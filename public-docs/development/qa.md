@@ -111,3 +111,47 @@ Past source runs and their remaining limits are in [Validation history](validati
 - [Complete checklist](testing.md)
 - [Browser E2E](../../firecrab-e2e/README.md)
 - [Troubleshooting](../guides/troubleshooting.md)
+
+## MicroVM pause/resume memory continuity
+
+`scripts/ci-qa-vm-pause.py` prepares a temporary API, helper, image copy, and
+private network/mount namespaces on a Linux/KVM test host. It requires root,
+systemd, iproute2, unshare, dnsmasq, nftables, an SSH client, and a Firecracker
+binary on PATH. Choose an installed image that provides a serial root shell and
+sshd. The guest readiness DNS probe uses a local fixture inside the private
+helper mount namespace, so the test needs no external network access.
+
+```sh
+sudo python3 scripts/ci-qa-vm-pause.py \
+  --api-binary target/debug/firecrab-api \
+  --helper-binary target/debug/firecrab-helper \
+  --image-root /var/lib/firecrab/images --template IMAGE_ALIAS \
+  --report /tmp/firecrab-pause-qa.json
+```
+
+The test checks three pause/resume cycles, an in-memory random token and counter,
+guest process and boot identity, VMM PID, IP/MAC, HTTP and new authenticated SSH
+connections, Sleepy inhibition,
+API restart while paused, Stop from Paused, and cleanup. Existing workload units
+and installed services are preserved. A successful JSON report is native KVM
+evidence; API fixture and browser results alone do not establish memory continuity.
+
+## Pools
+
+Needs a network (N1) and an installed template (I3 or I6).
+`minReady` 0 does not boot a guest.
+
+| ID | Work | Add | Delete / cleanup |
+| --- | --- | --- | --- |
+| P1 | create idle | `POST /api/pools` name `qa-pool`, template, cpu, ram, diskGb, `microNetworkId`, `minReady` 0, `maxSize` 1, `leaseTtlSeconds` 600 → 201; `templateVersion` is pinned | after P5 |
+| P2 | list and detail | `GET /api/pools` and `GET /{id}` | with P1 |
+| P3 | resize | `PATCH` `minReady`, `maxSize`, `leaseTtlSeconds` | with P1 |
+| P4 | acquire empty | `POST /{id}/acquire` → 409 `pool_exhausted` | no lease row |
+| P5 | delete idle | `DELETE` → 202 `deleting: true`, then GET → 404 | leftover empty |
+| P6 | warm lease | `minReady` 1 boots one member; acquire → 201; `PUT` or `DELETE /api/vms/{id}` → 409 `pool_owned`; release deletes that VM and its disk | replacement VM id differs |
+| P7 | API restart | keep one ready and one leased member; restart the API; member IDs, states and shim/Firecracker PIDs stay unchanged; retry acquire with the same key → 200 and the original active lease | release, then delete pool |
+
+P6 boots a guest.
+Run it with V7, not in the API-only pass.
+CI runs P1–P7, C6, and X7 on the first OCI reference in `scripts/ci-qa-guest.sh`, after that guest boots and before the image delete.
+P7 requires `FIRECRAB_QA_POOL_RESTART=1` on a disposable host. Other runs report it as a warning.

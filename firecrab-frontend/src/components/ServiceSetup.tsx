@@ -123,7 +123,7 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
     if (step < 3) { setError(null); setFields({}); setStep(step + 1); return; }
     setError(null); setFields({}); setSaving(true);
     const request: MicroServiceSpec = {
-      ...spec, name: spec.name.trim(), image: spec.image.trim(), domain: spec.domain?.trim() || null, ...maps,
+      ...spec, name: spec.name.trim(), image: spec.image.trim(), domain: normalizedDomain(spec.domain), ...maps,
     };
     // Copy only specification fields; an edited response also contains its ID.
     const { name, image, runtime, port, healthPath, domain, ram, cpu, replicas, startupTimeout, drainTimeout } = request;
@@ -136,7 +136,7 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
       if (failure instanceof ApiClientError) showErrors(failure.apiError?.fields ?? {});
     } finally { setSaving(false); }
   };
-  const unsupported = !!spec.domain?.trim() || secrets.length > 0;
+  const unsupported = secrets.length > 0;
   const reviewSections: { title: string; step: number; values: [string, string | number][] }[] = [
     { title: steps[0]!, step: 0, values: [[t("Name", "이름"), spec.name], [t("Image", "이미지"), spec.image]] },
     { title: steps[1]!, step: 1, values: [[t("App port", "앱 포트"), spec.port], [t("Health path", "상태 검사 경로"), spec.healthPath], [t("Domain", "도메인"), spec.domain || t("None", "없음")]] },
@@ -163,7 +163,7 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
               <Field name="port" label={t("App port", "앱 포트")} hint={t("The port inside your app. nginx uses 80. Many web apps use 8080.", "앱 내부에서 사용하는 포트이다. nginx는 80번을 사용한다. 웹 앱은 보통 8080번을 사용한다.")} error={fields.port}><input {...control("port")} type="number" min={1} max={65535} value={Number.isFinite(spec.port) ? spec.port : ""} onChange={(event) => change("port", event.target.valueAsNumber)} required /></Field>
               <Field name="healthPath" label={t("Health path", "상태 검사 경로")} hint={t("Firecrab requests this path to check your app. It must return HTTP 2xx. Use / for the nginx example.", "Firecrab이 이 경로에 요청을 보낸다. HTTP 2xx 응답이 와야 정상으로 판단한다. nginx 예제는 /를 사용한다.")} error={fields.healthPath}><input {...control("healthPath")} value={spec.healthPath} onChange={(event) => change("healthPath", event.target.value)} placeholder="/health" required maxLength={2048} spellCheck={false} /></Field>
               <div className="service-notice"><Info aria-hidden="true" /><p>{t("You will choose the external host port after saving. You can start without a domain.", "저장한 뒤 외부 접속용 호스트 포트를 정한다. 도메인 없이 시작할 수 있다.")}</p></div>
-              <details className="service-advanced" open={!!fields.domain || undefined}><summary>{t("Domain configuration · save only", "도메인 설정 · 저장만 지원")}</summary><Field name="domain" label={t("Domain (optional)", "도메인 (선택)")} hint={t("Domain routing is not supported by the current deployer. Leave this empty to deploy.", "현재 배포 기능은 도메인 연결을 지원하지 않는다. 배포하려면 비워 둔다.")} error={fields.domain}><input {...control("domain")} value={spec.domain ?? ""} onChange={(event) => change("domain", event.target.value)} placeholder="app.example.com" maxLength={253} /></Field></details>
+              <details className="service-advanced" open={!!fields.domain || undefined}><summary>{t("Domain configuration", "도메인 설정")}</summary><Field name="domain" label={t("Domain (optional)", "도메인 (선택)")} hint={t("Healthy replicas connect automatically. Public access uses Pipe Tunnel and your DNS.", "정상 인스턴스를 자동 연결한다. 외부 접속에는 Pipe Tunnel과 DNS 연결이 필요하다.")} error={fields.domain}><input {...control("domain")} value={spec.domain ?? ""} onChange={(event) => change("domain", event.target.value)} placeholder="app.example.com" maxLength={253} /></Field></details>
             </>}
             {step === 2 && <>
               <div className="service-resource-grid">
@@ -182,7 +182,7 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
             </>}
             {step === 3 && <>
               <div className="service-review">{reviewSections.map(({ title, step: index, values }) => <section key={index}><div className="service-review-heading"><h4>{title}</h4><button type="button" className="btn ghost sm" disabled={saving} onClick={() => setStep(index)} aria-label={t(`Edit ${title}`, `${title} 수정`)}>{t("Edit", "수정")}</button></div><dl>{values.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></section>)}</div>
-              {unsupported && <div className="service-notice service-notice-warning"><Info aria-hidden="true" /><p>{t("You can save this configuration, but deployment requires an empty domain and no secret references. Edit Connection or Resources to clear them.", "이 설정은 저장할 수 있다. 배포하려면 도메인과 시크릿 참조를 제거해야 한다. 접속 설정이나 실행 설정에서 수정한다.")}</p></div>}
+              {unsupported && <div className="service-notice service-notice-warning"><Info aria-hidden="true" /><p>{t("You can save this configuration, but deployment requires no secret references. Edit Resources to clear them.", "이 설정은 저장할 수 있다. 배포하려면 시크릿 참조를 제거해야 한다. 실행 설정에서 수정한다.")}</p></div>}
               <div className="service-notice"><CheckCircle2 aria-hidden="true" /><p>{t("Your app starts only when you select Deploy and run on the next screen.", "다음 화면에서 배포 및 실행을 선택해야 앱이 시작된다.")}</p></div>
             </>}
           </div>
@@ -212,4 +212,17 @@ function VariableRows({ kind, rows, setRows, disabled, error }: { kind: "env" | 
     </div>)}
     <button type="button" className="btn" disabled={rows.length >= 64} onClick={() => setRows([...rows, { key: "", value: "" }])}>{secret ? t("Add secret reference", "시크릿 참조 추가") : t("Add variable", "변수 추가")}</button>
   </fieldset>;
+}
+
+/** Accept a pasted site address without silently accepting a path or query. */
+function normalizedDomain(value: string | null): string | null {
+  const input = value?.trim().toLowerCase();
+  if (!input) return null;
+  if (/^https?:\/\//.test(input)) {
+    try {
+      const url = new URL(input);
+      if (url.pathname === "/" && !url.search && !url.hash && !url.port && !url.username && !url.password) return url.hostname.replace(/\.$/, "");
+    } catch { /* Keep invalid input for the API's domain field error. */ }
+  }
+  return input.replace(/\.$/, "");
 }

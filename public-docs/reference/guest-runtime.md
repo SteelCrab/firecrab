@@ -26,6 +26,10 @@ Native init owns mounts and service supervision.
 BusyBox uses `/etc/inittab` to run boot setup once and respawn the console.
 Both paths publish `FIRECRAB_NETWORK_READY` after network setup.
 The image's app runs after readiness and is never PID 1.
+Before starting services on each boot, Firecrab runs `systemd-tmpfiles` when available
+to recreate directories declared by the image under `/run` and `/var/run`.
+This restores paths such as MariaDB's `/run/mysqld` after tmpfs is cleared.
+A failed runtime preparation reports `FIRECRAB_RUNTIME_FAILED tmpfiles` and does not start app services.
 
 Inspect the running init from inside the guest:
 

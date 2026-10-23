@@ -40,7 +40,7 @@ interface EditButtonProps {
 /** "Edit" for a whole section; hidden while editing it or while the VM state forbids it. */
 export function EditButton({ vm, section, edit, label }: EditButtonProps) {
   const { t } = useI18n();
-  if (edit.draft?.section === section || !isSectionEditable(vm.state, section)) return null;
+  if (edit.draft?.section === section || !isSectionEditable(vm.state, section, vm.purpose)) return null;
   return (
     <button type="button" className="btn sm ghost" aria-label={label} onClick={() => edit.start(section)}>
       <Pencil aria-hidden="true" />
@@ -77,14 +77,14 @@ export function EditableProp({ vm, edit, section, label, editLabel, lockedNote, 
         ) : (
           <>
             <span className="prop-value">{children}</span>
-            {isSectionEditable(vm.state, section) ? (
+            {isSectionEditable(vm.state, section, vm.purpose) ? (
               <button type="button" className="icon-btn prop-action" aria-label={editLabel} title={editLabel} onClick={() => edit.start(section)}>
                 <Pencil aria-hidden="true" />
               </button>
             ) : lockedNote ? (
-              <span className="prop-lock" title={t("Stop the VM to change this.", "VM을 중지하면 바꿀 수 있습니다.")}>
+              <span className="prop-lock" title={vm.purpose === "pool" ? t("Managed by its pool.", "풀에서 관리합니다.") : t("Stop the VM to change this.", "VM을 중지하면 바꿀 수 있습니다.")}>
                 <Lock aria-hidden="true" />
-                {lockedNote}
+                {vm.purpose === "pool" ? t("Pool managed", "풀에서 관리") : lockedNote}
               </span>
             ) : null}
           </>

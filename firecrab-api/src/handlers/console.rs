@@ -27,7 +27,7 @@ pub async fn console_ws(
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, AppError> {
     let process = resolve_console_process(&state.processes, &id, request_id.0)?;
-    Ok(upgrade.on_upgrade(move |socket| stream_console(socket, process)))
+    Ok(upgrade.on_upgrade(move |socket| stream_console(socket, process, state, id)))
 }
 
 /// Parses the path id and looks up its live process — the same map entry
@@ -52,15 +52,25 @@ fn resolve_console_process(
 /// the rest of it before they are forwarded anyway.
 const MARKER_HOLD: Duration = Duration::from_millis(50);
 
-async fn stream_console(socket: WebSocket, process: VmProcess) {
+async fn stream_console(socket: WebSocket, process: VmProcess, state: AppState, id: String) {
     let (sink, inbound) = socket.split();
-    bridge_console(sink, inbound, process).await;
+    bridge_console(
+        sink,
+        inbound,
+        process,
+        Some((state, id.parse().expect("validated VM id"))),
+    )
+    .await;
 }
 
 /// Pumps console output to `sink` and viewer input from `inbound` until the
 /// VM exits, the viewer leaves, or the guest's login session ends (#303).
-async fn bridge_console<S, I, E>(mut sink: S, mut inbound: I, process: VmProcess)
-where
+async fn bridge_console<S, I, E>(
+    mut sink: S,
+    mut inbound: I,
+    process: VmProcess,
+    vm: Option<(AppState, Uuid)>,
+) where
     S: Sink<Message> + Unpin,
     I: Stream<Item = Result<Message, E>> + Unpin,
 {
@@ -115,12 +125,33 @@ where
             frame = inbound.next() => match frame {
                 None | Some(Ok(Message::Close(_))) => return,
                 Some(Err(_)) => return,
-                Some(Ok(Message::Binary(bytes))) => console.write_input(&bytes).await,
-                Some(Ok(Message::Text(text))) => console.write_input(text.as_bytes()).await,
+                Some(Ok(Message::Binary(bytes))) => { write_console_input(&console, vm.as_ref(), &bytes).await; },
+                Some(Ok(Message::Text(text))) => { write_console_input(&console, vm.as_ref(), text.as_bytes()).await; },
                 // Ping/Pong and anything else: nothing to act on.
                 Some(Ok(_)) => {}
             },
         }
+    }
+}
+
+async fn write_console_input(
+    console: &crate::console::ConsoleBroker,
+    vm: Option<&(AppState, Uuid)>,
+    bytes: &[u8],
+) {
+    let Some((state, id)) = vm else {
+        console.write_input(bytes).await;
+        return;
+    };
+    let _guard = state.lock_vm(*id).await;
+    let running = state
+        .vms
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(id)
+        .is_some_and(|vm| vm.state == crate::model::VmState::Running);
+    if running {
+        console.write_input(bytes).await;
     }
 }
 
@@ -150,6 +181,32 @@ mod tests {
             console: Arc::new(ConsoleBroker::new()),
             control: crate::vm_shim::client::ShimControl::for_test().0,
         }
+    }
+
+    #[tokio::test]
+    async fn paused_console_input_is_discarded_and_resume_accepts_new_input() {
+        let root = tempfile::tempdir().unwrap();
+        let templates =
+            crate::templates::TemplateRegistry::from_specs(root.path(), std::iter::empty())
+                .unwrap();
+        let state = AppState::with_db_file(templates, root.path().join("state.db"))
+            .await
+            .unwrap();
+        let id = Uuid::new_v4();
+        let mut vm = crate::handlers::vms::test_support::record("paused", id);
+        vm.state = crate::model::VmState::Paused;
+        state.vms.lock().unwrap().insert(id, vm);
+        let broker = ConsoleBroker::new();
+        let (control, mut received) = crate::vm_shim::client::ShimControl::for_test();
+        broker.attach_control(control);
+        let context = (state.clone(), id);
+        write_console_input(&broker, Some(&context), b"discard").await;
+        assert!(received.try_recv().is_err());
+        state.vms.lock().unwrap().get_mut(&id).unwrap().state = crate::model::VmState::Running;
+        write_console_input(&broker, Some(&context), b"new input").await;
+        assert!(
+            matches!(received.recv().await, Some(crate::vm_shim::protocol::ShimRequest::Input(bytes)) if bytes == b"new input")
+        );
     }
 
     #[test]
@@ -188,7 +245,7 @@ mod tests {
             feed.await;
         };
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            tokio::join!(bridge_console(&mut sent, inbound, process), drive)
+            tokio::join!(bridge_console(&mut sent, inbound, process, None), drive)
         })
         .await
         .expect("the bridge must close the socket");

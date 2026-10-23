@@ -12,11 +12,13 @@ type PlacementCheck = { key: string; fields: Record<string, string>; error: stri
 
 type AuthState = "checking" | "connected" | "missing" | "unavailable";
 
-const BUSY: ServicePhase[] = ["queued", "importing", "starting", "checking_health", "stopping"];
+const BUSY: ServicePhase[] = ["queued", "importing", "starting", "checking_health", "connecting_domain", "stopping"];
+import { getPipe, type PipeSnapshot } from "../api/pipe";
 
 export default function ServiceDeployment({ service, draft, onClose, onEdit }: { service: MicroServiceResponse; draft?: ServiceDeploymentDraft; onClose: () => void; onEdit: () => void }) {
   const { t } = useI18n();
   const [deployment, setDeployment] = useState<MicroServiceDeployment | null>(null);
+  const [pipe, setPipe] = useState<PipeSnapshot | null>(null);
   const [networks, setNetworks] = useState<MicroNetworkResponse[]>([]);
   const [network, setNetwork] = useState(draft?.microNetworkId ?? "");
   const [port, setPort] = useState(draft?.hostPort ?? 30100);
@@ -37,11 +39,14 @@ export default function ServiceDeployment({ service, draft, onClose, onEdit }: {
   const acting = useRef(false);
   const busy = !!deployment && BUSY.includes(deployment.phase);
   const hasInstances = !!deployment?.instances.length;
+  const ownsResources = hasInstances || !!deployment?.domainRouteOwned;
+  const domain = service.domain;
+  const routed = !!deployment?.domainRouteOwned && ["running", "degraded"].includes(deployment.phase);
 
-  const unsupported = !!service.domain || Object.keys(service.secrets).length > 0;
-  const canCheckPlacement = loaded && !busy && !hasInstances && !unsupported;
+  const unsupported = Object.keys(service.secrets).length > 0;
+  const canCheckPlacement = loaded && !busy && !ownsResources && !unsupported;
   const placementKey = JSON.stringify([service.id, service.replicas, network, port, placementVersion]);
-  const portRangeError = !Number.isInteger(port) || port < 1024 || port + service.replicas - 1 > 65535
+  const portRangeError = !domain && (!Number.isInteger(port) || port < 1024 || port + service.replicas - 1 > 65535)
     ? t(`Choose a first host port from 1024 to ${65536 - service.replicas}. All replicas need consecutive ports.`, `첫 번째 호스트 포트는 1024~${65536 - service.replicas} 범위에서 선택한다. 모든 복제본에 연속 포트가 필요하다.`) : null;
   const placementFields = portRangeError ? { hostPort: portRangeError } : placement?.key === placementKey ? placement.fields : {};
   const placementChecking = canCheckPlacement && !portRangeError && placement?.key !== placementKey;
@@ -61,7 +66,7 @@ export default function ServiceDeployment({ service, draft, onClose, onEdit }: {
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]);
       void Promise.allSettled([
         listMicroNetworks(signal),
-        checkServiceDeployment(service.id, { hostPort: port, microNetworkId: network || null }, signal),
+        checkServiceDeployment(service.id, { ...(domain ? {} : { hostPort: port }), microNetworkId: network || null }, signal),
       ]).then(([catalog, check]) => {
         if (controller.signal.aborted) return;
         if (catalog.status === "fulfilled") setNetworks(catalog.value);
@@ -76,7 +81,7 @@ export default function ServiceDeployment({ service, draft, onClose, onEdit }: {
       });
     }, 250);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [canCheckPlacement, portRangeError, service.id, service.replicas, port, network, placementKey]);
+  }, [canCheckPlacement, portRangeError, service.id, service.replicas, port, network, placementKey, domain]);
 
   useEffect(() => {
     if (submitting || !focusSubmitError.current || placement?.key !== placementKey) return;
@@ -86,7 +91,7 @@ export default function ServiceDeployment({ service, draft, onClose, onEdit }: {
   }, [submitting, placement, placementKey]);
 
   const readyInstance = !statusError && deployment?.phase === "running" ? deployment.instances.find((instance) => instance.healthy) : undefined;
-  const progress = { queued: 0, importing: 0, starting: 1, checking_health: 2, running: 3, degraded: 2 };
+  const progress = { queued: 0, importing: 0, starting: 1, checking_health: 2, connecting_domain: 2, running: 3, degraded: 2 };
   const activeStep = !statusError && deployment && deployment.phase in progress ? progress[deployment.phase as keyof typeof progress] : -1;
 
   const checkAuth = useCallback((restart = false): Promise<boolean> => {
@@ -138,7 +143,7 @@ export default function ServiceDeployment({ service, draft, onClose, onEdit }: {
       if (generation.current !== current) return;
       setDeployment(result); setLoaded(true); setStatusError(null);
       if (result && (BUSY.includes(result.phase) || result.instances.length > 0)) {
-        setPort(result.request.hostPort);
+        setPort(result.request.hostPort || 30100);
         setNetwork(result.request.microNetworkId ?? "");
       }
     } catch (failure) {
@@ -157,17 +162,23 @@ export default function ServiceDeployment({ service, draft, onClose, onEdit }: {
     setAuthState("checking");
     return checkAuth(true);
   };
+  useEffect(() => {
+    if (!domain) return;
+    let active = true;
+    getPipe().then((result) => { if (active) setPipe(result); }).catch(() => { if (active) setPipe(null); });
+    return () => { active = false; };
+  }, [domain, deployment?.phase]);
 
   const act = async (stop: boolean) => {
-    if (acting.current || (!stop && (!loaded || statusError || busy || hasInstances || unsupported || authState !== "connected" || !placementReady))) return;
+    if (acting.current || (!stop && (!loaded || statusError || busy || ownsResources || unsupported || authState !== "connected" || !placementReady))) return;
     acting.current = true;
     setSubmitting(true); setError(null); generation.current += 1;
     let placementChecked = stop;
     try {
       if (!stop && !await recheckAuth()) return;
-      if (!stop) await checkServiceDeployment(service.id, { hostPort: port, microNetworkId: network || null }, AbortSignal.timeout(10000));
+      if (!stop) await checkServiceDeployment(service.id, { ...(domain ? {} : { hostPort: port }), microNetworkId: network || null }, AbortSignal.timeout(10000));
       placementChecked = true;
-      const result = stop ? await stopMicroService(service.id) : await deployMicroService(service.id, { hostPort: port, microNetworkId: network || null });
+      const result = stop ? await stopMicroService(service.id) : await deployMicroService(service.id, { ...(domain ? {} : { hostPort: port }), microNetworkId: network || null });
       generation.current += 1;
       setDeployment(result);
     } catch (failure) {
@@ -184,9 +195,11 @@ export default function ServiceDeployment({ service, draft, onClose, onEdit }: {
   const labels: Record<ServicePhase, string> = {
     queued: t("Queued", "대기 중"), importing: t("Importing image", "이미지 가져오는 중"),
     starting: t("Starting MicroVM", "MicroVM 시작 중"), checking_health: t("Checking app health", "앱 상태 확인 중"),
+    connecting_domain: t("Connecting domain", "도메인 연결 중"),
     running: t("Running", "실행 중"), degraded: t("Health check failed", "상태 검사 실패"),
     stopping: t("Stopping", "중지 중"), stopped: t("Stopped", "중지 완료"), failed: t("Deployment failed", "배포 실패"),
   };
+  const networkField = (<div className="field service-wide"><label htmlFor="service-deploy-network">{t("Network", "네트워크")}</label><select ref={networkInput} id="service-deploy-network" value={network} aria-invalid={canCheckPlacement && !!placementFields.microNetworkId} aria-describedby={canCheckPlacement && placementFields.microNetworkId ? "service-deploy-network-error" : undefined} disabled={submitting || busy || hasInstances} onChange={(event) => setNetwork(event.target.value)}><option value="">{t("Automatic services network", "서비스 네트워크 자동 생성")}</option>{network && !networks.some((row) => row.id === network) && <option value={network}>{canCheckPlacement && placementFields.microNetworkId ? t("Unavailable network", "사용할 수 없는 네트워크") : t("Deployment network", "배포 네트워크")} · {network.slice(0, 8)}</option>}{networks.map((row) => <option key={row.id} value={row.id}>{row.name} · {row.subnetCidr}</option>)}</select>{canCheckPlacement && placementFields.microNetworkId && <div id="service-deploy-network-error" className="field-error" role="alert"><p>{t("The selected network is unavailable. Choose another network or use the automatic services network.", "선택한 네트워크를 사용할 수 없다. 다른 네트워크를 선택하거나 서비스 네트워크 자동 생성을 사용한다.")}</p><button className="btn" type="button" onClick={() => setNetwork("")}>{t("Use automatic services network", "서비스 네트워크 자동 생성 사용")}</button></div>}</div>);
   return (
     <section className="panel service-deployment" aria-labelledby="service-runtime-title">
       <div className="service-runtime-header">
@@ -200,7 +213,7 @@ export default function ServiceDeployment({ service, draft, onClose, onEdit }: {
       {deployment?.error && <p className="field-error" role="alert">{deployment.error}</p>}
       <p role="status">{statusError ? t("Status unavailable", "상태를 확인할 수 없다") : deployment ? labels[deployment.phase] : loaded ? t("Not deployed", "아직 배포하지 않았다") : t("Checking deployment…", "배포 상태 확인 중…")}</p>
       {activeStep >= 0 && <ol className="service-deploy-steps" aria-label={t("Deployment progress", "배포 진행 단계")}>{[t("Prepare image", "이미지 준비"), t("Start app", "앱 시작"), t("Check app health", "정상 응답 확인"), t("Ready to open", "접속 준비 완료")].map((label, index) => <li key={label} className={index < activeStep || (index === 3 && readyInstance) ? "done" : index === activeStep ? "active" : ""} aria-current={index === activeStep ? "step" : undefined}><span className="service-step-number">{index < activeStep || (index === 3 && readyInstance) ? <Check aria-hidden="true" /> : index + 1}</span>{label}</li>)}</ol>}
-      {readyInstance && <div className="service-deploy-success"><div><strong>{t("Your app is ready", "앱을 사용할 수 있다")}</strong><p>{t("The app answered the health check.", "앱이 상태 검사에 정상 응답했다.")}</p></div><a className="btn" href={endpoint(readyInstance.hostPort)} target="_blank" rel="noreferrer">{t("Open app", "앱 열기")}<ArrowUpRight aria-hidden="true" /></a></div>}
+      {readyInstance && <div className="service-deploy-success"><div><strong>{t("Your app is ready", "앱을 사용할 수 있다")}</strong><p>{t("The app answered the health check.", "앱이 상태 검사에 정상 응답했다.")}</p></div><a className="btn" href={domain ? `https://${domain}` : endpoint(readyInstance.hostPort)} target="_blank" rel="noreferrer">{t("Open app", "앱 열기")}<ArrowUpRight aria-hidden="true" /></a></div>}
       {(deployment?.phase === "failed" || deployment?.phase === "degraded") && <div className="service-deploy-next"><strong>{t("What to check next", "다음 항목을 확인한다")}</strong><p>{t("Check the deployment log below. Confirm that the image can run and that the app port and health path match your app. Stop remaining instances before changing settings or retrying.", "아래 배포 로그를 확인한다. 이미지가 실행 가능한지 확인한다. 앱 포트와 상태 검사 경로가 맞는지 확인한다. 설정을 바꾸거나 다시 배포하려면 남은 인스턴스를 먼저 중지한다.")}</p>{!hasInstances && !unsupported && <button className="btn" onClick={onEdit}>{t("Edit configuration", "설정 수정")}</button>}</div>}
       <div id="service-deploy-auth" aria-live="polite">
         {authState === "checking" && <p className="poll-note">{t("Checking AUTH connection…", "AUTH 연결 확인 중…")}</p>}
@@ -224,18 +237,24 @@ export default function ServiceDeployment({ service, draft, onClose, onEdit }: {
         {placementChecking && <p className="poll-note">{t("Checking network and host ports…", "네트워크와 호스트 포트 확인 중…")}</p>}
         {placement?.key === placementKey && placement.error !== null && <div className="service-notice service-notice-warning"><Info aria-hidden="true" /><div><strong>{t("Unable to verify deployment choices", "배포 설정을 확인할 수 없다")}</strong><p>{t("Deployment is disabled until the network and ports can be checked. Try again.", "네트워크와 포트를 확인할 때까지 배포를 사용할 수 없다. 다시 확인한다.")}</p><p>{placement.error}</p><button className="btn" onClick={() => setPlacementVersion((value) => value + 1)}>{t("Retry deployment check", "배포 설정 확인 재시도")}</button></div></div>}
       </div>}
+      {domain && <div className="service-domain-panel">
+        <strong>{domain}</strong>
+        <p>{routed ? t("Domain routing is ready.", "도메인 경로가 준비되었다.") : t("Healthy replicas will connect to this domain automatically.", "정상 인스턴스를 이 도메인에 자동 연결한다.")}</p>
+        {routed && <a className="btn" href={`https://${domain}`} target="_blank" rel="noreferrer">{t("Open domain", "도메인 열기")}</a>}
+        {pipe?.config?.tunnel ? <p className="poll-note">{t("For public HTTPS, point this domain's DNS CNAME to", "외부 HTTPS 접속을 위해 도메인의 DNS CNAME을 다음 주소로 연결한다.")} <code>{pipe.config.tunnel.id}.cfargotunnel.com</code>. {t("Keep Cloudflare proxy enabled.", "Cloudflare 프록시를 활성화한다.")}</p> : <p className="poll-note">{t("For public HTTPS, connect your domain in", "외부 HTTPS 접속을 위해 다음 화면에서 도메인을 연결한다.")} <a href="#/pipe/named-tunnel">Pipe Tunnel</a>.</p>}
+      </div>}
       <form className="create-grid" onSubmit={submit}>
-        <div className="field service-wide"><label htmlFor="service-deploy-network">{t("Network", "네트워크")}</label><select ref={networkInput} id="service-deploy-network" value={network} aria-invalid={canCheckPlacement && !!placementFields.microNetworkId} aria-describedby={canCheckPlacement && placementFields.microNetworkId ? "service-deploy-network-error" : undefined} disabled={submitting || busy || hasInstances} onChange={(event) => setNetwork(event.target.value)}><option value="">{t("Automatic services network", "서비스 네트워크 자동 생성")}</option>{network && !networks.some((row) => row.id === network) && <option value={network}>{canCheckPlacement && placementFields.microNetworkId ? t("Unavailable network", "사용할 수 없는 네트워크") : t("Deployment network", "배포 네트워크")} · {network.slice(0, 8)}</option>}{networks.map((row) => <option key={row.id} value={row.id}>{row.name} · {row.subnetCidr}</option>)}</select>{canCheckPlacement && placementFields.microNetworkId && <div id="service-deploy-network-error" className="field-error" role="alert"><p>{t("The selected network is unavailable. Choose another network or use the automatic services network.", "선택한 네트워크를 사용할 수 없다. 다른 네트워크를 선택하거나 서비스 네트워크 자동 생성을 사용한다.")}</p><button className="btn" type="button" onClick={() => setNetwork("")}>{t("Use automatic services network", "서비스 네트워크 자동 생성 사용")}</button></div>}</div>
-        <div className="field"><label htmlFor="service-deploy-port">{t("First host port", "첫 번째 호스트 포트")}</label><input ref={portInput} id="service-deploy-port" aria-invalid={canCheckPlacement && !!placementFields.hostPort} aria-describedby={canCheckPlacement && placementFields.hostPort ? "service-deploy-port-error" : undefined} type="number" min={1024} max={65536 - service.replicas} value={Number.isNaN(port) ? "" : port} disabled={submitting || busy || hasInstances} required onChange={(event) => setPort(event.target.valueAsNumber)} />{canCheckPlacement && placementFields.hostPort && <p id="service-deploy-port-error" className="field-error" role="alert">{t("Choose another host port range.", "다른 호스트 포트 범위를 선택한다.")} {placementFields.hostPort}</p>}</div>
-        <div className="field field-submit"><button className="btn primary" type="submit" aria-describedby={[authState !== "connected" ? "service-deploy-auth" : "", canCheckPlacement ? "service-deploy-placement" : ""].filter(Boolean).join(" ") || undefined} disabled={!loaded || !!statusError || submitting || busy || hasInstances || unsupported || authState !== "connected" || !placementReady}>{t("Deploy and run", "배포 및 실행")}</button></div>
+        {domain ? <details className="service-full" open={!!placementFields.microNetworkId || undefined}><summary>{t("Advanced settings", "고급 설정")}</summary><div className="create-grid">{networkField}</div></details> : networkField}
+        {!domain && <div className="field"><label htmlFor="service-deploy-port">{t("First host port", "첫 번째 호스트 포트")}</label><input ref={portInput} id="service-deploy-port" aria-invalid={canCheckPlacement && !!placementFields.hostPort} aria-describedby={canCheckPlacement && placementFields.hostPort ? "service-deploy-port-error" : undefined} type="number" min={1024} max={65536 - service.replicas} value={Number.isNaN(port) ? "" : port} disabled={submitting || busy || ownsResources} required onChange={(event) => setPort(event.target.valueAsNumber)} />{canCheckPlacement && placementFields.hostPort && <p id="service-deploy-port-error" className="field-error" role="alert">{t("Choose another host port range.", "다른 호스트 포트 범위를 선택한다.")} {placementFields.hostPort}</p>}</div>}
+        <div className="field field-submit"><button className="btn primary" type="submit" aria-describedby={[authState !== "connected" ? "service-deploy-auth" : "", canCheckPlacement ? "service-deploy-placement" : ""].filter(Boolean).join(" ") || undefined} disabled={!loaded || !!statusError || submitting || busy || ownsResources || unsupported || authState !== "connected" || !placementReady}>{t("Deploy and run", "배포 및 실행")}</button></div>
       </form>
-      <p className="poll-note">{t(`Each replica uses one host port, starting at ${Number.isNaN(port) ? "—" : port}. App port: ${service.port}.`, `복제본마다 ${Number.isNaN(port) ? "—" : port}번부터 호스트 포트를 하나씩 사용한다. 앱 포트는 ${service.port}번이다.`)}</p>
-      <p className="service-runtime-description">{t("A host port is the external entrance to your app. The automatic network needs no manual setup.", "호스트 포트는 외부에서 앱에 접속하는 입구이다. 자동 네트워크를 선택하면 직접 구성할 필요가 없다.")}</p>
-      {unsupported && <div className="service-notice service-notice-warning"><Info aria-hidden="true" /><div><p>{t("Domain routing and secret injection are not supported yet. Clear the domain and secret references to deploy using host ports.", "도메인 연결과 시크릿 주입은 아직 지원하지 않는다. 호스트 포트로 배포하려면 도메인과 시크릿 참조를 제거한다.")}</p><button className="btn" onClick={onEdit}>{t("Edit configuration", "설정 수정")}</button></div></div>}
+      {!domain && <p className="poll-note">{t(`Each replica uses one host port, starting at ${Number.isNaN(port) ? "—" : port}. App port: ${service.port}.`, `복제본마다 ${Number.isNaN(port) ? "—" : port}번부터 호스트 포트를 하나씩 사용한다. 앱 포트는 ${service.port}번이다.`)}</p>}
+      {!domain && <p className="service-runtime-description">{t("A host port is the external entrance to your app. The automatic network needs no manual setup.", "호스트 포트는 외부에서 앱에 접속하는 입구이다. 자동 네트워크를 선택하면 직접 구성할 필요가 없다.")}</p>}
+      {unsupported && <div className="service-notice service-notice-warning"><Info aria-hidden="true" /><div><p>{t("Secret injection is not available yet. Remove secret references before deploying.", "시크릿 주입은 아직 지원하지 않는다. 배포 전에 시크릿 참조를 제거한다.")}</p><button className="btn" onClick={onEdit}>{t("Edit configuration", "설정 수정")}</button></div></div>}
       {hasInstances && <>
-        <div className="table-scroll"><table className="vm-table service-table"><thead><tr><th id="service-instance-column-0" scope="col">MicroVM</th><th id="service-instance-column-1" scope="col">{t("State", "상태")}</th><th id="service-instance-column-2" scope="col">{t("App health", "앱 상태")}</th><th id="service-instance-column-3" scope="col">{t("Endpoint", "접속 주소")}</th></tr></thead><tbody>{deployment!.instances.map((instance) => <tr key={instance.vmId}><td headers="service-instance-column-0" data-label="MicroVM"><a href={consoleHash(instance.vmId)}>{instance.vmId.slice(0, 8)}</a></td><td headers="service-instance-column-1" data-label={t("State", "상태")}>{instance.state}</td><td headers="service-instance-column-2" data-label={t("App health", "앱 상태")}>{instance.healthy ? t("Healthy", "정상") : t("Not healthy", "정상 응답 없음")}</td><td headers="service-instance-column-3" data-label={t("Endpoint", "접속 주소")}><a href={endpoint(instance.hostPort)} target="_blank" rel="noreferrer">:{instance.hostPort}</a></td></tr>)}</tbody></table></div>
-        <div className="service-actions"><button className="btn danger" disabled={submitting || busy} onClick={() => { if (window.confirm(t("Stop and remove these service instances?", "서비스 인스턴스를 중지하고 삭제할까요?"))) act(true); }}>{t("Stop service", "서비스 중지")}</button></div>
+        <div className="table-scroll"><table className="vm-table service-table"><thead><tr><th id="service-instance-column-0" scope="col">MicroVM</th><th id="service-instance-column-1" scope="col">{t("State", "상태")}</th><th id="service-instance-column-2" scope="col">{t("App health", "앱 상태")}</th><th id="service-instance-column-3" scope="col">{t("Endpoint", "접속 주소")}</th></tr></thead><tbody>{deployment!.instances.map((instance) => <tr key={instance.vmId}><td headers="service-instance-column-0" data-label="MicroVM"><a href={consoleHash(instance.vmId)}>{instance.vmId.slice(0, 8)}</a></td><td headers="service-instance-column-1" data-label={t("State", "상태")}>{instance.state}</td><td headers="service-instance-column-2" data-label={t("App health", "앱 상태")}>{instance.healthy ? t("Healthy", "정상") : t("Not healthy", "정상 응답 없음")}</td><td headers="service-instance-column-3" data-label={t("Endpoint", "접속 주소")}>{instance.hostPort > 0 ? <a href={endpoint(instance.hostPort)} target="_blank" rel="noreferrer">:{instance.hostPort}</a> : <span>{t("Via domain", "도메인으로 접속")}</span>}</td></tr>)}</tbody></table></div>
       </>}
+      {ownsResources && <div className="service-actions"><button className="btn danger" disabled={submitting || busy} onClick={() => { if (window.confirm(t("Stop and remove these service instances?", "서비스 인스턴스를 중지하고 삭제할까요?"))) act(true); }}>{t("Stop service", "서비스 중지")}</button></div>}
       {deployment && <details className="service-log-details" open={deployment.phase === "failed" || deployment.phase === "degraded"}><summary>{t("Deployment log and image details", "배포 로그와 이미지 정보")}</summary>{deployment.digest && <p className="service-digest">{deployment.digest}</p>}<pre className="service-deploy-log" aria-label={t("Deployment log", "배포 로그")}>{deployment.log.join("\n")}</pre></details>}
     </section>
   );

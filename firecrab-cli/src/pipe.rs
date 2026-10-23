@@ -12,6 +12,8 @@ mod guest;
 pub(crate) mod host;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 mod quick;
+#[cfg(target_os = "linux")]
+mod service_routes;
 #[cfg(any(target_os = "linux", test))]
 mod status;
 
@@ -35,6 +37,10 @@ pub enum Command {
     #[cfg(target_os = "linux")]
     #[command(hide = true)]
     FirecrabManage,
+    /// Apply one MicroService domain intent from the privileged helper.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    ServiceRoute,
     /// Refresh stable address targets independently of the API.
     #[cfg(target_os = "linux")]
     #[command(hide = true)]
@@ -174,6 +180,8 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
         }
         #[cfg(target_os = "linux")]
         Command::FirecrabManage => firecrab::manage(),
+        #[cfg(target_os = "linux")]
+        Command::ServiceRoute => service_routes::manage(),
         #[cfg(target_os = "linux")]
         Command::FirecrabSync => firecrab::sync(),
         #[cfg(target_os = "linux")]

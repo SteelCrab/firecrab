@@ -76,3 +76,25 @@ The Host panel refreshes service states every ten seconds and clears stale state
 - [API](../reference/api.md) and [CLI](../reference/cli.md)
 - [Development setup](../../CONTRIBUTING.md#run-from-source)
 - [Troubleshooting](troubleshooting.md)
+
+## Pause a MicroVM
+
+For a running standalone MicroVM, select **Pause** in its row, actions menu, or
+detail panel. **Paused** means guest execution stopped and RAM remains allocated.
+Select **Resume** to continue the same guest. The **Paused** filter lists these VMs.
+Start, Delete, resource/env edits, and new console/SSH actions are unavailable while paused.
+Stop remains available and discards in-memory execution state.
+If state confirmation fails, the detail panel offers **Retry pause**, **Retry resume**,
+and **Stop**. See [operations](operations.md#pause-and-resume-a-microvm).
+
+## Pools
+
+- Route: `#/pools`
+- Create: name and image. Advanced settings hold network, resources, capacity, and session duration (minutes).
+- List: image, ready count, in-use count, and **Use VM**. Pool settings show the pinned version and capacity.
+- **Use VM** leases one ready VM. **Delete pool** stays in settings and is unavailable while a session is active.
+- Select a pool for active sessions and terminal access. Expand **Pool settings** for sizing and internal details.
+- **End session** deletes its VM and automatically prepares a fresh replacement.
+
+If an acquire response is lost, repeat **Use VM** to recover the same lease. The pending request
+key survives navigation and page reloads in the same browser tab. A successful response clears it.
