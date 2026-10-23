@@ -9,6 +9,7 @@ import VmScreen from "./components/vm/VmScreen";
 import FirecrabPanel from "./components/FirecrabPanel";
 import HostInfo from "./components/HostInfo";
 import Images from "./components/Images";
+import Pools from "./components/Pools";
 import Kernels from "./components/Kernels";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
@@ -287,6 +288,7 @@ export default function App() {
       )}
       {/* Each page mounts only while selected, so its own polling stops
           the moment you navigate away. */}
+      {view === "pools" && <Screen view="pools"><Pools /></Screen>}
       {view === "networks" && <MicroNetworks />}
       {view === "security-groups" && <SecurityGroups vms={state.vms} vmsAvailable={state.loaded && state.consecutiveFailures === 0} />}
       {view === "services" && <MicroServices />}

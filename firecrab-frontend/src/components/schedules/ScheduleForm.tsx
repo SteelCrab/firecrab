@@ -22,12 +22,13 @@ export default function ScheduleForm({ schedule, vms, vmId, onCancel, onSaved }:
   onCancel: () => void; onSaved: () => void;
 }) {
   const { t, locale } = useI18n();
-  const [target, setTarget] = useState(schedule?.vmId ?? vmId ?? vms[0]?.id ?? "");
+  const targets = vms.filter(vm => vm.purpose !== "pool");
+  const [target, setTarget] = useState(schedule?.vmId ?? vmId ?? targets[0]?.id ?? "");
   const [action, setAction] = useState<ScheduleSpec["action"]>(schedule?.action ?? "start");
   const [draft, setDraft] = useState(() => timingDraft(schedule?.timing));
   const [name, setName] = useState(() => {
     if (!schedule) return "";
-    const vm = vms.find(vm => vm.id === schedule.vmId);
+    const vm = targets.find(vm => vm.id === schedule.vmId);
     const labels = schedule.action === "start" ? ["Start", "시작"] : ["Stop", "중지"];
     return vm && labels.some(label => shortName(`${vm.name} · ${label}`) === schedule.name) ? "" : schedule.name;
   });
@@ -35,7 +36,7 @@ export default function ScheduleForm({ schedule, vms, vmId, onCancel, onSaved }:
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
-  const vm = vms.find(vm => vm.id === target);
+  const vm = targets.find(vm => vm.id === target);
   const change = (patch: Partial<TimingDraft>) => setDraft(previous => ({ ...previous, ...patch }));
   const original = schedule?.timing.kind === "once" ? timingDraft(schedule.timing) : null;
   const timing = schedule?.timing.kind === "once" && original && draft.repeat === "once" && draft.date === original.date && draft.time === original.time ? schedule.timing : buildTiming(draft);
@@ -68,7 +69,7 @@ export default function ScheduleForm({ schedule, vms, vmId, onCancel, onSaved }:
       <div className="field"><label htmlFor="schedule-vm">MicroVM</label><select id="schedule-vm" value={target} onChange={event => setTarget(event.target.value)} required disabled={saving} autoFocus>
         <option value="">{t("Select a VM", "VM 선택")}</option>
         {target && !vm && <option value={target}>{t("VM unavailable", "VM 확인 필요")}</option>}
-        {vms.map(vm => <option key={vm.id} value={vm.id}>{vm.name}</option>)}
+        {targets.map(vm => <option key={vm.id} value={vm.id}>{vm.name}</option>)}
       </select>{vm && <div className="schedule-vm-state"><StatusBadge state={vm.state} /><span>{vm.cpu} vCPU · {vm.ram} MiB</span></div>}{fieldError("vmId")}</div>
       <fieldset className="schedule-operation"><legend>{t("Operation", "작업")}</legend><div className="schedule-segments">
         <button type="button" aria-pressed={action === "start"} disabled={saving} onClick={() => setAction("start")}><Play aria-hidden="true" />{t("Start VM", "VM 시작")}</button>

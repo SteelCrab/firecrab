@@ -353,6 +353,7 @@ mod tests {
             security_group_id: None,
             id: id("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
             name: "web-1".to_owned(),
+            purpose: firecrab_api_types::VmPurpose::Instance,
             state: VmState::Running,
             reconciliation: None,
             template: "alpine-3.24.1".to_owned(),

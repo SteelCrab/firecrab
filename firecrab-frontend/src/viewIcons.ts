@@ -8,6 +8,7 @@ import type { ViewId } from "./navigation";
  */
 export const VIEW_ICONS: Record<ViewId, LucideIcon> = {
   vms: Cpu,
+  pools: Layers,
   services: Boxes,
   schedules: CalendarClock,
   networks: Network,

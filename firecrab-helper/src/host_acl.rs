@@ -546,29 +546,10 @@ fn expected_rule_miss(bin: &str, args: &[&str], output: &Output) -> bool {
     }
 }
 
-/// Retry transient fixture writers during tests; installed tools fail fast.
-async fn command_output(command: &mut Command) -> io::Result<Output> {
-    // Another test's fork can briefly inherit a fixture's open writer.
-    let mut attempt = 0;
-    loop {
-        match command.output().await {
-            Err(error)
-                if cfg!(test)
-                    && error.kind() == io::ErrorKind::ExecutableFileBusy
-                    && attempt < 8 =>
-            {
-                attempt += 1;
-                tokio::time::sleep(std::time::Duration::from_millis(10 * attempt)).await;
-            }
-            result => return result,
-        }
-    }
-}
-
 async fn run_tool(bin: &str, args: &[&str]) -> bool {
     let mut last_error = None;
     for path in tool_search_order(bin) {
-        let output = command_output(
+        let output = tool_output(
             Command::new(&path)
                 .args(args)
                 .stdin(Stdio::inherit())
@@ -608,10 +589,30 @@ async fn output_tool(bin: &str, args: &[&str]) -> Option<String> {
     output_tool_env(bin, args, &[]).await
 }
 
+/// Parallel test children can briefly inherit a writer for a stub executable.
+/// Retry that test-only race, as the helper's Pipe runner does. Installed tools
+/// still fail immediately on a spawn error.
+async fn tool_output(command: &mut Command) -> io::Result<Output> {
+    let mut attempt = 0;
+    loop {
+        match command.output().await {
+            Err(error)
+                if cfg!(test)
+                    && error.kind() == io::ErrorKind::ExecutableFileBusy
+                    && attempt < 8 =>
+            {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(10 * attempt)).await;
+            }
+            result => return result,
+        }
+    }
+}
+
 async fn output_tool_env(bin: &str, args: &[&str], envs: &[(&str, &str)]) -> Option<String> {
     let mut last_error = None;
     for path in tool_search_order(bin) {
-        let output = match command_output(
+        let output = match tool_output(
             Command::new(&path)
                 .args(args)
                 .envs(envs.iter().copied())
@@ -848,6 +849,36 @@ mod tests {
             "{logged}"
         );
         assert!(logged.contains("stderr=permission-denied"), "{logged}");
+    }
+
+    #[tokio::test]
+    async fn a_brief_stub_writer_does_not_hide_the_firewall_exit_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = fake_tool(
+            dir.path(),
+            "iptables",
+            "echo permission-denied >&2; exit 23",
+        );
+        let writer = fs::OpenOptions::new().write(true).open(&tool).unwrap();
+        let (capture, subscriber) = log_capture();
+        let run = async {
+            assert!(!run_tool(&tool, &["-C", "INPUT"]).await);
+        }
+        .with_subscriber(subscriber);
+        let close_writer = async {
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            drop(writer);
+        };
+        tokio::join!(run, close_writer);
+        let logged = fs::read_to_string(capture.path()).unwrap();
+        assert_eq!(
+            logged.matches("host firewall tool failed").count(),
+            1,
+            "{logged}"
+        );
+        assert!(logged.contains("status=exit status: 23"), "{logged}");
+        assert!(logged.contains("stderr=permission-denied"), "{logged}");
+        assert!(!logged.contains("unavailable"), "{logged}");
     }
 
     #[tokio::test]

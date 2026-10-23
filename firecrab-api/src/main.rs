@@ -23,6 +23,7 @@ mod package;
 mod persistence;
 mod pipe_auth;
 mod pipe_databases;
+mod pool;
 mod process_metrics;
 mod reconcile;
 mod resource_limits;
@@ -140,6 +141,8 @@ async fn run() -> Result<(), StartupError> {
     // Fetch the shared bootstrap builder source now, in the background, so
     // the request that needs it doesn't have to — see spawn_warmup.
     microboot::spawn_warmup(state.clone());
+    // Keep warm pools filled after startup reconciliation has settled existing VMs.
+    pool::spawn_reconciler(state.clone());
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
         .await

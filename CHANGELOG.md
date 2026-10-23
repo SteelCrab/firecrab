@@ -42,6 +42,19 @@ Entries land here as work merges, and move under the next version heading when t
   image syntax. Validation reports omit configuration values. Applying resources
   and continuous Git synchronization remain follow-up work for #437.
 
+- Warm MicroVM pools keep booted, never-used VMs ready to lease. A pool pins an
+  image version and VM spec, keeps `minReady` members booted within `maxSize`,
+  and deletes and replaces every released or expired member instead of reusing
+  its disk. Acquire is atomic and idempotent through `Idempotency-Key`, pool
+  members refuse direct VM mutations, and pools are available over REST
+  (`/api/pools`), `firecrab pool`, and the dashboard ([#291]). Pools protect
+  their pinned images from deletion and kernel replacement, including while
+  empty. CLI failures print the acquire retry key, and the dashboard keeps
+  pending keys across reloads. Surviving members and leases reconnect after an
+  API restart; guest QA verifies unchanged VM processes and lease replay.
+  The dashboard starts with name and image inputs, keeps advanced settings
+  optional, and exposes Use VM and End session as its main actions.
+
 - Updating from the dashboard opens a dialog that shows what the new release
   changes, then a gauge with the overall percent and the stage (check,
   download, verify, apply, restart) until the API is back on the new version.
@@ -746,6 +759,7 @@ network helper.
 [#269]: https://github.com/SteelCrab/firecrab/pull/269
 [#270]: https://github.com/SteelCrab/firecrab/pull/270
 [#272]: https://github.com/SteelCrab/firecrab/pull/272
+[#291]: https://github.com/SteelCrab/firecrab/issues/291
 [#287]: https://github.com/SteelCrab/firecrab/pull/287
 [#290]: https://github.com/SteelCrab/firecrab/pull/290
 [#294]: https://github.com/SteelCrab/firecrab/pull/294

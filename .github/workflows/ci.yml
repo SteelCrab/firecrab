@@ -641,7 +641,8 @@ jobs:
         # The first reference additionally runs N6/V2/V6/V9/V12 and C1/C2/C4;
         # a pre-existing first alias is preserved and its unperformed import is
         # reported as WARNING rather than a false PASS.
-        run: scripts/ci-qa-guest.sh alpine:3.21 ubuntu:24.04 fedora:42 2>&1 | tee target/qa/guest.log
+        # The first reference also runs P1-P7, C6, and X7.
+        run: FIRECRAB_QA_POOL_RESTART=1 scripts/ci-qa-guest.sh alpine:3.21 ubuntu:24.04 fedora:42 2>&1 | tee target/qa/guest.log
 
       - name: QA VM lifetime
         timeout-minutes: 30
