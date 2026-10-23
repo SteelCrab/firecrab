@@ -4,6 +4,10 @@ React and TypeScript UI for firecrab.
 Develop it from the repository root as described in [README.md](../README.md).
 OCI inspect → import browser tests live in [firecrab-e2e](../firecrab-e2e/README.md).
 
+The Pools screen asks for a name and image. Network and resource settings use
+defaults and remain available under Advanced settings. Use VM opens a fresh
+session; End session deletes its VM and prepares a replacement automatically.
+
 ---
 
 # React + TypeScript + Vite

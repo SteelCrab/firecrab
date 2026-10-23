@@ -139,11 +139,11 @@ function Row({ vm, busy, selected, menu, onSelect, onToggleMenu, onCloseMenu, on
       ? { text: `${startupStepLabel(vm.startupStep, t)}…`, tone: "busy" }
       : { text: `${vm.template} · ${vmSpec(vm)}`, tone: "" };
   const cpuHistory = usageSeries(vm.usageHistory, (sample) => sample.cpuUsagePercent);
-  const lifecycle: { action: VmAction; label: string; icon: typeof Play } | null = running
+  const lifecycle: { action: VmAction; label: string; icon: typeof Play } | null = vm.purpose === "pool" ? null : running
     ? { action: "stop", label: t("Stop", "중지"), icon: Square }
     : vm.state === "paused"
       ? { action: "resume", label: t("Resume", "재개"), icon: Play }
-    : availableActions(vm.state).includes("start")
+    : availableActions(vm.state, vm.purpose).includes("start")
       ? { action: "start", label: t("Start", "시작"), icon: Play }
       : null;
 
@@ -151,6 +151,7 @@ function Row({ vm, busy, selected, menu, onSelect, onToggleMenu, onCloseMenu, on
     <tr aria-selected={selected} className={selected ? "selected" : undefined} onClick={() => onSelect(vm.id)}>
       <td>
         <button type="button" className="vm-row-name" onClick={() => onSelect(vm.id)}>{vm.name}</button>
+        {vm.purpose === "pool" && <span className="state-badge">{t("Pool", "풀")}</span>}
         <div className={`vm-row-sub ${sub.tone}`}>{sub.text}</div>
       </td>
       <td>
@@ -201,7 +202,7 @@ function Row({ vm, busy, selected, menu, onSelect, onToggleMenu, onCloseMenu, on
             {busy ? <Loader2 className="spin" aria-hidden="true" /> : <lifecycle.icon aria-hidden="true" />}
           </button>
         )}
-        {running && (
+        {running && vm.purpose !== "pool" && (
           <button type="button" className="icon-btn" aria-label={t("Pause", "일시정지")} title={t("Pause", "일시정지")} disabled={busy} onClick={() => onAction(vm.id, "pause")}>
             <Pause aria-hidden="true" />
           </button>
@@ -257,7 +258,7 @@ function Row({ vm, busy, selected, menu, onSelect, onToggleMenu, onCloseMenu, on
                 {t("SSH connect", "SSH 연결")}
               </button>
             </li>
-            {availableActions(vm.state).map((action) => (
+            {availableActions(vm.state, vm.purpose).map((action) => (
               <li key={action} role="none">
                 <button
                   type="button"

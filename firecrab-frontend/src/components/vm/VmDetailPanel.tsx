@@ -51,6 +51,7 @@ export default function VmDetailPanel({ vm: listed, busy, onAction, onOpenSsh }:
         <h2 className="detail-title">{vm.name}</h2>
         <div className="detail-meta">
           <StatusBadge state={vm.state} />
+          {vm.purpose === "pool" && <span className="state-badge">{t("Pool", "풀")}</span>}
           {vm.ipv4 && <span className="mono">{vm.ipv4}</span>}
           <span>{vm.template}</span>
         </div>
@@ -111,13 +112,15 @@ function PanelActions({ vm, busy, onAction, onSsh }: PanelActionsProps) {
   if (vm.state === "running") {
     return (
       <>
-        <button type="button" className="btn" disabled={busy} onClick={() => onAction(vm.id, "pause")}>
-          <Pause aria-hidden="true" />{t("Pause", "일시정지")}
-        </button>
-        <button type="button" className="btn" disabled={busy} onClick={() => onAction(vm.id, "stop")}>
-          {busy ? <Loader2 className="spin" aria-hidden="true" /> : <Square aria-hidden="true" />}
-          {t("Stop", "중지")}
-        </button>
+        {vm.purpose !== "pool" && <>
+          <button type="button" className="btn" disabled={busy} onClick={() => onAction(vm.id, "pause")}>
+            <Pause aria-hidden="true" />{t("Pause", "일시정지")}
+          </button>
+          <button type="button" className="btn" disabled={busy} onClick={() => onAction(vm.id, "stop")}>
+            {busy ? <Loader2 className="spin" aria-hidden="true" /> : <Square aria-hidden="true" />}
+            {t("Stop", "중지")}
+          </button>
+        </>}
         <a className="btn" href={consolePageUrl(vm.id)} target="_blank" rel="noopener noreferrer" title={t("Serial console (new tab)", "시리얼 콘솔 (새 탭)")}>
           <SquareTerminal aria-hidden="true" />
           {t("Console", "콘솔")}
@@ -130,6 +133,7 @@ function PanelActions({ vm, busy, onAction, onSsh }: PanelActionsProps) {
     );
   }
   if (["paused", "pausing", "resuming"].includes(vm.state)) {
+    if (vm.purpose === "pool") return null;
     const uncertain = vm.state !== "paused";
     return <>
       {uncertain && <button type="button" className="btn" disabled={busy} onClick={() => onAction(vm.id, "pause")}><Pause aria-hidden="true" />{t("Retry pause", "일시정지 재시도")}</button>}
@@ -145,7 +149,7 @@ function PanelActions({ vm, busy, onAction, onSsh }: PanelActionsProps) {
       </button>
     );
   }
-  const actions = availableActions(vm.state);
+  const actions = availableActions(vm.state, vm.purpose);
   return (
     <>
       {actions.includes("start") && (

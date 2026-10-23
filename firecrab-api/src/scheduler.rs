@@ -114,13 +114,16 @@ pub(crate) async fn spawn(
 /// Missing targets disable future runs. Retry only result persistence on database
 /// failures, retaining the claim and worker slot without repeating VM side effects.
 async fn execute(state: AppState, schedule: ScheduleResponse, run: ScheduleRun) {
-    let exists = state
+    let purpose = state
         .vms
         .lock()
         .unwrap_or_else(|p| p.into_inner())
-        .contains_key(&schedule.spec.vm_id);
-    let error = if !exists {
+        .get(&schedule.spec.vm_id)
+        .map(|vm| vm.purpose);
+    let error = if purpose.is_none() {
         Some("target VM no longer exists; schedule disabled".to_owned())
+    } else if purpose == Some(crate::model::VmPurpose::Pool) {
+        Some("pool members are managed automatically; schedule disabled".to_owned())
     } else {
         let args = (
             State(state.clone()),
@@ -137,11 +140,12 @@ async fn execute(state: AppState, schedule: ScheduleResponse, run: ScheduleRun) 
     // Keep the claim and worker slot until the result is durable. A database
     // outage must not make the same operation eligible to execute again.
     loop {
-        let target_missing = !state
+        let target_unavailable = state
             .vms
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .contains_key(&schedule.spec.vm_id);
+            .get(&schedule.spec.vm_id)
+            .is_none_or(|vm| vm.purpose == crate::model::VmPurpose::Pool);
         let store = state.store.clone();
         let run = run.clone();
         let error = error.clone();
@@ -150,7 +154,7 @@ async fn execute(state: AppState, schedule: ScheduleResponse, run: ScheduleRun) 
                 &run,
                 finished_at_ms,
                 error,
-                target_missing,
+                target_unavailable,
                 Utc::now().timestamp_millis(),
             )
         })
