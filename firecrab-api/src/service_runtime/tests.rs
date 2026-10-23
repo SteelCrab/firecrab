@@ -735,6 +735,151 @@ async fn domain_publication_is_durable_and_cleanup_retries_without_abandoning_in
     );
 }
 
+/// Return scripted publication failures through the real framed helper transport.
+async fn publication_helper(
+    root: &std::path::Path,
+    failures: Vec<firecrab_helper_protocol::network::HelperFailure>,
+) -> (
+    crate::network::NetworkClient,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
+    use firecrab_helper_protocol::{
+        PROTOCOL_VERSION,
+        framing::{read_frame, write_frame},
+        network::{NetworkRequest, NetworkRequestEnvelope, NetworkResponseEnvelope},
+        pipe::{Operation, ServiceRouteRequest, Snapshot},
+    };
+    let path = root.join("publication.sock");
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls = attempts.clone();
+    let task = tokio::spawn(async move {
+        let mut failures = failures.into_iter();
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let envelope: NetworkRequestEnvelope = read_frame(&mut stream).await.unwrap();
+            assert!(matches!(
+                envelope.request,
+                NetworkRequest::Pipe {
+                    request: Operation::ManageServiceRoute {
+                        request: ServiceRouteRequest::Publish { .. }
+                    }
+                }
+            ));
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            write_frame(
+                &mut stream,
+                &NetworkResponseEnvelope {
+                    version: PROTOCOL_VERSION,
+                    request_id: envelope.request_id,
+                    result: failures.next().map_or(Ok(()), Err),
+                    pipe: Some(Snapshot {
+                        config: None,
+                        units: vec![],
+                        nginx_available: true,
+                        cloudflared_available: false,
+                        quick_tunnel: None,
+                        quick_tunnels: vec![],
+                        firecrab_tunnels: vec![],
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        }
+    });
+    (
+        crate::network::NetworkClient::with_socket_path(path),
+        attempts,
+        task,
+    )
+}
+
+/// Retry bounded lock contention, but fail immediately for conflicts and other helper errors.
+#[tokio::test]
+async fn domain_publication_retries_only_exact_transient_lock_errors() {
+    use firecrab_helper_protocol::network::HelperFailure;
+    let busy = || HelperFailure::Internal {
+        detail: "[ERROR] another pipe change is running\n".into(),
+    };
+    let conflict = || HelperFailure::Internal {
+        detail: "Domain is already used by another Pipe route or service".into(),
+    };
+    let cases = [
+        ("busy then success", vec![busy()], 2, true),
+        (
+            "retry budget exhausted",
+            vec![busy(), busy(), busy()],
+            3,
+            false,
+        ),
+        ("domain conflict", vec![conflict()], 1, false),
+        (
+            "busy then domain conflict",
+            vec![busy(), conflict()],
+            2,
+            false,
+        ),
+        (
+            "different error detail",
+            vec![HelperFailure::Internal {
+                detail: "[ERROR] another pipe change is running\nadditional failure".into(),
+            }],
+            1,
+            false,
+        ),
+        (
+            "different error type",
+            vec![HelperFailure::InvalidRequest {
+                detail: "[ERROR] another pipe change is running\n".into(),
+            }],
+            1,
+            false,
+        ),
+    ];
+    for (name, failures, expected_attempts, succeeds) in cases {
+        let root = crate::firecracker::test_support::short_tempdir();
+        let mut state = state(root.path()).await;
+        let (client, attempts, helper) = publication_helper(root.path(), failures).await;
+        state.network = client;
+        let id = Uuid::new_v4();
+        let mut record = deployment(id);
+        record.spec.domain = Some("web.example.com".into());
+        record.instances.push(ServiceInstance {
+            vm_id: Uuid::new_v4(),
+            ipv4: "172.30.0.2".into(),
+            host_port: 0,
+            state: VmState::Running,
+            healthy: true,
+        });
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse {
+                id,
+                spec: record.spec.clone(),
+            })
+            .unwrap();
+        let result = domain::publish(&state, &mut record).await;
+        helper.abort();
+        assert_eq!(result.is_ok(), succeeds, "{name}: {result:?}");
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            expected_attempts,
+            "{name}"
+        );
+        assert!(
+            state
+                .store
+                .service_deployment(id)
+                .unwrap()
+                .unwrap()
+                .domain_route_owned,
+            "{name}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn domain_health_checks_use_the_requested_hostname() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

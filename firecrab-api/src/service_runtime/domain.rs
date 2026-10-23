@@ -1,6 +1,8 @@
 //! Domain routes have the same durable ownership and cleanup lifetime as service replicas.
 
 use super::*;
+use crate::network::NetworkError;
+use firecrab_helper_protocol::network::HelperFailure;
 use firecrab_helper_protocol::pipe::{Operation, ServiceRouteOwner, ServiceRouteRequest};
 
 /// Fail before importing an image if the engine is unavailable or the domain is occupied.
@@ -92,11 +94,36 @@ pub(super) async fn publish(
         host,
         upstreams,
     };
-    state.network.pipe(Operation::ManageServiceRoute { request }).await.map_err(|error| {
-        tracing::warn!(%error, service_id = %deployment.service_id, "could not publish service domain");
-        "Could not confirm domain routing. Check Pipe ingress and domain conflicts.".to_owned()
-    })?;
-    Ok(())
+    let mut retries = 0;
+    loop {
+        match state
+            .network
+            .pipe(Operation::ManageServiceRoute {
+                request: request.clone(),
+            })
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(error)
+                if retries < 2
+                    && matches!(
+                        &error,
+                        NetworkError::Helper(HelperFailure::Internal { detail })
+                            if detail.trim_end() == "[ERROR] another pipe change is running"
+                    ) =>
+            {
+                retries += 1;
+                tokio::time::sleep(Duration::from_secs(retries)).await;
+            }
+            Err(error) => {
+                tracing::warn!(%error, service_id = %deployment.service_id, "could not publish service domain");
+                return Err(
+                    "Could not confirm domain routing. Check Pipe ingress and domain conflicts."
+                        .to_owned(),
+                );
+            }
+        }
+    }
 }
 
 /// Withdraw traffic before draining or deleting VMs. Keep ownership on uncertain results.
