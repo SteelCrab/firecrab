@@ -1755,7 +1755,10 @@ fn runtime_preparation_recreates_image_directories_after_each_tmpfs_reset() {
         root.join("usr/lib/tmpfiles.d/database.conf"),
         format!(
             "d /run/mysqld 0750 {} {} -\nd /var/lib/untouched 0755 {} {} -\n",
-            owner.uid(), owner.gid(), owner.uid(), owner.gid()
+            owner.uid(),
+            owner.gid(),
+            owner.uid(),
+            owner.gid()
         ),
     )
     .unwrap();
