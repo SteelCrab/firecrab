@@ -190,7 +190,61 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // HTTP vs. WebSocket handling per configured path prefix, not by
     // inspecting each request's Upgrade header, so an HTTP-proxied `/api`
     // prefix and a WS-proxied path can't overlap.
+    // Every route that can change a VM, grouped so a pool member (#291) can
+    // be refused in one place; reads on the same paths pass through.
+    let vm_mutations = Router::new()
+        .route(
+            "/api/vms/{id}",
+            get(handlers::vms::get_vm)
+                .put(handlers::vms::update_vm)
+                .delete(handlers::vms::delete_vm),
+        )
+        .route("/api/vms/{id}/start", post(handlers::vms::start_vm_request))
+        .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
+        .route(
+            "/api/vms/{id}/pause",
+            post(handlers::vm_execution::pause_vm),
+        )
+        .route(
+            "/api/vms/{id}/resume",
+            post(handlers::vm_execution::resume_vm),
+        )
+        .route(
+            "/api/vms/{id}/storage",
+            axum::routing::put(handlers::vms::assign_vm_storage),
+        )
+        .route(
+            "/api/vms/{id}/shells",
+            axum::routing::put(handlers::vms::update_vm_shells),
+        )
+        .route(
+            "/api/vms/{id}/port-forwards",
+            axum::routing::put(handlers::vms::update_vm_port_forwards),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::pool::guard::reject_pool_owned,
+        ));
+
     let rest = Router::new()
+        .route(
+            "/api/schedules",
+            get(handlers::schedules::list).post(handlers::schedules::create),
+        )
+        .route(
+            "/api/schedules/{id}",
+            get(handlers::schedules::get)
+                .put(handlers::schedules::update)
+                .delete(handlers::schedules::delete),
+        )
+        .route(
+            "/api/schedules/{id}/enabled",
+            axum::routing::put(handlers::schedules::set_enabled),
+        )
+        .route(
+            "/api/schedules/{id}/runs",
+            get(handlers::schedules::history),
+        )
         .route(
             "/api/micro-services",
             get(handlers::micro_services::list).post(handlers::micro_services::create),
@@ -209,18 +263,11 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/micro-services/{id}/stop",
             post(crate::service_runtime::stop),
         )
+        .merge(vm_mutations)
         .route(
             "/api/vms",
             get(handlers::vms::list_vms).post(handlers::vms::create_vm_route),
         )
-        .route(
-            "/api/vms/{id}",
-            get(handlers::vms::get_vm)
-                .put(handlers::vms::update_vm)
-                .delete(handlers::vms::delete_vm),
-        )
-        .route("/api/vms/{id}/start", post(handlers::vms::start_vm_request))
-        .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
         .route("/api/vms/{id}/log", get(handlers::vms::get_vm_log))
         .route(
             "/api/vms/{id}/ssh-key",
@@ -236,6 +283,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))
+        .route(
+            "/api/micromanager/activity",
+            get(handlers::micromanager::activity),
+        )
         .route("/api/info", get(handlers::info::get_info))
         .route(
             "/api/pipe",
@@ -465,8 +516,26 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
                 .delete(handlers::micro_storages::delete_micro_storage),
         )
         .route(
-            "/api/vms/{id}/storage",
-            axum::routing::put(handlers::vms::assign_vm_storage),
+            "/api/pools",
+            get(handlers::pools::list_pools).post(handlers::pools::create_pool),
+        )
+        .route(
+            "/api/pools/{id}",
+            get(handlers::pools::get_pool)
+                .patch(handlers::pools::update_pool)
+                .delete(handlers::pools::delete_pool),
+        )
+        .route(
+            "/api/pools/{id}/acquire",
+            post(handlers::pools::acquire_pool_lease),
+        )
+        .route(
+            "/api/pools/{id}/leases",
+            get(handlers::pools::list_pool_leases),
+        )
+        .route(
+            "/api/pools/{id}/leases/{lease_id}",
+            get(handlers::pools::get_pool_lease).delete(handlers::pools::release_pool_lease),
         )
         .route(
             "/api/micro-networks",
@@ -494,14 +563,6 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/shells/{id}/revisions/{revision_id}",
             get(handlers::shells::get_shell_revision),
-        )
-        .route(
-            "/api/vms/{id}/shells",
-            axum::routing::put(handlers::vms::update_vm_shells),
-        )
-        .route(
-            "/api/vms/{id}/port-forwards",
-            axum::routing::put(handlers::vms::update_vm_port_forwards),
         )
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
@@ -959,6 +1020,61 @@ mod tests {
                 "{refused} must not pass as the dashboard's own origin"
             );
         }
+    }
+
+    /// #291: a pool member is only reachable through its lease. Reads,
+    /// console, and SSH keep working; nothing may start, stop, edit, or
+    /// delete it behind the pool's back.
+    #[tokio::test]
+    async fn mutating_routes_refuse_a_pool_owned_vm_but_reads_still_work() {
+        use tower::ServiceExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = crate::handlers::vms::test_support::record("pool-ci-1", uuid::Uuid::new_v4());
+        vm.purpose = crate::model::VmPurpose::Pool;
+        state.store.insert(&vm).unwrap();
+        state.vms.lock().unwrap().insert(vm.id, vm.clone());
+        let app = build_router(state, &config);
+
+        for (method, path) in [
+            (Method::PUT, format!("/api/vms/{}", vm.id)),
+            (Method::DELETE, format!("/api/vms/{}", vm.id)),
+            (Method::POST, format!("/api/vms/{}/start", vm.id)),
+            (Method::POST, format!("/api/vms/{}/stop", vm.id)),
+            (Method::POST, format!("/api/vms/{}/pause", vm.id)),
+            (Method::POST, format!("/api/vms/{}/resume", vm.id)),
+            (Method::PUT, format!("/api/vms/{}/storage", vm.id)),
+            (Method::PUT, format!("/api/vms/{}/shells", vm.id)),
+            (Method::PUT, format!("/api/vms/{}/port-forwards", vm.id)),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method.clone())
+                        .uri(&path)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            assert_eq!(status, axum::http::StatusCode::CONFLICT, "{method} {path}");
+            assert!(
+                String::from_utf8_lossy(&body).contains("pool_owned"),
+                "{method} {path}: {}",
+                String::from_utf8_lossy(&body)
+            );
+        }
+
+        let (status, body) = get(&app, &format!("/api/vms/{}", vm.id)).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
     }
 
     #[tokio::test]

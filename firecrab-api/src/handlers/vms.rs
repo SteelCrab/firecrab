@@ -10,7 +10,9 @@ use axum::http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, HeaderMap, HeaderValue,
 };
 use axum::response::IntoResponse;
-use firecrab_api_types::{SshHostKeyCheckResponse, SshHostKeyResponse, VmLogResponse, VmResponse};
+use firecrab_api_types::{
+    SshHostKeyCheckResponse, SshHostKeyResponse, VmLogResponse, VmPurpose, VmResponse,
+};
 use firecrab_helper_protocol::network::{
     DhcpLeaseEntry, Ipv6AddressMode, MicroNetworkSpec, VmPolicySpec,
 };
@@ -299,15 +301,39 @@ pub async fn create_vm(
         .templates
         .resolve_alias(&req.template)
         .ok_or_else(|| AppError::internal(request_id.0))?;
+    let response = insert_vm(
+        &state,
+        request_id,
+        Uuid::new_v4(),
+        req,
+        &template,
+        crate::model::VmPurpose::Instance,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+/// Persists a VM validated by [`validate_create`] from an exact template
+/// version: record, shell pins, port forwards, SSH key, and its address.
+/// Everything written is undone if a later step fails. Pools (#291) call
+/// this with their pinned version and a pre-assigned id.
+pub(crate) async fn insert_vm(
+    state: &AppState,
+    request_id: RequestId,
+    id: Uuid,
+    req: CreateVmRequest,
+    template: &crate::templates::TemplateVersion,
+    purpose: crate::model::VmPurpose,
+) -> Result<VmResponse, AppError> {
     let storage_root = req
         .storage_root
         .clone()
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| state.storage.default_id().to_owned());
     let vm = VmRecord {
-        id: Uuid::new_v4(),
+        id,
         name: req.name,
-        purpose: crate::model::VmPurpose::Instance,
+        purpose,
         template: template.name.clone(),
         template_version: template.version.clone(),
         template_kernel_sha256: template.kernel.sha256().to_owned(),
@@ -416,7 +442,7 @@ pub async fn create_vm(
     // see Store::active_lease's doc comment. The subnet it comes from is the
     // VM's MicroNetwork, so a VM can never hold an address its own bridge
     // doesn't route.
-    let subnet = match resolve_subnet(&state, vm.micro_network_id, request_id.0).await {
+    let subnet = match resolve_subnet(state, vm.micro_network_id, request_id.0).await {
         Ok(subnet) => subnet,
         Err(error) => {
             let store = state.store.clone();
@@ -453,7 +479,7 @@ pub async fn create_vm(
     // snapshot on every start regardless, and the console-sentinel
     // readiness check at that point is what actually surfaces a genuinely
     // missing reservation, not this one.
-    if let Err(error) = sync_dhcp_leases(&state).await {
+    if let Err(error) = sync_dhcp_leases(state).await {
         tracing::warn!(request_id = %request_id.0, vm_id = %vm.id, error, "dhcp sync failed after create");
     }
 
@@ -468,14 +494,14 @@ pub async fn create_vm(
         env_len,
         "vm created"
     );
-    let response = vm_response(&state, &vm, Some(&lease));
+    let response = vm_response(state, &vm, Some(&lease));
     state
         .vms
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(vm.id, vm);
 
-    Ok((StatusCode::CREATED, Json(response)))
+    Ok(response)
 }
 
 /// Replaces pinned shell revisions for a VM that has no live process.
@@ -568,6 +594,7 @@ pub async fn update_vm_port_forwards(
     ValidatedJson(req): ValidatedJson<firecrab_api_types::UpdateVmPortForwardsRequest>,
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let _guard = state.lock_vm(id).await;
 
     let mut fields = BTreeMap::new();
     let mut seen = std::collections::HashSet::new();
@@ -713,6 +740,7 @@ pub async fn update_vm(
     ValidatedJson(req): ValidatedJson<UpdateVmResourcesRequest>,
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let _guard = state.lock_vm(id).await;
     if req.env.is_some()
         && (state
             .store
@@ -877,6 +905,7 @@ async fn claim_start(
     Path(id): Path<String>,
 ) -> Result<(Uuid, VmRecord), AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let _guard = state.lock_vm(id).await;
     let (claimed, previous) = claim_transition(&state, id, VmState::Starting, request_id.0)?;
     if let Err(error) = persist_update(&state, &claimed, request_id.0).await {
         set_memory_state(&state, id, previous);
@@ -955,6 +984,7 @@ async fn finish_start(
         }
     };
     let pid = process.pid();
+    let guard = state.lock_vm(id).await;
 
     firecracker::register_and_watch(state, id, process);
 
@@ -963,6 +993,7 @@ async fn finish_start(
     match transition_if(state, id, VmState::Starting, VmState::Running) {
         Some(running) => {
             if persist_update(state, &running, request_id.0).await.is_err() {
+                drop(guard);
                 return Err(fail_start(state, id, request_id.0).await);
             }
             tracing::info!(
@@ -1000,13 +1031,27 @@ pub async fn stop_vm(
     Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
 ) -> Result<Json<VmResponse>, AppError> {
+    tokio::spawn(stop_vm_inner(State(state), Extension(request_id), Path(id)))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+}
+
+async fn stop_vm_inner(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let guard = state.lock_vm(id).await;
     let (claimed, previous) = claim_transition(&state, id, VmState::Stopping, request_id.0)?;
     if let Err(error) = persist_update(&state, &claimed, request_id.0).await {
         set_memory_state(&state, id, previous);
         return Err(error);
     }
 
+    // The exit monitor takes this lock before signaling completion. Stopping
+    // rejects other lifecycle requests while we wait without the lock.
+    drop(guard);
     let entry = state
         .processes
         .lock()
@@ -1017,7 +1062,9 @@ pub async fn stop_vm(
         firecracker::stop_registered(id, process, state.runtime.stop_grace).await;
     }
 
-    // Only a running VM can reach Stopping (see VmState::can_transition), so
+    let _guard = state.lock_vm(id).await;
+
+    // Only a VM with a live runtime can reach Stopping, so
     // setup_vm_network always ran for it — tear its TAP/policy back down.
     // The underlying lease is untouched; it's freed only by a successful
     // delete, so a later start reuses the same IP/MAC.
@@ -1052,6 +1099,7 @@ pub async fn delete_vm(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let _guard = state.lock_vm(id).await;
     if state
         .store
         .managed_database_kafka()
@@ -1181,7 +1229,7 @@ fn claim_transition(
     Ok((vm.clone(), previous))
 }
 
-fn set_memory_state(state: &AppState, id: Uuid, to: VmState) -> Option<VmRecord> {
+pub(super) fn set_memory_state(state: &AppState, id: Uuid, to: VmState) -> Option<VmRecord> {
     let mut vms = state
         .vms
         .lock()
@@ -1193,7 +1241,12 @@ fn set_memory_state(state: &AppState, id: Uuid, to: VmState) -> Option<VmRecord>
     })
 }
 
-fn transition_if(state: &AppState, id: Uuid, from: VmState, to: VmState) -> Option<VmRecord> {
+pub(super) fn transition_if(
+    state: &AppState,
+    id: Uuid,
+    from: VmState,
+    to: VmState,
+) -> Option<VmRecord> {
     let mut vms = state
         .vms
         .lock()
@@ -1208,7 +1261,7 @@ fn transition_if(state: &AppState, id: Uuid, from: VmState, to: VmState) -> Opti
     }
 }
 
-async fn persist_update(
+pub(super) async fn persist_update(
     state: &AppState,
     record: &VmRecord,
     request_id: Uuid,
@@ -1812,7 +1865,7 @@ pub(crate) async fn active_vm_policy_specs(state: &AppState) -> Result<Vec<VmPol
         let mut active = Vec::new();
         for vm in vms
             .into_values()
-            .filter(|vm| matches!(vm.state, VmState::Starting | VmState::Running))
+            .filter(|vm| vm.state.has_live_runtime() && vm.state != VmState::Stopping)
         {
             // An active VM always has one; skipped rather than failed if not,
             // since there is no address-keyed policy to install either way.
@@ -2025,9 +2078,15 @@ fn sorted_responses(
     vms: &HashMap<Uuid, VmRecord>,
     leases: &HashMap<Uuid, Lease>,
 ) -> Vec<VmResponse> {
+    // Instances and pool members. Builder VMs stay on the image-job session.
     let mut records: Vec<&VmRecord> = vms
         .values()
-        .filter(|vm| vm.purpose == crate::model::VmPurpose::Instance)
+        .filter(|vm| {
+            matches!(
+                vm.purpose,
+                crate::model::VmPurpose::Instance | crate::model::VmPurpose::Pool
+            )
+        })
         .collect();
     records.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
     records
@@ -2061,6 +2120,11 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
     VmResponse {
         id: vm.id,
         name: vm.name.clone(),
+        purpose: match vm.purpose {
+            crate::model::VmPurpose::Instance => VmPurpose::Instance,
+            crate::model::VmPurpose::Builder => VmPurpose::Builder,
+            crate::model::VmPurpose::Pool => VmPurpose::Pool,
+        },
         state: vm.state,
         reconciliation: state
             .reconciliation
@@ -2134,7 +2198,18 @@ pub(crate) fn is_valid_ram_mib(ram: u32) -> bool {
     (MIN_RAM_MIB..=MAX_RAM_MIB).contains(&ram) && ram.is_power_of_two()
 }
 
-fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, String> {
+pub(crate) fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, String> {
+    let template = state.templates.resolve_alias(&req.template);
+    validate_create_for(req, template.as_deref(), state)
+}
+
+/// Checks a VM against the exact image it will boot. Pools pass their pinned
+/// version so changing an alias cannot change the disk requirements.
+pub(crate) fn validate_create_for(
+    req: &CreateVmRequest,
+    template: Option<&crate::templates::TemplateVersion>,
+    state: &AppState,
+) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
     if req.shell_ids.len() > crate::shells::MAX_SHELLS_PER_VM {
         fields.insert(
@@ -2177,7 +2252,6 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
             );
         }
     }
-    let template = state.templates.resolve_alias(&req.template);
     if template.is_none() {
         fields.insert("template".to_owned(), "is not supported".to_owned());
     }

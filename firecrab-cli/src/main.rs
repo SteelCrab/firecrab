@@ -14,6 +14,8 @@ mod micromanager;
 mod microservice;
 mod network;
 mod pipe;
+mod pool;
+mod schedule;
 #[cfg(target_os = "linux")]
 mod service;
 #[cfg(any(target_os = "linux", all(test, unix)))]
@@ -46,6 +48,11 @@ enum Command {
     Stack {
         #[command(subcommand)]
         command: stack::Command,
+    },
+    /// Manage time-based MicroVM start and stop operations.
+    Schedule {
+        #[command(subcommand)]
+        command: schedule::Command,
     },
     /// Manage desired MicroService configurations through the host API.
     Microservice {
@@ -108,6 +115,11 @@ enum Command {
         #[command(subcommand)]
         command: network::Command,
     },
+    /// Manage warm MicroVM pools and lease their VMs.
+    Pool {
+        #[command(subcommand)]
+        command: pool::Command,
+    },
     /// Inspect template images through the host API.
     Image {
         #[command(subcommand)]
@@ -140,6 +152,11 @@ fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
         Command::Stack { command } => stack::run(command),
+        Command::Schedule { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                schedule::run(client, command)
+            })
+        }
         Command::Microservice { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 microservice::run(client, command)
@@ -175,6 +192,11 @@ fn run(cli: Cli) -> i32 {
         Command::Network { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 network::run(client, command)
+            })
+        }
+        Command::Pool { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                pool::run(client, command)
             })
         }
         Command::Image { command } => {

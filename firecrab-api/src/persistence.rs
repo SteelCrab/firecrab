@@ -18,11 +18,15 @@ use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
 mod database_services;
+mod pools;
+pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod micro_services;
 mod pipe_auth;
 mod pipe_databases;
 mod registries;
+mod schedules;
 pub use registries::RegistryLogin;
+pub(crate) use schedules::ScheduleMutation;
 
 /// Default SQLite database path, relative to the process's working directory.
 const DB_FILE: &str = "data/firecrab.db";
@@ -689,6 +693,7 @@ impl Store {
         migrate_ipv6_columns(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
+        conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(database_services::CREATE_SQL)?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
@@ -713,6 +718,7 @@ impl Store {
         conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_UNIQUE_HOST_PORT_SQL, [])?;
+        pools::create_tables(&conn)?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
         // that still have NULL micro_network_id onto one explicit row.
         promote_implicit_default_network(&conn)?;
@@ -1869,6 +1875,7 @@ fn decode_purpose(id: &str, purpose: &str) -> Result<crate::model::VmPurpose, Pe
     match purpose {
         "instance" => Ok(crate::model::VmPurpose::Instance),
         "builder" => Ok(crate::model::VmPurpose::Builder),
+        "pool" => Ok(crate::model::VmPurpose::Pool),
         other => Err(PersistenceError::CorruptRecord {
             id: id.to_owned(),
             reason: format!("unknown purpose {other:?}"),
@@ -2467,6 +2474,18 @@ mod tests {
 
         let loaded = store.load_all().unwrap();
         assert_eq!(loaded[&vm.id].purpose, crate::model::VmPurpose::Builder);
+    }
+
+    #[test]
+    fn pool_purpose_round_trips_through_insert_and_load() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(&dir.path().join("test.db")).unwrap();
+        let mut vm = record(Uuid::new_v4(), "pool-ci-1");
+        vm.purpose = crate::model::VmPurpose::Pool;
+        store.insert(&vm).unwrap();
+
+        let loaded = store.load_all().unwrap();
+        assert_eq!(loaded[&vm.id].purpose, crate::model::VmPurpose::Pool);
     }
 
     #[test]

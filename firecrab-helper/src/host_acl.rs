@@ -848,6 +848,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_brief_stub_writer_does_not_hide_the_firewall_exit_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = fake_tool(
+            dir.path(),
+            "iptables",
+            "echo permission-denied >&2; exit 23",
+        );
+        let writer = fs::OpenOptions::new().write(true).open(&tool).unwrap();
+        let (capture, subscriber) = log_capture();
+        let run = async {
+            assert!(!run_tool(&tool, &["-C", "INPUT"]).await);
+        }
+        .with_subscriber(subscriber);
+        let close_writer = async {
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            drop(writer);
+        };
+        tokio::join!(run, close_writer);
+        let logged = fs::read_to_string(capture.path()).unwrap();
+        assert_eq!(
+            logged.matches("host firewall tool failed").count(),
+            1,
+            "{logged}"
+        );
+        assert!(logged.contains("status=exit status: 23"), "{logged}");
+        assert!(logged.contains("stderr=permission-denied"), "{logged}");
+        assert!(!logged.contains("unavailable"), "{logged}");
+    }
+
+    #[tokio::test]
     async fn missing_fallback_paths_do_not_hide_spawn_permission_errors() {
         let dir = tempfile::tempdir().unwrap();
         let tool = fake_tool(dir.path(), "firewall-tool", "exit 0");

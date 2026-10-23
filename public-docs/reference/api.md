@@ -8,6 +8,7 @@ Keep the unauthenticated listener on a trusted loopback path.
 - [Request rules](#request-rules)
 - [VM endpoints and fields](#vm-endpoints)
 - [Startup reconciliation](#api-startup-reconciliation)
+- [Schedules](../guides/schedules.md#rest-api)
 - [Other endpoints](#other-endpoints)
 - [Host responses](#host)
 - [Update](#update)
@@ -32,6 +33,7 @@ Keep the unauthenticated listener on a trusted loopback path.
 | GET, POST | `/api/vms` | List / create |
 | GET, PUT, DELETE | `/api/vms/{id}` | Read / edit / delete |
 | POST | `/api/vms/{id}/start`, `/stop` | Start / stop |
+| POST | `/api/vms/{id}/pause`, `/resume` | Preserve guest execution state / continue it |
 | GET | `/api/vms/{id}/log` | Full console transcript |
 | GET | `/api/vms/{id}/ssh-key` | Operator private key (`firecrab-<name>.pem`) |
 | GET | `/api/vms/{id}/ssh-host-key` | Guest fingerprint and public key |
@@ -85,6 +87,17 @@ created -> starting -> running -> stopping -> stopped
 ```
 
 Start accepts `created`, `stopped`, and `error`; delete requires an inactive VM.
+Pause follows `running → pausing → paused`; resume follows `paused → resuming → running`.
+The same VMM, RAM, disks, and network identity remain allocated.
+Repeated pause/resume calls are safe and return a confirmed runtime state.
+A lost VMM answer is checked through its instance API before success is reported.
+An unconfirmed operation stays `pausing`/`resuming`; retry Pause/Resume or Stop.
+API restarts query the VMM and preserve a surviving paused guest.
+Stop works from paused or unconfirmed execution states and discards guest RAM.
+Start, delete, resource/env edits, and shell/storage changes remain unavailable while paused.
+MicroService-owned replicas and internal image builders return `409` for pause/resume.
+Existing serial consoles can read history while paused; keystrokes are discarded until Running.
+External requests and guest health probes cannot complete while paused.
 The console closes when a VM stops.
 Guest logout closes it with `4000 session_ended` while the VM keeps running.
 A new attachment replays only the new login session; reconnecting before logout retains current history.
@@ -340,3 +353,57 @@ Use `requestId` to locate the server log.
 - [Guest runtime](guest-runtime.md)
 - [CLI](cli.md)
 - [Troubleshooting](../guides/troubleshooting.md)
+
+## Pools
+
+A pool keeps booted, never-used VMs ready to lease. A released or expired member is stopped,
+deleted, and replaced; its disk is never handed to another caller. Pools are host-local.
+
+| Method | Path | Job |
+| --- | --- | --- |
+| `GET`, `POST` | `/api/pools` | List or create pools |
+| `GET`, `PATCH`, `DELETE` | `/api/pools/{id}` | Read, resize, or delete a pool |
+| `POST` | `/api/pools/{id}/acquire` | Lease one ready VM |
+| `GET` | `/api/pools/{id}/leases` | List leases, newest first |
+| `GET`, `DELETE` | `/api/pools/{id}/leases/{leaseId}` | Read or release a lease |
+
+`POST /api/pools`:
+
+- `name` (1–40 characters), `template`, `cpu`, `ram`, `diskGb`, `microNetworkId`
+- optional `egressPolicy`, `storageRoot`
+- `minReady` (0 to `maxSize`), `maxSize` (1–32), `leaseTtlSeconds` (60–604800)
+- The VM spec is validated like `POST /api/vms`
+- The pool pins the image version `template` resolves to at creation; image and spec stay fixed
+- Image deletion and kernel replacement return `409 in_use` while any pool references the image,
+  including a pool with no members. Delete the pool first
+
+`PATCH /api/pools/{id}` changes `minReady`, `maxSize`, and `leaseTtlSeconds`. A new TTL applies to
+later leases. Lowering a limit drains the newest unleased members.
+
+Acquire:
+
+- `201` with the lease, including its `vm` (address, hostname, state)
+- `Idempotency-Key` header (1–255 visible ASCII characters): a retry returns the original lease
+  with `200`. Keys are per pool and kept until 24 hours after the lease ends
+- `409 pool_exhausted` when no member is ready. The pool keeps booting replacements up to
+  `maxSize`; retry with the same key
+- `409 pool_deleting` once the pool is being deleted
+
+Release (`DELETE /api/pools/{id}/leases/{leaseId}`) returns the ended lease; a repeat returns it
+unchanged.
+
+Members:
+
+- `provisioning` → `ready` → `leased` → `draining` → deleted
+- Members are listed on `GET /api/vms` with `purpose` `pool`.
+- `GET /api/vms/{id}`, the console, and the SSH key still work for a member.
+- `PUT`/`DELETE /api/vms/{id}`, start, stop, storage, shells, and port forwards answer `409 pool_owned` for a member.
+- `maxSize` counts every member, draining ones included
+- A lease ends as `expired` when its TTL passes or its VM stops. API startup reconnects surviving
+  VM shims before pool reconciliation. Ready members and unexpired active leases survive a restart;
+  missing or stopped VMs are replaced and their active leases expire
+- `lastError` names the most recent member that failed to create or boot; the pool waits 30
+  seconds before trying again
+
+`DELETE /api/pools/{id}` answers `409 pool_in_use` while a lease is active. Otherwise it returns
+`202` with `deleting: true`, and the pool disappears once its members are deleted.

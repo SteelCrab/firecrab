@@ -25,6 +25,7 @@ fn deployment(id: Uuid) -> MicroServiceDeployment {
         id: Uuid::new_v4(),
         service_id: id,
         phase: ServicePhase::Queued,
+        domain_route_owned: false,
         spec: spec(),
         request: DeployMicroServiceRequest {
             micro_network_id: None,
@@ -48,7 +49,8 @@ fn deployments_reject_unsupported_configuration_and_port_overflow_before_claimin
     spec.domain = Some("example.com".into());
     spec.secrets.insert("PASSWORD".into(), Uuid::new_v4());
     let fields = deployment_fields(&spec, &request, 5523);
-    assert!(fields.contains_key("domain"));
+    assert!(!fields.contains_key("domain"));
+    spec.domain = None;
     assert!(fields.contains_key("secrets"));
     spec.replicas = 2;
     for port in [0, 80, 5522, 5523, 65535] {
@@ -495,7 +497,7 @@ async fn deploy_rejects_unknown_services_networks_and_unsupported_settings() {
         .unwrap();
     assert_eq!(
         status(call(id.to_string(), request.clone()).await),
-        StatusCode::BAD_REQUEST
+        StatusCode::SERVICE_UNAVAILABLE
     );
     let id = Uuid::new_v4();
     state
@@ -547,4 +549,369 @@ async fn get_reports_live_instance_state_and_rejects_unknown_services() {
     };
     assert_eq!(live.phase, ServicePhase::Degraded);
     assert_eq!(live.instances[0].state, VmState::Stopped);
+}
+
+/// A framed helper with an isolated Pipe manifest. No host services or networking are changed.
+async fn domain_helper(
+    root: &std::path::Path,
+    fail_after_publish: bool,
+) -> (
+    crate::network::NetworkClient,
+    std::sync::Arc<std::sync::Mutex<firecrab_helper_protocol::pipe::Config>>,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use firecrab_helper_protocol::{
+        PROTOCOL_VERSION,
+        framing::{read_frame, write_frame},
+        network::{HelperFailure, NetworkRequest, NetworkRequestEnvelope, NetworkResponseEnvelope},
+        pipe::{Config, Operation, ServiceRouteRequest, Snapshot},
+    };
+    let path = root.join("domain.sock");
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let config = std::sync::Arc::new(std::sync::Mutex::new(
+        serde_json::from_value::<Config>(serde_json::json!({"routes":[],"tunnel":null})).unwrap(),
+    ));
+    let reject_remove = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let saved = config.clone();
+    let reject = reject_remove.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let saved = saved.clone();
+            let reject = reject.clone();
+            tokio::spawn(async move {
+                let envelope: NetworkRequestEnvelope = read_frame(&mut stream).await.unwrap();
+                let mut result = Ok(());
+                let snapshot = {
+                    let mut config = saved.lock().unwrap();
+                    if let NetworkRequest::Pipe {
+                        request: Operation::ManageServiceRoute { request },
+                    } = envelope.request
+                    {
+                        if matches!(request, ServiceRouteRequest::Remove { .. })
+                            && reject.load(std::sync::atomic::Ordering::SeqCst)
+                        {
+                            result = Err(HelperFailure::Internal {
+                                detail: "isolated withdraw failure".into(),
+                            });
+                        } else {
+                            match request.updated_config(&config) {
+                                Ok(next) => *config = next,
+                                Err(detail) => result = Err(HelperFailure::Internal { detail }),
+                            }
+                            if fail_after_publish
+                                && matches!(request, ServiceRouteRequest::Publish { .. })
+                            {
+                                result = Err(HelperFailure::Internal {
+                                    detail: "response lost after publication".into(),
+                                });
+                            }
+                        }
+                    }
+                    Snapshot {
+                        config: Some(config.clone()),
+                        units: vec![],
+                        nginx_available: true,
+                        cloudflared_available: false,
+                        quick_tunnel: None,
+                        quick_tunnels: vec![],
+                        firecrab_tunnels: vec![],
+                    }
+                };
+                write_frame(
+                    &mut stream,
+                    &NetworkResponseEnvelope {
+                        version: PROTOCOL_VERSION,
+                        request_id: envelope.request_id,
+                        result,
+                        pipe: Some(snapshot),
+                    },
+                )
+                .await
+                .unwrap();
+            });
+        }
+    });
+    (
+        crate::network::NetworkClient::with_socket_path(path),
+        config,
+        reject_remove,
+    )
+}
+
+#[tokio::test]
+async fn domain_deployments_accept_empty_requests_and_reject_existing_routes_before_queueing() {
+    let root = crate::firecracker::test_support::short_tempdir();
+    let mut state = state(root.path()).await;
+    let (helper, config, _) = domain_helper(root.path(), false).await;
+    state.network = helper;
+    let request: DeployMicroServiceRequest = serde_json::from_value(serde_json::json!({})).unwrap();
+    let mut spec = spec();
+    spec.domain = Some("web.example.com".into());
+    assert!(deployment_fields(&spec, &request, 5523).is_empty());
+    let id = Uuid::new_v4();
+    state
+        .store
+        .insert_micro_service(&MicroServiceResponse {
+            id,
+            spec: spec.clone(),
+        })
+        .unwrap();
+    domain::preflight(&state, id, &spec, Uuid::new_v4())
+        .await
+        .unwrap();
+    config.lock().unwrap().routes.push(
+        serde_json::from_value(
+            serde_json::json!({"host":"web.example.com","upstreams":["127.0.0.1:9000"]}),
+        )
+        .unwrap(),
+    );
+    let error = deploy(
+        State(state.clone()),
+        Extension(RequestId(Uuid::new_v4())),
+        Path(id.to_string()),
+        ValidatedJson(request),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    assert!(state.store.service_deployment(id).unwrap().is_none());
+    assert_eq!(config.lock().unwrap().routes.len(), 1);
+}
+
+#[tokio::test]
+async fn domain_publication_is_durable_and_cleanup_retries_without_abandoning_instances() {
+    let root = crate::firecracker::test_support::short_tempdir();
+    let mut state = state(root.path()).await;
+    let (helper, config, reject_remove) = domain_helper(root.path(), true).await;
+    state.network = helper;
+    let id = Uuid::new_v4();
+    let mut record = deployment(id);
+    record.spec.domain = Some("web.example.com".into());
+    record.instances.push(ServiceInstance {
+        vm_id: Uuid::new_v4(),
+        ipv4: "172.30.0.2".into(),
+        host_port: 0,
+        state: VmState::Running,
+        healthy: true,
+    });
+    state
+        .store
+        .insert_micro_service(&MicroServiceResponse {
+            id,
+            spec: record.spec.clone(),
+        })
+        .unwrap();
+    assert!(domain::publish(&state, &mut record).await.is_err());
+    let persisted = state.store.service_deployment(id).unwrap().unwrap();
+    assert!(persisted.domain_route_owned);
+    assert_eq!(persisted.phase, ServicePhase::ConnectingDomain);
+    assert_eq!(
+        config.lock().unwrap().routes[0].upstreams[0].to_string(),
+        "172.30.0.2:8080"
+    );
+    recover(&state).await;
+    assert_eq!(
+        state.store.service_deployment(id).unwrap().unwrap().phase,
+        ServicePhase::Failed
+    );
+    reject_remove.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(cleanup(&state, &mut record).await.is_err());
+    assert!(record.domain_route_owned);
+    assert_eq!(record.instances.len(), 1);
+    assert!(ensure_editable(&state, id, Uuid::new_v4()).await.is_err());
+    reject_remove.store(false, std::sync::atomic::Ordering::SeqCst);
+    cleanup(&state, &mut record).await.unwrap();
+    assert!(!record.domain_route_owned);
+    assert!(record.instances.is_empty());
+    assert!(config.lock().unwrap().routes.is_empty());
+    assert!(
+        !state
+            .store
+            .service_deployment(id)
+            .unwrap()
+            .unwrap()
+            .domain_route_owned
+    );
+}
+
+/// Return scripted publication failures through the real framed helper transport.
+async fn publication_helper(
+    root: &std::path::Path,
+    failures: Vec<firecrab_helper_protocol::network::HelperFailure>,
+) -> (
+    crate::network::NetworkClient,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
+    use firecrab_helper_protocol::{
+        PROTOCOL_VERSION,
+        framing::{read_frame, write_frame},
+        network::{NetworkRequest, NetworkRequestEnvelope, NetworkResponseEnvelope},
+        pipe::{Operation, ServiceRouteRequest, Snapshot},
+    };
+    let path = root.join("publication.sock");
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls = attempts.clone();
+    let task = tokio::spawn(async move {
+        let mut failures = failures.into_iter();
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let envelope: NetworkRequestEnvelope = read_frame(&mut stream).await.unwrap();
+            assert!(matches!(
+                envelope.request,
+                NetworkRequest::Pipe {
+                    request: Operation::ManageServiceRoute {
+                        request: ServiceRouteRequest::Publish { .. }
+                    }
+                }
+            ));
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            write_frame(
+                &mut stream,
+                &NetworkResponseEnvelope {
+                    version: PROTOCOL_VERSION,
+                    request_id: envelope.request_id,
+                    result: failures.next().map_or(Ok(()), Err),
+                    pipe: Some(Snapshot {
+                        config: None,
+                        units: vec![],
+                        nginx_available: true,
+                        cloudflared_available: false,
+                        quick_tunnel: None,
+                        quick_tunnels: vec![],
+                        firecrab_tunnels: vec![],
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        }
+    });
+    (
+        crate::network::NetworkClient::with_socket_path(path),
+        attempts,
+        task,
+    )
+}
+
+/// Retry bounded lock contention, but fail immediately for conflicts and other helper errors.
+#[tokio::test]
+async fn domain_publication_retries_only_exact_transient_lock_errors() {
+    use firecrab_helper_protocol::network::HelperFailure;
+    let busy = || HelperFailure::Internal {
+        detail: "[ERROR] another pipe change is running\n".into(),
+    };
+    let conflict = || HelperFailure::Internal {
+        detail: "Domain is already used by another Pipe route or service".into(),
+    };
+    let cases = [
+        ("busy then success", vec![busy()], 2, true),
+        (
+            "retry budget exhausted",
+            vec![busy(), busy(), busy()],
+            3,
+            false,
+        ),
+        ("domain conflict", vec![conflict()], 1, false),
+        (
+            "busy then domain conflict",
+            vec![busy(), conflict()],
+            2,
+            false,
+        ),
+        (
+            "different error detail",
+            vec![HelperFailure::Internal {
+                detail: "[ERROR] another pipe change is running\nadditional failure".into(),
+            }],
+            1,
+            false,
+        ),
+        (
+            "different error type",
+            vec![HelperFailure::InvalidRequest {
+                detail: "[ERROR] another pipe change is running\n".into(),
+            }],
+            1,
+            false,
+        ),
+    ];
+    for (name, failures, expected_attempts, succeeds) in cases {
+        let root = crate::firecracker::test_support::short_tempdir();
+        let mut state = state(root.path()).await;
+        let (client, attempts, helper) = publication_helper(root.path(), failures).await;
+        state.network = client;
+        let id = Uuid::new_v4();
+        let mut record = deployment(id);
+        record.spec.domain = Some("web.example.com".into());
+        record.instances.push(ServiceInstance {
+            vm_id: Uuid::new_v4(),
+            ipv4: "172.30.0.2".into(),
+            host_port: 0,
+            state: VmState::Running,
+            healthy: true,
+        });
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse {
+                id,
+                spec: record.spec.clone(),
+            })
+            .unwrap();
+        let result = domain::publish(&state, &mut record).await;
+        helper.abort();
+        assert_eq!(result.is_ok(), succeeds, "{name}: {result:?}");
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            expected_attempts,
+            "{name}"
+        );
+        assert!(
+            state
+                .store
+                .service_deployment(id)
+                .unwrap()
+                .unwrap()
+                .domain_route_owned,
+            "{name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn domain_health_checks_use_the_requested_hostname() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = axum::Router::new().route(
+        "/health",
+        axum::routing::get(|headers: axum::http::HeaderMap| async move {
+            if headers
+                .get("host")
+                .is_some_and(|value| value == "web.example.com")
+            {
+                StatusCode::OK
+            } else {
+                StatusCode::NOT_FOUND
+            }
+        }),
+    );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let mut spec = spec();
+    spec.port = port;
+    spec.domain = Some("web.example.com".into());
+    let instance = ServiceInstance {
+        vm_id: Uuid::new_v4(),
+        ipv4: "127.0.0.1".into(),
+        host_port: 0,
+        state: VmState::Running,
+        healthy: false,
+    };
+    assert!(healthy(&health_client(), &spec, &instance).await);
+    spec.domain = None;
+    assert!(!healthy(&health_client(), &spec, &instance).await);
+    task.abort();
 }

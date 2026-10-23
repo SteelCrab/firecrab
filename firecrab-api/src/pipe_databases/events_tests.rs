@@ -231,6 +231,7 @@ async fn durable_events_real_kafka() {
                     healthy: true,
                 }],
                 log: vec![],
+                domain_route_owned: false,
                 error: None,
             })
             .unwrap();

@@ -10,6 +10,8 @@ async-compression = { version = "0.4.43", features = ["gzip", "tokio", "zstd"] }
 axum = { version = "0.8.9", features = ["ws"] }
 base64 = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono-tz = "0.10.4"
+cron = "0.17.0"
 hmac = "0.12"
 firecrab-api-types = { path = "../firecrab-api-types" }
 firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }

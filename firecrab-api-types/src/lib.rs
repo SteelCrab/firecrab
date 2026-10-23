@@ -9,11 +9,15 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod pool;
+pub use pool::*;
 mod micro_services;
+mod schedules;
 pub use micro_services::{
     DeployMicroServiceRequest, MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec,
     ServiceInstance, ServicePhase, ServiceRuntime,
 };
+pub use schedules::*;
 
 /// The egress policies the API may request for a VM. New policies are added
 /// here and mirrored in `firecrab-helper`'s own (deliberately separate)
@@ -72,6 +76,12 @@ pub enum VmState {
     Starting,
     /// Firecracker process is up and the guest has booted.
     Running,
+    /// Pause requested; runtime confirmation is pending.
+    Pausing,
+    /// Guest execution is paused; the VMM and RAM remain allocated.
+    Paused,
+    /// Resume requested; runtime confirmation is pending.
+    Resuming,
     /// Shutdown requested, process not yet confirmed gone.
     Stopping,
     /// Process exited cleanly.
@@ -83,15 +93,39 @@ pub enum VmState {
 impl VmState {
     /// Whether the lifecycle table allows moving from `self` to `to`.
     pub fn can_transition(self, to: Self) -> bool {
-        use VmState::{Created, Error, Running, Starting, Stopped, Stopping};
+        use VmState::{
+            Created, Error, Paused, Pausing, Resuming, Running, Starting, Stopped, Stopping,
+        };
         matches!(
             (self, to),
             (Created, Starting)
                 | (Starting, Running | Error)
-                | (Running, Stopping | Stopped | Error)
+                | (Running, Pausing | Resuming | Stopping | Stopped | Error)
+                | (
+                    Pausing,
+                    Paused | Resuming | Running | Stopping | Stopped | Error
+                )
+                | (Paused, Pausing | Resuming | Stopping | Stopped | Error)
+                | (
+                    Resuming,
+                    Running | Pausing | Paused | Stopping | Stopped | Error
+                )
                 | (Stopping, Stopped | Error)
                 | (Stopped, Starting)
                 | (Error, Starting)
+        )
+    }
+
+    /// Whether a live VMM may still own this VM's memory, disks, and network.
+    pub fn has_live_runtime(self) -> bool {
+        matches!(
+            self,
+            Self::Starting
+                | Self::Running
+                | Self::Pausing
+                | Self::Paused
+                | Self::Resuming
+                | Self::Stopping
         )
     }
 
@@ -373,6 +407,22 @@ pub struct StartupStepRun {
     pub detail: Option<String>,
 }
 
+/// What a VM record represents.
+///
+/// Wire values are `instance`, `builder`, and `pool` — the same three
+/// purposes the API stores. `GET /api/vms` returns `instance` and `pool`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VmPurpose {
+    /// A user-created MicroVM.
+    #[default]
+    Instance,
+    /// An image-build VM. `GET /api/vms` does not list it.
+    Builder,
+    /// A warm-pool member. `GET /api/vms` lists it.
+    Pool,
+}
+
 /// What the latest API startup or operator network retry learned about a VM.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -404,6 +454,9 @@ pub struct VmResponse {
     pub id: Uuid,
     /// User-supplied name.
     pub name: String,
+    /// What this record represents. Omitted JSON is [`VmPurpose::Instance`].
+    #[serde(default)]
+    pub purpose: VmPurpose,
     /// Current lifecycle state.
     pub state: VmState,
     /// Latest API startup/network retry check; cleared when a new start is accepted.
@@ -1664,9 +1717,13 @@ pub struct ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use VmState::{Created, Error, Running, Starting, Stopped, Stopping};
+    use VmState::{
+        Created, Error, Paused, Pausing, Resuming, Running, Starting, Stopped, Stopping,
+    };
 
-    const ALL_STATES: [VmState; 6] = [Created, Starting, Running, Stopping, Stopped, Error];
+    const ALL_STATES: [VmState; 9] = [
+        Created, Starting, Running, Pausing, Paused, Resuming, Stopping, Stopped, Error,
+    ];
 
     #[test]
     fn egress_policy_id_round_trips_through_from_str() {
@@ -1725,6 +1782,25 @@ mod tests {
             (Created, Starting),
             (Starting, Running),
             (Starting, Error),
+            (Running, Pausing),
+            (Running, Resuming),
+            (Pausing, Paused),
+            (Pausing, Resuming),
+            (Pausing, Running),
+            (Pausing, Stopping),
+            (Pausing, Stopped),
+            (Pausing, Error),
+            (Paused, Resuming),
+            (Paused, Pausing),
+            (Paused, Stopping),
+            (Paused, Stopped),
+            (Paused, Error),
+            (Resuming, Running),
+            (Resuming, Pausing),
+            (Resuming, Paused),
+            (Resuming, Stopping),
+            (Resuming, Stopped),
+            (Resuming, Error),
             (Running, Stopping),
             (Running, Stopped),
             (Running, Error),
@@ -1846,10 +1922,55 @@ mod tests {
     }
 
     #[test]
+    fn vm_purpose_serializes_snake_case_and_defaults_when_absent() {
+        for (purpose, wire) in [
+            (VmPurpose::Instance, "instance"),
+            (VmPurpose::Builder, "builder"),
+            (VmPurpose::Pool, "pool"),
+        ] {
+            assert_eq!(serde_json::to_value(purpose).unwrap(), wire);
+            assert_eq!(
+                serde_json::from_value::<VmPurpose>(serde_json::Value::String(wire.to_owned()))
+                    .unwrap(),
+                purpose
+            );
+        }
+        assert_eq!(VmPurpose::default(), VmPurpose::Instance);
+
+        let legacy = serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000000",
+            "name": "legacy",
+            "state": "created",
+            "template": "ubuntu-rootfs-26.04",
+            "templateVersion": "v1",
+            "cpu": 1,
+            "ram": 512,
+            "diskGb": 2,
+            "startupStep": null,
+            "egressPolicy": "internet",
+            "ipv4": null,
+            "ipv6": null,
+            "mac": null,
+            "hostname": "fc-abc",
+            "startupTimeline": [],
+            "microNetworkId": "00000000-0000-0000-0000-000000000000",
+            "storageRoot": "default",
+            "cpuUsagePercent": null,
+            "memoryUsedMib": null,
+            "memoryTotalMib": null,
+            "memoryUsedPercent": null,
+            "usageHistory": []
+        });
+        let decoded: VmResponse = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.purpose, VmPurpose::Instance);
+    }
+
+    #[test]
     fn vm_response_round_trips() {
         let response = VmResponse {
             id: Uuid::nil(),
             name: "test-vm".to_owned(),
+            purpose: VmPurpose::Instance,
             state: VmState::Created,
             reconciliation: Some(VmReconciliation {
                 outcome: VmReconciliationOutcome::NetworkFailed,
@@ -1890,6 +2011,7 @@ mod tests {
         let json = serde_json::to_string(&response).expect("serialize response");
         assert_eq!(serde_json::from_str::<VmResponse>(&json).unwrap(), response);
         assert!(json.contains("\"env\":{\"FOO\":\"bar\"}"));
+        assert!(json.contains("\"purpose\":\"instance\""));
         assert!(json.contains("\"cpuUsagePercent\":12.5"));
         assert!(json.contains("\"memoryUsedMib\":180"));
         assert!(json.contains("\"memoryTotalMib\":512"));
@@ -1986,6 +2108,7 @@ mod tests {
         let response = VmResponse {
             id: Uuid::nil(),
             name: "test-vm".to_owned(),
+            purpose: VmPurpose::Instance,
             state: VmState::Starting,
             reconciliation: None,
             template: "ubuntu-rootfs-26.04".to_owned(),

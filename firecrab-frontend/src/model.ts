@@ -1,12 +1,16 @@
-import type { VmState } from "./bindings";
+import type { VmResponse, VmState } from "./bindings";
 
-export type VmAction = "start" | "stop" | "delete";
+export type VmAction = "start" | "stop" | "pause" | "resume" | "delete";
 
+type VmPurpose = NonNullable<VmResponse["purpose"]>;
 /** Display name for each VM state, as `t(english, korean)` arguments. */
 export const VM_STATE_LABELS: Record<VmState, [string, string]> = {
   created: ["Created", "생성됨"],
   starting: ["Starting", "시작 중"],
   running: ["Running", "실행 중"],
+  pausing: ["Pausing", "일시정지 중"],
+  paused: ["Paused", "일시정지됨"],
+  resuming: ["Resuming", "재개 중"],
   stopping: ["Stopping", "중지 중"],
   stopped: ["Stopped", "중지됨"],
   error: ["Error", "오류"],
@@ -32,15 +36,22 @@ export function stepRamValue(current: number, direction: 1 | -1): number {
   return [...options].reverse().find((option) => option < current) ?? options[0];
 }
 
-/** Lifecycle actions the API accepts for a VM in `state`; everything else 409s. */
-export function availableActions(state: VmState): VmAction[] {
+/** Lifecycle actions the API accepts for a VM in `state`; everything else 409s.
+ * A pool member has none — only its pool may start, stop, or delete it. */
+export function availableActions(state: VmState, purpose?: VmPurpose): VmAction[] {
+  if (purpose === "pool") return [];
   switch (state) {
     case "created":
     case "stopped":
     case "error":
       return ["start", "delete"];
     case "running":
-      return ["stop"];
+      return ["pause", "stop"];
+    case "paused":
+      return ["resume", "stop"];
+    case "pausing":
+    case "resuming":
+      return ["pause", "resume", "stop"];
     case "starting":
     case "stopping":
       return [];
@@ -48,17 +59,23 @@ export function availableActions(state: VmState): VmAction[] {
 }
 
 /** cpu/ram/disk edits only take effect on the next start, so they're only
- * accepted while no Firecracker process is live for this VM. */
-export function isEditableState(state: VmState): boolean {
+ * accepted while no Firecracker process is live for this VM.
+ * Pool members stay read-only here. */
+export function isEditableState(state: VmState, purpose?: VmPurpose): boolean {
+  if (purpose === "pool") return false;
   return state === "created" || state === "stopped" || state === "error";
 }
 
-/** Env can be replaced while running; the guest service is restarted. */
-export function isEnvEditableState(state: VmState): boolean {
-  return isEditableState(state) || state === "running";
+/** Env can be replaced while running; the guest service is restarted.
+ * Pool members stay read-only even while running. */
+export function isEnvEditableState(state: VmState, purpose?: VmPurpose): boolean {
+  if (purpose === "pool") return false;
+  return isEditableState(state, purpose) || state === "running";
 }
 
-/** Port forwards apply live via nft, including on a running VM. */
-export function isPortEditableState(state: VmState): boolean {
-  return isEditableState(state) || state === "running";
+/** Port forwards apply live via nft, including on a running VM.
+ * Pool members stay read-only even while running. */
+export function isPortEditableState(state: VmState, purpose?: VmPurpose): boolean {
+  if (purpose === "pool") return false;
+  return isEditableState(state, purpose) || state === "running";
 }
