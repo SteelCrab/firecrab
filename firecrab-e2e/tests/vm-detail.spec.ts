@@ -197,3 +197,59 @@ test.describe("MicroVM detail panel", () => {
     expect(await panel(page).evaluate((el) => el.getBoundingClientRect().width)).toBe(384);
   });
 });
+
+test.describe("MicroVM pause and resume", () => {
+  for (const locale of ["en", "ko"] as const) {
+    test(`preserves a paused VM and resumes from the detail panel (${locale})`, async ({ page }) => {
+      const current = { ...RUNNING, env: {} };
+      const actions: string[] = [];
+      await openDashboard(page, {
+        locale,
+        vms: () => [current],
+        routes: {
+          [`/api/vms/${current.id}`]: () => undefined,
+          [`/api/vms/${current.id}/pause`]: async (route) => {
+            actions.push("pause");
+            current.state = "paused";
+            await route.fulfill({ json: current });
+          },
+          [`/api/vms/${current.id}/resume`]: async (route) => {
+            actions.push("resume");
+            current.state = "running";
+            await route.fulfill({ json: current });
+          },
+        },
+      });
+      // The detail endpoint always returns the latest execution state.
+      await page.route(`**/api/vms/${current.id}`, (route) => route.fulfill({ json: current }));
+      await page.getByRole("button", { name: current.name, exact: true }).click();
+      const detail = page.getByRole("complementary", { name: locale === "en" ? "MicroVM detail" : "MicroVM 상세", exact: true });
+      await detail.getByRole("button", { name: locale === "en" ? "Pause" : "일시정지", exact: true }).click();
+      await expect(detail.getByRole("button", { name: locale === "en" ? "Resume" : "재개", exact: true })).toBeVisible();
+      await expect(detail).toContainText(locale === "en" ? "Memory stays allocated" : "메모리는 계속 점유합니다");
+      await expect(detail.getByRole("button", { name: locale === "en" ? "Start" : "시작", exact: true })).toHaveCount(0);
+      await expect(detail.getByRole("button", { name: locale === "en" ? "Delete" : "삭제", exact: true })).toHaveCount(0);
+      await expect(detail.getByRole("button", { name: locale === "en" ? "Edit spec" : "사양 수정", exact: true })).toHaveCount(0);
+      await expect(detail.getByRole("link", { name: locale === "en" ? "Console" : "콘솔", exact: true })).toHaveCount(0);
+      expect(current.ram).toBe(RUNNING.ram);
+      expect(current.ipv4).toBe(RUNNING.ipv4);
+      await detail.getByRole("button", { name: locale === "en" ? "Resume" : "재개", exact: true }).click();
+      await expect(detail.getByRole("button", { name: locale === "en" ? "Pause" : "일시정지", exact: true })).toBeVisible();
+      expect(actions).toEqual(["pause", "resume"]);
+      const row = page.getByRole("row").filter({ has: page.getByRole("button", { name: current.name, exact: true }) });
+      await row.getByRole("button", { name: locale === "en" ? "Pause" : "일시정지", exact: true }).click();
+      await expect(row.getByRole("button", { name: locale === "en" ? "Resume" : "재개", exact: true })).toBeVisible();
+      await page.getByRole("tab", { name: locale === "en" ? /^Paused/ : /^일시정지됨/ }).click();
+      await expect(row).toBeVisible();
+    });
+  }
+
+  test("an unconfirmed pause exposes recovery and stop actions", async ({ page }) => {
+    const pending = { ...RUNNING, state: "pausing" as const };
+    await open(page, [pending], pending.name);
+    await expect(panel(page).getByRole("button", { name: "Retry pause", exact: true })).toBeVisible();
+    await expect(panel(page).getByRole("button", { name: "Retry resume", exact: true })).toBeVisible();
+    await expect(panel(page).getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+    await expect(panel(page).getByRole("button", { name: "Start", exact: true })).toHaveCount(0);
+  });
+});

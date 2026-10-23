@@ -202,6 +202,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/vms/{id}/start", post(handlers::vms::start_vm_request))
         .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
         .route(
+            "/api/vms/{id}/pause",
+            post(handlers::vm_execution::pause_vm),
+        )
+        .route(
+            "/api/vms/{id}/resume",
+            post(handlers::vm_execution::resume_vm),
+        )
+        .route(
             "/api/vms/{id}/storage",
             axum::routing::put(handlers::vms::assign_vm_storage),
         )
@@ -219,6 +227,24 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         ));
 
     let rest = Router::new()
+        .route(
+            "/api/schedules",
+            get(handlers::schedules::list).post(handlers::schedules::create),
+        )
+        .route(
+            "/api/schedules/{id}",
+            get(handlers::schedules::get)
+                .put(handlers::schedules::update)
+                .delete(handlers::schedules::delete),
+        )
+        .route(
+            "/api/schedules/{id}/enabled",
+            axum::routing::put(handlers::schedules::set_enabled),
+        )
+        .route(
+            "/api/schedules/{id}/runs",
+            get(handlers::schedules::history),
+        )
         .route(
             "/api/micro-services",
             get(handlers::micro_services::list).post(handlers::micro_services::create),
@@ -257,6 +283,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))
+        .route(
+            "/api/micromanager/activity",
+            get(handlers::micromanager::activity),
+        )
         .route("/api/info", get(handlers::info::get_info))
         .route(
             "/api/pipe",
@@ -512,6 +542,46 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             enforce_limits,
         ));
 
+    // Transfer previews may need multiple provider reads. Keep the normal
+    // REST protections and bound all Secrets operations to one minute.
+    let secrets = Router::new()
+        .route(
+            "/api/secrets",
+            get(handlers::secrets::list).post(handlers::secrets::create),
+        )
+        .route(
+            "/api/secrets/{id}",
+            axum::routing::put(handlers::secrets::update).delete(handlers::secrets::delete),
+        )
+        .route("/api/secrets/{id}/reveal", post(handlers::secrets::reveal))
+        .route(
+            "/api/secrets/connections",
+            get(handlers::secrets::connections).post(handlers::secrets::create_connection),
+        )
+        .route(
+            "/api/secrets/connections/{id}",
+            axum::routing::put(handlers::secrets::update_connection)
+                .delete(handlers::secrets::delete_connection),
+        )
+        .route(
+            "/api/secrets/connections/{id}/preview",
+            post(handlers::secrets::preview),
+        )
+        .route(
+            "/api/secrets/plans/{id}/apply",
+            post(handlers::secrets::apply),
+        )
+        .layer(cors.clone())
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn_with_state(
+            RequestLimits {
+                permits: Arc::clone(&limits.permits),
+                timeout: Some(Duration::from_secs(60)),
+            },
+            enforce_limits,
+        ))
+        .layer(middleware::from_fn(handlers::secrets::no_store));
+
     // Inspection performs registry authentication and multiple manifest GETs.
     // Allow their bounded connection retries to finish while retaining the
     // same concurrency pool, body limit, CORS and origin checks as other REST.
@@ -537,6 +607,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     let app = rest
         .merge(recovery)
         .merge(inspection)
+        .merge(secrets)
         .merge(console)
         // Unknown paths under the API/WebSocket prefixes answer with the JSON
         // error envelope even when the dashboard is served below, so a typo in
@@ -891,6 +962,8 @@ mod tests {
             (Method::DELETE, format!("/api/vms/{}", vm.id)),
             (Method::POST, format!("/api/vms/{}/start", vm.id)),
             (Method::POST, format!("/api/vms/{}/stop", vm.id)),
+            (Method::POST, format!("/api/vms/{}/pause", vm.id)),
+            (Method::POST, format!("/api/vms/{}/resume", vm.id)),
             (Method::PUT, format!("/api/vms/{}/storage", vm.id)),
             (Method::PUT, format!("/api/vms/{}/shells", vm.id)),
             (Method::PUT, format!("/api/vms/{}/port-forwards", vm.id)),

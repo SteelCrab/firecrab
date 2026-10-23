@@ -29,6 +29,15 @@ pub struct AppError {
 }
 
 impl AppError {
+    /// Concise operation failure suitable for a durable task result.
+    pub(crate) fn description(&self) -> String {
+        let mut text = format!("{}: {}", self.code, self.message);
+        for (field, detail) in &self.fields {
+            text.push_str(&format!(" ({field}: {detail})"));
+        }
+        text
+    }
+
     /// Builds an error with no per-field validation detail.
     pub fn new(
         status: StatusCode,

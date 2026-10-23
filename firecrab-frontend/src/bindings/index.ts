@@ -80,3 +80,4 @@ export * from "./PoolMemberState";
 export * from "./PoolResponse";
 export * from "./UpdatePoolRequest";
 export * from "./ManagerResourceStatus";
+export * from "./Schedule";

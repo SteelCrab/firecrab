@@ -1,4 +1,7 @@
 import type {
+  ScheduleSpec,
+  ScheduleResponse,
+  ScheduleRun,
   ApiError,
   AssignVmStorageRequest,
   CreateMicroNetworkRequest,
@@ -115,6 +118,32 @@ export function listVms(): Promise<VmResponse[]> {
   return fetchJson("/api/vms");
 }
 
+export function listSchedules(): Promise<ScheduleResponse[]> {
+  return fetchJson("/api/schedules");
+}
+
+export function saveSchedule(id: string | null, spec: ScheduleSpec): Promise<ScheduleResponse> {
+  return fetchJson(id ? `/api/schedules/${encodeURIComponent(id)}` : "/api/schedules", {
+    method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec),
+  });
+}
+
+export function setScheduleEnabled(id: string, enabled: boolean): Promise<ScheduleResponse> {
+  return fetchJson(`/api/schedules/${encodeURIComponent(id)}/enabled`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }),
+  });
+}
+
+export function listScheduleRuns(id: string): Promise<ScheduleRun[]> {
+  return fetchJson(`/api/schedules/${encodeURIComponent(id)}/runs`);
+}
+
+export async function deleteSchedule(id: string): Promise<void> {
+  const response = await fetch(`/api/schedules/${encodeURIComponent(id)}`, { method: "DELETE" })
+    .catch(error => { throw ApiClientError.transport(transportDetail(error)); });
+  if (!response.ok) throw await fail(response);
+}
+
 export function listMicroServices(): Promise<MicroServiceResponse[]> {
   return fetchJson("/api/micro-services");
 }
@@ -224,6 +253,14 @@ export function updateVmResources(id: string, request: UpdateVmResourcesRequest)
 
 export function startVm(id: string): Promise<VmResponse> {
   return fetchJson(`/api/vms/${id}/start`, { method: "POST" });
+}
+
+export function pauseVm(id: string): Promise<VmResponse> {
+  return fetchJson<VmResponse>(`/api/vms/${id}/pause`, { method: "POST" });
+}
+
+export function resumeVm(id: string): Promise<VmResponse> {
+  return fetchJson<VmResponse>(`/api/vms/${id}/resume`, { method: "POST" });
 }
 
 export function stopVm(id: string): Promise<VmResponse> {

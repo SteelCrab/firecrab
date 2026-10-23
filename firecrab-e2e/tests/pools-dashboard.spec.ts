@@ -54,16 +54,17 @@ test.describe("pool dashboard @dashboard", () => {
     expect(keys[2]).not.toBe(keys[0]);
   });
 
-  for (const state of ["running", "stopped"] as const) {
+  for (const state of ["running", "stopped", "paused"] as const) {
     test(`keeps a ${state} pool member read-only in the new VM screen`, async ({ page }) => {
       const record = { ...member, state };
       await openDashboard(page, { vms: [record], routes: { [`/api/vms/${VM_ID}`]: record } });
       const row = page.getByRole("row").filter({ hasText: record.name });
-      await expect(row.getByRole("button", { name: /^(Start|Stop|Delete)$/ })).toHaveCount(0);
+      await expect(row.getByRole("button", { name: /^(Start|Stop|Pause|Resume|Delete)$/ })).toHaveCount(0);
       await row.getByRole("button", { name: record.name, exact: true }).click();
+      await expect(page.getByRole("link", { name: /^Add schedule/ })).toHaveCount(0);
       const detail = page.locator(".detail-head");
       await expect(detail).toContainText("Pool");
-      await expect(detail.getByRole("button", { name: /^(Start|Stop|Delete)$/ })).toHaveCount(0);
+      await expect(detail.getByRole("button", { name: /^(Start|Stop|Pause|Resume|Delete)$/ })).toHaveCount(0);
       await expect(page.getByRole("button", { name: /^Edit / })).toHaveCount(0);
       await page.getByRole("tab", { name: "Environment", exact: true }).click();
       await expect(page.getByRole("button", { name: /^Edit / })).toHaveCount(0);

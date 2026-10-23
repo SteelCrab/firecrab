@@ -4,7 +4,7 @@
 use firecrab_api_types::{UpdateCheckResponse, VmReconciliation};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use uuid::Uuid;
@@ -107,7 +107,11 @@ pub struct AppState {
     pub templates: Arc<TemplateRegistry>,
     /// SQLite-backed durable storage.
     pub(crate) store: Store,
-    /// Short configuration/operation claims; never held while booting a guest.
+    /// Encrypted, host-local PipeSecrets vault; opened lazily on first use.
+    pub(crate) secrets: Arc<crate::secrets::Vault>,
+    /// Active per-VM lifecycle locks; weak entries do not retain deleted VM IDs.
+    pub(crate) vm_mutations: Arc<Mutex<HashMap<Uuid, Weak<AsyncMutex<()>>>>>,
+    /// Short service configuration/operation claims; never held while booting a guest.
     pub(crate) service_mutations: Arc<AsyncMutex<()>>,
     /// One image/VM deployment at a time bounds replica surge on one host.
     pub(crate) service_deploy_permits: Arc<Semaphore>,
@@ -163,6 +167,9 @@ impl AppState {
         templates: TemplateRegistry,
         db_file: PathBuf,
     ) -> Result<Self, PersistenceError> {
+        let secrets = Arc::new(crate::secrets::Vault::new(
+            db_file.with_extension("secrets"),
+        ));
         let (store, vms) = tokio::task::spawn_blocking(move || {
             let store = Store::open(&db_file)?;
             // Live states from the previous run stay as they are: the VM
@@ -181,6 +188,8 @@ impl AppState {
             vms: Arc::new(Mutex::new(vms)),
             templates: Arc::new(templates),
             store,
+            vm_mutations: Arc::new(Mutex::new(HashMap::new())),
+            secrets,
             service_mutations: Arc::new(AsyncMutex::new(())),
             service_deploy_permits: Arc::new(Semaphore::new(1)),
             processes: Arc::new(Mutex::new(HashMap::new())),
@@ -202,6 +211,22 @@ impl AppState {
             update_check: Arc::new(AsyncMutex::new(None)),
             pools: crate::pool::PoolRuntime::default(),
         })
+    }
+
+    /// Serializes lifecycle requests for one VM without blocking other VMs.
+    pub(crate) async fn lock_vm(&self, id: Uuid) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = self.vm_mutations.lock().unwrap_or_else(|p| p.into_inner());
+            locks.retain(|_, lock| lock.strong_count() > 0);
+            if let Some(lock) = locks.get(&id).and_then(Weak::upgrade) {
+                lock
+            } else {
+                let lock = Arc::new(AsyncMutex::new(()));
+                locks.insert(id, Arc::downgrade(&lock));
+                lock
+            }
+        };
+        lock.lock_owned().await
     }
 
     /// `{storage_root}/vms` for this VM. Resolves env/default roots first,

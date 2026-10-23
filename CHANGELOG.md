@@ -23,6 +23,19 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- MicroService domains connect healthy replicas to PipeIngress automatically,
+  without host ports or manual routes. The dashboard shows the domain and DNS
+  setup guidance, and the CLI accepts domain deployments without `--host-port`.
+  Deployment ownership protects routes from stale Pipe saves and retains cleanup
+  state across API restarts. Stop withdraws the domain before deleting instances.
+
+- MicroVM pause/resume retains guest memory and execution state in the same
+  Firecracker process through REST, `firecrab vm pause/resume`, and bilingual
+  Dashboard actions. API restart recovery checks the actual VMM state. Paused
+  guests keep their allocations and block Sleepy shutdown. Failed confirmation
+  exposes retry/stop actions; service-owned and builder VMs reject manual pause.
+  Disk-backed suspension is separate. Tracked in [#442].
+
 - `firecrab stack validate --file YAML [--json]` validates an experimental
   declarative stack offline. The shared schema checks local network references,
   resource limits, overlapping subnets and service ports, and pinned service
@@ -793,3 +806,5 @@ network helper.
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740
 [322e95c]: https://github.com/SteelCrab/firecrab/commit/322e95c
 [45790c3]: https://github.com/SteelCrab/firecrab/commit/45790c3
+
+[#442]: https://github.com/SteelCrab/firecrab/issues/442

@@ -165,3 +165,41 @@ CLI and managed-guest service checks accept either unit name.
 - [Installation](../getting-started/installation.md)
 - [CLI](../reference/cli.md)
 - [Troubleshooting](troubleshooting.md)
+
+## Pause and resume a MicroVM
+
+Use the MicroVM row or detail panel's **Pause** and **Resume** buttons, the CLI,
+or the VM REST endpoints:
+
+```sh
+firecrab vm pause VM_ID --json
+firecrab vm resume VM_ID --json
+```
+
+Pause keeps the VMM alive. Its guest RAM, CPU/device state, disk lock, IP/MAC,
+and network allocation remain owned by the same VM. The guest cannot handle
+requests or console input while paused. Console history remains readable;
+keystrokes during pause are discarded. The Dashboard hides new console/SSH actions.
+Memory is still allocated; pause does not reclaim RAM.
+
+The initial feature supports standalone VM instances. MicroService-owned replicas
+and internal image builders reject pause/resume so their controllers do not
+replace a deliberately paused workload. Pools are not part of this delivery.
+
+Pause/resume requires the Firecracker native execution-state API. Validate the
+installed Firecracker version on each supported architecture; the managed runtime
+uses v1.17.0. Include fresh SSH/HTTP and any configured vsock connection in QA.
+Older versions may have [vsock resume defects](https://github.com/firecracker-microvm/firecracker/pull/6100).
+External connections, application deadlines, leases, and timers can expire during
+a pause. Guest clocks/timers may catch up after resume. In-flight host disk I/O
+can finish after pause; this is not a consistent disk checkpoint.
+
+After an API restart, Firecrab queries a surviving VMM and restores its actual
+Running or Paused state. It does not resume a paused VM automatically.
+If verification fails, the VM stays in an active intermediate state with diagnostics.
+Retry Pause/Resume or use **Stop**. Never run a second VMM against its disk.
+Paused VMs prevent Sleepy from shutting down their management VM.
+
+**Stop** ends the VMM and loses its in-memory workload. A later **Start** boots
+the guest again. Host reboot or VMM failure also loses memory. Disk-backed
+suspend, snapshot restore, RAM reclamation, and migration are separate features.
