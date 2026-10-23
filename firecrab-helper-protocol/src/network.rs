@@ -195,6 +195,9 @@ pub enum NetworkRequest {
         mac: MacAddr,
         /// ID resolved against the helper's allowlist; never a raw CIDR.
         egress_policy: String,
+        /// Optional structured policy; an empty policy still denies traffic.
+        #[serde(default)]
+        security_group: Option<crate::security_group::SecurityGroupPolicySpec>,
         /// Whether host SSH access should be permitted for this VM.
         allow_host_ssh: bool,
         /// Inbound port forwarding rules (DNAT).
@@ -479,6 +482,9 @@ pub struct VmPolicySpec {
     pub mac: MacAddr,
     /// ID resolved against the helper's allowlist; never a raw CIDR.
     pub egress_policy: String,
+    /// Same policy as the per-VM apply path, included during reconciliation.
+    #[serde(default)]
+    pub security_group: Option<crate::security_group::SecurityGroupPolicySpec>,
     /// Whether host SSH access should be permitted for this VM.
     pub allow_host_ssh: bool,
     /// Inbound port forwarding rules (DNAT).
@@ -982,6 +988,7 @@ mod tests {
     #[test]
     fn vm_policies_and_leases_carry_an_optional_ipv6() {
         let policy = VmPolicySpec {
+            security_group: None,
             vm_id: Uuid::nil(),
             ipv4: "172.31.0.5".parse().unwrap(),
             ipv6: Some("fd00::5".parse().unwrap()),
@@ -1039,13 +1046,10 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_unchanged_by_the_self_update_request() {
-        // Adding a request variant is additive: existing fields are
-        // untouched, so an older peer keeps parsing every request it already
-        // knew. Bumping this would make a freshly swapped API talk to a
-        // not-yet-restarted helper and get UnsupportedVersion for the few
-        // seconds between the swap and the restart. Do not bump.
-        assert_eq!(PROTOCOL_VERSION, 2);
+    fn security_groups_require_a_helper_that_cannot_silently_ignore_policy() {
+        // Older helpers ignore unknown policy fields. Refuse that peer rather
+        // than acknowledge an attached policy without enforcing it.
+        assert_eq!(PROTOCOL_VERSION, 3);
     }
 
     #[test]

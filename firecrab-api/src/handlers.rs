@@ -19,6 +19,7 @@ pub mod pools;
 pub mod registries;
 pub mod schedules;
 pub mod secrets;
+pub mod security_groups;
 pub mod shells;
 pub mod storage;
 pub mod update;

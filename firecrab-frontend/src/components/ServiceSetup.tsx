@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Box, Check, CheckCircle2, Info, SlidersHorizontal } from "lucide-react";
-import type { MicroServiceResponse, MicroServiceSpec } from "../bindings";
-import { ApiClientError, createMicroService, updateMicroService } from "../api/client";
+import type { MicroNetworkResponse, MicroServiceResponse, MicroServiceSpec, SecurityGroupResponse } from "../bindings";
+import { ApiClientError, createMicroService, listMicroNetworks, listSecurityGroups, updateMicroService } from "../api/client";
 import { getPipeAuth } from "../api/pipeAuth";
 import ServiceAppPicker, { type ServiceAppSelection } from "./ServiceAppPicker";
 import { useI18n } from "../i18n";
@@ -12,7 +12,7 @@ const DEFAULT_SPEC: MicroServiceSpec = {
   ram: 512, cpu: 1, replicas: 1, startupTimeout: 300, drainTimeout: 30, env: {}, secrets: {},
 };
 const FIELD_STEP: Record<string, number> = {
-  name: 0, image: 0, runtime: 0, port: 1, healthPath: 1, domain: 1,
+  name: 0, image: 0, runtime: 0, port: 1, healthPath: 1, domain: 1, securityGroupId: 1,
   ram: 2, cpu: 2, replicas: 2, startupTimeout: 2, drainTimeout: 2, env: 2, secrets: 2,
 };
 type Pair = { key: string; value: string };
@@ -32,6 +32,17 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
+  const [groups, setGroups] = useState<SecurityGroupResponse[] | null>(null);
+  const [networks, setNetworks] = useState<MicroNetworkResponse[]>([]);
+  const [groupError, setGroupError] = useState<string | null>(null);
+  const [groupVersion, setGroupVersion] = useState(0);
+  useEffect(() => {
+    let active = true;
+    Promise.all([listSecurityGroups(), listMicroNetworks()])
+      .then(([rows, nets]) => { if (active) { setGroups(rows); setNetworks(nets); setGroupError(null); } })
+      .catch((failure) => { if (active) setGroupError((failure as Error).message); });
+    return () => { active = false; };
+  }, [groupVersion]);
   const heading = useRef<HTMLHeadingElement>(null);
   const steps = [t("App", "앱 선택"), t("Connection", "접속 설정"), t("Resources", "실행 설정"), t("Review", "확인")];
   const titles = [t("What would you like to run?", "어떤 앱을 실행할까요?"), t("How does your app respond?", "앱에 어떻게 접속할까요?"), t("Start with the recommended settings", "권장 설정으로 시작한다"), t("Ready to save your app?", "마지막으로 설정을 확인한다")];
@@ -106,7 +117,7 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
   };
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (saving) return;
+    if (saving || groups === null || groupError) return;
     if (!event.currentTarget.reportValidity()) return;
     if (step === 1 && (!spec.healthPath.startsWith("/") || spec.healthPath.startsWith("//") || /[^\x21-\x7e]|[?#\\]/.test(spec.healthPath))) {
       showErrors({ healthPath: t("Start with one / and omit spaces, query strings and fragments.", "/로 시작하는 경로를 입력한다. 공백, 쿼리 문자열, #은 제외한다.") });
@@ -126,9 +137,9 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
       ...spec, name: spec.name.trim(), image: spec.image.trim(), domain: normalizedDomain(spec.domain), ...maps,
     };
     // Copy only specification fields; an edited response also contains its ID.
-    const { name, image, runtime, port, healthPath, domain, ram, cpu, replicas, startupTimeout, drainTimeout } = request;
+    const { name, image, runtime, port, healthPath, domain, ram, cpu, replicas, startupTimeout, drainTimeout, securityGroupId } = request;
     try {
-      const body = { name, image, runtime, port, healthPath, domain, ram, cpu, replicas, startupTimeout, drainTimeout, ...maps };
+      const body = { name, image, runtime, port, healthPath, domain, ram, cpu, replicas, startupTimeout, drainTimeout, securityGroupId, ...maps };
       const saved = service ? await updateMicroService(service.id, body) : await createMicroService(body);
       await onSaved(saved);
     } catch (failure) {
@@ -163,6 +174,14 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
               <Field name="port" label={t("App port", "앱 포트")} hint={t("The port inside your app. nginx uses 80. Many web apps use 8080.", "앱 내부에서 사용하는 포트이다. nginx는 80번을 사용한다. 웹 앱은 보통 8080번을 사용한다.")} error={fields.port}><input {...control("port")} type="number" min={1} max={65535} value={Number.isFinite(spec.port) ? spec.port : ""} onChange={(event) => change("port", event.target.valueAsNumber)} required /></Field>
               <Field name="healthPath" label={t("Health path", "상태 검사 경로")} hint={t("Firecrab requests this path to check your app. It must return HTTP 2xx. Use / for the nginx example.", "Firecrab이 이 경로에 요청을 보낸다. HTTP 2xx 응답이 와야 정상으로 판단한다. nginx 예제는 /를 사용한다.")} error={fields.healthPath}><input {...control("healthPath")} value={spec.healthPath} onChange={(event) => change("healthPath", event.target.value)} placeholder="/health" required maxLength={2048} spellCheck={false} /></Field>
               <div className="service-notice"><Info aria-hidden="true" /><p>{t("You will choose the external host port after saving. You can start without a domain.", "저장한 뒤 외부 접속용 호스트 포트를 정한다. 도메인 없이 시작할 수 있다.")}</p></div>
+              <Field name="securityGroupId" label={t("Security group", "보안그룹")} hint={t("New replicas inherit this group's rules and MicroNetwork.", "새 복제 VM은 이 그룹의 규칙과 MicroNetwork를 상속한다.")} error={fields.securityGroupId}>
+                <select {...control("securityGroupId")} value={spec.securityGroupId ?? ""} disabled={saving || groups === null || !!groupError} onChange={(event) => change("securityGroupId", event.target.value || null)}>
+                  <option value="">{groups === null ? t("Loading…", "불러오는 중…") : t("None — use network defaults", "없음 — 네트워크 기본 설정 사용")}</option>
+                  {spec.securityGroupId && !groups?.some((group) => group.id === spec.securityGroupId) && <option value={spec.securityGroupId}>{t("Unavailable group", "그룹을 확인할 수 없다")} · {spec.securityGroupId}</option>}
+                  {groups?.map((group) => <option key={group.id} value={group.id}>{group.name} · {networks.find((network) => network.id === group.microNetworkId)?.name ?? group.microNetworkId}</option>)}
+                </select>
+                {groupError && <div><p className="field-error" role="alert">{groupError}</p><button type="button" className="btn" onClick={() => setGroupVersion((value) => value + 1)}>{t("Retry loading security groups", "보안그룹 다시 불러오기")}</button></div>}
+              </Field>
               <details className="service-advanced" open={!!fields.domain || undefined}><summary>{t("Domain configuration", "도메인 설정")}</summary><Field name="domain" label={t("Domain (optional)", "도메인 (선택)")} hint={t("Healthy replicas connect automatically. Public access uses Pipe Tunnel and your DNS.", "정상 인스턴스를 자동 연결한다. 외부 접속에는 Pipe Tunnel과 DNS 연결이 필요하다.")} error={fields.domain}><input {...control("domain")} value={spec.domain ?? ""} onChange={(event) => change("domain", event.target.value)} placeholder="app.example.com" maxLength={253} /></Field></details>
             </>}
             {step === 2 && <>

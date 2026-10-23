@@ -676,6 +676,52 @@ mod tests {
         path.to_str().expect("tool path").to_owned()
     }
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn busy_fixture_tools_recover_without_duplicate_execution_or_warnings() {
+        for capture_output in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let tool = fake_tool(
+                dir.path(),
+                "firewall-tool",
+                "printf run >> \"${0%/*}/runs\"; printf ready",
+            );
+            let writer = fs::OpenOptions::new().write(true).open(&tool).unwrap();
+            let releaser = std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                drop(writer);
+            });
+            let (capture, subscriber) = log_capture();
+            async {
+                if capture_output {
+                    assert_eq!(output_tool(&tool, &[]).await.as_deref(), Some("ready"));
+                } else {
+                    assert!(run_tool(&tool, &[]).await);
+                }
+            }
+            .with_subscriber(subscriber)
+            .await;
+            releaser.join().unwrap();
+            assert_eq!(fs::read(dir.path().join("runs")).unwrap(), b"run");
+            assert_eq!(fs::read_to_string(capture.path()).unwrap(), "");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_tool_that_stays_busy_returns_failure_without_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = fake_tool(dir.path(), "firewall-tool", "touch \"${0%/*}/runs\"");
+        let _writer = fs::OpenOptions::new().write(true).open(&tool).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            assert!(!run_tool(&tool, &[]).await);
+            assert_eq!(output_tool(&tool, &[]).await, None);
+        })
+        .await
+        .expect("busy retries must be bounded");
+        assert!(!dir.path().join("runs").exists());
+    }
+
     #[tokio::test]
     async fn failed_tools_keep_return_values_and_log_arguments_status_and_stderr() {
         let dir = tempfile::tempdir().unwrap();

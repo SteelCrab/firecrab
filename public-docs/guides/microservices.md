@@ -21,6 +21,7 @@ PipeSecrets injection, rolling updates, rollback, and automatic instance replace
 | `ram` | Required RAM per replica in MiB; power of two from 128 to 32768 |
 | `cpu` | Required vCPU count per replica; 1–32 |
 | `replicas` | 1–100; default 1 |
+| `securityGroupId` | Optional security group UUID; default `null`; every new replica inherits it |
 | `startupTimeout` | 1–3600 seconds; default 300 |
 | `drainTimeout` | 0–3600 seconds; default 30 |
 | `env` | Variable name to plain value; default `{}` |
@@ -215,6 +216,10 @@ It does not save a deployment, create a network, or start MicroVMs. The check
 briefly tests each TCP port; it does not reserve ports. The UI checks again
 immediately before submitting. The deploy API repeats validation before queuing,
 and the worker checks ports again before preparing the image.
+
+When `securityGroupId` is set, select its IPv4-only network explicitly or reuse an existing matching `services` network.
+The deployment captures the group selection and assigns it to every replica before startup.
+See [security groups](security-groups.md) for rules and inactive-only changes.
 Concurrent deployments share one host queue.
 The worker rechecks Pipe Auth after leaving the queue. A disconnected or replaced
 account fails the deployment before image resolution or VM creation. It never

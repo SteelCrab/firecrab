@@ -293,6 +293,13 @@ pub async fn create_vm(
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
     }
+    let _network_guard = state.network_mutations.lock().await;
+    crate::network_policy::validate_selection(
+        &state,
+        req.security_group_id,
+        Some(req.micro_network_id),
+        request_id.0,
+    )?;
     // Not verified against disk here — that's a real (2GB rootfs) I/O cost,
     // and run_start already re-verifies right before the template is
     // actually used, which is the point that matters for catching a
@@ -343,6 +350,7 @@ pub(crate) async fn insert_vm(
         cpu: req.cpu,
         disk_gb: req.disk_gb,
         egress_policy: req.egress_policy,
+        security_group_id: req.security_group_id,
         micro_network_id: req.micro_network_id,
         storage_root,
         disk_generation: None,
@@ -668,6 +676,12 @@ pub async fn update_vm_port_forwards(
         )
     };
 
+    let security_group = crate::network_policy::resolve(
+        &state.store,
+        record.security_group_id,
+        Some(record.micro_network_id),
+    )
+    .map_err(|_| AppError::internal(request_id.0))?;
     // Kept so a failed reapply below can restore exactly what was live
     // before this request, instead of leaving the DB pointing at rules that
     // were never actually installed on the host.
@@ -711,7 +725,13 @@ pub async fn update_vm_port_forwards(
             .collect();
         if let Err(error) = state
             .network
-            .apply_vm_policy(&lease, record.egress_policy, false, port_forwards_specs)
+            .apply_vm_policy(
+                &lease,
+                record.egress_policy,
+                false,
+                port_forwards_specs,
+                security_group,
+            )
             .await
         {
             tracing::error!(
@@ -740,7 +760,38 @@ pub async fn update_vm(
     ValidatedJson(req): ValidatedJson<UpdateVmResourcesRequest>,
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let _service_guard = if req.security_group_id.is_some() {
+        Some(state.service_mutations.lock().await)
+    } else {
+        None
+    };
     let _guard = state.lock_vm(id).await;
+    let _network_guard = state.network_mutations.lock().await;
+    if let Some(selection) = req.security_group_id {
+        crate::service_runtime::ensure_vm_policy_editable(&state, id, request_id.0).await?;
+        let vm = state
+            .vms
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| AppError::not_found(request_id.0))?;
+        if crate::network_policy::vm_is_active(&state, &vm)
+            .map_err(|_| AppError::internal(request_id.0))?
+        {
+            return Err(AppError::conflict(
+                "security_group_in_use",
+                "stop the VM before changing its security group",
+                request_id.0,
+            ));
+        }
+        crate::network_policy::validate_selection(
+            &state,
+            selection,
+            Some(vm.micro_network_id),
+            request_id.0,
+        )?;
+    }
     let (updated, previous) = claim_resource_update(&state, id, &req, request_id.0)?;
     if let Err(error) = persist_update(&state, &updated, request_id.0).await {
         restore_resources(&state, id, previous);
@@ -790,7 +841,14 @@ async fn apply_env_to_running_guest(state: &AppState, id: Uuid, env: &BTreeMap<S
     process.console.write_input(script.as_bytes()).await;
 }
 
-type PreviousResources = (u8, u32, u16, EgressPolicy, BTreeMap<String, String>);
+type PreviousResources = (
+    u8,
+    u32,
+    u16,
+    EgressPolicy,
+    BTreeMap<String, String>,
+    Option<Uuid>,
+);
 
 fn claim_resource_update(
     state: &AppState,
@@ -806,7 +864,7 @@ fn claim_resource_update(
         .get_mut(&id)
         .ok_or_else(|| AppError::not_found(request_id))?;
     if !vm.state.can_edit_resources() {
-        if !vm.state.can_edit_env() || req.env.is_none() {
+        if !vm.state.can_edit_env() || req.env.is_none() || req.security_group_id.is_some() {
             return Err(AppError::invalid_state(vm.state, request_id));
         }
         if req.cpu != vm.cpu
@@ -821,11 +879,21 @@ fn claim_resource_update(
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id));
     }
-    let previous = (vm.cpu, vm.ram, vm.disk_gb, vm.egress_policy, vm.env.clone());
+    let previous = (
+        vm.cpu,
+        vm.ram,
+        vm.disk_gb,
+        vm.egress_policy,
+        vm.env.clone(),
+        vm.security_group_id,
+    );
     vm.cpu = req.cpu;
     vm.ram = req.ram;
     vm.disk_gb = req.disk_gb;
     vm.egress_policy = req.egress_policy;
+    if let Some(selection) = req.security_group_id {
+        vm.security_group_id = selection;
+    }
     if let Some(env) = &req.env {
         vm.env = env.clone();
     }
@@ -838,7 +906,14 @@ fn restore_resources(state: &AppState, id: Uuid, previous: PreviousResources) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(vm) = vms.get_mut(&id) {
-        (vm.cpu, vm.ram, vm.disk_gb, vm.egress_policy, vm.env) = previous;
+        (
+            vm.cpu,
+            vm.ram,
+            vm.disk_gb,
+            vm.egress_policy,
+            vm.env,
+            vm.security_group_id,
+        ) = previous;
     }
 }
 
@@ -888,6 +963,20 @@ async fn claim_start(
 ) -> Result<(Uuid, VmRecord), AppError> {
     let id = parse_id(&id, request_id.0)?;
     let _guard = state.lock_vm(id).await;
+    let _network_guard = state.network_mutations.lock().await;
+    let vm = state
+        .vms
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found(request_id.0))?;
+    crate::network_policy::validate_selection(
+        &state,
+        vm.security_group_id,
+        Some(vm.micro_network_id),
+        request_id.0,
+    )?;
     let (claimed, previous) = claim_transition(&state, id, VmState::Starting, request_id.0)?;
     if let Err(error) = persist_update(&state, &claimed, request_id.0).await {
         set_memory_state(&state, id, previous);
@@ -1082,6 +1171,23 @@ pub async fn delete_vm(
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
     let _guard = state.lock_vm(id).await;
+    let vm = state
+        .vms
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found(request_id.0))?;
+    if vm.security_group_id.is_some()
+        && crate::network_policy::vm_is_active(&state, &vm)
+            .map_err(|_| AppError::internal(request_id.0))?
+    {
+        return Err(AppError::conflict(
+            "security_group_in_use",
+            "stop the VM host runtime before deleting it",
+            request_id.0,
+        ));
+    }
     let removed = {
         let mut vms = state
             .vms
@@ -1675,6 +1781,16 @@ async fn setup_vm_network(
         .await
         .map_err(VmNetworkSetupError::Other)?;
 
+    let selection = state
+        .vms
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&vm_id)
+        .ok_or_else(|| VmNetworkSetupError::Other("VM record is missing".into()))?
+        .security_group_id;
+    let security_group =
+        crate::network_policy::resolve(&state.store, selection, Some(micro_network_id))
+            .map_err(VmNetworkSetupError::Other)?;
     let tap_name = state
         .network
         .create_tap(vm_id, micro_network_id)
@@ -1695,7 +1811,7 @@ async fn setup_vm_network(
 
     if let Err(error) = state
         .network
-        .apply_vm_policy(&lease, egress_policy, false, port_forwards)
+        .apply_vm_policy(&lease, egress_policy, false, port_forwards, security_group)
         .await
     {
         // A failed apply_vm_policy leaves nothing installed (nft applies a
@@ -1818,39 +1934,56 @@ fn dhcp_lease_entries(
 
 /// Builds the complete host-firewall policy snapshot for VMs whose network
 /// resources may currently be live. `Starting` is included because setup
-/// installs its policy before Firecracker is launched. `Stopping` is omitted
-/// so a concurrent reconcile cannot reinstall a policy after teardown has
-/// begun. The helper applies this snapshot atomically with the shared tables,
+/// installs its policy before Firecracker is launched. Grouped VMs retain
+/// policy through stopping and orphaned runtimes. The helper filters out
+/// missing TAPs, so completed teardown cannot reinstall their policy.
+/// The helper applies this snapshot atomically with the shared tables,
 /// so a reconcile cannot temporarily strip policy from another active VM and
 /// any policy absent here is removed as an orphan.
 pub(crate) async fn active_vm_policy_specs(state: &AppState) -> Result<Vec<VmPolicySpec>, String> {
     let store = state.store.clone();
+    let runtime_state = state.clone();
     let active = tokio::task::spawn_blocking(move || {
-        let vms = store.load_all()?;
+        let vms = store.load_all().map_err(|error| error.to_string())?;
         let mut active = Vec::new();
-        for vm in vms
-            .into_values()
-            .filter(|vm| vm.state.has_live_runtime() && vm.state != VmState::Stopping)
-        {
+        for vm in vms.into_values() {
+            let live = (vm.state.has_live_runtime() && vm.state != VmState::Stopping)
+                || (vm.security_group_id.is_some()
+                    && crate::network_policy::vm_is_active(&runtime_state, &vm)
+                        .map_err(|error| error.to_string())?);
+            if !live {
+                continue;
+            }
             // An active VM always has one; skipped rather than failed if not,
             // since there is no address-keyed policy to install either way.
-            if let Some(lease) = store.active_lease(vm.id).ok().flatten() {
-                active.push((vm.id, vm.egress_policy, lease));
+            if let Some(lease) = store
+                .active_lease(vm.id)
+                .map_err(|error| error.to_string())?
+            {
+                active.push((
+                    vm.id,
+                    vm.egress_policy,
+                    lease,
+                    vm.security_group_id,
+                    vm.micro_network_id,
+                ));
+            } else if vm.security_group_id.is_some() {
+                return Err(format!("protected VM {} has no active lease", vm.id));
             }
         }
-        active.sort_by_key(|(vm_id, _, _)| *vm_id);
-        Ok::<_, crate::persistence::PersistenceError>(active)
+        active.sort_by_key(|(vm_id, ..)| *vm_id);
+        Ok::<_, String>(active)
     })
     .await
     .map_err(|error| format!("active vm lookup task failed: {error}"))?
     .map_err(|error| format!("active vm lookup failed: {error}"))?;
 
     let mut policies = Vec::with_capacity(active.len());
-    for (vm_id, egress_policy, lease) in active {
+    for (vm_id, egress_policy, lease, selection, network_id) in active {
         let port_forwards = state
             .store
             .list_vm_port_forwards(vm_id)
-            .unwrap_or_default()
+            .map_err(|error| format!("port forward lookup failed: {error}"))?
             .into_iter()
             .map(|pf| firecrab_helper_protocol::network::PortForwardSpec {
                 host_port: pf.host_port,
@@ -1864,6 +1997,11 @@ pub(crate) async fn active_vm_policy_specs(state: &AppState) -> Result<Vec<VmPol
             ipv6: lease.ipv6,
             mac: lease.mac,
             egress_policy: egress_policy.id().to_owned(),
+            security_group: crate::network_policy::resolve(
+                &state.store,
+                selection,
+                Some(network_id),
+            )?,
             allow_host_ssh: false,
             port_forwards,
         });
@@ -2112,6 +2250,7 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
         mac: lease.map(|lease| lease.mac.to_string()),
         hostname: firecrab_helper_protocol::network::guest_hostname(vm.id),
         micro_network_id: vm.micro_network_id,
+        security_group_id: vm.security_group_id,
         storage_root: vm.storage_root.clone(),
         cpu_usage_percent: usage.cpu_usage_percent,
         memory_used_mib: usage.memory_used_mib,
@@ -2557,6 +2696,7 @@ pub(crate) mod test_support {
 
     pub(crate) fn record(name: &str, id: Uuid) -> VmRecord {
         VmRecord {
+            security_group_id: None,
             id,
             name: name.to_owned(),
             purpose: crate::model::VmPurpose::Instance,
@@ -2758,6 +2898,7 @@ mod tests {
         // The fixture template's rootfs is 6 bytes (`test_state_with_binary`),
         // so `min_disk_gb_for` rounds it up to 1 GiB.
         let base = CreateVmRequest {
+            security_group_id: None,
             name: "test-vm".to_owned(),
             template: "ubuntu-rootfs-26.04".to_owned(),
             ram: 512,
@@ -4320,6 +4461,7 @@ while True:
 
     fn create_request_on(name: &str, micro_network_id: Uuid) -> CreateVmRequest {
         CreateVmRequest {
+            security_group_id: None,
             name: name.to_owned(),
             template: "ubuntu-rootfs-26.04".to_owned(),
             ram: 512,
@@ -4853,6 +4995,7 @@ while True:
 
     fn update_request(cpu: u8, ram: u32, disk_gb: u16) -> UpdateVmResourcesRequest {
         UpdateVmResourcesRequest {
+            security_group_id: None,
             cpu,
             ram,
             disk_gb,

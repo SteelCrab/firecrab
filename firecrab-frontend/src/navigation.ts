@@ -13,6 +13,7 @@ export const VIEWS = [
   { id: "services", group: "compute", labels: { en: "MicroService", ko: "MicroService" } },
   { id: "schedules", group: "compute", labels: { en: "Schedules", ko: "스케줄러" } },
   { id: "networks", group: "network", labels: { en: "Networks", ko: "네트워크" } },
+  { id: "security-groups", group: "network", labels: { en: "Security groups", ko: "보안그룹" } },
   { id: "pipe", group: "network", labels: { en: "Pipe", ko: "Pipe" } },
   { id: "secrets", group: "data", labels: { en: "Secrets", ko: "Secrets" } },
   { id: "storages", group: "data", labels: { en: "Storage", ko: "스토리지" } },

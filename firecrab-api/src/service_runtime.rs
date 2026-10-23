@@ -110,6 +110,34 @@ async fn validate_placement(
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id));
     }
+    let _network = state.network_mutations.lock().await;
+    if spec.security_group_id.is_some() {
+        let network_id = match request.micro_network_id {
+            Some(id) => Some(id),
+            None => state
+                .store
+                .list_micro_networks()
+                .map_err(|_| AppError::internal(request_id))?
+                .into_iter()
+                .find(|network| network.name == "services")
+                .map(|network| network.id),
+        }
+        .ok_or_else(|| {
+            AppError::validation(
+                BTreeMap::from([(
+                    "microNetworkId".into(),
+                    "select the security group's MicroNetwork".into(),
+                )]),
+                request_id,
+            )
+        })?;
+        crate::network_policy::validate_selection(
+            state,
+            spec.security_group_id,
+            Some(network_id),
+            request_id,
+        )?;
+    }
     Ok(())
 }
 
@@ -227,6 +255,37 @@ pub(crate) async fn ensure_editable(
             "service_in_use",
             "stop the service before editing, deleting or deploying it again",
             request_id,
+        ));
+    }
+    Ok(())
+}
+
+/// Reject attachment edits while a deployment still owns the VM.
+pub(crate) async fn ensure_vm_policy_editable(
+    state: &AppState,
+    vm_id: Uuid,
+    request: Uuid,
+) -> Result<(), AppError> {
+    let store = state.store.clone();
+    let owned = database(request, move || {
+        for service in store.list_micro_services()? {
+            if let Some(deployment) = store.service_deployment(service.id)?
+                && deployment
+                    .instances
+                    .iter()
+                    .any(|instance| instance.vm_id == vm_id)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })
+    .await?;
+    if owned {
+        return Err(AppError::conflict(
+            "service_in_use",
+            "stop the service before changing a replica's security group",
+            request,
         ));
     }
     Ok(())
@@ -416,6 +475,11 @@ async fn execute(
         None => default_network(state, deployment.id).await?,
     };
     deployment.request.micro_network_id = Some(network_id);
+    crate::network_policy::resolve(
+        &state.store,
+        deployment.spec.security_group_id,
+        Some(network_id),
+    )?;
     let template = state
         .templates
         .resolve_alias(&alias)
@@ -456,6 +520,7 @@ async fn execute(
             cpu: deployment.spec.cpu,
             disk_gb,
             egress_policy: EgressPolicy::Internet,
+            security_group_id: deployment.spec.security_group_id,
             micro_network_id: network_id,
             storage_root: None,
             shell_ids: vec![],
@@ -470,6 +535,8 @@ async fn execute(
                 }]
             },
         };
+        // Serialize publication of the VM and its owner with attachment edits.
+        let owner_guard = state.service_mutations.lock().await;
         let (_, Json(vm)) = vms::create_vm(
             State(state.clone()),
             Extension(RequestId(deployment.id)),
@@ -489,6 +556,7 @@ async fn execute(
         });
         // Ownership is durable before booting anything.
         save(state, deployment).await?;
+        drop(owner_guard);
         let vm_id = vm.id;
         let Json(vm) = vms::start_vm(
             State(state.clone()),

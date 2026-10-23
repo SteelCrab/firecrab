@@ -1013,6 +1013,7 @@ mod tests {
 
     fn record(cpu: u8, ram: u32) -> VmRecord {
         VmRecord {
+            security_group_id: None,
             id: Uuid::new_v4(),
             name: "test-vm".to_owned(),
             purpose: crate::model::VmPurpose::Instance,
