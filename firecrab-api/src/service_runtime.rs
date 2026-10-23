@@ -235,7 +235,7 @@ pub(crate) async fn ensure_vm_policy_editable(
 }
 
 /// Reject invalid direct host-port ranges.
-fn deployment_fields(
+pub(crate) fn deployment_fields(
     spec: &MicroServiceSpec,
     request: &DeployMicroServiceRequest,
     api_port: u16,

@@ -44,7 +44,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Validate stack files, manage host ownership and preview changes without applying them.
+    /// Validate stack files, manage ownership, preview changes and explicitly apply them.
     Stack {
         #[command(subcommand)]
         command: stack::Command,

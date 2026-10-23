@@ -25,6 +25,7 @@ mod pipe_databases;
 mod registries;
 mod schedules;
 mod security_groups;
+mod stack_applies;
 mod stacks;
 pub use registries::RegistryLogin;
 pub(crate) use schedules::ScheduleMutation;
@@ -473,6 +474,18 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    /// Another durable stack operation is queued or running.
+    #[error("a stack apply is active")]
+    StackApplyBusy,
+    /// Ownership changed after the plan was observed.
+    #[error("stack plan is stale")]
+    StaleStackPlan,
+    /// An operation ID was reused with a different registration or request.
+    #[error("stack apply identity conflicts")]
+    StackApplyIdentity,
+    /// The requested operation is not recorded for this stack.
+    #[error("stack apply does not exist")]
+    MissingStackApply,
     /// A saved service or VM still references this policy.
     #[error("security group is still referenced")]
     SecurityGroupInUse,
@@ -718,6 +731,7 @@ impl Store {
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute_batch(stacks::SCHEMA_SQL)?;
+        conn.execute_batch(stack_applies::SCHEMA_SQL)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;

@@ -113,6 +113,8 @@ pub struct AppState {
     pub(crate) vm_mutations: Arc<Mutex<HashMap<Uuid, Weak<AsyncMutex<()>>>>>,
     /// Short service configuration/operation claims; never held while booting a guest.
     pub(crate) service_mutations: Arc<AsyncMutex<()>>,
+    /// Serializes durable apply admission and identical retry lookup, never worker execution.
+    pub(crate) stack_apply_admission: Arc<AsyncMutex<()>>,
     /// One image/VM deployment at a time bounds replica surge on one host.
     pub(crate) service_deploy_permits: Arc<Semaphore>,
     /// Live VM id -> its running Firecracker process handle.
@@ -172,6 +174,7 @@ impl AppState {
         ));
         let (store, vms) = tokio::task::spawn_blocking(move || {
             let store = Store::open(&db_file)?;
+            store.interrupt_stack_applies()?;
             // Live states from the previous run stay as they are: the VM
             // may still be running, and `reconcile::reconcile` decides.
             let vms = store.load_all()?;
@@ -188,6 +191,7 @@ impl AppState {
             vms: Arc::new(Mutex::new(vms)),
             templates: Arc::new(templates),
             store,
+            stack_apply_admission: Arc::new(AsyncMutex::new(())),
             vm_mutations: Arc::new(Mutex::new(HashMap::new())),
             secrets,
             service_mutations: Arc::new(AsyncMutex::new(())),

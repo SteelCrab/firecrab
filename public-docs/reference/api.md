@@ -143,6 +143,7 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | --- | --- |
 | MicroService | `GET, POST /api/micro-services`, `GET, PUT, DELETE /api/micro-services/{id}` |
 | Stack ownership and planning | `GET, POST /api/stacks`, `GET, DELETE /api/stacks/{name}`, `POST /api/stacks/{name}/bindings`, `/unbind`, `/plan`; empty-registration deletion requires `?id=STACK_UUID`; see [Stack planning](../guides/stack-planning.md#rest) |
+| Native stack apply | `POST /api/stacks/{name}/apply`, `GET /api/stacks/{name}/applies/{id}`; durable, redacted execution with exact retry IDs; see [Stack apply](../guides/stack-apply.md#rest-and-limits) |
 | MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/stop` |
 | MicroNetwork | `/api/micro-networks`, `/{id}` |
 | Security group | `GET, POST /api/security-groups`, `GET, PUT, DELETE /api/security-groups/{id}`, `PUT /api/security-groups/{id}/rules` |
