@@ -7,6 +7,7 @@ import {
 } from "../api/client";
 import { Boxes } from "lucide-react";
 import { useI18n } from "../i18n";
+import { listStorage, type StorageConnection } from "../api/pipeStorage";
 import ServiceDeployment from "./ServiceDeployment";
 import Screen from "./layout/Screen";
 import { useScreenStatus } from "./layout/screenStatus";
@@ -144,6 +145,14 @@ function ServiceForm({ service, onCancel, onSaved }: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
+  const [storageConnections, setStorageConnections] = useState<StorageConnection[]>([]);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void listStorage(controller.signal).then(rows => { if (!controller.signal.aborted) setStorageConnections(rows); })
+      .catch(failure => { if (!controller.signal.aborted) setStorageError((failure as Error).message); });
+    return () => controller.abort();
+  }, []);
   const [groups, setGroups] = useState<SecurityGroupResponse[] | null>(null);
   const [networks, setNetworks] = useState<MicroNetworkResponse[]>([]);
   const [groupError, setGroupError] = useState<string | null>(null);
@@ -190,6 +199,7 @@ function ServiceForm({ service, onCancel, onSaved }: {
       ram: spec.ram, cpu: spec.cpu, replicas: spec.replicas,
       startupTimeout: spec.startupTimeout, drainTimeout: spec.drainTimeout,
       env: maps.env!, secrets: maps.secrets!,
+      ...(spec.storageConnectionId ? { storageConnectionId: spec.storageConnectionId } : {}),
       securityGroupId: spec.securityGroupId,
     };
     setSaving(true);
@@ -234,6 +244,15 @@ function ServiceForm({ service, onCancel, onSaved }: {
         <div className="field"><label htmlFor="service-startup">{t("Startup timeout (s)", "시작 제한 시간 (초)")}</label><input id="service-startup" type="number" min={1} max={3600} value={spec.startupTimeout} onChange={(event) => change("startupTimeout", event.target.valueAsNumber)} required disabled={saving} />{fieldError("startupTimeout")}</div>
         <div className="field"><label htmlFor="service-drain">{t("Drain timeout (s)", "요청 종료 대기 (초)")}</label><input id="service-drain" type="number" min={0} max={3600} value={spec.drainTimeout} onChange={(event) => change("drainTimeout", event.target.valueAsNumber)} required disabled={saving} />{fieldError("drainTimeout")}</div>
         <VariableRows kind="env" rows={env} setRows={setEnv} disabled={saving} />
+        <div className="field service-full"><label htmlFor="service-storage">{t("S3 connection (optional)", "S3 연결 (선택)")}</label>
+          <select id="service-storage" disabled={saving} value={spec.storageConnectionId ?? ""} onChange={event => change("storageConnectionId", event.target.value || null)}>
+            <option value="">{t("No S3 connection", "S3 연결 없음")}</option>
+            {!!spec.storageConnectionId && !storageConnections.some(row => row.id === spec.storageConnectionId) && <option value={spec.storageConnectionId}>{spec.storageConnectionId}</option>}
+            {storageConnections.map(connection => <option key={connection.id} value={connection.id}>{connection.name} · {connection.bucket}/{connection.prefix}</option>)}
+          </select>
+          {storageError && <span role="alert" className="field-error">{storageError}</span>}
+          <small>{t("AWS SDK credentials are provided at boot. Use FIRECRAB_S3_BUCKET and FIRECRAB_S3_PREFIX in the app. Restrict access with AWS IAM.", "부팅할 때 AWS SDK 자격 증명을 전달한다. 앱에서 FIRECRAB_S3_BUCKET과 FIRECRAB_S3_PREFIX를 사용한다. AWS IAM으로 접근 권한을 제한한다.")}</small>
+        </div>
         <div className="service-full">{fieldError("env")}</div>
         <VariableRows kind="secrets" rows={secrets} setRows={setSecrets} disabled={saving} />
         <div className="service-full">{fieldError("secrets")}</div>
@@ -254,7 +273,7 @@ function VariableRows({ kind, rows, setRows, disabled }: {
   return (
     <fieldset className="service-variables service-full" disabled={disabled}>
       <legend>{secret ? t("Secret references", "시크릿 참조") : t("Environment variables", "환경 변수")}</legend>
-      {secret && <p className="poll-note">{t("Enter a PipeSecrets ID for each variable. Manage sensitive values in Secrets.", "변수마다 PipeSecrets ID를 입력한다. 민감한 값은 Secrets에서 관리한다.")}</p>}
+      {secret && <p className="poll-note">{t("Enter a PipeSecrets ID for each variable. Values are injected into every replica at deployment. Secret changes apply on the next deployment.", "변수마다 PipeSecrets ID를 입력한다. 배포할 때 모든 복제본에 값을 주입한다. 시크릿 변경은 다음 배포에 반영한다.")}</p>}
       {rows.map((row, index) => (
         <div className="service-variable-row" key={index}>
           <div className="field"><label htmlFor={`service-${kind}-key-${index}`}>{t("Variable", "변수")}</label><input id={`service-${kind}-key-${index}`} value={row.key} maxLength={256} autoComplete="off" onChange={(event) => setRows(rows.map((pair, i) => i === index ? { ...pair, key: event.target.value } : pair))} required /></div>

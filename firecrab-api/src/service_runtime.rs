@@ -25,6 +25,7 @@ use crate::server::RequestId;
 use crate::state::AppState;
 
 mod domain;
+pub(crate) mod secrets;
 
 /// Validate deployment settings, persist a queued snapshot and start background work.
 pub async fn deploy(
@@ -41,9 +42,11 @@ pub async fn deploy(
         .await?
         .ok_or_else(|| AppError::not_found(request_id.0))?;
     let fields = deployment_fields(&service.spec, &request, state.api_port);
+    crate::handlers::pipe_storage::validate_binding(&state, &service.spec, request_id.0).await?;
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
     }
+    secrets::preflight(&state, &service.spec, request_id.0).await?;
     domain::preflight(&state, id, &service.spec, request_id.0).await?;
     if let Some(network_id) = request.micro_network_id {
         let store = state.store.clone();
@@ -179,16 +182,24 @@ pub(crate) async fn ensure_editable(
     request_id: Uuid,
 ) -> Result<(), AppError> {
     let store = state.store.clone();
-    if let Some(deployment) = database(request_id, move || store.service_deployment(id)).await?
-        && (deployment.phase.is_busy()
+    if let Some(deployment) = database(request_id, move || store.service_deployment(id)).await? {
+        if deployment.phase.is_busy()
             || !deployment.instances.is_empty()
-            || deployment.domain_route_owned)
-    {
-        return Err(AppError::conflict(
-            "service_in_use",
-            "stop the service before editing, deleting or deploying it again",
-            request_id,
-        ));
+            || deployment.domain_route_owned
+        {
+            return Err(AppError::conflict(
+                "service_in_use",
+                "stop the service before editing, deleting or deploying it again",
+                request_id,
+            ));
+        }
+        // Retry private-state cleanup before replacing or deleting the owner record.
+        secrets::remove(state, &deployment).await.map_err(|_| {
+            AppError::unavailable(
+                "Could not clear deployment Secrets; retry Stop.",
+                request_id,
+            )
+        })?;
     }
     Ok(())
 }
@@ -224,7 +235,7 @@ pub(crate) async fn ensure_vm_policy_editable(
     Ok(())
 }
 
-/// Reject unsupported secret settings and invalid direct host-port ranges.
+/// Reject invalid direct host-port ranges.
 fn deployment_fields(
     spec: &MicroServiceSpec,
     request: &DeployMicroServiceRequest,
@@ -241,13 +252,6 @@ fn deployment_fields(
         fields.insert(
             "hostPort".into(),
             "replicas need consecutive host ports from 1024 to 65535; port 5523 is reserved".into(),
-        );
-    }
-    if !spec.secrets.is_empty() {
-        fields.insert(
-            "secrets".into(),
-            "PipeSecrets injection is not available yet; secret references cannot be deployed"
-                .into(),
         );
     }
     fields
@@ -299,6 +303,7 @@ async fn run_deploy(state: AppState, mut deployment: MicroServiceDeployment) {
 
 /// Check capacity, import a pinned image and boot each replica until HTTP health passes.
 async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> Result<(), String> {
+    secrets::capture(state, deployment).await?;
     check_capacity(state, &deployment.spec).await?;
     if deployment.spec.domain.is_none() {
         let store = state.store.clone();
@@ -329,9 +334,7 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
     let credential =
         oci_handler::stored_credential_for(state, &original.registry, RequestId(deployment.id))
             .await
-            .map_err(|_| {
-                "Could not authenticate the image registry. Check Pipe Auth.".to_owned()
-            })?;
+            .map_err(|_| "Could not authenticate the image registry. Check Auth.".to_owned())?;
     let resolved = oci::resolve(
         &original,
         Architecture::HOST,
@@ -748,6 +751,7 @@ async fn cleanup(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
         deployment.instances.pop();
         save(state, deployment).await?;
     }
+    secrets::remove(state, deployment).await?;
     Ok(())
 }
 

@@ -72,7 +72,7 @@ export default function PipeServiceMenu({ label, disabled, items }: Props) {
       setAnchor(anchor ? null : { top: rect.bottom + 6, right: Math.max(8, window.innerWidth - rect.right) });
     }}>⋯</button>
     {anchor && createPortal(<ul ref={menu} className="options-menu-list vm-actions-menu pipe-service-menu" role="menu" aria-label={label} style={{ top: anchor.top, right: anchor.right }}>
-      {items.map(item => <li key={item.label} role="none"><button className={`options-menu-item${item.danger ? " danger" : ""}`} type="button" role="menuitem" disabled={disabled || item.disabled} onClick={() => { setAnchor(null); item.onSelect(); }}>{item.label}</button></li>)}
+      {items.map(item => <li key={item.label} role="none"><button className={`options-menu-item${item.danger ? " danger" : ""}`} type="button" role="menuitem" disabled={disabled || item.disabled} onClick={() => { setAnchor(null); trigger.current?.focus({ preventScroll: true }); item.onSelect(); }}>{item.label}</button></li>)}
     </ul>, document.body)}
   </div>;
 }

@@ -142,6 +142,7 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | Resource | Paths |
 | --- | --- |
 | MicroService | `GET, POST /api/micro-services`, `GET, PUT, DELETE /api/micro-services/{id}` |
+| Stack ownership and planning | `GET, POST /api/stacks`, `GET, DELETE /api/stacks/{name}`, `POST /api/stacks/{name}/bindings`, `/unbind`, `/plan`; empty-registration deletion requires `?id=STACK_UUID`; see [Stack planning](../guides/stack-planning.md#rest) |
 | MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/stop` |
 | MicroNetwork | `/api/micro-networks`, `/{id}` |
 | Security group | `GET, POST /api/security-groups`, `GET, PUT, DELETE /api/security-groups/{id}`, `PUT /api/security-groups/{id}/rules` |
@@ -356,6 +357,35 @@ use `400 validation_failed` with a `cloudflare` field. An unavailable helper use
 `503 cloudflare_setup_unavailable`. Connection setup can take several minutes.
 See [token issuance and connection](../guides/cloudflare-tunnel.md) for permissions
 and manual verification. Actual public access requires a real Cloudflare domain.
+
+## Pipe AI
+
+These routes share the existing host REST policy and a 60-second request deadline.
+Connections contain only metadata and separately inference-verified model IDs, which may be empty after account connection.
+Credentials are stored only on the API host.
+Pipe AI UI manages accounts only. Model verification, selection, and response routes are shared integration APIs for AI Sandbox.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/api/pipe/ai/connections` | Secret-free connections, verified `models`, `authentication`, `streaming`, and `toolCalls` |
+| PUT | `/api/pipe/ai/connections/{id}` | Validate and save `{name, provider: "openai" \| "anthropic", apiKey, model?: string}`; check the provider's `/v1/models` without inference. Anthropic accepts no `model` and supports connection management only |
+| POST | `/api/pipe/ai/connections/{id}/verify` | Verify inference with saved credentials and add `{model}` |
+| DELETE | `/api/pipe/ai/connections/{id}` | Remove credentials/defaults; return `{deleted, remoteRevocationConfirmed}` |
+| POST | `/api/pipe/ai/connections/{id}/login` | Start official ChatGPT login with `{name, model?: string}`; no inference unless `model` is supplied; return `{loginId, authorizationUrl, expiresIn}` |
+| GET | `/api/pipe/ai/logins/{id}` | Return `{status, message}`; status is `pending`, `working`, `connected`, or `failed` |
+| GET | `/auth/callback` | One-time state-bound OAuth callback; never returns tokens to the browser |
+| GET | `/api/pipe/ai/projects/{id}/model` | Saved `{connectionId, model}` or null |
+| PUT | `/api/pipe/ai/projects/{id}/model` | Persist a verified `{connectionId, model}` |
+| POST | `/api/pipe/ai/responses` | Accept `{projectId, input, selection?: {connectionId, model}}`; return `{selection, text}` |
+
+Login requires a local API authority and a reachable `127.0.0.1` callback.
+The server validates OAuth state, PKCE, signed identity, and granted plan scopes before replacing a connection.
+Account connection requires neither a model nor a project. Inference permission is checked separately; the optional `model` preserves API-client inference probes.
+Project UUIDs identify model settings rather than newly created Project records.
+An explicit response selection is a task/request override and leaves the project default unchanged.
+Calls never fall back to another model or connection.
+See [Pipe AI](../guides/pipe-ai.md) for capabilities, limits, CLI/MCP setup, and recovery.
+Anthropic model verification, defaults, and responses return `409 ai_connection_only`. API key disconnect removes the local saved key; it does not revoke the key at the provider.
 
 ## Errors
 

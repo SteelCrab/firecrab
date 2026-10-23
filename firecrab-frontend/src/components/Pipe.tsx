@@ -10,7 +10,9 @@ import { viewHash, type PipeCardId } from "../navigation";
 import PipeCards from "./PipeCards";
 import Screen from "./layout/Screen";
 import PipeAuth from "./PipeAuth";
+import PipeAi from "./PipeAi";
 import PipeDatabases from "./PipeDatabases";
+import PipeStorage from "./PipeStorage";
 import PipeRegistries from "./PipeRegistries";
 import PipeRouting from "./PipeRouting";
 
@@ -49,6 +51,7 @@ export default function Pipe({ card, vms, vmsLoading, vmsUnavailable, onUnsavedC
   }, [dirty]);
 
   useEffect(() => {
+    if (card === "ai" || card === "storage") return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let controller: AbortController | undefined;
@@ -73,7 +76,7 @@ export default function Pipe({ card, vms, vmsLoading, vmsUnavailable, onUnsavedC
     };
     void refresh();
     return () => { cancelled = true; clearTimeout(timer); controller?.abort(); };
-  }, []);
+  }, [card]);
 
   // A started request blocks polling so an older snapshot cannot overwrite its result.
   const onBusy = useCallback((value: boolean) => { mutating.current = value; setBusy(value); revision.current++; }, []);
@@ -84,11 +87,13 @@ export default function Pipe({ card, vms, vmsLoading, vmsUnavailable, onUnsavedC
   if (card === "auth") return <PipeAuth onUnsavedChange={setDirty} />;
   if (!card) return <Screen view="pipe"><PipeCards snapshot={snapshot} error={error} /></Screen>;
   return <Screen view="pipe"><div className="stack">
-    <nav className="pipe-back" aria-label={t("Pipe navigation", "Pipe 이동")}><a href={viewHash("pipe")}><span aria-hidden="true">← </span>Pipe</a></nav>
-    {error && <div className="banner error" role="alert">{error}</div>}
+    {card !== "storage" && <nav className="pipe-back" aria-label={t("Pipe navigation", "Pipe 이동")}><a href={viewHash("pipe")}><span aria-hidden="true">← </span>Pipe</a></nav>}
+    {error && card !== "ai" && card !== "storage" && <div className="banner error" role="alert">{error}</div>}
+    {card === "ai" && <PipeAi onUnsavedChange={setDirty} />}
     {card === "route" && <PipeRouting {...shared} {...appProps} onSnapshot={onSnapshot} />}
     {card === "registry" && <PipeRegistries onUnsavedChange={setDirty} />}
     {card === "database" && <PipeDatabases onUnsavedChange={setDirty} />}
+    {card === "storage" && <PipeStorage onUnsavedChange={setDirty} />}
     {card === "firecrab-tunnel" && <FirecrabTunnel {...shared} {...appProps} onConnected={onSnapshot} />}
     {card === "quick-tunnel" && <CloudflareConnect {...shared} {...appProps} config={snapshot?.config ?? EMPTY_PIPE} onConnected={onSnapshot} />}
     {card === "named-tunnel" && <NamedCloudflareTunnel {...shared} config={snapshot?.config ?? EMPTY_PIPE} onConnected={onSnapshot} />}

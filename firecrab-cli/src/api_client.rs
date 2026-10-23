@@ -149,8 +149,12 @@ impl ApiClient {
         let resp = self
             .client
             .post(self.url(path))
-            .timeout(self.mutation_timeout())
             .json(body)
+            .timeout(if path.starts_with("/api/pipe/ai/") {
+                self.mutation_timeout().max(OCI_INSPECT_TIMEOUT)
+            } else {
+                self.mutation_timeout()
+            })
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(resp)
@@ -207,6 +211,11 @@ impl ApiClient {
         let resp = self
             .client
             .delete(self.url(path))
+            .timeout(if path.starts_with("/api/pipe/ai/") {
+                self.mutation_timeout().max(OCI_INSPECT_TIMEOUT)
+            } else {
+                self.mutation_timeout()
+            })
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(resp)
@@ -222,8 +231,12 @@ impl ApiClient {
         let resp = self
             .client
             .put(self.url(path))
-            .timeout(self.mutation_timeout())
             .json(body)
+            .timeout(if path.starts_with("/api/pipe/ai/") {
+                self.mutation_timeout().max(OCI_INSPECT_TIMEOUT)
+            } else {
+                self.mutation_timeout()
+            })
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(resp)
@@ -241,6 +254,22 @@ impl ApiClient {
         Self::ensure_success(resp).map(|_| ())
     }
 
+    /// Send a DELETE with URL-encoded identity guards and accept an empty 2xx response.
+    pub fn delete_query<Q: Serialize + ?Sized>(
+        &self,
+        path: &str,
+        query: &Q,
+    ) -> Result<(), ApiError> {
+        let resp = self
+            .client
+            .delete(self.url(path))
+            .query(query)
+            .timeout(self.mutation_timeout())
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::ensure_success(resp).map(|_| ())
+    }
+
     fn mutation_timeout(&self) -> Duration {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if reqwest::Url::parse(self.base_url())
@@ -251,6 +280,81 @@ impl ApiClient {
             return Duration::from_secs(360);
         }
         DEFAULT_REQUEST_TIMEOUT
+    }
+
+    /// Stream a known-size file with a deadline matching PipeStorage's transfer routes.
+    pub fn upload_object(&self, path: &str, file: &std::path::Path) -> Result<(), ApiError> {
+        let input = std::fs::File::open(file)
+            .map_err(|_| ApiError::Unreachable("Could not open upload file".into()))?;
+        let metadata = input
+            .metadata()
+            .map_err(|_| ApiError::Unreachable("Could not inspect upload file".into()))?;
+        if !metadata.is_file() || metadata.len() > 512 * 1024 * 1024 {
+            return Err(ApiError::Unreachable(
+                "Upload must be a regular file of at most 512 MiB".into(),
+            ));
+        }
+        let response = self
+            .client
+            .put(self.url(path))
+            .timeout(Duration::from_secs(125))
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .body(reqwest::blocking::Body::sized(input, metadata.len()))
+            .send()
+            .map_err(|_| {
+                ApiError::Unreachable(
+                    "S3 upload interrupted; inspect the object before retrying".into(),
+                )
+            })?;
+        Self::ensure_success(response).map(|_| ())
+    }
+
+    /// Keep interrupted downloads private and leave existing destination files intact.
+    pub fn download_object(
+        &self,
+        path: &str,
+        file: &std::path::Path,
+        overwrite: bool,
+    ) -> Result<(), ApiError> {
+        let response = self
+            .client
+            .get(self.url(path))
+            .timeout(Duration::from_secs(125))
+            .send()
+            .map_err(|_| ApiError::Unreachable("Could not start S3 download".into()))?;
+        let mut response = Self::ensure_success(response)?;
+        let length = response
+            .content_length()
+            .filter(|n| *n <= 512 * 1024 * 1024)
+            .ok_or_else(|| ApiError::Unreachable("Invalid S3 download size".into()))?;
+        if file.exists() && !overwrite {
+            return Err(ApiError::Unreachable(
+                "Destination exists; use --overwrite explicitly".into(),
+            ));
+        }
+        let parent = file
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(std::path::Path::new("."));
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)
+            .map_err(|_| ApiError::Unreachable("Could not create download file".into()))?;
+        let copied = std::io::copy(&mut response, &mut temporary).map_err(|_| {
+            ApiError::Unreachable("S3 download interrupted; destination was not replaced".into())
+        })?;
+        if copied != length {
+            return Err(ApiError::Unreachable(
+                "Incomplete S3 download; destination was not replaced".into(),
+            ));
+        }
+        let result = if overwrite {
+            temporary.persist(file)
+        } else {
+            temporary.persist_noclobber(file)
+        };
+        result.map_err(|_| {
+            ApiError::Unreachable("Could not save download; destination was not replaced".into())
+        })?;
+        Ok(())
     }
 
     /// Sends `GET` and returns the raw successful body. Used for attachments
@@ -310,6 +414,34 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
+
+    #[test]
+    fn interrupted_s3_download_keeps_the_existing_destination_and_removes_temporary_bytes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = ApiClient::new(format!("http://{}", listener.local_addr().unwrap()));
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 2048];
+            let count = stream.read(&mut request).unwrap();
+            assert!(count > 0);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial",
+                )
+                .unwrap();
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("destination.bin");
+        std::fs::write(&file, b"original bytes").unwrap();
+        assert!(
+            client
+                .download_object("/api/pipe/storage/id/object?key=team/file", &file, true)
+                .is_err()
+        );
+        server.join().unwrap();
+        assert_eq!(std::fs::read(file).unwrap(), b"original bytes");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
 
     #[derive(Debug)]
     struct CapturedRequest {
