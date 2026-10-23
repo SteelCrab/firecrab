@@ -9,6 +9,7 @@ import type { Locale } from "./i18n";
  */
 export const VIEWS = [
   { id: "vms", group: "compute", labels: { en: "MicroVM", ko: "MicroVM" } },
+  { id: "pools", group: "compute", labels: { en: "Pools", ko: "풀" } },
   { id: "services", group: "compute", labels: { en: "MicroService", ko: "MicroService" } },
   { id: "schedules", group: "compute", labels: { en: "Schedules", ko: "스케줄러" } },
   { id: "networks", group: "network", labels: { en: "Networks", ko: "네트워크" } },

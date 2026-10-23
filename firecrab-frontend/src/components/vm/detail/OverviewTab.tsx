@@ -53,7 +53,7 @@ export default function OverviewTab({ vm, detail, edit, onShowLog }: OverviewTab
         </section>
       )}
 
-      <VmSchedules vm={vm} />
+      {vm.purpose !== "pool" && <VmSchedules vm={vm} />}
 
       <DetailSection title={t("Resource usage", "리소스 사용량")}>
         <VmUsage vm={vm} />

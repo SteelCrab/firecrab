@@ -63,6 +63,8 @@ test.describe("MicroService configuration @dashboard", () => {
     });
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("Not deployed");
+    await expect(page.getByText("Secret values are injected into every replica. Changes apply on the next deployment.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Secret injection is not available yet.", { exact: false })).toHaveCount(0);
     await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("Running");
     await expect(page.getByRole("cell", { name: "Healthy", exact: true })).toBeVisible();

@@ -72,13 +72,23 @@ fn validate(
             "use 1–64 bytes without control characters".to_owned(),
         );
     }
-    if !state
+    let purpose = state
         .vms
         .lock()
         .unwrap_or_else(|p| p.into_inner())
-        .contains_key(&spec.vm_id)
-    {
-        fields.insert("vmId".to_owned(), "target VM does not exist".to_owned());
+        .get(&spec.vm_id)
+        .map(|vm| vm.purpose);
+    match purpose {
+        None => {
+            fields.insert("vmId".to_owned(), "target VM does not exist".to_owned());
+        }
+        Some(crate::model::VmPurpose::Pool) => {
+            fields.insert(
+                "vmId".to_owned(),
+                "pool members are managed automatically".to_owned(),
+            );
+        }
+        Some(_) => {}
     }
     let next = match crate::scheduler::next_run(&spec.timing, now) {
         Ok(Some(at)) => Some(at),
