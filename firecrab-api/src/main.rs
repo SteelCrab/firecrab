@@ -23,6 +23,7 @@ mod package;
 mod persistence;
 mod pipe_auth;
 mod pipe_databases;
+mod pipe_storage;
 mod process_metrics;
 mod reconcile;
 mod resource_limits;

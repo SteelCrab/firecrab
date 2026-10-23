@@ -20,6 +20,7 @@ use crate::model::{Lease, VmRecord, VmState};
 mod micro_services;
 mod pipe_auth;
 mod pipe_databases;
+mod pipe_storage;
 mod registries;
 mod schedules;
 pub use registries::RegistryLogin;
@@ -692,6 +693,7 @@ impl Store {
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
+        conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;

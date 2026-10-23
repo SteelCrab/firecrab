@@ -46,6 +46,8 @@ pub async fn create(
     ValidatedJson(spec): ValidatedJson<MicroServiceSpec>,
 ) -> Result<(StatusCode, Json<MicroServiceResponse>), AppError> {
     validate(&spec, request_id.0)?;
+    let _claim = state.service_mutations.lock().await;
+    super::pipe_storage::validate_binding(&state, &spec, request_id.0).await?;
     let service = MicroServiceResponse {
         id: Uuid::new_v4(),
         spec,
@@ -69,6 +71,7 @@ pub async fn update(
     validate(&spec, request_id.0)?;
     let _claim = state.service_mutations.lock().await;
     crate::service_runtime::ensure_editable(&state, id, request_id.0).await?;
+    super::pipe_storage::validate_binding(&state, &spec, request_id.0).await?;
     let service = MicroServiceResponse { id, spec };
     let record = service.clone();
     let changed = database(request_id.0, move || {

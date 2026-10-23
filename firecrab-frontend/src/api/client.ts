@@ -98,6 +98,11 @@ async function fail(response: Response): Promise<ApiClientError> {
 }
 
 export async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
+  return (await (await fetchApiResponse(input, init)).json()) as T;
+}
+
+/** Fetch a successful response, including streamed files and 204 mutations. */
+export async function fetchApiResponse(input: string, init?: RequestInit): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(input, init);
@@ -107,7 +112,7 @@ export async function fetchJson<T>(input: string, init?: RequestInit): Promise<T
   if (!response.ok) {
     throw await fail(response);
   }
-  return (await response.json()) as T;
+  return response;
 }
 
 export function listVms(): Promise<VmResponse[]> {

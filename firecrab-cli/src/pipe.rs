@@ -26,6 +26,11 @@ pub(crate) const TUNNEL_UNIT: &str = "firecrab-tunnel.service";
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Connect existing S3 buckets and manage objects through the selected host API.
+    Storage {
+        #[command(subcommand)]
+        command: crate::pipe_storage::Command,
+    },
     /// Connect or remove a stable *.firecrab.dev address.
     Address {
         #[command(subcommand)]
@@ -119,6 +124,7 @@ pub enum AddressCommand {
 
 pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     match command {
+        Command::Storage { .. } => Err("Storage commands must use the selected API host".into()),
         Command::Address { command } => {
             use firecrab_helper_protocol::firecrab_tunnel::{Request, Target};
             let request = match command {

@@ -10,10 +10,15 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 mod micro_services;
+mod pipe_storage;
 mod schedules;
 pub use micro_services::{
     DeployMicroServiceRequest, MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec,
     ServiceInstance, ServicePhase, ServiceRuntime,
+};
+pub use pipe_storage::{
+    PipeStorageResponse, PipeStorageSpec, StorageCredentialRef, StorageObject, StorageObjectPage,
+    StorageServiceRef,
 };
 pub use schedules::*;
 

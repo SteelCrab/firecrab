@@ -39,6 +39,7 @@ pub async fn deploy(
         .await?
         .ok_or_else(|| AppError::not_found(request_id.0))?;
     let fields = deployment_fields(&service.spec, &request, state.api_port);
+    crate::handlers::pipe_storage::validate_binding(&state, &service.spec, request_id.0).await?;
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
     }
@@ -268,9 +269,7 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
     let credential =
         oci_handler::stored_credential_for(state, &original.registry, RequestId(deployment.id))
             .await
-            .map_err(|_| {
-                "Could not authenticate the image registry. Check Pipe Auth.".to_owned()
-            })?;
+            .map_err(|_| "Could not authenticate the image registry. Check Auth.".to_owned())?;
     let resolved = oci::resolve(
         &original,
         Architecture::HOST,

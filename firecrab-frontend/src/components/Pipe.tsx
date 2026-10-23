@@ -11,6 +11,7 @@ import PipeCards from "./PipeCards";
 import Screen from "./layout/Screen";
 import PipeAuth from "./PipeAuth";
 import PipeDatabases from "./PipeDatabases";
+import PipeStorage from "./PipeStorage";
 import PipeRegistries from "./PipeRegistries";
 import PipeRouting from "./PipeRouting";
 
@@ -89,6 +90,7 @@ export default function Pipe({ card, vms, vmsLoading, vmsUnavailable, onUnsavedC
     {card === "route" && <PipeRouting {...shared} {...appProps} onSnapshot={onSnapshot} />}
     {card === "registry" && <PipeRegistries onUnsavedChange={setDirty} />}
     {card === "database" && <PipeDatabases onUnsavedChange={setDirty} />}
+    {card === "storage" && <PipeStorage onUnsavedChange={setDirty} />}
     {card === "firecrab-tunnel" && <FirecrabTunnel {...shared} {...appProps} onConnected={onSnapshot} />}
     {card === "quick-tunnel" && <CloudflareConnect {...shared} {...appProps} config={snapshot?.config ?? EMPTY_PIPE} onConnected={onSnapshot} />}
     {card === "named-tunnel" && <NamedCloudflareTunnel {...shared} config={snapshot?.config ?? EMPTY_PIPE} onConnected={onSnapshot} />}

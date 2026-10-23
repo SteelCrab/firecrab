@@ -6,7 +6,7 @@ export interface AuthConnection {
   account: string;
   registry: string;
   region: string | null;
-  services: "registry"[];
+  services: ("registry" | "storage")[];
 }
 export type AuthLogin = { provider: "github"; token: string } | {
   provider: "aws"; accessKeyId: string; secretAccessKey: string; sessionToken: string; region: string;

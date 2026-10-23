@@ -54,6 +54,9 @@ pub struct MicroServiceSpec {
     /// Host-port deployment currently rejects nonempty secret references.
     #[serde(default)]
     pub secrets: BTreeMap<String, Uuid>,
+    /// PipeStorage connection for the application's AWS SDK. Credentials stay on the host.
+    #[serde(default)]
+    pub storage_connection_id: Option<Uuid>,
 }
 
 /// Saved configuration and its stable service identifier.

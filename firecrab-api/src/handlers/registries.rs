@@ -97,7 +97,7 @@ pub struct Connection {
     registry: String,
     username: String,
     provider: &'static str,
-    /// Shared Pipe Auth provider, or `None` when this registry uses a direct login.
+    /// Shared Auth provider, or `None` when this registry uses a direct login.
     #[serde(skip_serializing_if = "Option::is_none")]
     auth_provider: Option<crate::pipe_auth::Provider>,
     /// Optional display name retained from a direct ECR login.
@@ -251,7 +251,7 @@ async fn require_direct_login(
     {
         return Err(AppError::conflict(
             "pipe_auth_managed",
-            "Manage this registry in Pipe Auth",
+            "Manage this registry in Auth",
             id.0,
         ));
     }
@@ -266,7 +266,7 @@ pub struct RepositoriesQuery {
     namespace: Option<String>,
     /// One-based catalog page, defaulting to the first page.
     page: Option<u32>,
-    /// Opaque ECR continuation token, valid only with an AWS Pipe Auth connection.
+    /// Opaque ECR continuation token, valid only with an AWS Auth connection.
     cursor: Option<String>,
 }
 
@@ -301,7 +301,7 @@ pub async fn repositories(
         }
     }
     if query.cursor.is_some() {
-        return Err(invalid("Repository cursors require AWS Pipe Auth", id));
+        return Err(invalid("Repository cursors require AWS Auth", id));
     }
     let credential = super::oci::stored_credential_for(&state, &registry, id).await?;
     let kind = match provider(&registry) {

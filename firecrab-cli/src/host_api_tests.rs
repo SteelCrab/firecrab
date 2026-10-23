@@ -137,14 +137,15 @@ fn micro_services_waiting_deploy_returns_failure_to_the_caller() {
 }
 
 #[test]
-fn micro_services_commands_send_configuration_and_secret_references() {
+fn micro_services_commands_send_configuration_secret_and_storage_references() {
     let directory = tempfile::tempdir().unwrap();
     let file = directory.path().join("orders.json");
     let spec = json!({
         "name": "orders", "image": "ghcr.io/team/orders:1.0", "runtime": "vm",
         "port": 8080, "healthPath": "/health", "domain": null, "ram": 512, "cpu": 1,
         "replicas": 2, "startupTimeout": 300, "drainTimeout": 30,
-        "env": {"PROFILE": "prod"}, "secrets": {"DB_PASSWORD": NETWORK_ID}
+        "env": {"PROFILE": "prod"}, "secrets": {"DB_PASSWORD": NETWORK_ID},
+        "storageConnectionId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
     });
     std::fs::write(&file, spec.to_string()).unwrap();
     let file = file.to_str().unwrap();

@@ -715,6 +715,22 @@ pub async fn update_vm(
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
     let _guard = state.lock_vm(id).await;
+    if req.env.is_some() {
+        let store = state.store.clone();
+        let storage_env = tokio::task::spawn_blocking(move || {
+            crate::pipe_storage::environment_for_vm(&store, id)
+        })
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+        .map_err(|e| super::pipe_storage::failure(e, request_id.0))?;
+        if !storage_env.is_empty() {
+            return Err(AppError::conflict(
+                "service_storage_env",
+                "Stop and edit the MicroService configuration to change this VM's environment",
+                request_id.0,
+            ));
+        }
+    }
     let (updated, previous) = claim_resource_update(&state, id, &req, request_id.0)?;
     if let Err(error) = persist_update(&state, &updated, request_id.0).await {
         restore_resources(&state, id, previous);
@@ -1302,8 +1318,17 @@ async fn finish_run_start(
         let target_bytes = u64::from(record.disk_gb) * 1024 * 1024 * 1024;
         let rootfs = rootfs::prepare_rootfs(&paths, generation, &mut source, target_bytes)
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
-        rootfs::specialize_guest(&rootfs, record.id, &record.env)
+        let storage_env = crate::pipe_storage::environment_for_vm(&store_for_shells, record.id)
+            .map_err(|error| error.message.to_owned())?;
+        let has_storage_secrets = !storage_env.is_empty();
+        let mut guest_env = record.env.clone();
+        guest_env.extend(storage_env);
+        rootfs::specialize_guest(&rootfs, record.id, &guest_env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
+        if has_storage_secrets {
+            rootfs::protect_vm_credentials(&rootfs)
+                .map_err(|_| "Could not protect the service's S3 credential file".to_owned())?;
+        }
         crate::guest_ssh::install_on_guest(&rootfs, &paths)
             .map_err(|error| format!("guest SSH install failed: {error}"))?;
         if let Some(ref program) = guest_fastfetch {

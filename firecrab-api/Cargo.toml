@@ -18,6 +18,7 @@ firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
 filetime = "0.2.29"
 futures-util = "0.3"
 percent-encoding = "2.3"
+quick-xml = { version = "0.38", features = ["serialize"] }
 libc = "0.2.186"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 ring = "0.17.14"
