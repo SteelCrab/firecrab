@@ -728,10 +728,10 @@ mod tests {
 
     #[tokio::test]
     async fn absent_iptables_rules_keep_false_without_warning() {
-        let dir = tempfile::tempdir().unwrap();
         let (capture, subscriber) = log_capture();
         async {
             for name in ["iptables", "ip6tables"] {
+                let dir = tempfile::tempdir().unwrap();
                 let tool = fake_tool(
                     dir.path(),
                     name,
@@ -740,7 +740,8 @@ mod tests {
                 for action in ["-C", "--check", "-D", "--delete"] {
                     assert!(!run_tool(&tool, &[action, "INPUT"]).await);
                 }
-                let tool = fake_tool(dir.path(), name, "exit 1");
+                let empty = tempfile::tempdir().unwrap();
+                let tool = fake_tool(empty.path(), name, "exit 1");
                 assert!(!run_tool(&tool, &["-C", "INPUT"]).await);
             }
         }
@@ -751,7 +752,6 @@ mod tests {
 
     #[tokio::test]
     async fn unexpected_iptables_failures_still_warn() {
-        let dir = tempfile::tempdir().unwrap();
         let (capture, subscriber) = log_capture();
         async {
             for name in ["iptables", "ip6tables"] {
@@ -767,6 +767,8 @@ mod tests {
                         "echo 'Bad rule (does a matching rule exist in that chain?).' >&2; exit 2",
                     ),
                 ] {
+                    // Keep the executable inode unchanged after a child has used it.
+                    let dir = tempfile::tempdir().unwrap();
                     let tool = fake_tool(dir.path(), name, script);
                     assert!(!run_tool(&tool, &[action, "INPUT"]).await);
                 }
