@@ -15,8 +15,11 @@ async function openServices(page: Page, rows: object[] = [], failSave = false) {
   await page.route(/^https?:\/\/[^/]+\/api\//, async (route) => {
     const path = new URL(route.request().url()).pathname;
     const method = route.request().method();
+    if (path === "/api/pipe") return route.fulfill({ json: { config: null, units: [], nginxAvailable: true, cloudflaredAvailable: false } });
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/micro-networks") return route.fulfill({ json: [] });
+    if (path === "/api/security-groups") return route.fulfill({ json: [{ id: SECRET, name: "orders-policy", microNetworkId: ID, rules: [] }] });
+    if (path === `/api/security-groups/${SECRET}`) return route.fulfill({ json: { id: SECRET, name: "orders-policy", microNetworkId: ID, rules: [] } });
     if (path === "/api/host") return route.fulfill({ json: { loadAverage1m: 0.1, memoryTotalMib: 8192, memoryAvailableMib: 4096, diskTotalGib: 100, diskAvailableGib: 50, uptimeSeconds: 3600 } });
     if (path === "/api/update") return route.fulfill({ json: { current: "0.3.1", latest: "0.3.1", updateAvailable: false } });
     if (path === "/api/update/progress") return route.fulfill({ json: { phase: "idle", percent: 0, updatedAtMs: 0 } });
@@ -40,7 +43,7 @@ async function openServices(page: Page, rows: object[] = [], failSave = false) {
 
 test.describe("MicroService configuration @dashboard", () => {
   test("deploys from the runtime panel, reports health, and stops the service", async ({ page }, testInfo) => {
-    const service = { ...INITIAL, domain: null, secrets: {}, replicas: 1 };
+    const service = { ...INITIAL, domain: null, replicas: 1 };
     await openServices(page, [service]);
     let deployment: Record<string, unknown> | null = null;
     let read = 0;
@@ -62,6 +65,9 @@ test.describe("MicroService configuration @dashboard", () => {
     });
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.locator("#service-status").getByRole("status")).toHaveText("Not deployed");
+    await expect(page.getByText("Secret values are injected into every replica. Changes apply on the next deployment.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Secret injection is not available yet.", { exact: false })).toHaveCount(0);
+
     await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
     await expect(page.locator("#service-status").getByRole("status")).toHaveText("Running");
     await expect(page.getByRole("cell", { name: "Healthy", exact: true })).toBeVisible();
@@ -91,17 +97,39 @@ test.describe("MicroService configuration @dashboard", () => {
     expect(maxActiveReads).toBe(1);
   });
 
+  test("shows a missing Secret error before a deployment is accepted", async ({ page }) => {
+    const service = { ...INITIAL, domain: null, replicas: 1 };
+    await openServices(page, [service]);
+    let submitted = false;
+    await page.route(`**/api/micro-services/${ID}/deployment`, async route => {
+      if (route.request().method() === "POST") {
+        submitted = true;
+        return route.fulfill({ status: 400, json: { error: { code: "validation_failed", message: "request validation failed", fields: { secrets: "a referenced PipeSecret does not exist" } } } });
+      }
+      return route.fulfill({ json: null });
+    });
+    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await expect(page.getByRole("status")).toHaveText("Not deployed");
+    await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("a referenced PipeSecret does not exist");
+    await expect(page.getByRole("status")).toHaveText("Not deployed");
+    await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeEnabled();
+    expect(submitted).toBe(true);
+  });
+
   test("closes stale runtime settings after saving and preserves mobile headers", async ({ page }) => {
-    await openServices(page, [INITIAL]);
+    const writes = await openServices(page, [{ ...INITIAL, domain: null, securityGroupId: SECRET }]);
     await page.route(`**/api/micro-services/${ID}/deployment`, (route) => route.fulfill({ json: null }));
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.locator("#service-status").getByRole("status")).toHaveText("Not deployed");
     await page.getByRole("button", { name: "Edit orders", exact: true }).click();
     await page.getByLabel("Port", { exact: true }).fill("9090");
     await page.getByLabel("Replicas", { exact: true }).fill("3");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("button", { name: "Save configuration", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Deploy MicroService", exact: true })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Edit MicroService", exact: true })).toHaveCount(0);
+    expect(writes[0].body.securityGroupId).toBe(SECRET);
+
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.getByText("Each replica uses one host port, starting at 30100. App port: 9090.", { exact: true })).toBeVisible();
     await expect(page.getByLabel("First host port")).toHaveAttribute("max", "65533");
@@ -142,10 +170,10 @@ test.describe("MicroService configuration @dashboard", () => {
     await page.getByLabel("Environment (NAME=value)", { exact: true }).fill("PROFILE=prod");
     await page.getByLabel("Secret references (NAME=CrabSecrets ID)", { exact: true }).fill(`DB_PASSWORD=${SECRET}`);
     await page.screenshot({ path: testInfo.outputPath("microservice-desktop.png"), fullPage: true });
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("button", { name: "Save configuration", exact: true }).click();
     await expect(page.getByRole("cell", { name: "orders", exact: true })).toBeVisible();
     expect(writes[0]).toEqual({ method: "POST", body: {
-      name: "orders", image: "ghcr.io/team/orders:1.0", runtime: "vm", port: 8080,
+      name: "orders", image: "ghcr.io/team/orders:1.0", runtime: "vm", securityGroupId: null, port: 8080,
       healthPath: "/health", domain: null, ram: 512, cpu: 1, replicas: 1,
       startupTimeout: 300, drainTimeout: 30, env: { PROFILE: "prod" }, secrets: { DB_PASSWORD: SECRET },
     } });
@@ -154,7 +182,7 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect(page.getByLabel("Secret references (NAME=CrabSecrets ID)", { exact: true })).toHaveValue(`DB_PASSWORD=${SECRET}`);
     await page.getByLabel("OCI image", { exact: true }).fill("ghcr.io/team/orders:2.0");
     await page.getByLabel("Replicas", { exact: true }).fill("2");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("button", { name: "Save configuration", exact: true }).click();
     await expect(page.getByRole("cell", { name: "ghcr.io/team/orders:2.0", exact: true })).toBeVisible();
     expect(writes[1].method).toBe("PUT");
     expect(writes[1].body).not.toHaveProperty("id");
@@ -171,7 +199,7 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect(page.getByLabel("Startup timeout (seconds)")).toHaveValue("120");
     await expect(page.getByLabel("Drain timeout (seconds)")).toHaveValue("60");
     await page.getByLabel("Name", { exact: true }).fill("billing");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("button", { name: "Save configuration", exact: true }).click();
     await expect(page.getByText("is already registered", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Name", { exact: true })).toHaveValue("billing");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -190,4 +218,51 @@ test.describe("MicroService configuration @dashboard", () => {
     expect(await page.locator(".table-scroll").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("microservice-mobile.png"), fullPage: true });
   });
+});
+
+test("domain deployment inherits the security-group network and shows DNS guidance on mobile", async ({ page }, testInfo) => {
+  const service = { ...INITIAL, replicas: 1, secrets: {}, securityGroupId: SECRET };
+  await openServices(page, [service]);
+  let deployment: Record<string, unknown> | null = null;
+  await page.route(`**/api/micro-services/${ID}/deployment`, async route => {
+    if (route.request().method() === "POST") {
+      expect(route.request().postDataJSON()).toEqual({ microNetworkId: ID });
+      deployment = { id: SECRET, serviceId: ID, spec: service, phase: "running", request: { hostPort: 0 }, domainRouteOwned: true,
+        instances: [{ vmId: SECRET, ipv4: "172.30.0.2", hostPort: 0, state: "running", healthy: true }], digest: null, error: null, log: ["Domain connected"] };
+      return route.fulfill({ status: 202, json: deployment });
+    }
+    return route.fulfill({ json: deployment });
+  });
+  await page.route("**/api/pipe", route => route.fulfill({ json: { config: { listen: "127.0.0.1:8080", routes: [], tunnel: { id: SECRET, credentialsFile: "hidden" } }, units: [], nginxAvailable: true, cloudflaredAvailable: true } }));
+  await page.getByRole("button", { name: "Run orders", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Not deployed");
+  await expect(page.getByLabel("First host port")).toHaveCount(0);
+  await expect(page.getByLabel("Network", { exact: true })).not.toBeVisible();
+  await page.getByText("Advanced settings", { exact: true }).click();
+  await expect(page.getByLabel("Network", { exact: true })).toHaveValue(ID);
+  await expect(page.getByLabel("Network", { exact: true })).toBeDisabled();
+  await expect(page.getByText(`${SECRET}.cfargotunnel.com`, { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open domain", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
+  await expect(page.getByRole("link", { name: "Open domain", exact: true })).toHaveAttribute("href", "https://orders.example.com");
+  await expect(page.getByRole("link", { name: ":0", exact: true })).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("service-domain-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByRole("combobox", { name: "Language", exact: true }).selectOption("ko");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("link", { name: "도메인 열기", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("accepts a pasted domain URL", async ({ page }) => {
+  const writes = await openServices(page);
+  await page.getByRole("button", { name: "New MicroService", exact: true }).click();
+  await page.getByLabel("Name", { exact: true }).fill("web");
+  await page.getByLabel("OCI image", { exact: true }).fill("nginx:alpine");
+  await page.getByLabel("Domain (optional)", { exact: true }).fill("https://Orders.Example.COM/");
+  await page.getByRole("button", { name: "Save configuration", exact: true }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0].body.domain).toBe("orders.example.com");
 });

@@ -11,6 +11,260 @@ fn spec() -> MicroServiceSpec {
     .unwrap()
 }
 
+fn stored_secret(state: &AppState, value: &str) -> Uuid {
+    use crate::secrets::{Secret, SecretSummary};
+    let id = Uuid::new_v4();
+    state
+        .secrets
+        .write(|contents| {
+            contents.secrets.push(Secret {
+                summary: SecretSummary {
+                    id,
+                    name: "test-password".into(),
+                    description: String::new(),
+                    version: 1,
+                    created_at: 0,
+                    updated_at: 0,
+                    source: None,
+                },
+                value: value.into(),
+            });
+            Ok(())
+        })
+        .unwrap();
+    id
+}
+
+fn replica(state: &AppState, deployment: &mut MicroServiceDeployment) -> crate::model::VmRecord {
+    let mut vm = vms::test_support::record("replica", Uuid::new_v4());
+    vm.env = deployment.spec.env.clone();
+    state.store.insert(&vm).unwrap();
+    state.vms.lock().unwrap().insert(vm.id, vm.clone());
+    deployment.instances.push(ServiceInstance {
+        vm_id: vm.id,
+        ipv4: "127.0.0.1".into(),
+        host_port: 30100,
+        state: VmState::Created,
+        healthy: false,
+    });
+    state.store.save_service_deployment(deployment).unwrap();
+    vm
+}
+
+#[tokio::test]
+async fn secret_preflight_rejects_missing_and_invalid_values_without_creating_resources() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let secret = stored_secret(&state, "valid");
+    for value in [None, Some("x".repeat(4097)), Some("bad\0value".into())] {
+        let mut spec = spec();
+        let reference = if let Some(value) = value {
+            state
+                .secrets
+                .write(|contents| {
+                    contents.secrets[0].value = value;
+                    Ok(())
+                })
+                .unwrap();
+            secret
+        } else {
+            Uuid::new_v4()
+        };
+        spec.secrets.insert("PASSWORD".into(), reference);
+        let id = Uuid::new_v4();
+        spec.name = id.simple().to_string();
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse { id, spec })
+            .unwrap();
+        let error = deploy(
+            State(state.clone()),
+            Extension(RequestId(id)),
+            Path(id.to_string()),
+            ValidatedJson(DeployMicroServiceRequest {
+                host_port: 30100,
+                micro_network_id: None,
+            }),
+        )
+        .await
+        .unwrap_err()
+        .into_response();
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(error.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["error"]["fields"]["secrets"].is_string());
+        assert!(state.store.service_deployment(id).unwrap().is_none());
+    }
+    assert!(state.store.load_all().unwrap().is_empty());
+    assert!(state.store.list_micro_networks().unwrap().is_empty());
+    state
+        .secrets
+        .read(|contents| {
+            assert!(contents.service_environments.is_empty());
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[tokio::test]
+async fn secret_snapshot_is_shared_by_replicas_and_survives_restart_without_public_plaintext() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let value = "SECRET-only-in-guest-'quoted'\n$(printf literal)";
+    let secret = stored_secret(&state, value);
+    let mut record = deployment(Uuid::new_v4());
+    record.spec.secrets.insert("PASSWORD".into(), secret);
+    record.spec.secrets.insert("ALIAS".into(), secret);
+    record.spec.env.insert("PLAIN".into(), "kept".into());
+    secrets::capture(&state, &record).await.unwrap();
+    let first = replica(&state, &mut record);
+    state
+        .secrets
+        .write(|contents| {
+            contents.secrets[0].value = "new-value".into();
+            Ok(())
+        })
+        .unwrap();
+    secrets::capture(&state, &record).await.unwrap();
+    let second = replica(&state, &mut record);
+    for vm in [&first, &second] {
+        let env = secrets::guest_env(&state, vm).await.unwrap();
+        assert_eq!(env["PASSWORD"], value);
+        assert_eq!(env["ALIAS"], value);
+        assert_eq!(env["PLAIN"], "kept");
+        let public = vms::vm_response(&state, vm, None);
+        let public = serde_json::to_string(&public).unwrap();
+        assert!(!public.contains("PASSWORD"));
+        assert!(!vm.env.contains_key("PASSWORD"));
+    }
+    let reopened = self::state(root.path()).await;
+    assert_eq!(
+        secrets::guest_env(&reopened, &first).await.unwrap()["PASSWORD"],
+        value
+    );
+    let public = serde_json::to_string(&record).unwrap();
+    assert!(!public.contains("SECRET-only-in-guest"));
+    for file in [
+        root.path().join("state.db"),
+        root.path().join("state.secrets/vault.bin"),
+    ] {
+        let bytes = std::fs::read(file).unwrap();
+        let marker = b"SECRET-only-in-guest-";
+        assert!(!bytes.windows(marker.len()).any(|bytes| bytes == marker));
+    }
+    // A different deployment captures the new value without changing the old one.
+    let mut next = deployment(Uuid::new_v4());
+    next.spec.secrets.insert("PASSWORD".into(), secret);
+    secrets::capture(&reopened, &next).await.unwrap();
+    let next_vm = replica(&reopened, &mut next);
+    assert_eq!(
+        secrets::guest_env(&reopened, &next_vm).await.unwrap()["PASSWORD"],
+        "new-value"
+    );
+    assert_eq!(
+        secrets::guest_env(&reopened, &first).await.unwrap()["PASSWORD"],
+        value
+    );
+}
+
+#[tokio::test]
+async fn secret_capture_rechecks_queued_references_before_import_or_vm_creation() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let id = stored_secret(&state, "before-queue");
+    let mut record = deployment(Uuid::new_v4());
+    record.spec.secrets.insert("PASSWORD".into(), id);
+    secrets::preflight(&state, &record.spec, record.id)
+        .await
+        .unwrap();
+    state
+        .secrets
+        .write(|contents| {
+            contents.secrets.clear();
+            Ok(())
+        })
+        .unwrap();
+    let error = execute(&state, &mut record).await.unwrap_err();
+    assert!(error.contains("Secrets"));
+    assert!(record.digest.is_none());
+    assert!(record.instances.is_empty());
+    assert!(state.store.list_micro_networks().unwrap().is_empty());
+    assert!(state.store.load_all().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn missing_or_damaged_snapshots_fail_closed_without_affecting_standalone_vms() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let mut record = deployment(Uuid::new_v4());
+    record
+        .spec
+        .secrets
+        .insert("PASSWORD".into(), stored_secret(&state, "sensitive"));
+    let vm = replica(&state, &mut record);
+    assert!(secrets::guest_env(&state, &vm).await.is_err());
+    secrets::capture(&state, &record).await.unwrap();
+    std::fs::write(root.path().join("state.secrets/vault.bin"), b"damaged").unwrap();
+    let error = secrets::guest_env(&state, &vm).await.unwrap_err();
+    assert!(!error.contains("sensitive"));
+    assert!(
+        secrets::preflight(&state, &record.spec, record.id)
+            .await
+            .is_err()
+    );
+    let mut standalone = vms::test_support::record("standalone", Uuid::new_v4());
+    standalone.env.insert("PLAIN".into(), "works".into());
+    assert_eq!(
+        secrets::guest_env(&state, &standalone).await.unwrap(),
+        standalone.env
+    );
+    secrets::preflight(&state, &spec(), Uuid::new_v4())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn secret_snapshots_are_removed_after_cleanup_and_replica_env_edits_are_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let mut record = deployment(Uuid::new_v4());
+    record
+        .spec
+        .secrets
+        .insert("PASSWORD".into(), stored_secret(&state, "private"));
+    secrets::capture(&state, &record).await.unwrap();
+    let vm = replica(&state, &mut record);
+    let request = serde_json::from_value(
+        serde_json::json!({"cpu": 1, "ram": 128, "diskGb": 0, "env": {"PASSWORD": "override"}}),
+    )
+    .unwrap();
+    let error = vms::update_vm(
+        State(state.clone()),
+        Extension(RequestId(record.id)),
+        Path(vm.id.to_string()),
+        ValidatedJson(request),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    assert!(state.store.load_all().unwrap()[&vm.id].env.is_empty());
+    // Simulate a replica already removed by an interrupted cleanup.
+    state.vms.lock().unwrap().remove(&vm.id);
+    state.store.delete(vm.id).unwrap();
+    cleanup(&state, &mut record).await.unwrap();
+    assert!(record.instances.is_empty());
+    state
+        .secrets
+        .read(|contents| {
+            assert!(!contents.service_environments.contains_key(&record.id));
+            Ok(())
+        })
+        .unwrap();
+    secrets::remove(&state, &record).await.unwrap();
+}
+
 async fn state(root: &std::path::Path) -> AppState {
     AppState::with_db_file(
         TemplateRegistry::from_specs(root, std::iter::empty()).unwrap(),
@@ -25,6 +279,7 @@ fn deployment(id: Uuid) -> MicroServiceDeployment {
         id: Uuid::new_v4(),
         service_id: id,
         phase: ServicePhase::Queued,
+        domain_route_owned: false,
         spec: spec(),
         request: DeployMicroServiceRequest {
             micro_network_id: None,
@@ -38,7 +293,7 @@ fn deployment(id: Uuid) -> MicroServiceDeployment {
 }
 
 #[test]
-fn deployments_reject_unsupported_configuration_and_port_overflow_before_claiming() {
+fn deployments_accept_secret_references_and_reject_port_overflow_before_claiming() {
     let request = DeployMicroServiceRequest {
         micro_network_id: None,
         host_port: 30100,
@@ -48,8 +303,9 @@ fn deployments_reject_unsupported_configuration_and_port_overflow_before_claimin
     spec.domain = Some("example.com".into());
     spec.secrets.insert("PASSWORD".into(), Uuid::new_v4());
     let fields = deployment_fields(&spec, &request, 5523);
-    assert!(fields.contains_key("domain"));
-    assert!(fields.contains_key("secrets"));
+    assert!(!fields.contains_key("domain"));
+    spec.domain = None;
+    assert!(!fields.contains_key("secrets"));
     spec.replicas = 2;
     for port in [0, 80, 5522, 5523, 65535] {
         assert!(
@@ -343,6 +599,117 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
+async fn replicas_inherit_the_group_before_boot_and_redeploy_with_the_same_selection() {
+    use firecrab_api_types::{MicroNetworkResponse, SecurityGroupResponse};
+    use firecrab_helper_protocol::network::NetworkRequest;
+
+    let directory = crate::firecracker::test_support::short_tempdir();
+    let (state, id, mut spec, _) = bootable_service(directory.path()).await;
+    let socket = directory.path().join("record-net.sock");
+    let (_helper, requests) =
+        crate::network::test_support::spawn_policy_collision_helper(&socket, []);
+    let state = state.with_test_network(crate::network::NetworkClient::with_socket_path(socket));
+    // Loopback leases let real HTTP health checks run without changing host networking.
+    let network: MicroNetworkResponse = serde_json::from_value(serde_json::json!({
+        "id":Uuid::new_v4(),"name":"loopback","subnetCidr":"127.0.0.0/24",
+        "gateway":"127.0.0.1","internetEnabled":true,"uplink":null,
+        "ipv6Cidr":null,"ipv6Gateway":null,"ipv6AddressMode":null,"ipv6Egress":null
+    }))
+    .unwrap();
+    state.store.insert_micro_network(&network).unwrap();
+    let group = SecurityGroupResponse {
+        id: Uuid::new_v4(),
+        name: "app".into(),
+        micro_network_id: network.id,
+        rules: vec![],
+    };
+    state.store.insert_security_group(&group).unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    spec.port = listener.local_addr().unwrap().port();
+    spec.replicas = 2;
+    spec.security_group_id = Some(group.id);
+    spec.drain_timeout = 1;
+    let health = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route("/health", axum::routing::get(|| async { StatusCode::OK })),
+        )
+        .await
+        .unwrap();
+    });
+    state
+        .store
+        .update_micro_service(&MicroServiceResponse {
+            id,
+            spec: spec.clone(),
+        })
+        .unwrap();
+    let mut previous_ids = std::collections::HashSet::new();
+    for _ in 0..2 {
+        let (_, Json(snapshot)) = deploy(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(id.to_string()),
+            ValidatedJson(DeployMicroServiceRequest {
+                micro_network_id: Some(network.id),
+                host_port: free_port().min(65000),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(snapshot.spec.security_group_id, Some(group.id));
+        let running = wait_for_phase(&state, id, ServicePhase::Running).await;
+        assert_eq!(running.instances.len(), 2);
+        let recovered = state.store.load_all().unwrap();
+        for instance in &running.instances {
+            assert_eq!(recovered[&instance.vm_id].security_group_id, Some(group.id));
+            assert!(
+                previous_ids.insert(instance.vm_id),
+                "redeploy must create new VMs"
+            );
+        }
+        let policies = vms::active_vm_policy_specs(&state).await.unwrap();
+        assert_eq!(policies.len(), 2);
+        assert!(policies.iter().all(|vm| {
+            vm.security_group
+                .as_ref()
+                .is_some_and(|policy| policy.id == group.id)
+        }));
+        let restarted = AppState::with_db_file(
+            (*state.templates).clone(),
+            directory.path().join("data/firecrab.db"),
+        )
+        .await
+        .unwrap()
+        .with_test_runtime((*state.runtime).clone())
+        .with_test_network(state.network.clone());
+        assert_eq!(restarted.vms.lock().unwrap().len(), 2);
+        crate::reconcile::retry_networks(&restarted).await.unwrap();
+        let restored = vms::active_vm_policy_specs(&restarted).await.unwrap();
+        assert_eq!(
+            restored, policies,
+            "network recovery must restore each stored attachment"
+        );
+        let requests = requests.lock().unwrap().clone();
+        for instance in &running.instances {
+            let tap = requests.iter().position(|request| matches!(request, NetworkRequest::CreateTap {vm_id,..} if *vm_id == instance.vm_id)).unwrap();
+            let policy = requests.iter().position(|request| matches!(request, NetworkRequest::ApplyVmPolicy {vm_id, security_group:Some(policy),..} if *vm_id == instance.vm_id && policy.id == group.id)).unwrap();
+            assert!(tap < policy);
+        }
+        let _ = stop(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(id.to_string()),
+        )
+        .await
+        .unwrap();
+        wait_for_phase(&state, id, ServicePhase::Stopped).await;
+        assert!(state.store.load_all().unwrap().is_empty());
+    }
+    health.abort();
+}
+
+#[tokio::test]
 async fn failed_app_health_deletes_the_booted_replica_and_records_the_reason() {
     let directory = crate::firecracker::test_support::short_tempdir();
     let (state, id, _, _) = bootable_service(directory.path()).await;
@@ -404,6 +771,7 @@ async fn stop_withdraws_ports_drains_and_deletes_a_running_replica() {
         State(state.clone()),
         Extension(RequestId(Uuid::new_v4())),
         ValidatedJson(CreateVmRequest {
+            security_group_id: None,
             name: "ms-stop-test".into(),
             template: alias,
             ram: spec.ram,
@@ -495,7 +863,7 @@ async fn deploy_rejects_unknown_services_networks_and_unsupported_settings() {
         .unwrap();
     assert_eq!(
         status(call(id.to_string(), request.clone()).await),
-        StatusCode::BAD_REQUEST
+        StatusCode::SERVICE_UNAVAILABLE
     );
     let id = Uuid::new_v4();
     state
@@ -547,4 +915,369 @@ async fn get_reports_live_instance_state_and_rejects_unknown_services() {
     };
     assert_eq!(live.phase, ServicePhase::Degraded);
     assert_eq!(live.instances[0].state, VmState::Stopped);
+}
+
+/// A framed helper with an isolated Pipe manifest. No host services or networking are changed.
+async fn domain_helper(
+    root: &std::path::Path,
+    fail_after_publish: bool,
+) -> (
+    crate::network::NetworkClient,
+    std::sync::Arc<std::sync::Mutex<firecrab_helper_protocol::pipe::Config>>,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use firecrab_helper_protocol::{
+        PROTOCOL_VERSION,
+        framing::{read_frame, write_frame},
+        network::{HelperFailure, NetworkRequest, NetworkRequestEnvelope, NetworkResponseEnvelope},
+        pipe::{Config, Operation, ServiceRouteRequest, Snapshot},
+    };
+    let path = root.join("domain.sock");
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let config = std::sync::Arc::new(std::sync::Mutex::new(
+        serde_json::from_value::<Config>(serde_json::json!({"routes":[],"tunnel":null})).unwrap(),
+    ));
+    let reject_remove = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let saved = config.clone();
+    let reject = reject_remove.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let saved = saved.clone();
+            let reject = reject.clone();
+            tokio::spawn(async move {
+                let envelope: NetworkRequestEnvelope = read_frame(&mut stream).await.unwrap();
+                let mut result = Ok(());
+                let snapshot = {
+                    let mut config = saved.lock().unwrap();
+                    if let NetworkRequest::Pipe {
+                        request: Operation::ManageServiceRoute { request },
+                    } = envelope.request
+                    {
+                        if matches!(request, ServiceRouteRequest::Remove { .. })
+                            && reject.load(std::sync::atomic::Ordering::SeqCst)
+                        {
+                            result = Err(HelperFailure::Internal {
+                                detail: "isolated withdraw failure".into(),
+                            });
+                        } else {
+                            match request.updated_config(&config) {
+                                Ok(next) => *config = next,
+                                Err(detail) => result = Err(HelperFailure::Internal { detail }),
+                            }
+                            if fail_after_publish
+                                && matches!(request, ServiceRouteRequest::Publish { .. })
+                            {
+                                result = Err(HelperFailure::Internal {
+                                    detail: "response lost after publication".into(),
+                                });
+                            }
+                        }
+                    }
+                    Snapshot {
+                        config: Some(config.clone()),
+                        units: vec![],
+                        nginx_available: true,
+                        cloudflared_available: false,
+                        quick_tunnel: None,
+                        quick_tunnels: vec![],
+                        firecrab_tunnels: vec![],
+                    }
+                };
+                write_frame(
+                    &mut stream,
+                    &NetworkResponseEnvelope {
+                        version: PROTOCOL_VERSION,
+                        request_id: envelope.request_id,
+                        result,
+                        pipe: Some(snapshot),
+                    },
+                )
+                .await
+                .unwrap();
+            });
+        }
+    });
+    (
+        crate::network::NetworkClient::with_socket_path(path),
+        config,
+        reject_remove,
+    )
+}
+
+#[tokio::test]
+async fn domain_deployments_accept_empty_requests_and_reject_existing_routes_before_queueing() {
+    let root = crate::firecracker::test_support::short_tempdir();
+    let mut state = state(root.path()).await;
+    let (helper, config, _) = domain_helper(root.path(), false).await;
+    state.network = helper;
+    let request: DeployMicroServiceRequest = serde_json::from_value(serde_json::json!({})).unwrap();
+    let mut spec = spec();
+    spec.domain = Some("web.example.com".into());
+    assert!(deployment_fields(&spec, &request, 5523).is_empty());
+    let id = Uuid::new_v4();
+    state
+        .store
+        .insert_micro_service(&MicroServiceResponse {
+            id,
+            spec: spec.clone(),
+        })
+        .unwrap();
+    domain::preflight(&state, id, &spec, Uuid::new_v4())
+        .await
+        .unwrap();
+    config.lock().unwrap().routes.push(
+        serde_json::from_value(
+            serde_json::json!({"host":"web.example.com","upstreams":["127.0.0.1:9000"]}),
+        )
+        .unwrap(),
+    );
+    let error = deploy(
+        State(state.clone()),
+        Extension(RequestId(Uuid::new_v4())),
+        Path(id.to_string()),
+        ValidatedJson(request),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    assert!(state.store.service_deployment(id).unwrap().is_none());
+    assert_eq!(config.lock().unwrap().routes.len(), 1);
+}
+
+#[tokio::test]
+async fn domain_publication_is_durable_and_cleanup_retries_without_abandoning_instances() {
+    let root = crate::firecracker::test_support::short_tempdir();
+    let mut state = state(root.path()).await;
+    let (helper, config, reject_remove) = domain_helper(root.path(), true).await;
+    state.network = helper;
+    let id = Uuid::new_v4();
+    let mut record = deployment(id);
+    record.spec.domain = Some("web.example.com".into());
+    record.instances.push(ServiceInstance {
+        vm_id: Uuid::new_v4(),
+        ipv4: "172.30.0.2".into(),
+        host_port: 0,
+        state: VmState::Running,
+        healthy: true,
+    });
+    state
+        .store
+        .insert_micro_service(&MicroServiceResponse {
+            id,
+            spec: record.spec.clone(),
+        })
+        .unwrap();
+    assert!(domain::publish(&state, &mut record).await.is_err());
+    let persisted = state.store.service_deployment(id).unwrap().unwrap();
+    assert!(persisted.domain_route_owned);
+    assert_eq!(persisted.phase, ServicePhase::ConnectingDomain);
+    assert_eq!(
+        config.lock().unwrap().routes[0].upstreams[0].to_string(),
+        "172.30.0.2:8080"
+    );
+    recover(&state).await;
+    assert_eq!(
+        state.store.service_deployment(id).unwrap().unwrap().phase,
+        ServicePhase::Failed
+    );
+    reject_remove.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(cleanup(&state, &mut record).await.is_err());
+    assert!(record.domain_route_owned);
+    assert_eq!(record.instances.len(), 1);
+    assert!(ensure_editable(&state, id, Uuid::new_v4()).await.is_err());
+    reject_remove.store(false, std::sync::atomic::Ordering::SeqCst);
+    cleanup(&state, &mut record).await.unwrap();
+    assert!(!record.domain_route_owned);
+    assert!(record.instances.is_empty());
+    assert!(config.lock().unwrap().routes.is_empty());
+    assert!(
+        !state
+            .store
+            .service_deployment(id)
+            .unwrap()
+            .unwrap()
+            .domain_route_owned
+    );
+}
+
+/// Return scripted publication failures through the real framed helper transport.
+async fn publication_helper(
+    root: &std::path::Path,
+    failures: Vec<firecrab_helper_protocol::network::HelperFailure>,
+) -> (
+    crate::network::NetworkClient,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
+    use firecrab_helper_protocol::{
+        PROTOCOL_VERSION,
+        framing::{read_frame, write_frame},
+        network::{NetworkRequest, NetworkRequestEnvelope, NetworkResponseEnvelope},
+        pipe::{Operation, ServiceRouteRequest, Snapshot},
+    };
+    let path = root.join("publication.sock");
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls = attempts.clone();
+    let task = tokio::spawn(async move {
+        let mut failures = failures.into_iter();
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let envelope: NetworkRequestEnvelope = read_frame(&mut stream).await.unwrap();
+            assert!(matches!(
+                envelope.request,
+                NetworkRequest::Pipe {
+                    request: Operation::ManageServiceRoute {
+                        request: ServiceRouteRequest::Publish { .. }
+                    }
+                }
+            ));
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            write_frame(
+                &mut stream,
+                &NetworkResponseEnvelope {
+                    version: PROTOCOL_VERSION,
+                    request_id: envelope.request_id,
+                    result: failures.next().map_or(Ok(()), Err),
+                    pipe: Some(Snapshot {
+                        config: None,
+                        units: vec![],
+                        nginx_available: true,
+                        cloudflared_available: false,
+                        quick_tunnel: None,
+                        quick_tunnels: vec![],
+                        firecrab_tunnels: vec![],
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        }
+    });
+    (
+        crate::network::NetworkClient::with_socket_path(path),
+        attempts,
+        task,
+    )
+}
+
+/// Retry bounded lock contention, but fail immediately for conflicts and other helper errors.
+#[tokio::test]
+async fn domain_publication_retries_only_exact_transient_lock_errors() {
+    use firecrab_helper_protocol::network::HelperFailure;
+    let busy = || HelperFailure::Internal {
+        detail: "[ERROR] another pipe change is running\n".into(),
+    };
+    let conflict = || HelperFailure::Internal {
+        detail: "Domain is already used by another Pipe route or service".into(),
+    };
+    let cases = [
+        ("busy then success", vec![busy()], 2, true),
+        (
+            "retry budget exhausted",
+            vec![busy(), busy(), busy()],
+            3,
+            false,
+        ),
+        ("domain conflict", vec![conflict()], 1, false),
+        (
+            "busy then domain conflict",
+            vec![busy(), conflict()],
+            2,
+            false,
+        ),
+        (
+            "different error detail",
+            vec![HelperFailure::Internal {
+                detail: "[ERROR] another pipe change is running\nadditional failure".into(),
+            }],
+            1,
+            false,
+        ),
+        (
+            "different error type",
+            vec![HelperFailure::InvalidRequest {
+                detail: "[ERROR] another pipe change is running\n".into(),
+            }],
+            1,
+            false,
+        ),
+    ];
+    for (name, failures, expected_attempts, succeeds) in cases {
+        let root = crate::firecracker::test_support::short_tempdir();
+        let mut state = state(root.path()).await;
+        let (client, attempts, helper) = publication_helper(root.path(), failures).await;
+        state.network = client;
+        let id = Uuid::new_v4();
+        let mut record = deployment(id);
+        record.spec.domain = Some("web.example.com".into());
+        record.instances.push(ServiceInstance {
+            vm_id: Uuid::new_v4(),
+            ipv4: "172.30.0.2".into(),
+            host_port: 0,
+            state: VmState::Running,
+            healthy: true,
+        });
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse {
+                id,
+                spec: record.spec.clone(),
+            })
+            .unwrap();
+        let result = domain::publish(&state, &mut record).await;
+        helper.abort();
+        assert_eq!(result.is_ok(), succeeds, "{name}: {result:?}");
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            expected_attempts,
+            "{name}"
+        );
+        assert!(
+            state
+                .store
+                .service_deployment(id)
+                .unwrap()
+                .unwrap()
+                .domain_route_owned,
+            "{name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn domain_health_checks_use_the_requested_hostname() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = axum::Router::new().route(
+        "/health",
+        axum::routing::get(|headers: axum::http::HeaderMap| async move {
+            if headers
+                .get("host")
+                .is_some_and(|value| value == "web.example.com")
+            {
+                StatusCode::OK
+            } else {
+                StatusCode::NOT_FOUND
+            }
+        }),
+    );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let mut spec = spec();
+    spec.port = port;
+    spec.domain = Some("web.example.com".into());
+    let instance = ServiceInstance {
+        vm_id: Uuid::new_v4(),
+        ipv4: "127.0.0.1".into(),
+        host_port: 0,
+        state: VmState::Running,
+        healthy: false,
+    };
+    assert!(healthy(&health_client(), &spec, &instance).await);
+    spec.domain = None;
+    assert!(!healthy(&health_client(), &spec, &instance).await);
+    task.abort();
 }

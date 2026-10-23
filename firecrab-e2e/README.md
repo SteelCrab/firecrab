@@ -17,6 +17,7 @@ Isolated Playwright suite.
 - [What it covers](#what-it-covers)
 - [Setup](#setup)
 - [Run](#run)
+- [PipeSecrets](#pipesecrets)
 - [Fixture](#fixture)
 - [Environment](#environment)
 - [Results and CI coverage](#results-and-ci-coverage)
@@ -167,6 +168,27 @@ npm run test:ipv6 --prefix firecrab-e2e
 - Needs a helper the API process can connect to (`/run/firecrab/net-helper.sock`)
 - systemd `firecrab-api` runs as user `firecrab`; a debug helper that recreates the socket as `root:pista` makes create return 500
 
+Warm MicroVM pools ([#291](https://github.com/SteelCrab/firecrab/issues/291)), form only:
+
+```sh
+FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm run test:pools --prefix firecrab-e2e
+```
+
+- Expect **1 passed, 1 skipped** — the flag is set and the form test already ran
+- This spec does not boot a guest
+
+Create `pool-e2e` (`minReady` 0), acquire when no ready member exists, and delete the row:
+
+```sh
+./scripts/dev-net-helper.sh    # terminal session 1
+npm run test:pools --prefix firecrab-e2e
+```
+
+- Expect **2 passed**
+- Still does not boot a MicroVM (`minReady` 0; acquire fails closed)
+- `afterAll` deletes `pool-e2e`, network `172.31.91.0/24`, and the imported alias this spec created
+- Needs a helper the API process can connect to (`/run/firecrab/net-helper.sock`)
+
 OCI DHCP boot (busybox `udhcpc`, nginx-stable path), form only:
 
 ```sh
@@ -202,6 +224,61 @@ Playwright:
 - `127.0.0.1:8080` is a different CORS origin and fails
 - `ensure-api.mjs` copies the Ubuntu catalog kernel into `images/kernel/` as a regular file (`O_NOFOLLOW`)
 - Static busybox on disk: sets `FIRECRAB_OCI_TOOLBOX_PATH` so toolbox install does not reach a public registry
+
+## PipeSecrets
+
+Secrets has two independent browser suites. Both use one worker and zero retries.
+They use synthetic values only. No external account credentials are required.
+
+```sh
+# UI behavior, mocked API, any supported desktop OS: SEC1–SEC8
+npm run test:secrets --prefix firecrab-e2e
+
+# Linux: build the real API and the dashboard first
+cargo build -p firecrab-api --locked
+npm run build --prefix firecrab-frontend
+
+# Browser → actual HTTP API → encrypted vault: SEC9–SEC14
+npm run test:secrets:live --prefix firecrab-e2e
+
+# Complete Secrets QA, including unit tests, lint, types, builds, and both suites
+python3 scripts/ci-qa-secrets.py
+```
+
+The live suite runs on native Linux or managed Debian on macOS/Windows.
+It starts a built API in a new temporary working directory for every case.
+Firecrab transfers use a second actual API process; Infisical uses a local HTTP protocol fixture.
+The built dashboard is served by the actual API. Vite and a running installed API are not used.
+Listeners bind only to ephemeral loopback ports. Each API gets its own SQLite database,
+vault, image directory, home, and unused helper socket. Installed Firecrab settings and
+credentials are excluded from its environment. API processes and temporary stores are removed
+in fixture teardown, including failed assertions. KVM, guests, and network helpers are not required.
+
+The six live cases cover CRUD and restart persistence, encrypted files and permissions,
+captured imports, retained local copies, selected uploads, remote and local version conflicts,
+single-use previews, Infisical credential retention and error masking, and refusal to reset
+a vault when its key is missing or its ciphertext is damaged.
+The UI suite additionally covers partial failures, all three provider forms, unsaved forms,
+Korean/mobile layouts, the 30-second reveal limit, and preview expiry using a controlled browser clock.
+
+| Variable | Default | Role |
+| --- | --- | --- |
+| `FIRECRAB_SECRETS_E2E_API_BIN` | `target/debug/firecrab-api` | Linux executable to test; the QA runner also respects `CARGO_TARGET_DIR` |
+| `FIRECRAB_SECRETS_E2E_CHROMIUM` | Playwright Chromium | Optional existing Chromium executable for either Secrets suite |
+
+JSON and JUnit reports are written under `firecrab-e2e/test-results/secrets-ui/` and
+`firecrab-e2e/test-results/secrets-live/`. Failed cases retain screenshots, traces, and API logs.
+`ci-qa-secrets.py --results-dir <new-directory>` writes stage logs, copied browser JSON,
+and `summary.json` / `summary.md`; the default is a new run directory under `target/qa/secrets/`.
+It records the revision, dirty state, OS, architecture, commands, exit codes, and SEC case results.
+Missing automated cases fail the run. Later checks still run after a failure; a failed prerequisite
+build blocks live checks against old binaries. The runner contracts are checked with
+`python3 scripts/test-ci-qa-secrets.py`.
+
+CI runs the complete QA command in `e2e-dashboard` and retains reports for 14 days.
+Actual Infisical and AWS account checks are separate manual SEC15/SEC16 cases.
+They remain `WARNING` in the automated report; local fixtures and signing tests do not establish
+real account permissions or service compatibility. Follow the [QA procedure](../public-docs/development/qa.md#pipesecrets-qa).
 
 ## Fixture
 

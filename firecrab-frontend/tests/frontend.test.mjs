@@ -240,9 +240,9 @@ test('VM lifecycle actions refresh server state and deletion requires confirmati
   await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(11);
 });
 
-test('all nine main destinations and seven Pipe destinations load without React', async () => {
+test('all thirteen main destinations and seven Pipe destinations load without React', async () => {
   await open();
-  for (const [route, title] of [['services','MicroService'],['networks','Networks'],['storages','Storage'],['images','Images'],['kernels','Kernels'],['shells','Shells'],['host','Host'],['pipe','Pipe'],['vms','MicroVM']]) {
+  for (const [route, title] of [['pools','Pools'],['schedules','Schedules'],['security-groups','Security groups'],['secrets','Secrets'],['services','MicroService'],['networks','Networks'],['storages','Storage'],['images','Images'],['kernels','Kernels'],['shells','Shells'],['host','Host'],['pipe','Pipe'],['vms','MicroVM']]) {
     await page.locator(`nav a.sidebar-item[href="#/${route}"]`).click();
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
     await expect(page.locator('#content')).toHaveAttribute('data-loaded', 'true');
@@ -523,6 +523,8 @@ test('panel resize persists, tooltip is shared, and narrow screens start without
   await expect(page.getByRole('tooltip')).toHaveCount(1);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
+  await expect(page.locator('#detail-panel')).toBeVisible(); // Explicit VM links reopen on reload.
+  await page.goto(`${fixture.url}/#/vms`);
   await expect(page.locator('#content')).toHaveAttribute('data-loaded','true');
   await expect(page.locator('#detail-panel')).toBeHidden();
   await page.locator('.vm-row-name').first().click();

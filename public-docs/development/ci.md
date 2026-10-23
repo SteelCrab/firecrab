@@ -28,6 +28,8 @@ Passing build or unit checks does not establish MicroVM boot, SSH, or host port 
 | `install` | Ubuntu 24.04 | Shell checks, install/service permissions, API QA, Chromium with real boot and IPv4/IPv6 SSH, nginx, Alpine/Ubuntu/Fedora, reinstall/uninstall |
 | `install-distro` | Linux containers | Dependency installation on Debian 12, Fedora, Arch, and openSUSE; no systemd or guest boot |
 | `frontend` | Ubuntu, Node.js 22 | Rust fmt/Clippy/tests, production WASM build, browser regression tests, Vite lifecycle |
+| `e2e-dashboard` | Ubuntu, Node.js 22 | Mocked dashboard checks; Secrets QA contracts, unit tests, lint/types/builds, and real API/vault browser E2E without guest boot |
+
 
 The Linux installer job requires working `/dev/kvm`; absence fails guest QA rather than skipping it.
 Its Chromium step has a 30-minute budget, nginx has 25 minutes, and the public-image guest step has 90 minutes.
@@ -43,6 +45,13 @@ Browser, nginx, and guest failures are retained without suppressing the other el
 QA logs, JSON/JUnit results, and failure traces are uploaded as `linux-runtime-qa-<attempt>` for 14 days.
 The [release workflow](../../.github/workflows/release.yml) separately tests and packages release artifacts.
 
+The `e2e-dashboard` job also runs `python3 scripts/ci-qa-secrets.py`.
+Secrets uses disposable loopback API processes and local provider fixtures; it does not reuse the installed API.
+Reports include SEC1–SEC14, command logs, JSON/JUnit results, and failure traces.
+They are retained as `e2e-dashboard-results` for 14 days, even on failure.
+Real Infisical/AWS account checks remain manual SEC15/SEC16 warnings.
+See [Secrets QA](qa.md#pipesecrets-qa) for commands and evidence limits.
+
 ## Local checks
 
 Run workspace checks on Linux with the pinned toolchain and the test dependencies, including `dnsmasq` and `fakeroot`:
@@ -53,6 +62,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 python3 scripts/test-micromanager-dev.py
 python3 scripts/test-ci-qa-guest.py
+python3 scripts/test-ci-qa-secrets.py
 python3 scripts/check-doc-links.py
 python3 scripts/check-changelog.py
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --document-private-items

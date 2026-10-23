@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+firecrab-api-types = { path = "../firecrab-api-types" }
 firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
 flate2 = "1"
 futures-util = "0.3"

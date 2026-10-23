@@ -87,3 +87,6 @@
 .wasm-table { table-layout:fixed; } .wasm-table td { overflow-wrap:anywhere; } .table-scroll { min-width:0; overflow:auto; }
 
 .wasm-table .btn { max-width:100%; white-space:normal; overflow-wrap:anywhere; }
+
+.pipe-database-cell { max-height: 160px; max-width: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sg-rule {min-width:0;}

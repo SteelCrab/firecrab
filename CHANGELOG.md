@@ -23,6 +23,44 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- MicroServices inject PipeSecrets into every replica using an encrypted
+  deployment snapshot that survives API and VM restarts. Missing or invalid
+  references fail before VM creation. Values stay out of public VM/deployment
+  records and SQLite; guest environment files are root-only. Stop and failed
+  deployment cleanup remove snapshots after deleting owned replicas.
+
+- MicroService domains connect healthy replicas to PipeIngress automatically,
+  without host ports or manual routes. The dashboard shows the domain and DNS
+  setup guidance, and the CLI accepts domain deployments without `--host-port`.
+  Deployment ownership protects routes from stale Pipe saves and retains cleanup
+  state across API restarts. Stop withdraws the domain before deleting instances.
+
+- MicroVM pause/resume retains guest memory and execution state in the same
+  Firecracker process through REST, `firecrab vm pause/resume`, and bilingual
+  Dashboard actions. API restart recovery checks the actual VMM state. Paused
+  guests keep their allocations and block Sleepy shutdown. Failed confirmation
+  exposes retry/stop actions; service-owned and builder VMs reject manual pause.
+  Disk-backed suspension is separate. Tracked in [#442].
+
+- `firecrab stack validate --file YAML [--json]` validates an experimental
+  declarative stack offline. The shared schema checks local network references,
+  resource limits, overlapping subnets and service ports, and pinned service
+  image syntax. Validation reports omit configuration values. Applying resources
+  and continuous Git synchronization remain follow-up work for #437.
+
+- Warm MicroVM pools keep booted, never-used VMs ready to lease. A pool pins an
+  image version and VM spec, keeps `minReady` members booted within `maxSize`,
+  and deletes and replaces every released or expired member instead of reusing
+  its disk. Acquire is atomic and idempotent through `Idempotency-Key`, pool
+  members refuse direct VM mutations, and pools are available over REST
+  (`/api/pools`), `firecrab pool`, and the dashboard ([#291]). Pools protect
+  their pinned images from deletion and kernel replacement, including while
+  empty. CLI failures print the acquire retry key, and the dashboard keeps
+  pending keys across reloads. Surviving members and leases reconnect after an
+  API restart; guest QA verifies unchanged VM processes and lease replay.
+  The dashboard starts with name and image inputs, keeps advanced settings
+  optional, and exposes Use VM and End session as its main actions.
+
 - Updating from the dashboard opens a dialog that shows what the new release
   changes, then a gauge with the overall percent and the stage (check,
   download, verify, apply, restart) until the API is back on the new version.
@@ -125,7 +163,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Improved
 
-- None.
+- The helper logs failed host firewall commands with their arguments, exit
+  status, and stderr. Warnings also identify failed nftables and firewall-state
+  queries that keep their existing empty or disabled fallback ([#305]).
 
 ## [0.3.1] - 2026-10-06
 
@@ -725,6 +765,7 @@ network helper.
 [#269]: https://github.com/SteelCrab/firecrab/pull/269
 [#270]: https://github.com/SteelCrab/firecrab/pull/270
 [#272]: https://github.com/SteelCrab/firecrab/pull/272
+[#291]: https://github.com/SteelCrab/firecrab/issues/291
 [#287]: https://github.com/SteelCrab/firecrab/pull/287
 [#290]: https://github.com/SteelCrab/firecrab/pull/290
 [#294]: https://github.com/SteelCrab/firecrab/pull/294
@@ -771,3 +812,5 @@ network helper.
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740
 [322e95c]: https://github.com/SteelCrab/firecrab/commit/322e95c
 [45790c3]: https://github.com/SteelCrab/firecrab/commit/45790c3
+
+[#442]: https://github.com/SteelCrab/firecrab/issues/442

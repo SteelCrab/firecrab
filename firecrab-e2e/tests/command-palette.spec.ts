@@ -85,7 +85,7 @@ test.describe("command palette", () => {
     await palette(page).getByRole("option", { name: /postgres-main/ }).click();
 
     await expect(palette(page)).toHaveCount(0);
-    await expect(page).toHaveURL(/#\/vms$/);
+    await expect(page).toHaveURL(/#\/vms(?:\?vm=.+)?$/);
     await expect(page.getByRole("complementary", { name: "MicroVM detail" }).getByRole("heading", { name: "postgres-main" })).toBeVisible();
   });
 

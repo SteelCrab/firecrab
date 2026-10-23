@@ -1,3 +1,4 @@
+mod advanced;
 mod api;
 mod details;
 mod forms;
@@ -57,6 +58,7 @@ struct App {
     service_deployment: Option<Value>,
     job: Option<(String, Value)>,
     workflows: workflows::State,
+    advanced: advanced::State,
     console: Option<terminal::State>,
     console_retry: Option<Closure<dyn FnMut()>>,
     panel_open: bool,
@@ -170,9 +172,11 @@ fn render_detail(app: &Shared) {
                 .panel_width
                 .min(viewport.saturating_sub(716).clamp(320, 720));
         }
-        let open = state.panel_open
-            && state.route != "vms/new"
-            && (!narrow || state.detail.is_some() || state.form.is_some());
+        let open =
+            (state.route != "security-groups" || state.detail.is_some() || state.form.is_some())
+                && state.panel_open
+                && state.route != "vms/new"
+                && (!narrow || state.detail.is_some() || state.form.is_some());
         let html = if open {
             details::panel(&state)
         } else {
@@ -367,6 +371,7 @@ pub fn start() -> Result<(), JsValue> {
 }
 fn route_from_hash() -> String {
     let hash = window().location().hash().unwrap_or_default();
+    let hash = hash.split('?').next().unwrap_or(&hash);
     let route = hash.trim_start_matches('#').trim_start_matches('/');
     if route == "vms/new"
         || route.starts_with("console/")
@@ -391,6 +396,10 @@ fn route_from_hash() -> String {
 }
 fn endpoint(route: &str) -> &'static str {
     match route {
+        "pools" => "/api/pools",
+        "schedules" => "/api/schedules",
+        "security-groups" => "/api/security-groups",
+        "secrets" => "/api/secrets",
         "services" => "/api/micro-services",
         "networks" => "/api/micro-networks",
         "storages" => "/api/micro-storages",
@@ -434,8 +443,23 @@ fn load_route(app: Shared) {
     if route == "vms" {
         aux.extend(["/api/micro-networks", "/api/shells", "/api/storage"]);
     }
+    if ["services", "pools", "security-groups"].contains(&route.as_str()) {
+        aux.extend(["/api/micro-networks", "/api/security-groups"]);
+    }
+    if route == "pools" {
+        aux.extend(["/api/images", "/api/storage"]);
+    }
+    if route == "vms" {
+        aux.push("/api/schedules");
+    }
+    if route == "secrets" {
+        advanced::secrets::connections(&app);
+    }
+    if route == "security-groups" {
+        advanced::security::load(&app);
+    }
     if route == "services" {
-        aux.push("/api/micro-networks");
+        aux.push("/api/pipe");
     }
     if route != "vms" {
         aux.push("/api/vms");
@@ -476,6 +500,7 @@ fn load_route(app: Shared) {
                         },
                     );
                 }
+                advanced::aux_loaded(&app, path);
                 if path == "/api/host" {
                     update_host(&app);
                 }
@@ -556,6 +581,7 @@ fn refresh(app: Shared) {
         }
         let has_form = state.form.is_some();
         drop(state);
+        advanced::after_refresh(&app);
         if !has_form {
             if changed {
                 render_content(&app);
@@ -650,7 +676,7 @@ fn navigate(app: &Shared) {
         state.restoring_history = false;
         return;
     }
-    if state.route == next {
+    if state.route == next && advanced::same_context(&state) {
         if let Some(index) = next_index {
             state.history_index = index;
         }
@@ -674,6 +700,7 @@ fn navigate(app: &Shared) {
         .filter(|index| *index != state.history_index)
         .unwrap_or(state.history_index + 1);
     save_history_index(state.history_index, None);
+    state.advanced.reveals.clear();
     state.route = next;
     state.generation += 1;
     state.detail_generation += 1;
@@ -757,6 +784,7 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 if target.closest("#editor").ok().flatten().is_some() {
                     changed.borrow_mut().dirty = true;
                     workflows::form_input(&changed, &target);
+                    advanced::form_input(&changed, &target);
                 }
             }
         }
@@ -772,6 +800,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             return;
         };
         if !target.is_connected() || language.borrow().rendering {
+            return;
+        }
+        if advanced::change(&language, &target) {
             return;
         }
         if terminal::change(&language, &target) {
@@ -797,7 +828,15 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                     let _ = root.set_attribute("lang", &state.locale);
                 }
                 drop(state);
+                let menu_open = document()
+                    .query_selector(".app-frame[data-nav-open]")
+                    .ok()
+                    .flatten()
+                    .is_some();
                 render_page(&language);
+                if menu_open && let Ok(Some(frame)) = document().query_selector(".app-frame") {
+                    let _ = frame.set_attribute("data-nav-open", "");
+                }
             }
         } else if target.closest("#editor").ok().flatten().is_some() {
             language.borrow_mut().dirty = true;
@@ -920,6 +959,7 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
     });
     window().add_event_listener_with_callback("beforeunload", before.as_ref().unchecked_ref())?;
     before.forget();
+    advanced::install(app)?;
     Ok(())
 }
 fn open_palette(app: &Shared) {
@@ -939,6 +979,9 @@ fn open_palette(app: &Shared) {
 fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
     if action != "vm-menu" {
         set_html("menu-root", "");
+    }
+    if advanced::dispatch(&app, action, id, button) {
+        return;
     }
     if updates::dispatch(&app, action) || workflows::ssh_dispatch(&app, action, id) {
         return;
@@ -997,19 +1040,21 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
                 .max(8.0)
             );
             menu.push_str(&render::button("SSH connect", "ssh", id));
-            menu.push_str(&render::button(
-                if vm.state == "running" {
-                    "stop"
-                } else {
-                    "start"
-                },
-                if vm.state == "running" {
-                    "vm-stop"
-                } else {
-                    "vm-start"
-                },
-                id,
-            ));
+            if vm.extra.get("purpose").and_then(Value::as_str) != Some("pool") {
+                menu.push_str(&render::button(
+                    if vm.state == "running" {
+                        "stop"
+                    } else {
+                        "start"
+                    },
+                    if vm.state == "running" {
+                        "vm-stop"
+                    } else {
+                        "vm-start"
+                    },
+                    id,
+                ));
+            }
             menu.push_str("</div>");
             set_html(
                 "menu-root",
@@ -1052,12 +1097,13 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
                 render_content(&app);
             }
         }
-        "vm-start" | "vm-stop" => {
-            let suffix = if action == "vm-start" {
-                "start"
-            } else {
-                "stop"
-            };
+        "vm-start" | "vm-stop" | "vm-pause" | "vm-resume" => {
+            if app.borrow().vms.iter().any(|vm| {
+                vm.id == id && vm.extra.get("purpose").and_then(Value::as_str) == Some("pool")
+            }) {
+                return;
+            }
+            let suffix = action.trim_start_matches("vm-");
             mutate(
                 app,
                 "POST".into(),
@@ -1158,13 +1204,12 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
             fetch_result(app, "/api/update/progress".into(), ResultKind::Properties)
         }
         "manager-edit" => open_manager_form(app),
-        "manager-apply" => {
+        "manager-apply"
             if window()
                 .confirm_with_message(i18n::t("Apply resources and restart the management VM?"))
-                .unwrap_or(false)
-            {
-                manager::apply(app);
-            }
+                .unwrap_or(false) =>
+        {
+            manager::apply(app)
         }
         _ => {}
     }
@@ -1189,6 +1234,21 @@ fn open_form(app: Shared, kind: &str, id: &str) {
     } else {
         id.into()
     };
+    if kind.starts_with("vm-") && text(&data, "purpose") == "pool" {
+        return;
+    }
+    if kind == "secret-connection" {
+        data = list(
+            state
+                .cache
+                .get("/api/secrets/connections")
+                .unwrap_or(&Value::Null),
+        )
+        .iter()
+        .find(|row| row["id"] == id)
+        .cloned()
+        .unwrap_or(Value::Null);
+    }
     state.form = forms::resource_form(kind, &data, &edit_id);
     state.panel_open = true;
     state.dirty = false;
@@ -1196,6 +1256,7 @@ fn open_form(app: Shared, kind: &str, id: &str) {
     state.field_errors.clear();
     drop(state);
     workflows::prepare_form(&app);
+    advanced::prepare(&app);
     render_editor(&app);
 }
 fn save_form(app: Shared, form_element: HtmlFormElement) {
@@ -1207,6 +1268,7 @@ fn save_form(app: Shared, form_element: HtmlFormElement) {
         return;
     };
     drop(state);
+    advanced::security::sync_rules();
     let values = match FormData::new_with_form(&form_element) {
         Ok(values) => values,
         Err(error) => {
@@ -1247,6 +1309,7 @@ fn save_form(app: Shared, form_element: HtmlFormElement) {
     let mut payload = match form.payload(&values) {
         Ok(payload) => payload,
         Err(error) => {
+            app.borrow_mut().field_errors.clear();
             app.borrow_mut().error = error;
             render_messages(&app);
             return;
@@ -1297,6 +1360,11 @@ fn mutate(
     body: Option<Value>,
     controller: Option<String>,
 ) {
+    advanced::capture_form(&app);
+    let submits_form = app.borrow().form.as_ref().is_some_and(|form| {
+        form.path == path
+            || (form.title == "Connect registry" && path.starts_with("/api/pipe/registries/"))
+    });
     {
         let mut state = app.borrow_mut();
         if state.busy {
@@ -1318,6 +1386,7 @@ fn mutate(
     spawn_local(async move {
         let result =
             api::request_detailed(&method, &path, body.as_ref(), controller.as_deref()).await;
+        let succeeded = result.is_ok();
         let mut state = app.borrow_mut();
         state.busy = false;
         if state.generation != generation {
@@ -1327,10 +1396,24 @@ fn mutate(
         }
         match result {
             Ok(value) => {
-                let return_route = state.form.as_ref().map(|form| form.return_route.clone());
-                state.form = None;
-                state.dirty = false;
-                state.notice = "Saved.".into();
+                let return_route = state
+                    .form
+                    .as_ref()
+                    .filter(|_| submits_form)
+                    .map(|form| form.return_route.clone());
+                if submits_form {
+                    state.form = None;
+                    state.dirty = false;
+                }
+                if path == "/api/schedules" || path == "/api/security-groups" {
+                    state.detail = Some(value.clone());
+                }
+                state.notice = if path.ends_with("/rules") {
+                    "Rules saved."
+                } else {
+                    "Saved."
+                }
+                .into();
                 let selected = state
                     .detail
                     .as_ref()
@@ -1374,6 +1457,9 @@ fn mutate(
                             .unwrap_or(""),
                     );
                 }
+                if path == "/api/oci/import" && value["status"] == "running" {
+                    workflows::remember_import(text(&value, "alias"));
+                }
                 let status = text(&value, "status");
                 let job_path = if path == "/api/oci/import" {
                     Some(format!(
@@ -1408,7 +1494,12 @@ fn mutate(
             }
             Err(error) => {
                 state.field_errors = error.fields;
-                state.error = error.message;
+                state.error = if path.ends_with("/rules") && error.message.starts_with("HTTP 409:")
+                {
+                    "Stop affected VMs and service deployments before changing rules.".into()
+                } else {
+                    error.message
+                };
             }
         }
         let registry_done = path == "/api/pipe/registry-transfers"
@@ -1421,6 +1512,9 @@ fn mutate(
             workflows::job_finished(&app);
         }
         render_content(&app);
+        if succeeded {
+            advanced::after_mutation(&app, &path);
+        }
         refresh(app);
     });
 }
@@ -1474,6 +1568,7 @@ fn show_detail(app: Shared, id: String) {
         route.as_str(),
         "vms" | "services" | "networks" | "storages" | "shells" | "images"
     );
+    advanced::detail_selected(&app);
     if !fetch {
         return;
     }
@@ -1523,7 +1618,10 @@ enum ResultKind {
     Tags(String),
 }
 fn fetch_result(app: Shared, path: String, kind: ResultKind) {
+    app.borrow_mut().detail_result.clear();
+    set_html("detail-result", "<p role=\"status\">Loading…</p>");
     let generation = app.borrow().generation;
+    app.borrow_mut().detail_generation += 1;
     let detail_generation = app.borrow().detail_generation;
     spawn_local(async move {
         let result = api::request("GET", &path, None).await;
@@ -1557,7 +1655,11 @@ fn fetch_result(app: Shared, path: String, kind: ResultKind) {
                         )
                     ),
                     ResultKind::Tables(id) => {
-                        let mut html = String::new();
+                        let mut html = if list(&value["tables"]).is_empty() {
+                            "<p>No tables.</p>".into()
+                        } else {
+                            String::new()
+                        };
                         for table in list(&value["tables"]) {
                             let schema = text(table, "schema");
                             let name = text(table, "name");
@@ -1621,7 +1723,10 @@ fn log_text(value: &Value) -> String {
         .join("\n")
 }
 fn preview_database(app: Shared, id: String, schema: String, table: String, offset: u32) {
+    app.borrow_mut().detail_result.clear();
+    set_html("detail-result", "<p role=\"status\">Loading…</p>");
     let generation = app.borrow().generation;
+    app.borrow_mut().detail_generation += 1;
     let detail_generation = app.borrow().detail_generation;
     spawn_local(async move {
         let result = api::request(
@@ -1637,7 +1742,7 @@ fn preview_database(app: Shared, id: String, schema: String, table: String, offs
         match result {
             Err(error) => state.error = error,
             Ok(value) => {
-                let mut html = "<table class=\"wasm-table\"><thead><tr>".to_string();
+                let mut html = "<div class=\"table-scroll\"><table class=\"wasm-table pipe-database-preview\"><thead><tr>".to_string();
                 for column in list(&value["columns"]) {
                     html.push_str(&format!("<th>{}</th>", escape(text(column, "name"))));
                 }
@@ -1646,13 +1751,13 @@ fn preview_database(app: Shared, id: String, schema: String, table: String, offs
                     html.push_str("<tr>");
                     for cell in list(row) {
                         html.push_str(&format!(
-                            "<td>{}</td>",
+                            "<td><div class=\"pipe-database-cell\" tabindex=\"0\">{}</div></td>",
                             escape(cell.as_str().unwrap_or("NULL"))
                         ));
                     }
                     html.push_str("</tr>");
                 }
-                html.push_str("</tbody></table>");
+                html.push_str("</tbody></table></div>");
                 if offset > 0 {
                     html.push_str(&render::button(
                         "Previous 50 rows",

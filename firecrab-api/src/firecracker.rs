@@ -559,6 +559,7 @@ pub fn register_and_watch(state: &AppState, id: Uuid, mut process: FirecrackerPr
         }
         let _ = fs::remove_file(&api_sock);
 
+        let _guard = state.lock_vm(id).await;
         // Only tear down map/metrics entries for *this* process. After a
         // quick stop→start the new generation may already be registered under
         // the same VM id; a late exit monitor must not remove it or wipe the
@@ -596,13 +597,7 @@ pub fn register_and_watch(state: &AppState, id: Uuid, mut process: FirecrackerPr
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             match vms.get_mut(&id) {
-                Some(vm)
-                    if still_ours
-                        && matches!(
-                            vm.state,
-                            VmState::Starting | VmState::Running | VmState::Stopping
-                        ) =>
-                {
+                Some(vm) if still_ours && vm.state.has_live_runtime() => {
                     vm.state = if vm.state == VmState::Stopping || clean_exit || requested {
                         VmState::Stopped
                     } else {
@@ -924,7 +919,7 @@ srv.listen(1)
 while True:
     conn, _ = srv.accept()
     conn.recv(1024)
-    conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+    conn.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{"state":"Running"}')
     conn.close()
 "#;
 
@@ -1018,6 +1013,7 @@ mod tests {
 
     fn record(cpu: u8, ram: u32) -> VmRecord {
         VmRecord {
+            security_group_id: None,
             id: Uuid::new_v4(),
             name: "test-vm".to_owned(),
             purpose: crate::model::VmPurpose::Instance,

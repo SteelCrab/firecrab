@@ -56,6 +56,7 @@ async fn send(
     path: &str,
     body: Option<&Value>,
     controller: Option<&str>,
+    key: Option<&str>,
 ) -> Result<(String, Option<String>), Failure> {
     let window =
         web_sys::window().ok_or_else(|| Failure::message("Browser window is unavailable."))?;
@@ -80,12 +81,24 @@ async fn send(
             .set("X-Firecrab-Controller-Id", controller)
             .map_err(|e| Failure::message(error(e)))?;
     }
+    if let Some(key) = key {
+        request
+            .headers()
+            .set("Idempotency-Key", key)
+            .map_err(|e| Failure::message(error(e)))?;
+    }
     let timeout_abort = abort.clone();
     let timeout = Closure::<dyn FnMut()>::new(move || timeout_abort.abort());
     let timer = window
         .set_timeout_with_callback_and_timeout_and_arguments_0(
             timeout.as_ref().unchecked_ref(),
-            if path == "/api/info" { 5000 } else { 15000 },
+            if path == "/api/info" {
+                5000
+            } else if path.ends_with("/acquire") {
+                120000
+            } else {
+                15000
+            },
         )
         .map_err(|e| Failure::message(error(e)))?;
     let result = async {
@@ -130,7 +143,7 @@ pub async fn request_detailed(
     body: Option<&Value>,
     controller: Option<&str>,
 ) -> Result<Value, Failure> {
-    let (text, _) = send(method, path, body, controller).await?;
+    let (text, _) = send(method, path, body, controller, None).await?;
     if text.trim().is_empty() {
         return Ok(Value::Null);
     }
@@ -151,7 +164,7 @@ pub async fn request_with_controller(
         .map_err(|error| error.to_string())
 }
 pub async fn text_response(path: &str) -> Result<(String, Option<String>), String> {
-    send("GET", path, None, None)
+    send("GET", path, None, None, None)
         .await
         .map_err(|error| error.to_string())
 }
@@ -170,4 +183,11 @@ pub fn encode(value: &str) -> String {
         }
     }
     encoded
+}
+
+pub async fn acquire(path: &str, key: &str) -> Result<Value, String> {
+    let (body, _) = send("POST", path, None, None, Some(key))
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::from_str(&body).map_err(|e| e.to_string())
 }

@@ -30,6 +30,10 @@ sudo systemctl restart firecrab-helper
 A connection from an unknown UID, an unreadable peer credential, a request read
 timeout, and a failed response write are all recorded there.
 
+Failed host firewall commands include the tool, arguments, exit status, and
+stderr in the log. Warnings also identify failed nftables or firewall-state
+queries that fall back to an empty or disabled state.
+
 ## Dashboard cannot reach the API
 
 Check the API directly.

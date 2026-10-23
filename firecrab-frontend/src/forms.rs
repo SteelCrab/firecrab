@@ -1,3 +1,4 @@
+mod advanced;
 use crate::model::{escape, format_pairs, format_ports, list, pairs, ports, text};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -80,14 +81,31 @@ impl Form {
     }
     pub fn html(&self, busy: bool, errors: &BTreeMap<String, String>) -> String {
         let mut html = format!(
-            "<h2>{}</h2><form id=\"editor\" class=\"wasm-form\"><fieldset class=\"wasm-wide wasm-form\" {} style=\"border:0;padding:0\">",
+            "<h2>{}</h2><form id=\"editor\" role=\"region\" aria-label=\"{}\" class=\"wasm-form\"><fieldset class=\"wasm-wide wasm-form\" {} style=\"border:0;padding:0\">",
+            escape(crate::i18n::t(&self.title)),
             escape(crate::i18n::t(&self.title)),
             if busy { "disabled" } else { "" }
         );
+
+        if self.title == "Deploy MicroService" && !self.base["policyNetwork"].is_null() {
+            html = html.replace(
+                "id=\"editor\"",
+                "id=\"editor\" data-policy-network=\"true\"",
+            );
+        }
         if self.title == "Deploy MicroService" {
+            html.push_str("<p class=\"wasm-wide\">Secret values are injected into every replica. Changes apply on the next deployment.</p>");
             html.push_str(&format!("<p class=\"wasm-wide\">Each replica uses one host port, starting at 30100. App port: {}.</p>", self.base["port"].as_u64().unwrap_or(8080)));
         }
-        for field in &self.fields {
+        let domain_deploy =
+            self.title == "Deploy MicroService" && !text(&self.base, "domain").is_empty();
+        if domain_deploy {
+            html.push_str(&format!("<p class=\"wasm-wide\">{} · Healthy replicas will connect to this domain automatically.</p><details class=\"wasm-wide\"><summary>Advanced settings</summary>",escape(text(&self.base,"domain"))));
+        }
+        for (index, field) in self.fields.iter().enumerate() {
+            if self.title == "Create a pool" && index == 2 {
+                html.push_str("<details class=\"wasm-wide\"><summary>Advanced settings</summary><div class=\"wasm-form\">");
+            }
             let key = escape(field.key);
             let field_error = errors.get(field.key).or_else(|| {
                 errors
@@ -130,15 +148,34 @@ impl Form {
                         crate::i18n::t("Default")
                     ));
                 }
+                if !field.value.is_empty()
+                    && field.kind != "multi"
+                    && !field.options.iter().any(|(v, _)| *v == field.value)
+                {
+                    html.push_str(&format!(
+                        "<option value=\"{}\" selected>{}</option>",
+                        escape(&field.value),
+                        escape(&field.value)
+                    ));
+                }
                 for (value, label) in &field.options {
                     html.push_str(&format!(
-                        "<option value=\"{}\" {}>{}</option>",
+                        "<option value=\"{}\" {} {}>{}</option>",
                         escape(value),
                         if *value == field.value
                             || (field.kind == "multi"
                                 && field.value.lines().any(|selected| selected == value))
                         {
                             "selected"
+                        } else {
+                            ""
+                        },
+                        if field.key == "microNetworkId"
+                            && crate::model::list(&self.base["disabledNetworks"])
+                                .iter()
+                                .any(|id| id == value)
+                        {
+                            "disabled"
                         } else {
                             ""
                         },
@@ -150,6 +187,14 @@ impl Form {
                     ));
                 }
                 html.push_str("</select>");
+            } else if field.kind == "rules" {
+                html.push_str(&crate::advanced::security::rules_editor(&field.value));
+            } else if field.kind == "days" {
+                html.push_str(&format!("<input type=\"hidden\" id=\"field-days\" name=\"days\" value=\"{}\"><div role=\"group\" aria-label=\"Days\">", escape(&field.value)));
+                for day in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] {
+                    html.push_str(&format!("<button type=\"button\" aria-pressed=\"{}\" data-action=\"schedule-day\" data-id=\"{day}\">{day}</button>", field.value.split(',').any(|value| value==day)));
+                }
+                html.push_str("</div>");
             } else if matches!(
                 field.kind,
                 "textarea" | "pairs" | "ports" | "lines" | "routes"
@@ -160,6 +205,8 @@ impl Form {
                     "number"
                 } else if field.kind == "password" {
                     "password"
+                } else if ["date", "time"].contains(&field.kind) {
+                    field.kind
                 } else {
                     "text"
                 };
@@ -173,6 +220,22 @@ impl Form {
             }
             html.push_str("</div>");
         }
+        if self.title == "Create a pool" {
+            html.push_str("</div></details>");
+        }
+        if domain_deploy {
+            html.push_str("</details>");
+        }
+        for (key, error) in errors
+            .iter()
+            .filter(|(key, _)| !self.fields.iter().any(|f| f.key == key.as_str()))
+        {
+            html.push_str(&format!(
+                "<p class=\"field-error wasm-wide\" role=\"alert\" data-field=\"{}\">{}</p>",
+                escape(key),
+                escape(error)
+            ));
+        }
         let extra = match self.title.as_str() {
             "Connect Cloudflare" => crate::render::button("Load zones", "load-zones", ""),
             "Connect database" => crate::render::button("Test connection", "database-test", ""),
@@ -180,7 +243,15 @@ impl Form {
             _ => String::new(),
         };
         html.push_str(&extra);
-        html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\">{}</button><button class=\"btn\" type=\"button\" data-action=\"cancel\">{}</button></div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>",crate::i18n::t(if self.title == "Deploy MicroService" { "Deploy and run" } else { "Save" }),crate::i18n::t("Cancel")));
+        html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\">{}</button><button class=\"btn\" type=\"button\" data-action=\"cancel\">{}</button></div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>",crate::i18n::t(match self.title.as_str() { "Deploy MicroService"=>"Deploy and run", "New MicroService"|"Edit MicroService"=>"Save configuration", "New schedule"=>"Create schedule", "Edit schedule"=>"Save changes", "Create a pool"=>"Create pool", "Pool settings"=>"Save settings", "New security group"=>"Create security group", "Security group rules"=>"Save rules", "New secret"|"Edit secret"=>"Save secret", "New connection"|"Edit connection"=>"Save connection", _=>"Save" }),crate::i18n::t("Cancel")));
+        if self.base["policyError"] == true {
+            html = html.replace("type=\"submit\"", "type=\"submit\" disabled");
+            html.push_str(&crate::render::button(
+                "Retry loading security groups",
+                "security-policy-retry",
+                "",
+            ));
+        }
         html
     }
     pub fn choose(&mut self, key: &str, items: &Value, id: &str, label: &str) {
@@ -212,6 +283,7 @@ impl Form {
                                     .contains(&number),
                                 "hostPort" | "port" => (1..=65535).contains(&number),
                                 "replicas" => (1..=100).contains(&number),
+                                "minReady" => true,
                                 "startupTimeout" => (1..=3600).contains(&number),
                                 "drainTimeout" => number <= 3600,
                                 _ => number > 0,
@@ -232,7 +304,9 @@ impl Form {
         if ["Quick tunnel", "Firecrab address"].contains(&self.title.as_str()) {
             let apps = values.get("targetType").is_none_or(|kind| kind == "apps");
             let key = if apps { "upstreams" } else { "host" };
-            if values.get(key).is_none_or(|value| value.trim().is_empty()) {
+            if (apps || values.get("targetType").is_some_and(|v| v == "routes"))
+                && values.get(key).is_none_or(|value| value.trim().is_empty())
+            {
                 errors.insert(key.into(), "Select a connection target.".into());
             }
             if self.title == "Firecrab address"
@@ -296,12 +370,24 @@ impl Form {
                 Ok(body)
             }
             "Deploy MicroService" => {
-                Ok(json!({"hostPort": body["hostPort"], "microNetworkId": body["microNetworkId"]}))
+                let mut result = json!({"microNetworkId":if self.base["policyNetwork"].is_null(){body["microNetworkId"].clone()}else{self.base["policyNetwork"].clone()}});
+                if text(&self.base, "domain").is_empty() {
+                    result["hostPort"] = body["hostPort"].clone();
+                }
+                Ok(result)
+            }
+            "New MicroService" | "Edit MicroService" => {
+                if let Some(domain) = body["domain"].as_str() {
+                    body["domain"] = json!(normalize_domain(domain));
+                }
+                Ok(body)
             }
             "Routing" => Ok(json!({"config": body, "credentials": null})),
             "Quick tunnel" | "Firecrab address" => {
                 let target = if body["targetType"] == "apps" {
                     json!({"type":"apps","upstreams":body["upstreams"]})
+                } else if body["targetType"] == "nginx" {
+                    json!({"type":"nginx"})
                 } else {
                     json!({"type":body["targetType"],"host":body["host"]})
                 };
@@ -313,7 +399,7 @@ impl Form {
                     Ok(json!({"token":body["token"],"target":target}))
                 }
             }
-            _ => Ok(body),
+            _ => advanced::payload(&self.title, body),
         }
     }
 }
@@ -486,6 +572,9 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
                 "services",
             );
             form.base = data.clone();
+            if !text(data, "domain").is_empty() {
+                form.fields.retain(|f| f.key != "hostPort");
+            }
             form
         }
         "services" => {
@@ -498,6 +587,13 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
                 format!("/api/micro-services{suffix}"),
                 method,
                 vec![
+                    Field::new(
+                        "securityGroupId",
+                        "Security group",
+                        "nullable-select",
+                        value("securityGroupId"),
+                    )
+                    .optional(),
                     Field::new("name", "Name", "text", value("name")),
                     Field::new("image", "OCI image", "text", value("image")),
                     Field::new("port", "Port", "number", number("port", 8080)),
@@ -678,7 +774,7 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
                     ("rds", "RDS"),
                 ]),
                 Field::new("uri", "Connection URI", "password", ""),
-                Field::new("tlsMode", "TLS", "select", "require").choices(&[
+                Field::new("tlsMode", "TLS", "select", "disable").choices(&[
                     ("disable", "Disabled"),
                     ("require", "Required"),
                     ("verify_full", "Verify certificate"),
@@ -881,7 +977,7 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
             f.base = json!({"config":data});
             f
         }
-        _ => return None,
+        _ => return advanced::resource(kind, data, id),
     };
     let mut form = form;
     if kind == "vm-env" || kind == "vm-egress" {
@@ -1054,9 +1150,20 @@ mod tests {
         )
         .unwrap();
         let body = edit.payload(&values(&edit)).unwrap();
-        assert_eq!(
-            body,
-            json!({"subdomain":"saved","target":{"type":"nginx","host":"app.example.com"}})
-        );
+        assert_eq!(body, json!({"subdomain":"saved","target":{"type":"nginx"}}));
     }
+}
+
+fn normalize_domain(input: &str) -> String {
+    let input = input.trim().to_lowercase();
+    if let Some(tail) = input
+        .strip_prefix("https://")
+        .or_else(|| input.strip_prefix("http://"))
+    {
+        let host = tail.trim_end_matches('/');
+        if !host.contains(['/', '?', '#', ':', '@']) {
+            return host.trim_end_matches('.').into();
+        }
+    }
+    input.trim_end_matches('.').into()
 }

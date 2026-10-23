@@ -5,7 +5,9 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Seek, SeekFrom};
+use std::io::{self, Seek, SeekFrom, Write};
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(target_os = "linux")]
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -652,7 +654,15 @@ fn apply_vm_env(rootfs: &Path, env: &BTreeMap<String, String>) -> Result<(), Roo
         crate::oci::service::GUEST_VM_ENV_FILE,
         file.as_bytes(),
     )?;
-    set_guest_file_mode(rootfs, crate::oci::service::GUEST_VM_ENV_FILE, "0100644");
+    let guest_env = crate::oci::service::GUEST_VM_ENV_FILE;
+    run_debugfs(rootfs, &format!("set_inode_field {guest_env} mode 0100600"))?;
+    let mode = run_debugfs(rootfs, &format!("stat {guest_env}"))?;
+    if !String::from_utf8_lossy(&mode.stdout).contains("Mode:  0600") {
+        return Err(RootfsError::Specialize {
+            path: rootfs.to_owned(),
+            detail: "could not restrict guest environment permissions".into(),
+        });
+    }
     let staging = rootfs.with_extension("vm-env.tmp");
     let _ = fs::remove_file(&staging);
     let rewritten = (|| {
@@ -1049,10 +1059,22 @@ pub(crate) fn write_into_image(
     content: &[u8],
 ) -> Result<(), RootfsError> {
     let staging = rootfs.with_extension("specialize.tmp");
-    fs::write(&staging, content).map_err(|source| RootfsError::Specialize {
-        path: rootfs.to_owned(),
-        detail: format!("failed to stage content for {guest_path}: {source}"),
-    })?;
+    let _ = fs::remove_file(&staging);
+    let staged = (|| {
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&staging)?
+            .write_all(content)
+    })();
+    if let Err(source) = staged {
+        let _ = fs::remove_file(&staging);
+        return Err(RootfsError::Specialize {
+            path: rootfs.to_owned(),
+            detail: format!("failed to stage content for {guest_path}: {source}"),
+        });
+    }
     remove_from_image(rootfs, guest_path);
     let output = run_debugfs(rootfs, &format!("write {} {guest_path}", staging.display()));
     let _ = fs::remove_file(&staging);
@@ -1148,13 +1170,26 @@ pub(crate) enum CopyMode {
 /// inside them. A template under `FIRECRAB_IMAGE_ROOT` and a disk under
 /// `data/vms` on separate mounts fail here with `EXDEV`.
 fn ficlone(source: &File, destination: &File) -> io::Result<()> {
-    // SAFETY: both descriptors stay open across the call, and FICLONE takes
-    // the source descriptor by value rather than writing through a pointer.
-    let result = unsafe { libc::ioctl(destination.as_raw_fd(), libc::FICLONE, source.as_raw_fd()) };
-    if result == -1 {
-        return Err(io::Error::last_os_error());
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: both descriptors stay open across the call, and FICLONE takes
+        // the source descriptor by value rather than writing through a pointer.
+        let result =
+            unsafe { libc::ioctl(destination.as_raw_fd(), libc::FICLONE, source.as_raw_fd()) };
+        if result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
-    Ok(())
+    #[cfg(not(target_os = "linux"))]
+    {
+        // macOS has no FICLONE. Callers already fall back to a byte copy.
+        let _ = (source, destination);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "reflink is unavailable",
+        ))
+    }
 }
 
 /// Fills `destination` with `source`'s contents, sharing blocks copy-on-write
@@ -2275,6 +2310,40 @@ mod tests {
         let sidecar = debugfs_cat(&rootfs, "/etc/firecrab/vm.env");
         assert!(sidecar.contains("export APP_NAME='web'"), "{sidecar}");
         assert!(sidecar.contains("export FOO='bar'"), "{sidecar}");
+        let stat = run_debugfs(&rootfs, "stat /etc/firecrab/vm.env").unwrap();
+        assert!(String::from_utf8_lossy(&stat.stdout).contains("Mode:  0600"));
+        assert!(!rootfs.with_extension("specialize.tmp").exists());
+    }
+
+    #[test]
+    fn guest_secret_values_are_literal_shell_data_in_a_private_file() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        seed_services_d_app(&rootfs, &sample_app_service());
+        let value = "empty='';\n$(printf should-not-run) `printf literal` \\\"한글";
+        let env = BTreeMap::from([
+            ("PASSWORD".into(), value.into()),
+            ("EMPTY".into(), String::new()),
+        ]);
+        specialize_guest(&rootfs, Uuid::new_v4(), &env).unwrap();
+        let sidecar = debugfs_cat(&rootfs, "/etc/firecrab/vm.env");
+        let script = debugfs_cat(&rootfs, GUEST_VM_SERVICE);
+        assert!(!script.contains("should-not-run"));
+        let file = directory.path().join("test.env");
+        fs::write(&file, sidecar).unwrap();
+        let output = Command::new("/bin/sh")
+            .args([
+                "-c",
+                ". \"$1\"; test -z \"$EMPTY\" || exit 1; printf '%s' \"$PASSWORD\"",
+                "test",
+            ])
+            .arg(&file)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, value.as_bytes());
+        assert!(!rootfs.with_extension("specialize.tmp").exists());
     }
 
     #[test]

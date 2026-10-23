@@ -172,6 +172,7 @@ fn app_addresses(vms: &[crate::model::Vm]) -> Value {
     json!(values)
 }
 pub fn sync_form() {
+    crate::advanced::sync_form();
     if let (Some(mode), Some(interface)) = (
         element("field-networkMode")
             .and_then(|el| el.dyn_into::<web_sys::HtmlSelectElement>().ok()),
@@ -522,7 +523,15 @@ pub fn restore_job(app: &Shared) {
         let id = text(&saved, "id");
         if !id.is_empty() {
             app.borrow_mut().job = Some((
-                format!("/api/pipe/registry-transfers/{}", api::encode(id)),
+                format!(
+                    "{}/{}",
+                    if saved["kind"] == "import" {
+                        "/api/oci/import"
+                    } else {
+                        "/api/pipe/registry-transfers"
+                    },
+                    api::encode(id)
+                ),
                 json!({"status":"running","alias":id}),
             ));
             crate::poll_job(app.clone());
@@ -578,6 +587,18 @@ pub fn change(app: &Shared, target: &Element) -> bool {
         redraw_registry(app);
         return true;
     }
+    if id == "field-provider"
+        && element("field-uri").is_some()
+        && let Some(tls) =
+            element("field-tlsMode").and_then(|el| el.dyn_into::<web_sys::HtmlSelectElement>().ok())
+    {
+        let local = target
+            .clone()
+            .unchecked_into::<web_sys::HtmlSelectElement>()
+            .value()
+            == "local";
+        tls.set_value(if local { "disable" } else { "verify_full" });
+    }
     if id == "field-targetType" || id == "field-networkMode" {
         sync_form();
         return false;
@@ -589,6 +610,10 @@ pub fn change(app: &Shared, target: &Element) -> bool {
     false
 }
 fn inspect_form(app: Shared, kind: &str) {
+    if app.borrow().busy {
+        return;
+    }
+    crate::advanced::capture_form(&app);
     let Some(data) = read_form() else {
         return;
     };
@@ -596,6 +621,14 @@ fn inspect_form(app: Shared, kind: &str) {
         return;
     };
     let values = values(&form, &data);
+    if kind == "database" {
+        let errors = form.validate(&values);
+        if !errors.is_empty() {
+            app.borrow_mut().field_errors = errors;
+            crate::render_editor(&app);
+            return;
+        }
+    }
     let (method, path, body) = match kind {
         "zones" => (
             "POST",
@@ -627,12 +660,15 @@ fn inspect_form(app: Shared, kind: &str) {
             None,
         ),
     };
+    app.borrow_mut().busy = true;
+    crate::render_editor(&app);
     let generation = app.borrow().generation;
     let form_path = form.path.clone();
     let kind = kind.to_string();
     spawn_local(async move {
         let result = api::request(method, &path, body.as_ref()).await;
         let mut state = app.borrow_mut();
+        state.busy = false;
         if state.generation != generation
             || !state
                 .form
@@ -646,6 +682,9 @@ fn inspect_form(app: Shared, kind: &str) {
         {
             return;
         }
+        drop(state);
+        crate::render_editor(&app);
+        let mut state = app.borrow_mut();
         match result {
             Err(error) => {
                 state.error = error;
@@ -688,6 +727,7 @@ fn inspect_form(app: Shared, kind: &str) {
     });
 }
 pub fn form_input(app: &Shared, target: &Element) {
+    set_html("form-result", "");
     if target.id() != "field-apiToken" {
         return;
     }
@@ -1203,4 +1243,13 @@ pub fn close_on_escape(app: &Shared) -> bool {
         return true;
     }
     false
+}
+
+pub fn remember_import(alias: &str) {
+    if let Ok(Some(storage)) = window().local_storage() {
+        let _ = storage.set_item(
+            "firecrab.registry-job",
+            &json!({"kind":"import","id":alias}).to_string(),
+        );
+    }
 }

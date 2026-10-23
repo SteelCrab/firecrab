@@ -18,6 +18,8 @@ fn vm_icon_button(label: &str, action: &str, id: &str) -> String {
     let path = match action {
         "vm-start" => "M6 3l14 9-14 9z",
         "vm-stop" => "M6 6h12v12H6z",
+        "vm-pause" => "M7 4h3v16H7zM14 4h3v16h-3z",
+        "vm-resume" => "M6 3l14 9-14 9z",
         _ => "M4 11h1v2H4zM11 11h1v2h-1zM18 11h1v2h-1z",
     };
     format!(
@@ -121,6 +123,10 @@ pub fn page(app: &App) -> String {
             "create",
             "oci",
         ),
+        "pools" => button("New pool", "create", "pools"),
+        "schedules" => button("New schedule", "create", "schedules"),
+        "security-groups" => button("New security group", "create", "security-groups"),
+        "secrets" => button("New secret", "create", "secrets"),
         _ => String::new(),
     };
     let panel = crate::details::panel(app);
@@ -139,9 +145,9 @@ pub fn page(app: &App) -> String {
         })
     );
     let category = match section {
-        "vms" | "services" => tr(app, "Compute", "컴퓨팅"),
-        "networks" | "pipe" => tr(app, "Network", "네트워크"),
-        "storages" | "images" | "kernels" => tr(app, "Data", "데이터"),
+        "vms" | "services" | "pools" | "schedules" => tr(app, "Compute", "컴퓨팅"),
+        "networks" | "pipe" | "security-groups" => tr(app, "Network", "네트워크"),
+        "storages" | "images" | "kernels" | "secrets" => tr(app, "Data", "데이터"),
         _ => tr(app, "System", "시스템"),
     };
     let meters = host_meters(app);
@@ -162,7 +168,11 @@ pub fn page(app: &App) -> String {
 }
 
 pub fn panel_label(app: &App) -> &'static str {
-    match app.route.as_str() {
+    crate::i18n::t(match app.route.as_str() {
+        "pools" => "Pool detail",
+        "schedules" => "Schedule detail",
+        "security-groups" => "Security group detail",
+        "secrets" => "Secret detail",
         "vms" => "MicroVM detail",
         "services" => "MicroService detail",
         "networks" => "MicroNetwork detail",
@@ -171,14 +181,14 @@ pub fn panel_label(app: &App) -> &'static str {
         "kernels" => "Kernel detail",
         "shells" => "Shell detail",
         _ => "Details",
-    }
+    })
 }
 
 pub fn messages(app: &App) -> String {
     let mut out = String::new();
     for error in [&app.error, &app.connection_error]
         .into_iter()
-        .filter(|error| !error.is_empty())
+        .filter(|error| !error.is_empty() && (app.field_errors.is_empty() || *error != &app.error))
     {
         let _ = write!(
             out,
@@ -234,6 +244,7 @@ pub fn content(app: &App) -> String {
                 "조건에 맞는 MicroVM이 없습니다."
             )
         ),
+        "pools" | "schedules" | "security-groups" | "secrets" => crate::advanced::content(app),
         "services" => resource_table(
             app,
             &app.resource,
@@ -291,6 +302,9 @@ pub fn content(app: &App) -> String {
         route if route.starts_with("pipe/") => pipe(app, route.trim_start_matches("pipe/")),
         _ => String::new(),
     };
+    if app.route == "images" {
+        html.push_str(&crate::advanced::images::sources(app));
+    }
     if app.route == "pipe/registry" {
         html.push_str(&format!(
             "<div id=\"workflow-root\">{}</div>",
@@ -335,6 +349,7 @@ pub fn vm_toolbar(app: &App) -> String {
     for (id, en, ko) in [
         ("all", "All", "전체"),
         ("running", "Running", "실행 중"),
+        ("paused", "Paused", "일시정지됨"),
         ("stopped", "Stopped", "중지됨"),
         ("error", "Error", "오류"),
     ] {
@@ -431,6 +446,9 @@ pub fn vm_row(app: &App, vm: &Vm) -> String {
         "stopped" => tr(app, "Stopped", "중지됨"),
         "starting" => tr(app, "Starting", "시작 중"),
         "stopping" => tr(app, "Stopping", "중지 중"),
+        "paused" => tr(app, "Paused", "일시 중지됨"),
+        "pausing" => tr(app, "Pausing", "일시 중지 중"),
+        "resuming" => tr(app, "Resuming", "재개 중"),
         _ => tr(app, "Error", "오류"),
     };
     let cpu = if vm.state == "running" {
@@ -450,8 +468,13 @@ pub fn vm_row(app: &App, vm: &Vm) -> String {
     } else {
         "—".into()
     };
-    let action = if vm.state == "running" {
+    let action = if vm.extra.get("purpose").and_then(Value::as_str) == Some("pool") {
+        String::new()
+    } else if vm.state == "paused" {
+        vm_icon_button("Resume", "vm-resume", &vm.id)
+    } else if vm.state == "running" {
         vm_icon_button(tr(app, "Stop", "중지"), "vm-stop", &vm.id)
+            + &vm_icon_button("Pause", "vm-pause", &vm.id)
     } else if vm.editable() {
         vm_icon_button(tr(app, "Start", "시작"), "vm-start", &vm.id)
     } else {
@@ -648,6 +671,13 @@ pub fn deployment(value: Option<&Value>) -> String {
         _ => phase,
     };
     let mut out = format!("<p role=\"status\">{}</p>", escape(crate::i18n::t(label)));
+    if value["domainRouteOwned"] == true
+        && ["running", "degraded"].contains(&phase)
+        && !text(&value["spec"], "domain").is_empty()
+    {
+        let domain = text(&value["spec"], "domain");
+        out.push_str(&format!("<p>Domain routing is ready.</p><a class=\"btn\" href=\"https://{}\" target=\"_blank\" rel=\"noreferrer\">{}</a>",escape(domain),crate::i18n::t("Open domain")));
+    }
     if !text(value, "error").is_empty() {
         out.push_str(&format!(
             "<p role=\"alert\">{}</p>",
@@ -748,7 +778,8 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
     match section {
         "vms" => {
             let state = text(data, "state");
-            let editable = matches!(state, "created" | "stopped" | "error");
+            let pool = text(data, "purpose") == "pool";
+            let editable = !pool && matches!(state, "created" | "stopped" | "error");
             if editable {
                 out.push_str(&button("Start", "vm-start", id));
                 out.push_str(&button("Resources", "edit", "vm-resources"));
@@ -760,10 +791,11 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
                     Value::Null,
                 ));
             }
-            if state == "running" {
+            if !pool && state == "running" {
+                out.push_str(&button("Pause", "vm-pause", id));
                 out.push_str(&button("Stop", "vm-stop", id));
             }
-            if editable || state == "running" {
+            if !pool && (editable || state == "running") {
                 for (kind, label) in [
                     ("vm-egress", "Egress"),
                     ("vm-env", "Environment"),
@@ -773,9 +805,28 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
                     out.push_str(&button(label, "edit", kind));
                 }
             }
+            if !pool && ["pausing", "resuming"].contains(&state) {
+                out.push_str(&button("Retry pause", "vm-pause", id));
+                out.push_str(&button("Retry resume", "vm-resume", id));
+            }
+            if !pool && ["paused", "pausing", "resuming"].contains(&state) {
+                if state == "paused" {
+                    out.push_str(&button("Resume", "vm-resume", id));
+                }
+                out.push_str(&button("Stop", "vm-stop", id));
+            }
+            if !pool {
+                out.push_str(&format!("<a class=\"btn\" href=\"#/schedules?vm={encoded}&new=1\" aria-label=\"Add schedule for {}\">Add schedule</a>",escape(text(data,"name"))));
+            }
+            if pool {
+                out.push_str("<span class=\"badge\">Pool</span>");
+            }
             out.push_str(&button("Logs", "logs", id));
             out.push_str(&button("Download SSH key", "ssh-download-key", id));
             out.push_str(&button("SSH connection", "ssh", id));
+        }
+        "pools" | "schedules" | "security-groups" | "secrets" => {
+            out.push_str(&crate::advanced::actions(app, data))
         }
         "services" => {
             out.push_str(&button("Edit", "edit", "services"));
@@ -871,13 +922,21 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
                 Value::Null,
             ));
         }
-        "pipe/auth" => out.push_str(&request(
-            "Disconnect",
-            "DELETE",
-            &format!("/api/pipe/auth/{}", encode(text(data, "provider"))),
-            Value::Null,
-        )),
+        "pipe/auth" => {
+            out.push_str(&button(
+                "Update credentials",
+                "create",
+                text(data, "provider"),
+            ));
+            out.push_str(&request(
+                "Disconnect",
+                "DELETE",
+                &format!("/api/pipe/auth/{}", encode(text(data, "provider"))),
+                Value::Null,
+            ));
+        }
         "pipe/registry" => {
+            out.push_str(&button("Update token", "edit", "registry"));
             out.push_str(&request(
                 "Disconnect",
                 "DELETE",
@@ -983,6 +1042,30 @@ fn pipe(app: &App, card: &str) -> String {
         _ => {}
     }
     out.push_str("</div>");
+    if app.resource["nginxAvailable"] == false
+        && ["route", "named-tunnel", "quick-tunnel", "firecrab-tunnel"].contains(&card)
+    {
+        out.push_str(&format!(
+            "<p role=\"alert\">{}</p>",
+            tr(
+                app,
+                "Reinstall the Firecrab host bundle to restore the ingress engine.",
+                "Ingress 엔진을 복구하려면 Firecrab 호스트 번들을 다시 설치한다."
+            )
+        ));
+    }
+    if app.resource["cloudflaredAvailable"] == false
+        && ["named-tunnel", "quick-tunnel", "firecrab-tunnel"].contains(&card)
+    {
+        out.push_str(&format!(
+            "<p role=\"alert\">{}</p>",
+            tr(
+                app,
+                "Reinstall the Firecrab host bundle to restore the Cloudflare connector.",
+                "Cloudflare 연결기를 복구하려면 Firecrab 호스트 번들을 다시 설치한다."
+            )
+        ));
+    }
     match card {
         "auth" => out.push_str(&resource_table(
             app,

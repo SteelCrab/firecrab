@@ -46,6 +46,15 @@ pub fn panel(app: &App) -> String {
             "<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\">{}</section>",
             form.html(app.busy, &app.field_errors) + &if form.title == "Deploy MicroService" { format!("<div id=\"service-status\">{}</div>", render::deployment(app.service_deployment.as_ref())) } else { String::new() }
         ));
+        if form.title == "Deploy MicroService" && !text(&form.base, "domain").is_empty() {
+            if let Some(pipe) = app.cache.get("/api/pipe")
+                && !text(&pipe["config"]["tunnel"], "id").is_empty()
+            {
+                out.push_str(&format!("<p>For public HTTPS, point this domain's DNS CNAME to <code>{}.cfargotunnel.com</code>. Keep Cloudflare proxy enabled.</p>",escape(text(&pipe["config"]["tunnel"],"id"))));
+            } else {
+                out.push_str("<p>For public HTTPS, connect your domain in <a href=\"#/pipe/named-tunnel\">Pipe Tunnel</a>.</p>");
+            }
+        }
         return out;
     }
     let Some(data) = &app.detail else {
@@ -59,7 +68,7 @@ pub fn panel(app: &App) -> String {
         .iter()
         .find_map(|key| data[key].as_str())
         .unwrap_or(t("Details"));
-    out.push_str(&format!("<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\"><header class=\"wasm-actions\"><h2 class=\"detail-title\">{}</h2>{}</header>{}",escape(title),button("Close","close-detail",""),render::detail_actions(app,data)));
+    out.push_str(&format!("<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\"><header class=\"wasm-actions detail-head\"><h2 class=\"detail-title\">{}{}</h2>{}</header>{}",escape(title),if text(data,"purpose")=="pool"{" · Pool"}else{""},button("Close","close-detail",""),render::detail_actions(app,data)));
     if app.route == "vms" {
         out.push_str(
             "<div role=\"tablist\" class=\"tabs\" aria-label=\"MicroVM detail sections\">",
@@ -77,14 +86,18 @@ pub fn panel(app: &App) -> String {
             "env" => environment(app, data),
             "network" => network(data),
             "logs" => logs(app, data),
-            _ => overview(data),
+            _ => overview(data) + &crate::advanced::schedules::vm_schedules(app, data),
         };
         out.push_str(&format!(
             "<div role=\"tabpanel\" id=\"vm-tab-panel\" aria-labelledby=\"vm-tab-{}\">{body}</div>",
             escape(&app.detail_tab)
         ));
     } else {
-        out.push_str(&render::properties(data));
+        if let Some(body) = crate::advanced::detail(app, data) {
+            out.push_str(&body);
+        } else {
+            out.push_str(&render::properties(data));
+        }
         if app.route == "storages" {
             out.push_str(&format!(
                 "<p>{} / {} GiB</p>",
@@ -177,6 +190,12 @@ pub fn overview(data: &Value) -> String {
     }
     props.push_str("</dl>");
     let mut out = section("Properties", props);
+    if ["paused", "pausing", "resuming"].contains(&text(data, "state")) {
+        out.push_str(&format!(
+            "<p>{}</p>",
+            t("Memory stays allocated while the VM is paused. Resume to reconnect.")
+        ));
+    }
     out.push_str(&section("Startup", timeline(data)));
     if data["reconciliation"].is_object() {
         out.push_str(&section(

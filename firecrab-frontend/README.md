@@ -33,8 +33,12 @@ builds. Its tests deserialize requests using the existing `firecrab-api-types`.
 
 | Area | Rust/WASM client |
 |---|---|
-| MicroVM | List, state tabs, name/IP/image search, allocation totals, create, start/stop/delete, details, resources, egress, environment, port forwards, Shell assignments, storage assignment, logs, SSH key download |
+| MicroVM | List, state tabs, name/IP/image search, allocation totals, create, start/pause/resume/stop/delete, details, resources, egress, environment, port forwards, Shell assignments, storage assignment, logs, SSH key download |
 | MicroService | List, configuration create/edit/delete, deploy with host port and optional network, stop, deployment status |
+| Pools | Create/configure/delete, ready members, acquire with a persistent idempotency key, lease expiry/release, pool-managed VM protection |
+| Schedules | Weekday/daily/weekly/custom cron and one-time actions, time zones, exact instant preservation, VM context links, enable/disable, run history |
+| Security groups | Create/delete, ingress/egress IPv4 rules, service policy selection, deployment network enforcement, live replica inheritance and partial-failure reporting |
+| Secrets | Metadata create/edit/delete, explicit reveal with automatic masking, provider credentials, import/export previews, explicit replacements, expiry, partial failures |
 | Networks | List, create with IPv4/IPv6, details, internet/uplink changes, delete |
 | Storage | List, create, inspect, delete |
 | Images | List, catalog registration, OCI import, package download/install/delete, kernel assignment, progress |

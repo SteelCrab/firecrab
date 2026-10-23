@@ -110,8 +110,12 @@
 .screen.has-panel .col-detail { display: none; }
 .vm-table .actions { white-space: nowrap; }
 .vm-table .actions .btn { height: var(--control-height-sm); padding: 0 8px; font-size: 12px; }
-.screen.has-panel table.service-table { width: 100%; min-width: 0; table-layout: fixed; }
-.screen.has-panel .service-table th:first-child { width: 120px; }
-.screen.has-panel .service-table th:nth-child(3) { width: 72px; }
-.screen.has-panel .service-table th:last-child { width: 232px; }
-.screen.has-panel .service-table .service-image { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screen.has-panel .screen-main table.service-table { width: 100%; min-width: 0; table-layout: fixed; }
+.screen.has-panel .screen-main .service-table th:first-child { width: 120px; }
+.screen.has-panel .screen-main .service-table th:nth-child(3) { width: 72px; }
+.screen.has-panel .screen-main .service-table th:last-child { width: 232px; }
+.screen.has-panel .screen-main .service-table .service-image { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Runtime replicas use their own compact columns inside the detail panel. */
+.detail-embed table.service-table { min-width: 0; }
+.detail-embed .service-table th, .detail-embed .service-table td { padding-inline: 6px; font-size: 12px; }

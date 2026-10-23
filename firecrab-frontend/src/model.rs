@@ -3,9 +3,13 @@ use serde_json::{Value, json};
 
 pub const VIEWS: &[(&str, &str, &str, &str)] = &[
     ("vms", "compute", "MicroVM", "MicroVM"),
+    ("pools", "compute", "Pools", "풀"),
+    ("schedules", "compute", "Schedules", "스케줄러"),
     ("services", "compute", "MicroService", "MicroService"),
     ("networks", "network", "Networks", "네트워크"),
+    ("security-groups", "network", "Security groups", "보안그룹"),
     ("pipe", "network", "Pipe", "Pipe"),
+    ("secrets", "data", "Secrets", "Secrets"),
     ("storages", "data", "Storage", "스토리지"),
     ("images", "data", "Images", "이미지"),
     ("kernels", "data", "Kernels", "커널"),
@@ -76,7 +80,8 @@ impl Vm {
             .any(|text| lowercase(text).contains(&needle))
     }
     pub fn editable(&self) -> bool {
-        matches!(self.state.as_str(), "created" | "stopped" | "error")
+        self.extra.get("purpose").and_then(Value::as_str) != Some("pool")
+            && matches!(self.state.as_str(), "created" | "stopped" | "error")
     }
 }
 

@@ -3,9 +3,11 @@
 MicroService stores the desired configuration of an OCI service on a MicroVM.
 Configurations survive API restarts in the existing SQLite database.
 Deploy imports the OCI image by digest, creates MicroVM replicas, and waits for HTTP app health.
-Each replica exposes one host TCP port.
+Services with a domain use PipeIngress to reach guest app ports directly.
+Services without a domain expose one host TCP port per replica.
 The deployment record and owned VM identifiers survive API restarts.
-Domain routing, CrabSecrets injection, rolling updates, rollback, and automatic instance replacement remain separate work.
+PipeSecrets values are injected into every replica without appearing in VM or deployment responses.
+Rolling updates, rollback, and automatic instance replacement remain separate work.
 
 ## Fields
 
@@ -20,16 +22,17 @@ Domain routing, CrabSecrets injection, rolling updates, rollback, and automatic 
 | `ram` | Required RAM per replica in MiB; power of two from 128 to 32768 |
 | `cpu` | Required vCPU count per replica; 1–32 |
 | `replicas` | 1–100; default 1 |
+| `securityGroupId` | Optional security group UUID; default `null`; every new replica inherits it |
 | `startupTimeout` | 1–3600 seconds; default 300 |
 | `drainTimeout` | 0–3600 seconds; default 30 |
 | `env` | Variable name to plain value; default `{}` |
-| `secrets` | Variable name to non-nil CrabSecrets UUID; default `{}`; values are never stored here |
+| `secrets` | Variable name to non-nil PipeSecrets UUID; default `{}`; values are never stored here |
 
 `env` and `secrets` together allow up to 64 entries.
 Variable names follow `[A-Za-z_][A-Za-z0-9_]*` and allow up to 256 bytes.
 Plain values allow up to 4096 bytes and must not contain NUL bytes.
 A variable name cannot appear in both maps.
-Secret references are saved without resolving them in this stage.
+Secret references are saved without resolving them. Deployment validates them before accepting work.
 
 ## REST
 
@@ -95,19 +98,64 @@ firecrab microservice delete SERVICE_UUID
 Create, get, and update print JSON.
 Delete prints a JSON receipt.
 In the dashboard, open **MicroService** to create, inspect, edit, or delete configurations.
-The form supports environment variables and CrabSecrets references.
+The form supports environment variables and [PipeSecrets](secrets.md) references.
 Saving a configuration does not deploy it.
 Select **Run**, then **Deploy and run** to pull the image and start its replicas.
 The panel reports startup progress, app health, host-port links, and failures.
 **Stop service** removes the owned MicroVMs.
 
+## Connect a domain
+
+1. Set **Domain** when creating or editing a MicroService. A hostname such as
+   `orders.example.com` is enough; the dashboard also accepts a pasted HTTPS URL
+   without a path or query.
+2. Select **Run**, then **Deploy and run**. No host port or network selection is
+   required. Network selection remains available under **Advanced settings**.
+3. Firecrab checks that ingress is installed and the hostname is free. After every
+   replica passes its HTTP health check, it publishes one load-balanced root route.
+   The dashboard then offers **Open domain**.
+
+For public HTTPS, use the existing **Pipe → Named Tunnel** setup with this domain.
+If a named tunnel is already configured, point the domain's proxied Cloudflare
+CNAME to `<tunnel-id>.cfargotunnel.com`; the deployment panel shows that target.
+DNS and public TLS remain external. A prepared local route does not prove that
+public DNS, TLS, or the connector is working. This deployment does not modify DNS.
+
+The domain owns all paths for that hostname. Existing manual routes or another
+service on the hostname cause a field error before image import. Service routes
+appear in Pipe as **Managed by MicroService**. Manual Pipe saves preserve them,
+including saves from a stale dashboard draft.
+
+Domain deployment needs no public replica ports:
+
+```sh
+firecrab microservice deploy SERVICE_UUID
+```
+
+REST accepts `{}` for a domain service, or `{"microNetworkId":"NETWORK_UUID"}`
+to select an existing network. Domain deployments ignore `hostPort` and report
+`hostPort: 0` for instances. Health checks send the service hostname in `Host`.
+
+Stop withdraws only that deployment's route before draining and deleting its VMs.
+The existing named connector and its DNS remain configured. A failed route
+withdrawal retains instance ownership and allows **Stop** to retry. If a Quick
+Tunnel references this hostname, remove that connector before stopping the service.
+Interrupted publication is recorded durably, so Stop can clean it up after an API
+restart. A completed domain route keeps serving independently of API restarts.
+
+Changing the configured domain still requires stopping the service first. This
+step does not add rolling updates or release rollback.
+
 ## Deploy behavior
 
-The deploy request body is `{"hostPort":30100,"microNetworkId":null}`.
+Without a domain, the deploy request body is `{"hostPort":30100,"microNetworkId":null}`.
 Two replicas use host ports 30100 and 30101, both forwarding to the configured app port.
 Omit the network UUID to create or reuse the `services` MicroNetwork.
 Supply `microNetworkId` or CLI `--network UUID` to use an existing network.
 The automatic network selects a free `/24` from `172.30.0.0/16`.
+When `securityGroupId` is set, select its IPv4-only network explicitly or reuse an existing matching `services` network.
+The deployment captures the group selection and assigns it to every replica before startup.
+See [security groups](security-groups.md) for rules and inactive-only changes.
 Concurrent deployments share one host queue.
 The worker checks memory, disk space, and port conflicts before starting replicas.
 
@@ -124,12 +172,53 @@ The macOS TCP relay can close its SSH forwards when those port records disappear
 An interrupted deploy or stop is marked failed after API restart; Stop cleans up remaining instances.
 A completed deployment uses the existing VM re-adoption mechanism.
 
-Deploy currently requires `domain: null` and empty `secrets`.
-Unsupported domain or secret settings return a field error before the job starts.
-Use this flow for direct host ports; it does not yet switch a stable domain between releases.
+Domain services connect through PipeIngress after health
+checks. Services without a domain keep using direct host ports. Neither flow
+switches between running releases yet.
 Deploy and Stop wait by default in the CLI.
 Use `--no-wait` to return after acceptance and poll `microservice status` later.
 Deploy exits nonzero when deployment or health fails.
+
+## Inject Secrets
+
+Create a value in **Secrets**, then copy its UUID into the service's secret references:
+
+```json
+{
+  "env": {"APP_ENV": "production"},
+  "secrets": {"DB_PASSWORD": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+}
+```
+
+The environment name is the map key. The value is a local PipeSecrets UUID, not
+the password or an external provider name. Imported Secrets work in the same way.
+Saving keeps only references. A missing Secret or a value over 4096 UTF-8 bytes
+or containing NUL rejects deployment with a `secrets` field error before any VM
+is created. Empty and multiline values are supported. The vault itself supports
+larger values, but the guest environment limit still applies.
+
+When queued work starts, Firecrab resolves all references together and stores one
+encrypted deployment snapshot. Every replica uses that snapshot, including after
+a VM or API restart. Changes to a Secret apply to the next deployment; updating
+or importing a Secret does not restart running apps. Stop and redeploy to use the
+new value. Automatic rotation and rolling updates remain follow-up work.
+
+Secret values stay out of service configuration, deployment records, VM metadata,
+logs generated by the deployment controller, and SQLite. On boot they are merged
+with plain environment variables only in memory, then written to the owned VM's
+`/etc/firecrab/vm.env` with root-only mode `0600`. Host staging files also use
+mode `0600` and are removed after use. Guest root and the application can read
+their values; applications must avoid printing them to their own logs. Guest
+disks contain the injected values and must be treated as sensitive.
+
+Editing a Secret-backed replica's environment through the VM API is rejected.
+Edit its MicroService configuration instead. Missing or damaged vault state
+blocks a fresh boot; a running guest continues independently. A standalone VM
+or a service without Secret references does not need the vault.
+
+Stop and failed-deploy cleanup remove the encrypted snapshot after removing all
+owned replicas. If cleanup fails, the snapshot remains available for a retry.
+Normal PipeSecrets records remain stored for reuse by other services.
 
 ## Verification
 
@@ -153,8 +242,22 @@ python3 scripts/test-microservice-runtime.py --api http://127.0.0.1:5523
 ```
 
 It imports a local OCI fixture, boots two real MicroVMs, checks HTTP and env injection, and tests failed-health cleanup.
+Add `--with-secrets` to use a disposable PipeSecret and verify response redaction,
+shared replica values, and a VM stop/start after editing the stored Secret.
 Use `--restart-unit UNIT` only for an isolated QA API unit to test re-adoption after restart.
 Use `--keep-running` to retain the healthy service for manual inspection.
+
+For domain routing and public HTTPS, use an empty, dedicated Linux/KVM API with
+the bundled ingress and cloudflared engines installed:
+
+```sh
+sudo python3 scripts/test-microservice-domain-live.py --api http://127.0.0.1:15335
+```
+
+This test checks two real replicas, public TLS, API restart continuity and replica
+failure, then removes its VMs, services, network, routes and Quick Tunnel.
+Use `--output PATH` only when a JSON report is needed. Stop the dedicated QA
+API/helper and ingress units after the run.
 
 ## Related
 
