@@ -171,7 +171,7 @@ test.describe("Pipe AI accounts @dashboard", () => {
     const panel = page.getByRole("region", { name: "Pipe AI", exact: true });
     const account = panel.locator(".pipe-ai-connections li").filter({ hasText: "Personal AI" });
     await account.getByRole("button", { name: "Disconnect", exact: true }).click();
-    await expect(panel.locator(".pipe-ai-connections strong")).toHaveText("Other account");
+    await expect(panel.locator(".pipe-ai-connections strong")).toHaveText(["Other account"]);
     await expect(panel.getByRole("button", { name: "Disconnect", exact: true })).toBeEnabled();
   });
 
