@@ -1,0 +1,82 @@
+.pipe-ai { display: grid; gap: 20px; width: 100%; max-width: 1120px; margin-inline: auto; }
+.pipe-ai-heading, .pipe-ai-title, .pipe-ai-section-head, .pipe-ai-actions { display: flex; align-items: center; gap: 12px; }
+.pipe-ai-heading, .pipe-ai-section-head { justify-content: space-between; }
+.pipe-ai-heading { flex-wrap: wrap; }
+.pipe-ai-title { min-width: 0; }
+.pipe-ai-title h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.03em; }
+.pipe-ai-title p { margin: 5px 0 0; color: var(--text-2); font-size: 13px; line-height: 1.5; }
+.pipe-ai-mark { display: grid; place-items: center; flex: none; width: 42px; height: 42px; border: 1px solid var(--accent-ring); border-radius: 12px; background: var(--accent-soft); color: var(--accent); }
+.pipe-ai-mark svg { width: 23px; height: 23px; stroke-width: 1.6; }
+.pipe-ai > .banner { margin: 0; }
+.pipe-ai > .banner svg { width: 16px; height: 16px; flex: none; }
+.pipe-ai-loading { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 180px; color: var(--text-3); }
+.pipe-ai-loading svg { width: 16px; height: 16px; }
+
+.pipe-ai-welcome { display: flex; flex-direction: column; align-items: center; padding: 64px 24px 48px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); text-align: center; }
+.pipe-ai-welcome-icon { display: grid; place-items: center; width: 52px; height: 52px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-subtle); color: var(--text-2); }
+.pipe-ai-welcome-icon svg { width: 24px; height: 24px; stroke-width: 1.5; }
+.pipe-ai-welcome h3 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.025em; }
+.pipe-ai-welcome > p { max-width: 340px; margin: 10px 0 24px; color: var(--text-2); font-size: 13px; line-height: 1.6; text-wrap: pretty; }
+.pipe-ai-actions { flex-wrap: wrap; gap: 8px; }
+.pipe-ai-welcome .pipe-ai-security { margin: 26px 0 0; }
+.pipe-ai-welcome .btn, .pipe-ai-editor > .pipe-ai-actions .btn { height: 36px; padding-inline: 14px; }
+
+.pipe-ai .panel .pipe-ai-section-head h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 600; }
+.pipe-ai-section-head h3 svg { width: 16px; height: 16px; color: var(--text-2); stroke-width: 1.7; }
+.pipe-ai-editor { display: grid; gap: 16px; width: 100%; max-width: 620px; margin-inline: auto; padding: 24px; }
+.pipe-ai-authentication { min-width: 0; margin: 0; padding: 0; border: 0; }
+.pipe-ai-authentication legend { margin-bottom: 8px; color: var(--text-2); font-size: 12px; font-weight: 500; }
+.pipe-ai-auth-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-subtle); }
+.pipe-ai-auth-options label { position: relative; min-width: 0; cursor: pointer; }
+.pipe-ai-auth-options input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
+.pipe-ai-auth-options span { display: flex; align-items: center; justify-content: center; gap: 8px; height: 34px; border: 1px solid transparent; border-radius: 6px; color: var(--text-2); font-size: 13px; }
+.pipe-ai-auth-options svg { width: 16px; height: 16px; stroke-width: 1.7; }
+.pipe-ai-auth-options input:checked + span { border-color: var(--border-strong); background: var(--bg); color: var(--text); box-shadow: var(--shadow-xs); font-weight: 500; }
+.pipe-ai-auth-options input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pipe-ai-auth-options input:disabled + span { color: var(--text-4); cursor: default; }
+.pipe-ai-authentication + .pipe-ai-hint { margin-top: -6px; }
+.pipe-ai-hint { margin: 0; color: var(--text-3); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.pipe-ai-login { display: flex; align-items: start; gap: 8px; margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.6; }
+.pipe-ai-login svg { width: 16px; height: 16px; margin-top: 2px; flex: none; }
+.pipe-ai-login a { display: block; }
+.pipe-ai-details { min-width: 0; color: var(--text-2); font-size: 12px; }
+.pipe-ai-details > summary { display: flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%; padding: 4px 0; border-radius: 3px; list-style: none; cursor: pointer; }
+.pipe-ai-details > summary::-webkit-details-marker { display: none; }
+.pipe-ai-details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.pipe-ai-details > summary svg { width: 14px; height: 14px; flex: none; }
+.pipe-ai-details[open] > summary > .lucide-chevron-down { transform: rotate(180deg); }
+.pipe-ai-details > div, .pipe-ai-details > form { margin-top: 10px; }
+.pipe-ai-details p { margin: 0 0 8px; line-height: 1.6; overflow-wrap: anywhere; }
+.pipe-ai-editor > .pipe-ai-details { padding-top: 12px; border-top: 1px solid var(--border); }
+
+.pipe-ai-accounts { min-width: 0; padding: 20px; }
+.pipe-ai-count { display: grid; place-items: center; min-width: 22px; height: 22px; padding-inline: 5px; border-radius: 6px; background: var(--gray-soft); color: var(--text-2); font-size: 12px; }
+.pipe-ai-connections { display: grid; margin: 16px 0 0; padding: 0; list-style: none; }
+.pipe-ai-connections li { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-width: 0; padding: 16px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.pipe-ai-account-icon { display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-subtle); color: var(--text-2); }
+.pipe-ai-account-icon svg { width: 18px; height: 18px; stroke-width: 1.6; }
+.pipe-ai-account-info { min-width: 0; }
+.pipe-ai-account-info strong { display: block; margin-bottom: 4px; font-size: 13px; font-weight: 600; }
+.pipe-ai-connections .badge svg { width: 13px; height: 13px; }
+.pipe-ai-manage { display: flex; flex-wrap: wrap; gap: 8px; }
+.pipe-ai-editor .field input { height: 34px; }
+.pipe-ai-security { display: flex; align-items: start; gap: 6px; margin: 20px 0 0; color: var(--text-3); font-size: 11.5px; line-height: 1.5; }
+.pipe-ai-security svg { width: 14px; height: 14px; flex: none; margin-top: 1px; stroke-width: 1.6; }
+.pipe-ai-footnote { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; color: var(--text-3); font-size: 11.5px; line-height: 1.5; }
+.pipe-ai-footnote .pipe-ai-security { margin: 0; }
+.pipe-ai-footnote a { color: var(--text-2); text-underline-offset: 3px; }
+
+@media (max-width: 1000px) {
+  .pipe-ai-connections li { grid-template-columns: 36px minmax(0, 1fr) auto; }
+  .pipe-ai-manage { grid-column: 2 / -1; }
+}
+@media (max-width: 560px) {
+  .pipe-ai { gap: 16px; }
+  .pipe-ai-title h2 { font-size: 16px; }
+  .pipe-ai-title p { font-size: 12px; }
+  .pipe-ai-mark { width: 36px; height: 36px; border-radius: 10px; }
+  .pipe-ai-welcome { padding: 36px 20px; }
+  .pipe-ai-welcome .pipe-ai-actions { width: 100%; flex-direction: column; align-items: stretch; }
+  .pipe-ai-editor, .pipe-ai-accounts { padding: 16px; }
+  .pipe-ai-footnote { font-size: 11px; }
+}

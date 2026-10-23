@@ -10,6 +10,7 @@ import { viewHash, type PipeCardId } from "../navigation";
 import PipeCards from "./PipeCards";
 import Screen from "./layout/Screen";
 import PipeAuth from "./PipeAuth";
+import PipeAi from "./PipeAi";
 import PipeDatabases from "./PipeDatabases";
 import PipeStorage from "./PipeStorage";
 import PipeRegistries from "./PipeRegistries";
@@ -50,7 +51,7 @@ export default function Pipe({ card, vms, vmsLoading, vmsUnavailable, onUnsavedC
   }, [dirty]);
 
   useEffect(() => {
-    if (card === "storage") return;
+    if (card === "ai" || card === "storage") return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let controller: AbortController | undefined;
@@ -87,7 +88,8 @@ export default function Pipe({ card, vms, vmsLoading, vmsUnavailable, onUnsavedC
   if (!card) return <Screen view="pipe"><PipeCards snapshot={snapshot} error={error} /></Screen>;
   return <Screen view="pipe"><div className="stack">
     {card !== "storage" && <nav className="pipe-back" aria-label={t("Pipe navigation", "Pipe 이동")}><a href={viewHash("pipe")}><span aria-hidden="true">← </span>Pipe</a></nav>}
-    {error && card !== "storage" && <div className="banner error" role="alert">{error}</div>}
+    {error && card !== "ai" && card !== "storage" && <div className="banner error" role="alert">{error}</div>}
+    {card === "ai" && <PipeAi onUnsavedChange={setDirty} />}
     {card === "route" && <PipeRouting {...shared} {...appProps} onSnapshot={onSnapshot} />}
     {card === "registry" && <PipeRegistries onUnsavedChange={setDirty} />}
     {card === "database" && <PipeDatabases onUnsavedChange={setDirty} />}

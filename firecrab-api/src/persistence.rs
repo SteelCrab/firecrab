@@ -20,6 +20,7 @@ use crate::model::{Lease, VmRecord, VmState};
 mod pools;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod micro_services;
+mod pipe_ai;
 mod pipe_auth;
 mod pipe_databases;
 mod pipe_storage;
@@ -717,6 +718,10 @@ impl Store {
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
+        conn.execute(pipe_ai::CONNECTIONS_SQL, [])?;
+        conn.execute(pipe_ai::DEFAULTS_SQL, [])?;
+        conn.execute(pipe_ai::SETTINGS_SQL, [])?;
+        conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute_batch(stacks::SCHEMA_SQL)?;
