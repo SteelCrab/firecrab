@@ -766,6 +766,20 @@ pub async fn update_vm(
         None
     };
     let _guard = state.lock_vm(id).await;
+    if req.env.is_some() {
+        let store = state.store.clone();
+        let owner = tokio::task::spawn_blocking(move || store.service_deployment_for_vm(id))
+            .await
+            .map_err(|_| AppError::internal(request_id.0))?
+            .map_err(|_| AppError::internal(request_id.0))?;
+        if owner.is_some_and(|deployment| !deployment.spec.secrets.is_empty()) {
+            return Err(AppError::conflict(
+                "vm_service_owned",
+                "Edit the MicroService configuration instead of its replica environment",
+                request_id.0,
+            ));
+        }
+    }
     let _network_guard = state.network_mutations.lock().await;
     if let Some(selection) = req.security_group_id {
         crate::service_runtime::ensure_vm_policy_editable(&state, id, request_id.0).await?;
@@ -1354,6 +1368,7 @@ pub(super) async fn persist_update(
 }
 
 async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess, String> {
+    let guest_env = crate::service_runtime::secrets::guest_env(state, vm).await?;
     let template = state
         .templates
         .resolve_version(&vm.template, &vm.template_version)
@@ -1377,7 +1392,7 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
     )
     .await?;
 
-    let result = finish_run_start(state, vm, template, &network).await;
+    let result = finish_run_start(state, vm, template, &network, guest_env).await;
     if result.is_err() {
         teardown_vm_network(state, vm.id).await;
     }
@@ -1389,6 +1404,7 @@ async fn finish_run_start(
     vm: &VmRecord,
     template: std::sync::Arc<crate::templates::TemplateVersion>,
     network: &VmNetwork,
+    guest_env: BTreeMap<String, String>,
 ) -> Result<FirecrackerProcess, String> {
     // Capture transport-derived values before the template Arc is moved into
     // the blocking disk/configuration task below. `runtime_boot_args` also
@@ -1434,7 +1450,7 @@ async fn finish_run_start(
         let target_bytes = u64::from(record.disk_gb) * 1024 * 1024 * 1024;
         let rootfs = rootfs::prepare_rootfs(&paths, generation, &mut source, target_bytes)
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
-        rootfs::specialize_guest(&rootfs, record.id, &record.env)
+        rootfs::specialize_guest(&rootfs, record.id, &guest_env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
         crate::guest_ssh::install_on_guest(&rootfs, &paths)
             .map_err(|error| format!("guest SSH install failed: {error}"))?;

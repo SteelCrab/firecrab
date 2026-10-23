@@ -97,5 +97,9 @@ Secrets requests have a 60-second deadline.
 Preview bodies use `{"direction":"import"}` or `{"direction":"export","secretIds":["UUID"]}`.
 Apply bodies use `{"names":["DB_PASSWORD"]}`.
 Secret and connection updates require their latest `version`.
-This feature manages stored values and transfers through the web console.
-It does not add CLI commands or change the [MicroService deployment restrictions](microservices.md#deploy-behavior).
+Manage stored values and transfers through the web console.
+Reference a local Secret UUID from a [MicroService](microservices.md#inject-secrets)
+to inject its value into every replica. Each deployment keeps an encrypted
+snapshot, so edits and imports take effect on the next deployment. VM restarts
+keep the existing snapshot. Service injection is limited to 4096 bytes per value.
+This feature does not add Secrets CLI commands or automatic rotation.
