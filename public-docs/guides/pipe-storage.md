@@ -7,8 +7,10 @@ in its existing owner-only SQLite database. Credentials are not application-encr
 
 ## Connect a bucket
 
-Enter a name, bucket, AWS region, and optional directory prefix. A nonempty
-prefix is normalized to end in `/`. Object keys include that prefix.
+Choose **Connect bucket**, then enter the bucket, AWS region, and optional folder.
+The bucket name is also the display name unless you set a name under
+**More options**. A nonempty folder is normalized to end in `/`.
+Object keys include that prefix.
 For example, a connection limited to `team/` accepts `team/report.csv`
 and rejects `other/report.csv` and `team-other/report.csv`.
 Keys containing control characters or `.`/`..` path segments are unsupported.
@@ -30,6 +32,17 @@ enumerate account buckets, upload a probe, or delete an object. Failed validatio
 keeps the previous connection unchanged. The verification response reports
 `list: allowed`; read, write, and delete remain `unknown` until those operations
 are attempted. A successful listing cannot prove every IAM capability.
+
+Select a connection to open its files. Use folders and the breadcrumb trail to
+navigate, or **Enter folder path** to open a folder directly. **Load more** keeps
+the current files visible while adding the next page. File sizes and modification
+times are formatted for the selected language.
+
+Choose **Upload file**, select a file, then review its name and destination before
+uploading. Failed uploads keep the selected file and settings for a retry.
+Click a file name to download it. Its **⋯** menu also contains download and delete.
+The connection's **⋯** menu contains edit, connection check, and disconnect.
+Connections used by a MicroService explain why edit and disconnect are disabled.
 
 ## AWS permissions
 

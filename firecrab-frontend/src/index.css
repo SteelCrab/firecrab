@@ -1097,10 +1097,3 @@ table.image-table tbody tr.is-selected td {
   .secrets-toolbar .secrets-search { flex-basis: 100%; }
   .secrets-change { flex-wrap: wrap; }
 }
-.pipe-storage-form { display: grid; gap: 1rem; margin-block: 1.5rem; }
-.pipe-storage-browser { margin-top: 2rem; min-width: 0; }
-.pipe-storage table.vm-table { min-width: 720px; }
-.pipe-storage .vm-table .pipe-storage-key { min-width: 14rem; max-width: 28rem; }
-.pipe-storage-key { overflow-wrap: anywhere; }
-.pipe-storage-check { display: flex; align-items: center; gap: .5rem; }
-.pipe-storage-check input { width: auto; }

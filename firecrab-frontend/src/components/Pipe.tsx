@@ -50,6 +50,7 @@ export default function Pipe({ card, vms, vmsLoading, vmsUnavailable, onUnsavedC
   }, [dirty]);
 
   useEffect(() => {
+    if (card === "storage") return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let controller: AbortController | undefined;
@@ -74,7 +75,7 @@ export default function Pipe({ card, vms, vmsLoading, vmsUnavailable, onUnsavedC
     };
     void refresh();
     return () => { cancelled = true; clearTimeout(timer); controller?.abort(); };
-  }, []);
+  }, [card]);
 
   // A started request blocks polling so an older snapshot cannot overwrite its result.
   const onBusy = useCallback((value: boolean) => { mutating.current = value; setBusy(value); revision.current++; }, []);
@@ -85,8 +86,8 @@ export default function Pipe({ card, vms, vmsLoading, vmsUnavailable, onUnsavedC
   if (card === "auth") return <PipeAuth onUnsavedChange={setDirty} />;
   if (!card) return <Screen view="pipe"><PipeCards snapshot={snapshot} error={error} /></Screen>;
   return <Screen view="pipe"><div className="stack">
-    <nav className="pipe-back" aria-label={t("Pipe navigation", "Pipe 이동")}><a href={viewHash("pipe")}><span aria-hidden="true">← </span>Pipe</a></nav>
-    {error && <div className="banner error" role="alert">{error}</div>}
+    {card !== "storage" && <nav className="pipe-back" aria-label={t("Pipe navigation", "Pipe 이동")}><a href={viewHash("pipe")}><span aria-hidden="true">← </span>Pipe</a></nav>}
+    {error && card !== "storage" && <div className="banner error" role="alert">{error}</div>}
     {card === "route" && <PipeRouting {...shared} {...appProps} onSnapshot={onSnapshot} />}
     {card === "registry" && <PipeRegistries onUnsavedChange={setDirty} />}
     {card === "database" && <PipeDatabases onUnsavedChange={setDirty} />}
