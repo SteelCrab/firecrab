@@ -69,11 +69,12 @@ At each VM start, `MemoryMax` is guest RAM plus the larger of 256 MiB and one ei
 `CPUQuota` is one core per vCPU plus one core.
 An external unit stop records a requested stop in `exit.json`.
 
-At API startup, only records left `starting`, `running`, or `stopping` are reconciled.
+At API startup, records with a live runtime, including `pausing`, `paused`, and `resuming` are reconciled.
 
 | Evidence | Result |
 | --- | --- |
-| Compatible live shim for `running` / `stopping` | Reattach; finish a pending stop |
+| Compatible live shim for running/paused/pause-resume transition | Query the native VMM state; reattach without changing guest execution |
+| Compatible live shim for `stopping` | Reattach; finish the pending stop |
 | Live shim for `starting` | Stop it and record `error` |
 | Incompatible or mismatched shim | Stop the unit; record `stopped`, or `error` if stopping fails |
 | Clean or requested exit record | Record `stopped` |
@@ -82,7 +83,7 @@ At API startup, only records left `starting`, `running`, or `stopping` are recon
 
 VMs that are not reattached lose their runtime network state after their unit stops.
 Untracked VM units are logged and left running for operator inspection.
-Network failures on a reattached VM keep it `running` with `networkFailed` diagnostics.
+Network failures on a reattached VM keep its execution state with `networkFailed` diagnostics.
 [Network retry](../guides/operations.md#retry-vm-network-recovery) repairs host state without restarting VM processes.
 
 ## Persistent and runtime state

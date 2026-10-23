@@ -100,12 +100,12 @@ pub(super) fn task_definition(layout: &Layout, settings: &Runtime) -> Result<Str
         path: layout.managed_home.clone(),
         source,
     })?;
-    Ok(render_resource_task(
-        &user,
-        &cli,
-        &layout.managed_home,
-        settings,
-    ))
+    let task = render_resource_task(&user, &cli, &layout.managed_home, settings);
+    Ok(if layout.runtime().join("controlled").is_file() {
+        without_triggers(&task)
+    } else {
+        task
+    })
 }
 
 pub(super) fn register(layout: &Layout, task: &str) -> Result<PathBuf, Error> {
@@ -114,7 +114,16 @@ pub(super) fn register(layout: &Layout, task: &str) -> Result<PathBuf, Error> {
         path: layout.managed_home.clone(),
         source: io::Error::other(error.to_string()),
     })?;
-    let definition = layout.runtime().join("microManager-task.xml");
+    register_named(layout, TASK_NAME, "microManager-task.xml", task)
+}
+
+pub fn register_named(
+    layout: &Layout,
+    name: &str,
+    filename: &str,
+    task: &str,
+) -> Result<PathBuf, Error> {
+    let definition = layout.runtime().join(filename);
     fs::write(&definition, utf16_with_bom(task)).map_err(|source| Error::Io {
         action: "write the scheduled task definition",
         path: definition.clone(),
@@ -123,12 +132,29 @@ pub(super) fn register(layout: &Layout, task: &str) -> Result<PathBuf, Error> {
     schtasks(&[
         "/Create",
         "/TN",
-        TASK_NAME,
+        name,
         "/XML",
         &definition.to_string_lossy(),
         "/F",
     ])?;
     Ok(definition)
+}
+
+/// The controller owns all automatic starts. The guest holder has no triggers.
+pub fn install_controlled(layout: &Layout) -> Result<(), Error> {
+    let settings = Runtime::load(&layout.managed_home)?;
+    let task = without_triggers(&task_definition(layout, &settings)?);
+    register(layout, &task)?;
+    Ok(())
+}
+
+fn without_triggers(task: &str) -> String {
+    if task.contains("  <Triggers />") {
+        return task.to_owned();
+    }
+    let start = task.find("  <Triggers>").expect("triggers");
+    let end = task.find("  </Triggers>").expect("triggers") + "  </Triggers>".len();
+    format!("{}  <Triggers />{}", &task[..start], &task[end..])
 }
 
 pub fn uninstall(layout: &Layout) -> Result<(), Error> {
@@ -322,10 +348,18 @@ fn api_reachable() -> bool {
     if let Some(reachable) = wsl::fake::api_response() {
         return reachable;
     }
+    let controlled = Layout::from_process_env()
+        .ok()
+        .is_some_and(|layout| layout.runtime().join("controlled").is_file());
+    let url = if controlled {
+        "http://127.0.0.1:5524/api/host"
+    } else {
+        API_URL
+    };
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
-        .and_then(|client| client.get(API_URL).send())
+        .and_then(|client| client.get(url).send())
         .is_ok_and(|response| response.status().is_success())
 }
 
@@ -474,6 +508,25 @@ mod tests {
             "& 'C:\\Apps\\firecrab.exe' service resource-server --home 'C:\\User Data\\micromanager'"
         );
         assert!(task.contains("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>"));
+    }
+
+    #[test]
+    fn controlled_task_keeps_resource_management_without_automatic_wake() {
+        let task = without_triggers(&render_resource_task(
+            "dev",
+            Path::new("C:\\Apps\\firecrab.exe"),
+            Path::new("D:\\User Data\\micromanager"),
+            &Runtime::default(),
+        ));
+        assert!(task.contains("<Triggers />"));
+        assert!(!task.contains("<LogonTrigger>"));
+        assert!(!task.contains("<TimeTrigger>"));
+        assert_eq!(
+            resource_command(&task),
+            "& 'C:\\Apps\\firecrab.exe' service resource-server --home 'D:\\User Data\\micromanager'"
+        );
+        assert!(settings_enabled(&task));
+        assert_eq!(without_triggers(&task), task);
     }
 
     #[test]

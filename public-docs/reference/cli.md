@@ -76,6 +76,8 @@ firecrab image list
 firecrab network create --name app --subnet-cidr 172.31.20.0/24
 firecrab vm create --name app-1 --template alpine-3.24.1 --network NETWORK_ID
 firecrab vm start VM_ID
+firecrab vm pause VM_ID --json
+firecrab vm resume VM_ID --json
 ```
 
 Replace IDs with values returned by the previous commands.
@@ -207,3 +209,10 @@ Systemd unit files require an installer rerun; see [Operations](../guides/operat
 - [API](api.md)
 - [Operations](../guides/operations.md)
 - [Build from source](../../CONTRIBUTING.md#run-from-source)
+
+### Pause and resume
+
+`vm pause` keeps guest RAM and execution state in the same Firecracker process.
+`vm resume` continues it without a guest reboot. RAM remains allocated while paused.
+Stop discards that execution state. Host/VMM shutdown also loses it.
+Use [pause/resume operations](../guides/operations.md#pause-and-resume-a-microvm) for limits and recovery.

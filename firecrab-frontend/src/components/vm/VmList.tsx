@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Ellipsis, Loader2, Play, Square, SquareTerminal } from "lucide-react";
+import { Pause, Ellipsis, Loader2, Play, Square, SquareTerminal } from "lucide-react";
 import type { VmResponse, VmState } from "../../bindings";
 import { useI18n } from "../../i18n";
 import type { VmAction } from "../../model";
@@ -24,6 +24,9 @@ const DESCRIPTIONS: Record<VmState, [string, string]> = {
   created: ["The VM is created and has not been started yet.", "VM이 생성되었으며 아직 시작되지 않았습니다."],
   starting: ["The VM is starting. Open its details to follow startup progress.", "VM이 시작 중입니다. 상세보기에서 시작 진행 상황을 확인할 수 있습니다."],
   running: ["The VM is running.", "VM이 실행 중입니다."],
+  pausing: ["Waiting for pause confirmation. Retry pause/resume or stop if verification fails.", "일시정지 확인을 기다립니다. 확인에 실패하면 일시정지·재개 또는 중지를 다시 시도합니다."],
+  paused: ["Guest execution is paused. Memory stays allocated and guest requests cannot be served.", "실행을 일시정지했습니다. 메모리는 계속 점유하고 게스트 요청은 처리하지 못합니다."],
+  resuming: ["Waiting for resume confirmation. Retry pause/resume or stop if verification fails.", "재개 확인을 기다립니다. 확인에 실패하면 일시정지·재개 또는 중지를 다시 시도합니다."],
   stopping: ["The VM is stopping.", "VM이 종료 중입니다."],
   stopped: ["The VM is stopped.", "VM이 중지되어 있습니다."],
   error: ["The VM is in an error state. Open its details to inspect the logs.", "VM이 오류 상태입니다. 상세보기에서 로그를 확인할 수 있습니다."],
@@ -138,6 +141,8 @@ function Row({ vm, busy, selected, menu, onSelect, onToggleMenu, onCloseMenu, on
   const cpuHistory = usageSeries(vm.usageHistory, (sample) => sample.cpuUsagePercent);
   const lifecycle: { action: VmAction; label: string; icon: typeof Play } | null = running
     ? { action: "stop", label: t("Stop", "중지"), icon: Square }
+    : vm.state === "paused"
+      ? { action: "resume", label: t("Resume", "재개"), icon: Play }
     : availableActions(vm.state).includes("start")
       ? { action: "start", label: t("Start", "시작"), icon: Play }
       : null;
@@ -196,6 +201,11 @@ function Row({ vm, busy, selected, menu, onSelect, onToggleMenu, onCloseMenu, on
             {busy ? <Loader2 className="spin" aria-hidden="true" /> : <lifecycle.icon aria-hidden="true" />}
           </button>
         )}
+        {running && (
+          <button type="button" className="icon-btn" aria-label={t("Pause", "일시정지")} title={t("Pause", "일시정지")} disabled={busy} onClick={() => onAction(vm.id, "pause")}>
+            <Pause aria-hidden="true" />
+          </button>
+        )}
         {running ? (
           <a
             className="icon-btn"
@@ -243,7 +253,7 @@ function Row({ vm, busy, selected, menu, onSelect, onToggleMenu, onCloseMenu, on
               </li>
             )}
             <li role="none">
-              <button type="button" role="menuitem" className="options-menu-item" onClick={onOpenSsh}>
+              <button type="button" role="menuitem" className="options-menu-item" disabled={["paused", "pausing", "resuming"].includes(vm.state)} onClick={onOpenSsh}>
                 {t("SSH connect", "SSH 연결")}
               </button>
             </li>
@@ -259,7 +269,7 @@ function Row({ vm, busy, selected, menu, onSelect, onToggleMenu, onCloseMenu, on
                     onAction(vm.id, action);
                   }}
                 >
-                  {action}
+                  {action === "pause" ? t("Pause", "일시정지") : action === "resume" ? t("Resume", "재개") : action}
                 </button>
               </li>
             ))}
