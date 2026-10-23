@@ -546,16 +546,36 @@ fn expected_rule_miss(bin: &str, args: &[&str], output: &Output) -> bool {
     }
 }
 
+/// Parallel test children can inherit a stub's writer until exec closes it.
+/// Bound that test-only race, as the Pipe runner does; installed tools fail fast.
+async fn command_output(command: &mut Command) -> io::Result<Output> {
+    let mut attempt = 0;
+    loop {
+        match command.output().await {
+            Err(error)
+                if cfg!(test)
+                    && error.kind() == io::ErrorKind::ExecutableFileBusy
+                    && attempt < 8 =>
+            {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(10 * attempt)).await;
+            }
+            output => return output,
+        }
+    }
+}
+
 async fn run_tool(bin: &str, args: &[&str]) -> bool {
     let mut last_error = None;
     for path in tool_search_order(bin) {
-        let output = Command::new(&path)
-            .args(args)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .output()
-            .await;
+        let output = command_output(
+            Command::new(&path)
+                .args(args)
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped()),
+        )
+        .await;
         match output {
             Ok(output) => {
                 if expected_rule_miss(bin, args, &output) {
@@ -591,13 +611,14 @@ async fn output_tool(bin: &str, args: &[&str]) -> Option<String> {
 async fn output_tool_env(bin: &str, args: &[&str], envs: &[(&str, &str)]) -> Option<String> {
     let mut last_error = None;
     for path in tool_search_order(bin) {
-        let output = match Command::new(&path)
-            .args(args)
-            .envs(envs.iter().copied())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
+        let output = match command_output(
+            Command::new(&path)
+                .args(args)
+                .envs(envs.iter().copied())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .await
         {
             Ok(output) => output,
             Err(error) => {
@@ -652,6 +673,75 @@ mod tests {
         fs::write(&path, format!("#!/bin/sh\n{script}\n")).expect("write tool");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable tool");
         path.to_str().expect("tool path").to_owned()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_busy_tool_runs_once_after_its_writer_closes() {
+        for capture_output in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let tool = fake_tool(
+                dir.path(),
+                "firewall-tool",
+                "printf 'run\\n' >> \"${0%/*}/runs\"; printf '%s' \"$LC_ALL\"",
+            );
+            let writer = fs::OpenOptions::new().write(true).open(&tool).unwrap();
+            assert_eq!(
+                std::process::Command::new(&tool)
+                    .status()
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::ExecutableFileBusy
+            );
+            let releaser = std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                drop(writer);
+            });
+            let (capture, subscriber) = log_capture();
+            async {
+                if capture_output {
+                    assert_eq!(
+                        output_tool_env(&tool, &["list"], &[("LC_ALL", "C")]).await,
+                        Some("C".to_owned())
+                    );
+                } else {
+                    assert!(run_tool(&tool, &["list"]).await);
+                }
+            }
+            .with_subscriber(subscriber)
+            .await;
+            releaser.join().unwrap();
+            assert_eq!(fs::read(dir.path().join("runs")).unwrap(), b"run\n");
+            assert_eq!(fs::read_to_string(capture.path()).unwrap(), "");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_tool_that_stays_busy_fails_with_the_original_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = fake_tool(dir.path(), "firewall-tool", "touch \"${0%/*}/runs\"");
+        let _writer = fs::OpenOptions::new().write(true).open(&tool).unwrap();
+        let (capture, subscriber) = log_capture();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            async {
+                assert!(!run_tool(&tool, &["list"]).await);
+                assert_eq!(output_tool(&tool, &["list"]).await, None);
+            }
+            .with_subscriber(subscriber),
+        )
+        .await
+        .expect("busy retries must be bounded");
+        assert!(!dir.path().join("runs").exists());
+        let logged = fs::read_to_string(capture.path()).unwrap();
+        assert_eq!(
+            logged.matches("host firewall tool unavailable").count(),
+            2,
+            "{logged}"
+        );
+        assert_eq!(logged.matches("os error 26").count(), 2, "{logged}");
+        assert!(!logged.contains("os error 2)"), "{logged}");
     }
 
     #[tokio::test]
