@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, time::Duration};
 use uuid::Uuid;
 
+const BROKER_RAM_MIB: u32 = 2048;
+
 #[derive(Clone, Deserialize, Serialize)]
 /// Owned broker VM and its private generated configuration.
 pub struct Broker {
@@ -108,9 +110,9 @@ pub fn preflight(state: &AppState, development: bool) -> Result<(), Error> {
         .values()
         .map(|v| u64::from(v.ram))
         .sum();
-    if total < reserved + count * 1536 + 1024 {
+    if total < reserved + count * u64::from(BROKER_RAM_MIB) + 1024 {
         return Err(Error::Invalid(
-            "Managed Kafka needs 1536 MiB per broker plus 1024 MiB host headroom; increase host capacity or connect an existing Kafka cluster",
+            "Managed Kafka needs 2048 MiB per broker plus 1024 MiB host headroom; increase host capacity or connect an existing Kafka cluster",
         ));
     }
     state.ensure_storage_capacity(state.storage.default_id(),count*10*1024*1024*1024).map_err(|_|Error::Invalid("Managed Kafka needs 10 GiB of durable storage per broker; increase storage or connect an existing cluster"))?;
@@ -121,9 +123,12 @@ pub fn preflight(state: &AppState, development: bool) -> Result<(), Error> {
 pub fn queue(state: AppState, cluster: Cluster) {
     tokio::spawn(async move {
         let mut cluster = cluster;
-        if let Err(_error) = start(&state, &mut cluster).await {
+        if let Err(error) = start(&state, &mut cluster).await {
+            tracing::warn!(%error, "Managed Kafka setup failed");
             cluster.phase = "failed".into();
-            cluster.error=Some("Kafka setup failed. Owned broker disks are retained. Retry setup after checking capacity, image import and networking.".into());
+            cluster.error = Some(format!(
+                "Kafka setup failed: {error}. Owned broker disks are retained. Retry setup after checking capacity, image import and networking."
+            ));
             let _ = persist(&state, &cluster);
             return;
         }
@@ -303,7 +308,7 @@ async fn start(state: &AppState, cluster: &mut Cluster) -> Result<(), Error> {
                     cluster.brokers.len() + 1
                 ),
                 template: alias.clone(),
-                ram: 1536,
+                ram: BROKER_RAM_MIB,
                 cpu: 1,
                 disk_gb: 10,
                 egress_policy: EgressPolicy::Isolated,
@@ -516,6 +521,10 @@ pub fn recover(state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn broker_memory_satisfies_vm_creation_contract() {
+        assert!(vms::is_valid_ram_mib(BROKER_RAM_MIB));
+    }
     #[tokio::test]
     async fn pinned_local_image_recovers_without_registry_access() {
         use crate::templates::{TemplateRegistry, TemplateSpec};

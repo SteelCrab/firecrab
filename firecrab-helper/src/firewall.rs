@@ -580,7 +580,6 @@ fn render_apply_ruleset(
     for (_, oif) in &egress6 {
         nat::validate_uplink(oif)?;
     }
-    let bridges = bridge_names(micro_networks);
     let subnets = subnet_cidrs(micro_networks);
     let subnets6 = subnet_cidrs6(micro_networks);
     let postrouting = nat::render_postrouting_chain(&subnets, &egress, &egress6);
@@ -588,11 +587,21 @@ fn render_apply_ruleset(
     // One dispatch pair per bridge: the per-VM verdict maps below are keyed
     // by leased IP (globally unique across networks, since their subnets
     // cannot overlap), so only the entry rules need to know about bridges.
-    let forward_dispatch: String = bridges
+    let forward_dispatch: String = micro_networks
         .iter()
-        .map(|bridge| {
+        .map(|network| {
+            let bridge = network.bridge_name();
+            let subnet = network.subnet_cidr();
+            // br_netfilter also sends switched frames through this hook.
+            // Keep the same-network path before routed-network isolation.
+            let local6 = network.ipv6.as_ref().map(|ipv6| {
+                let subnet = ipv6.subnet_cidr();
+                format!("\t\tiifname \"{bridge}\" oifname \"{bridge}\" ip6 saddr {subnet} ip6 daddr {subnet} accept\n")
+            }).unwrap_or_default();
             format!(
-                "\t\tiifname \"{bridge}\" jump firecrab_egress\n\
+                "\t\tiifname \"{bridge}\" oifname \"{bridge}\" ip saddr {subnet} ip daddr {subnet} accept\n\
+                 {local6}\
+                 \t\tiifname \"{bridge}\" jump firecrab_egress\n\
                  \t\toifname \"{bridge}\" jump firecrab_ingress\n"
             )
         })
@@ -1438,13 +1447,21 @@ mod tests {
 
     #[test]
     fn global_ruleset_allows_east_west_within_a_micro_network() {
-        let ruleset = render_apply_ruleset("eth0", &[]).unwrap();
-        // TAPs in the same MicroNetwork share one Linux bridge, so leaving
-        // bridge forwarding at its accept default permits their L2 traffic.
-        // Different MicroNetworks use different bridges and their routed
-        // traffic is denied by firecrab_egress above.
-        assert!(!ruleset.contains("iifname \"fct*\" oifname \"fct*\" drop"));
-        assert!(!ruleset.contains("type filter hook forward priority -200"));
+        let first = sample_network(0x1234, "172.31.0.1", 24);
+        let second = sample_network(0x5678, "172.32.0.1", 24);
+        let bridge = first.bridge_name();
+        let ruleset = render_apply_ruleset("eth0", &[first, second]).unwrap();
+        let local = format!(
+            "iifname \"{bridge}\" oifname \"{bridge}\" ip saddr 172.31.0.0/24 ip daddr 172.31.0.0/24 accept"
+        );
+        assert!(
+            ruleset.find(&local).unwrap()
+                < ruleset
+                    .find(&format!("iifname \"{bridge}\" jump firecrab_egress"))
+                    .unwrap()
+        );
+        assert!(ruleset.contains("172.31.0.0/24, 172.32.0.0/24 } drop"));
+        assert!(!ruleset.contains("ip saddr 172.31.0.0/24 ip daddr 172.32.0.0/24 accept"));
     }
 
     #[test]

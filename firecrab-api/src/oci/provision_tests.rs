@@ -616,6 +616,62 @@ fn the_boot_script_exposes_dev_fd_for_process_substitution() {
     );
 }
 
+#[test]
+fn image_services_start_while_optional_package_install_waits() {
+    let directory = tempdir().unwrap();
+    let root = directory.path();
+    let services = root.join("services");
+    std::fs::create_dir(&services).unwrap();
+    let app = services.join("app");
+    std::fs::write(&app, "#!/bin/sh\n: > \"$QA_APP_READY\"\n").unwrap();
+    std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let toolbox = root.join("bb");
+    std::fs::write(&toolbox, "#!/bin/sh\nexec \"$@\"\n").unwrap();
+    std::fs::set_permissions(&toolbox, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let fastfetch = root.join("fastfetch");
+    std::fs::write(&fastfetch, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&fastfetch, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let boot = provision::boot_script();
+    let worker = &boot[boot.find("# The image carries").unwrap()..];
+    let script = worker
+        .replace(
+            provision::BASE_PACKAGE_INSTALL,
+            r#"
+attempt=0
+while [ "$attempt" -lt 200 ]; do
+  if [ -f "$QA_APP_READY" ]; then
+    : > "$QA_PACKAGE_SAW_APP"
+    break
+  fi
+  sleep 0.01
+  attempt=$((attempt + 1))
+done
+"#,
+        )
+        .replace("/etc/firecrab/services.d", services.to_str().unwrap())
+        .replace("/run/firecrab", root.join("run").to_str().unwrap())
+        .replace("/usr/bin/fastfetch", fastfetch.to_str().unwrap())
+        .replace("/dev/console", root.join("console").to_str().unwrap());
+    let ready = root.join("app-ready");
+    let observed = root.join("package-saw-app");
+    let output = std::process::Command::new("sh")
+        .args(["-c", &script])
+        .env("BB", &toolbox)
+        .env("QA_APP_READY", &ready)
+        .env("QA_PACKAGE_SAW_APP", &observed)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !observed.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        observed.exists(),
+        "Application startup waited for optional packages"
+    );
+}
+
 #[tokio::test]
 async fn inittab_commands_avoid_the_metacharacters_busybox_init_reroutes() {
     let directory = tempdir().expect("create fixture directory");

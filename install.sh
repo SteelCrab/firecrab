@@ -397,6 +397,7 @@ ensure_runtime_deps() {
             || warn "SELinux is on but semanage is missing; the services will be confined to init_t"
     fi
     ensure mkfs.ext4 e2fsprogs || failed=1
+    ensure fakeroot fakeroot || failed=1
     ensure curl curl     || failed=1
     ensure find findutils || failed=1
     ensure tar tar       || failed=1

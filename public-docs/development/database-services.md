@@ -50,7 +50,7 @@ SQL numeric columns are represented as strings in event row images to preserve i
 
 ## Kafka and failure recovery
 
-Managed Kafka uses the official Apache image pinned to its resolved digest. The normal profile creates three broker/controller MicroVMs with mutual TLS, replication factor 3, minimum ISR 2, and unclean leader election disabled. Each broker uses 1536 MiB RAM and a persistent 10 GiB VM disk. Stop/start reuses that disk. Startup recovery and health supervision restart owned brokers.
+Managed Kafka uses the official Apache image pinned to its resolved digest. The normal profile creates three broker/controller MicroVMs with mutual TLS, replication factor 3, minimum ISR 2, and unclean leader election disabled. Each broker uses 2048 MiB RAM and a persistent 10 GiB VM disk. Stop/start reuses that disk. Startup recovery and health supervision restart owned brokers.
 
 All local brokers share one host. Host failover needs an external Kafka cluster. An explicit development profile uses one broker and cannot tolerate loss of that broker's data. Capacity checks reject insufficient memory or disk space before setup.
 

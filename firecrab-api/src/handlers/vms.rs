@@ -2130,7 +2130,7 @@ const MAX_RAM_MIB: u32 = 32_768;
 /// RAM is restricted to powers of two (128, 256, 512, ... 32768 MiB),
 /// matching how cloud instance sizes are usually picked rather than an
 /// arbitrary MiB value.
-fn is_valid_ram_mib(ram: u32) -> bool {
+pub(crate) fn is_valid_ram_mib(ram: u32) -> bool {
     (MIN_RAM_MIB..=MAX_RAM_MIB).contains(&ram) && ram.is_power_of_two()
 }
 
