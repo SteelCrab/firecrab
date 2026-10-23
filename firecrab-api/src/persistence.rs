@@ -26,6 +26,7 @@ mod pipe_databases;
 mod registries;
 mod schedules;
 mod security_groups;
+mod stacks;
 pub use registries::RegistryLogin;
 pub(crate) use schedules::ScheduleMutation;
 
@@ -476,6 +477,21 @@ pub enum PersistenceError {
     /// A saved service or VM still references this policy.
     #[error("security group is still referenced")]
     SecurityGroupInUse,
+    /// The requested stack registration does not exist.
+    #[error("stack is not registered")]
+    MissingStack,
+    /// Bindings must be explicitly released before removing registration metadata.
+    #[error("stack still has ownership bindings")]
+    StackNotEmpty,
+    /// A binding would overwrite an existing ownership assignment.
+    #[error("stack ownership conflicts with an existing binding")]
+    StackConflict,
+    /// The ownership set cannot exceed the manifest resource limit.
+    #[error("stack ownership is limited to 256 bindings")]
+    StackBindingLimit,
+    /// An explicit adoption request targets a missing or protected resource.
+    #[error("resource is missing or cannot be owned by a stack")]
+    InvalidStackResource,
     #[error("MicroService name {name} is already registered")]
     DuplicateMicroServiceName { name: String },
     /// Couldn't create the database's parent directory.
@@ -706,6 +722,7 @@ impl Store {
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
+        conn.execute_batch(stacks::SCHEMA_SQL)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;

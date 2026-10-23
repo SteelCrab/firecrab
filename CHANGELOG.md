@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- MicroServices inject PipeSecrets into every replica using an encrypted
+  deployment snapshot that survives API and VM restarts. Missing or invalid
+  references fail before VM creation. Values stay out of public VM/deployment
+  records and SQLite; guest environment files are root-only. Stop and failed
+  deployment cleanup remove snapshots after deleting owned replicas.
+
 - MicroService domains connect healthy replicas to PipeIngress automatically,
   without host ports or manual routes. The dashboard shows the domain and DNS
   setup guidance, and the CLI accepts domain deployments without `--host-port`.
@@ -41,6 +47,19 @@ Entries land here as work merges, and move under the next version heading when t
   resource limits, overlapping subnets and service ports, and pinned service
   image syntax. Validation reports omit configuration values. Applying resources
   and continuous Git synchronization remain follow-up work for #437.
+
+- Host-local stack registration and UUID ownership bindings survive API restarts.
+  `firecrab stack register/list/status/bind/unbind` manages metadata without
+  changing resources. `firecrab stack plan --file YAML [--json]` reports a
+  read-only configuration diff, blocks implicit adoption and conflicting ownership,
+  and retains removed declarations. Field values stay out of plans. Actual apply
+  and Git polling remain follow-up work for #437.
+  Empty registrations can be removed with `stack delete NAME --id STACK_UUID`;
+  bound resources and newer registrations with the same name are protected.
+
+- An experimental Terraform REST example provisions a network, stopped VM and
+  saved service configuration through the public API. It includes a provider
+  lock file and explicit response-field exclusions that preserve drift detection.
 
 - Warm MicroVM pools keep booted, never-used VMs ready to lease. A pool pins an
   image version and VM spec, keeps `minReady` members booted within `maxSize`,

@@ -53,7 +53,7 @@ enum Command {
     },
     /// Serve local MCP tools over stdin/stdout using the selected REST host.
     Mcp,
-    /// Validate a declarative stack file locally, without connecting to a host.
+    /// Validate stack files, manage host ownership and preview changes without applying them.
     Stack {
         #[command(subcommand)]
         command: stack::Command,
@@ -164,7 +164,14 @@ fn run(cli: Cli) -> i32 {
             pipe_ai::run(client, command)
         }),
         Command::Mcp => run_with_api_client(api.as_deref(), host.as_deref(), mcp::run),
-        Command::Stack { command } => stack::run(command),
+        Command::Stack {
+            command: stack::Command::Validate { file, json },
+        } => stack::validate_file(file, json),
+        Command::Stack { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                stack::run_remote(client, command)
+            })
+        }
         Command::Schedule { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 schedule::run(client, command)

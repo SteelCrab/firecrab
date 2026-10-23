@@ -23,6 +23,14 @@ pub(super) const CREATE_DEPLOYMENTS_SQL: &str =
 impl Store {
     /// Pausing a replica independently would make service health/replica control replace it.
     pub fn vm_has_service_owner(&self, id: Uuid) -> Result<bool, PersistenceError> {
+        Ok(self.service_deployment_for_vm(id)?.is_some())
+    }
+
+    /// Find the persisted deployment that owns a replica, including during boot.
+    pub fn service_deployment_for_vm(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<MicroServiceDeployment>, PersistenceError> {
         let conn = self.lock();
         let mut statement = conn.prepare("SELECT deployment FROM micro_service_deployments")?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
@@ -37,10 +45,10 @@ impl Store {
                 .iter()
                 .any(|instance| instance.vm_id == id)
             {
-                return Ok(true);
+                return Ok(Some(deployment));
             }
         }
-        Ok(false)
+        Ok(None)
     }
 
     /// List saved configurations in stable name and identifier order.
