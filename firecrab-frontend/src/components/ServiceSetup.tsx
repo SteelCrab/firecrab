@@ -117,7 +117,7 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
   };
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (saving || groups === null || groupError) return;
+    if (saving || (step >= 1 && (groups === null || groupError))) return;
     if (!event.currentTarget.reportValidity()) return;
     if (step === 1 && (!spec.healthPath.startsWith("/") || spec.healthPath.startsWith("//") || /[^\x21-\x7e]|[?#\\]/.test(spec.healthPath))) {
       showErrors({ healthPath: t("Start with one / and omit spaces, query strings and fragments.", "/로 시작하는 경로를 입력한다. 공백, 쿼리 문자열, #은 제외한다.") });

@@ -756,6 +756,30 @@ test.describe("MicroService configuration @dashboard", () => {
     expect(writes).toHaveLength(0);
   });
 
+  test("keeps App usable when security groups fail and retries from Connection", async ({ page }) => {
+    const writes = await openServices(page);
+    let unavailable = true;
+    expectedConsoleErrors.get(page)?.add("Failed to load resource: the server responded with a status of 503 (Service Unavailable)");
+    await page.route("**/api/security-groups", route => unavailable
+      ? route.fulfill({ status: 503, json: { error: { message: "Security groups unavailable" } } })
+      : route.fulfill({ json: [{ id: SECRET, name: "orders-policy", microNetworkId: ID, rules: [] }] }));
+    await page.getByRole("button", { name: "New MicroService", exact: true }).click();
+    await page.getByLabel("Name", { exact: true }).fill("web");
+    await selectApp(page);
+    await next(page);
+    await expect(page.getByLabel("Security group", { exact: true })).toBeDisabled();
+    await expect(page.getByText("Security groups unavailable", { exact: true })).toBeVisible();
+    unavailable = false;
+    await page.getByRole("button", { name: "Retry loading security groups", exact: true }).click();
+    await expect(page.getByLabel("Security group", { exact: true })).toBeEnabled();
+    await page.getByLabel("Security group", { exact: true }).selectOption(SECRET);
+    await next(page);
+    await next(page);
+    await page.getByRole("button", { name: "Save configuration", exact: true }).click();
+    await expect.poll(() => writes.length).toBe(1);
+    expect(writes[0].body.securityGroupId).toBe(SECRET);
+  });
+
   test("explains unsupported deployment settings and provides a path to fix them", async ({ page }) => {
     await openServices(page, [INITIAL]);
     await page.getByRole("button", { name: "Run orders", exact: true }).click();

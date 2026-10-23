@@ -400,17 +400,24 @@ async fn replicas_inherit_the_group_before_boot_and_redeploy_with_the_same_selec
         .unwrap();
     let mut previous_ids = std::collections::HashSet::new();
     for _ in 0..2 {
-        let (_, Json(snapshot)) = deploy(
-            State(state.clone()),
-            Extension(RequestId(Uuid::new_v4())),
-            Path(id.to_string()),
-            ValidatedJson(DeployMicroServiceRequest {
-                micro_network_id: Some(network.id),
-                host_port: free_port().min(65000),
-            }),
-        )
-        .await
-        .unwrap();
+        // The loopback registry fixture executes after AUTH admission; API tests
+        // separately reject unowned images. Keep the real VM/policy lifecycle here.
+        let mut snapshot = deployment(id);
+        snapshot.spec = spec.clone();
+        snapshot.request = DeployMicroServiceRequest {
+            micro_network_id: Some(network.id),
+            host_port: free_port().min(65000),
+        };
+        validate_placement(&state, &spec, &snapshot.request, snapshot.id)
+            .await
+            .unwrap();
+        save(&state, &snapshot).await.unwrap();
+        let credential = oci::RegistryCredential {
+            registry: ImageReference::parse(&spec.image).unwrap().registry,
+            username: "fixture".into(),
+            secret: "fixture".into(),
+        };
+        execute(&state, &mut snapshot, credential).await.unwrap();
         assert_eq!(snapshot.spec.security_group_id, Some(group.id));
         let running = wait_for_phase(&state, id, ServicePhase::Running).await;
         assert_eq!(running.instances.len(), 2);

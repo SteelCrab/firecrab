@@ -3,7 +3,7 @@ use core::assert_matches;
 
 use std::collections::BTreeMap;
 use std::io::Cursor;
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
 use tar::{Builder, EntryType, Header};
 use tempfile::{TempDir, tempdir};
@@ -1750,9 +1750,13 @@ fn runtime_preparation_recreates_image_directories_after_each_tmpfs_reset() {
     let root = directory.path().join("guest");
     std::fs::create_dir_all(root.join("usr/lib/tmpfiles.d")).unwrap();
     std::fs::create_dir_all(root.join("run")).unwrap();
+    let owner = std::fs::metadata(&root).unwrap();
     std::fs::write(
         root.join("usr/lib/tmpfiles.d/database.conf"),
-        "d /run/mysqld 0750 - - -\nd /var/lib/untouched 0755 - - -\n",
+        format!(
+            "d /run/mysqld 0750 {} {} -\nd /var/lib/untouched 0755 {} {} -\n",
+            owner.uid(), owner.gid(), owner.uid(), owner.gid()
+        ),
     )
     .unwrap();
     let bin = directory.path().join("bin");
