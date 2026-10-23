@@ -61,6 +61,13 @@ impl PkgManager {
     /// One generic name can map to two packages, so this returns a list.
     pub fn packages_for<'a>(&self, generic: &'a str) -> Vec<&'a str> {
         match (self, generic) {
+            (Self::AptGet, "mysql-client") => vec!["mariadb-client"],
+            (Self::Dnf, "postgresql-client") => vec!["postgresql"],
+            (Self::Dnf, "mysql-client") => vec!["mariadb"],
+            (Self::Pacman, "postgresql-client") => vec!["postgresql-libs"],
+            (Self::Pacman, "mysql-client") => vec!["mariadb-clients"],
+            (Self::Zypper, "postgresql-client") => vec!["postgresql"],
+            (Self::Zypper, "mysql-client") => vec!["mariadb-client"],
             (Self::Dnf, "iproute2") => vec!["iproute"],
             // dhcp_release ships separately on Debian/Alpine; RHEL has no such package.
             (Self::Dnf, "dnsmasq-utils") => vec!["dnsmasq"],

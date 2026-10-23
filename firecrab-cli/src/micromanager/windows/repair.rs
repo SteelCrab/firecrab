@@ -132,7 +132,7 @@ mod tests {
 
     const ENABLED: &str = "<Task><Settings><Enabled>true</Enabled></Settings></Task>";
     const DISABLED: &str = "<Task><Settings><Enabled>false</Enabled></Settings></Task>";
-    const PROVISIONED: &str = "schema=1\nkvm=usable\nfirecrab_api=active\nfirecrab_net_helper=active\nnested_firecracker=passed\n";
+    const PROVISIONED: &str = "schema=3\nkvm=usable\nfirecrab_api=active\nfirecrab_net_helper=active\nnested_firecracker=passed\n";
     const READY: &str = "firecrab-api=active\nfirecrab-helper=active\nip=172.20.1.5\n";
 
     fn answer(mut handler: impl FnMut(&str) -> fake::Reply + 'static) -> fake::Guard {

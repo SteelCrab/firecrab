@@ -947,8 +947,19 @@ fi
 
 echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
 
-# Package configuration can take minutes on a small guest. Let init start
-# the console while this worker installs packages, then starts services.
+# The image carries its application dependencies. Start it before optional
+# operational tools, which may be unavailable on an isolated network.
+$BB mkdir -p /run/firecrab
+for service in {services}/*; do
+  [ -x "$service" ] || continue
+  name=${{service##*/}}
+  $BB setsid "$service" >/dev/console 2>&1 &
+  echo $! > /run/firecrab/$name.pid
+  [ "$name" = app ] && echo $! > /run/firecrab-app.pid
+done
+
+# Package configuration can take minutes on a small guest. Keep it separate
+# from application startup and the interactive console.
 (
 {base_packages}
 
@@ -965,15 +976,6 @@ if [ ! -x /usr/bin/fastfetch ]; then
   fi
 fi
 
-# A later import stage translates the image entrypoint into a program here.
-$BB mkdir -p /run/firecrab
-for service in {services}/*; do
-  [ -x "$service" ] || continue
-  name=${{service##*/}}
-  $BB setsid "$service" >/dev/console 2>&1 &
-  echo $! > /run/firecrab/$name.pid
-  [ "$name" = app ] && echo $! > /run/firecrab-app.pid
-done
 ) </dev/null >/dev/console 2>&1 &
 exit 0
 "#,

@@ -766,6 +766,24 @@ pub async fn update_vm(
         None
     };
     let _guard = state.lock_vm(id).await;
+    if req.env.is_some()
+        && (state
+            .store
+            .database_vm_service(id)
+            .map_err(|_| AppError::internal(request_id.0))?
+            .is_some()
+            || state
+                .store
+                .managed_database_kafka()
+                .map_err(|_| AppError::internal(request_id.0))?
+                .is_some_and(|c| c.brokers.iter().any(|b| b.id == id)))
+    {
+        return Err(AppError::conflict(
+            "service_environment_managed",
+            "Edit this service's configuration and redeploy to update its environment",
+            request_id.0,
+        ));
+    }
     let _network_guard = state.network_mutations.lock().await;
     if let Some(selection) = req.security_group_id {
         crate::service_runtime::ensure_vm_policy_editable(&state, id, request_id.0).await?;
@@ -1171,6 +1189,18 @@ pub async fn delete_vm(
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
     let _guard = state.lock_vm(id).await;
+    if state
+        .store
+        .managed_database_kafka()
+        .map_err(|_| AppError::internal(request_id.0))?
+        .is_some_and(|c| c.brokers.iter().any(|b| b.id == id))
+    {
+        return Err(AppError::conflict(
+            "database_broker_in_use",
+            "This VM stores managed Kafka data and cannot be deleted through the VM API",
+            request_id.0,
+        ));
+    }
     let vm = state
         .vms
         .lock()
@@ -1436,6 +1466,11 @@ async fn finish_run_start(
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
         rootfs::specialize_guest(&rootfs, record.id, &record.env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
+        let (private_env, private_files) =
+            crate::pipe_databases::bindings::guest_inputs(&store_for_shells, record.id)
+                .map_err(|_| "Could not load private database bindings".to_owned())?;
+        rootfs::apply_private_service_inputs(&rootfs, &record.env, &private_env, &private_files)
+            .map_err(|_| "Could not install private database bindings".to_owned())?;
         crate::guest_ssh::install_on_guest(&rootfs, &paths)
             .map_err(|error| format!("guest SSH install failed: {error}"))?;
         if let Some(ref program) = guest_fastfetch {
@@ -2298,7 +2333,7 @@ const MAX_RAM_MIB: u32 = 32_768;
 /// RAM is restricted to powers of two (128, 256, 512, ... 32768 MiB),
 /// matching how cloud instance sizes are usually picked rather than an
 /// arbitrary MiB value.
-fn is_valid_ram_mib(ram: u32) -> bool {
+pub(crate) fn is_valid_ram_mib(ram: u32) -> bool {
     (MIN_RAM_MIB..=MAX_RAM_MIB).contains(&ram) && ram.is_power_of_two()
 }
 

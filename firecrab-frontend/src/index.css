@@ -905,14 +905,62 @@ table.image-table tbody tr.is-selected td {
 .pipe-nginx-editor h3 { margin: 0; font-size: .85rem; font-weight: 600; }
 .pipe-nginx-editor .pipe-description { margin: .35rem 0 0; }
 .pipe-controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; margin-top: 1rem; }
-.pipe-database-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; margin-block: 1rem; }
+.pipe-databases { min-width: 0; }
+.pipe-databases > .panel-title { flex-wrap: wrap; }
+.pipe-database-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin-block: 18px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); }
+.panel h3.pipe-database-form-title { margin: 0; }
+.pipe-database-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .pipe-database-form .pipe-row-actions { flex-wrap: wrap; }
-.pipe-database-form textarea { width: 100%; min-height: 5rem; resize: vertical; padding: .6rem; color: var(--text-2); background: var(--bg); border: 1px solid var(--text-4); border-radius: 4px; font-family: var(--mono); font-size: .8rem; }
-.pipe-database-browser { margin-top: 1.25rem; border-top: 1px solid var(--text-4); padding-top: 1rem; }
+.pipe-database-form .poll-note { margin: 0; line-height: 1.55; }
+.pipe-database-uri { position: relative; }
+.pipe-database-uri input { padding-right: 38px; font-family: var(--mono); font-size: 12px; }
+.pipe-database-uri > .icon-btn { position: absolute; inset: 1px 2px auto auto; }
+.pipe-database-security { min-width: 0; padding-block: 12px; border-block: 1px solid var(--border); }
+.pipe-database-security > summary { width: fit-content; color: var(--text-2); font-size: 12px; font-weight: 500; cursor: pointer; }
+.pipe-database-security[open] > summary { margin-bottom: 14px; }
+.pipe-database-security textarea { resize: vertical; font: 12px/1.5 var(--mono); }
+.pipe-database-security > .poll-note { margin-top: 10px; }
+.pipe-database-security section { margin-block: 18px; }
+.pipe-database-security section + section { padding-top: 14px; border-top: 1px solid var(--border); }
+.pipe-database-security form { display: grid; gap: 12px; margin-block: 14px; }
+.pipe-database-security form > .btn { justify-self: start; }
+.pipe-database-binding { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding-block: 12px; border-bottom: 1px solid var(--border); font-size: 12px; overflow-wrap: anywhere; }
+.pipe-database-binding small { display: block; margin-top: 4px; color: var(--text-3); }
+.pipe-database-binding .pipe-row-actions { flex-wrap: wrap; }
+.pipe-database-write-option { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.pipe-database-write-option input { width: auto; }
+.pipe-database-table td { max-width: 22rem; overflow-wrap: anywhere; }
+.pipe-database-table .actions { width: 1%; }
+.pipe-database-table .actions .pipe-row-actions { justify-content: end; flex-wrap: nowrap; }
+.pipe-database-browser { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+.pipe-database-browser-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.panel .pipe-database-browser-heading h3 { margin: 0; overflow-wrap: anywhere; }
+.pipe-database-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.pipe-database-toolbar .field { flex: 1 1 12rem; max-width: 28rem; }
+.pipe-database-browser > .poll-note { margin: 12px 0; line-height: 1.55; }
+table.pipe-database-preview { font-family: var(--mono); font-size: 12px; }
 .pipe-database-preview td { max-width: 24rem; overflow-wrap: anywhere; white-space: pre-wrap; vertical-align: top; }
 .pipe-database-cell { min-width: 8rem; max-width: 24rem; max-height: 8rem; overflow: auto; }
-.pipe-database-preview th small { display: block; font-size: .65rem; font-weight: normal; color: var(--text-4); }
-.pipe-database-null { color: var(--text-4); font-style: italic; }
+.pipe-database-preview th small { display: block; font-size: 10px; font-weight: 400; color: var(--text-3); }
+.pipe-database-null { color: var(--text-3); font-style: italic; }
+.pipe-database-pagination { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 12px; color: var(--text-3); font-size: 12px; }
+@media (max-width: 560px) {
+  .pipe-database-form { padding: 12px; }
+  .pipe-database-fields { grid-template-columns: minmax(0, 1fr); }
+  .pipe-database-toolbar .field { flex-basis: 100%; max-width: none; }
+  .pipe-database-table thead { display: none; }
+  .pipe-database-table tbody { display: grid; }
+  .pipe-database-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; padding: 12px; border-bottom: 1px solid var(--border); }
+  .pipe-database-table tr:last-child { border-bottom: 0; }
+  .pipe-database-table tr.selected { background: var(--bg-hover); box-shadow: inset 2px 0 0 var(--accent); }
+  .pipe-database-table td { grid-column: 1 / -1; min-width: 0; max-width: none; height: auto; padding: 0; border: 0; }
+  .pipe-database-table td.name { grid-column: 1; align-self: center; }
+  .pipe-database-table tbody tr.selected > td { background: none; box-shadow: none; }
+  .pipe-database-table tbody tr.selected > td:first-child { box-shadow: none; }
+  .pipe-database-table td[data-label] { color: var(--text-2); font-size: 12px; }
+  .pipe-database-table td[data-label]::before { content: attr(data-label) ": "; color: var(--text-3); }
+  .pipe-database-table td.actions { grid-column: 2; grid-row: 1; width: auto; }
+}
 
 .pipe-description { margin: 0 0 1rem; color: var(--text); font-size: .85rem; line-height: 1.6; }
 .cloudflare-help { margin-top: 1rem; }
@@ -1126,6 +1174,7 @@ table.image-table tbody tr.is-selected td {
   .pipe-auth-connections .pipe-auth-account, .pipe-auth-connections .pipe-auth-services { display: none; }
 }
 
+.database-job-error { display: block; max-width: 28rem; white-space: normal; color: var(--text-3); line-height: 1.5; }
 .service-domain-panel {
   margin-block: 1rem;
   padding: 1rem;

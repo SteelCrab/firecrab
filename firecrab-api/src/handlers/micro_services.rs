@@ -95,6 +95,25 @@ pub async fn delete(
     let id = parse_id(&id, request_id.0)?;
     let _claim = state.service_mutations.lock().await;
     crate::service_runtime::ensure_editable(&state, id, request_id.0).await?;
+    if state
+        .store
+        .database_bindings()
+        .map_err(|_| AppError::internal(request_id.0))?
+        .iter()
+        .any(|b| b.input.service_id == id)
+        || state
+            .store
+            .database_triggers()
+            .map_err(|_| AppError::internal(request_id.0))?
+            .iter()
+            .any(|t| t.input.service_id == id)
+    {
+        return Err(AppError::conflict(
+            "database_service_in_use",
+            "Remove database bindings and finish retained triggers before deleting this service",
+            request_id.0,
+        ));
+    }
     if !database(request_id.0, move || state.store.delete_micro_service(id)).await? {
         return Err(AppError::not_found(request_id.0));
     }

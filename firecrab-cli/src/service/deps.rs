@@ -177,6 +177,29 @@ pub fn ensure_runtime_deps(
         );
     }
 
+    // DB connections work without native clients, but logical backup/restore
+    // needs these tools. Install them by default without blocking other services.
+    for (command, generic) in [
+        ("pg_dump", "postgresql-client"),
+        ("pg_restore", "postgresql-client"),
+        ("psql", "postgresql-client"),
+        ("mysqldump", "mysql-client"),
+        ("mysql", "mysql-client"),
+    ] {
+        let mut probe = DepsOutcome::default();
+        if !ensure(
+            packages,
+            &mut probe,
+            command,
+            generic,
+            install_deps,
+            check_only,
+        ) {
+            outcome.warnings.push(format!(
+                "{command} is missing; database backup/restore is unavailable for this engine"
+            ));
+        }
+    }
     for warning in &outcome.warnings {
         output::warn(warning);
     }

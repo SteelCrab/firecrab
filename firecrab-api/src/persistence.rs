@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
+mod database_services;
 mod pools;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod micro_services;
@@ -700,6 +701,7 @@ impl Store {
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
+        conn.execute_batch(database_services::CREATE_SQL)?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;

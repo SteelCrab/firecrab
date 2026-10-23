@@ -13,7 +13,7 @@ pub const DEBIAN_ARCHIVE: &str = "debian-13-generic-arm64-20260914-2601.tar.xz";
 const DEBIAN_SHA512: &str = "7bacdeb825f81b7eb5fcd35330ce7160ed60413adfa61f37cff3c4028fdc61dbd444e046c58934cd0494192f53fa2cbcfcca1e8e1d337755b34c6c90dc72f62b";
 const DEBIAN_RAW_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 const DATA_DISK_BYTES: u64 = 16 * 1024 * 1024 * 1024;
-pub(super) const PROVISION_SCHEMA: u32 = 5;
+pub(super) const PROVISION_SCHEMA: u32 = 7;
 const EXTRACT_ARM64_IMAGE: &str =
     include_str!("../../../../scripts/firecracker-menual/extract-arm64-image");
 
@@ -584,7 +584,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 phase apt-install
 apt-get install -y ca-certificates curl sudo tar findutils xz-utils gzip zstd lz4 lzop \
-  nftables conntrack dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat openssh-server \
+  nftables conntrack dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat postgresql-client mariadb-client openssh-server \
   linux-image-{kernel_version}
 # firecrab-helper runs its own dnsmasq per bridge; the packaged unit only
 # fails at boot fighting systemd-resolved for port 53 and leaves the guest degraded.

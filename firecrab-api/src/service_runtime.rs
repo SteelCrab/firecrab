@@ -40,6 +40,22 @@ pub async fn deploy(
     let service = database(request_id.0, move || store.micro_service(id))
         .await?
         .ok_or_else(|| AppError::not_found(request_id.0))?;
+    for binding in state
+        .store
+        .database_bindings()
+        .map_err(|_| AppError::internal(request_id.0))?
+        .into_iter()
+        .filter(|b| b.input.service_id == id)
+    {
+        if !binding.ready {
+            return Err(AppError::conflict(
+                "database_binding_not_ready",
+                "Finish database binding setup before deployment",
+                request_id.0,
+            ));
+        }
+        crate::handlers::pipe_databases::available(&state, binding.database_id, request_id.0)?;
+    }
     let fields = deployment_fields(&service.spec, &request, state.api_port);
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
@@ -479,6 +495,10 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
         save(state, deployment).await?;
         drop(owner_guard);
         let vm_id = vm.id;
+        state
+            .store
+            .link_database_service_vm(vm_id, deployment.service_id)
+            .map_err(|_| "Could not persist private database binding ownership".to_owned())?;
         let Json(vm) = vms::start_vm(
             State(state.clone()),
             Extension(RequestId(deployment.id)),
@@ -534,7 +554,7 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
 }
 
 /// Reuse the `services` network or create it on a free subnet in `172.30.0.0/16`.
-async fn default_network(state: &AppState, request_id: Uuid) -> Result<Uuid, String> {
+pub(crate) async fn default_network(state: &AppState, request_id: Uuid) -> Result<Uuid, String> {
     let store = state.store.clone();
     let networks = database(request_id, move || store.list_micro_networks())
         .await
