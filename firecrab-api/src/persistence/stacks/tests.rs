@@ -64,6 +64,7 @@ fn vm(id: Uuid, purpose: VmPurpose) -> VmRecord {
         disk_gb: 2,
         egress_policy: Default::default(),
         micro_network_id: Uuid::from_u128(1),
+        security_group_id: None,
         storage_root: "default".to_owned(),
         disk_generation: None,
         last_runtime_id: None,
@@ -179,6 +180,13 @@ fn stacks_missing_and_protected_resources_cannot_be_adopted() {
         Err(PersistenceError::InvalidStackResource)
     ));
     let replica = vm(Uuid::new_v4(), VmPurpose::Instance);
+    let pooled = vm(Uuid::new_v4(), VmPurpose::Pool);
+    store.insert(&pooled).unwrap();
+    owned.resource_id = pooled.id;
+    assert!(matches!(
+        store.bind_stack_resource("demo", &owned),
+        Err(PersistenceError::InvalidStackResource)
+    ));
     store.insert(&replica).unwrap();
     let spec: MicroServiceSpec = serde_json::from_value(
         json!({"name":"web","image":"nginx:latest","port":80,"cpu":1,"ram":256}),

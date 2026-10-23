@@ -256,6 +256,7 @@ pub async fn update_image_kernel(
             request_id.0,
         ));
     }
+    super::pools::ensure_image_unused(&state, &alias, request_id).await?;
     let next_spec = TemplateSpec {
         alias: alias.clone(),
         version: format!("{}-kernel-{}", current.version, version),
@@ -622,6 +623,8 @@ pub async fn delete_image(
             ));
         }
     }
+
+    super::pools::ensure_image_unused(&state, &alias, request_id).await?;
 
     let templates = state.templates.clone();
     let alias_for_task = alias.clone();

@@ -27,6 +27,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Schedule MicroVM start and stop operations | [Schedules](guides/schedules.md) |
 | Store secrets and transfer them to external stores | [Secrets and PipeSecrets](guides/secrets.md) |
 | Configure subnets, internet access, and IPv6 | [Networking](guides/networking.md) |
+| Restrict VM connections and inherit replica policies | [Security groups](guides/security-groups.md) |
 | Choose a disk location and back up VM data | [Storage](guides/storage.md) |
 | Set management VM CPU, RAM, disk, and networking | [microManager resources](guides/micromanager-resources.md) |
 | Edit microManager settings and automatic idle shutdown | [Settings and Sleepy](guides/micromanager-settings.md) |

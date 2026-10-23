@@ -237,6 +237,10 @@ pkg_name() {
         dnf:iproute2) echo "iproute" ;;
         *:iproute2)   echo "iproute2" ;;
         *:nftables)   echo "nftables" ;;
+        apt-get:conntrack) echo "conntrack" ;;
+        dnf:conntrack) echo "conntrack-tools" ;;
+        zypper:conntrack) echo "conntrack-tools" ;;
+        *:conntrack) echo "conntrack-tools" ;;
         *:dnsmasq)    echo "dnsmasq" ;;
         # dhcp_release is shipped separately on Debian/Ubuntu and Alpine.
         # On RHEL/Fedora it does not exist as a separate package.
@@ -368,6 +372,7 @@ ensure_runtime_deps() {
     local failed=0
     ensure ip iproute2   || failed=1
     ensure nft nftables  || failed=1
+    ensure conntrack conntrack || warn "conntrack is required when using security groups"
     ensure dnsmasq dnsmasq || failed=1
     # dhcp_release releases DHCP leases on VM stop; VMs can still run without
     # it but leases accumulate until they expire (default 1 h). Fedora/RHEL

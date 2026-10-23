@@ -644,6 +644,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pool_restart_reloads_ready_members_and_active_idempotent_leases() {
+        use crate::persistence::{MemberRow, PoolRow};
+        use firecrab_api_types::{EgressPolicy, PoolMemberState};
+
+        let host = host().await;
+        let pool_id = Uuid::new_v4();
+        host.state
+            .store
+            .insert_pool(&PoolRow {
+                id: pool_id,
+                name: "restart-pool".to_owned(),
+                template: "ubuntu-rootfs-26.04".to_owned(),
+                template_version: "v1".to_owned(),
+                cpu: 1,
+                ram: 128,
+                disk_gb: 1,
+                egress_policy: EgressPolicy::Internet,
+                micro_network_id: Uuid::from_u128(1),
+                storage_root: "default".to_owned(),
+                min_ready: 1,
+                max_size: 2,
+                lease_ttl_seconds: 600,
+                deleting: false,
+                created_at_ms: 1,
+            })
+            .unwrap();
+        let mut ids = Vec::new();
+        for name in ["pool-ready", "pool-leased"] {
+            let (id, runtime) = seed_active(&host, name, VmState::Running);
+            let mut vm = host.state.vms.lock().unwrap()[&id].clone();
+            vm.purpose = crate::model::VmPurpose::Pool;
+            host.state.store.update(&vm).unwrap();
+            host.state.vms.lock().unwrap().insert(id, vm);
+            host.state
+                .store
+                .insert_pool_member(&MemberRow {
+                    vm_id: id,
+                    pool_id,
+                    state: PoolMemberState::Ready,
+                    created_at_ms: 1,
+                })
+                .unwrap();
+            surviving_shim(&host, id, &runtime).await;
+            ids.push(id);
+        }
+        let lease = host
+            .state
+            .store
+            .acquire_pool_lease(pool_id, Some("restart-job"), crate::pool::now_ms(), |_| {
+                true
+            })
+            .unwrap()
+            .lease;
+        let before = host.state.store.pool_members(pool_id).unwrap();
+        // Open a new SQLite connection and rebuild the API state, while the
+        // independently owned shims and their Firecracker children keep running.
+        let reopened = AppState::with_db_file(
+            (*host.state.templates).clone(),
+            host._directory.path().join("data/firecrab.db"),
+        )
+        .await
+        .unwrap()
+        .with_test_runtime((*host.state.runtime).clone())
+        .with_test_network(host.state.network.clone());
+        let report = reconcile(&reopened).await;
+        assert_eq!(report.adopted.len(), 2);
+        crate::pool::reconcile(&reopened, crate::pool::now_ms()).await;
+        assert_eq!(reopened.store.pool_members(pool_id).unwrap(), before);
+        assert_eq!(
+            reopened.store.pool_lease(lease.id).unwrap(),
+            Some(lease.clone())
+        );
+        let retry = reopened
+            .store
+            .acquire_pool_lease(pool_id, Some("restart-job"), crate::pool::now_ms(), |_| {
+                true
+            })
+            .unwrap();
+        assert!(retry.replayed);
+        assert_eq!(retry.lease, lease);
+
+        let host = Host {
+            state: reopened,
+            ..host
+        };
+        for id in ids {
+            host.state.processes.lock().unwrap()[&id]
+                .control
+                .terminate();
+            wait_for(&host, id, VmState::Stopped).await;
+        }
+    }
+
+    #[tokio::test]
     async fn a_running_vm_whose_shim_answers_is_adopted_and_its_network_reverified() {
         let host = host().await;
         let (id, runtime) = seed_active(&host, "survivor", VmState::Running);

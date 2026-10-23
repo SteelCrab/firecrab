@@ -24,6 +24,7 @@ mod host_acl;
 /// NAT/uplink detection, split out of `firewall`.
 mod nat;
 mod pipe;
+mod security_groups;
 /// Applying a downloaded host bundle (`ApplySelfUpdate`).
 mod self_update;
 /// Per-VM TAP device lifecycle.
@@ -655,6 +656,7 @@ fn validate_vm_policies(
             egress,
             allow_host_ssh: spec.allow_host_ssh,
             port_forwards: spec.port_forwards,
+            security_group: spec.security_group,
         });
     }
     Ok(policies)
@@ -736,6 +738,7 @@ async fn dispatch(
             ipv6,
             mac,
             egress_policy,
+            security_group,
             allow_host_ssh,
             port_forwards,
         } => {
@@ -753,6 +756,7 @@ async fn dispatch(
                 ipv6,
                 mac,
                 egress,
+                security_group,
                 allow_host_ssh,
                 port_forwards,
             };
@@ -1125,6 +1129,7 @@ mod tests {
         let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
             .expect("helper config");
         let request = NetworkRequest::ApplyVmPolicy {
+            security_group: None,
             vm_id: Uuid::nil(),
             ipv4: "172.30.0.9".parse().unwrap(),
             ipv6: None,
@@ -1142,6 +1147,7 @@ mod tests {
         let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
             .expect("helper config");
         let base = |port_forwards| NetworkRequest::ApplyVmPolicy {
+            security_group: None,
             vm_id: Uuid::nil(),
             ipv4: "172.30.0.9".parse().unwrap(),
             ipv6: None,
@@ -1176,6 +1182,7 @@ mod tests {
     #[test]
     fn firewall_snapshot_rejects_duplicate_ipv4s_before_nft() {
         let first = VmPolicySpec {
+            security_group: None,
             vm_id: Uuid::from_u128(1),
             ipv4: "172.30.0.40".parse().unwrap(),
             ipv6: None,
@@ -1293,6 +1300,7 @@ mod tests {
     #[test]
     fn firewall_snapshot_rejects_duplicate_ipv6s_before_nft() {
         let first = VmPolicySpec {
+            security_group: None,
             vm_id: Uuid::from_u128(1),
             ipv4: "172.30.0.40".parse().unwrap(),
             ipv6: Some("fd00:1::5".parse().unwrap()),

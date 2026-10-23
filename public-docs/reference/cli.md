@@ -226,3 +226,23 @@ Systemd unit files require an installer rerun; see [Operations](../guides/operat
 `vm resume` continues it without a guest reboot. RAM remains allocated while paused.
 Stop discards that execution state. Host/VMM shutdown also loses it.
 Use [pause/resume operations](../guides/operations.md#pause-and-resume-a-microvm) for limits and recovery.
+
+## Warm pools
+
+| Command | Endpoint |
+| --- | --- |
+| `firecrab pool list [--json]` | `GET /api/pools` |
+| `firecrab pool create --name NAME --template ALIAS --network UUID --min-ready N --max-size N [--lease-ttl SECONDS] [--cpu N] [--ram MIB] [--disk-gb GIB] [--egress internet\|isolated] [--storage-root ID] [--json]` | `POST /api/pools` |
+| `firecrab pool show POOL [--json]` | `GET /api/pools/{id}` |
+| `firecrab pool update POOL [--min-ready N] [--max-size N] [--lease-ttl SECONDS] [--json]` | `PATCH /api/pools/{id}` |
+| `firecrab pool delete POOL [--json]` | `DELETE /api/pools/{id}` |
+| `firecrab pool acquire POOL [--idempotency-key KEY] [--json]` | `POST /api/pools/{id}/acquire` |
+| `firecrab pool leases POOL [--json]` | `GET /api/pools/{id}/leases` |
+| `firecrab pool release POOL LEASE_ID [--json]` | `DELETE /api/pools/{id}/leases/{leaseId}` |
+
+`POOL` is a pool UUID or name. `pool acquire --idempotency-key KEY` makes a retry return the same
+lease instead of a second VM; the printed lease names the `firecrab vm console` command for its VM.
+See [API: Pools](api.md#pools) for sizing, TTL, and release rules.
+
+Pool acquire always sends an idempotency key. If `--idempotency-key` is omitted, the CLI generates
+one. On failure it prints a retry command with that key; use it to recover the same lease.

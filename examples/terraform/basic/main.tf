@@ -52,7 +52,7 @@ resource "restapi_object" "vm" {
   # This example manages stopped VM configuration. Changes replace the VM.
   force_new = ["name", "template", "cpu", "ram", "diskGb", "microNetworkId", "env", "portForwards"]
   ignore_changes_to = [
-    "id", "state", "reconciliation", "templateVersion", "startupStep", "egressPolicy",
+    "id", "purpose", "state", "reconciliation", "templateVersion", "startupStep", "egressPolicy", "securityGroupId",
     "ipv4", "ipv6", "mac", "hostname", "startupTimeline", "storageRoot", "shellRefs",
     "cpuUsagePercent", "memoryUsedMib", "memoryTotalMib", "memoryUsedPercent", "usageHistory", "sshHostFingerprint"
   ]
@@ -68,7 +68,7 @@ resource "restapi_object" "service" {
     ram        = 256
     cpu        = 1
   })
-  ignore_changes_to = ["id", "runtime", "domain", "replicas", "startupTimeout", "drainTimeout", "env", "secrets"]
+  ignore_changes_to = ["id", "runtime", "domain", "replicas", "startupTimeout", "drainTimeout", "env", "secrets", "securityGroupId"]
 }
 
 output "network_id" { value = restapi_object.network.id }

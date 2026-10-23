@@ -584,7 +584,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 phase apt-install
 apt-get install -y ca-certificates curl sudo tar findutils xz-utils gzip zstd lz4 lzop \
-  nftables dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat openssh-server \
+  nftables conntrack dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat openssh-server \
   linux-image-{kernel_version}
 # firecrab-helper runs its own dnsmasq per bridge; the packaged unit only
 # fails at boot fighting systemd-resolved for port 53 and leaves the guest degraded.
