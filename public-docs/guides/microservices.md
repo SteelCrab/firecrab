@@ -3,9 +3,10 @@
 MicroService stores the desired configuration of an OCI service on a MicroVM.
 Configurations survive API restarts in the existing SQLite database.
 Deploy imports the OCI image by digest, creates MicroVM replicas, and waits for HTTP app health.
-Each replica exposes one host TCP port.
+Services with a domain use PipeIngress to reach guest app ports directly.
+Services without a domain expose one host TCP port per replica.
 The deployment record and owned VM identifiers survive API restarts.
-Domain routing, PipeSecrets injection, rolling updates, rollback, and automatic instance replacement remain separate work.
+PipeSecrets injection, rolling updates, rollback, and automatic instance replacement remain separate work.
 
 ## Fields
 
@@ -20,6 +21,7 @@ Domain routing, PipeSecrets injection, rolling updates, rollback, and automatic 
 | `ram` | Required RAM per replica in MiB; power of two from 128 to 32768 |
 | `cpu` | Required vCPU count per replica; 1–32 |
 | `replicas` | 1–100; default 1 |
+| `securityGroupId` | Optional security group UUID; default `null`; every new replica inherits it |
 | `startupTimeout` | 1–3600 seconds; default 300 |
 | `drainTimeout` | 0–3600 seconds; default 30 |
 | `env` | Variable name to plain value; default `{}` |
@@ -101,13 +103,58 @@ Select **Run**, then **Deploy and run** to pull the image and start its replicas
 The panel reports startup progress, app health, host-port links, and failures.
 **Stop service** removes the owned MicroVMs.
 
+## Connect a domain
+
+1. Set **Domain** when creating or editing a MicroService. A hostname such as
+   `orders.example.com` is enough; the dashboard also accepts a pasted HTTPS URL
+   without a path or query.
+2. Select **Run**, then **Deploy and run**. No host port or network selection is
+   required. Network selection remains available under **Advanced settings**.
+3. Firecrab checks that ingress is installed and the hostname is free. After every
+   replica passes its HTTP health check, it publishes one load-balanced root route.
+   The dashboard then offers **Open domain**.
+
+For public HTTPS, use the existing **Pipe → Named Tunnel** setup with this domain.
+If a named tunnel is already configured, point the domain's proxied Cloudflare
+CNAME to `<tunnel-id>.cfargotunnel.com`; the deployment panel shows that target.
+DNS and public TLS remain external. A prepared local route does not prove that
+public DNS, TLS, or the connector is working. This deployment does not modify DNS.
+
+The domain owns all paths for that hostname. Existing manual routes or another
+service on the hostname cause a field error before image import. Service routes
+appear in Pipe as **Managed by MicroService**. Manual Pipe saves preserve them,
+including saves from a stale dashboard draft.
+
+Domain deployment needs no public replica ports:
+
+```sh
+firecrab microservice deploy SERVICE_UUID
+```
+
+REST accepts `{}` for a domain service, or `{"microNetworkId":"NETWORK_UUID"}`
+to select an existing network. Domain deployments ignore `hostPort` and report
+`hostPort: 0` for instances. Health checks send the service hostname in `Host`.
+
+Stop withdraws only that deployment's route before draining and deleting its VMs.
+The existing named connector and its DNS remain configured. A failed route
+withdrawal retains instance ownership and allows **Stop** to retry. If a Quick
+Tunnel references this hostname, remove that connector before stopping the service.
+Interrupted publication is recorded durably, so Stop can clean it up after an API
+restart. A completed domain route keeps serving independently of API restarts.
+
+Changing the configured domain still requires stopping the service first. This
+step does not add rolling updates or release rollback.
+
 ## Deploy behavior
 
-The deploy request body is `{"hostPort":30100,"microNetworkId":null}`.
+Without a domain, the deploy request body is `{"hostPort":30100,"microNetworkId":null}`.
 Two replicas use host ports 30100 and 30101, both forwarding to the configured app port.
 Omit the network UUID to create or reuse the `services` MicroNetwork.
 Supply `microNetworkId` or CLI `--network UUID` to use an existing network.
 The automatic network selects a free `/24` from `172.30.0.0/16`.
+When `securityGroupId` is set, select its IPv4-only network explicitly or reuse an existing matching `services` network.
+The deployment captures the group selection and assigns it to every replica before startup.
+See [security groups](security-groups.md) for rules and inactive-only changes.
 Concurrent deployments share one host queue.
 The worker checks memory, disk space, and port conflicts before starting replicas.
 
@@ -124,9 +171,10 @@ The macOS TCP relay can close its SSH forwards when those port records disappear
 An interrupted deploy or stop is marked failed after API restart; Stop cleans up remaining instances.
 A completed deployment uses the existing VM re-adoption mechanism.
 
-Deploy currently requires `domain: null` and empty `secrets`.
-Unsupported domain or secret settings return a field error before the job starts.
-Use this flow for direct host ports; it does not yet switch a stable domain between releases.
+Deploy requires empty `secrets`; unsupported secret settings return a field error
+before the job starts. Domain services connect through PipeIngress after health
+checks. Services without a domain keep using direct host ports. Neither flow
+switches between running releases yet.
 Deploy and Stop wait by default in the CLI.
 Use `--no-wait` to return after acceptance and poll `microservice status` later.
 Deploy exits nonzero when deployment or health fails.
@@ -155,6 +203,18 @@ python3 scripts/test-microservice-runtime.py --api http://127.0.0.1:5523
 It imports a local OCI fixture, boots two real MicroVMs, checks HTTP and env injection, and tests failed-health cleanup.
 Use `--restart-unit UNIT` only for an isolated QA API unit to test re-adoption after restart.
 Use `--keep-running` to retain the healthy service for manual inspection.
+
+For domain routing and public HTTPS, use an empty, dedicated Linux/KVM API with
+the bundled ingress and cloudflared engines installed:
+
+```sh
+sudo python3 scripts/test-microservice-domain-live.py --api http://127.0.0.1:15335
+```
+
+This test checks two real replicas, public TLS, API restart continuity and replica
+failure, then removes its VMs, services, network, routes and Quick Tunnel.
+Use `--output PATH` only when a JSON report is needed. Stop the dedicated QA
+API/helper and ingress units after the run.
 
 ## Related
 

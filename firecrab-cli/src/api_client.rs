@@ -172,6 +172,55 @@ impl ApiClient {
         Self::decode_json(resp)
     }
 
+    /// Sends a body-less `POST` with an `Idempotency-Key` header when `key`
+    /// is set, so a retried request can be recognized by the API.
+    pub fn post_empty_idempotent<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        key: Option<&str>,
+    ) -> Result<T, ApiError> {
+        let mut request = self.client.post(self.url(path));
+        if let Some(key) = key {
+            request = request.header(firecrab_api_types::IDEMPOTENCY_KEY_HEADER, key);
+        }
+        let resp = request
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::decode_json(resp)
+    }
+
+    /// Sends `body` as JSON with `PATCH` and deserializes any successful 2xx
+    /// response body.
+    pub fn patch<B, T>(&self, path: &str, body: &B) -> Result<T, ApiError>
+    where
+        B: Serialize + ?Sized,
+        T: DeserializeOwned,
+    {
+        let resp = self
+            .client
+            .patch(self.url(path))
+            .json(body)
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::decode_json(resp)
+    }
+
+    /// Sends a `DELETE` request and deserializes the successful response
+    /// body, for endpoints that answer with the resource they changed.
+    pub fn delete_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
+        let resp = self
+            .client
+            .delete(self.url(path))
+            .timeout(if path.starts_with("/api/pipe/ai/") {
+                self.mutation_timeout().max(OCI_INSPECT_TIMEOUT)
+            } else {
+                self.mutation_timeout()
+            })
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::decode_json(resp)
+    }
+
     /// Sends `body` as JSON with `PUT` and deserializes any successful 2xx
     /// response body.
     pub fn put<B, T>(&self, path: &str, body: &B) -> Result<T, ApiError>
@@ -203,16 +252,6 @@ impl ApiClient {
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::ensure_success(resp).map(|_| ())
-    }
-
-    pub fn delete_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
-        let response = self
-            .client
-            .delete(self.url(path))
-            .timeout(self.mutation_timeout().max(OCI_INSPECT_TIMEOUT))
-            .send()
-            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
-        Self::decode_json(response)
     }
 
     fn mutation_timeout(&self) -> Duration {

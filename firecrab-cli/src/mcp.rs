@@ -223,6 +223,7 @@ impl Session {
                     name: resource_name(&a.name, a.operation_id)?,
                     template: a.template,
                     micro_network_id: a.micro_network_id,
+                    security_group_id: None,
                     cpu: a.cpu,
                     ram: a.ram,
                     disk_gb: a.disk_gb,

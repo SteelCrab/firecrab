@@ -20,14 +20,14 @@ export type VmSectionDraft =
   | { section: "ports"; portForwards: PortForward[] };
 
 /** Same rules as the API: cpu/ram/disk, storage, shells and egress only while no Firecracker process is live. */
-export function isSectionEditable(state: VmState, section: VmSection): boolean {
+export function isSectionEditable(state: VmState, section: VmSection, purpose?: VmResponse["purpose"]): boolean {
   switch (section) {
     case "env":
-      return isEnvEditableState(state);
+      return isEnvEditableState(state, purpose);
     case "ports":
-      return isPortEditableState(state);
+      return isPortEditableState(state, purpose);
     default:
-      return isEditableState(state);
+      return isEditableState(state, purpose);
   }
 }
 

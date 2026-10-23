@@ -17,12 +17,15 @@ use uuid::Uuid;
 use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
+mod pools;
+pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod micro_services;
 mod pipe_ai;
 mod pipe_auth;
 mod pipe_databases;
 mod registries;
 mod schedules;
+mod security_groups;
 pub use registries::RegistryLogin;
 pub(crate) use schedules::ScheduleMutation;
 
@@ -50,33 +53,34 @@ const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vms (
     disk_generation TEXT,
     last_runtime_id TEXT,
     purpose TEXT NOT NULL DEFAULT 'instance',
-    env TEXT NOT NULL DEFAULT '{}'
+    env TEXT NOT NULL DEFAULT '{}',
+    security_group_id TEXT
 ) STRICT";
 
 /// Selects every column [`Store::load_all`] needs.
 const SELECT_ALL_SQL: &str = "SELECT id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env FROM vms";
+    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env, security_group_id FROM vms";
 
 /// Inserts a new row; fails on a duplicate id.
 const INSERT_SQL: &str = "INSERT INTO vms (id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
+    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env, security_group_id) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
 
 /// Upserts a row, used only by the one-time legacy `vms.json` import.
 const IMPORT_SQL: &str = "INSERT OR REPLACE INTO vms (id, name, state, template, \
     template_version, template_kernel_sha256, template_rootfs_sha256, \
     template_boot_args_sha256, cpu, ram, disk_gb, egress_policy, micro_network_id, storage_root, \
-    disk_generation, last_runtime_id, purpose, env) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
+    disk_generation, last_runtime_id, purpose, env, security_group_id) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
 
 /// Replaces an existing row's columns by id.
 const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     template_version = ?5, template_kernel_sha256 = ?6, template_rootfs_sha256 = ?7, \
     template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11, egress_policy = ?12, \
     micro_network_id = ?13, storage_root = ?14, disk_generation = ?15, last_runtime_id = ?16, \
-    purpose = ?17, env = ?18 WHERE id = ?1";
+    purpose = ?17, env = ?18, security_group_id = ?19 WHERE id = ?1";
 
 /// Schema for the `micro_networks` table (`public-docs/guides/networking.md`).
 /// The gateway isn't stored — it's derived from `subnet_cidr` — and neither
@@ -469,6 +473,9 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    /// A saved service or VM still references this policy.
+    #[error("security group is still referenced")]
+    SecurityGroupInUse,
     #[error("MicroService name {name} is already registered")]
     DuplicateMicroServiceName { name: String },
     /// Couldn't create the database's parent directory.
@@ -677,6 +684,7 @@ impl Store {
         migrate_disk_generation_columns(&conn)?;
         migrate_purpose_column(&conn)?;
         migrate_env_column(&conn)?;
+        security_groups::migrate(&conn)?;
         conn.execute(ipam::CREATE_LEASES_TABLE_SQL, [])?;
         migrate_lease_ipv6_column(&conn)?;
         for index_sql in ipam::CREATE_LEASES_INDEXES_SQL {
@@ -719,6 +727,7 @@ impl Store {
         conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_UNIQUE_HOST_PORT_SQL, [])?;
+        pools::create_tables(&conn)?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
         // that still have NULL micro_network_id onto one explicit row.
         promote_implicit_default_network(&conn)?;
@@ -770,6 +779,7 @@ impl Store {
                     startup_step: None,
                     startup_timeline: Vec::new(),
                     env: decode_env(&id_text, &row.get::<_, String>(17)?)?,
+                    security_group_id: decode_optional_id(&id_text, row.get(18)?)?,
                 },
             );
         }
@@ -1787,6 +1797,7 @@ fn execute_record(conn: &Connection, sql: &str, vm: &VmRecord) -> Result<usize, 
             vm.last_runtime_id.map(|id| id.to_string()),
             vm.purpose.id(),
             encode_env(&vm.env),
+            vm.security_group_id.map(|id| id.to_string()),
         ],
     )
 }
@@ -1875,6 +1886,7 @@ fn decode_purpose(id: &str, purpose: &str) -> Result<crate::model::VmPurpose, Pe
     match purpose {
         "instance" => Ok(crate::model::VmPurpose::Instance),
         "builder" => Ok(crate::model::VmPurpose::Builder),
+        "pool" => Ok(crate::model::VmPurpose::Pool),
         other => Err(PersistenceError::CorruptRecord {
             id: id.to_owned(),
             reason: format!("unknown purpose {other:?}"),
@@ -1892,6 +1904,7 @@ mod tests {
 
     fn record(id: Uuid, name: &str) -> VmRecord {
         VmRecord {
+            security_group_id: None,
             id,
             name: name.to_owned(),
             purpose: crate::model::VmPurpose::Instance,
@@ -2473,6 +2486,18 @@ mod tests {
 
         let loaded = store.load_all().unwrap();
         assert_eq!(loaded[&vm.id].purpose, crate::model::VmPurpose::Builder);
+    }
+
+    #[test]
+    fn pool_purpose_round_trips_through_insert_and_load() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(&dir.path().join("test.db")).unwrap();
+        let mut vm = record(Uuid::new_v4(), "pool-ci-1");
+        vm.purpose = crate::model::VmPurpose::Pool;
+        store.insert(&vm).unwrap();
+
+        let loaded = store.load_all().unwrap();
+        assert_eq!(loaded[&vm.id].purpose, crate::model::VmPurpose::Pool);
     }
 
     #[test]

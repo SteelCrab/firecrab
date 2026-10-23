@@ -90,6 +90,15 @@ export const DHCP_NETWORK_NAME = "oci-e2e-dhcp";
 /** Isolated subnet so this spec does not share {@link NETWORK_CIDR}. */
 export const DHCP_NETWORK_CIDR = "172.30.94.0/24";
 
+/** Pool and MicroNetwork for the #291 spec. */
+export const POOL_E2E_NAME = "pool-e2e";
+
+/**
+ * /24 under 172.31. Does not overlap ipv6-e2e ({@link IPV6_E2E_V4_CIDR},
+ * {@link IPV6_E2E_V6_CIDR}) or oci-e2e-dhcp ({@link DHCP_NETWORK_CIDR}).
+ */
+export const POOL_E2E_CIDR = "172.31.91.0/24";
+
 /** Host port forwarded to guest 80 — away from a developer's own 8888. */
 export const DHCP_HOST_PORT = 18888;
 

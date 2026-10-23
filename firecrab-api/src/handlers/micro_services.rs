@@ -46,6 +46,9 @@ pub async fn create(
     ValidatedJson(spec): ValidatedJson<MicroServiceSpec>,
 ) -> Result<(StatusCode, Json<MicroServiceResponse>), AppError> {
     validate(&spec, request_id.0)?;
+    let _claim = state.service_mutations.lock().await;
+    let _network = state.network_mutations.lock().await;
+    crate::network_policy::validate_selection(&state, spec.security_group_id, None, request_id.0)?;
     let service = MicroServiceResponse {
         id: Uuid::new_v4(),
         spec,
@@ -69,6 +72,8 @@ pub async fn update(
     validate(&spec, request_id.0)?;
     let _claim = state.service_mutations.lock().await;
     crate::service_runtime::ensure_editable(&state, id, request_id.0).await?;
+    let _network = state.network_mutations.lock().await;
+    crate::network_policy::validate_selection(&state, spec.security_group_id, None, request_id.0)?;
     let service = MicroServiceResponse { id, spec };
     let record = service.clone();
     let changed = database(request_id.0, move || {
@@ -148,7 +153,7 @@ fn validate(spec: &MicroServiceSpec, request_id: Uuid) -> Result<(), AppError> {
         );
     }
     if let Some(domain) = &spec.domain
-        && (domain.len() > 253 || !domain.split('.').all(dns_label))
+        && !firecrab_helper_protocol::pipe::valid_route_hostname(domain)
     {
         fields.insert(
             "domain".to_owned(),

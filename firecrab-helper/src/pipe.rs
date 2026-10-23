@@ -124,6 +124,17 @@ async fn run_with_cli(cli: &Path, request: Operation) -> Result<Snapshot, Helper
             )
             .await?;
         }
+        Operation::ManageServiceRoute { request } => {
+            request
+                .validate()
+                .map_err(|detail| HelperFailure::InvalidRequest { detail })?;
+            execute(
+                cli,
+                "service-route",
+                Some(serde_json::to_vec(&request).map_err(failure)?),
+            )
+            .await?;
+        }
         Operation::Inspect => {}
         Operation::DisconnectCloudflare => {
             execute(cli, "cloudflare-disconnect", None).await?;

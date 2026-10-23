@@ -9,15 +9,19 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod pool;
+pub use pool::*;
 mod micro_services;
 mod pipe_ai;
 mod schedules;
+mod security_groups;
 pub use micro_services::{
     DeployMicroServiceRequest, MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec,
     ServiceInstance, ServicePhase, ServiceRuntime,
 };
 pub use pipe_ai::*;
 pub use schedules::*;
+pub use security_groups::*;
 
 /// The egress policies the API may request for a VM. New policies are added
 /// here and mirrored in `firecrab-helper`'s own (deliberately separate)
@@ -171,6 +175,9 @@ pub struct CreateVmRequest {
     /// MicroNetwork to place this VM in. Required — firecrab has no
     /// implicit default subnet; create a MicroNetwork first.
     pub micro_network_id: Uuid,
+    /// Optional allow-only policy from the same IPv4 MicroNetwork.
+    #[serde(default)]
+    pub security_group_id: Option<Uuid>,
     /// Storage root id from `GET /api/storage` / `FIRECRAB_STORAGE_ROOTS`.
     /// Omitted (or null) uses the first registered root (the legacy
     /// `data/vms` layout when the env var is unset).
@@ -353,6 +360,19 @@ pub struct UpdateVmResourcesRequest {
     /// `Some({})` clears it.
     #[serde(default)]
     pub env: Option<BTreeMap<String, String>>,
+    /// Omission keeps the attachment; explicit null detaches it.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_security_group_update",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub security_group_id: Option<Option<Uuid>>,
+}
+
+fn deserialize_security_group_update<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<Uuid>>, D::Error> {
+    Option::<Uuid>::deserialize(deserializer).map(Some)
 }
 
 /// A named phase of `start_vm`'s pipeline, exposed only while `state ==
@@ -407,6 +427,22 @@ pub struct StartupStepRun {
     pub detail: Option<String>,
 }
 
+/// What a VM record represents.
+///
+/// Wire values are `instance`, `builder`, and `pool` — the same three
+/// purposes the API stores. `GET /api/vms` returns `instance` and `pool`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VmPurpose {
+    /// A user-created MicroVM.
+    #[default]
+    Instance,
+    /// An image-build VM. `GET /api/vms` does not list it.
+    Builder,
+    /// A warm-pool member. `GET /api/vms` lists it.
+    Pool,
+}
+
 /// What the latest API startup or operator network retry learned about a VM.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -438,6 +474,9 @@ pub struct VmResponse {
     pub id: Uuid,
     /// User-supplied name.
     pub name: String,
+    /// What this record represents. Omitted JSON is [`VmPurpose::Instance`].
+    #[serde(default)]
+    pub purpose: VmPurpose,
     /// Current lifecycle state.
     pub state: VmState,
     /// Latest API startup/network retry check; cleared when a new start is accepted.
@@ -477,6 +516,9 @@ pub struct VmResponse {
     /// MicroNetwork this VM belongs to. Fixed at creation — its lease comes
     /// out of that network's subnet (`public-docs/guides/networking.md`).
     pub micro_network_id: Uuid,
+    /// Selected security group, or null for legacy networking.
+    #[serde(default)]
+    pub security_group_id: Option<Uuid>,
     /// Storage root id this VM's disk lives under (`{root}/vms/{id}/`).
     /// Fixed at creation so a later config change cannot orphan the files.
     pub storage_root: String,
@@ -1842,6 +1884,7 @@ mod tests {
         assert_eq!(
             request,
             UpdateVmResourcesRequest {
+                security_group_id: None,
                 ram: 1024,
                 cpu: 2,
                 disk_gb: 8,
@@ -1894,6 +1937,30 @@ mod tests {
     }
 
     #[test]
+    fn security_group_update_distinguishes_omission_clear_and_selection() {
+        let mut body = serde_json::json!({"ram":128,"cpu":1,"diskGb":1});
+        let omitted: UpdateVmResourcesRequest = serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(omitted.security_group_id, None);
+        assert!(
+            serde_json::to_value(omitted)
+                .unwrap()
+                .get("securityGroupId")
+                .is_none()
+        );
+        body["securityGroupId"] = serde_json::Value::Null;
+        let cleared: UpdateVmResourcesRequest = serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(cleared.security_group_id, Some(None));
+        assert_eq!(
+            serde_json::to_value(cleared).unwrap()["securityGroupId"],
+            serde_json::Value::Null
+        );
+        let id = uuid::Uuid::new_v4();
+        body["securityGroupId"] = serde_json::json!(id);
+        let selected: UpdateVmResourcesRequest = serde_json::from_value(body).unwrap();
+        assert_eq!(selected.security_group_id, Some(Some(id)));
+    }
+
+    #[test]
     fn running_may_edit_env_but_not_cpu_ram_or_disk() {
         use VmState::*;
         assert!(Running.can_edit_env());
@@ -1903,10 +1970,56 @@ mod tests {
     }
 
     #[test]
+    fn vm_purpose_serializes_snake_case_and_defaults_when_absent() {
+        for (purpose, wire) in [
+            (VmPurpose::Instance, "instance"),
+            (VmPurpose::Builder, "builder"),
+            (VmPurpose::Pool, "pool"),
+        ] {
+            assert_eq!(serde_json::to_value(purpose).unwrap(), wire);
+            assert_eq!(
+                serde_json::from_value::<VmPurpose>(serde_json::Value::String(wire.to_owned()))
+                    .unwrap(),
+                purpose
+            );
+        }
+        assert_eq!(VmPurpose::default(), VmPurpose::Instance);
+
+        let legacy = serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000000",
+            "name": "legacy",
+            "state": "created",
+            "template": "ubuntu-rootfs-26.04",
+            "templateVersion": "v1",
+            "cpu": 1,
+            "ram": 512,
+            "diskGb": 2,
+            "startupStep": null,
+            "egressPolicy": "internet",
+            "ipv4": null,
+            "ipv6": null,
+            "mac": null,
+            "hostname": "fc-abc",
+            "startupTimeline": [],
+            "microNetworkId": "00000000-0000-0000-0000-000000000000",
+            "storageRoot": "default",
+            "cpuUsagePercent": null,
+            "memoryUsedMib": null,
+            "memoryTotalMib": null,
+            "memoryUsedPercent": null,
+            "usageHistory": []
+        });
+        let decoded: VmResponse = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.purpose, VmPurpose::Instance);
+    }
+
+    #[test]
     fn vm_response_round_trips() {
         let response = VmResponse {
+            security_group_id: None,
             id: Uuid::nil(),
             name: "test-vm".to_owned(),
+            purpose: VmPurpose::Instance,
             state: VmState::Created,
             reconciliation: Some(VmReconciliation {
                 outcome: VmReconciliationOutcome::NetworkFailed,
@@ -1947,6 +2060,7 @@ mod tests {
         let json = serde_json::to_string(&response).expect("serialize response");
         assert_eq!(serde_json::from_str::<VmResponse>(&json).unwrap(), response);
         assert!(json.contains("\"env\":{\"FOO\":\"bar\"}"));
+        assert!(json.contains("\"purpose\":\"instance\""));
         assert!(json.contains("\"cpuUsagePercent\":12.5"));
         assert!(json.contains("\"memoryUsedMib\":180"));
         assert!(json.contains("\"memoryTotalMib\":512"));
@@ -2041,8 +2155,10 @@ mod tests {
         }
 
         let response = VmResponse {
+            security_group_id: None,
             id: Uuid::nil(),
             name: "test-vm".to_owned(),
+            purpose: VmPurpose::Instance,
             state: VmState::Starting,
             reconciliation: None,
             template: "ubuntu-rootfs-26.04".to_owned(),

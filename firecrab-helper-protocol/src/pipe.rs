@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+mod service_routes;
+pub use service_routes::{ServiceRouteOwner, ServiceRouteRequest};
+
 mod quick_tunnels;
 pub use quick_tunnels::{
     LEGACY_QUICK_TUNNEL_ID, MAX_QUICK_TUNNELS, QuickTunnelEntry, QuickTunnelRequest,
@@ -49,6 +52,9 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Route {
+    /// MicroService deployment that owns this route; manual routes omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<ServiceRouteOwner>,
     /// Lowercase DNS hostname, without a wildcard or port.
     pub host: String,
     /// Absolute path matched exactly and as a slash-delimited subtree.
@@ -243,6 +249,7 @@ impl Config {
             }
             validate_upstreams(&route.upstreams, Some(self.listen), &route.host)?;
         }
+        self.validate_service_routes()?;
         let mut ids = BTreeSet::new();
         if self.quick_tunnel.is_some() {
             ids.insert(LEGACY_QUICK_TUNNEL_ID);
@@ -305,6 +312,7 @@ impl Config {
             .quick_tunnel
             .as_ref()
             .map(|quick| Route {
+                owner: None,
                 host: QUICK_TUNNEL_HOST.into(),
                 path_prefix: "/".into(),
                 upstreams: quick.upstreams.clone(),
@@ -315,6 +323,7 @@ impl Config {
             let host = quick_tunnel_host(entry.id);
             match &entry.target {
                 QuickTunnelTarget::Apps { upstreams } => quick_routes.push(Route {
+                    owner: None,
                     host,
                     path_prefix: "/".into(),
                     upstreams: upstreams.clone(),
@@ -470,6 +479,11 @@ pub enum Operation {
     ManageFirecrabTunnel {
         /// Non-secret local resource intent.
         request: crate::firecrab_tunnel::Request,
+    },
+    /// Publish or withdraw one deployment-owned domain under the Pipe lock.
+    ManageServiceRoute {
+        /// Bounded intent; never replaces unrelated routes or connectors.
+        request: ServiceRouteRequest,
     },
     /// Read persisted configuration, engine availability and systemd state.
     Inspect,

@@ -24,6 +24,8 @@ use crate::oci::{self, ImageReference, ImageVersion, Sha256Digest};
 use crate::server::RequestId;
 use crate::state::AppState;
 
+mod domain;
+
 /// Validate deployment settings, persist a queued snapshot and start background work.
 pub async fn deploy(
     State(state): State<AppState>,
@@ -42,6 +44,7 @@ pub async fn deploy(
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
     }
+    domain::preflight(&state, id, &service.spec, request_id.0).await?;
     if let Some(network_id) = request.micro_network_id {
         let store = state.store.clone();
         if database(request_id.0, move || store.micro_network(network_id))
@@ -54,12 +57,41 @@ pub async fn deploy(
             ));
         }
     }
+    let _network = state.network_mutations.lock().await;
+    if service.spec.security_group_id.is_some() {
+        let network_id = match request.micro_network_id {
+            Some(id) => Some(id),
+            None => state
+                .store
+                .list_micro_networks()
+                .map_err(|_| AppError::internal(request_id.0))?
+                .into_iter()
+                .find(|network| network.name == "services")
+                .map(|network| network.id),
+        }
+        .ok_or_else(|| {
+            AppError::validation(
+                BTreeMap::from([(
+                    "microNetworkId".into(),
+                    "select the security group's MicroNetwork".into(),
+                )]),
+                request_id.0,
+            )
+        })?;
+        crate::network_policy::validate_selection(
+            &state,
+            service.spec.security_group_id,
+            Some(network_id),
+            request_id.0,
+        )?;
+    }
     let deployment = MicroServiceDeployment {
         id: Uuid::new_v4(),
         service_id: id,
         spec: service.spec,
         request,
         phase: ServicePhase::Queued,
+        domain_route_owned: false,
         digest: None,
         instances: vec![],
         log: vec!["Deployment queued".into()],
@@ -148,7 +180,9 @@ pub(crate) async fn ensure_editable(
 ) -> Result<(), AppError> {
     let store = state.store.clone();
     if let Some(deployment) = database(request_id, move || store.service_deployment(id)).await?
-        && (deployment.phase.is_busy() || !deployment.instances.is_empty())
+        && (deployment.phase.is_busy()
+            || !deployment.instances.is_empty()
+            || deployment.domain_route_owned)
     {
         return Err(AppError::conflict(
             "service_in_use",
@@ -159,7 +193,38 @@ pub(crate) async fn ensure_editable(
     Ok(())
 }
 
-/// Reject unsupported routing and secret settings or invalid host-port ranges.
+/// Reject attachment edits while a deployment still owns the VM.
+pub(crate) async fn ensure_vm_policy_editable(
+    state: &AppState,
+    vm_id: Uuid,
+    request: Uuid,
+) -> Result<(), AppError> {
+    let store = state.store.clone();
+    let owned = database(request, move || {
+        for service in store.list_micro_services()? {
+            if let Some(deployment) = store.service_deployment(service.id)?
+                && deployment
+                    .instances
+                    .iter()
+                    .any(|instance| instance.vm_id == vm_id)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })
+    .await?;
+    if owned {
+        return Err(AppError::conflict(
+            "service_in_use",
+            "stop the service before changing a replica's security group",
+            request,
+        ));
+    }
+    Ok(())
+}
+
+/// Reject unsupported secret settings and invalid direct host-port ranges.
 fn deployment_fields(
     spec: &MicroServiceSpec,
     request: &DeployMicroServiceRequest,
@@ -167,21 +232,15 @@ fn deployment_fields(
 ) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
     let end = u32::from(request.host_port) + u32::from(spec.replicas) - 1;
-    if request.host_port < 1024
-        || end > 65535
-        || (u32::from(request.host_port)..=end).contains(&5523)
-        || (u32::from(request.host_port)..=end).contains(&u32::from(api_port))
+    if spec.domain.is_none()
+        && (request.host_port < 1024
+            || end > 65535
+            || (u32::from(request.host_port)..=end).contains(&5523)
+            || (u32::from(request.host_port)..=end).contains(&u32::from(api_port)))
     {
         fields.insert(
             "hostPort".into(),
             "replicas need consecutive host ports from 1024 to 65535; port 5523 is reserved".into(),
-        );
-    }
-    if spec.domain.is_some() {
-        fields.insert(
-            "domain".into(),
-            "automatic domain routing needs PipeIngress; clear domain to deploy using host ports"
-                .into(),
         );
     }
     if !spec.secrets.is_empty() {
@@ -241,20 +300,22 @@ async fn run_deploy(state: AppState, mut deployment: MicroServiceDeployment) {
 /// Check capacity, import a pinned image and boot each replica until HTTP health passes.
 async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> Result<(), String> {
     check_capacity(state, &deployment.spec).await?;
-    let store = state.store.clone();
-    let ports = database(deployment.id, move || store.list_all_port_forwards())
-        .await
-        .map_err(|_| "Could not check host ports".to_owned())?;
-    let first = u32::from(deployment.request.host_port);
-    let end = first + u32::from(deployment.spec.replicas);
-    if ports.iter().any(|(_, port)| {
-        port.protocol == PortProtocol::Tcp && (first..end).contains(&u32::from(port.host_port))
-    }) {
-        return Err("A requested host port is already assigned to a VM".into());
-    }
-    for port in first..end {
-        std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port as u16))
-            .map_err(|_| format!("Host port {port} is already used by another process"))?;
+    if deployment.spec.domain.is_none() {
+        let store = state.store.clone();
+        let ports = database(deployment.id, move || store.list_all_port_forwards())
+            .await
+            .map_err(|_| "Could not check host ports".to_owned())?;
+        let first = u32::from(deployment.request.host_port);
+        let end = first + u32::from(deployment.spec.replicas);
+        if ports.iter().any(|(_, port)| {
+            port.protocol == PortProtocol::Tcp && (first..end).contains(&u32::from(port.host_port))
+        }) {
+            return Err("A requested host port is already assigned to a VM".into());
+        }
+        for port in first..end {
+            std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port as u16))
+                .map_err(|_| format!("Host port {port} is already used by another process"))?;
+        }
     }
     phase(
         state,
@@ -335,6 +396,11 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
         None => default_network(state, deployment.id).await?,
     };
     deployment.request.micro_network_id = Some(network_id);
+    crate::network_policy::resolve(
+        &state.store,
+        deployment.spec.security_group_id,
+        Some(network_id),
+    )?;
     let template = state
         .templates
         .resolve_alias(&alias)
@@ -359,7 +425,11 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
             ),
         )
         .await?;
-        let host_port = deployment.request.host_port + index;
+        let host_port = if deployment.spec.domain.is_some() {
+            0
+        } else {
+            deployment.request.host_port + index
+        };
         let request = CreateVmRequest {
             name: format!(
                 "ms-{}-{}-{index}",
@@ -371,16 +441,23 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
             cpu: deployment.spec.cpu,
             disk_gb,
             egress_policy: EgressPolicy::Internet,
+            security_group_id: deployment.spec.security_group_id,
             micro_network_id: network_id,
             storage_root: None,
             shell_ids: vec![],
             env: deployment.spec.env.clone(),
-            port_forwards: vec![PortForward {
-                host_port,
-                guest_port: deployment.spec.port,
-                protocol: PortProtocol::Tcp,
-            }],
+            port_forwards: if host_port == 0 {
+                vec![]
+            } else {
+                vec![PortForward {
+                    host_port,
+                    guest_port: deployment.spec.port,
+                    protocol: PortProtocol::Tcp,
+                }]
+            },
         };
+        // Serialize publication of the VM and its owner with attachment edits.
+        let owner_guard = state.service_mutations.lock().await;
         let (_, Json(vm)) = vms::create_vm(
             State(state.clone()),
             Extension(RequestId(deployment.id)),
@@ -400,6 +477,7 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
         });
         // Ownership is durable before booting anything.
         save(state, deployment).await?;
+        drop(owner_guard);
         let vm_id = vm.id;
         let Json(vm) = vms::start_vm(
             State(state.clone()),
@@ -445,6 +523,7 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
         instance.healthy = true;
         save(state, deployment).await?;
     }
+    domain::publish(state, deployment).await?;
     phase(
         state,
         deployment,
@@ -528,8 +607,13 @@ async fn healthy(
     let Ok(ip) = instance.ipv4.parse::<std::net::Ipv4Addr>() else {
         return false;
     };
-    client
-        .get(format!("http://{ip}:{}{}", spec.port, spec.health_path))
+    let request = client.get(format!("http://{ip}:{}{}", spec.port, spec.health_path));
+    let request = if let Some(host) = &spec.domain {
+        request.header(reqwest::header::HOST, host)
+    } else {
+        request
+    };
+    request
         .send()
         .await
         .is_ok_and(|response| response.status().is_success())
@@ -598,6 +682,7 @@ async fn refresh_instances(state: &AppState, deployment: &mut MicroServiceDeploy
 /// Drain on Stop, then delete only owned VMs, persisting each successful removal.
 /// Retain unremoved identifiers if cleanup fails so a later Stop can retry.
 async fn cleanup(state: &AppState, deployment: &mut MicroServiceDeployment) -> Result<(), String> {
+    domain::withdraw(state, deployment).await?;
     if deployment.phase == ServicePhase::Stopping && deployment.spec.drain_timeout > 0 {
         let mut draining = false;
         for instance in &deployment.instances {
