@@ -208,6 +208,9 @@ def run(args):
         raise ValueError("Use an isolated loopback API, not an installed or remote host")
     if not args.isolated_api:
         raise ValueError("Pass --isolated-api to confirm a disposable API/data directory")
+    service_image = getattr(args, "service_image", None) or getattr(args, "microvm_image", None)
+    if not service_image:
+        raise ValueError("Pass --service-image or --microvm-image from an account connected in Pipe Auth")
     account = aws("sts", "get-caller-identity")["Account"]
     region = args.region or subprocess.check_output(["aws", "configure", "get", "region"], text=True).strip()
     run_id = uuid.uuid4().hex[:20]
@@ -349,7 +352,7 @@ def run(args):
         request("PUT", f"/api/pipe/storage/{connection}", invalid, expected=401)
         assert request("GET", f"/api/pipe/storage/{connection}")["name"] == "AWS S3 QA"
         checks.append("invalid credential replacement preserves working connection")
-        service = request("POST", "/api/micro-services", {"name": "s3-qa-" + run_id[:8], "image": "example/app:v1", "port": 8080, "ram": 128, "cpu": 1, "storageConnectionId": connection}, expected=201)
+        service = request("POST", "/api/micro-services", {"name": "s3-qa-" + run_id[:8], "image": service_image, "port": 8080, "ram": 128, "cpu": 1, "storageConnectionId": connection}, expected=201)
         services.append(service["id"])
         request("DELETE", f"/api/pipe/storage/{connection}", expected=409)
         request("DELETE", f"/api/micro-services/{service['id']}", expected=204)
@@ -410,7 +413,8 @@ def main():
     parser.add_argument("--region")
     parser.add_argument("--browser", action="store_true")
     parser.add_argument("--cli", type=Path)
-    parser.add_argument("--microvm-image", help="Private QA image served in the isolated Linux network")
+    parser.add_argument("--service-image", help="AUTH-owned image reference for configuration checks; defaults to --microvm-image")
+    parser.add_argument("--microvm-image", help="Published QA image in a Pipe Auth-connected GHCR namespace or ECR registry")
     parser.add_argument("--microvm-url", default="http://127.0.0.1:15540")
     parser.add_argument("--local-aws-auth", action="store_true", help="Authenticate the local AWS profile through the real dashboard (no traces)")
     parser.add_argument("--output", type=Path, default=Path("target/qa/s3-live.json"))

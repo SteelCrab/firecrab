@@ -289,10 +289,10 @@ For domain routing and public HTTPS, use an empty, dedicated Linux/KVM API with
 the bundled ingress and cloudflared engines installed:
 
 ```sh
-sudo python3 scripts/test-microservice-domain-live.py --api http://127.0.0.1:15335
+sudo python3 scripts/test-microservice-domain-live.py --api http://127.0.0.1:15335 \
+  --image ghcr.io/your-account/service-domain-test:qa
 ```
 
-This test checks two real replicas, public TLS, API restart continuity and replica
-failure, then removes its VMs, services, network, routes and Quick Tunnel.
-Use `--output PATH` only when a JSON report is needed. Stop the dedicated QA
-API/helper and ingress units after the run.
+The AUTH-owned image must serve `GREETING` at `/health` and its hostname at `/cgi-bin/identity` on port 8080.
+The test checks two replicas, public TLS, restart continuity and failure, then removes its resources.
+Use `--output PATH` for JSON. Stop the dedicated QA API/helper and ingress units after the run.
