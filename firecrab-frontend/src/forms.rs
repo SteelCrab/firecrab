@@ -376,6 +376,12 @@ impl Form {
                 }
                 Ok(result)
             }
+            "Connect database" => {
+                if text(&body, "caCertificate").trim().is_empty() {
+                    body.as_object_mut().unwrap().remove("caCertificate");
+                }
+                Ok(body)
+            }
             "New MicroService" | "Edit MicroService" => {
                 if body["storageConnectionId"].is_null() {
                     body.as_object_mut().unwrap().remove("storageConnectionId");
@@ -1081,6 +1087,27 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn database_omits_an_absent_ca_bundle_and_preserves_explicit_pem() {
+        let form = resource_form("database", &Value::Null, "").unwrap();
+        let mut input = values(&form);
+        input.insert("name".into(), "DB".into());
+        input.insert(
+            "uri".into(),
+            "postgres://reader:fixture@localhost/db".into(),
+        );
+        let body = form.payload(&input).unwrap();
+        assert!(body.get("caCertificate").is_none());
+        assert_eq!(body["tlsMode"], "disable");
+        input.insert(
+            "caCertificate".into(),
+            "-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----".into(),
+        );
+        assert_eq!(
+            form.payload(&input).unwrap()["caCertificate"],
+            input["caCertificate"]
+        );
+    }
     #[test]
     fn vm_create_matches_the_backend_wire_type() {
         let form = vm_create(&BTreeMap::new());

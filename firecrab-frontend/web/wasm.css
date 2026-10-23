@@ -90,3 +90,9 @@
 
 .pipe-database-cell { max-height: 160px; max-width: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .sg-rule {min-width:0;}
+
+@media(max-width:767px) {
+  .screen-head { flex-wrap:wrap; }
+  .screen-heading { min-width:0; }
+  .screen-head>.wasm-actions { max-width:100%; }
+}
