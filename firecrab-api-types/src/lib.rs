@@ -1,5 +1,4 @@
-//! Wire types shared between `firecrab-api` and `firecrab-frontend`'s
-//! generated bindings: request/response bodies and the VM lifecycle state
+//! Wire types shared between `firecrab-api` and browser clients and test fixtures: request/response bodies and the VM lifecycle state
 //! machine.
 
 use std::collections::BTreeMap;
@@ -1932,7 +1931,7 @@ mod tests {
     }
 
     /// The dashboard switches on these exact strings
-    /// (`firecrab-frontend/src/bindings/SshHostKeyCheckStatus.ts`).
+    /// (`firecrab-e2e/types/bindings/SshHostKeyCheckStatus.ts`).
     #[test]
     fn ssh_host_key_check_status_serializes_camel_case() {
         for (status, json) in [

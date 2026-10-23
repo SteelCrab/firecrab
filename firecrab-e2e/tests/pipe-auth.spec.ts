@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { AuthConnection, AuthLogin } from "../../firecrab-frontend/src/api/pipeAuth";
+import type { AuthConnection, AuthLogin } from "../types/api/pipeAuth";
 
 const github: AuthConnection = { provider: "github", account: "octocat", registry: "ghcr.io", region: null, services: ["registry"] };
 const aws: AuthConnection = { provider: "aws", account: "123456789012", registry: "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com", region: "ap-northeast-2", services: ["registry"] };

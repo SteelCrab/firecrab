@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { PipeConfig, PipeSnapshot } from "../../firecrab-frontend/src/api/pipe";
-import type { VmResponse } from "../../firecrab-frontend/src/bindings/VmResponse";
-import type { PipeCardId } from "../../firecrab-frontend/src/navigation";
+import type { PipeConfig, PipeSnapshot } from "../types/api/pipe";
+import type { VmResponse } from "../types/bindings/VmResponse";
+import type { PipeCardId } from "../types/navigation";
 
 function appVm(name: string, ipv4: string | null, ports: number[], state: VmResponse["state"] = "running"): VmResponse {
   return {
@@ -101,7 +101,7 @@ async function open(page: Page, options: { card?: PipeCardId | null; unavailable
   const namedConnections: { apiToken: string; zoneId: string; hostname: string; config: PipeConfig }[] = [];
   const zoneRequests: string[] = [];
   let namedDisconnects = 0;
-  const firecrabSaves: { subdomain?: string; token?: string; target: import("../../firecrab-frontend/src/api/pipe").FirecrabTarget }[] = [];
+  const firecrabSaves: { subdomain?: string; token?: string; target: import("../types/api/pipe").FirecrabTarget }[] = [];
   const firecrabDeletes: string[] = [];
   const quickSaves: QuickSave[] = [];
   const quickDeletes: string[] = [];
@@ -247,7 +247,7 @@ test.describe("Pipe cards @dashboard", () => {
     await page.goto("/#/pipe/quick-tunnel");
     await page.reload();
     await expect(page.getByRole("region", { name: "Quick Tunnel", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Pipe", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("link", { name: "Pipe", exact: true })).toHaveAttribute("aria-current", "page");
   });
 
   test("asks before leaving a card with unsaved changes and discards them on leave", async ({ page }) => {
@@ -404,20 +404,20 @@ test.describe("Pipe dashboard @dashboard", () => {
     const dialogs: string[] = [];
     page.on("dialog", async dialog => { dialogs.push(dialog.message()); await dialog.dismiss(); });
     await edit();
-    await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
     await expect(page).toHaveURL(/#\/vms$/);
     expect(dialogs).toEqual([]);
-    await page.getByRole("button", { name: "Pipe", exact: true }).click();
+    await page.getByRole("link", { name: "Pipe", exact: true }).click();
     await page.getByRole("region", { name: "Pipe", exact: true }).getByRole("link", { name: "Firecrab Tunnel", exact: true }).click();
     await edit();
     if (kind === "nginx") await panel.getByLabel("Nginx route domain", { exact: true }).selectOption("other.example.com");
     else await panel.getByRole("checkbox", { name: "web-b · TCP 80", exact: true }).check();
-    await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
     await expect(page).toHaveURL(/#\/pipe\/firecrab-tunnel$/);
     expect(dialogs).toEqual(["Pipe changes have not been saved. Leave without saving?"]);
     if (kind === "nginx") await panel.getByLabel("Nginx route domain", { exact: true }).selectOption("app.example.com");
     else await panel.getByRole("checkbox", { name: "web-b · TCP 80", exact: true }).uncheck();
-    await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
     await expect(page).toHaveURL(/#\/vms$/);
     expect(dialogs).toHaveLength(1);
     expect(mock.firecrabSaves).toEqual([]);
@@ -666,7 +666,7 @@ test.describe("Pipe dashboard @dashboard", () => {
 
   test("edits domain/path routes and applies multiple app addresses", async ({ page }, info) => {
     const mock = await open(page);
-    await expect(page.getByRole("button", { name: "Pipe", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("link", { name: "Pipe", exact: true })).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("region", { name: "Route", exact: true })).toContainText("active");
     await page.getByRole("button", { name: "Add route", exact: true }).click();
     await page.getByLabel("Domain", { exact: true }).fill("api.example.com");
@@ -857,15 +857,15 @@ test.describe("Pipe dashboard @dashboard", () => {
       expect(dialog.message()).toContain("Pipe changes have not been saved.");
       await dialog.dismiss();
     });
-    await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
     await expect(page).toHaveURL(/#\/pipe\/route$/);
     await expect(routes.getByRole("button", { name: "Remove", exact: true })).toHaveCount(0);
     expect(mock.writes).toHaveLength(1);
 
     page.once("dialog", dialog => dialog.accept());
-    await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
     await expect(page).toHaveURL(/#\/vms$/);
-    await page.getByRole("button", { name: "Pipe", exact: true }).click();
+    await page.getByRole("link", { name: "Pipe", exact: true }).click();
     await page.getByRole("link", { name: "Route", exact: true }).click();
     await expect(routes.getByRole("button", { name: "Remove", exact: true })).toHaveCount(1);
     await expect(routes.getByRole("status")).toHaveCount(0);
@@ -873,13 +873,13 @@ test.describe("Pipe dashboard @dashboard", () => {
 
   for (const direction of ["back", "forward"] as const) test(`keeps unfinished route inputs and browser history when ${direction} is cancelled`, async ({ page }) => {
     await open(page);
-    await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
     await expect(page).toHaveURL(/#\/vms$/);
-    await page.getByRole("button", { name: "Pipe", exact: true }).click();
+    await page.getByRole("link", { name: "Pipe", exact: true }).click();
     await page.getByRole("link", { name: "Route", exact: true }).click();
     await expect(page).toHaveURL(/#\/pipe\/route$/);
     if (direction === "forward") {
-      await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+      await page.getByRole("link", { name: "MicroVM", exact: true }).click();
       await expect(page).toHaveURL(/#\/vms$/);
       await page.goBack();
       await expect(page).toHaveURL(/#\/pipe\/route$/);
@@ -1137,7 +1137,7 @@ test.describe("API connection recovery @dashboard", () => {
       await route.fulfill({ json: appVms.map(vm => refresh && vm.id === "web-a" ? { ...vm, name: "web-a-refreshed" } : vm) });
     });
     await page.route("**/api/vms/web-a/stop", route => route.fulfill({ status: 409, json: { error: { message: "This VM cannot be stopped right now" } } }));
-    await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
     const row = page.getByRole("row").filter({ has: page.getByText("web-a", { exact: true }) });
     await row.getByRole("button", { name: "Actions", exact: true }).click();
     await page.getByRole("menuitem", { name: "stop", exact: true }).click();

@@ -12,6 +12,7 @@ npm run build --prefix firecrab-frontend
 
 # Prepare the same target-complete attribution payload installed from releases.
 cargo fetch --locked
+cargo fetch --manifest-path firecrab-frontend/Cargo.toml --locked
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 metadata_args=()
@@ -24,6 +25,9 @@ for target in \
     cargo metadata --format-version=1 --locked --filter-platform "$target" > "$path"
     metadata_args+=(--cargo-metadata "$path")
 done
+cargo metadata --manifest-path firecrab-frontend/Cargo.toml \
+    --format-version=1 --locked --filter-platform wasm32-unknown-unknown > "$tmp/cargo-metadata-wasm.json"
+metadata_args+=(--cargo-metadata "$tmp/cargo-metadata-wasm.json")
 python3 scripts/release_compliance.py \
     "${metadata_args[@]}" \
     --frontend-lock firecrab-frontend/package-lock.json \

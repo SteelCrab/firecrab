@@ -233,9 +233,15 @@ set -euo pipefail
 exec 2>&1
 cd __QA__
 tar -C __CHECKOUT__ --exclude=node_modules --exclude=test-results --exclude=playwright-report \
-  -cf - firecrab-e2e firecrab-frontend | tar -xf -
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends nodejs npm openssh-server
+  -cf - firecrab-e2e firecrab-frontend firecrab-api-types rust-toolchain.toml | tar -xf -
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends nodejs npm openssh-server curl build-essential
+if ! command -v rustup >/dev/null; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+fi
+export PATH="$HOME/.cargo/bin:$PATH"
 npm ci --prefix firecrab-e2e
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack --version 0.14.0 --locked
 npm ci --prefix firecrab-frontend
 ./firecrab-e2e/node_modules/.bin/playwright install --with-deps chromium
 export FIRECRAB_E2E_REUSE_SERVER=1

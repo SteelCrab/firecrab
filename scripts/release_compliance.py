@@ -10,7 +10,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-HOST_ROOTS = {"firecrab-api", "firecrab-helper", "firecrab-cli"}
+RUNTIME_ROOTS = {"firecrab-api", "firecrab-helper", "firecrab-cli", "firecrab-frontend"}
 NOTICE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT", "AUTHORS")
 
 # Keep the mechanical release gate deliberately small and fail closed. These are
@@ -69,7 +69,7 @@ def cargo_sets(metadata: dict[str, Any]) -> tuple[set[str], set[str]]:
 
     The metadata should be produced with ``cargo metadata --filter-platform`` for
     a shipped target. Runtime traversal follows normal dependency edges from the
-    three distributed binaries. A second traversal follows every dependency kind;
+    distributed host binaries and browser module. A second traversal follows every dependency kind;
     anything reachable there but not at runtime is classified build/test-only.
     Proc-macro crates are compile-time even when Cargo represents their edge as a
     normal dependency.
@@ -82,7 +82,7 @@ def cargo_sets(metadata: dict[str, Any]) -> tuple[set[str], set[str]]:
     roots = {
         package_id
         for package_id in workspace
-        if packages.get(package_id, {}).get("name") in HOST_ROOTS
+        if packages.get(package_id, {}).get("name") in RUNTIME_ROOTS
     }
     if not roots:
         raise ValueError(
@@ -121,7 +121,7 @@ def cargo_sets(metadata: dict[str, Any]) -> tuple[set[str], set[str]]:
 def merge_cargo_sets(
     metadatas: list[dict[str, Any]],
 ) -> tuple[set[str], set[str]]:
-    """Union dependency classifications across all shipped host targets."""
+    """Union dependency classifications across all shipped host and browser targets."""
     runtime: set[str] = set()
     reachable: set[str] = set()
     for metadata in metadatas:
@@ -368,7 +368,7 @@ def render_notices(
         "",
         "This file is generated from target-filtered Cargo metadata and the frontend",
         "npm lockfile during the release build. Runtime entries are reachable by the",
-        "distributed Linux host binaries or marked non-dev in the frontend lockfile.",
+        "distributed host binaries, the WASM dashboard, or non-dev npm packages.",
         "Build/test-only dependencies are inventoried separately at the end.",
         "",
         f"Runtime dependencies: {len(runtime)}",

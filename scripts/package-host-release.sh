@@ -92,7 +92,8 @@ cp "$root/packaging/systemd/"*.service "$stage/systemd/"
 sed -e 's/firecrab-helper/firecrab-net-helper/g' -e '/^Alias=/d' \
     "$root/packaging/systemd/firecrab-helper.service" \
     > "$stage/systemd/firecrab-net-helper.service"
-sed -i 's/firecrab-helper/firecrab-net-helper/g' "$stage/systemd/firecrab-api.service"
+sed 's/firecrab-helper/firecrab-net-helper/g' "$stage/systemd/firecrab-api.service" > "$stage/systemd/firecrab-api.service.tmp"
+mv "$stage/systemd/firecrab-api.service.tmp" "$stage/systemd/firecrab-api.service"
 cp -a "$dashboard_dir/." "$stage/dashboard/"
 
 mkdir -p "$(dirname -- "$output")"

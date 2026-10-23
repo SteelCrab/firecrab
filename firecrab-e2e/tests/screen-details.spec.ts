@@ -92,8 +92,9 @@ test.describe("list screens with a detail panel", () => {
     await expect(detail.getByRole("heading", { name: "web-init" })).toBeVisible();
     await expect(detail.getByRole("region", { name: "Revisions" })).toContainText("v2");
     await expect(detail.getByRole("region", { name: "Revisions" })).toContainText("v1");
-    await expect(detail.locator("#shell-revise")).toHaveValue("#!/bin/sh\necho hello\n");
-    await expect(detail.getByRole("button", { name: "Publish new revision" })).toBeVisible();
+    await detail.getByRole("button", { name: "Publish revision", exact: true }).click();
+    await expect(detail.getByLabel("Shell script", { exact: true })).toHaveValue("#!/bin/sh\necho hello\n");
+    await expect(detail.getByRole("button", { name: "Save", exact: true })).toBeVisible();
   });
 
   test("MicroService opens its forms and runtime in the panel", async ({ page }) => {
@@ -114,18 +115,18 @@ test.describe("list screens with a detail panel", () => {
     await expect(detail.getByRole("heading", { name: "New MicroService" })).toHaveCount(0);
 
     await page.getByRole("button", { name: "Edit orders", exact: true }).click();
-    await expect(detail.getByRole("heading", { name: "Edit: orders", exact: true })).toBeVisible();
+    await expect(detail.getByRole("heading", { name: "Edit MicroService", exact: true })).toBeVisible();
     // Run stays disabled while a form is open, as before.
     await expect(page.getByRole("button", { name: "Run orders", exact: true })).toBeDisabled();
     await detail.getByRole("button", { name: "Cancel", exact: true }).click();
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
-    await expect(detail.getByRole("heading", { name: "Run: orders", exact: true })).toBeVisible();
+    await expect(detail.getByRole("heading", { name: "Deploy MicroService", exact: true })).toBeVisible();
     await expect(detail.getByRole("status")).toHaveText("Not deployed");
     await page.keyboard.press("Escape");
     await expect(detail).toHaveCount(0);
   });
 
-  test("Esc on the image row menu leaves the panel open", async ({ page }) => {
+  test("image actions stay available in the selected detail panel", async ({ page }) => {
     await openDashboard(page, {
       hash: "#/images",
       routes: {
@@ -137,11 +138,10 @@ test.describe("list screens with a detail panel", () => {
     await imageRow.click();
     const detail = panel(page, "Image detail");
     await expect(detail.getByRole("heading", { name: "ubuntu-24.04" })).toBeVisible();
-    await imageRow.locator("button.options-menu-trigger").click();
-    await expect(page.getByRole("menu")).toBeVisible();
+    await expect(detail.getByRole("button", { name: "Download package", exact: true })).toBeVisible();
+    await expect(detail.getByRole("button", { name: "Delete image", exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("menu")).toHaveCount(0);
-    await expect(detail.getByRole("heading", { name: "ubuntu-24.04" })).toBeVisible();
+    await expect(detail).toHaveCount(0);
   });
 
   for (const width of [1280, 1440]) {
@@ -163,9 +163,9 @@ test.describe("list screens with a detail panel", () => {
       await expect(panel(page, "MicroNetwork detail")).toBeVisible();
       expect(await fits()).toBe(true);
 
-      await page.getByRole("button", { name: "MicroService", exact: true }).click();
+      await page.getByRole("link", { name: "MicroService", exact: true }).click();
       await page.getByRole("button", { name: "Run orders-api", exact: true }).click();
-      await expect(panel(page, "MicroService detail").getByRole("heading", { name: "Run: orders-api" })).toBeVisible();
+      await expect(panel(page, "MicroService detail").getByRole("heading", { name: "Deploy MicroService" })).toBeVisible();
       expect(await fits()).toBe(true);
     });
   }

@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import type { RegistryImage } from "../../firecrab-frontend/src/api/registries";
+import type { RegistryImage } from "../types/api/registries";
 
 const HARBOR = "127.0.0.1:18080";
 const ECR = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com";

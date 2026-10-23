@@ -61,9 +61,9 @@ test.describe("MicroService configuration @dashboard", () => {
       return route.fulfill({ status: 202, json: deployment });
     });
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Not deployed");
+    await expect(page.locator("#service-status").getByRole("status")).toHaveText("Not deployed");
     await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Running");
+    await expect(page.locator("#service-status").getByRole("status")).toHaveText("Running");
     await expect(page.getByRole("cell", { name: "Healthy", exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("service-running-desktop.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
@@ -71,8 +71,8 @@ test.describe("MicroService configuration @dashboard", () => {
     await page.screenshot({ path: testInfo.outputPath("service-running-mobile.png"), fullPage: true });
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Stop service", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Stopped");
-    await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeEnabled();
+    await expect(page.locator("#service-status").getByRole("status")).toHaveText("Stopped");
+    await expect(page.getByRole("button", { name: "Deploy", exact: true })).toBeEnabled();
   });
 
   test("accepts a status response slower than the polling interval", async ({ page }) => {
@@ -87,7 +87,7 @@ test.describe("MicroService configuration @dashboard", () => {
       activeReads -= 1;
     });
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Not deployed");
+    await expect(page.locator("#service-status").getByRole("status")).toHaveText("Not deployed");
     expect(maxActiveReads).toBe(1);
   });
 
@@ -95,13 +95,13 @@ test.describe("MicroService configuration @dashboard", () => {
     await openServices(page, [INITIAL]);
     await page.route(`**/api/micro-services/${ID}/deployment`, (route) => route.fulfill({ json: null }));
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Not deployed");
+    await expect(page.locator("#service-status").getByRole("status")).toHaveText("Not deployed");
     await page.getByRole("button", { name: "Edit orders", exact: true }).click();
-    await page.getByLabel("App port", { exact: true }).fill("9090");
+    await page.getByLabel("Port", { exact: true }).fill("9090");
     await page.getByLabel("Replicas", { exact: true }).fill("3");
-    await page.getByRole("button", { name: "Save configuration" }).click();
-    await expect(page.getByRole("heading", { name: "Run: orders", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "Edit: orders", exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Deploy MicroService", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Edit MicroService", exact: true })).toHaveCount(0);
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.getByText("Each replica uses one host port, starting at 30100. App port: 9090.", { exact: true })).toBeVisible();
     await expect(page.getByLabel("First host port")).toHaveAttribute("max", "65533");
@@ -128,7 +128,7 @@ test.describe("MicroService configuration @dashboard", () => {
       phase: "failed", digest: null, instances: [], log: ["App health check failed"], error: "App health check failed",
     } }));
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Deployment failed");
+    await expect(page.locator("#service-status").getByRole("status")).toHaveText("Deployment failed");
     await expect(page.getByRole("alert")).toHaveText("App health check failed");
     await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeEnabled();
     await expect(page.getByRole("button", { name: "Stop service", exact: true })).toHaveCount(0);
@@ -139,14 +139,10 @@ test.describe("MicroService configuration @dashboard", () => {
     await page.getByRole("button", { name: "New MicroService", exact: true }).click();
     await page.getByLabel("Name", { exact: true }).fill("orders");
     await page.getByLabel("OCI image", { exact: true }).fill("ghcr.io/team/orders:1.0");
-    await page.getByRole("button", { name: "Add variable", exact: true }).click();
-    await page.locator("#service-env-key-0").fill("PROFILE");
-    await page.locator("#service-env-value-0").fill("prod");
-    await page.getByRole("button", { name: "Add secret reference", exact: true }).click();
-    await page.locator("#service-secrets-key-0").fill("DB_PASSWORD");
-    await page.locator("#service-secrets-value-0").fill(SECRET);
+    await page.getByLabel("Environment (NAME=value)", { exact: true }).fill("PROFILE=prod");
+    await page.getByLabel("Secret references (NAME=CrabSecrets ID)", { exact: true }).fill(`DB_PASSWORD=${SECRET}`);
     await page.screenshot({ path: testInfo.outputPath("microservice-desktop.png"), fullPage: true });
-    await page.getByRole("button", { name: "Save configuration" }).click();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByRole("cell", { name: "orders", exact: true })).toBeVisible();
     expect(writes[0]).toEqual({ method: "POST", body: {
       name: "orders", image: "ghcr.io/team/orders:1.0", runtime: "vm", port: 8080,
@@ -155,10 +151,10 @@ test.describe("MicroService configuration @dashboard", () => {
     } });
 
     await page.getByRole("button", { name: "Edit orders", exact: true }).click();
-    await expect(page.locator("#service-secrets-value-0")).toHaveValue(SECRET);
+    await expect(page.getByLabel("Secret references (NAME=CrabSecrets ID)", { exact: true })).toHaveValue(`DB_PASSWORD=${SECRET}`);
     await page.getByLabel("OCI image", { exact: true }).fill("ghcr.io/team/orders:2.0");
     await page.getByLabel("Replicas", { exact: true }).fill("2");
-    await page.getByRole("button", { name: "Save configuration" }).click();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByRole("cell", { name: "ghcr.io/team/orders:2.0", exact: true })).toBeVisible();
     expect(writes[1].method).toBe("PUT");
     expect(writes[1].body).not.toHaveProperty("id");
@@ -172,10 +168,10 @@ test.describe("MicroService configuration @dashboard", () => {
     const writes = await openServices(page, [INITIAL], true);
     await page.getByRole("button", { name: "Edit orders", exact: true }).click();
     await expect(page.getByLabel("Health path", { exact: true })).toHaveValue("/actuator/health");
-    await expect(page.getByLabel("Startup timeout (s)")).toHaveValue("120");
-    await expect(page.getByLabel("Drain timeout (s)")).toHaveValue("60");
+    await expect(page.getByLabel("Startup timeout (seconds)")).toHaveValue("120");
+    await expect(page.getByLabel("Drain timeout (seconds)")).toHaveValue("60");
     await page.getByLabel("Name", { exact: true }).fill("billing");
-    await page.getByRole("button", { name: "Save configuration" }).click();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByText("is already registered", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Name", { exact: true })).toHaveValue("billing");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -188,8 +184,8 @@ test.describe("MicroService configuration @dashboard", () => {
     await page.getByRole("combobox", { name: "Language", exact: true }).selectOption("ko");
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole("button", { name: "orders 수정", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "수정: orders", exact: true })).toBeVisible();
-    await expect(page.getByLabel("상태 검사 경로")).toHaveValue("/actuator/health");
+    await expect(page.getByRole("heading", { name: "MicroService 편집", exact: true })).toBeVisible();
+    await expect(page.getByLabel("상태 확인 경로")).toHaveValue("/actuator/health");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(await page.locator(".table-scroll").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("microservice-mobile.png"), fullPage: true });

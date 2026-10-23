@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { RegistryImage } from "../../firecrab-frontend/src/api/registries";
+import type { RegistryImage } from "../types/api/registries";
 
 const DIGEST = `sha256:${"a".repeat(64)}`;
 const SOURCE: RegistryImage = {

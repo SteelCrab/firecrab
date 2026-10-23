@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { DatabaseInput, DatabasePreview, DatabaseTable, PipeDatabase } from "../../firecrab-frontend/src/api/pipeDatabases";
+import type { DatabaseInput, DatabasePreview, DatabaseTable, PipeDatabase } from "../types/api/pipeDatabases";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const saved: PipeDatabase = { id, name: "Application DB", provider: "local", engine: "postgres", host: "localhost", port: 5432, database: "app", tlsMode: "disable" };
@@ -212,12 +212,12 @@ test.describe("PIPE databases @dashboard", () => {
     await panel.getByLabel("Connection name", { exact: true }).fill("Unfinished DB");
     let dialogs = 0;
     page.on("dialog", async dialog => { dialogs++; await dialog.dismiss(); });
-    await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
     await expect(page).toHaveURL(/#\/pipe\/database$/);
     await expect(panel.getByLabel("Connection name", { exact: true })).toHaveValue("Unfinished DB");
     expect(dialogs).toBe(1);
     await panel.getByRole("button", { name: "Cancel", exact: true }).click();
-    await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
     await expect(page).toHaveURL(/#\/vms$/);
     expect(dialogs).toBe(1);
   });

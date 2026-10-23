@@ -1,5 +1,5 @@
 import type { Page, Route } from "@playwright/test";
-import type { VmResponse } from "../../../firecrab-frontend/src/bindings";
+import type { VmResponse } from "../../types/bindings";
 
 /** A VM record with every field the dashboard reads; `overrides` replaces any of them. */
 export function vm(name: string, id: string, state: VmResponse["state"], overrides: Partial<VmResponse> = {}): VmResponse {

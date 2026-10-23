@@ -38,6 +38,9 @@ for name in LICENSE.nginx LICENSE.pcre2 LICENSE.musl sources.json; do
     printf 'fixture\n' >"$bins/ingress/$name"
 done
 printf '<html></html>\n' >"$dashboard/index.html"
+mkdir -p "$dashboard/assets"
+printf '\000asm\001\000\000\000' >"$dashboard/assets/dashboard.wasm"
+printf 'import init from \"./dashboard.wasm\";\n' >"$dashboard/assets/dashboard.js"
 printf 'third-party notices\n' >"$compliance/THIRD_PARTY_NOTICES.txt"
 printf '{"schemaVersion":1,"runtime":[],"buildTestOnly":[]}\n' \
     >"$compliance/release-license-inventory.json"
@@ -48,6 +51,7 @@ bundle="$work/firecrab-host-x86_64-gnu.tar.gz"
 
 members=$(tar -tzf "$bundle")
 for need in \
+    dashboard/index.html dashboard/assets/dashboard.wasm dashboard/assets/dashboard.js \
     LICENSE \
     THIRD_PARTY_NOTICES.txt \
     release-license-inventory.json \
@@ -67,6 +71,8 @@ cmp "$unpacked/firecrab-helper" "$unpacked/firecrab-net-helper"
 grep -q 'ExecStart=@LIBDIR@/firecrab-net-helper' "$unpacked/systemd/firecrab-net-helper.service"
 grep -q 'Wants=firecrab-net-helper.service' "$unpacked/systemd/firecrab-api.service"
 
+cmp "$dashboard/assets/dashboard.wasm" "$unpacked/dashboard/assets/dashboard.wasm"
+cmp "$dashboard/assets/dashboard.js" "$unpacked/dashboard/assets/dashboard.js"
 cmp "$ROOT/LICENSE" "$unpacked/LICENSE"
 cmp "$ROOT/licenses/GPL-2.0-only.txt" "$unpacked/licenses/GPL-2.0-only.txt"
 cmp "$compliance/THIRD_PARTY_NOTICES.txt" "$unpacked/THIRD_PARTY_NOTICES.txt"

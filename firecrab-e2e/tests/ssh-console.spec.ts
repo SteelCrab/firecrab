@@ -22,7 +22,7 @@ const routes = {
 
 const row = (page: Page, name: string) =>
   page.locator("table.vm-list tbody tr").filter({ has: page.getByRole("button", { name, exact: true }) });
-const sshDialog = (page: Page, name: string) => page.getByRole("dialog", { name: `SSH — ${name}` });
+const sshDialog = (page: Page, name: string) => page.getByRole("dialog", { name: "SSH connection", exact: true });
 
 async function openList(page: Page) {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -68,11 +68,11 @@ test.describe("SSH access", () => {
       await expect(panel.getByRole("button", { name, exact: true })).toHaveCount(0);
     }
 
-    await panel.getByRole("button", { name: "SSH", exact: true }).click();
+    await panel.getByRole("button", { name: "SSH connection", exact: true }).click();
     const dialog = sshDialog(page, "api-gateway");
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Copy key", exact: true })).toHaveCount(1);
-    await expect(dialog.getByRole("button", { name: "Download firecrab-api-gateway.pem", exact: true })).toHaveCount(1);
+    await expect(dialog.getByRole("button", { name: "Download SSH key", exact: true })).toHaveCount(1);
 
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await expect(dialog).toHaveCount(0);
@@ -89,7 +89,7 @@ test.describe("SSH access", () => {
 
     const ipv4 = dialog.locator(".console-ssh-block").filter({ has: page.locator(".console-ssh-block-label", { hasText: /^IPv4$/ }) });
     await ipv4.getByRole("button", { name: "Copy IPv4", exact: true }).click();
-    await expect(ipv4.getByRole("button", { name: "Copied", exact: true })).toBeVisible();
+    await expect(page.getByRole("status")).toContainText("Copied");
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("ssh -i firecrab-api-gateway.pem root@10.42.0.11");
 
     await expect(dialog.locator(".console-ssh-code.is-masked")).toHaveCount(1);
@@ -155,7 +155,7 @@ test.describe("console page", () => {
   test("terminal only hides the chrome until Esc", async ({ page }) => {
     await openConsole(page);
     await page.getByRole("button", { name: "Terminal only", exact: true }).click();
-    await expect(page.locator(".console-header")).toHaveCount(0);
+    await expect(page.locator(".console-header")).toBeHidden();
     await expect(page.getByRole("complementary", { name: "VM details" })).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(page.locator(".console-header")).toBeVisible();

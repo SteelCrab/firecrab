@@ -297,3 +297,25 @@ fn installs_missing_locked_dependencies_and_reports_invalid_locks() {
             .contains("dependency installation failed")
     );
 }
+
+#[test]
+fn wasm_build_failure_is_reported_before_starting_the_dashboard() {
+    let fixture = Fixture::new();
+    let frontend = fixture.source.path().join("firecrab-frontend");
+    fs::write(frontend.join("Cargo.toml"), "[workspace]\n").unwrap();
+    fs::create_dir(frontend.join("scripts")).unwrap();
+    fs::write(frontend.join("scripts/wasm.mjs"), "process.exit(42)").unwrap();
+    assert!(
+        prepare(fixture.source.path())
+            .unwrap_err()
+            .to_string()
+            .contains("dashboard WASM build failed")
+    );
+    assert!(
+        !fixture
+            .home
+            .path()
+            .join("runtime/dev-dashboard.json")
+            .exists()
+    );
+}

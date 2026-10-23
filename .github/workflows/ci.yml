@@ -328,20 +328,16 @@ jobs:
             firecrab-frontend/package-lock.json
             firecrab-e2e/package-lock.json
 
+      - uses: ./.github/actions/setup-wasm
+
       - name: Install dashboard and E2E dependencies
         run: |
           npm ci --prefix firecrab-frontend
           npm ci --prefix firecrab-e2e
           npx --prefix firecrab-e2e playwright install --with-deps chromium
 
-      - name: Build the API Playwright starts
-        run: cargo build -p firecrab-api
-
-      - name: Playwright @dashboard specs
+      - name: Framework-independent dashboard regression specs
         run: npm --prefix firecrab-e2e run test:dashboard
-
-      - name: Playwright mocked dashboard specs
-        run: npm --prefix firecrab-e2e run test:mocked
 
       - name: PIPE database E2E types
         run: npm run typecheck:pipe --prefix firecrab-e2e
@@ -387,6 +383,8 @@ jobs:
           cache-dependency-path: |
             firecrab-frontend/package-lock.json
             firecrab-e2e/package-lock.json
+      - uses: ./.github/actions/setup-wasm
+
       - name: Build dashboard
         run: |
           npm ci --prefix firecrab-frontend
@@ -510,6 +508,8 @@ jobs:
           cache-dependency-path: |
             firecrab-frontend/package-lock.json
             firecrab-e2e/package-lock.json
+
+      - uses: ./.github/actions/setup-wasm
 
       - name: Build install payload
         # CI installs from local binaries, not GitHub Releases (PRs have none).
@@ -824,7 +824,7 @@ jobs:
           done
 
   frontend:
-    name: Frontend (lint, typecheck, build)
+    name: Frontend (Rust/WASM lint, tests, build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -838,8 +838,12 @@ jobs:
           cache: npm
           cache-dependency-path: firecrab-frontend/package-lock.json
 
+      - uses: ./.github/actions/setup-wasm
       - run: npm ci
+      - run: npm ci --prefix ../firecrab-e2e
+      - run: ../firecrab-e2e/node_modules/.bin/playwright install --with-deps chromium
       - name: Development dashboard lifecycle with real Vite
         run: node ../scripts/test-dev-dashboard.mjs
       - run: npm run lint
       - run: npm run build
+      - run: npm test
