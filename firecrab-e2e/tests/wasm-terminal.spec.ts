@@ -175,9 +175,10 @@ test("WASM modes control application arrows and bracketed paste", async ({ page 
   await page.keyboard.press("ArrowUp");
   await page.keyboard.press("Control+c");
   await input.evaluate(textarea => {
-    const clipboardData = new DataTransfer();
-    clipboardData.setData("text/plain", "한글 é 👩‍💻\ncommand");
-    textarea.dispatchEvent(new ClipboardEvent("paste", { clipboardData, bubbles: true, cancelable: true }));
+    const event = new ClipboardEvent("paste", { clipboardData: new DataTransfer(), bubbles: true, cancelable: true });
+    // Firefox gives synthetic events their own clipboard store.
+    event.clipboardData!.setData("text/plain", "한글 é 👩‍💻\ncommand");
+    textarea.dispatchEvent(event);
   });
   await expect.poll(() => received.join("")).toBe("\x1bOA\x03\x1b[200~한글 é 👩‍💻\ncommand\x1b[201~");
 });
@@ -335,10 +336,9 @@ test("copies selected Korean and graphemes without wide-cell padding", async ({ 
   await page.mouse.move(box!.x + 220, box!.y + 5, { steps: 5 });
   await page.mouse.up();
   const copied = await page.locator(".terminal-emulator textarea").evaluate(textarea => {
-    const clipboardData = new DataTransfer();
-    const event = new ClipboardEvent("copy", { clipboardData, bubbles: true, cancelable: true });
+    const event = new ClipboardEvent("copy", { clipboardData: new DataTransfer(), bubbles: true, cancelable: true });
     textarea.dispatchEvent(event);
-    return { text: clipboardData.getData("text/plain"), prevented: event.defaultPrevented };
+    return { text: event.clipboardData!.getData("text/plain"), prevented: event.defaultPrevented };
   });
   expect(copied).toEqual({ text: expected, prevented: true });
   await page.locator(".terminal-emulator textarea").focus();
