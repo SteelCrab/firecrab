@@ -28,6 +28,9 @@ Text export reads native graphemes to avoid [truncated clusters](https://github.
 externalizing the binary and correcting resize, DPI and selection behavior.
 Review its checks when upgrading. MIT notices ship in `terminal-licenses.txt`.
 
+Font size changes apply live. Color themes apply through an explicit reconnect,
+because the pinned native core cannot update an open terminal's default colors.
+
 The browser adapter supports composition/mobile editing, bracketed paste,
 application cursor keys, selection copy, history paging, SGR/legacy mouse and
 focus reports. Live cursor/status queries receive native replies; the API strips

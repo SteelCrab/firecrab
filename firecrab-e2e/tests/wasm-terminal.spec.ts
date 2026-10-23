@@ -449,3 +449,36 @@ test("returns live cursor and device status replies from the WASM core", async (
   await expect(page.locator(".terminal-output")).toHaveText("ready#");
   await expect.poll(() => received.join("")).toBe("\x1b[1;7R\x1b[0n");
 });
+
+
+test("applies color themes on explicit reconnect while font changes stay live", async ({ page }) => {
+  let connections = 0;
+  await page.routeWebSocket(`**/ws/vms/${VM.id}/console`, socket => {
+    connections++;
+    socket.send(`session ${connections} Theme text`);
+  });
+  await openDashboard(page, { vms: [VM], hash: `#/console/${VM.id}`, routes: { [`/api/vms/${VM.id}`]: VM } });
+  await expect(page.locator(".terminal-output")).toContainText("session 1 Theme text");
+  await expect(page.locator(".terminal-emulator textarea")).toBeFocused();
+  await page.getByRole("button", { name: "Display settings", exact: true }).click();
+  await page.getByRole("combobox", { name: "Font size", exact: true }).selectOption("16");
+  await expect(page.locator(".terminal-emulator")).toHaveCSS("font-size", "16px");
+  expect(connections).toBe(1);
+  await page.getByRole("combobox", { name: "Color theme", exact: true }).selectOption("light");
+  await expect(page.locator(".console-surface")).toHaveCSS("background-color", "rgb(24, 24, 27)");
+  expect(connections).toBe(1);
+  await page.getByRole("button", { name: "Apply theme and reconnect", exact: true }).click();
+  await expect(page.locator(".terminal-output")).toContainText("session 2 Theme text");
+  await expect(page.locator(".console-surface")).toHaveCSS("background-color", "rgb(250, 250, 251)");
+  await expect(page.locator(".terminal-emulator canvas")).toHaveCount(1);
+  await expect.poll(() => page.locator(".terminal-emulator canvas").evaluate(canvas => {
+    const pixels = (canvas as HTMLCanvasElement).getContext("2d")!.getImageData(0, 0, 180, 30).data;
+    let light = 0, dark = 0;
+    for (let i = 0; i < pixels.length; i += 4) {
+      if (pixels[i] > 230 && pixels[i + 1] > 230 && pixels[i + 2] > 230) light++;
+      if (pixels[i] < 60 && pixels[i + 1] < 60 && pixels[i + 2] < 60) dark++;
+    }
+    return light > 1000 && dark > 30;
+  })).toBe(true);
+  expect(connections).toBe(2);
+});

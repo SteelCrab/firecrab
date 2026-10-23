@@ -138,10 +138,10 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const initialPrefsRef = useRef(loadPrefs());
 
   const [status, setStatus] = useState<Status>("connecting");
-  const [prefs, setPrefs] = useState<ConsolePrefs>(initialPrefsRef.current);
+  const [prefs, setPrefs] = useState<ConsolePrefs>(loadPrefs);
+  const [appliedThemeId, setAppliedThemeId] = useState<ThemeId>(prefs.themeId);
   const prefsRef = useRef(prefs);
   const [terminalError, setTerminalError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -277,7 +277,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
 
     const initialize = async () => {
       const encoder = new TextEncoder();
-      const initial = initialPrefsRef.current;
+      const initial = prefsRef.current;
       session = await createWasmTerminal(container, {
         fontSize: initial.fontSize, theme: THEMES[initial.themeId].theme,
         cols: 80, rows: 24, disableStdin: true,
@@ -292,7 +292,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
       const { terminal } = session;
       const latest = prefsRef.current;
       terminal.options.fontSize = latest.fontSize;
-      terminal.options.theme = THEMES[latest.themeId].theme;
+      setAppliedThemeId(initial.themeId);
       termRef.current = terminal;
       sessionRef.current = session;
       session.fit();
@@ -309,14 +309,13 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     return cleanup;
   }, [vmId, reconnectKey, clearReconnectTimer]);
 
-  // Live-apply font size and color scheme without tearing down the session.
+  // Font changes are live. The native core applies a new theme on reconnect.
   useEffect(() => {
     prefsRef.current = prefs;
     savePrefs(prefs);
     const term = termRef.current;
     if (!term) return;
     term.options.fontSize = prefs.fontSize;
-    term.options.theme = THEMES[prefs.themeId].theme;
     if (term.element) term.element.style.fontSize = `${prefs.fontSize}px`;
     scheduleFit();
   }, [prefs, scheduleFit]);
@@ -445,6 +444,11 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                       {Object.entries(THEMES).map(([id, { label }]) => <option key={id} value={id}>{label}</option>)}
                     </select>
                   </label>
+                  {prefs.themeId !== appliedThemeId && (
+                    <button type="button" className="btn sm" onClick={() => { setSettingsOpen(false); reconnectNow(); }}>
+                      {t("Apply theme and reconnect", "테마 적용 후 재연결")}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -485,7 +489,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
             className="console-surface"
             hidden={surfaceTab !== "serial"}
             ref={containerRef}
-            style={{ background: THEMES[prefs.themeId].theme.background }}
+            style={{ background: THEMES[appliedThemeId].theme.background }}
             onClick={() => {
               setSettingsOpen(false);
               termRef.current?.focus();
