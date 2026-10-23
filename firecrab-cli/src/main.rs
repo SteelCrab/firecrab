@@ -14,10 +14,12 @@ mod micromanager;
 mod microservice;
 mod network;
 mod pipe;
+mod schedule;
 #[cfg(target_os = "linux")]
 mod service;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 mod shell;
+mod stack;
 #[cfg(target_os = "linux")]
 mod status;
 #[cfg(target_os = "linux")]
@@ -41,6 +43,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Validate a declarative stack file locally, without connecting to a host.
+    Stack {
+        #[command(subcommand)]
+        command: stack::Command,
+    },
+    /// Manage time-based MicroVM start and stop operations.
+    Schedule {
+        #[command(subcommand)]
+        command: schedule::Command,
+    },
     /// Manage desired MicroService configurations through the host API.
     Microservice {
         #[command(subcommand)]
@@ -133,6 +145,12 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
+        Command::Stack { command } => stack::run(command),
+        Command::Schedule { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                schedule::run(client, command)
+            })
+        }
         Command::Microservice { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 microservice::run(client, command)
@@ -658,11 +676,15 @@ mod tests {
             "repair",
             "start",
             "stop",
+            "restart",
             "status",
             "validate",
             "dev",
         ] {
             assert!(Cli::try_parse_from(["firecrab", "service", action]).is_ok());
+        }
+        for action in ["start", "stop", "restart", "clean"] {
+            assert!(Cli::try_parse_from(["firecrab", "service", "dev", action]).is_ok());
         }
         #[cfg(target_os = "macos")]
         {

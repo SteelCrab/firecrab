@@ -31,7 +31,7 @@ pub struct MicroServiceSpec {
     /// Absolute HTTP health-check path; defaults to `/health`.
     #[serde(default = "default_health_path")]
     pub health_path: String,
-    /// Desired public hostname. Host-port deployment currently rejects this field.
+    /// Optional hostname routed automatically to healthy replicas through PipeIngress.
     #[serde(default)]
     pub domain: Option<String>,
     /// Guest RAM in MiB, using the same sizes as MicroVMs.
@@ -50,7 +50,7 @@ pub struct MicroServiceSpec {
     /// Plain-text environment variables passed to the image entrypoint.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
-    /// Environment variable name -> CrabSecrets UUID. Never contains secret values.
+    /// Environment variable name -> PipeSecrets UUID. Never contains secret values.
     /// Host-port deployment currently rejects nonempty secret references.
     #[serde(default)]
     pub secrets: BTreeMap<String, Uuid>,
@@ -70,14 +70,16 @@ pub struct MicroServiceResponse {
     pub spec: MicroServiceSpec,
 }
 
-/// Network placement and host ports for a new deployment.
+/// Optional network placement and host ports for a new deployment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DeployMicroServiceRequest {
     /// Existing guest network; omission selects or creates the `services` network.
     #[serde(default)]
     pub micro_network_id: Option<Uuid>,
-    /// First replica's host TCP port; remaining replicas use consecutive ports.
+    /// First replica's host TCP port. Required without a domain; omitted for domain routing.
+    /// Zero means no host port and is accepted only when the service has a domain.
+    #[serde(default)]
     pub host_port: u16,
 }
 
@@ -93,6 +95,8 @@ pub enum ServicePhase {
     Starting,
     /// Waiting for a booted replica to answer its HTTP health check.
     CheckingHealth,
+    /// Connecting healthy replicas to the service domain.
+    ConnectingDomain,
     /// Every requested replica passed its startup health check.
     Running,
     /// A live status read found a missing, stopped or unhealthy replica.
@@ -110,7 +114,12 @@ impl ServicePhase {
     pub fn is_busy(self) -> bool {
         matches!(
             self,
-            Self::Queued | Self::Importing | Self::Starting | Self::CheckingHealth | Self::Stopping
+            Self::Queued
+                | Self::Importing
+                | Self::Starting
+                | Self::CheckingHealth
+                | Self::ConnectingDomain
+                | Self::Stopping
         )
     }
 }
@@ -123,7 +132,7 @@ pub struct ServiceInstance {
     pub vm_id: Uuid,
     /// Guest IPv4 address used for direct application health checks.
     pub ipv4: String,
-    /// Host TCP port forwarded to the application's guest port.
+    /// Host TCP port forwarded to the app; zero when a domain uses direct guest routing.
     pub host_port: u16,
     /// Latest VM lifecycle state; a missing VM is reported as stopped.
     pub state: VmState,
@@ -144,6 +153,7 @@ pub struct MicroServiceDeployment {
     /// Configuration snapshot captured when deployment was accepted.
     pub spec: MicroServiceSpec,
     /// Network and host-port settings, including the selected default network.
+    /// Domain deployments use zero host ports.
     pub request: DeployMicroServiceRequest,
     /// Immutable OCI image digest, set after image resolution.
     pub digest: Option<String>,
@@ -151,6 +161,10 @@ pub struct MicroServiceDeployment {
     pub instances: Vec<ServiceInstance>,
     /// Deployment progress messages in chronological order.
     pub log: Vec<String>,
+    /// Domain publication was attempted and has not yet been confirmed withdrawn.
+    /// Persisted before the helper call so interrupted publication remains owned.
+    #[serde(default)]
+    pub domain_route_owned: bool,
     /// Failure description, if deployment or cleanup failed.
     pub error: Option<String>,
 }

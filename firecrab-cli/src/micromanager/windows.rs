@@ -3,7 +3,7 @@
 //! Commands and their output follow the macOS backend line for line, so the
 //! same `[PASS]`/`[FAILED]` reading works on both hosts.
 
-mod daemon;
+pub(super) mod daemon;
 mod dev;
 mod doctor;
 mod filesystem;
@@ -11,7 +11,7 @@ pub(super) mod lifecycle;
 mod provision;
 mod repair;
 pub(super) mod resource;
-mod wsl;
+pub(super) mod wsl;
 
 use super::dev::dashboard;
 use super::{Command, DevCommand, debug, managed_home, manifest};
@@ -26,6 +26,11 @@ pub enum Error {
     NotReady,
     #[error("could not render the capability report: {0}")]
     Render(#[from] serde_json::Error),
+    #[error(transparent)]
+    Settings(#[from] super::settings::Error),
+    #[cfg(target_os = "windows")]
+    #[error(transparent)]
+    Controller(#[from] super::controller::Error),
     #[error(transparent)]
     Lifecycle(#[from] lifecycle::Error),
     #[error(transparent)]
@@ -72,6 +77,10 @@ pub fn run(command: Command) -> Result<i32, Error> {
         }
         Command::Start => run_start(),
         Command::Stop => run_stop(),
+        Command::Restart => {
+            run_stop()?;
+            run_start()
+        }
         Command::Status => run_status(),
         Command::Debug { json, logs, tail } => run_debug(debug::Options::new(json, logs, tail)),
         Command::Doctor { json } => run_doctor(json),
@@ -84,6 +93,15 @@ pub fn run(command: Command) -> Result<i32, Error> {
             };
             run_validate(&host, &layout)
         }
+        Command::Settings { json, set } => Ok(super::settings::run(
+            &lifecycle::Layout::from_process_env()?.managed_home,
+            json,
+            &set,
+        )?),
+        #[cfg(target_os = "windows")]
+        Command::Controller { home } => Ok(super::controller::run(&home)?),
+        #[cfg(not(target_os = "windows"))]
+        Command::Controller { .. } => Err(Error::MacosOnly("controller")),
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         Command::Shell { command } => run_shell(&command),
         Command::ForwardPorts { .. } => Err(Error::MacosOnly("forward-ports")),
@@ -94,7 +112,7 @@ pub fn run(command: Command) -> Result<i32, Error> {
             restore,
             yes,
         } => match command {
-            Some(command) => run_dev_control(command),
+            Some(command) => run_dev_control(&lifecycle::Layout::from_process_env()?, command),
             None => run_dev(source.as_deref(), release, restore, yes),
         },
     }
@@ -117,6 +135,8 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
         return Err(Error::NotReady);
     }
     let layout = lifecycle::Layout::from_process_env()?;
+    #[cfg(target_os = "windows")]
+    let _host_work = super::controller::HostWork::begin(&layout.managed_home)?;
     let manifest = manifest::Manifest::for_install(&layout.managed_home)?;
     let host = provision::host_from_manifest(&manifest, std::env::consts::ARCH)?;
     lifecycle::prepare(&layout)?;
@@ -176,6 +196,15 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
 }
 
 fn run_start() -> Result<i32, Error> {
+    #[cfg(target_os = "windows")]
+    {
+        let layout = lifecycle::Layout::from_process_env()?;
+        if super::controller::configured(&layout.managed_home) {
+            super::controller::start(&layout.managed_home)?;
+            println!("[PASS] microManager: running (automatic wake enabled)");
+            return Ok(0);
+        }
+    }
     if daemon::task_state() == daemon::TaskState::Missing {
         return Err(daemon::Error::NotInstalled.into());
     }
@@ -201,6 +230,8 @@ fn run_dev(
         )?)
     };
     let layout = lifecycle::Layout::from_process_env()?;
+    #[cfg(target_os = "windows")]
+    let _host_work = super::controller::HostWork::begin(&layout.managed_home)?;
     let frontend = checkout
         .as_ref()
         .map(|checkout| dashboard::prepare(&checkout.root))
@@ -238,12 +269,16 @@ fn run_dev(
     Ok(0)
 }
 
-fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
-    if !wsl::is_running(DISTRO_NAME) {
+fn run_dev_control(layout: &lifecycle::Layout, command: DevCommand) -> Result<i32, Error> {
+    if wsl::is_running(DISTRO_NAME) {
+        dev::control(command)?;
+    } else if command != DevCommand::Stop {
         return Err(Error::GuestNotRunning);
     }
-    dev::control(command)?;
-    let layout = lifecycle::Layout::from_process_env()?;
+    if command == DevCommand::Clean {
+        dashboard::clean(&layout.managed_home).map_err(super::dev::Error::from)?;
+        return Ok(0);
+    }
     if command != DevCommand::Start {
         dashboard::stop(&layout.managed_home).map_err(super::dev::Error::from)?;
     }
@@ -255,8 +290,15 @@ fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
 }
 
 fn run_stop() -> Result<i32, Error> {
+    #[cfg(target_os = "windows")]
     match lifecycle::Layout::from_process_env() {
-        Ok(layout) => dashboard::stop(&layout.managed_home).map_err(super::dev::Error::from)?,
+        Ok(layout) => {
+            if super::controller::active(&layout.managed_home) {
+                super::controller::stop(&layout.managed_home)?;
+                println!("[PASS] microManager: manually stopped (automatic wake blocked)");
+                return Ok(0);
+            }
+        }
         Err(lifecycle::Error::MissingManagedHome) => {}
         Err(error) => return Err(error.into()),
     }
@@ -266,6 +308,13 @@ fn run_stop() -> Result<i32, Error> {
 }
 
 fn run_status() -> Result<i32, Error> {
+    #[cfg(target_os = "windows")]
+    {
+        let layout = lifecycle::Layout::from_process_env()?;
+        if super::controller::active(&layout.managed_home) {
+            return Ok(super::controller::print_status(&layout.managed_home)?);
+        }
+    }
     let status = daemon::status();
     print_daemon_status(&status);
     Ok(i32::from(!status.success()))
@@ -458,6 +507,15 @@ fn run_validate(host: &provision::Host, layout: &lifecycle::Layout) -> Result<i3
 /// A root shell in the managed distribution, or one command run there as
 /// root. The distribution keeps running while it is open.
 fn run_shell(command: &[String]) -> Result<i32, Error> {
+    #[cfg(target_os = "windows")]
+    let _lease = {
+        let home = lifecycle::Layout::from_process_env()?.managed_home;
+        if super::controller::active(&home) {
+            Some(super::controller::hold(&home)?)
+        } else {
+            None
+        }
+    };
     if !wsl::contains(&wsl::distributions(), DISTRO_NAME) {
         return Err(Error::NotInstalled);
     }
@@ -503,6 +561,8 @@ pub(crate) fn run_guest_command(
 /// Without `--purge` the distribution stays registered, so its Firecrab data
 /// and the managed home survive for the next install, as on macOS.
 fn run_uninstall(layout: &lifecycle::Layout, purge: bool) -> Result<i32, Error> {
+    #[cfg(target_os = "windows")]
+    super::controller::uninstall(&layout.managed_home)?;
     if purge {
         lifecycle::validate_purge(layout)?;
     }
@@ -620,7 +680,12 @@ mod tests {
 
     #[test]
     fn dev_controls_use_the_running_guest_without_changing_micro_manager() {
-        for command in [DevCommand::Start, DevCommand::Stop, DevCommand::Restart] {
+        for command in [
+            DevCommand::Start,
+            DevCommand::Stop,
+            DevCommand::Restart,
+            DevCommand::Clean,
+        ] {
             let action = command.as_str();
             let wsl = fake::answer(move |line| match line {
                 "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
@@ -638,13 +703,14 @@ mod tests {
 
     #[test]
     fn dev_controls_do_not_boot_a_stopped_guest() {
-        for command in [DevCommand::Start, DevCommand::Stop, DevCommand::Restart] {
+        let (_directory, layout) = layout();
+        for command in [DevCommand::Start, DevCommand::Restart, DevCommand::Clean] {
             let wsl = fake::answer(|line| match line {
                 "wsl.exe --list --running --quiet" => Ok("Debian\n".into()),
                 other => panic!("dev control booted a guest: {other}"),
             });
             assert!(matches!(
-                run_dev_control(command),
+                run_dev_control(&layout, command),
                 Err(Error::GuestNotRunning)
             ));
             assert_eq!(wsl.calls().len(), 1);
@@ -653,16 +719,76 @@ mod tests {
 
     #[test]
     fn dev_control_failure_is_reported_without_starting_micro_manager() {
+        let (_directory, layout) = layout();
         let wsl = fake::answer(|line| match line {
             "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
             l if l.contains("--exec bash -s -- restart") => Err("restart failed".into()),
             other => panic!("dev control changed the host: {other}"),
         });
         assert!(matches!(
-            run_dev_control(DevCommand::Restart),
+            run_dev_control(&layout, DevCommand::Restart),
             Err(Error::Wsl(_))
         ));
         assert_eq!(wsl.calls().len(), 2);
+    }
+
+    #[test]
+    fn dev_stop_succeeds_after_the_management_vm_is_stopped() {
+        let (_directory, layout) = layout();
+        let wsl = fake::answer(|line| match line {
+            "wsl.exe --list --running --quiet" => Ok(String::new()),
+            other => panic!("dev stop booted the management VM: {other}"),
+        });
+        assert_eq!(run_dev_control(&layout, DevCommand::Stop).unwrap(), 0);
+        assert_eq!(wsl.calls().len(), 1);
+
+        // A stopped VM must not skip dashboard cleanup.
+        std::fs::write(
+            layout.runtime().join("dev-dashboard.json"),
+            "invalid session",
+        )
+        .unwrap();
+        assert!(matches!(
+            run_dev_control(&layout, DevCommand::Stop),
+            Err(Error::Dev(_))
+        ));
+    }
+
+    #[test]
+    fn dev_clean_removes_dashboard_state_without_source_or_vm_lifecycle_commands() {
+        let (_directory, layout) = layout();
+        for name in ["dev-dashboard.mjs", "dev-dashboard.log"] {
+            std::fs::write(layout.runtime().join(name), "development state").unwrap();
+        }
+        let wsl = fake::answer(|line| match line {
+            "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
+            "wsl.exe -d firecrab-debian -u root --exec bash -s -- clean" => Ok(String::new()),
+            other => panic!("dev clean changed the management VM or built sources: {other}"),
+        });
+        assert_eq!(run_dev_control(&layout, DevCommand::Clean).unwrap(), 0);
+        assert_eq!(wsl.calls().len(), 2);
+        assert!(!layout.runtime().join("dev-dashboard.mjs").exists());
+        assert!(!layout.runtime().join("dev-dashboard.log").exists());
+    }
+
+    #[test]
+    fn failed_guest_clean_preserves_host_dashboard_state() {
+        let (_directory, layout) = layout();
+        let state = layout.runtime().join("dev-dashboard.json");
+        std::fs::write(&state, "preserved").unwrap();
+        let wsl = fake::answer(|line| match line {
+            "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
+            "wsl.exe -d firecrab-debian -u root --exec bash -s -- clean" => {
+                Err("restore failed".into())
+            }
+            other => panic!("dev clean continued after failure: {other}"),
+        });
+        assert!(matches!(
+            run_dev_control(&layout, DevCommand::Clean),
+            Err(Error::Wsl(_))
+        ));
+        assert_eq!(wsl.calls().len(), 2);
+        assert_eq!(std::fs::read_to_string(state).unwrap(), "preserved");
     }
 
     #[test]
@@ -674,6 +800,53 @@ mod tests {
             run(Command::Start),
             Err(Error::Daemon(daemon::Error::NotInstalled))
         ));
+    }
+
+    #[test]
+    fn restart_stops_the_management_vm_before_starting_it() {
+        let mut queries = 0;
+        let wsl = fake::answer(move |line| match line {
+            l if l.starts_with("schtasks.exe /Query") => {
+                queries += 1;
+                if queries == 1 {
+                    Ok(ENABLED.into())
+                } else {
+                    // Registration disappears after shutdown; start must report it.
+                    Err("not found".into())
+                }
+            }
+            "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
+            l if l.starts_with("schtasks.exe /Change") || l.starts_with("schtasks.exe /End") => {
+                Ok(String::new())
+            }
+            l if l.contains("systemctl stop firecrab-api") => Ok(String::new()),
+            "wsl.exe --terminate firecrab-debian" => Ok(String::new()),
+            other => panic!("management restart invoked a development command: {other}"),
+        });
+        assert!(matches!(
+            run(Command::Restart),
+            Err(Error::Daemon(daemon::Error::NotInstalled))
+        ));
+        let calls = wsl.calls();
+        let terminate = calls
+            .iter()
+            .position(|call| call == "wsl.exe --terminate firecrab-debian")
+            .unwrap();
+        assert_eq!(terminate, calls.len() - 2);
+        assert!(calls.last().unwrap().starts_with("schtasks.exe /Query"));
+    }
+
+    #[test]
+    fn restart_does_not_start_the_management_vm_after_stop_fails() {
+        let wsl = fake::answer(|line| match line {
+            l if l.starts_with("schtasks.exe /Query") => Ok(ENABLED.into()),
+            "schtasks.exe /Change /TN Firecrab\\microManager /DISABLE" => {
+                Err("disable failed".into())
+            }
+            other => panic!("restart continued after stop failed: {other}"),
+        });
+        assert!(matches!(run(Command::Restart), Err(Error::Daemon(_))));
+        assert_eq!(wsl.calls().len(), 2);
     }
 
     #[test]

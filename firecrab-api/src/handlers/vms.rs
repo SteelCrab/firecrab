@@ -576,6 +576,7 @@ pub async fn update_vm_port_forwards(
     ValidatedJson(req): ValidatedJson<firecrab_api_types::UpdateVmPortForwardsRequest>,
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let _guard = state.lock_vm(id).await;
 
     let mut fields = BTreeMap::new();
     let mut seen = std::collections::HashSet::new();
@@ -738,6 +739,7 @@ pub async fn update_vm(
     } else {
         None
     };
+    let _guard = state.lock_vm(id).await;
     let _network_guard = state.network_mutations.lock().await;
     if let Some(selection) = req.security_group_id {
         crate::service_runtime::ensure_vm_policy_editable(&state, id, request_id.0).await?;
@@ -934,6 +936,7 @@ async fn claim_start(
     Path(id): Path<String>,
 ) -> Result<(Uuid, VmRecord), AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let _guard = state.lock_vm(id).await;
     let _network_guard = state.network_mutations.lock().await;
     let vm = state
         .vms
@@ -1026,6 +1029,7 @@ async fn finish_start(
         }
     };
     let pid = process.pid();
+    let guard = state.lock_vm(id).await;
 
     firecracker::register_and_watch(state, id, process);
 
@@ -1034,6 +1038,7 @@ async fn finish_start(
     match transition_if(state, id, VmState::Starting, VmState::Running) {
         Some(running) => {
             if persist_update(state, &running, request_id.0).await.is_err() {
+                drop(guard);
                 return Err(fail_start(state, id, request_id.0).await);
             }
             tracing::info!(
@@ -1071,13 +1076,27 @@ pub async fn stop_vm(
     Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
 ) -> Result<Json<VmResponse>, AppError> {
+    tokio::spawn(stop_vm_inner(State(state), Extension(request_id), Path(id)))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+}
+
+async fn stop_vm_inner(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let guard = state.lock_vm(id).await;
     let (claimed, previous) = claim_transition(&state, id, VmState::Stopping, request_id.0)?;
     if let Err(error) = persist_update(&state, &claimed, request_id.0).await {
         set_memory_state(&state, id, previous);
         return Err(error);
     }
 
+    // The exit monitor takes this lock before signaling completion. Stopping
+    // rejects other lifecycle requests while we wait without the lock.
+    drop(guard);
     let entry = state
         .processes
         .lock()
@@ -1088,7 +1107,9 @@ pub async fn stop_vm(
         firecracker::stop_registered(id, process, state.runtime.stop_grace).await;
     }
 
-    // Only a running VM can reach Stopping (see VmState::can_transition), so
+    let _guard = state.lock_vm(id).await;
+
+    // Only a VM with a live runtime can reach Stopping, so
     // setup_vm_network always ran for it — tear its TAP/policy back down.
     // The underlying lease is untouched; it's freed only by a successful
     // delete, so a later start reuses the same IP/MAC.
@@ -1123,6 +1144,7 @@ pub async fn delete_vm(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let _guard = state.lock_vm(id).await;
     let vm = state
         .vms
         .lock()
@@ -1257,7 +1279,7 @@ fn claim_transition(
     Ok((vm.clone(), previous))
 }
 
-fn set_memory_state(state: &AppState, id: Uuid, to: VmState) -> Option<VmRecord> {
+pub(super) fn set_memory_state(state: &AppState, id: Uuid, to: VmState) -> Option<VmRecord> {
     let mut vms = state
         .vms
         .lock()
@@ -1269,7 +1291,12 @@ fn set_memory_state(state: &AppState, id: Uuid, to: VmState) -> Option<VmRecord>
     })
 }
 
-fn transition_if(state: &AppState, id: Uuid, from: VmState, to: VmState) -> Option<VmRecord> {
+pub(super) fn transition_if(
+    state: &AppState,
+    id: Uuid,
+    from: VmState,
+    to: VmState,
+) -> Option<VmRecord> {
     let mut vms = state
         .vms
         .lock()
@@ -1284,7 +1311,7 @@ fn transition_if(state: &AppState, id: Uuid, from: VmState, to: VmState) -> Opti
     }
 }
 
-async fn persist_update(
+pub(super) async fn persist_update(
     state: &AppState,
     record: &VmRecord,
     request_id: Uuid,
@@ -1894,7 +1921,7 @@ pub(crate) async fn active_vm_policy_specs(state: &AppState) -> Result<Vec<VmPol
         let vms = store.load_all().map_err(|error| error.to_string())?;
         let mut active = Vec::new();
         for vm in vms.into_values() {
-            let live = matches!(vm.state, VmState::Starting | VmState::Running)
+            let live = (vm.state.has_live_runtime() && vm.state != VmState::Stopping)
                 || (vm.security_group_id.is_some()
                     && crate::network_policy::vm_is_active(&runtime_state, &vm)
                         .map_err(|error| error.to_string())?);

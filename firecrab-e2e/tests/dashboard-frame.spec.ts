@@ -42,7 +42,7 @@ test.describe("dashboard frame", () => {
     for (const group of ["Compute", "Network", "Data", "System"]) {
       await expect(nav(page).getByText(group, { exact: true })).toBeVisible();
     }
-    for (const name of ["MicroVM", "MicroService", "Networks", "Pipe", "Storage", "Images", "Kernels", "Shells", "Host"]) {
+    for (const name of ["MicroVM", "MicroService", "Networks", "Pipe", "Secrets", "Storage", "Images", "Kernels", "Shells", "Host"]) {
       await expect(nav(page).getByRole("button", { name, exact: true })).toBeVisible();
     }
   });

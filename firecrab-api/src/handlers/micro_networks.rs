@@ -120,7 +120,12 @@ pub async fn get_micro_network(
     // says how many ports the bridge really has right now.
     let attached_taps = members
         .iter()
-        .filter(|vm| vm.state == VmState::Running)
+        .filter(|vm| {
+            matches!(
+                vm.state,
+                VmState::Running | VmState::Pausing | VmState::Paused | VmState::Resuming
+            )
+        })
         .count() as u32;
 
     Ok(Json(MicroNetworkDetailResponse {

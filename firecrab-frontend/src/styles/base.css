@@ -141,7 +141,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--text); }
 }
 .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .badge.running { background: var(--green-soft); color: var(--green-ink); }
-.badge.starting, .badge.stopping { background: var(--amber-soft); color: var(--amber-ink); }
+.badge.paused, .badge.pausing, .badge.resuming, .badge.starting, .badge.stopping { background: var(--amber-soft); color: var(--amber-ink); }
 .badge.starting::before, .badge.stopping::before { animation: badge-pulse 1.4s ease-in-out infinite; }
 .badge.error { background: var(--red-soft); color: var(--red-ink); }
 .badge.created { background: var(--indigo-soft); color: var(--indigo-ink); }

@@ -231,6 +231,11 @@ pub(super) fn apply_quick_locked(config_file: &Path) -> Result<()> {
     apply_mode_locked(config_file, None, None, ApplyMode::QuickTunnel, || Ok(()))
 }
 
+/// Publish a healthy service without starting stopped tunnel connectors.
+pub(super) fn apply_service_locked(config_file: &Path) -> Result<()> {
+    apply_mode_locked(config_file, None, None, ApplyMode::ServiceRoute, || Ok(()))
+}
+
 fn apply_mode_locked(
     config_file: &Path,
     nginx: Option<&Path>,
@@ -238,8 +243,16 @@ fn apply_mode_locked(
     mode: ApplyMode,
     verify: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    let config = Config::read(config_file)?;
+    let mut config = Config::read(config_file)?;
     if mode == ApplyMode::Configuration {
+        let manifest = ServiceEnv::from_process_env()
+            .confdir
+            .join("pipe/manifest.json");
+        if manifest.is_file() {
+            config.preserve_service_routes(&Config::read(&manifest)?)?;
+        } else if config.routes.iter().any(|route| route.owner.is_some()) {
+            return Err("MicroService routes must be managed through their service".into());
+        }
         super::firecrab::validate_config(&config)?;
     }
     let env = ServiceEnv::from_process_env();
@@ -294,6 +307,8 @@ fn apply_mode_locked(
 /// Configuration applies retain the legacy start behavior; Quick intents preserve peers.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ApplyMode {
+    /// Start ingress for a healthy service while preserving connector state.
+    ServiceRoute,
     Configuration,
     QuickTunnel,
 }
@@ -481,7 +496,8 @@ fn apply_with(
     let run_ingress = ingress_active
         || ingress_unit_file.previous.is_none()
         || mode == ApplyMode::Configuration
-        || connector_will_start;
+        || connector_will_start
+        || mode == ApplyMode::ServiceRoute;
     let apply = || -> Result<()> {
         for tunnel in &tunnels {
             if files[tunnel.file].next.is_none() && files[tunnel.file].previous.is_some() {
@@ -493,7 +509,10 @@ fn apply_with(
             write_atomic(&file.path, file.next.as_deref(), file.mode)?;
         }
         command(runner, "systemctl", &["daemon-reload"])?;
-        if ingress_unit_file.previous.is_none() || mode == ApplyMode::Configuration {
+        if ingress_unit_file.previous.is_none()
+            || mode == ApplyMode::Configuration
+            || mode == ApplyMode::ServiceRoute
+        {
             command(runner, "systemctl", &["enable", INGRESS_UNIT])?;
         }
         if run_ingress {

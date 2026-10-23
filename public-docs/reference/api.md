@@ -8,6 +8,7 @@ Keep the unauthenticated listener on a trusted loopback path.
 - [Request rules](#request-rules)
 - [VM endpoints and fields](#vm-endpoints)
 - [Startup reconciliation](#api-startup-reconciliation)
+- [Schedules](../guides/schedules.md#rest-api)
 - [Other endpoints](#other-endpoints)
 - [Host responses](#host)
 - [Update](#update)
@@ -33,6 +34,7 @@ Keep the unauthenticated listener on a trusted loopback path.
 | GET, POST | `/api/vms` | List / create |
 | GET, PUT, DELETE | `/api/vms/{id}` | Read / edit / delete |
 | POST | `/api/vms/{id}/start`, `/stop` | Start / stop |
+| POST | `/api/vms/{id}/pause`, `/resume` | Preserve guest execution state / continue it |
 | GET | `/api/vms/{id}/log` | Full console transcript |
 | GET | `/api/vms/{id}/ssh-key` | Operator private key (`firecrab-<name>.pem`) |
 | GET | `/api/vms/{id}/ssh-host-key` | Guest fingerprint and public key |
@@ -87,6 +89,17 @@ created -> starting -> running -> stopping -> stopped
 ```
 
 Start accepts `created`, `stopped`, and `error`; delete requires an inactive VM.
+Pause follows `running → pausing → paused`; resume follows `paused → resuming → running`.
+The same VMM, RAM, disks, and network identity remain allocated.
+Repeated pause/resume calls are safe and return a confirmed runtime state.
+A lost VMM answer is checked through its instance API before success is reported.
+An unconfirmed operation stays `pausing`/`resuming`; retry Pause/Resume or Stop.
+API restarts query the VMM and preserve a surviving paused guest.
+Stop works from paused or unconfirmed execution states and discards guest RAM.
+Start, delete, resource/env edits, and shell/storage changes remain unavailable while paused.
+MicroService-owned replicas and internal image builders return `409` for pause/resume.
+Existing serial consoles can read history while paused; keystrokes are discarded until Running.
+External requests and guest health probes cannot complete while paused.
 The console closes when a VM stops.
 Guest logout closes it with `4000 session_ended` while the VM keeps running.
 A new attachment replays only the new login session; reconnecting before logout retains current history.

@@ -21,8 +21,10 @@ mod micro_services;
 mod pipe_auth;
 mod pipe_databases;
 mod registries;
+mod schedules;
 mod security_groups;
 pub use registries::RegistryLogin;
+pub(crate) use schedules::ScheduleMutation;
 
 /// Default SQLite database path, relative to the process's working directory.
 const DB_FILE: &str = "data/firecrab.db";
@@ -694,6 +696,7 @@ impl Store {
         migrate_ipv6_columns(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
+        conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;

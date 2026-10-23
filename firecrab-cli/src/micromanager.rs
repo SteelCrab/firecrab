@@ -3,6 +3,8 @@
 //! Each host has its own backend module; everything they share lives beside them.
 
 mod artifact;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod controller;
 mod debug;
 mod dev;
 mod host_platform;
@@ -15,6 +17,9 @@ mod os_repair;
 mod resource;
 mod resource_server;
 mod runtime;
+mod settings;
+mod settings_tui;
+mod sleepy;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod snapshot;
 // Everything but the `wsl.exe` and `schtasks.exe` calls is plain Rust, so the
@@ -36,6 +41,18 @@ pub(crate) use macos::run_guest_command;
 pub use windows::run;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::run_guest_command;
+
+/// Use the activated controller port, preserving the old port until settings
+/// are applied. Explicit API flags and saved remote hosts take precedence.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn local_api_base() -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    let home = windows::lifecycle::Layout::from_process_env().map(|layout| layout.managed_home);
+    #[cfg(target_os = "macos")]
+    let home = macos::lifecycle::Layout::from_process_env().map(|layout| layout.managed_home);
+    let Ok(home) = home else { return Ok(None) };
+    controller::local_api_base(&home).map_err(|error| error.to_string())
+}
 
 /// `println!` panics if the write returns an error, and on some terminal
 /// multiplexers a burst of output (a progress bar redraw, then this line)
@@ -122,8 +139,10 @@ pub enum Command {
     },
     /// Start the resident management VM and wait for the local API.
     Start,
-    /// Stop the resident management VM.
+    /// Stop the resident management VM; keep the development dashboard running.
     Stop,
+    /// Restart the resident management VM and wait for the local API; keep the dev dashboard.
+    Restart,
     /// Show the resident service, VM readiness, and local API status.
     Status,
     /// Check that this host can run the managed Debian VM.
@@ -134,6 +153,21 @@ pub enum Command {
     },
     /// Show and validate the managed Debian VM configuration.
     Validate,
+    /// Edit microManager settings in a terminal (no workload management).
+    Settings {
+        /// Print saved settings without starting the management VM.
+        #[arg(long, conflicts_with = "set")]
+        json: bool,
+        /// Save one or more settings, e.g. --set sleepy=true --set idle_minutes=10.
+        #[arg(long, value_name = "KEY=VALUE")]
+        set: Vec<String>,
+    },
+    /// Host-side API proxy; launched by the resident controller service.
+    #[command(hide = true)]
+    Controller {
+        #[arg(long)]
+        home: std::path::PathBuf,
+    },
     /// Diagnose the managed VM without changing its state.
     Debug {
         /// Emit a machine-readable diagnostic report.
@@ -157,7 +191,7 @@ pub enum Command {
         /// Build optimized guest binaries instead of debug binaries.
         #[arg(long, conflicts_with = "restore")]
         release: bool,
-        /// Remove development overrides and restart the installed release binaries.
+        /// Stop workload MicroVMs and restore the installed release binaries.
         #[arg(long)]
         restore: bool,
         /// Skip the artifact download prompt if the management VM needs installation.
@@ -190,10 +224,12 @@ pub enum Command {
 pub enum DevCommand {
     /// Start the deployed API/helper and dashboard without rebuilding or booting the VM.
     Start,
-    /// Stop the API/helper and development dashboard while keeping microManager running.
+    /// Stop the API/helper if the VM is running, and stop the development dashboard.
     Stop,
     /// Restart the deployed API/helper and dashboard without rebuilding or rebooting the VM.
     Restart,
+    /// Stop workload MicroVMs, restore installed services, and remove development state.
+    Clean,
 }
 
 impl DevCommand {
@@ -202,6 +238,7 @@ impl DevCommand {
             Self::Start => "start",
             Self::Stop => "stop",
             Self::Restart => "restart",
+            Self::Clean => "clean",
         }
     }
 }
@@ -372,11 +409,36 @@ mod tests {
     }
 
     #[test]
+    fn management_vm_controls_are_separate_from_dev_controls() {
+        for (action, dev_command) in [
+            ("start", DevCommand::Start),
+            ("stop", DevCommand::Stop),
+            ("restart", DevCommand::Restart),
+        ] {
+            let cli = TestCli::try_parse_from(["test", action]).unwrap();
+            assert!(matches!(
+                (cli.command, action),
+                (Command::Start, "start") | (Command::Stop, "stop") | (Command::Restart, "restart")
+            ));
+            let cli = TestCli::try_parse_from(["test", "dev", action]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Command::Dev { command: Some(command), .. } if command == dev_command
+            ));
+        }
+    }
+
+    #[test]
     fn dev_controls_are_separate_from_build_and_restore_options() {
         let cli = TestCli::try_parse_from(["test", "dev"]).unwrap();
         assert!(matches!(cli.command, Command::Dev { command: None, .. }));
 
-        for command in [DevCommand::Start, DevCommand::Stop, DevCommand::Restart] {
+        for command in [
+            DevCommand::Start,
+            DevCommand::Stop,
+            DevCommand::Restart,
+            DevCommand::Clean,
+        ] {
             let cli = TestCli::try_parse_from(["test", "dev", command.as_str()]).unwrap();
             assert!(matches!(
                 cli.command,

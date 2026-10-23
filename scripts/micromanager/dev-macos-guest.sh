@@ -45,7 +45,7 @@ case "$profile" in
     [[ "$archive_name" != */* ]]
     [[ "$channel" =~ ^[a-zA-Z0-9.-]+$ ]]
     ;;
-  start|stop|restart|check) ;;
+  start|stop|restart|clean|check) ;;
   *) echo 'invalid build profile or service action' >&2; exit 1 ;;
 esac
 
@@ -118,7 +118,7 @@ finish() {
   set +e
   if [ "$rc" -ne 0 ] && ! check_filesystems; then
     echo '[FAIL] guest OS filesystem is unhealthy; stop retrying the build and run firecrab service repair' >&2
-    echo "[PRESERVE] deployment backup: $backup; source archive: $root/$archive_name" >&2
+    echo "[PRESERVE] deployment backup: $backup; development cache: $root" >&2
     exit 74
   fi
   if [ "$rc" -ne 0 ] && [ "$deploying" -eq 1 ]; then
@@ -142,7 +142,9 @@ finish() {
     systemctl start "$helper_unit"
     systemctl start firecrab-api
   fi
-  if ! rm -f "$root/$archive_name" "$bin_root/bin.next" || ! rm -rf "$backup"; then
+  cleanup=("$bin_root/bin.next")
+  if [ -n "${archive_name:-}" ]; then cleanup+=("$root/$archive_name"); fi
+  if ! rm -f "${cleanup[@]}" || ! rm -rf "$backup"; then
     echo '[WARN] guest deployment cleanup failed; inspect filesystem errors with firecrab service debug --logs' >&2
   fi
   if [ "$rc" -ne 0 ] && [ -n "$binaries" ]; then rm -rf "$binaries"; fi
@@ -152,7 +154,7 @@ trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if [ "$profile" != restore ]; then
+if [ "$profile" != restore ] && [ "$profile" != clean ]; then
   phase=build
   case "$(uname -m)" in
     aarch64) target=aarch64-unknown-linux-gnu ;;
@@ -261,8 +263,28 @@ fi
 # remain installed. Helper write access also covers pipe config and unit files.
 deploying=1
 phase=activate
-systemctl stop firecrab-api "$helper_unit"
-if [ "$profile" = restore ]; then
+systemctl stop firecrab-api
+if [ "$profile" = restore ] || [ "$profile" = clean ]; then
+  # The installed API may predate VM shims and cannot adopt them. Stop them
+  # synchronously before switching binaries so no old Firecracker holds a TAP
+  # or disk when that API starts a replacement. The API is already down so it
+  # cannot launch new replicas while the loaded units are being collected.
+  phase=stop-vms
+  vm_listing=$(systemctl list-units --all --plain --no-legend --no-pager 'firecrab-vm-*.service')
+  vm_units=()
+  while read -r unit _; do
+    if [[ "$unit" =~ ^firecrab-vm-[0-9a-f]{32}\.service$ ]]; then
+      vm_units+=("$unit")
+    fi
+  done <<< "$vm_listing"
+  if [ "${#vm_units[@]}" -gt 0 ]; then
+    echo "[STOP] waiting for ${#vm_units[@]} MicroVM unit(s) before restoring installed services"
+    systemctl stop "${vm_units[@]}"
+  fi
+  phase=activate
+fi
+systemctl stop "$helper_unit"
+if [ "$profile" = restore ] || [ "$profile" = clean ]; then
   for unit in firecrab-api firecrab-helper firecrab-net-helper; do
     rm -f "$unit_root/$unit.service.d/90-firecrab-dev.conf"
   done
@@ -303,7 +325,7 @@ for _ in $(seq 1 60); do
     check_filesystems || exit 74
     deploying=0
     keep_ingress_build=0
-    if [ "$profile" = restore ]; then
+    if [ "$profile" = restore ] || [ "$profile" = clean ]; then
       # Pipe outlives the API. Keep an engine still referenced by its unit,
       # including an inactive unit that an operator can start again later.
       if grep -Fq "$bin_root/bin/firecrab-ingress" "$unit_root/firecrab-ingress.service" 2>/dev/null; then
@@ -311,6 +333,21 @@ for _ in $(seq 1 60); do
       else
         rm -f "$bin_root/bin"
       fi
+    fi
+    if [ "$profile" = clean ]; then
+      phase=clean
+      # Release services are healthy. Keep the lock inode while removing caches.
+      if [ "$keep_ingress_build" = 0 ]; then
+        rm -rf -- "$bin_root"
+      else
+        echo '[PASS] guest: binaries referenced by independent ingress preserved'
+      fi
+      shopt -s dotglob nullglob
+      for entry in "$root"/*; do
+        if [ "$entry" != "$root/deploy.lock" ]; then rm -rf -- "$entry"; fi
+      done
+      echo '[PASS] guest: development files cleaned; installed release API + helper are ready'
+      exit 0
     fi
     if [ "$keep_ingress_build" = 0 ]; then
       case "$previous_bin" in

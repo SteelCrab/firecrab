@@ -170,6 +170,9 @@ async fn active_and_orphaned_vm_runtimes_block_policy_changes() {
     for state_value in [
         crate::model::VmState::Starting,
         crate::model::VmState::Running,
+        crate::model::VmState::Pausing,
+        crate::model::VmState::Paused,
+        crate::model::VmState::Resuming,
         crate::model::VmState::Stopping,
     ] {
         state.vms.lock().unwrap().get_mut(&vm.id).unwrap().state = state_value;
@@ -454,6 +457,7 @@ async fn service_ownership_blocks_rules_and_replica_attachment_edits_until_clean
         }],
         log: vec![],
         error: None,
+        domain_route_owned: false,
     };
     state.store.save_service_deployment(&deployment).unwrap();
     let rules = format!("/api/security-groups/{group}/rules");

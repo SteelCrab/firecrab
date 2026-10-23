@@ -1226,3 +1226,104 @@ fn named_connect_and_disconnect_keep_independent_quick_connectors_running() {
     let saved = Config::read(&directory.path().join("config/pipe/manifest.json")).unwrap();
     assert_eq!(saved.quick_tunnels, config.quick_tunnels);
 }
+
+#[test]
+fn service_domain_publication_starts_ingress_without_resuming_a_stopped_connector() {
+    use firecrab_helper_protocol::pipe::{ServiceRouteOwner, ServiceRouteRequest};
+    let directory = tempfile::tempdir().unwrap();
+    let saved = named_config(directory.path());
+    apply_fixture(&transaction_runner(false), directory.path(), &saved, || {
+        Ok(())
+    })
+    .unwrap();
+    let next = ServiceRouteRequest::Publish {
+        owner: ServiceRouteOwner {
+            service_id: uuid::Uuid::from_u128(1),
+            deployment_id: uuid::Uuid::from_u128(2),
+        },
+        host: "service.example.com".into(),
+        upstreams: vec!["172.30.0.2:8080".parse().unwrap()],
+    }
+    .updated_config(&saved)
+    .unwrap();
+    let runner = transaction_runner(false);
+    apply_with(
+        &runner,
+        (
+            &directory.path().join("config"),
+            &directory.path().join("units"),
+        ),
+        &next,
+        (
+            Path::new("/usr/sbin/nginx"),
+            Path::new("/opt/firecrab/cloudflared"),
+        ),
+        ApplyMode::ServiceRoute,
+        |_| Ok(()),
+        || Ok(()),
+    )
+    .unwrap();
+    assert!(
+        runner
+            .calls()
+            .contains(&format!("systemctl start {INGRESS_UNIT}"))
+    );
+    assert!(
+        !runner
+            .calls()
+            .contains(&format!("systemctl start {TUNNEL_UNIT}"))
+    );
+    assert!(
+        !runner
+            .calls()
+            .contains(&format!("systemctl restart {TUNNEL_UNIT}"))
+    );
+    assert_eq!(
+        Config::read(&directory.path().join("config/pipe/manifest.json"))
+            .unwrap()
+            .routes,
+        next.routes
+    );
+}
+
+#[test]
+fn repeated_service_route_cleanup_verifies_the_serving_generation() {
+    let directory = tempfile::tempdir().unwrap();
+    let config: Config =
+        serde_json::from_value(serde_json::json!({"routes":[],"tunnel":null})).unwrap();
+    apply_fixture(
+        &transaction_runner(false),
+        directory.path(),
+        &config,
+        || Ok(()),
+    )
+    .unwrap();
+    let runner = transaction_runner(true);
+    let checked = std::cell::Cell::new(false);
+    apply_with(
+        &runner,
+        (
+            &directory.path().join("config"),
+            &directory.path().join("units"),
+        ),
+        &config,
+        (
+            Path::new("/usr/sbin/nginx"),
+            Path::new("/opt/firecrab/cloudflared"),
+        ),
+        ApplyMode::QuickTunnel,
+        |generation| {
+            assert_eq!(generation, config.generation());
+            checked.set(true);
+            Ok(())
+        },
+        || Ok(()),
+    )
+    .unwrap();
+    assert!(checked.get());
+    assert!(
+        runner
+            .calls()
+            .contains(&format!("systemctl reload {INGRESS_UNIT}"))
+    );
+}

@@ -10,9 +10,11 @@ import type { Locale } from "./i18n";
 export const VIEWS = [
   { id: "vms", group: "compute", labels: { en: "MicroVM", ko: "MicroVM" } },
   { id: "services", group: "compute", labels: { en: "MicroService", ko: "MicroService" } },
+  { id: "schedules", group: "compute", labels: { en: "Schedules", ko: "스케줄러" } },
   { id: "networks", group: "network", labels: { en: "Networks", ko: "네트워크" } },
   { id: "security-groups", group: "network", labels: { en: "Security groups", ko: "보안그룹" } },
   { id: "pipe", group: "network", labels: { en: "Pipe", ko: "Pipe" } },
+  { id: "secrets", group: "data", labels: { en: "Secrets", ko: "Secrets" } },
   { id: "storages", group: "data", labels: { en: "Storage", ko: "스토리지" } },
   { id: "images", group: "data", labels: { en: "Images", ko: "이미지" } },
   { id: "kernels", group: "data", labels: { en: "Kernels", ko: "커널" } },
@@ -103,6 +105,19 @@ export function viewHash(view: ViewId = DEFAULT_VIEW): string {
   return `#/${view}`;
 }
 
+/** Preserve the selected VM across the scheduler and VM detail screens. */
+export function vmDetailsHash(vmId: string): string {
+  return `#/vms?vm=${encodeURIComponent(vmId)}`;
+}
+
+export function schedulesHash(vmId?: string, create = false, scheduleId?: string): string {
+  const query = new URLSearchParams();
+  if (vmId) query.set("vm", vmId);
+  if (create) query.set("new", "1");
+  if (scheduleId) query.set("schedule", scheduleId);
+  return `#/schedules${query.size ? `?${query}` : ""}`;
+}
+
 /** Dedicated New MicroVM page. Not a `VIEWS` id — `#/vms` stays the list. */
 const NEW_VM_PATH = "vms/new";
 
@@ -125,13 +140,13 @@ export function pipeCardHash(card: PipeCardId): string {
  * clipped xterm after leaving "fullscreen".
  */
 export type AppRoute =
-  | { kind: "shell"; view: ViewId }
+  | { kind: "shell"; view: ViewId; vmId?: string; createSchedule?: boolean; scheduleId?: string }
   | { kind: "console"; vmId: string }
   | { kind: "vm-new" }
   | { kind: "pipe-card"; card: PipeCardId };
 
 export function parseAppRoute(hash: string = window.location.hash): AppRoute {
-  const path = stripHash(hash);
+  const [path = "", query = ""] = stripHash(hash).split("?");
   const consoleMatch = path.match(CONSOLE_RE);
   if (consoleMatch?.[1]) {
     try {
@@ -143,7 +158,12 @@ export function parseAppRoute(hash: string = window.location.hash): AppRoute {
   if (path === NEW_VM_PATH) return { kind: "vm-new" };
   const card = path.match(PIPE_CARD_RE)?.[1];
   if (PIPE_CARDS.some(id => id === card)) return { kind: "pipe-card", card: card as PipeCardId };
-  return { kind: "shell", view: parseViewId(path) ?? DEFAULT_VIEW };
+  const view = parseViewId(path) ?? DEFAULT_VIEW;
+  if (view === "vms" || view === "schedules") {
+    const params = new URLSearchParams(query);
+    return { kind: "shell", view, vmId: params.get("vm") || undefined, createSchedule: view === "schedules" && params.get("new") === "1", scheduleId: view === "schedules" ? params.get("schedule") || undefined : undefined };
+  }
+  return { kind: "shell", view };
 }
 
 /**
@@ -204,7 +224,7 @@ export function useAppRoute(confirmLeave?: () => boolean): {
   // the same route immediately on first paint after `npm run dev`.
   useEffect(() => {
     if (route.kind !== "shell") return;
-    const path = stripHash(window.location.hash);
+    const path = stripHash(window.location.hash).split("?")[0] ?? "";
     // `#/vms/new` is not a ViewId; do not rewrite it to the list.
     if (path === NEW_VM_PATH) return;
     if (parseViewId(path) === null && parseConsoleVmId(window.location.hash) === null) {

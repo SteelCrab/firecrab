@@ -1125,3 +1125,51 @@ table.image-table tbody tr.is-selected td {
   .pipe-auth-heading { padding: 16px 12px; }
   .pipe-auth-connections .pipe-auth-account, .pipe-auth-connections .pipe-auth-services { display: none; }
 }
+
+.service-domain-panel {
+  margin-block: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.service-domain-panel p { margin-block: .5rem; }
+
+/* PipeSecrets follows the console's existing panel and form styles. */
+.secrets-panel { min-width: 0; }
+.secrets-badge { display: inline-block; padding: .25rem .5rem; border: 1px solid var(--border); border-radius: 3px; color: var(--text-2); font: .72rem var(--mono); }
+.secrets-tabs, .secrets-toolbar, .secrets-upload, .secrets-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.secrets-tabs { border-bottom: 1px solid var(--border); padding-bottom: 1rem; margin: 1rem 0; }
+.secrets-tabs button span { margin-left: .5rem; opacity: .75; }
+.secrets-toolbar { margin: 1rem 0; }
+.secrets-toolbar .secrets-search { flex: 1; min-width: 10rem; }
+.secrets-upload { padding: .85rem; background: var(--bg); border: 1px solid var(--border); margin-bottom: 1rem; }
+.secrets-upload select { flex: 1; min-width: 10rem; max-width: 100%; }
+.secrets-description { display: block; color: var(--text-2); font-size: .72rem; margin-top: .3rem; overflow-wrap: anywhere; }
+.secrets-value { display: flex; align-items: flex-start; gap: .5rem; }
+.secrets-value-text { min-width: 8ch; max-width: 16rem; max-height: 8rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.secrets-notice { color: var(--green-ink); }
+.secrets-connections { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 1rem; }
+.secrets-connection { display: flex; flex-direction: column; justify-content: space-between; gap: 1rem; border: 1px solid var(--border); padding: 1rem; border-radius: 4px; min-width: 0; }
+.secrets-connection h3 { margin: .8rem 0 .4rem; }
+.secrets-connection p { font-size: .8rem; overflow-wrap: anywhere; }
+.secrets-form { max-width: 48rem; }
+.secrets-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.secrets-field { display: grid; gap: .4rem; margin: 1rem 0; }
+.secrets-field input, .secrets-field textarea, .secrets-field select, .secrets-search, .secrets-upload select { width: 100%; min-width: 0; height: var(--control-height); border: 1px solid var(--border); border-radius: var(--radius); padding: 0 10px; background: var(--bg); color: var(--text); font: 13px var(--font); }
+.secrets-field select, .secrets-upload select { padding-right: 28px; }
+.secrets-field textarea { height: auto; min-height: 80px; padding: 8px 10px; line-height: 1.5; resize: vertical; }
+.secrets-masked-input { -webkit-text-security: disc; }
+.secrets-checkbox { display: flex; align-items: center; gap: .5rem; font-size: .85rem; margin: .75rem 0; }
+.secrets-changes { margin: 1rem 0; max-height: 24rem; overflow-y: auto; border: 1px solid var(--border); }
+.secrets-change { display: flex; align-items: center; gap: .75rem; padding: .8rem; border-bottom: 1px solid var(--border); font-size: .85rem; }
+.secrets-change:last-child { border-bottom: 0; }
+.secrets-change code { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.secrets-change-add { color: var(--green-ink); }
+.secrets-change-update { color: var(--amber-ink); }
+.secrets-change-unchanged { color: var(--text-2); }
+@media (max-width: 640px) {
+  .secrets-table { min-width: 50rem; }
+  .secrets-toolbar .secrets-search { flex-basis: 100%; }
+  .secrets-change { flex-wrap: wrap; }
+}
