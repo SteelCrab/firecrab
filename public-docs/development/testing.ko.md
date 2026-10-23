@@ -51,6 +51,7 @@ API·CLI·브라우저 검사 결과를 따로 기록한다.
 - [ ] **A17 — 배포판 의존성:** Debian 12, Fedora, Arch, openSUSE Tumbleweed에서 의존성을 점검·설치한다.
 - [ ] **A18 — 개발 배포 계약:** 공통 게스트 빌드·배포·rollback 회귀 검사를 실행한다. 실제 `service dev` 검증은 별도로 기록한다.
 - [ ] **A19 — QA 실행기 계약:** VM 없이 게스트 실패·정리, 네이티브 Windows 단계별 결과 수집, 브라우저 모드·API 조건을 검증한다.
+- [ ] **A20 — microManager 설정·Sleepy:** PTY에서 키보드 편집·저장·폐기와 터미널 복원을 검사한다. 실제 Windows/WSL2에서 `scripts/test-micromanager-sleepy.ps1 -CliPath ./firecrab.exe`로 유휴 종료·작업 요청에 의한 기동·실행 중 VM의 절전 방지·수동 중지를 검증한다. [설정·Sleepy 안내](../guides/micromanager-settings.md)를 따른다. macOS 실행 검증은 실제 Mac에서 별도로 수행한다.
 
 ## 플랫폼 및 호스트
 

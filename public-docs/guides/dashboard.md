@@ -76,3 +76,13 @@ The Host panel refreshes service states every ten seconds and clears stale state
 - [API](../reference/api.md) and [CLI](../reference/cli.md)
 - [Development setup](../../CONTRIBUTING.md#run-from-source)
 - [Troubleshooting](troubleshooting.md)
+
+## Pause a MicroVM
+
+For a running standalone MicroVM, select **Pause** in its row, actions menu, or
+detail panel. **Paused** means guest execution stopped and RAM remains allocated.
+Select **Resume** to continue the same guest. The **Paused** filter lists these VMs.
+Start, Delete, resource/env edits, and new console/SSH actions are unavailable while paused.
+Stop remains available and discards in-memory execution state.
+If state confirmation fails, the detail panel offers **Retry pause**, **Retry resume**,
+and **Stop**. See [operations](operations.md#pause-and-resume-a-microvm).
