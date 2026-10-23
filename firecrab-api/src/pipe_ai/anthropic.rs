@@ -4,9 +4,12 @@ use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
 
+/// Official credential verification endpoint; no inference request is sent.
 pub const CREDENTIAL_ENDPOINT: &str = "https://api.anthropic.com/v1/models";
+/// Pinned request version for the supported Models API response contract.
 pub const API_VERSION: &str = "2026-10-21";
 
+/// Connection-only Anthropic client with fixed endpoints and bounded responses.
 #[derive(Debug, Clone)]
 pub struct Anthropic {
     client: Client,
@@ -14,6 +17,7 @@ pub struct Anthropic {
 }
 
 impl Anthropic {
+    /// Construct the production client without redirect following or automatic retries.
     pub fn new() -> Self {
         Self {
             client: Client::builder()
@@ -27,6 +31,7 @@ impl Anthropic {
     }
 
     #[cfg(test)]
+    /// Use a local credential-verification fixture without production network calls.
     pub fn at(credential_endpoint: String) -> Self {
         Self {
             credential_endpoint,
@@ -34,6 +39,7 @@ impl Anthropic {
         }
     }
 
+    /// Validate a workspace API key without selecting, invoking, or advertising a model.
     pub async fn verify_credentials(&self, api_key: &str) -> Result<(), Failure> {
         let response = self
             .client

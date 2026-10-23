@@ -10,20 +10,26 @@ pub mod anthropic;
 mod oauth;
 pub use oauth::{LoginRegistry, OAuthRegistration, OAuthSession};
 
+/// Fixed text inference endpoint for the OpenAI adapter.
 pub const ENDPOINT: &str = "https://api.openai.com/v1/responses";
+/// Credential-only verification endpoint; listing models does not prove inference access.
 pub const CREDENTIAL_ENDPOINT: &str = "https://api.openai.com/v1/models";
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
-// No Debug: the private record must never print a credential.
+/// Private server record. No Debug implementation is allowed to print its credentials.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct SavedConnection {
+    /// Public metadata that may be returned to Dashboard, CLI, and MCP clients.
     pub connection: AiConnection,
+    /// Provider API key or current OAuth access token; never sent to clients.
     pub api_key: String,
+    /// Optional private refresh session for a ChatGPT account.
     #[serde(default)]
     pub oauth: Option<OAuthSession>,
 }
 
 impl SavedConnection {
+    /// Replace saved access and refresh credentials in user input or returned text.
     pub fn redact(&self, text: &str) -> String {
         let mut text = if self.api_key.is_empty() {
             text.to_owned()
@@ -39,6 +45,7 @@ impl SavedConnection {
     }
 }
 
+/// Bounded, fixed-endpoint OpenAI client without automatic redirects or inference retries.
 #[derive(Debug, Clone)]
 pub struct OpenAi {
     client: Client,
@@ -47,20 +54,31 @@ pub struct OpenAi {
     auth_base: String,
 }
 
+/// Sanitized provider failures shared by connection and model operations.
 #[derive(Debug, Clone, Copy)]
 pub enum Failure {
+    /// Client input is invalid or the provider rejected its request parameters.
     InvalidInput,
+    /// The provider rejected or expired the supplied credential.
     Authentication,
+    /// The selected model is unavailable to this account.
     ModelDenied,
+    /// Provider quota or request limits were reached.
     RateLimited,
+    /// The provider deadline expired and the request outcome may be uncertain.
     Timeout,
+    /// Transport, status, or response shape did not match the provider contract.
     Provider,
+    /// Inference did not yield a complete assistant text response.
     NoText,
+    /// Authorization state or token identity validation failed.
     Login,
+    /// Required account plan usage consent was not granted.
     Consent,
 }
 
 impl Failure {
+    /// Public HTTP status, stable code, and message without provider secrets.
     pub fn details(self) -> (StatusCode, &'static str, &'static str) {
         match self {
             Self::Login => (
@@ -113,6 +131,7 @@ impl Failure {
 }
 
 impl OpenAi {
+    /// Construct the production client using pinned HTTPS provider endpoints.
     pub fn new() -> Self {
         Self {
             client: Client::builder()
@@ -128,6 +147,7 @@ impl OpenAi {
     }
 
     #[cfg(test)]
+    /// Point provider requests at an isolated local test fixture.
     pub fn at(endpoint: String) -> Self {
         let auth_base = endpoint.trim_end_matches("/v1/responses").to_owned();
         Self {
@@ -172,6 +192,7 @@ impl OpenAi {
         self.infer(api_key, model, input, false).await
     }
 
+    /// Run a bounded text request with the credential's API-key or ChatGPT contract.
     pub async fn infer(
         &self,
         api_key: &str,
@@ -292,6 +313,7 @@ fn transport_failure(error: reqwest::Error) -> Failure {
     }
 }
 
+/// Restrict model identifiers to a bounded provider-safe character set.
 pub fn validate_model(model: &str) -> Result<(), Failure> {
     if model.is_empty()
         || model.len() > 200
@@ -304,6 +326,7 @@ pub fn validate_model(model: &str) -> Result<(), Failure> {
     Ok(())
 }
 
+/// Reject malformed or secret-bearing metadata before contacting the selected provider.
 pub fn validate_connection(input: &AiConnectionInput) -> Result<(), Failure> {
     if input.provider == firecrab_api_types::AiProvider::Anthropic && input.model.is_some() {
         return Err(Failure::InvalidInput);

@@ -22,25 +22,39 @@ const SCOPES: &str =
     "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
 const LOGIN_TTL: Duration = Duration::from_secs(600);
 
+/// Private refresh session persisted only on the API host.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct OAuthSession {
+    /// Public client identity issued during account authorization.
     pub client_id: String,
+    /// Signed account subject used to bind future refreshes to the same user.
     pub subject: String,
+    /// Rotating refresh credential; never returned in public metadata.
     pub refresh_token: String,
+    /// Access-token expiry as Unix seconds.
     pub expires_at: u64,
+    /// Earliest refresh time permitted by the provider, as Unix seconds.
     pub earliest_refresh_at: u64,
+    /// Granted scopes checked independently of model inference permission.
     pub scope: String,
 }
 
+/// Non-secret registration retained for reconnecting the same account.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct OAuthRegistration {
+    /// Public client identity reused by the next authorization attempt.
     pub client_id: String,
+    /// Expected signed account subject; replacement cannot switch identities.
     pub subject: String,
 }
 
+/// Ephemeral authorization context consumed once by the callback handler.
 pub struct PendingLogin {
+    /// Connection to replace only after the login succeeds.
     pub connection_id: Uuid,
+    /// Validated display name and optional, explicit inference probe.
     pub input: AiLoginRequest,
+    /// Loopback callback bound to this API's listening port.
     pub redirect_uri: String,
     verifier: String,
     nonce: String,
@@ -55,6 +69,7 @@ struct Attempt {
     status: AiLoginStatus,
 }
 
+/// Bounded login attempts with expiry, single-use state, and redacted debugging.
 #[derive(Default)]
 pub struct LoginRegistry(Mutex<HashMap<Uuid, Attempt>>);
 
@@ -73,6 +88,7 @@ fn random() -> Result<String, Failure> {
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
+/// Current Unix seconds used for token expiry and refresh checks.
 pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -81,6 +97,7 @@ pub fn now() -> u64 {
 }
 
 impl LoginRegistry {
+    /// Prepare a PKCE login while preserving the previously saved connection.
     pub fn begin(
         &self,
         connection_id: Uuid,
@@ -163,6 +180,7 @@ impl LoginRegistry {
         })
     }
 
+    /// Consume unexpired callback state once, rejecting replays.
     pub fn take(&self, state: Uuid) -> Result<PendingLogin, Failure> {
         let mut attempts = self.0.lock().map_err(|_| Failure::Login)?;
         let attempt = attempts
@@ -174,6 +192,7 @@ impl LoginRegistry {
         Ok(pending)
     }
 
+    /// Clear private attempt data and publish a sanitized completion result.
     pub fn finish(&self, state: Uuid, result: Result<(), Failure>) {
         if let Ok(mut attempts) = self.0.lock()
             && let Some(attempt) = attempts.get_mut(&state)
@@ -192,6 +211,7 @@ impl LoginRegistry {
         }
     }
 
+    /// Read public progress only while the attempt remains unexpired.
     pub fn status(&self, state: Uuid) -> Result<AiLoginStatus, Failure> {
         let attempts = self.0.lock().map_err(|_| Failure::Login)?;
         attempts
@@ -201,6 +221,7 @@ impl LoginRegistry {
             .ok_or(Failure::Login)
     }
 
+    /// Invalidate every outstanding attempt when its connection is replaced or removed.
     pub fn cancel_connection(&self, id: Uuid) {
         if let Ok(mut attempts) = self.0.lock() {
             attempts.retain(|_, a| a.connection_id != id);
@@ -277,6 +298,7 @@ impl OpenAi {
         verify_identity(token, &jwks, client_id, nonce, now())
     }
 
+    /// Exchange a code and validate signed identity, nonce, client, and granted scopes.
     pub async fn exchange(
         &self,
         pending: &PendingLogin,
@@ -326,6 +348,7 @@ impl OpenAi {
         Ok((tokens.access_token, session))
     }
 
+    /// Rotate an expiring session in place; return whether persistence must be updated.
     pub async fn refresh(&self, saved: &mut SavedConnection) -> Result<bool, Failure> {
         let Some(session) = &saved.oauth else {
             return Ok(false);
