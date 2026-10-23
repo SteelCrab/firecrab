@@ -159,6 +159,27 @@ pub enum Action {
     Blocked,
 }
 
+impl Action {
+    /// Stable CLI and JSON action name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Update => "update",
+            Self::Replace => "replace",
+            Self::Deploy => "deploy",
+            Self::Noop => "noop",
+            Self::Retain => "retain",
+            Self::Blocked => "blocked",
+        }
+    }
+}
+
+impl std::fmt::Display for Action {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One redacted plan entry.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

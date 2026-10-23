@@ -14,6 +14,22 @@ const NETWORK: Uuid = Uuid::from_u128(1);
 const VM: Uuid = Uuid::from_u128(2);
 const SERVICE: Uuid = Uuid::from_u128(3);
 
+#[test]
+fn human_and_json_action_names_match() {
+    for action in [
+        Action::Create,
+        Action::Update,
+        Action::Replace,
+        Action::Deploy,
+        Action::Noop,
+        Action::Retain,
+        Action::Blocked,
+    ] {
+        let value = serde_json::to_value(action).unwrap();
+        assert_eq!(action.to_string(), value.as_str().unwrap());
+    }
+}
+
 fn fixture() -> (Stack, StackRecord, Inventory) {
     let stack = parse(EXAMPLE).unwrap();
     let record = StackRecord {

@@ -39,3 +39,43 @@ variable "service_image" {
     error_message = "Provide a digest-pinned image reference."
   }
 }
+
+variable "vm_egress_policy" {
+  type        = string
+  default     = "internet"
+  description = "Explicit VM egress posture, preserved in creation and update payloads."
+  validation {
+    condition     = contains(["internet", "isolated"], var.vm_egress_policy)
+    error_message = "Use internet or isolated."
+  }
+}
+
+variable "vm_security_group_id" {
+  type        = string
+  default     = null
+  description = "Existing security group UUID for this network; null explicitly selects legacy networking."
+}
+
+variable "service_domain" {
+  type        = string
+  default     = null
+  description = "Managed service domain; null explicitly disables domain routing."
+}
+
+variable "service_replicas" {
+  type        = number
+  default     = 1
+  description = "Managed service replica count."
+}
+
+variable "service_env" {
+  type        = map(string)
+  default     = {}
+  description = "Managed plaintext test environment values, also stored in Terraform state."
+}
+
+variable "service_security_group_id" {
+  type        = string
+  default     = null
+  description = "Existing service security group UUID; null explicitly selects legacy networking."
+}

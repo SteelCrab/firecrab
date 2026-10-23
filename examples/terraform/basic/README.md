@@ -52,7 +52,11 @@ Known response fields omitted from `data` are listed in `ignore_changes_to`.
 Do not enable `ignore_server_additions` with restapi 3.0.0: live testing showed it preserves stale desired data on refresh and misses declared-field drift.
 New API response fields can require updating the ignore lists.
 Network name/CIDR changes and all VM configuration changes replace those resources.
+VM egress and security-group selection are explicit managed inputs, including when a VM is replaced.
 Service edits use the existing full-replacement `PUT` endpoint and require an undeployed service.
+Terraform owns the complete service specification, including domain, replicas, environment and security-group selection.
+Set these through the corresponding variables; out-of-band changes are drift and will be reverted to the declared values.
+The remaining runtime, health-check, timeout and empty secret-reference settings are explicit in `main.tf`.
 
 ## Runtime checks and cleanup
 

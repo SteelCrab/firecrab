@@ -180,7 +180,7 @@ pub fn run_remote(client: &ApiClient, command: Command) -> Result<(), Error> {
                 println!("KIND\tKEY\tACTION\tFIELDS / REASON");
                 for change in &plan.changes {
                     println!(
-                        "{}\t{}\t{:?}\t{}",
+                        "{}\t{}\t{}\t{}",
                         change.kind,
                         change.key,
                         change.action,
