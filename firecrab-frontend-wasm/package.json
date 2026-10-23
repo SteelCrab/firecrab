@@ -1,0 +1,16 @@
+{
+  "name": "firecrab-frontend-wasm",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "vite --host 127.0.0.1 --port 8081",
+    "preview": "vite preview --host 127.0.0.1 --port 8081"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0"
+  },
+  "devDependencies": { "vite": "8.3.4" }
+}
