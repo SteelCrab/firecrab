@@ -106,6 +106,8 @@ Browser tests cover account-only controls and terminal login/cancellation at des
 The installed official CLI's command contract and signed-out status are smoke-checked separately.
 On 2026-10-23, the official Linux CLI also ran through the real API, WebSocket and PTY: its native OAuth login URL appeared, closing the terminal canceled the login, and official logout plus metadata removal succeeded.
 That check did not complete account authentication or send inference; the existing ChatGPT connection remained present after API restart and smoke cleanup.
+An actual account login was attempted later on the same date. The Claude website rejected browser verification after Google account selection; the user reported the same error when retrying manually in a regular browser.
+After canceling the pending terminal, the real CLI-backed REST status was `signed_out`, while the existing ChatGPT connection remained connected. The underlying browser or network cause is undetermined. This failed attempt does not satisfy live-account acceptance.
 A live Claude account login, real model response, and MicroVM-local CLI execution have not been validated.
 
 ```sh
