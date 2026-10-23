@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- The browser console uses Ghostty WebAssembly for VT parsing, Unicode cells,
+  terminal modes and history. It supports mobile editing, composition,
+  bracketed paste, application mouse/focus reports and native grapheme export.
+  Session memory stays isolated; output and resize work are scheduled in frames.
+  The xterm dependency is removed. Tracked in [#453](https://github.com/SteelCrab/firecrab/issues/453).
+
 - MicroService domains connect healthy replicas to PipeIngress automatically,
   without host ports or manual routes. The dashboard shows the domain and DNS
   setup guidance, and the CLI accepts domain deployments without `--host-port`.
