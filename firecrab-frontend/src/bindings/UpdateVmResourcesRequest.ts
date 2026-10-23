@@ -6,6 +6,8 @@ export type UpdateVmResourcesRequest = {
   cpu: number,
   diskGb: number,
   egressPolicy: EgressPolicy,
+  /** Omitted preserves the attachment; null detaches it. */
+  securityGroupId?: string | null,
   /** Replacement environment map. Omitted keeps the stored map; {} clears. */
   env?: { [key: string]: string },
 };

@@ -76,6 +76,8 @@ impl PkgManager {
             (_, "e2fsprogs") => vec!["e2fsprogs"],
             (_, "fakeroot") => vec!["fakeroot"],
             (_, "xz") => vec!["xz"],
+            (Self::AptGet, "conntrack") => vec!["conntrack"],
+            (_, "conntrack") => vec!["conntrack-tools"],
             (_, "nftables") => vec!["nftables"],
             (_, "dnsmasq") => vec!["dnsmasq"],
             (_, "curl") => vec!["curl"],

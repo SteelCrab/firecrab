@@ -100,6 +100,9 @@ pub struct VmRecord {
     /// lease comes out of that network's subnet, so moving it would mean
     /// reallocating the address its guest already booted with.
     pub micro_network_id: Uuid,
+    /// Same-network firewall policy; legacy records keep no attachment.
+    #[serde(default)]
+    pub security_group_id: Option<Uuid>,
     /// Storage root id (from `FIRECRAB_STORAGE_ROOTS` / `GET /api/storage`).
     /// Disks live at `{root}/vms/{id}/`. Defaults to `"default"` so records
     /// written before multi-disk support keep the legacy `data/vms` path.

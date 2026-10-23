@@ -14,6 +14,7 @@ import Kernels from "./components/Kernels";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
 import MicroServices from "./components/MicroServices";
+import SecurityGroups from "./components/SecurityGroups";
 import Schedules from "./components/Schedules";
 import Shell from "./components/Shell";
 import Pipe from "./components/Pipe";
@@ -289,6 +290,7 @@ export default function App() {
           the moment you navigate away. */}
       {view === "pools" && <Screen view="pools"><Pools /></Screen>}
       {view === "networks" && <MicroNetworks />}
+      {view === "security-groups" && <SecurityGroups vms={state.vms} vmsAvailable={state.loaded && state.consecutiveFailures === 0} />}
       {view === "services" && <MicroServices />}
       {view === "schedules" && <Schedules key={route.kind === "shell" ? `${route.vmId ?? "all"}-${!!route.createSchedule}-${route.scheduleId ?? ""}` : "all"} vms={state.vms} vmsLoaded={state.loaded && state.consecutiveFailures === 0} vmId={route.kind === "shell" ? route.vmId : undefined} create={route.kind === "shell" && route.createSchedule} scheduleId={route.kind === "shell" ? route.scheduleId : undefined} />}
       {view === "secrets" && <Screen view="secrets"><Secrets onUnsavedChange={setSecretsHasUnsavedChanges} /></Screen>}

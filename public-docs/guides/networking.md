@@ -26,6 +26,7 @@ Deleting the VM frees the lease; the next allocation uses the lowest free addres
 
 Both network `internetEnabled` and VM `egressPolicy: internet` must allow internet access.
 An isolated VM keeps DHCP and gateway DNS.
+Use [security groups](security-groups.md) to restrict connections within an IPv4-only MicroNetwork.
 
 ```sh
 curl -fsS -X PATCH http://127.0.0.1:5523/api/micro-networks/NETWORK_ID \
@@ -91,7 +92,7 @@ Traffic between different MicroNetworks is blocked in both families.
 ## Delete and recover
 
 Delete a network with `DELETE /api/micro-networks/{id}`.
-Attached VMs or leases return `409`; delete those VMs first.
+Attached VMs, leases, or security groups return `409`; delete those resources first.
 
 SQLite is the desired-state source.
 Services recreate runtime networking after restart.

@@ -18,6 +18,8 @@ async function openServices(page: Page, rows: object[] = [], failSave = false) {
     if (path === "/api/pipe") return route.fulfill({ json: { config: null, units: [], nginxAvailable: true, cloudflaredAvailable: false } });
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/micro-networks") return route.fulfill({ json: [] });
+    if (path === "/api/security-groups") return route.fulfill({ json: [{ id: SECRET, name: "orders-policy", microNetworkId: ID, rules: [] }] });
+    if (path === `/api/security-groups/${SECRET}`) return route.fulfill({ json: { id: SECRET, name: "orders-policy", microNetworkId: ID, rules: [] } });
     if (path === "/api/host") return route.fulfill({ json: { loadAverage1m: 0.1, memoryTotalMib: 8192, memoryAvailableMib: 4096, diskTotalGib: 100, diskAvailableGib: 50, uptimeSeconds: 3600 } });
     if (path === "/api/update") return route.fulfill({ json: { current: "0.3.1", latest: "0.3.1", updateAvailable: false } });
     if (path === "/api/update/progress") return route.fulfill({ json: { phase: "idle", percent: 0, updatedAtMs: 0 } });
@@ -93,7 +95,7 @@ test.describe("MicroService configuration @dashboard", () => {
   });
 
   test("closes stale runtime settings after saving and preserves mobile headers", async ({ page }) => {
-    await openServices(page, [{ ...INITIAL, domain: null }]);
+    const writes = await openServices(page, [{ ...INITIAL, domain: null, securityGroupId: SECRET }]);
     await page.route(`**/api/micro-services/${ID}/deployment`, (route) => route.fulfill({ json: null }));
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("Not deployed");
@@ -103,6 +105,7 @@ test.describe("MicroService configuration @dashboard", () => {
     await page.getByRole("button", { name: "Save configuration" }).click();
     await expect(page.getByRole("heading", { name: "Run: orders", exact: true })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Edit: orders", exact: true })).toHaveCount(0);
+    expect(writes[0].body.securityGroupId).toBe(SECRET);
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.getByText("Each replica uses one host port, starting at 30100. App port: 9090.", { exact: true })).toBeVisible();
     await expect(page.getByLabel("First host port")).toHaveAttribute("max", "65533");
@@ -197,13 +200,13 @@ test.describe("MicroService configuration @dashboard", () => {
   });
 });
 
-test("domain deployment needs no port input and shows DNS guidance on mobile", async ({ page }, testInfo) => {
-  const service = { ...INITIAL, replicas: 1, secrets: {} };
+test("domain deployment inherits the security-group network and shows DNS guidance on mobile", async ({ page }, testInfo) => {
+  const service = { ...INITIAL, replicas: 1, secrets: {}, securityGroupId: SECRET };
   await openServices(page, [service]);
   let deployment: Record<string, unknown> | null = null;
   await page.route(`**/api/micro-services/${ID}/deployment`, async route => {
     if (route.request().method() === "POST") {
-      expect(route.request().postDataJSON()).toEqual({ microNetworkId: null });
+      expect(route.request().postDataJSON()).toEqual({ microNetworkId: ID });
       deployment = { id: SECRET, serviceId: ID, spec: service, phase: "running", request: { hostPort: 0 }, domainRouteOwned: true,
         instances: [{ vmId: SECRET, ipv4: "172.30.0.2", hostPort: 0, state: "running", healthy: true }], digest: null, error: null, log: ["Domain connected"] };
       return route.fulfill({ status: 202, json: deployment });
@@ -215,6 +218,9 @@ test("domain deployment needs no port input and shows DNS guidance on mobile", a
   await expect(page.getByRole("status")).toHaveText("Not deployed");
   await expect(page.getByLabel("First host port")).toHaveCount(0);
   await expect(page.getByLabel("Network", { exact: true })).not.toBeVisible();
+  await page.getByText("Advanced settings", { exact: true }).click();
+  await expect(page.getByLabel("Network", { exact: true })).toHaveValue(ID);
+  await expect(page.getByLabel("Network", { exact: true })).toBeDisabled();
   await expect(page.getByText(`${SECRET}.cfargotunnel.com`, { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Open domain", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
