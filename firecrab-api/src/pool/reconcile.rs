@@ -301,6 +301,7 @@ async fn create_member(state: &AppState, pool: &PoolRow, now_ms: u64) -> Result<
 /// The VM a member is created as: the pool's spec, nothing per-caller.
 pub(crate) fn member_request(pool: &PoolRow) -> CreateVmRequest {
     CreateVmRequest {
+        security_group_id: None,
         name: member_vm_name(&pool.name),
         template: pool.template.clone(),
         ram: pool.ram,

@@ -228,6 +228,20 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
 
     let rest = Router::new()
         .route(
+            "/api/security-groups",
+            get(handlers::security_groups::list).post(handlers::security_groups::create),
+        )
+        .route(
+            "/api/security-groups/{id}",
+            get(handlers::security_groups::get)
+                .put(handlers::security_groups::update)
+                .delete(handlers::security_groups::delete),
+        )
+        .route(
+            "/api/security-groups/{id}/rules",
+            axum::routing::put(handlers::security_groups::replace_rules),
+        )
+        .route(
             "/api/schedules",
             get(handlers::schedules::list).post(handlers::schedules::create),
         )

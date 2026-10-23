@@ -27,6 +27,7 @@ export type VmResponse = {
   mac: string | null;
   hostname: string;
   microNetworkId: string;
+  securityGroupId?: string | null;
   storageRoot: string;
   /**
    * Guest OS CPU busy percent from the Metrics Agent (`FIRECRAB_USAGE cpu_pct=`).

@@ -172,6 +172,7 @@ mod tests {
 
     fn policy(host_port: u16, guest_port: u16) -> VmPolicy {
         VmPolicy {
+            security_group: None,
             vm_id: Uuid::new_v4(),
             ipv4: Ipv4Addr::LOCALHOST,
             ipv6: None,

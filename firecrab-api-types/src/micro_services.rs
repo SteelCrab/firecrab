@@ -54,6 +54,9 @@ pub struct MicroServiceSpec {
     /// Resolved into an encrypted deployment snapshot and injected only into guests.
     #[serde(default)]
     pub secrets: BTreeMap<String, Uuid>,
+    /// Policy copied to every replica and captured in deployment snapshots.
+    #[serde(default)]
+    pub security_group_id: Option<Uuid>,
 }
 
 /// Saved configuration and its stable service identifier.

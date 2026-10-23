@@ -599,6 +599,117 @@ fn free_port() -> u16 {
 }
 
 #[tokio::test]
+async fn replicas_inherit_the_group_before_boot_and_redeploy_with_the_same_selection() {
+    use firecrab_api_types::{MicroNetworkResponse, SecurityGroupResponse};
+    use firecrab_helper_protocol::network::NetworkRequest;
+
+    let directory = crate::firecracker::test_support::short_tempdir();
+    let (state, id, mut spec, _) = bootable_service(directory.path()).await;
+    let socket = directory.path().join("record-net.sock");
+    let (_helper, requests) =
+        crate::network::test_support::spawn_policy_collision_helper(&socket, []);
+    let state = state.with_test_network(crate::network::NetworkClient::with_socket_path(socket));
+    // Loopback leases let real HTTP health checks run without changing host networking.
+    let network: MicroNetworkResponse = serde_json::from_value(serde_json::json!({
+        "id":Uuid::new_v4(),"name":"loopback","subnetCidr":"127.0.0.0/24",
+        "gateway":"127.0.0.1","internetEnabled":true,"uplink":null,
+        "ipv6Cidr":null,"ipv6Gateway":null,"ipv6AddressMode":null,"ipv6Egress":null
+    }))
+    .unwrap();
+    state.store.insert_micro_network(&network).unwrap();
+    let group = SecurityGroupResponse {
+        id: Uuid::new_v4(),
+        name: "app".into(),
+        micro_network_id: network.id,
+        rules: vec![],
+    };
+    state.store.insert_security_group(&group).unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    spec.port = listener.local_addr().unwrap().port();
+    spec.replicas = 2;
+    spec.security_group_id = Some(group.id);
+    spec.drain_timeout = 1;
+    let health = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route("/health", axum::routing::get(|| async { StatusCode::OK })),
+        )
+        .await
+        .unwrap();
+    });
+    state
+        .store
+        .update_micro_service(&MicroServiceResponse {
+            id,
+            spec: spec.clone(),
+        })
+        .unwrap();
+    let mut previous_ids = std::collections::HashSet::new();
+    for _ in 0..2 {
+        let (_, Json(snapshot)) = deploy(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(id.to_string()),
+            ValidatedJson(DeployMicroServiceRequest {
+                micro_network_id: Some(network.id),
+                host_port: free_port().min(65000),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(snapshot.spec.security_group_id, Some(group.id));
+        let running = wait_for_phase(&state, id, ServicePhase::Running).await;
+        assert_eq!(running.instances.len(), 2);
+        let recovered = state.store.load_all().unwrap();
+        for instance in &running.instances {
+            assert_eq!(recovered[&instance.vm_id].security_group_id, Some(group.id));
+            assert!(
+                previous_ids.insert(instance.vm_id),
+                "redeploy must create new VMs"
+            );
+        }
+        let policies = vms::active_vm_policy_specs(&state).await.unwrap();
+        assert_eq!(policies.len(), 2);
+        assert!(policies.iter().all(|vm| {
+            vm.security_group
+                .as_ref()
+                .is_some_and(|policy| policy.id == group.id)
+        }));
+        let restarted = AppState::with_db_file(
+            (*state.templates).clone(),
+            directory.path().join("data/firecrab.db"),
+        )
+        .await
+        .unwrap()
+        .with_test_runtime((*state.runtime).clone())
+        .with_test_network(state.network.clone());
+        assert_eq!(restarted.vms.lock().unwrap().len(), 2);
+        crate::reconcile::retry_networks(&restarted).await.unwrap();
+        let restored = vms::active_vm_policy_specs(&restarted).await.unwrap();
+        assert_eq!(
+            restored, policies,
+            "network recovery must restore each stored attachment"
+        );
+        let requests = requests.lock().unwrap().clone();
+        for instance in &running.instances {
+            let tap = requests.iter().position(|request| matches!(request, NetworkRequest::CreateTap {vm_id,..} if *vm_id == instance.vm_id)).unwrap();
+            let policy = requests.iter().position(|request| matches!(request, NetworkRequest::ApplyVmPolicy {vm_id, security_group:Some(policy),..} if *vm_id == instance.vm_id && policy.id == group.id)).unwrap();
+            assert!(tap < policy);
+        }
+        let _ = stop(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(id.to_string()),
+        )
+        .await
+        .unwrap();
+        wait_for_phase(&state, id, ServicePhase::Stopped).await;
+        assert!(state.store.load_all().unwrap().is_empty());
+    }
+    health.abort();
+}
+
+#[tokio::test]
 async fn failed_app_health_deletes_the_booted_replica_and_records_the_reason() {
     let directory = crate::firecracker::test_support::short_tempdir();
     let (state, id, _, _) = bootable_service(directory.path()).await;
@@ -660,6 +771,7 @@ async fn stop_withdraws_ports_drains_and_deletes_a_running_replica() {
         State(state.clone()),
         Extension(RequestId(Uuid::new_v4())),
         ValidatedJson(CreateVmRequest {
+            security_group_id: None,
             name: "ms-stop-test".into(),
             template: alias,
             ram: spec.ram,

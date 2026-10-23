@@ -157,6 +157,7 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
             json,
         } => {
             let request = CreateVmRequest {
+                security_group_id: None,
                 name,
                 template,
                 ram,
@@ -349,6 +350,7 @@ mod tests {
 
     fn sample_vm() -> VmResponse {
         VmResponse {
+            security_group_id: None,
             id: id("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
             name: "web-1".to_owned(),
             purpose: firecrab_api_types::VmPurpose::Instance,

@@ -10,6 +10,7 @@ export type CreateVmRequest = {
   diskGb: number;
   egressPolicy: EgressPolicy;
   microNetworkId: string;
+  securityGroupId?: string | null;
   storageRoot: string | null;
   /** Optional Shell repository ids; latest revision pinned at create. */
   shellIds?: Array<string>;
