@@ -147,7 +147,6 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
       if (failure instanceof ApiClientError) showErrors(failure.apiError?.fields ?? {});
     } finally { setSaving(false); }
   };
-  const unsupported = secrets.length > 0;
   const reviewSections: { title: string; step: number; values: [string, string | number][] }[] = [
     { title: steps[0]!, step: 0, values: [[t("Name", "이름"), spec.name], [t("Image", "이미지"), spec.image]] },
     { title: steps[1]!, step: 1, values: [[t("App port", "앱 포트"), spec.port], [t("Health path", "상태 검사 경로"), spec.healthPath], [t("Domain", "도메인"), spec.domain || t("None", "없음")]] },
@@ -201,7 +200,6 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
             </>}
             {step === 3 && <>
               <div className="service-review">{reviewSections.map(({ title, step: index, values }) => <section key={index}><div className="service-review-heading"><h4>{title}</h4><button type="button" className="btn ghost sm" disabled={saving} onClick={() => setStep(index)} aria-label={t(`Edit ${title}`, `${title} 수정`)}>{t("Edit", "수정")}</button></div><dl>{values.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></section>)}</div>
-              {unsupported && <div className="service-notice service-notice-warning"><Info aria-hidden="true" /><p>{t("You can save this configuration, but deployment requires no secret references. Edit Resources to clear them.", "이 설정은 저장할 수 있다. 배포하려면 시크릿 참조를 제거해야 한다. 실행 설정에서 수정한다.")}</p></div>}
               <div className="service-notice"><CheckCircle2 aria-hidden="true" /><p>{t("Your app starts only when you select Deploy and run on the next screen.", "다음 화면에서 배포 및 실행을 선택해야 앱이 시작된다.")}</p></div>
             </>}
           </div>
@@ -221,8 +219,8 @@ function VariableRows({ kind, rows, setRows, disabled, error }: { kind: "env" | 
   const { t } = useI18n();
   const secret = kind === "secrets";
   return <fieldset className="service-variables" disabled={disabled} aria-describedby={error ? `service-${kind}-error` : undefined}>
-    <legend>{secret ? t("Secret references · save only", "시크릿 참조 · 저장만 지원") : t("Environment variables", "환경 변수")}</legend>
-    <p className="service-hint">{secret ? t("PipeSecrets injection is not supported by the current deployer. Save references here for later; remove them before deploying.", "현재 배포 기능은 PipeSecrets 주입을 지원하지 않는다. 참조를 저장할 수 있지만 배포하려면 제거해야 한다.") : t("Extra settings passed to your app, such as NODE_ENV=production. Do not put passwords here.", "앱에 전달할 추가 설정이다. 예: NODE_ENV=production. 비밀번호는 입력하지 않는다.")}</p>
+    <legend>{secret ? t("Secret references", "시크릿 참조") : t("Environment variables", "환경 변수")}</legend>
+    <p className="service-hint">{secret ? t("Enter a PipeSecrets ID for each variable. Values are injected into every replica at deployment. Secret changes apply on the next deployment.", "변수마다 PipeSecrets ID를 입력한다. 배포할 때 모든 복제본에 값을 주입한다. 시크릿 변경은 다음 배포에 반영한다.") : t("Extra settings passed to your app, such as NODE_ENV=production. Do not put passwords here.", "앱에 전달할 추가 설정이다. 예: NODE_ENV=production. 비밀번호는 입력하지 않는다.")}</p>
     {error && <p className="field-error" id={`service-${kind}-error`} role="alert">{error}</p>}
     {rows.map((row, index) => <div className="service-variable-row" key={index}>
       <div className="field"><label htmlFor={`service-${kind}-key-${index}`}>{t("Variable", "변수")}</label><input id={`service-${kind}-key-${index}`} value={row.key} maxLength={256} autoComplete="off" onChange={(event) => setRows(rows.map((pair, i) => i === index ? { ...pair, key: event.target.value } : pair))} required /></div>

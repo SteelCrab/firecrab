@@ -11,6 +11,264 @@ fn spec() -> MicroServiceSpec {
     .unwrap()
 }
 
+fn stored_secret(state: &AppState, value: &str) -> Uuid {
+    use crate::secrets::{Secret, SecretSummary};
+    let id = Uuid::new_v4();
+    state
+        .secrets
+        .write(|contents| {
+            contents.secrets.push(Secret {
+                summary: SecretSummary {
+                    id,
+                    name: "test-password".into(),
+                    description: String::new(),
+                    version: 1,
+                    created_at: 0,
+                    updated_at: 0,
+                    source: None,
+                },
+                value: value.into(),
+            });
+            Ok(())
+        })
+        .unwrap();
+    id
+}
+
+fn replica(state: &AppState, deployment: &mut MicroServiceDeployment) -> crate::model::VmRecord {
+    let mut vm = vms::test_support::record("replica", Uuid::new_v4());
+    vm.env = deployment.spec.env.clone();
+    state.store.insert(&vm).unwrap();
+    state.vms.lock().unwrap().insert(vm.id, vm.clone());
+    deployment.instances.push(ServiceInstance {
+        vm_id: vm.id,
+        ipv4: "127.0.0.1".into(),
+        host_port: 30100,
+        state: VmState::Created,
+        healthy: false,
+    });
+    state.store.save_service_deployment(deployment).unwrap();
+    vm
+}
+
+#[tokio::test]
+async fn secret_preflight_rejects_missing_and_invalid_values_without_creating_resources() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let secret = stored_secret(&state, "valid");
+    for value in [None, Some("x".repeat(4097)), Some("bad\0value".into())] {
+        let mut spec = spec();
+        let reference = if let Some(value) = value {
+            state
+                .secrets
+                .write(|contents| {
+                    contents.secrets[0].value = value;
+                    Ok(())
+                })
+                .unwrap();
+            secret
+        } else {
+            Uuid::new_v4()
+        };
+        spec.secrets.insert("PASSWORD".into(), reference);
+        let id = Uuid::new_v4();
+        spec.name = id.simple().to_string();
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse { id, spec })
+            .unwrap();
+        let error = deploy(
+            State(state.clone()),
+            Extension(RequestId(id)),
+            Path(id.to_string()),
+            ValidatedJson(DeployMicroServiceRequest {
+                host_port: 30100,
+                micro_network_id: None,
+            }),
+        )
+        .await
+        .unwrap_err()
+        .into_response();
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(error.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["error"]["fields"]["secrets"].is_string());
+        assert!(state.store.service_deployment(id).unwrap().is_none());
+    }
+    assert!(state.store.load_all().unwrap().is_empty());
+    assert!(state.store.list_micro_networks().unwrap().is_empty());
+    state
+        .secrets
+        .read(|contents| {
+            assert!(contents.service_environments.is_empty());
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[tokio::test]
+async fn secret_snapshot_is_shared_by_replicas_and_survives_restart_without_public_plaintext() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let value = "SECRET-only-in-guest-'quoted'\n$(printf literal)";
+    let secret = stored_secret(&state, value);
+    let mut record = deployment(Uuid::new_v4());
+    record.spec.secrets.insert("PASSWORD".into(), secret);
+    record.spec.secrets.insert("ALIAS".into(), secret);
+    record.spec.env.insert("PLAIN".into(), "kept".into());
+    secrets::capture(&state, &record).await.unwrap();
+    let first = replica(&state, &mut record);
+    state
+        .secrets
+        .write(|contents| {
+            contents.secrets[0].value = "new-value".into();
+            Ok(())
+        })
+        .unwrap();
+    secrets::capture(&state, &record).await.unwrap();
+    let second = replica(&state, &mut record);
+    for vm in [&first, &second] {
+        let env = secrets::guest_env(&state, vm).await.unwrap();
+        assert_eq!(env["PASSWORD"], value);
+        assert_eq!(env["ALIAS"], value);
+        assert_eq!(env["PLAIN"], "kept");
+        let public = vms::vm_response(&state, vm, None);
+        let public = serde_json::to_string(&public).unwrap();
+        assert!(!public.contains("PASSWORD"));
+        assert!(!vm.env.contains_key("PASSWORD"));
+    }
+    let reopened = self::state(root.path()).await;
+    assert_eq!(
+        secrets::guest_env(&reopened, &first).await.unwrap()["PASSWORD"],
+        value
+    );
+    let public = serde_json::to_string(&record).unwrap();
+    assert!(!public.contains("SECRET-only-in-guest"));
+    for file in [
+        root.path().join("state.db"),
+        root.path().join("state.secrets/vault.bin"),
+    ] {
+        let bytes = std::fs::read(file).unwrap();
+        let marker = b"SECRET-only-in-guest-";
+        assert!(!bytes.windows(marker.len()).any(|bytes| bytes == marker));
+    }
+    // A different deployment captures the new value without changing the old one.
+    let mut next = deployment(Uuid::new_v4());
+    next.spec.secrets.insert("PASSWORD".into(), secret);
+    secrets::capture(&reopened, &next).await.unwrap();
+    let next_vm = replica(&reopened, &mut next);
+    assert_eq!(
+        secrets::guest_env(&reopened, &next_vm).await.unwrap()["PASSWORD"],
+        "new-value"
+    );
+    assert_eq!(
+        secrets::guest_env(&reopened, &first).await.unwrap()["PASSWORD"],
+        value
+    );
+}
+
+#[tokio::test]
+async fn secret_capture_rechecks_queued_references_before_import_or_vm_creation() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let id = stored_secret(&state, "before-queue");
+    let mut record = deployment(Uuid::new_v4());
+    record.spec.secrets.insert("PASSWORD".into(), id);
+    secrets::preflight(&state, &record.spec, record.id)
+        .await
+        .unwrap();
+    state
+        .secrets
+        .write(|contents| {
+            contents.secrets.clear();
+            Ok(())
+        })
+        .unwrap();
+    let auth = require_image_auth(&state, &record.spec.image, record.id)
+        .await
+        .unwrap();
+    let credential = auth.registry_credential().await.unwrap();
+    let error = execute(&state, &mut record, credential).await.unwrap_err();
+    assert!(error.contains("Secrets"));
+    assert!(record.digest.is_none());
+    assert!(record.instances.is_empty());
+    assert!(state.store.list_micro_networks().unwrap().is_empty());
+    assert!(state.store.load_all().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn missing_or_damaged_snapshots_fail_closed_without_affecting_standalone_vms() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let mut record = deployment(Uuid::new_v4());
+    record
+        .spec
+        .secrets
+        .insert("PASSWORD".into(), stored_secret(&state, "sensitive"));
+    let vm = replica(&state, &mut record);
+    assert!(secrets::guest_env(&state, &vm).await.is_err());
+    secrets::capture(&state, &record).await.unwrap();
+    std::fs::write(root.path().join("state.secrets/vault.bin"), b"damaged").unwrap();
+    let error = secrets::guest_env(&state, &vm).await.unwrap_err();
+    assert!(!error.contains("sensitive"));
+    assert!(
+        secrets::preflight(&state, &record.spec, record.id)
+            .await
+            .is_err()
+    );
+    let mut standalone = vms::test_support::record("standalone", Uuid::new_v4());
+    standalone.env.insert("PLAIN".into(), "works".into());
+    assert_eq!(
+        secrets::guest_env(&state, &standalone).await.unwrap(),
+        standalone.env
+    );
+    secrets::preflight(&state, &spec(), Uuid::new_v4())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn secret_snapshots_are_removed_after_cleanup_and_replica_env_edits_are_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let mut record = deployment(Uuid::new_v4());
+    record
+        .spec
+        .secrets
+        .insert("PASSWORD".into(), stored_secret(&state, "private"));
+    secrets::capture(&state, &record).await.unwrap();
+    let vm = replica(&state, &mut record);
+    let request = serde_json::from_value(
+        serde_json::json!({"cpu": 1, "ram": 128, "diskGb": 0, "env": {"PASSWORD": "override"}}),
+    )
+    .unwrap();
+    let error = vms::update_vm(
+        State(state.clone()),
+        Extension(RequestId(record.id)),
+        Path(vm.id.to_string()),
+        ValidatedJson(request),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    assert!(state.store.load_all().unwrap()[&vm.id].env.is_empty());
+    // Simulate a replica already removed by an interrupted cleanup.
+    state.vms.lock().unwrap().remove(&vm.id);
+    state.store.delete(vm.id).unwrap();
+    cleanup(&state, &mut record).await.unwrap();
+    assert!(record.instances.is_empty());
+    state
+        .secrets
+        .read(|contents| {
+            assert!(!contents.service_environments.contains_key(&record.id));
+            Ok(())
+        })
+        .unwrap();
+    secrets::remove(&state, &record).await.unwrap();
+}
+
 async fn state(root: &std::path::Path) -> AppState {
     let state = AppState::with_db_file(
         TemplateRegistry::from_specs(root, std::iter::empty()).unwrap(),
@@ -47,7 +305,7 @@ fn deployment(id: Uuid) -> MicroServiceDeployment {
 }
 
 #[test]
-fn deployments_reject_unsupported_configuration_and_port_overflow_before_claiming() {
+fn deployments_accept_secret_references_and_reject_port_overflow_before_claiming() {
     let request = DeployMicroServiceRequest {
         micro_network_id: None,
         host_port: 30100,
@@ -59,7 +317,7 @@ fn deployments_reject_unsupported_configuration_and_port_overflow_before_claimin
     let fields = deployment_fields(&spec, &request, 5523);
     assert!(!fields.contains_key("domain"));
     spec.domain = None;
-    assert!(fields.contains_key("secrets"));
+    assert!(!fields.contains_key("secrets"));
     spec.replicas = 2;
     for port in [0, 80, 5522, 5523, 65535] {
         assert!(

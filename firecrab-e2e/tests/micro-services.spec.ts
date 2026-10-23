@@ -67,7 +67,7 @@ async function advanced(page: Page) {
 
 test.describe("MicroService configuration @dashboard", () => {
   test("deploys from the runtime panel, reports health, and stops the service", async ({ page }, testInfo) => {
-    const service = { ...INITIAL, domain: null, secrets: {}, replicas: 1 };
+    const service = { ...INITIAL, domain: null, replicas: 1 };
     await openServices(page, [service]);
     let deployment: Record<string, unknown> | null = null;
     let read = 0;
@@ -89,6 +89,8 @@ test.describe("MicroService configuration @dashboard", () => {
     });
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("Not deployed");
+    await expect(page.getByText("Secret values are injected into every replica. Changes apply on the next deployment.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Secret injection is not available yet.", { exact: false })).toHaveCount(0);
     await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("Running");
     await expect(page.getByRole("cell", { name: "Healthy", exact: true })).toBeVisible();
@@ -540,6 +542,26 @@ test.describe("MicroService configuration @dashboard", () => {
     expect(maxActiveReads).toBe(1);
   });
 
+  test("shows a missing Secret error before a deployment is accepted", async ({ page }) => {
+    const service = { ...INITIAL, domain: null, replicas: 1 };
+    await openServices(page, [service]);
+    let submitted = false;
+    await page.route(`**/api/micro-services/${ID}/deployment`, async route => {
+      if (route.request().method() === "POST") {
+        submitted = true;
+        return route.fulfill({ status: 400, json: { error: { code: "validation_failed", message: "request validation failed", fields: { secrets: "a referenced PipeSecret does not exist" } } } });
+      }
+      return route.fulfill({ json: null });
+    });
+    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await expect(page.getByRole("status")).toHaveText("Not deployed");
+    await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("a referenced PipeSecret does not exist");
+    await expect(page.getByRole("status")).toHaveText("Not deployed");
+    await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeEnabled();
+    expect(submitted).toBe(true);
+  });
+
   test("opens updated runtime settings after saving and preserves mobile headers", async ({ page }) => {
     const writes = await openServices(page, [{ ...INITIAL, domain: null, secrets: {}, securityGroupId: SECRET }]);
     await page.route(`**/api/micro-services/${ID}/deployment`, (route) => route.fulfill({ json: null }));
@@ -780,21 +802,22 @@ test.describe("MicroService configuration @dashboard", () => {
     expect(writes[0].body.securityGroupId).toBe(SECRET);
   });
 
-  test("explains unsupported deployment settings and provides a path to fix them", async ({ page }) => {
-    await openServices(page, [INITIAL]);
+  test("edits Secret references through the wizard without blocking deployment", async ({ page }) => {
+    const writes = await openServices(page, [{ ...INITIAL, domain: null }]);
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeDisabled();
-    await expect(page.getByText(/Secret injection is not available yet/)).toBeVisible();
-    await page.getByRole("button", { name: "Edit configuration", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeEnabled();
+    await expect(page.getByText("Secret values are injected into every replica. Changes apply on the next deployment.", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Edit orders", exact: true }).click();
     await next(page);
-    await page.getByText("Domain configuration", { exact: true }).click();
-    await page.getByLabel("Domain (optional)", { exact: true }).fill("");
     await next(page);
     await advanced(page);
-    await page.getByRole("button", { name: "Remove secrets row 1", exact: true }).click();
+    await expect(page.locator("#service-secrets-key-0")).toHaveValue("DB_PASSWORD");
+    await expect(page.locator("#service-secrets-value-0")).toHaveValue(SECRET);
+    await page.locator("#service-secrets-value-0").fill(NETWORK.id);
     await next(page);
     await page.getByRole("button", { name: "Save configuration", exact: true }).click();
     await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeEnabled();
+    expect(writes[0].body.secrets).toEqual({ DB_PASSWORD: NETWORK.id });
   });
 
   test("prevents deployment while status is unavailable and recovers on the next poll", async ({ page }) => {

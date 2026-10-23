@@ -6,7 +6,8 @@ Deploy imports the OCI image by digest, creates MicroVM replicas, and waits for 
 Services with a domain use PipeIngress to reach guest app ports directly.
 Services without a domain expose one host TCP port per replica.
 The deployment record and owned VM identifiers survive API restarts.
-PipeSecrets injection, rolling updates, rollback, and automatic instance replacement remain separate work.
+PipeSecrets values are injected into every replica without appearing in VM or deployment responses.
+Rolling updates, rollback, and automatic instance replacement remain separate work.
 
 ## Fields
 
@@ -31,7 +32,7 @@ PipeSecrets injection, rolling updates, rollback, and automatic instance replace
 Variable names follow `[A-Za-z_][A-Za-z0-9_]*` and allow up to 256 bytes.
 Plain values allow up to 4096 bytes and must not contain NUL bytes.
 A variable name cannot appear in both maps.
-Secret references are saved without resolving them in this stage.
+Secret references are saved without resolving them. Deployment validates them before accepting work.
 
 ## REST
 
@@ -134,8 +135,8 @@ host port for a service without a domain, then select **Deploy and run**.
 For an existing configuration, select **Run** to open the same panel.
 The panel shows image preparation, app startup, health checks, and an **Open app**
 link once the app responds successfully. Failed deployments show a log and next
-steps. Services with a domain connect through PipeIngress. Remove secret
-references before deploying because secret injection remains unsupported.
+steps. Services with a domain connect through PipeIngress. PipeSecrets values
+are injected into every replica. Secret edits apply to the next deployment.
 The panel checks Pipe Auth when opened, every three seconds, when returning to
 this browser tab, and immediately before deployment. Deploy stays disabled during
 the initial and pre-deployment checks, when the image's account is disconnected
@@ -240,13 +241,18 @@ The macOS TCP relay can close its SSH forwards when those port records disappear
 An interrupted deploy or stop is marked failed after API restart; Stop cleans up remaining instances.
 A completed deployment uses the existing VM re-adoption mechanism.
 
-Deploy requires empty `secrets`; unsupported secret settings return a field error
-before the job starts. Domain services connect through PipeIngress after health
+Domain services connect through PipeIngress after health
 checks. Services without a domain keep using direct host ports. Neither flow
 switches between running releases yet.
 Deploy and Stop wait by default in the CLI.
 Use `--no-wait` to return after acceptance and poll `microservice status` later.
 Deploy exits nonzero when deployment or health fails.
+
+## Inject Secrets
+
+Create values in **Secrets**. Reference their UUIDs in **Resources → Advanced settings**.
+Every replica receives one encrypted deployment snapshot. Secret edits apply at the next deployment.
+See [Secret injection](secrets.md#microservice-injection) for limits, storage and restart behavior.
 
 ## Verification
 
@@ -257,12 +263,8 @@ cargo test -p firecrab-cli micro_services
 FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm --prefix firecrab-e2e run test:services
 ```
 
-API tests cover persistence, full replacement, concurrent name conflicts, rejected
-inputs, account/region ownership, standalone-login rejection, and Auth revocation
-while a deployment is queued.
-CLI tests cover request paths, JSON bodies, secret references, and failures.
-Browser tests cover CRUD, validation, Korean labels, and the mobile layout.
-They also cover deploy progress, healthy endpoints, and Stop.
+API, CLI and browser tests cover configuration, AUTH ownership and revocation,
+validation, deployment health, Stop, Korean labels and mobile layout.
 
 Run the real HTTP app test on a Linux host with KVM and the API/helper running:
 Install the normal OCI tools and `dnsmasq-utils` (`dhcp_release`) so stopped VM leases can be reused.
@@ -277,6 +279,8 @@ port 8080, return the `GREETING` environment value at `/health`, and return a
 non-2xx response at `/missing`. Loopback registry images are rejected by the
 service API. The script boots two MicroVMs, checks HTTP and env injection, and
 tests failed-health cleanup using the supplied image.
+Add `--with-secrets` to use a disposable PipeSecret and verify response redaction,
+shared replica values, and a VM stop/start after editing the stored Secret.
 Use `--restart-unit UNIT` only for an isolated QA API unit to test re-adoption after restart.
 Use `--keep-running` to retain the healthy service for manual inspection.
 
@@ -291,10 +295,3 @@ This test checks two real replicas, public TLS, API restart continuity and repli
 failure, then removes its VMs, services, network, routes and Quick Tunnel.
 Use `--output PATH` only when a JSON report is needed. Stop the dedicated QA
 API/helper and ingress units after the run.
-
-## Related
-
-- [API](../reference/api.md)
-- [CLI](../reference/cli.md)
-- [Dashboard](dashboard.md)
-- [OCI images](oci.md)

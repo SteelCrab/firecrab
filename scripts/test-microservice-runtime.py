@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Live OCI -> MicroVM -> HTTP service test. Run on the Linux Firecrab host.
 
-Requires a running API, helper, /dev/kvm, and an image published to an account
-connected in Pipe Auth. The image must serve HTTP on port 8080 and return the
-GREETING environment value at /health. /missing must return a non-2xx response.
+Requires a running API, helper, /dev/kvm and a fixture image from an account
+connected in Pipe Auth. The image must serve HTTP on port 8080, return the
+GREETING environment value at /health and a non-2xx response at /missing.
 """
 
 import argparse
 import json
 import subprocess
 import time
+import uuid
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -21,9 +22,14 @@ def main():
     parser.add_argument("--host-port", type=int, default=30170)
     parser.add_argument("--restart-unit", help="Optional QA API unit to restart after successful deployment")
     parser.add_argument("--keep-running", action="store_true", help="Keep the successful service for manual inspection")
+    parser.add_argument("--with-secrets", action="store_true", help="Verify encrypted Secret injection, redaction, rotation isolation and VM restart")
     args = parser.parse_args()
     owned = []
     kept = None
+    secret = None
+    greeting = "FIRECRAB_LIVE_SERVICE_OK"
+    if args.with_secrets:
+        greeting += "_" + uuid.uuid4().hex
 
     def request(method, path, body=None):
         payload = None if body is None else json.dumps(body).encode()
@@ -56,20 +62,37 @@ def main():
         for instance in status["instances"]:
             url = f"http://127.0.0.1:{instance['hostPort']}/health"
             with urlopen(url, timeout=5) as response:
-                assert response.read().decode().strip() == "FIRECRAB_LIVE_SERVICE_OK"
+                assert response.read().decode().strip() == greeting
+
+    def check_redaction(service_id, status):
+        for payload in [status, request("GET", f"/api/micro-services/{service_id}"), request("GET", "/api/vms")]:
+            assert greeting not in json.dumps(payload), "Secret leaked through a public response"
+
+    def wait_vm(vm_id, expected):
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            vm = request("GET", f"/api/vms/{vm_id}")
+            if vm["state"] == expected:
+                return
+            assert vm["state"] not in ("failed", "crashed"), "replica lifecycle failed"
+            time.sleep(1)
+        raise TimeoutError("replica did not reach " + expected)
 
     def check_removed(service_id):
         prefix = f"ms-{service_id.replace('-', '')}-"
         assert not any(vm["name"].startswith(prefix) for vm in request("GET", "/api/vms"))
 
     try:
+        if args.with_secrets:
+            secret = request("POST", "/api/secrets", {"name": "qa-service-" + uuid.uuid4().hex, "value": greeting})
         for suffix, health, replicas in [("healthy", "/health", 2), ("unhealthy", "/missing", 1)]:
             spec = {
                 "name": f"live-{suffix}-{int(time.time())}", "image": args.image,
                 "port": 8080, "ram": 128, "cpu": 1, "replicas": replicas,
-                "healthPath": health, "startupTimeout": 3,
+                "healthPath": health, "startupTimeout": 30 if suffix == "healthy" else 3,
                 "drainTimeout": 1,
-                "env": {"GREETING": "FIRECRAB_LIVE_SERVICE_OK"},
+                "env": {} if secret else {"GREETING": greeting},
+                "secrets": {"GREETING": secret["id"]} if secret else {},
             }
             service = request("POST", "/api/micro-services", spec)
             service_id = service["id"]
@@ -90,6 +113,27 @@ def main():
                 assert instance["state"] == "running" and instance["healthy"], instance
             check_http(status)
             print("PASS: two real MicroVMs answer HTTP with injected environment", flush=True)
+            if secret:
+                check_redaction(service_id, status)
+                request("PUT", "/api/secrets/" + secret["id"], {
+                    "name": secret["name"], "value": "rotated-" + uuid.uuid4().hex, "version": secret["version"],
+                })
+                vm_id = status["instances"][0]["vmId"]
+                request("POST", f"/api/vms/{vm_id}/stop")
+                wait_vm(vm_id, "stopped")
+                request("POST", f"/api/vms/{vm_id}/start")
+                wait_vm(vm_id, "running")
+                deadline = time.monotonic() + 60
+                while True:
+                    try:
+                        check_http(status)
+                        break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            raise
+                        time.sleep(1)
+                check_redaction(service_id, request("GET", f"/api/micro-services/{service_id}/deployment"))
+                print("PASS: Secret values stay private and VM restart retains the deployment snapshot after rotation", flush=True)
             if args.restart_unit:
                 with subprocess.Popen(["systemctl", "restart", args.restart_unit]) as restart:
                     while True:
@@ -131,6 +175,8 @@ def main():
                 else:
                     raise RuntimeError(f"Deployment still active; clean up service {service_id} after it finishes")
             request("DELETE", f"/api/micro-services/{service_id}")
+        if secret and not (args.keep_running and kept):
+            request("DELETE", "/api/secrets/" + secret["id"])
 
 
 if __name__ == "__main__":
