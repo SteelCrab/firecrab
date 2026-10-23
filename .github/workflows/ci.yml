@@ -268,8 +268,8 @@ jobs:
       - name: rustdoc coverage floor
         # --show-coverage is nightly-only rustdoc; RUSTC_BOOTSTRAP=1 unlocks it
         # on the pinned stable toolchain. Floor is a documentation-completeness
-        # target (75%), not a regression guard — current baseline is ~14%, so
-        # this fails until doc comments are added across the workspace.
+        # target (75%), not a regression guard. Display enough precision to
+        # explain failures just below the floor without rounding them to 75.0%.
         run: |
           RUSTC_BOOTSTRAP=1 RUSTDOCFLAGS="-Z unstable-options --show-coverage" \
             cargo doc --workspace --no-deps --document-private-items | tee doc-coverage.txt
@@ -288,7 +288,7 @@ jobs:
 
           pct = (documented / total * 100) if total else 0.0
           threshold = 75.0
-          summary = f"**rustdoc coverage: {documented}/{total} items ({pct:.1f}%)** — floor {threshold}%\n"
+          summary = f"**rustdoc coverage: {documented}/{total} items ({pct:.4f}%)** — floor {threshold}%\n"
           print(summary)
           import os
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:

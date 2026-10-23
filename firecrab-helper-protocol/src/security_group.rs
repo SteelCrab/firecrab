@@ -12,11 +12,17 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SecurityGroupRuleSpec {
+    /// Connection side on which this allow rule is evaluated.
     pub direction: SecurityGroupDirection,
+    /// TCP or UDP transport protocol to match.
     pub protocol: PortProtocol,
+    /// First allowed destination port, inclusive and nonzero.
     pub port_from: u16,
+    /// Last allowed destination port, inclusive and not below `port_from`.
     pub port_to: u16,
+    /// Canonical IPv4 network address with all host bits cleared.
     pub peer_address: Ipv4Addr,
+    /// IPv4 network prefix length from 0 through 32.
     pub peer_prefix: u8,
 }
 
@@ -68,12 +74,17 @@ fn mask(prefix: u8) -> Result<u32, String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SecurityGroupPolicySpec {
+    /// Non-nil identifier of the selected security group.
     pub id: Uuid,
+    /// Non-nil identifier of the MicroNetwork to which the group belongs.
     pub micro_network_id: Uuid,
+    /// Complete allow list; an empty list retains default-deny behavior.
     pub rules: Vec<SecurityGroupRuleSpec>,
 }
 
 impl SecurityGroupPolicySpec {
+    /// Reject nil identifiers, oversized allow lists, and invalid rules
+    /// before the privileged helper renders or installs the policy.
     pub fn validate(&self) -> Result<(), String> {
         if self.id.is_nil() || self.micro_network_id.is_nil() {
             return Err("security group and network ids must not be nil".into());

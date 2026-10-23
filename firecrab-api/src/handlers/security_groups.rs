@@ -47,6 +47,7 @@ async fn group(
         .ok_or_else(|| AppError::not_found(request))
 }
 
+/// Return all stored policies with their complete allow lists.
 pub async fn list(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -56,6 +57,7 @@ pub async fn list(
         .map(Json)
 }
 
+/// Return one policy by UUID, or a not-found response when it is absent.
 pub async fn get(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -66,6 +68,7 @@ pub async fn get(
         .map(Json)
 }
 
+/// Store an empty, default-deny policy bound to an IPv4-only MicroNetwork.
 pub async fn create(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -100,6 +103,7 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(group)))
 }
 
+/// Rename a policy without changing its network binding or allow rules.
 pub async fn update(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -120,6 +124,8 @@ pub async fn update(
     group(&state, id, request.0).await.map(Json)
 }
 
+/// Validate and atomically replace the allow list while affected runtimes
+/// and service deployments are inactive.
 pub async fn replace_rules(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -150,6 +156,7 @@ pub async fn replace_rules(
     group(&state, id, request.0).await.map(Json)
 }
 
+/// Remove an unreferenced policy; VM and service references return a conflict.
 pub async fn delete(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
