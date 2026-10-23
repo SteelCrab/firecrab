@@ -23,6 +23,7 @@ async function setup(page: Page, groups: SecurityGroupResponse[] = [], hash = "#
   await openDashboard(page, { hash, routes: {
     "/api/host": { loadAverage1m: 0, memoryTotalMib: 8192, memoryAvailableMib: 4096, diskTotalGib: 100, diskAvailableGib: 50, uptimeSeconds: 3600 },
     "/api/update/progress": { phase: "idle", percent: 0, updatedAtMs: 0 },
+    "/api/pipe/storage": [],
     "/api/micro-networks": [
       { id: NETWORK, name: "orders-net", subnetCidr: "172.30.0.0/24", gateway: "172.30.0.1", internetEnabled: true, ipv6Cidr: null },
       { id: IPV6_NETWORK, name: "dual-stack", subnetCidr: "172.31.0.0/24", gateway: "172.31.0.1", internetEnabled: true, ipv6Cidr: "fd42:31::/64" },
