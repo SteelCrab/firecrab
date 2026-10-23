@@ -138,7 +138,7 @@ export function pipeCardHash(card: PipeCardId): string {
 /**
  * Shell views live under `#/vms` etc.; the terminal is a separate full-page
  * route (`#/console/<id>`) so it never shares the modal overlay layout that
- * clipped xterm after leaving "fullscreen".
+ * clipped terminal after leaving "fullscreen".
  */
 export type AppRoute =
   | { kind: "shell"; view: ViewId; vmId?: string; createSchedule?: boolean; scheduleId?: string }

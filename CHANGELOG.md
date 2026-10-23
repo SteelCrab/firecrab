@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- The browser console uses Ghostty WebAssembly for VT parsing, Unicode cells,
+  terminal modes and history. It supports mobile editing, composition,
+  bracketed paste, application mouse/focus reports and native grapheme export.
+  Session memory stays isolated; output and resize work are scheduled in frames.
+  The xterm dependency is removed. Tracked in [#453](https://github.com/SteelCrab/firecrab/issues/453).
+
 - MicroServices inject PipeSecrets into every replica using an encrypted
   deployment snapshot that survives API and VM restarts. Missing or invalid
   references fail before VM creation. Values stay out of public VM/deployment

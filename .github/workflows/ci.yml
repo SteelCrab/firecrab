@@ -371,6 +371,48 @@ jobs:
             target/qa/secrets
           retention-days: 14
 
+  wasm-terminal:
+    name: WASM terminal (${{ matrix.browser }}, production)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    env:
+      FIRECRAB_MOCKED_E2E_PRODUCTION: "1"
+      FIRECRAB_MOCKED_E2E_CROSS_BROWSER: "1"
+      FIRECRAB_MOCKED_E2E_BASE_URL: http://127.0.0.1:8099
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            firecrab-frontend/package-lock.json
+            firecrab-e2e/package-lock.json
+      - name: Install dashboard and browser test dependencies
+        run: |
+          npm ci --prefix firecrab-frontend
+          npm ci --prefix firecrab-e2e
+          npx --prefix firecrab-e2e playwright install --with-deps ${{ matrix.browser }}
+      - name: Check WASM browser test types
+        run: node firecrab-frontend/node_modules/tsrs/bin/tsrs -p firecrab-e2e/tsconfig.wasm.json
+      - name: Check the production WASM console and session behavior
+        run: >-
+          npm run test:mocked --prefix firecrab-e2e --
+          tests/wasm-terminal.spec.ts tests/console-session.spec.ts
+          --project ${{ matrix.browser }}
+      - name: Verify standalone WASM artifacts
+        run: node --test firecrab-e2e/scripts/test-terminal-build.mjs
+      - name: WASM terminal browser results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasm-terminal-${{ matrix.browser }}
+          path: firecrab-e2e/test-results
+          retention-days: 14
+
   pipe-databases:
     name: PIPE databases (real API, PostgreSQL, MySQL, TLS and browser)
     runs-on: ubuntu-latest
