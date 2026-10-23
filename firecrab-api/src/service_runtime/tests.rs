@@ -704,13 +704,14 @@ async fn s3_and_service_secrets_reach_the_guest_together_after_vm_restart() {
                 assert!(!metadata.contains(value));
             }
         }
-        vms::stop_vm(
+        let Json(stopped) = vms::stop_vm(
             State(state.clone()),
             Extension(RequestId(deployment.id)),
             Path(vm.id.to_string()),
         )
         .await
         .unwrap();
+        assert_eq!(stopped.state, VmState::Stopped);
         let paths = VmArtifactPaths::for_vm(&state.vms_dir_for(&stored.storage_root), vm.id);
         let rootfs = paths.rootfs(stored.disk_generation.unwrap());
         let output = std::process::Command::new("debugfs")
