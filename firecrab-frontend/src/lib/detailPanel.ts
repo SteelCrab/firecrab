@@ -11,8 +11,8 @@ function storedOpen(): boolean {
 }
 
 /** Wide-screen detail column, open unless the user closed it; remembered per browser. */
-export function useDetailPanelOpen(): [open: boolean, setOpen: (open: boolean) => void] {
-  const [open, setOpenState] = useState(storedOpen);
+export function useDetailPanelOpen(initialSelection = false): [open: boolean, setOpen: (open: boolean) => void] {
+  const [open, setOpenState] = useState(() => initialSelection || storedOpen());
   const setOpen = useCallback((next: boolean) => {
     setOpenState(next);
     try {

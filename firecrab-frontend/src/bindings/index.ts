@@ -73,3 +73,4 @@ export * from "./VmState";
 export * from "./VmUsageSample";
 export * from "./PortForward";
 export * from "./ManagerResourceStatus";
+export * from "./Schedule";
