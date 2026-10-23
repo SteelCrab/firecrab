@@ -369,3 +369,71 @@ async fn expired_tokens_with_the_correct_region_are_not_reported_as_region_misma
     let error = client.verify().await.err().unwrap();
     assert_eq!(error.code, "storage_credentials_expired");
 }
+
+#[tokio::test]
+async fn listings_reject_inconsistent_scope_encoding_and_directory_metadata() {
+    let contents = |key: &str| {
+        format!(
+            "<Contents><Key>{key}</Key><Size>1</Size><LastModified>today</LastModified></Contents>"
+        )
+    };
+    let directory =
+        |prefix: &str| format!("<CommonPrefixes><Prefix>{prefix}</Prefix></CommonPrefixes>");
+    let subdirectory_listing = |entries: &str| {
+        listing(entries, "").replace("<Prefix>team%2F</Prefix>", "<Prefix>team%2Fsub%2F</Prefix>")
+    };
+    for (name, prefix, limit, xml) in [
+        (
+            "unexpected encoding",
+            "team/",
+            100,
+            listing("", "").replace(
+                "<EncodingType>url</EncodingType>",
+                "<EncodingType>plain</EncodingType>",
+            ),
+        ),
+        ("wrong response prefix", "team/sub/", 100, listing("", "")),
+        (
+            "more entries than requested",
+            "team/",
+            1,
+            listing(&(contents("team%2Fone") + &directory("team%2Ftwo%2F")), ""),
+        ),
+        (
+            "invalid UTF-8 object key",
+            "team/",
+            100,
+            listing(&contents("team%2F%FF"), ""),
+        ),
+        (
+            "object outside the selected subdirectory",
+            "team/sub/",
+            100,
+            subdirectory_listing(&contents("team%2Fother")),
+        ),
+        (
+            "directory outside the selected subdirectory",
+            "team/sub/",
+            100,
+            subdirectory_listing(&directory("team%2Fother%2F")),
+        ),
+        (
+            "directory without a trailing slash",
+            "team/",
+            100,
+            listing(&directory("team%2Fother"), ""),
+        ),
+        (
+            "directory outside the connection",
+            "team/",
+            100,
+            listing(&directory("other%2F"), ""),
+        ),
+    ] {
+        let fixture = fixture(vec![reply(StatusCode::OK, xml)]).await;
+        let client = S3Client::new(record(), keys())
+            .unwrap()
+            .with_test_origin(&fixture.origin);
+        assert!(client.list(prefix, None, limit).await.is_err(), "{name}");
+    }
+}
