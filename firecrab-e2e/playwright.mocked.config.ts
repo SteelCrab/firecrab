@@ -10,7 +10,7 @@ const address = new URL(baseURL);
 
 export default defineConfig({
   ...baseConfig,
-  testMatch: /(command-palette|dashboard-frame|vm-list|vm-detail|screen-details|ssh-console|console-session|host-firecrab|manager-resources|update-dialog|vm-reconciliation|micro-services|pools-dashboard|schedules|security-groups|security-group-connections)\.spec\.ts/,
+  testMatch: /(command-palette|dashboard-frame|vm-list|vm-detail|screen-details|ssh-console|console-session|host-firecrab|manager-resources|update-dialog|vm-reconciliation|pipe-storage|micro-services|pools-dashboard|schedules|security-groups|security-group-connections)\.spec\.ts/,
   timeout: 45_000,
   use: { ...baseConfig.use, baseURL },
   webServer: servers.filter(server => server.command === "npm run dev")

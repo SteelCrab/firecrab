@@ -377,6 +377,7 @@ fn route_from_hash() -> String {
         || route.starts_with("console/")
         || [
             "pipe/auth",
+            "pipe/storage",
             "pipe/route",
             "pipe/registry",
             "pipe/database",
@@ -408,6 +409,7 @@ fn endpoint(route: &str) -> &'static str {
         "shells" => "/api/shells",
         "host" => "/api/host",
         "pipe/auth" => "/api/pipe/auth",
+        "pipe/storage" => "/api/pipe/storage",
         "pipe/registry" => "/api/pipe/registries",
         "pipe/database" => "/api/pipe/databases",
         route if route.starts_with("pipe") => "/api/pipe",
@@ -459,7 +461,7 @@ fn load_route(app: Shared) {
         advanced::security::load(&app);
     }
     if route == "services" {
-        aux.push("/api/pipe");
+        aux.extend(["/api/pipe", "/api/pipe/storage"]);
     }
     if route != "vms" {
         aux.push("/api/vms");
@@ -701,6 +703,7 @@ fn navigate(app: &Shared) {
         .unwrap_or(state.history_index + 1);
     save_history_index(state.history_index, None);
     state.advanced.reveals.clear();
+    state.advanced.storage = advanced::storage::State::default();
     state.route = next;
     state.generation += 1;
     state.detail_generation += 1;

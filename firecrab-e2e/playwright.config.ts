@@ -47,7 +47,7 @@ const baseURL = (process.env.FIRECRAB_E2E_BASE_URL ?? "http://localhost:8080").r
 export default defineConfig({
   testDir: "tests",
   // Live DB checks require the disposable QA runner and its private API.
-  testIgnore: "**/pipe-databases-live.spec.ts",
+  testIgnore: ["**/pipe-databases-live.spec.ts", "**/pipe-storage-live.spec.ts", "**/pipe-storage-account-live.spec.ts"],
   fullyParallel: false,
   workers: 1,
   retries: 0,

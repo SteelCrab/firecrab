@@ -21,6 +21,7 @@ pub mod schedules;
 pub mod secrets;
 pub mod security_groups;
 pub mod shells;
+pub mod stacks;
 pub mod storage;
 pub mod update;
 pub mod vm_execution;
@@ -31,3 +32,4 @@ pub mod pipe;
 /// Provider authentication endpoints shared by supported Pipe services.
 pub mod pipe_auth;
 pub mod pipe_databases;
+pub mod pipe_storage;

@@ -21,7 +21,7 @@ wasm-bindgen = "=0.2.126"
 wasm-bindgen-futures = "=0.4.76"
 js-sys = "=0.3.103"
 web-sys = { version = "=0.3.103", features = [
-  "Crypto", "Window", "Document", "Element", "Node", "NodeList", "Event", "EventTarget",
+  "File", "FileList", "Crypto", "Window", "Document", "Element", "Node", "NodeList", "Event", "EventTarget",
   "HtmlElement", "HtmlInputElement", "HtmlSelectElement", "HtmlTextAreaElement",
   "HtmlFormElement", "FocusOptions", "FormData", "Location", "History", "Storage", "KeyboardEvent",
   "Request", "RequestInit", "Headers", "Response", "AbortController", "AbortSignal",

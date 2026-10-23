@@ -228,6 +228,17 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
 
     let rest = Router::new()
         .route(
+            "/api/stacks",
+            get(handlers::stacks::list).post(handlers::stacks::register),
+        )
+        .route("/api/stacks/{name}/plan", post(handlers::stacks::plan))
+        .route(
+            "/api/stacks/{name}",
+            get(handlers::stacks::get).delete(handlers::stacks::delete),
+        )
+        .route("/api/stacks/{name}/bindings", post(handlers::stacks::bind))
+        .route("/api/stacks/{name}/unbind", post(handlers::stacks::unbind))
+        .route(
             "/api/security-groups",
             get(handlers::security_groups::list).post(handlers::security_groups::create),
         )
@@ -308,6 +319,24 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/pipe/disable", post(handlers::pipe::disable))
         .route("/api/pipe/auth", get(handlers::pipe_auth::list))
+        .route(
+            "/api/pipe/storage",
+            get(handlers::pipe_storage::list).post(handlers::pipe_storage::create),
+        )
+        .route(
+            "/api/pipe/storage/{id}",
+            get(handlers::pipe_storage::get)
+                .put(handlers::pipe_storage::update)
+                .delete(handlers::pipe_storage::delete),
+        )
+        .route(
+            "/api/pipe/storage/{id}/verify",
+            post(handlers::pipe_storage::verify),
+        )
+        .route(
+            "/api/pipe/storage/{id}/objects",
+            get(handlers::pipe_storage::objects),
+        )
         .route(
             "/api/pipe/auth/{provider}",
             axum::routing::put(handlers::pipe_auth::save).delete(handlers::pipe_auth::delete),
@@ -606,23 +635,43 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::registries::repositories),
         )
         .route("/api/pipe/registry-tags", get(handlers::registries::tags))
-        .layer(cors)
+        .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
             RequestLimits {
-                permits: limits.permits,
+                permits: limits.permits.clone(),
                 timeout: Some(Duration::from_secs(60)),
             },
             enforce_limits,
         ));
 
     let console = Router::new().route("/ws/vms/{id}/console", get(handlers::console::console_ws));
+    // Object bodies stream with their own 512 MiB limit and upstream deadline.
+    let storage_transfers = Router::new()
+        .route(
+            "/api/pipe/storage/{id}/object",
+            get(handlers::pipe_storage::download)
+                .put(handlers::pipe_storage::upload)
+                .delete(handlers::pipe_storage::delete_object),
+        )
+        .layer(cors.clone())
+        .layer(DefaultBodyLimit::max(
+            crate::pipe_storage::MAX_OBJECT_BYTES as usize,
+        ))
+        .layer(middleware::from_fn_with_state(
+            RequestLimits {
+                permits: limits.permits.clone(),
+                timeout: Some(crate::pipe_storage::TRANSFER_TIMEOUT),
+            },
+            enforce_limits,
+        ));
 
     let app = rest
         .merge(recovery)
         .merge(inspection)
         .merge(secrets)
         .merge(console)
+        .merge(storage_transfers)
         // Unknown paths under the API/WebSocket prefixes answer with the JSON
         // error envelope even when the dashboard is served below, so a typo in
         // a client's URL never comes back as an HTML page.

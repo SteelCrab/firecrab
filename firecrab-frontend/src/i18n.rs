@@ -8,6 +8,27 @@ pub fn t(value: &str) -> &str {
         return value;
     }
     match value {
+        "Connect bucket" => "버킷 연결",
+        "Connect S3 bucket" => "S3 버킷 연결",
+        "Edit S3 connection" => "S3 연결 수정",
+        "Bucket" => "버킷",
+        "Folder (optional)" => "폴더 (선택)",
+        "Name (optional)" => "이름 (선택)",
+        "Credentials" => "인증",
+        "AWS account from Account" => "Account의 AWS 계정",
+        "Separate AWS keys" => "별도 AWS 키",
+        "Replace saved keys" => "저장된 키 교체",
+        "Keep saved keys" => "저장된 키 유지",
+        "Replace keys" => "키 교체",
+        "All connections" => "모든 연결",
+        "Root folder" => "처음 폴더",
+        "Open prefix" => "경로 열기",
+        "Check connection" => "연결 검사",
+        "Delete file" => "파일 삭제",
+        "Load more" => "더 보기",
+        "Upload" => "업로드",
+        "Cancel upload" => "업로드 취소",
+
         "Pause" => "일시정지",
         "Resume" => "재개",
         "Paused" => "일시정지됨",

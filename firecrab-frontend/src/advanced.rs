@@ -3,6 +3,7 @@ pub mod pools;
 pub mod schedules;
 pub mod secrets;
 pub mod security;
+pub mod storage;
 use crate::{
     App, Shared, api, element,
     model::{list, text},
@@ -16,6 +17,7 @@ use web_sys::{Element, Event, HtmlInputElement, HtmlSelectElement};
 #[derive(Default)]
 pub struct State {
     pub context: String,
+    pub storage: storage::State,
     pub secrets_external: bool,
     pub reveal_generation: u64,
     pub reveals: BTreeMap<String, (String, f64)>,
@@ -30,6 +32,7 @@ pub fn content(app: &App) -> String {
         "schedules" => schedules::content(app),
         "secrets" => secrets::content(app),
         "security-groups" => security::content(app),
+        "pipe/storage" => storage::content(app),
         _ => String::new(),
     }
 }
@@ -80,13 +83,17 @@ pub fn dispatch(app: &Shared, action: &str, id: &str, button: &Element) -> bool 
         app.borrow_mut().dirty = true;
         return true;
     }
-    images::dispatch(app, action, id)
+    storage::dispatch(app, action, id)
+        || images::dispatch(app, action, id)
         || pools::dispatch(app, action, id)
         || schedules::dispatch(app, action, id)
         || secrets::dispatch(app, action, id)
         || security::dispatch(app, action, id)
 }
 pub fn change(app: &Shared, target: &Element) -> bool {
+    if storage::change(app, target) {
+        return true;
+    }
     if target.id() == "schedule-filter" {
         let value = target.clone().unchecked_into::<HtmlSelectElement>().value();
         let _ = window()
@@ -142,6 +149,16 @@ pub fn sync_form() {
             visible(key, show);
         }
     }
+    if let Some(credentials) =
+        element("field-credentialRef").and_then(|el| el.dyn_into::<HtmlSelectElement>().ok())
+    {
+        let own = credentials.value() == "connection";
+        let replace = value("replaceKeys") != "false";
+        for key in ["accessKeyId", "secretAccessKey", "sessionToken"] {
+            visible(key, own && replace);
+        }
+        visible("replaceKeys", own);
+    }
     let provider = value("provider");
     if element("field-projectId").is_some()
         && let Some(label) = element("field-token")
@@ -184,6 +201,14 @@ pub fn prepare(app: &Shared) {
     let Some(mut form) = state.form.take() else {
         return;
     };
+    if form.return_route == "services" {
+        form.choose(
+            "storageConnectionId",
+            state.cache.get("/api/pipe/storage").unwrap_or(&Value::Null),
+            "id",
+            "name",
+        );
+    }
     if form.title == "New security group" {
         form.base["disabledNetworks"] = json!(
             list(

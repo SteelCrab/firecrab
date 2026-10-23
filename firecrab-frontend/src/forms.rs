@@ -377,6 +377,9 @@ impl Form {
                 Ok(result)
             }
             "New MicroService" | "Edit MicroService" => {
+                if body["storageConnectionId"].is_null() {
+                    body.as_object_mut().unwrap().remove("storageConnectionId");
+                }
                 if let Some(domain) = body["domain"].as_str() {
                     body["domain"] = json!(normalize_domain(domain));
                 }
@@ -587,6 +590,13 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
                 format!("/api/micro-services{suffix}"),
                 method,
                 vec![
+                    Field::new(
+                        "storageConnectionId",
+                        "S3 connection (optional)",
+                        "nullable-select",
+                        value("storageConnectionId"),
+                    )
+                    .optional(),
                     Field::new(
                         "securityGroupId",
                         "Security group",

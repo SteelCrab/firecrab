@@ -44,7 +44,7 @@ builds. Its tests deserialize requests using the existing `firecrab-api-types`.
 | Images | List, catalog registration, OCI import, package download/install/delete, kernel assignment, progress |
 | Kernels | List, install, delete, progress |
 | Shells | List, create, inspect, publish revision, read revision, delete |
-| Pipe | Routing and service controls, AWS/GitHub auth, registry login/browsing/pull, database connections/table previews, Firecrab addresses, quick tunnels, Cloudflare connection |
+| Pipe | Routing and service controls, AWS/GitHub auth, registry login/browsing/pull, S3 connections and binary object transfers, database connections/table previews, Firecrab addresses, quick tunnels, Cloudflare connection |
 | Host | Status, build information, update/start/progress, localhost microManager resource edit/apply with controller ID |
 | Browser | Hash routing, back/forward, dirty-form confirmation, keyboard navigation, VM/destination palette, responsive sidebar, English/Korean forms and actions |
 | Console | Lazy xterm, serial WebSocket, bounded reconnect, session-ended close code 4000, disconnect/dispose on navigation, saved + live buffer log copy/export, preferences, inspector, SSH, terminal-only mode |

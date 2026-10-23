@@ -40,7 +40,7 @@ export async function createFixtureServer(root, initialRows = 100) {
       this.delayNext = null;
       this.state = { vms: Array.from({ length: rows }, (_, i) => vm(i)), services: [structuredClone(service)], networks: [structuredClone(network)], storages: [structuredClone(storage)], images: [structuredClone(image)], shells: [structuredClone(shell)],
         kernels: [{ version: '6.12.1', installed: true, architecture: 'aarch64' }],
-        auth: [], registries: [], databases: [], pools: [], schedules: [], securityGroups: [], secrets: [], connections: [], pipe: { config: { listen: '127.0.0.1:8080', routes: [], tunnel: null }, units: [], firecrabTunnels: [], quickTunnels: [], nginxAvailable: true, cloudflaredAvailable: true } };
+        auth: [], registries: [], databases: [], pools: [], schedules: [], securityGroups: [], secrets: [], connections: [], storageConnections: [], pipe: { config: { listen: '127.0.0.1:8080', routes: [], tunnel: null }, units: [], firecrabTunnels: [], quickTunnels: [], nginxAvailable: true, cloudflaredAvailable: true } };
     },
   };
   fixture.reset();
@@ -74,7 +74,7 @@ export async function createFixtureServer(root, initialRows = 100) {
       if (fixture.delayNext?.path === path) { const delay = fixture.delayNext; fixture.delayNext = null; await new Promise(resolve => setTimeout(resolve, delay.ms)); }
       if (fixture.failNext?.path === path && (!fixture.failNext.method || fixture.failNext.method === method)) { const failure = fixture.failNext; fixture.failNext = null; return send(failure.status ?? 422, { error: { message: failure.message ?? 'Fixture rejected the request', fields: failure.fields } }); }
       const state = fixture.state;
-      const entries = { '/api/pools':'pools','/api/schedules':'schedules','/api/security-groups':'securityGroups','/api/secrets/connections':'connections','/api/secrets':'secrets', '/api/vms': 'vms', '/api/micro-services': 'services', '/api/micro-networks': 'networks', '/api/micro-storages': 'storages', '/api/images': 'images', '/api/kernels': 'kernels', '/api/shells': 'shells', '/api/pipe/auth': 'auth', '/api/pipe/registries': 'registries', '/api/pipe/databases': 'databases' };
+      const entries = { '/api/pipe/storage':'storageConnections','/api/pools':'pools','/api/schedules':'schedules','/api/security-groups':'securityGroups','/api/secrets/connections':'connections','/api/secrets':'secrets', '/api/vms': 'vms', '/api/micro-services': 'services', '/api/micro-networks': 'networks', '/api/micro-storages': 'storages', '/api/images': 'images', '/api/kernels': 'kernels', '/api/shells': 'shells', '/api/pipe/auth': 'auth', '/api/pipe/registries': 'registries', '/api/pipe/databases': 'databases' };
       const resourceBase = Object.keys(entries).sort((a, b) => b.length - a.length).find(base => path === base || path.startsWith(base + '/'));
       const simple = {
         '/api/host': host,

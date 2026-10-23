@@ -13,6 +13,61 @@ pub fn resource(kind: &str, data: &Value, id: &str) -> Option<Form> {
         String::new()
     };
     Some(match kind {
+        "pipe-storage" => {
+            let mut form = Form::new(
+                if edit {
+                    "Edit S3 connection"
+                } else {
+                    "Connect S3 bucket"
+                },
+                format!("/api/pipe/storage{suffix}"),
+                method,
+                vec![
+                    Field::new("bucket", "Bucket", "text", value("bucket")),
+                    Field::new(
+                        "region",
+                        "Region",
+                        "text",
+                        if edit {
+                            value("region")
+                        } else {
+                            "ap-northeast-2".into()
+                        },
+                    ),
+                    Field::new("prefix", "Folder (optional)", "text", value("prefix")).optional(),
+                    Field::new("name", "Name (optional)", "text", value("name")).optional(),
+                    Field::new(
+                        "credentialRef",
+                        "Credentials",
+                        "select",
+                        if edit {
+                            value("credentialRef")
+                        } else {
+                            "pipeAuthAws".into()
+                        },
+                    )
+                    .choices(&[
+                        ("pipeAuthAws", "AWS account from Account"),
+                        ("connection", "Separate AWS keys"),
+                    ]),
+                    Field::new(
+                        "replaceKeys",
+                        "Replace saved keys",
+                        "bool",
+                        if edit { "false" } else { "true" },
+                    )
+                    .choices(&[("false", "Keep saved keys"), ("true", "Replace keys")]),
+                    Field::new("accessKeyId", "AWS access key ID", "password", "").optional(),
+                    Field::new("secretAccessKey", "AWS secret access key", "password", "")
+                        .optional(),
+                    Field::new("sessionToken", "Session token (optional)", "password", "")
+                        .optional(),
+                ],
+                "pipe/storage",
+            );
+            form.base = json!({"editing":edit});
+            form
+        }
         "pools" => {
             let mut fields = if edit {
                 Vec::new()
@@ -269,6 +324,29 @@ pub fn resource(kind: &str, data: &Value, id: &str) -> Option<Form> {
 
 pub fn payload(title: &str, mut body: Value) -> Result<Value, String> {
     match title {
+        "Connect S3 bucket" | "Edit S3 connection" => {
+            let name = if text(&body, "name").trim().is_empty() {
+                text(&body, "bucket")
+            } else {
+                text(&body, "name").trim()
+            };
+            let prefix = text(&body, "prefix");
+            let prefix = if prefix.is_empty() || prefix.ends_with('/') {
+                prefix.into()
+            } else {
+                format!("{prefix}/")
+            };
+            let mut result = json!({"name":name,"bucket":body["bucket"],"region":body["region"],"prefix":prefix,"credentialRef":body["credentialRef"]});
+            if body["credentialRef"] == "connection" && body["replaceKeys"] == true {
+                if text(&body, "accessKeyId").is_empty()
+                    || text(&body, "secretAccessKey").is_empty()
+                {
+                    return Err("AWS access key ID and secret access key are required.".into());
+                }
+                result["credentials"] = json!({"accessKeyId":body["accessKeyId"],"secretAccessKey":body["secretAccessKey"],"sessionToken":body["sessionToken"]});
+            }
+            Ok(result)
+        }
         "Create a pool" | "Pool settings" => {
             let minutes = body["leaseMinutes"].as_u64().unwrap_or_default();
             if minutes == 0
@@ -526,6 +604,33 @@ fn local_zone() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn storage_keeps_saved_credentials_private_and_normalizes_scope() {
+        let fields = |form: &Form| {
+            form.fields
+                .iter()
+                .map(|f| (f.key.to_string(), f.value.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let form=resource("pipe-storage",&json!({"name":"Reports","bucket":"reports","prefix":"team","region":"ap-northeast-2","credentialRef":"connection"}),"saved").unwrap();
+        assert!(
+            form.fields
+                .iter()
+                .filter(|f| ["accessKeyId", "secretAccessKey", "sessionToken"].contains(&f.key))
+                .all(|f| f.value.is_empty())
+        );
+        let body = form.payload(&fields(&form)).unwrap();
+        assert_eq!(body["prefix"], "team/");
+        assert!(body.get("credentials").is_none());
+        assert!(body.get("replaceKeys").is_none());
+        let mut input = fields(&form);
+        input.insert("replaceKeys".into(), "true".into());
+        assert!(form.payload(&input).is_err());
+        input.insert("accessKeyId".into(), "fixture-key".into());
+        input.insert("secretAccessKey".into(), "fixture-secret".into());
+        let body = form.payload(&input).unwrap();
+        assert_eq!(body["credentials"]["secretAccessKey"], "fixture-secret");
+    }
     #[test]
     fn schedule_presets_keep_the_api_contract_and_reject_invalid_days() {
         let mut body = json!({"repeat":"weekdays","time":"18:30","timeZone":"Asia/Seoul","days":"Fri,Mon,Wed"});

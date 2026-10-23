@@ -191,3 +191,58 @@ pub async fn acquire(path: &str, key: &str) -> Result<Value, String> {
         .map_err(|e| e.to_string())?;
     serde_json::from_str(&body).map_err(|e| e.to_string())
 }
+
+// Object bodies remain binary; credential and metadata requests use the JSON path above.
+pub async fn binary(
+    method: &str,
+    path: &str,
+    body: Option<&web_sys::Blob>,
+) -> Result<web_sys::Blob, String> {
+    let options = RequestInit::new();
+    options.set_method(method);
+    if let Some(body) = body {
+        options.set_body(body);
+    }
+    let request = Request::new_with_str_and_init(path, &options).map_err(error)?;
+    if body.is_some() {
+        request
+            .headers()
+            .set("Content-Type", "application/octet-stream")
+            .map_err(error)?;
+    }
+    let response = JsFuture::from(
+        web_sys::window()
+            .ok_or("Browser window is unavailable.")?
+            .fetch_with_request(&request),
+    )
+    .await
+    .map_err(error)?
+    .dyn_into::<Response>()
+    .map_err(error)?;
+    if !response.ok() {
+        let text = JsFuture::from(response.text().map_err(error)?)
+            .await
+            .map_err(error)?
+            .as_string()
+            .unwrap_or_default();
+        return Err(
+            Failure::response(response.status(), &response.status_text(), &text).to_string(),
+        );
+    }
+    let bytes = JsFuture::from(response.blob().map_err(error)?)
+        .await
+        .map_err(error)?
+        .dyn_into::<web_sys::Blob>()
+        .map_err(error)?;
+    if method == "GET"
+        && response
+            .headers()
+            .get("Content-Length")
+            .map_err(error)?
+            .and_then(|n| n.parse::<usize>().ok())
+            != Some(bytes.size() as usize)
+    {
+        return Err("S3 download interrupted. Retry the download.".into());
+    }
+    Ok(bytes)
+}

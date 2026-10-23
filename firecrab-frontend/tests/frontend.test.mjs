@@ -240,14 +240,14 @@ test('VM lifecycle actions refresh server state and deletion requires confirmati
   await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(11);
 });
 
-test('all thirteen main destinations and seven Pipe destinations load without React', async () => {
+test('all thirteen main destinations and eight Pipe destinations load without React', async () => {
   await open();
   for (const [route, title] of [['pools','Pools'],['schedules','Schedules'],['security-groups','Security groups'],['secrets','Secrets'],['services','MicroService'],['networks','Networks'],['storages','Storage'],['images','Images'],['kernels','Kernels'],['shells','Shells'],['host','Host'],['pipe','Pipe'],['vms','MicroVM']]) {
     await page.locator(`nav a.sidebar-item[href="#/${route}"]`).click();
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
     await expect(page.locator('#content')).toHaveAttribute('data-loaded', 'true');
   }
-  for (const card of ['auth','route','registry','database','firecrab-tunnel','quick-tunnel','named-tunnel']) {
+  for (const card of ['auth','route','registry','database','storage','firecrab-tunnel','quick-tunnel','named-tunnel']) {
     await page.goto(`${fixture.url}/#/pipe/${card}`);
     await expect(page.locator('#content')).toHaveAttribute('data-loaded', 'true');
     await expect(page.locator('#content')).not.toBeEmpty();
