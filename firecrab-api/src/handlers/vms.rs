@@ -768,16 +768,24 @@ pub async fn update_vm(
     let _guard = state.lock_vm(id).await;
     if req.env.is_some() {
         let store = state.store.clone();
-        let storage_env = tokio::task::spawn_blocking(move || {
-            crate::pipe_storage::environment_for_vm(&store, id)
-        })
-        .await
-        .map_err(|_| AppError::internal(request_id.0))?
-        .map_err(|e| super::pipe_storage::failure(e, request_id.0))?;
-        if !storage_env.is_empty() {
+        let owner = tokio::task::spawn_blocking(move || store.service_deployment_for_vm(id))
+            .await
+            .map_err(|_| AppError::internal(request_id.0))?
+            .map_err(|_| AppError::internal(request_id.0))?;
+        if owner
+            .as_ref()
+            .is_some_and(|deployment| deployment.spec.storage_connection_id.is_some())
+        {
             return Err(AppError::conflict(
                 "service_storage_env",
                 "Stop and edit the MicroService configuration to change this VM's environment",
+                request_id.0,
+            ));
+        }
+        if owner.is_some_and(|deployment| !deployment.spec.secrets.is_empty()) {
+            return Err(AppError::conflict(
+                "vm_service_owned",
+                "Edit the MicroService configuration instead of its replica environment",
                 request_id.0,
             ));
         }
@@ -1370,6 +1378,7 @@ pub(super) async fn persist_update(
 }
 
 async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess, String> {
+    let guest_env = crate::service_runtime::secrets::guest_env(state, vm).await?;
     let template = state
         .templates
         .resolve_version(&vm.template, &vm.template_version)
@@ -1393,7 +1402,7 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
     )
     .await?;
 
-    let result = finish_run_start(state, vm, template, &network).await;
+    let result = finish_run_start(state, vm, template, &network, guest_env).await;
     if result.is_err() {
         teardown_vm_network(state, vm.id).await;
     }
@@ -1405,6 +1414,7 @@ async fn finish_run_start(
     vm: &VmRecord,
     template: std::sync::Arc<crate::templates::TemplateVersion>,
     network: &VmNetwork,
+    mut guest_env: BTreeMap<String, String>,
 ) -> Result<FirecrackerProcess, String> {
     // Capture transport-derived values before the template Arc is moved into
     // the blocking disk/configuration task below. `runtime_boot_args` also
@@ -1453,7 +1463,6 @@ async fn finish_run_start(
         let storage_env = crate::pipe_storage::environment_for_vm(&store_for_shells, record.id)
             .map_err(|error| error.message.to_owned())?;
         let has_storage_secrets = !storage_env.is_empty();
-        let mut guest_env = record.env.clone();
         guest_env.extend(storage_env);
         rootfs::specialize_guest(&rootfs, record.id, &guest_env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;

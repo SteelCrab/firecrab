@@ -64,7 +64,7 @@ test.describe("MicroService configuration @dashboard", () => {
     expect(JSON.stringify(writes)).not.toContain("secretAccessKey");
   });
   test("deploys from the runtime panel, reports health, and stops the service", async ({ page }, testInfo) => {
-    const service = { ...INITIAL, domain: null, secrets: {}, replicas: 1 };
+    const service = { ...INITIAL, domain: null, replicas: 1 };
     await openServices(page, [service]);
     let deployment: Record<string, unknown> | null = null;
     let read = 0;
@@ -86,6 +86,8 @@ test.describe("MicroService configuration @dashboard", () => {
     });
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("Not deployed");
+    await expect(page.getByText("Secret values are injected into every replica. Changes apply on the next deployment.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Secret injection is not available yet.", { exact: false })).toHaveCount(0);
     await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("Running");
     await expect(page.getByRole("cell", { name: "Healthy", exact: true })).toBeVisible();
@@ -113,6 +115,26 @@ test.describe("MicroService configuration @dashboard", () => {
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("Not deployed");
     expect(maxActiveReads).toBe(1);
+  });
+
+  test("shows a missing Secret error before a deployment is accepted", async ({ page }) => {
+    const service = { ...INITIAL, domain: null, replicas: 1 };
+    await openServices(page, [service]);
+    let submitted = false;
+    await page.route(`**/api/micro-services/${ID}/deployment`, async route => {
+      if (route.request().method() === "POST") {
+        submitted = true;
+        return route.fulfill({ status: 400, json: { error: { code: "validation_failed", message: "request validation failed", fields: { secrets: "a referenced PipeSecret does not exist" } } } });
+      }
+      return route.fulfill({ json: null });
+    });
+    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await expect(page.getByRole("status")).toHaveText("Not deployed");
+    await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("a referenced PipeSecret does not exist");
+    await expect(page.getByRole("status")).toHaveText("Not deployed");
+    await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeEnabled();
+    expect(submitted).toBe(true);
   });
 
   test("closes stale runtime settings after saving and preserves mobile headers", async ({ page }) => {
