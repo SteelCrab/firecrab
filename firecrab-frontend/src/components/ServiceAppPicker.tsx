@@ -6,6 +6,7 @@ import { useI18n } from "../i18n";
 import { pipeCardHash } from "../navigation";
 
 export interface ServiceAppSelection { connection: AuthConnection; reference: string }
+type ImageAuth = AuthConnection & { registry: string };
 
 /** Only provider accounts connected through Pipe Auth can supply an app. */
 export default function ServiceAppPicker({ value, disabled, onChange }: {
@@ -13,7 +14,7 @@ export default function ServiceAppPicker({ value, disabled, onChange }: {
 }) {
   const { t } = useI18n();
   const [initialReference] = useState(value);
-  const [connections, setConnections] = useState<AuthConnection[] | null>(null);
+  const [connections, setConnections] = useState<ImageAuth[] | null>(null);
   const [account, setAccount] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
@@ -21,7 +22,7 @@ export default function ServiceAppPicker({ value, disabled, onChange }: {
     const controller = new AbortController();
     onChange(null);
     getPipeAuth(controller.signal).then((rows) => {
-      if (!controller.signal.aborted) setConnections(rows.filter((row) => row.services.includes("registry")));
+      if (!controller.signal.aborted) setConnections(rows.filter((row): row is ImageAuth => row.registry !== null && row.services.includes("registry")));
     }).catch((failure) => { if (!controller.signal.aborted) setError((failure as Error).message); });
     return () => controller.abort();
   }, [version, onChange]);
@@ -43,7 +44,7 @@ export default function ServiceAppPicker({ value, disabled, onChange }: {
 }
 
 function AccountApps({ connection, initialReference, disabled, onChange }: {
-  connection: AuthConnection; initialReference: string; disabled: boolean; onChange: (selection: ServiceAppSelection | null) => void;
+  connection: ImageAuth; initialReference: string; disabled: boolean; onChange: (selection: ServiceAppSelection | null) => void;
 }) {
   const { t } = useI18n();
   const prefix = `${connection.registry}/`;
@@ -77,7 +78,7 @@ function AccountApps({ connection, initialReference, disabled, onChange }: {
 }
 
 function AppVersions({ connection, repository, initialReference, disabled, onChange }: {
-  connection: AuthConnection; repository: string; initialReference: string; disabled: boolean; onChange: (selection: ServiceAppSelection | null) => void;
+  connection: ImageAuth; repository: string; initialReference: string; disabled: boolean; onChange: (selection: ServiceAppSelection | null) => void;
 }) {
   const { t } = useI18n();
   const reference = `${connection.registry}/${repository}`;

@@ -23,6 +23,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Pipe Auth links a Firecrab account with an account integration token issued
+  by `console.firecrab.dev`. It displays the verified account ID, email, and
+  token expiry. Address-scoped Tunnel tokens remain separate. Existing Tunnel
+  connection requests also declare the service's required client protocol (#440).
+
 - Browser console dimensions reach the guest serial terminal through a private
   vsock resize helper. Connected viewers share the smallest available grid.
   The console reports whether the guest applied the size and keeps working

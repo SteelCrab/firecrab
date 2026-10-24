@@ -130,7 +130,7 @@ cards. Each card shows a short summary and the service's current state:
 
 | Card | Use |
 | --- | --- |
-| **[Auth](pipe-auth.md)** | Shared AWS and GitHub account authentication |
+| **[Auth](pipe-auth.md)** | Shared AWS/GitHub credentials and console-issued Firecrab account integration tokens |
 | **Route** | Nginx service state and domain/path routes to VM apps |
 | **Pipe Registry** | Container registry logins and image pulls |
 | **Database** | Saved database connections and read-only table browsing |

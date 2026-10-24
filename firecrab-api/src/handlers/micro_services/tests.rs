@@ -265,8 +265,17 @@ async fn micro_services_reject_unknown_fields_runtime_and_malformed_ids() {
 async fn micro_services_auth_scopes_create_update_and_deploy_to_connected_accounts() {
     let root = tempfile::tempdir().unwrap();
     let state = state(root.path()).await;
+    state
+        .store
+        .put_pipe_auth(&SavedAuth::Firecrab {
+            account_id: "11111111-1111-4111-8111-111111111111".into(),
+            email: "owner@example.com".into(),
+            expires_at: 4102444800000,
+            token: format!("fca_{}", "a".repeat(64)),
+        })
+        .unwrap();
     let router = router(state.clone());
-    // A standalone login must never substitute for Pipe Auth, including public images.
+    // Neither a console account nor a standalone login authorizes service images.
     state
         .store
         .put_registry_login(
