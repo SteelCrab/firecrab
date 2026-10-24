@@ -4,6 +4,7 @@ pub mod pools;
 pub mod schedules;
 pub mod secrets;
 pub mod security;
+pub mod services;
 pub mod storage;
 use crate::{
     App, Shared, api, element,
@@ -20,6 +21,7 @@ pub struct State {
     pub context: String,
     pub storage: storage::State,
     pub ai: ai::State,
+    pub services: services::State,
     pub secrets_external: bool,
     pub reveal_generation: u64,
     pub reveals: BTreeMap<String, (String, f64)>,
@@ -85,7 +87,8 @@ pub fn dispatch(app: &Shared, action: &str, id: &str, button: &Element) -> bool 
         app.borrow_mut().dirty = true;
         return true;
     }
-    ai::dispatch(app, action, id)
+    services::dispatch(app, action, id)
+        || ai::dispatch(app, action, id)
         || storage::dispatch(app, action, id)
         || images::dispatch(app, action, id)
         || pools::dispatch(app, action, id)
@@ -94,7 +97,7 @@ pub fn dispatch(app: &Shared, action: &str, id: &str, button: &Element) -> bool 
         || security::dispatch(app, action, id)
 }
 pub fn change(app: &Shared, target: &Element) -> bool {
-    if ai::change(app, target) || storage::change(app, target) {
+    if services::change(app, target) || ai::change(app, target) || storage::change(app, target) {
         return true;
     }
     if target.id() == "schedule-filter" {
@@ -322,6 +325,7 @@ pub fn aux_loaded(app: &Shared, path: &str) {
     }
 }
 pub fn after_refresh(app: &Shared) {
+    services::after_refresh(app);
     if app.borrow().route == "images" {
         images::load(app);
         crate::workflows::restore_job(app);
@@ -407,6 +411,7 @@ pub fn load_extra(app: &Shared, key: &str, path: &str) {
     });
 }
 pub fn after_mutation(app: &Shared, path: &str) {
+    services::after_mutation(app, path);
     if path == "/api/security-groups" && app.borrow().detail.is_some() {
         let id = app
             .borrow()

@@ -575,8 +575,7 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
                 "POST",
                 vec![
                     Field::new("hostPort", "First host port", "number", 30100),
-                    Field::new("microNetworkId", "Network ID (optional)", "nullable", "")
-                        .optional(),
+                    Field::new("microNetworkId", "Network", "nullable-select", "").optional(),
                 ],
                 "services",
             );

@@ -44,7 +44,7 @@ pub fn panel(app: &App) -> String {
     if let Some(form) = &app.form {
         out.push_str(&format!(
             "<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\">{}</section>",
-            form.html(app.busy, &app.field_errors) + &if form.title == "Deploy MicroService" { format!("<div id=\"service-status\">{}</div>", render::deployment(app.service_deployment.as_ref())) } else { String::new() }
+            if form.return_route == "services" { crate::advanced::services::html(app, form) } else { form.html(app.busy, &app.field_errors) } + &if form.title == "Deploy MicroService" { format!("<div id=\"service-status\">{}</div>", render::deployment(app.service_deployment.as_ref())) } else { String::new() }
         ));
         if form.title == "Deploy MicroService" && !text(&form.base, "domain").is_empty() {
             if let Some(pipe) = app.cache.get("/api/pipe")
@@ -550,6 +550,7 @@ pub fn tick(app: &Shared) {
         drop(state);
         if deploy_form {
             set_html("service-status", &status);
+            crate::advanced::services::sync(&app);
         } else {
             crate::render_detail(&app);
         }

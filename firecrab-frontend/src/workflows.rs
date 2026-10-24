@@ -121,7 +121,7 @@ pub fn prepare_form(app: &Shared) {
         && !field.required
     {
         field.kind = "nullable-select";
-        field.label = "Network ID (optional)";
+        field.label = "Network";
     }
     if ["Quick tunnel", "Firecrab address"].contains(&form.title.as_str()) {
         let apps = app_addresses(&state.vms);

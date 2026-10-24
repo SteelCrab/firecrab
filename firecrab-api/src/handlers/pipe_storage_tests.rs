@@ -25,8 +25,19 @@ async fn state(dir: &std::path::Path) -> AppState {
     .await
     .unwrap()
 }
+
+fn connect_image_account(state: &AppState) {
+    state
+        .store
+        .put_pipe_auth(&crate::pipe_auth::SavedAuth::Github {
+            username: "team".into(),
+            token: "test-only-secret".into(),
+        })
+        .unwrap();
+}
+
 fn spec(connection: Uuid) -> MicroServiceSpec {
-    serde_json::from_value(serde_json::json!({"name":"s3-app","image":"example/app:v1","port":8080,"ram":128,"cpu":1,"storageConnectionId":connection})).unwrap()
+    serde_json::from_value(serde_json::json!({"name":"s3-app","image":"ghcr.io/team/app:v1","port":8080,"ram":128,"cpu":1,"storageConnectionId":connection})).unwrap()
 }
 
 #[tokio::test]
@@ -98,6 +109,7 @@ async fn services_block_disconnect_and_credential_values_stay_out_of_persisted_s
     let saved = record();
     state.store.save_pipe_storage(&saved).unwrap();
     let request_id = RequestId(Uuid::new_v4());
+    connect_image_account(&state);
     let (_, Json(service)) = super::super::micro_services::create(
         State(state.clone()),
         Extension(request_id),
@@ -337,6 +349,7 @@ async fn guest_credentials_fail_closed_when_bindings_are_lost_and_resolve_rotate
     let state = state(root.path()).await;
     let mut saved = record();
     state.store.save_pipe_storage(&saved).unwrap();
+    connect_image_account(&state);
     let (_, Json(service)) = super::super::micro_services::create(
         State(state.clone()),
         Extension(RequestId(Uuid::new_v4())),

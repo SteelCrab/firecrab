@@ -118,7 +118,14 @@ fn connections(app: &App, group: &Value) -> String {
     out
 }
 pub fn load(app: &Shared) {
-    if app.borrow().advanced.security_loading || app.borrow().route != "security-groups" {
+    if app.borrow().advanced.security_loading
+        || app.borrow().route != "security-groups"
+        || app
+            .borrow()
+            .cache
+            .get("security-connections")
+            .is_some_and(|v| v["serviceError"] == true)
+    {
         return;
     }
     app.borrow_mut().advanced.security_loading = true;
@@ -155,6 +162,9 @@ pub fn load(app: &Shared) {
         if s.generation != generation || s.route != "security-groups" {
             return;
         }
+        if s.cache.get("security-connections") == Some(&data) {
+            return;
+        }
         s.cache.insert("security-connections".into(), data);
         for group in list(&s.resource) {
             set_html(
@@ -188,6 +198,7 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
             true
         }
         "security-retry" => {
+            app.borrow_mut().cache.remove("security-connections");
             load(app);
             true
         }
@@ -284,6 +295,9 @@ pub fn policy(app: &Shared) {
         drop(s);
         crate::render_editor(&a);
         super::sync_form();
+        if deploy {
+            super::services::check(&a);
+        }
         render_messages(&a);
     });
 }

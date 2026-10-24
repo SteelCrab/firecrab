@@ -23,7 +23,7 @@ export function vm(index = 0, overrides = {}) {
 const network = { id: 'network-1', name: 'default', subnetCidr: '10.42.0.0/16', gateway: '10.42.0.1', internetEnabled: true, uplink: null, ipv6Cidr: null, ipv6Gateway: null, ipv6AddressMode: null, ipv6Egress: null };
 const image = { alias: 'ubuntu-24.04', version: '2026.09.1', installed: true, minDiskGb: 2, sizeBytes: 1048576, kernelVersion: '6.12.1', architecture: 'aarch64' };
 const shell = { id: 'shell-1', name: 'bootstrap', description: 'Bootstrap', latestVersion: 1, createdAtMs: 0, updatedAtMs: 0 };
-const service = { id: 'service-1', name: 'web', image: 'nginx:1.27', runtime: 'vm', port: 80, healthPath: '/', domain: null, ram: 512, cpu: 1, replicas: 1, startupTimeout: 120, drainTimeout: 30, env: {}, secrets: {} };
+const service = { id: 'service-1', name: 'web', image: 'ghcr.io/team/orders:1.0', runtime: 'vm', port: 80, healthPath: '/', domain: null, ram: 512, cpu: 1, replicas: 1, startupTimeout: 120, drainTimeout: 30, env: {}, secrets: {} };
 const storage = { id: 'storage-1', name: 'default', path: '/storage', availableGib: 100, totalGib: 200, kind: 'directory' };
 const host = { uptimeSeconds: 3600, loadAverage1m: 0.5, memoryTotalMib: 16384, memoryAvailableMib: 8192, diskTotalGib: 200, diskAvailableGib: 100,
   platform: { os: 'linux', name: 'Debian', architecture: 'aarch64', virtualization: 'kvm' } };
@@ -40,7 +40,7 @@ export async function createFixtureServer(root, initialRows = 100) {
       this.delayNext = null;
       this.state = { vms: Array.from({ length: rows }, (_, i) => vm(i)), services: [structuredClone(service)], networks: [structuredClone(network)], storages: [structuredClone(storage)], images: [structuredClone(image)], shells: [structuredClone(shell)],
         kernels: [{ version: '6.12.1', installed: true, architecture: 'aarch64' }],
-        auth: [], aiConnections: [], registries: [], databases: [], pools: [], schedules: [], securityGroups: [], secrets: [], connections: [], storageConnections: [], pipe: { config: { listen: '127.0.0.1:8080', routes: [], tunnel: null }, units: [], firecrabTunnels: [], quickTunnels: [], nginxAvailable: true, cloudflaredAvailable: true } };
+        auth: [{provider:"github",account:"team",registry:"ghcr.io",region:null,services:["registry"]}], aiConnections: [], registries: [], databases: [], pools: [], schedules: [], securityGroups: [], secrets: [], connections: [], storageConnections: [], pipe: { config: { listen: '127.0.0.1:8080', routes: [], tunnel: null }, units: [], firecrabTunnels: [], quickTunnels: [], nginxAvailable: true, cloudflaredAvailable: true } };
     },
   };
   fixture.reset();
@@ -85,11 +85,13 @@ export async function createFixtureServer(root, initialRows = 100) {
         '/api/microregistry': { source: 'fixture', images: [{ ...image, downloadable: true, packageStaged: true }] },
         '/api/pipe': state.pipe,
         '/api/pipe/registry-images': [],
-        '/api/pipe/registry-tags': { tags: ['latest'], nextLast: null },
+        '/api/pipe/registry-tags': { tags: ['1.0','2.0','stable-alpine'], nextLast: null },
         '/api/oci/inspect': { reference: url.searchParams.get('reference'), architecture: 'aarch64', compatible: true },
       };
       if (method === 'GET' && path in simple) return send(200, simple[path]);
       if (method === 'GET' && resourceBase === path) return send(200, state[entries[resourceBase]]);
+      if (path.endsWith('/deployment/check')) return send(200, null);
+      if (path.endsWith('/repositories')) return send(200, {repositories:['team/orders','team/nginx'],listingSupported:true,nextPage:null});
       if (path === '/api/oci/import' || path === '/api/pipe/registry-transfers') return send(202, { alias: 'nginx-1.27', status: 'succeeded', log: 'Fixture import complete' });
       if (path.startsWith('/api/oci/import/') || path.startsWith('/api/pipe/registry-transfers/')) return send(200, { alias: 'nginx-1.27', status: 'succeeded', log: 'Fixture import complete' });
       if (path === '/api/microregistry/register') return send(202, { jobId: 'register-1', status: 'succeeded', log: 'Registered' });

@@ -139,6 +139,7 @@ fn render_content(app: &Shared) {
     vm_list::cache(app);
     render_detail(app);
     workflows::sync_form();
+    advanced::services::sync(app);
 }
 fn render_editor(app: &Shared) {
     if app.borrow().route == "vms/new" {
@@ -147,6 +148,7 @@ fn render_editor(app: &Shared) {
         render_detail(app);
         workflows::sync_form();
     }
+    advanced::services::sync(app);
 }
 fn render_detail(app: &Shared) {
     let focused = document()
@@ -224,7 +226,11 @@ fn render_detail(app: &Shared) {
         row.set_class_name(if selected { "selected" } else { "" });
     }
     if let Ok(buttons) = document().query_selector_all("[data-action=service-run]") {
-        let editing = app.borrow().form.is_some();
+        let editing = app
+            .borrow()
+            .form
+            .as_ref()
+            .is_some_and(|form| form.title != "Deploy MicroService");
         for index in 0..buttons.length() {
             if let Some(button) = buttons
                 .item(index)
@@ -245,6 +251,7 @@ fn render_detail(app: &Shared) {
             "Show details"
         })));
     }
+    advanced::services::sync(app);
 }
 
 fn render_messages(app: &Shared) {
@@ -350,6 +357,7 @@ pub fn start() -> Result<(), JsValue> {
     let poll = app.clone();
     let callback = Closure::<dyn FnMut()>::new(move || {
         terminal::tick(&poll);
+        advanced::services::tick(&poll);
         updates::tick(&poll);
         poll_host(&poll);
         let state = poll.borrow();
@@ -715,6 +723,7 @@ fn navigate(app: &Shared) {
     state.detail_loading = false;
     state.detail_result.clear();
     state.dirty = false;
+    state.busy = false;
     state.loaded = false;
     state.refreshing = false;
     state.error.clear();
@@ -787,6 +796,10 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 }
             }
             _ => {
+                if target.id() == "field-hostPort" && advanced::services::change(&changed, &target)
+                {
+                    return;
+                }
                 if advanced::ai::input(&changed, &target) {
                     return;
                 }
@@ -1017,7 +1030,10 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
         return;
     }
     match action {
-        "refresh" => refresh(app),
+        "refresh" => {
+            app.borrow_mut().cache.remove("security-connections");
+            refresh(app)
+        }
         "palette" => open_palette(&app),
         "palette-close" => set_html("palette-root", ""),
         "menu" => {
@@ -1278,9 +1294,13 @@ fn open_form(app: Shared, kind: &str, id: &str) {
     drop(state);
     workflows::prepare_form(&app);
     advanced::prepare(&app);
+    advanced::services::open(&app);
     render_editor(&app);
 }
 fn save_form(app: Shared, form_element: HtmlFormElement) {
+    if advanced::services::before_save(&app) {
+        return;
+    }
     let state = app.borrow();
     if state.busy {
         return;
@@ -1409,12 +1429,12 @@ fn mutate(
             api::request_detailed(&method, &path, body.as_ref(), controller.as_deref()).await;
         let succeeded = result.is_ok();
         let mut state = app.borrow_mut();
-        state.busy = false;
         if state.generation != generation {
             drop(state);
             render_messages(&app);
             return;
         }
+        state.busy = false;
         match result {
             Ok(value) => {
                 let return_route = state
@@ -1425,6 +1445,17 @@ fn mutate(
                 if submits_form {
                     state.form = None;
                     state.dirty = false;
+                }
+                if path == "/api/micro-services"
+                    || (submits_form
+                        && path.starts_with("/api/micro-services/")
+                        && !path.ends_with("/deployment"))
+                {
+                    state.detail = Some(value.clone());
+                    let mut rows = model::list(&state.resource).to_vec();
+                    rows.retain(|row| row["id"] != value["id"]);
+                    rows.push(value.clone());
+                    state.resource = json!(rows);
                 }
                 if path == "/api/schedules" || path == "/api/security-groups" {
                     state.detail = Some(value.clone());
@@ -1440,6 +1471,17 @@ fn mutate(
                     .as_ref()
                     .map(|detail| text(detail, "id").to_string());
                 if method == "DELETE" {
+                    if state.route == "services" && path.starts_with("/api/micro-services/") {
+                        if let Some(id) = &selected {
+                            state.resource = json!(
+                                model::list(&state.resource)
+                                    .iter()
+                                    .filter(|row| row["id"] != *id)
+                                    .collect::<Vec<_>>()
+                            );
+                        }
+                        state.form = None;
+                    }
                     state.detail = None;
                     state.detail_generation += 1;
                 } else if path == "/api/vms" {

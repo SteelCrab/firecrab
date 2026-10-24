@@ -34,7 +34,7 @@ builds. Its tests deserialize requests using the existing `firecrab-api-types`.
 | Area | Rust/WASM client |
 |---|---|
 | MicroVM | List, state tabs, name/IP/image search, allocation totals, create, start/pause/resume/stop/delete, details, resources, egress, environment, port forwards, Shell assignments, storage assignment, logs, SSH key download |
-| MicroService | List, configuration create/edit/delete, deploy with host port and optional network, stop, deployment status |
+| MicroService | AUTH-owned app/version selection, four-step setup, security/S3 bindings, deployment preflight, AUTH reconnection with restored placement, status and stop |
 | Pools | Create/configure/delete, ready members, acquire with a persistent idempotency key, lease expiry/release, pool-managed VM protection |
 | Schedules | Weekday/daily/weekly/custom cron and one-time actions, time zones, exact instant preservation, VM context links, enable/disable, run history |
 | Security groups | Create/delete, ingress/egress IPv4 rules, service policy selection, deployment network enforcement, live replica inheritance and partial-failure reporting |
