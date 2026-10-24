@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Named MicroBlockStorage data volumes persist after VM deletion. REST, CLI, and
+  Dashboard support creation and exclusive attachment to inactive user VMs.
+  Guest mounts use filesystem UUIDs and gate managed application startup.
+  Data disks honor guest flush requests, and API restarts retain reservations.
+  Tracked in [#247](https://github.com/SteelCrab/firecrab/issues/247).
+
 - Browser console dimensions reach the guest serial terminal through a private
   vsock resize helper. Connected viewers share the smallest available grid.
   The console reports whether the guest applied the size and keeps working

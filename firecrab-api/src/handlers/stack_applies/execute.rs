@@ -358,6 +358,7 @@ async fn execute(
 
 fn vm_create(desired: &firecrab_stack::Vm, network: Uuid) -> CreateVmRequest {
     CreateVmRequest {
+        block_storages: vec![],
         name: desired.name.clone(),
         template: desired.template.clone(),
         ram: desired.ram,

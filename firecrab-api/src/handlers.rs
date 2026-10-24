@@ -1,3 +1,6 @@
+pub mod block_storage;
+#[cfg(test)]
+mod block_storage_tests;
 pub mod bootstrap;
 pub mod builder_vm;
 pub mod console;

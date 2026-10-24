@@ -16,6 +16,7 @@ export const VIEW_ICONS: Record<ViewId, LucideIcon> = {
   pipe: Workflow,
   secrets: KeyRound,
   storages: HardDrive,
+  volumes: HardDrive,
   images: Layers,
   kernels: Atom,
   shells: SquareTerminal,

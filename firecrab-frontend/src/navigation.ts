@@ -17,6 +17,7 @@ export const VIEWS = [
   { id: "pipe", group: "network", labels: { en: "Pipe", ko: "Pipe" } },
   { id: "secrets", group: "data", labels: { en: "Secrets", ko: "Secrets" } },
   { id: "storages", group: "data", labels: { en: "Storage", ko: "스토리지" } },
+  { id: "volumes", group: "data", labels: { en: "Volumes", ko: "볼륨" } },
   { id: "images", group: "data", labels: { en: "Images", ko: "이미지" } },
   { id: "kernels", group: "data", labels: { en: "Kernels", ko: "커널" } },
   { id: "shells", group: "system", labels: { en: "Shells", ko: "Shell" } },

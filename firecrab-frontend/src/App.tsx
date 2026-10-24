@@ -13,6 +13,7 @@ import Pools from "./components/Pools";
 import Kernels from "./components/Kernels";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
+import MicroBlockStorages from "./components/MicroBlockStorages";
 import MicroServices from "./components/MicroServices";
 import SecurityGroups from "./components/SecurityGroups";
 import Schedules from "./components/Schedules";
@@ -299,6 +300,7 @@ export default function App() {
         <Pipe card={route.kind === "pipe-card" ? route.card : null} vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={onPipeUnsavedChange} />
       )}
       {view === "storages" && <MicroStorages />}
+      {view === "volumes" && <MicroBlockStorages />}
       {view === "images" && <Images />}
       {view === "kernels" && <Screen view="kernels"><Kernels /></Screen>}
       {view === "shells" && <Shells />}

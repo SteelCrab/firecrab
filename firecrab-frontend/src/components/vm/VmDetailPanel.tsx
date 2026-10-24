@@ -10,10 +10,11 @@ import EnvTab from "./detail/EnvTab";
 import LogsTab from "./detail/LogsTab";
 import NetworkTab from "./detail/NetworkTab";
 import OverviewTab from "./detail/OverviewTab";
+import VolumesTab from "./detail/VolumesTab";
 import { useSectionEdit } from "./detail/useSectionEdit";
 import { useVmDetail } from "./detail/useVmDetail";
 
-type Tab = "overview" | "network" | "env" | "logs";
+type Tab = "overview" | "network" | "env" | "logs" | "volumes";
 
 interface VmDetailPanelProps {
   /** The VM as the list last saw it; the panel polls its own fresher copy. */
@@ -40,6 +41,7 @@ export default function VmDetailPanel({ vm: listed, busy, onAction, onOpenSsh }:
   const tabs: { id: Tab; label: string; count?: number }[] = [
     { id: "overview", label: t("Overview", "개요") },
     { id: "network", label: t("Network", "네트워크") },
+    { id: "volumes", label: t("Volumes", "볼륨") },
     { id: "env", label: t("Environment", "환경 변수"), count: envCount || undefined },
     { id: "logs", label: t("Log", "로그") },
   ];
@@ -92,6 +94,7 @@ export default function VmDetailPanel({ vm: listed, busy, onAction, onOpenSsh }:
           />
         )}
         {tab === "network" && <NetworkTab vm={vm} detail={detail} edit={edit} />}
+        {tab === "volumes" && <VolumesTab vm={vm} />}
         {tab === "env" && <EnvTab vm={vm} detail={detail} edit={edit} />}
         {tab === "logs" && <LogsTab vm={vm} detail={detail} />}
       </div>

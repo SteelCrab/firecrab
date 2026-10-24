@@ -11,6 +11,8 @@ use uuid::Uuid;
 
 mod pool;
 pub use pool::*;
+mod block_storage;
+pub use block_storage::*;
 mod micro_services;
 mod pipe_ai;
 mod pipe_storage;
@@ -163,6 +165,9 @@ impl VmState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateVmRequest {
+    /// Existing data disks, reserved exclusively for this VM at creation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub block_storages: Vec<VmBlockStorageMount>,
     /// 1–64 chars, alphanumeric plus `.`/`_`/`-`.
     pub name: String,
     /// Template registry alias (e.g. `ubuntu-26.04`), not a specific version.
