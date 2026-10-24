@@ -52,6 +52,11 @@ impl Fixture {
         )
         .unwrap();
         fs::write(vite.join("index.mjs"), VITE).unwrap();
+        fs::write(
+            frontend.join("node_modules/.firecrab-dev-dependencies"),
+            dependency_revision(&frontend).unwrap(),
+        )
+        .unwrap();
         let port = TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
@@ -107,6 +112,29 @@ fn starts_reuses_stops_and_resumes_the_selected_checkout() {
     assert!(!running(&client().unwrap(), &original, &fixture.url()));
     fixture.start().unwrap();
     assert_ne!(fixture.state().session, original.session);
+}
+
+#[test]
+fn restarts_the_dashboard_after_dependencies_are_reinstalled() {
+    let fixture = Fixture::new();
+    fixture.start().unwrap();
+    let original = fixture.state();
+    let frontend = fixture.source().join("firecrab-frontend");
+    fs::write(
+        frontend.join("node_modules/.firecrab-dev-dependencies"),
+        format!(
+            "{}\n{}",
+            dependency_revision(&frontend).unwrap(),
+            Uuid::new_v4()
+        ),
+    )
+    .unwrap();
+    fixture.start().unwrap();
+    let restarted = fixture.state();
+    assert_eq!(restarted.source, original.source);
+    assert_ne!(restarted.session, original.session);
+    assert_ne!(restarted.dependencies, original.dependencies);
+    assert!(!running(&client().unwrap(), &original, &fixture.url()));
 }
 
 #[test]
@@ -179,6 +207,7 @@ fn refuses_unauthorized_shutdown_and_stale_session_ownership() {
     let stale = Session {
         source: fixture.source(),
         session: Uuid::new_v4(),
+        dependencies: fixture.state().dependencies,
     };
     stop_session(&client, &stale, &fixture.url()).unwrap();
     assert!(running(&client, &fixture.state(), &fixture.url()));
@@ -288,7 +317,43 @@ fn installs_missing_locked_dependencies_and_reports_invalid_locks() {
     fs::write(frontend.join("package-lock.json"), r#"{"name":"dashboard-fixture","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"dashboard-fixture","version":"1.0.0","dependencies":{"vite":"file:./fixture-vite"}},"node_modules/vite":{"resolved":"fixture-vite","link":true},"fixture-vite":{"name":"vite","version":"1.0.0"}}}"#).unwrap();
     prepare(fixture.source.path()).unwrap();
     assert!(frontend.join("node_modules/vite/package.json").is_file());
-    fs::remove_dir_all(frontend.join("node_modules")).unwrap();
+    let sentinel = frontend.join("node_modules/keep-installed-dependencies");
+    fs::write(&sentinel, "preserved").unwrap();
+    prepare(fixture.source.path()).unwrap();
+    assert!(sentinel.is_file());
+
+    fs::remove_file(frontend.join("node_modules/.firecrab-dev-dependencies")).unwrap();
+    prepare(fixture.source.path()).unwrap();
+    assert!(!sentinel.exists());
+    fs::write(&sentinel, "stale").unwrap();
+
+    // Reproduce a branch update that adds Ghostty while Vite is already installed.
+    let ghostty = frontend.join("fixture-ghostty");
+    fs::create_dir(&ghostty).unwrap();
+    fs::write(
+        ghostty.join("package.json"),
+        r#"{"name":"ghostty-web","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(ghostty.join("ghostty-vt.wasm"), "fixture wasm").unwrap();
+    fs::write(frontend.join("package.json"), r#"{"name":"dashboard-fixture","version":"1.0.0","dependencies":{"vite":"file:./fixture-vite","ghostty-web":"file:./fixture-ghostty"}}"#).unwrap();
+    fs::write(frontend.join("package-lock.json"), r#"{"name":"dashboard-fixture","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"dashboard-fixture","version":"1.0.0","dependencies":{"vite":"file:./fixture-vite","ghostty-web":"file:./fixture-ghostty"}},"node_modules/vite":{"resolved":"fixture-vite","link":true},"fixture-vite":{"name":"vite","version":"1.0.0"},"node_modules/ghostty-web":{"resolved":"fixture-ghostty","link":true},"fixture-ghostty":{"name":"ghostty-web","version":"1.0.0"}}}"#).unwrap();
+    prepare(fixture.source.path()).unwrap();
+    assert!(frontend.join("node_modules/vite/package.json").is_file());
+    assert!(
+        frontend
+            .join("node_modules/ghostty-web/ghostty-vt.wasm")
+            .is_file()
+    );
+    assert!(!sentinel.exists());
+
+    // Manifest-only edits also invalidate the installation.
+    fs::write(&sentinel, "stale").unwrap();
+    let manifest = fs::read_to_string(frontend.join("package.json")).unwrap();
+    fs::write(frontend.join("package.json"), format!("{manifest}\n")).unwrap();
+    prepare(fixture.source.path()).unwrap();
+    assert!(!sentinel.exists());
+
     fs::write(frontend.join("package-lock.json"), "{}").unwrap();
     assert!(
         prepare(fixture.source.path())
