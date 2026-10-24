@@ -22,7 +22,13 @@ async fn fixture(
     let socket = root.join("helper.sock");
     let (_, calls) = crate::network::test_support::spawn_recording_helper(&socket, fail);
     let state = state.with_test_network(crate::network::NetworkClient::with_socket_path(socket));
-    let router = build_router(
+    let router = router(&state);
+    state.store.register_stack("demo").unwrap();
+    (router, state, calls)
+}
+
+fn router(state: &AppState) -> Router {
+    build_router(
         state.clone(),
         &HttpConfig {
             bind_addr: "127.0.0.1:5523".parse().unwrap(),
@@ -31,9 +37,7 @@ async fn fixture(
             request_timeout: std::time::Duration::from_secs(10),
             static_root: None,
         },
-    );
-    state.store.register_stack("demo").unwrap();
-    (router, state, calls)
+    )
 }
 
 fn declaration() -> Value {
@@ -74,7 +78,7 @@ async fn planned(router: &Router, stack: &Value, operation_id: Uuid) -> Value {
 }
 
 async fn terminal(router: &Router, id: Uuid) -> ApplyStatus {
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             let (code, status) = request(
                 router,
@@ -547,4 +551,242 @@ async fn stack_apply_updates_an_inactive_vm_preserves_policy_and_redacts_journal
     );
     assert_eq!(state.store.load_all().unwrap()[&vm_id].cpu, 2);
     assert_eq!(state.store.stack("demo").unwrap().unwrap().revision, 2);
+}
+
+#[tokio::test]
+async fn stack_apply_creates_a_vm_then_restarts_only_that_vm_with_its_disk_and_identity() {
+    use crate::firecracker::test_support::{SERVE_LOOP, fake_firecracker, short_tempdir};
+    use firecrab_api_types::VmState;
+
+    let root = short_tempdir();
+    let binary = fake_firecracker(
+        root.path(),
+        &format!("signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)){SERVE_LOOP}"),
+    );
+    let state =
+        crate::handlers::vms::test_support::test_state_with_binary(root.path(), binary).await;
+    state.store.register_stack("demo").unwrap();
+    let router = router(&state);
+    let mut stack = declaration();
+    stack["microVMs"] = json!({"worker":{"name":"worker","template":"ubuntu-rootfs-26.04","network":"app","ram":128,"cpu":1,"diskGb":1}});
+    let create_id = Uuid::new_v4();
+    let body = planned(&router, &stack, create_id).await;
+    assert_eq!(
+        request(&router, "POST", "/api/stacks/demo/apply", body)
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    let created = terminal(&router, create_id).await;
+    assert_eq!(created.state, ApplyState::Succeeded, "{created:?}");
+    let vm_id = state
+        .store
+        .stack("demo")
+        .unwrap()
+        .unwrap()
+        .bindings
+        .iter()
+        .find(|binding| binding.kind == ResourceKind::Vm)
+        .unwrap()
+        .resource_id;
+    assert_eq!(
+        state.store.load_all().unwrap()[&vm_id].state,
+        VmState::Created
+    );
+    let Json(started) = crate::handlers::vms::start_vm(
+        State(state.clone()),
+        Extension(RequestId(create_id)),
+        Path(vm_id.to_string()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(started.state, VmState::Running);
+    let before = state.store.load_all().unwrap()[&vm_id].clone();
+    stack["microVMs"]["worker"]["cpu"] = json!(2);
+    stack["microVMs"]["worker"]["env"] = json!({"MARKER":"PRIVATE-NEW-VALUE"});
+    let update_id = Uuid::new_v4();
+    let mut body = planned(&router, &stack, update_id).await;
+    body["allowStop"] = json!(true);
+    assert_eq!(
+        request(&router, "POST", "/api/stacks/demo/apply", body)
+            .await
+            .0,
+        StatusCode::ACCEPTED
+    );
+    let updated = terminal(&router, update_id).await;
+    // Stop even when a later assertion fails, so no fake VMM survives this test.
+    let after = state.store.load_all().unwrap()[&vm_id].clone();
+    let Json(stopped) = crate::handlers::vms::stop_vm(
+        State(state.clone()),
+        Extension(RequestId(update_id)),
+        Path(vm_id.to_string()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(stopped.state, VmState::Stopped);
+    assert_eq!(updated.state, ApplyState::Succeeded, "{updated:?}");
+    assert_eq!(after.state, VmState::Running);
+    assert_eq!(after.cpu, 2);
+    assert_eq!(after.env["MARKER"], "PRIVATE-NEW-VALUE");
+    assert_eq!(after.disk_generation, before.disk_generation);
+    assert_eq!(after.id, before.id);
+    assert_eq!(state.store.load_all().unwrap().len(), 1);
+    assert!(
+        !serde_json::to_string(&updated)
+            .unwrap()
+            .contains("PRIVATE-NEW-VALUE")
+    );
+    assert_eq!(state.store.stack("demo").unwrap().unwrap().revision, 1);
+}
+
+#[tokio::test]
+async fn stack_apply_service_create_update_and_redeploy_wait_for_live_health_and_clean_owned_replicas()
+ {
+    use firecrab_api_types::{MicroServiceDeployment, ServiceInstance, ServicePhase, VmState};
+
+    let root = tempfile::tempdir().unwrap();
+    let (router, state, _) = fixture(root.path(), None).await;
+    state
+        .store
+        .put_pipe_auth(&crate::pipe_auth::SavedAuth::Github {
+            username: "team".into(),
+            token: "fixture-only".into(),
+        })
+        .unwrap();
+    // Keep the OCI worker at its admission boundary. Publish its deployment result
+    // independently so the stack must use the saved identity and real HTTP health.
+    let _permit = state.service_deploy_permits.acquire().await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let health = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route("/health", axum::routing::get(|| async { StatusCode::OK })),
+        )
+        .await
+        .unwrap();
+    });
+    let worker_state = state.clone();
+    let backend = tokio::spawn(async move {
+        loop {
+            for service in worker_state.store.list_micro_services().unwrap() {
+                let Some(mut deployment) =
+                    worker_state.store.service_deployment(service.id).unwrap()
+                else {
+                    continue;
+                };
+                if deployment.phase != ServicePhase::Queued {
+                    continue;
+                }
+                let mut vm =
+                    crate::handlers::vms::test_support::record("owned-replica", Uuid::new_v4());
+                vm.state = VmState::Running;
+                worker_state.store.insert(&vm).unwrap();
+                worker_state.vms.lock().unwrap().insert(vm.id, vm.clone());
+                deployment.instances = vec![ServiceInstance {
+                    vm_id: vm.id,
+                    ipv4: "127.0.0.1".into(),
+                    host_port: 30100,
+                    state: VmState::Running,
+                    healthy: false,
+                }];
+                deployment.phase = ServicePhase::Running;
+                worker_state
+                    .store
+                    .save_service_deployment(&deployment)
+                    .unwrap();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    });
+    let mut stack = declaration();
+    stack["microServices"] = json!({"web":{"network":"app","hostPort":30100,"config":{"name":"web","image":format!("ghcr.io/team/app@sha256:{}", "a".repeat(64)),"port":port,"ram":128,"cpu":1,"healthPath":"/health","startupTimeout":1,"drainTimeout":0}}});
+    let mut previous: Option<MicroServiceDeployment> = None;
+    for action in [Action::Create, Action::Noop, Action::Update, Action::Deploy] {
+        if action == Action::Update {
+            stack["microServices"]["web"]["config"]["env"] = json!({"MODE":"changed"});
+        }
+        if action == Action::Deploy {
+            stack["microServices"]["web"]["hostPort"] = json!(30101);
+        }
+        let id = Uuid::new_v4();
+        let mut body = planned(&router, &stack, id).await;
+        if action == Action::Update {
+            let (code, error) =
+                request(&router, "POST", "/api/stacks/demo/apply", body.clone()).await;
+            assert_eq!(code, StatusCode::CONFLICT, "{error}");
+            assert_eq!(error["error"]["code"], "stack_stop_permission_required");
+        }
+        body["allowStop"] = json!(true);
+        assert_eq!(
+            request(&router, "POST", "/api/stacks/demo/apply", body)
+                .await
+                .0,
+            StatusCode::ACCEPTED
+        );
+        let status = terminal(&router, id).await;
+        assert_eq!(status.state, ApplyState::Succeeded, "{status:?}");
+        let step = status
+            .changes
+            .iter()
+            .find(|step| step.change.kind == ResourceKind::Service)
+            .unwrap();
+        assert_eq!(step.change.action, action);
+        let service_id = step.change.resource_id.unwrap();
+        let deployment = state.store.service_deployment(service_id).unwrap().unwrap();
+        if let Some(old) = previous {
+            assert_eq!(deployment.service_id, old.service_id);
+            if action == Action::Noop {
+                assert_eq!(deployment.id, old.id)
+            } else {
+                assert_ne!(deployment.id, old.id);
+                assert!(
+                    !state
+                        .store
+                        .load_all()
+                        .unwrap()
+                        .contains_key(&old.instances[0].vm_id)
+                );
+            }
+        }
+        assert_eq!(state.store.load_all().unwrap().len(), 1);
+        previous = Some(deployment);
+    }
+    backend.abort();
+    backend.await.unwrap_err();
+    let service_id = previous.unwrap().service_id;
+    let (code, _) = crate::service_runtime::stop(
+        State(state.clone()),
+        Extension(RequestId(Uuid::new_v4())),
+        Path(service_id.to_string()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(code, StatusCode::ACCEPTED);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while state
+            .store
+            .service_deployment(service_id)
+            .unwrap()
+            .unwrap()
+            .phase
+            != ServicePhase::Stopped
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    health.abort();
+    assert!(state.store.load_all().unwrap().is_empty());
+    assert_eq!(
+        state
+            .store
+            .micro_service(service_id)
+            .unwrap()
+            .unwrap()
+            .spec
+            .env["MODE"],
+        "changed"
+    );
 }

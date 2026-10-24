@@ -620,3 +620,6 @@ fn verify_current(
 fn conflict(code: &'static str, message: &'static str, id: Uuid) -> AppError {
     AppError::conflict(code, message, id)
 }
+
+#[cfg(test)]
+mod tests;
