@@ -9,11 +9,14 @@ mod hosts;
 mod image;
 #[cfg(target_os = "linux")]
 mod info;
+mod mcp;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod micromanager;
 mod microservice;
 mod network;
 mod pipe;
+mod pipe_ai;
+mod pipe_storage;
 mod pool;
 mod schedule;
 #[cfg(target_os = "linux")]
@@ -44,6 +47,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Connect Pipe AI providers and select models through the host REST API.
+    Ai {
+        #[command(subcommand)]
+        command: pipe_ai::Command,
+    },
+    /// Serve local MCP tools over stdin/stdout using the selected REST host.
+    Mcp,
     /// Validate stack files, manage ownership, preview changes and explicitly apply them.
     Stack {
         #[command(subcommand)]
@@ -151,6 +161,10 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
+        Command::Ai { command } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+            pipe_ai::run(client, command)
+        }),
+        Command::Mcp => run_with_api_client(api.as_deref(), host.as_deref(), mcp::run),
         Command::Stack {
             command: stack::Command::Validate { file, json },
         } => stack::validate_file(file, json),
@@ -169,6 +183,11 @@ fn run(cli: Cli) -> i32 {
                 microservice::run(client, command)
             })
         }
+        Command::Pipe {
+            command: pipe::Command::Storage { command },
+        } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+            pipe_storage::run(client, command)
+        }),
         Command::Pipe { command } => match pipe::run(command) {
             Ok(()) => 0,
             Err(error) => {

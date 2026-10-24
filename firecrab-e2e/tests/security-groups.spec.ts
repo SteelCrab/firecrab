@@ -9,7 +9,7 @@ const SERVICE = "cccccccc-0000-4000-8000-000000000001";
 const RULE: SecurityGroupRule = { direction: "ingress", protocol: "tcp", portFrom: 8080, portTo: 8080, peerCidr: "172.30.0.0/24" };
 const POLICY: SecurityGroupResponse = { id: GROUP, name: "orders-policy", microNetworkId: NETWORK, rules: [RULE] };
 const SPEC: MicroServiceResponse = {
-  id: SERVICE, name: "orders", image: "nginx:stable-alpine", runtime: "vm", port: 8080,
+  id: SERVICE, name: "orders", image: "ghcr.io/team/orders:1.0", runtime: "vm", port: 8080,
   healthPath: "/health", domain: null, ram: 512, cpu: 1, replicas: 2,
   startupTimeout: 300, drainTimeout: 30, env: { PROFILE: "prod" }, secrets: {}, securityGroupId: GROUP,
 };
@@ -23,6 +23,10 @@ async function setup(page: Page, groups: SecurityGroupResponse[] = [], hash = "#
   await openDashboard(page, { hash, routes: {
     "/api/host": { loadAverage1m: 0, memoryTotalMib: 8192, memoryAvailableMib: 4096, diskTotalGib: 100, diskAvailableGib: 50, uptimeSeconds: 3600 },
     "/api/update/progress": { phase: "idle", percent: 0, updatedAtMs: 0 },
+    "/api/pipe/auth": [{ provider: "github", account: "team", registry: "ghcr.io", region: null, services: ["registry"] }],
+    "/api/pipe/registries/ghcr.io/repositories": { repositories: ["team/orders"], listingSupported: true, nextPage: null, nextCursor: null },
+    "/api/pipe/registry-tags": { tags: ["1.0"], nextLast: null },
+    "/api/pipe/storage": [],
     "/api/micro-networks": [
       { id: NETWORK, name: "orders-net", subnetCidr: "172.30.0.0/24", gateway: "172.30.0.1", internetEnabled: true, ipv6Cidr: null },
       { id: IPV6_NETWORK, name: "dual-stack", subnetCidr: "172.31.0.0/24", gateway: "172.31.0.1", internetEnabled: true, ipv6Cidr: "fd42:31::/64" },
@@ -78,6 +82,7 @@ async function setup(page: Page, groups: SecurityGroupResponse[] = [], hash = "#
       }
       return route.fulfill({ json: null });
     },
+    [`/api/micro-services/${SERVICE}/deployment/check`]: (route) => route.fulfill({ json: null }),
   } });
   return state;
 }
@@ -174,41 +179,60 @@ test.describe("Security groups @dashboard", () => {
     const state = await setup(page, [POLICY], "#/services");
     await page.getByRole("button", { name: "New MicroService", exact: true }).click();
     await page.getByLabel("Name", { exact: true }).fill("orders");
-    await page.getByLabel("OCI image", { exact: true }).fill("nginx:stable-alpine");
+    await page.getByLabel("App repository", { exact: true }).selectOption("team/orders");
+    await page.getByLabel("App version", { exact: true }).selectOption("1.0");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByLabel("Security group", { exact: true }).selectOption(GROUP);
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("button", { name: "Save configuration", exact: true }).click();
     await expect(page.getByRole("heading", { name: "New MicroService", exact: true })).toHaveCount(0);
     expect(state.serviceWrites[0].securityGroupId).toBe(GROUP);
     await page.getByRole("button", { name: "Edit orders", exact: true }).click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await expect(page.getByLabel("Security group", { exact: true })).toHaveValue(GROUP);
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByLabel("Replicas", { exact: true }).fill("2");
     await page.screenshot({ path: testInfo.outputPath("microservice-security-group-desktop.png"), fullPage: true });
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("button", { name: "Save configuration", exact: true }).click();
     await page.getByRole("button", { name: "Edit orders", exact: true }).click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByLabel("Security group", { exact: true }).selectOption("");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("button", { name: "Save configuration", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Edit: orders", exact: true })).toHaveCount(0);
     expect(state.serviceWrites.at(-1)?.securityGroupId).toBeNull();
     await page.getByRole("button", { name: "Edit orders", exact: true }).click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByLabel("Security group", { exact: true }).selectOption(GROUP);
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("button", { name: "Save configuration", exact: true }).click();
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.getByLabel("Network", { exact: true })).toHaveValue(NETWORK);
     await expect(page.getByLabel("Network", { exact: true })).toBeDisabled();
     await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
-    expect(state.deployments).toEqual([{ hostPort: 30100, microNetworkId: NETWORK }]);
+    await expect.poll(() => state.deployments).toEqual([{ hostPort: 30100, microNetworkId: NETWORK }]);
   });
 
   test("preserves service edits when policies cannot load and retries without clearing the selection", async ({ page }) => {
     const state = await setup(page, [POLICY], "#/services");
     state.failGroups = true;
     await page.getByRole("button", { name: "Edit orders", exact: true }).click();
-    await expect(page.getByRole("alert")).toContainText("Policy list unavailable");
-    await expect(page.getByRole("button", { name: "Save configuration", exact: true })).toBeDisabled();
     await page.getByLabel("Name", { exact: true }).fill("orders-v2");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Policy list unavailable");
+    await expect(page.getByLabel("Security group", { exact: true })).toBeDisabled();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "How does your app respond?", exact: true })).toBeVisible();
+    expect(state.serviceWrites).toEqual([]);
     state.failGroups = false;
     await page.getByRole("button", { name: "Retry loading security groups", exact: true }).click();
     await expect(page.getByLabel("Security group", { exact: true })).toHaveValue(GROUP);
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("button", { name: "Save configuration", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Edit: orders", exact: true })).toHaveCount(0);
     expect(state.serviceWrites[0]).toMatchObject({ name: "orders-v2", securityGroupId: GROUP, env: { PROFILE: "prod" } });

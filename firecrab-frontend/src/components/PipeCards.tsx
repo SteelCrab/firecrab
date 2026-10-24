@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { KeyRound } from "lucide-react";
+import { KeyRound, Sparkles, Archive } from "lucide-react";
+import { listAiConnections } from "../api/pipeAi";
 import type { PipeSnapshot } from "../api/pipe";
 import { getPipeAuth } from "../api/pipeAuth";
 import { listPipeDatabases } from "../api/pipeDatabases";
+import { listStorage } from "../api/pipeStorage";
 import { getRegistries } from "../api/registries";
 import { useI18n } from "../i18n";
 import { pipeCardHash, type PipeCardId } from "../navigation";
@@ -18,6 +20,8 @@ interface Props {
 /** Brand marks where a service has one; otherwise a line icon in the card's ink. */
 function PipeCardIcon({ id }: { id: PipeCardId }) {
   switch (id) {
+    case "ai":
+      return <Sparkles className="pipe-card-icon" aria-hidden="true" />;
     case "auth":
       return <KeyRound className="pipe-card-icon" aria-hidden="true" />;
     case "route":
@@ -29,6 +33,8 @@ function PipeCardIcon({ id }: { id: PipeCardId }) {
     case "database":
       // Stacked disks: a database cylinder.
       return <svg className="pipe-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><ellipse cx="12" cy="5.5" rx="8" ry="3" /><path d="M4 5.5v13c0 1.66 3.58 3 8 3s8-1.34 8-3v-13" /><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" /></svg>;
+    case "storage":
+      return <Archive className="pipe-card-icon" aria-hidden="true" />;
     case "firecrab-tunnel":
       return <img className="pipe-card-icon" src="/firecrab.png" alt="" width={28} height={28} />;
     case "quick-tunnel":
@@ -41,11 +47,17 @@ function PipeCardIcon({ id }: { id: PipeCardId }) {
 export default function PipeCards({ snapshot, error }: Props) {
   const { t } = useI18n();
   const [auths, setAuths] = useState<number | null | undefined>(undefined);
+  const [ai, setAi] = useState<number | null | undefined>(undefined);
   const [registries, setRegistries] = useState<number | null | undefined>(undefined);
   const [databases, setDatabases] = useState<number | null | undefined>(undefined);
+  const [storages, setStorages] = useState<number | null | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
+    listAiConnections().then(
+      connections => { if (!cancelled) setAi(connections.length); },
+      () => { if (!cancelled) setAi(null); },
+    );
     getPipeAuth().then(
       connections => { if (!cancelled) setAuths(connections.length); },
       () => { if (!cancelled) setAuths(null); },
@@ -57,6 +69,10 @@ export default function PipeCards({ snapshot, error }: Props) {
     listPipeDatabases().then(
       connections => { if (!cancelled) setDatabases(connections.length); },
       () => { if (!cancelled) setDatabases(null); },
+    );
+    listStorage().then(
+      connections => { if (!cancelled) setStorages(connections.length); },
+      () => { if (!cancelled) setStorages(null); },
     );
     return () => { cancelled = true; };
   }, []);
@@ -112,10 +128,12 @@ export default function PipeCards({ snapshot, error }: Props) {
   }
 
   const cards: Card[] = [
-    { id: "auth", title: "Pipe Auth", description: "AWS · GitHub", ...auth() },
+    { id: "auth", title: "Auth", description: "AWS · GitHub", ...auth() },
+    { id: "ai", title: "Pipe AI", description: t("AI account connections", "AI 계정 연결 관리"), ...(ai === undefined ? show(loading) : ai === null ? show(unavailable, "error") : ai ? show(t(`${ai} connected`, `${ai}개 연결`), "running") : unconfigured) },
     { id: "route", title: "Route", description: t("Domain · path", "도메인 · 경로"), ...(unknown ?? route()) },
     { id: "registry", title: "Pipe Registry", description: t("Image pull", "이미지 가져오기"), ...registry() },
     { id: "database", title: "Database", description: t("Connections · browse", "연결 · 조회"), ...database() },
+    { id: "storage", title: "PipeStorage", description: t("Amazon S3 · files", "Amazon S3 · 파일"), ...show(storages === undefined ? loading : storages === null ? unavailable : storages ? t(`${storages} saved`, `${storages}개 저장됨`) : t("Not configured", "미설정"), storages === null ? "error" : storages ? "running" : "") },
     { id: "firecrab-tunnel", title: "Firecrab Tunnel", description: t("Fixed address", "고정 주소"), ...(unknown ?? firecrab()) },
     { id: "quick-tunnel", title: "Cloudflare Quick Tunnel", description: t("Temporary URL", "임시 주소"), ...(unknown ?? quick()) },
     { id: "named-tunnel", title: "Cloudflare Named Tunnel", description: t("Custom domain", "사용자 도메인"), ...(unknown ?? named()) },

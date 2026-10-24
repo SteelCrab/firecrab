@@ -36,7 +36,7 @@ export function formatVmExportBundle(opts: {
   vm: VmResponse | null;
   vmId: string;
   consoleLog: string;
-  /** Extra block (e.g. xterm buffer) shown after the server log. */
+  /** Live WASM terminal text shown after the server log. */
   liveTerminal?: string;
   at?: Date;
 }): string {
@@ -59,21 +59,4 @@ export function formatVmExportBundle(opts: {
     lines.push("", "## terminal buffer (session)", liveTerminal.trimEnd() || "(empty)");
   }
   return lines.join("\n");
-}
-
-/** Serialize an xterm buffer to plain text (no serialize addon required). */
-export function serializeXtermBuffer(term: {
-  buffer: { active: { length: number; getLine: (y: number) => { translateToString: (trimRight?: boolean) => string } | undefined } };
-}): string {
-  const buf = term.buffer.active;
-  const rows: string[] = [];
-  for (let y = 0; y < buf.length; y++) {
-    const line = buf.getLine(y);
-    rows.push(line ? line.translateToString(true) : "");
-  }
-  // Drop trailing empty rows from the scrollback floor.
-  while (rows.length > 0 && rows[rows.length - 1] === "") {
-    rows.pop();
-  }
-  return rows.join("\n");
 }

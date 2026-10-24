@@ -293,6 +293,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(crate::service_runtime::get).post(crate::service_runtime::deploy),
         )
         .route(
+            "/api/micro-services/{id}/deployment/check",
+            post(crate::service_runtime::check),
+        )
+        .route(
             "/api/micro-services/{id}/stop",
             post(crate::service_runtime::stop),
         )
@@ -327,6 +331,24 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/pipe/disable", post(handlers::pipe::disable))
         .route("/api/pipe/auth", get(handlers::pipe_auth::list))
+        .route(
+            "/api/pipe/storage",
+            get(handlers::pipe_storage::list).post(handlers::pipe_storage::create),
+        )
+        .route(
+            "/api/pipe/storage/{id}",
+            get(handlers::pipe_storage::get)
+                .put(handlers::pipe_storage::update)
+                .delete(handlers::pipe_storage::delete),
+        )
+        .route(
+            "/api/pipe/storage/{id}/verify",
+            post(handlers::pipe_storage::verify),
+        )
+        .route(
+            "/api/pipe/storage/{id}/objects",
+            get(handlers::pipe_storage::objects),
+        )
         .route(
             "/api/pipe/auth/{provider}",
             axum::routing::put(handlers::pipe_auth::save).delete(handlers::pipe_auth::delete),
@@ -619,29 +641,72 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // Allow their bounded connection retries to finish while retaining the
     // same concurrency pool, body limit, CORS and origin checks as other REST.
     let inspection = Router::new()
+        .route(
+            "/api/pipe/ai/connections/{id}/login",
+            post(handlers::pipe_ai::login_start),
+        )
+        .route(
+            "/api/pipe/ai/logins/{id}",
+            get(handlers::pipe_ai::login_status),
+        )
+        .route("/auth/callback", get(handlers::pipe_ai::login_callback))
+        .route("/api/pipe/ai/connections", get(handlers::pipe_ai::list))
+        .route(
+            "/api/pipe/ai/connections/{id}",
+            axum::routing::put(handlers::pipe_ai::save).delete(handlers::pipe_ai::disconnect),
+        )
+        .route(
+            "/api/pipe/ai/connections/{id}/verify",
+            post(handlers::pipe_ai::verify),
+        )
+        .route(
+            "/api/pipe/ai/projects/{id}/model",
+            get(handlers::pipe_ai::get_default).put(handlers::pipe_ai::set_default),
+        )
+        .route("/api/pipe/ai/responses", post(handlers::pipe_ai::respond))
         .route("/api/oci/inspect", get(handlers::oci::inspect_oci_image))
         .route(
             "/api/pipe/registries/{registry}/repositories",
             get(handlers::registries::repositories),
         )
         .route("/api/pipe/registry-tags", get(handlers::registries::tags))
-        .layer(cors)
+        .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
             RequestLimits {
-                permits: limits.permits,
+                permits: limits.permits.clone(),
                 timeout: Some(Duration::from_secs(60)),
             },
             enforce_limits,
         ));
 
     let console = Router::new().route("/ws/vms/{id}/console", get(handlers::console::console_ws));
+    // Object bodies stream with their own 512 MiB limit and upstream deadline.
+    let storage_transfers = Router::new()
+        .route(
+            "/api/pipe/storage/{id}/object",
+            get(handlers::pipe_storage::download)
+                .put(handlers::pipe_storage::upload)
+                .delete(handlers::pipe_storage::delete_object),
+        )
+        .layer(cors.clone())
+        .layer(DefaultBodyLimit::max(
+            crate::pipe_storage::MAX_OBJECT_BYTES as usize,
+        ))
+        .layer(middleware::from_fn_with_state(
+            RequestLimits {
+                permits: limits.permits.clone(),
+                timeout: Some(crate::pipe_storage::TRANSFER_TIMEOUT),
+            },
+            enforce_limits,
+        ));
 
     let app = rest
         .merge(recovery)
         .merge(inspection)
         .merge(secrets)
         .merge(console)
+        .merge(storage_transfers)
         // Unknown paths under the API/WebSocket prefixes answer with the JSON
         // error envelope even when the dashboard is served below, so a typo in
         // a client's URL never comes back as an HTML page.
@@ -1589,3 +1654,7 @@ mod quick_tunnels_tests;
 #[cfg(test)]
 #[path = "server_pipe_auth_tests.rs"]
 mod pipe_auth_tests;
+
+#[cfg(test)]
+#[path = "server_pipe_ai_tests.rs"]
+mod pipe_ai_tests;

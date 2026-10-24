@@ -15,6 +15,13 @@ async fn app(root: &std::path::Path) -> (AppState, Router) {
     )
     .await
     .unwrap();
+    state
+        .store
+        .put_pipe_auth(&crate::pipe_auth::SavedAuth::Github {
+            username: "qa".into(),
+            token: "test-only-secret".into(),
+        })
+        .unwrap();
     let config = HttpConfig {
         bind_addr: "127.0.0.1:3000".parse().unwrap(),
         allowed_origins: vec![],
@@ -260,7 +267,7 @@ async fn services_reference_groups_even_without_replicas_and_block_queued_rule_e
     let (state, router) = app(root.path()).await;
     let net = network(&state, false);
     let group = create_group(&router, net).await;
-    let spec = json!({"name":"web","image":"127.0.0.1:1/app:v1","ram":128,"cpu":1,"port":8080,"securityGroupId":group});
+    let spec = json!({"name":"web","image":"ghcr.io/qa/app:v1","ram":128,"cpu":1,"port":8080,"securityGroupId":group});
     let (status, service) = request(&router, "POST", "/api/micro-services", spec).await;
     assert_eq!(status, StatusCode::CREATED, "{service}");
     assert_eq!(service["securityGroupId"], group.to_string());
@@ -315,7 +322,7 @@ async fn ipv6_foreign_and_missing_selections_are_rejected_before_replica_creatio
     let net = network(&state, false);
     let group = create_group(&router, net).await;
     assert!(network_policy::resolve(&state.store, Some(group), Some(ipv6)).is_err());
-    let spec = json!({"name":"web","image":"127.0.0.1:1/app:v1","ram":128,"cpu":1,"port":8080,"securityGroupId":group});
+    let spec = json!({"name":"web","image":"ghcr.io/qa/app:v1","ram":128,"cpu":1,"port":8080,"securityGroupId":group});
     let (status, service) = request(&router, "POST", "/api/micro-services", spec.clone()).await;
     assert_eq!(status, StatusCode::CREATED);
     let path = format!(
@@ -435,7 +442,7 @@ async fn service_ownership_blocks_rules_and_replica_attachment_edits_until_clean
     let net = network(&state, false);
     let group = create_group(&router, net).await;
     let vm = seed_vm(&state, group, net);
-    let (status,service)=request(&router,"POST","/api/micro-services",json!({"name":"web","image":"127.0.0.1:1/app:v1","ram":128,"cpu":1,"port":8080,"securityGroupId":group})).await;
+    let (status,service)=request(&router,"POST","/api/micro-services",json!({"name":"web","image":"ghcr.io/qa/app:v1","ram":128,"cpu":1,"port":8080,"securityGroupId":group})).await;
     assert_eq!(status, StatusCode::CREATED);
     let id = Uuid::parse_str(service["id"].as_str().unwrap()).unwrap();
     let mut deployment = MicroServiceDeployment {

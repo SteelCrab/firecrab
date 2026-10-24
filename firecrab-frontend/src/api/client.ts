@@ -105,6 +105,11 @@ async function fail(response: Response): Promise<ApiClientError> {
 }
 
 export async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
+  return (await (await fetchApiResponse(input, init)).json()) as T;
+}
+
+/** Fetch a successful response, including streamed files and 204 mutations. */
+export async function fetchApiResponse(input: string, init?: RequestInit): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(input, init);
@@ -114,7 +119,7 @@ export async function fetchJson<T>(input: string, init?: RequestInit): Promise<T
   if (!response.ok) {
     throw await fail(response);
   }
-  return (await response.json()) as T;
+  return response;
 }
 
 export function listVms(): Promise<VmResponse[]> {
@@ -179,6 +184,12 @@ export async function deleteSecurityGroup(id: string): Promise<void> {
 
 export function getServiceDeployment(id: string): Promise<MicroServiceDeployment | null> {
   return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/deployment`);
+}
+
+export function checkServiceDeployment(id: string, request: DeployMicroServiceRequest, signal?: AbortSignal): Promise<null> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/deployment/check`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request), signal,
+  });
 }
 
 export function deployMicroService(id: string, request: DeployMicroServiceRequest): Promise<MicroServiceDeployment> {
@@ -562,8 +573,8 @@ export function releasePoolLease(id: string, leaseId: string): Promise<PoolLease
   return fetchJson(`/api/pools/${id}/leases/${leaseId}`, { method: "DELETE" });
 }
 
-export function listMicroNetworks(): Promise<MicroNetworkResponse[]> {
-  return fetchJson("/api/micro-networks");
+export function listMicroNetworks(signal?: AbortSignal): Promise<MicroNetworkResponse[]> {
+  return fetchJson("/api/micro-networks", { signal });
 }
 
 export function getMicroNetwork(id: string): Promise<MicroNetworkDetailResponse> {
