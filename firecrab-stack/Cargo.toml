@@ -10,5 +10,6 @@ publish = false
 firecrab-api-types = { path = "../firecrab-api-types" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 serde-saphyr = { version = "2.0", default-features = false, features = ["deserialize"] }
 uuid = { workspace = true }

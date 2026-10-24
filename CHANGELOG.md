@@ -54,6 +54,12 @@ Entries land here as work merges, and move under the next version heading when t
   image syntax. Validation reports omit configuration values. Applying resources
   and continuous Git synchronization remain follow-up work for #437.
 
+- Native `stack apply` creates and updates owned resources, deploys services and
+  records redacted progress by retry UUID. Plan fingerprints reject stale input;
+  running VM changes and service replica replacement require explicit stop
+  permission. Interrupted work keeps its exact ownership for explicit recovery.
+  Automatic replacement, pruning and Git polling remain follow-up work for #437.
+
 - Host-local stack registration and UUID ownership bindings survive API restarts.
   `firecrab stack register/list/status/bind/unbind` manages metadata without
   changing resources. `firecrab stack plan --file YAML [--json]` reports a

@@ -30,6 +30,73 @@ fn human_and_json_action_names_match() {
     }
 }
 
+#[test]
+fn fingerprints_are_canonical_redacted_and_change_with_configuration_or_ownership() {
+    let (stack, mut record, mut inventory) = fixture();
+    let original = plan(&stack, &record, &inventory).unwrap().fingerprint;
+    assert_eq!(original.len(), 64);
+    assert!(original.bytes().all(|b| b.is_ascii_hexdigit()));
+    record.bindings.reverse();
+    inventory.networks.reverse();
+    assert_eq!(
+        plan(&stack, &record, &inventory).unwrap().fingerprint,
+        original
+    );
+    let deployment = inventory.services[0].deployment.as_mut().unwrap();
+    deployment.phase = ServicePhase::Degraded;
+    deployment.instances[0].healthy = false;
+    deployment.instances[0].state = VmState::Stopped;
+    deployment.log.push("DO-NOT-PRINT runtime log".into());
+    deployment.error = Some("DO-NOT-PRINT backend detail".into());
+    assert_eq!(
+        plan(&stack, &record, &inventory).unwrap().fingerprint,
+        original
+    );
+    inventory.vms[0]
+        .env
+        .insert("MARKER".into(), "DO-NOT-PRINT".into());
+    let changed = plan(&stack, &record, &inventory).unwrap();
+    assert_ne!(changed.fingerprint, original);
+    assert!(
+        !serde_json::to_string(&changed)
+            .unwrap()
+            .contains("DO-NOT-PRINT")
+    );
+    inventory.vms[0].env.remove("MARKER");
+    record.revision += 1;
+    assert_ne!(
+        plan(&stack, &record, &inventory).unwrap().fingerprint,
+        original
+    );
+}
+
+#[test]
+fn fingerprints_include_deployment_identity_and_busy_state_but_not_instance_order() {
+    let (stack, record, mut inventory) = fixture();
+    let original = plan(&stack, &record, &inventory).unwrap().fingerprint;
+    inventory.services[0]
+        .deployment
+        .as_mut()
+        .unwrap()
+        .instances
+        .reverse();
+    assert_eq!(
+        plan(&stack, &record, &inventory).unwrap().fingerprint,
+        original
+    );
+    inventory.services[0].deployment.as_mut().unwrap().phase = ServicePhase::Starting;
+    assert_ne!(
+        plan(&stack, &record, &inventory).unwrap().fingerprint,
+        original
+    );
+    inventory.services[0].deployment.as_mut().unwrap().phase = ServicePhase::Running;
+    inventory.services[0].deployment.as_mut().unwrap().id = Uuid::new_v4();
+    assert_ne!(
+        plan(&stack, &record, &inventory).unwrap().fingerprint,
+        original
+    );
+}
+
 fn fixture() -> (Stack, StackRecord, Inventory) {
     let stack = parse(EXAMPLE).unwrap();
     let record = StackRecord {

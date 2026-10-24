@@ -157,7 +157,7 @@ pub async fn plan(
         .map_err(|errors| validation_errors(errors, request_id.0))
 }
 
-fn inventory(store: &Store) -> Result<Inventory, PersistenceError> {
+pub(super) fn inventory(store: &Store) -> Result<Inventory, PersistenceError> {
     let mut services = Vec::new();
     let mut service_vms = BTreeSet::new();
     for service in store.list_micro_services()? {
@@ -194,7 +194,7 @@ fn inventory(store: &Store) -> Result<Inventory, PersistenceError> {
     })
 }
 
-fn validate_name(name: &str, request_id: Uuid) -> Result<(), AppError> {
+pub(super) fn validate_name(name: &str, request_id: Uuid) -> Result<(), AppError> {
     if logical_name(name) {
         return Ok(());
     }
@@ -207,7 +207,10 @@ fn validate_name(name: &str, request_id: Uuid) -> Result<(), AppError> {
     ))
 }
 
-fn validation_errors(errors: Vec<firecrab_stack::Diagnostic>, request_id: Uuid) -> AppError {
+pub(super) fn validation_errors(
+    errors: Vec<firecrab_stack::Diagnostic>,
+    request_id: Uuid,
+) -> AppError {
     AppError::validation(
         errors
             .into_iter()
@@ -218,12 +221,16 @@ fn validation_errors(errors: Vec<firecrab_stack::Diagnostic>, request_id: Uuid) 
 }
 
 /// Keep SQLite off the async executor and never log submitted configuration values.
-async fn database<T: Send + 'static>(
+pub(super) async fn database<T: Send + 'static>(
     request_id: Uuid,
     operation: impl FnOnce() -> Result<T, PersistenceError> + Send + 'static,
 ) -> Result<T, AppError> {
     tokio::task::spawn_blocking(operation).await.map_err(|_| AppError::internal(request_id))?.map_err(|error| match error {
         PersistenceError::MissingStack => AppError::not_found(request_id),
+        PersistenceError::MissingStackApply => AppError::not_found(request_id),
+        PersistenceError::StackApplyBusy => AppError::conflict("stack_apply_busy", "wait for the active stack apply to finish", request_id),
+        PersistenceError::StaleStackPlan => AppError::conflict("stale_stack_plan", "host configuration or ownership changed; review a fresh plan", request_id),
+        PersistenceError::StackApplyIdentity => AppError::conflict("stack_apply_identity_conflict", "operation ID belongs to a different registration, declaration or stop permission", request_id),
         PersistenceError::StackNotEmpty => AppError::new(StatusCode::CONFLICT, "stack_not_empty", "unbind every exact resource UUID before deleting stack registration", request_id),
         PersistenceError::StackConflict => AppError::new(StatusCode::CONFLICT, "stack_ownership_conflict", "binding conflicts with existing ownership; unbind the exact UUID explicitly before changing it", request_id),
         PersistenceError::InvalidStackResource => AppError::new(StatusCode::BAD_REQUEST, "invalid_stack_resource", "resource is missing, is a protected VM, or a service operation is in progress", request_id),
