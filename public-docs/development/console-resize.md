@@ -11,12 +11,17 @@ The shell remains the same shared serial session; no independent PTY is created.
 - A complete host installation containing `firecrab-guest-console` beside the API.
 - VM stop/start after upgrading: specialization writes the helper into the guest.
 
-The published OCI kernel `vmlinux-7.2.2` currently has `CONFIG_VSOCKETS` disabled.
-It cannot synchronize guest dimensions. A new kernel package and updated catalog
-digests are required before this feature works with the default OCI kernel.
-`scripts/firecracker-menual/install-linux-kernel.sh` enables built-in vsock for new
-builds and refuses to reuse an older build that lacks those options. Publishing a
-replacement package is separate from installing the host helper.
+The default OCI kernel is `7.2.2-vsock1`, with built-in `CONFIG_VSOCKETS=y` and
+`CONFIG_VIRTIO_VSOCKETS=y` on x86_64 and aarch64. Older `7.2.2` packages have vsock
+disabled and remain available for rollback. Existing image kernel pins do not
+change automatically; select the new kernel before creating instances that need
+resize support. See [Kernel management](../guides/kernels.md).
+
+`scripts/build-guest-kernel.sh` pins the upstream source and original configurations
+in `packaging/guest-kernel.json`. It produces versioned binary and corresponding
+source archives. Binary archives bind their source URL and SHA256 in `SOURCE.txt`.
+`scripts/firecracker-menual/install-linux-kernel.sh` also enables built-in vsock for
+new local builds and refuses to reuse an older build that lacks those options.
 
 The static musl helper runs in glibc, musl and minimal images. The existing metrics
 service starts it on systemd, OpenRC and BusyBox paths. It has no SSH, IP network
@@ -97,6 +102,18 @@ Host releases build the helper on x86_64 and aarch64 for both host libc variants
 Both installers preserve its executable mode and attribution. Source development
 staging and self-update rollback include the same files.
 
+Build a catalog kernel on Linux (cross-compiling aarch64 requires
+`gcc-aarch64-linux-gnu`):
+
+```sh
+./scripts/build-guest-kernel.sh x86_64 /var/tmp/firecrab-kernel dist/kernels/x86_64
+./scripts/build-guest-kernel.sh aarch64 /var/tmp/firecrab-kernel dist/kernels/aarch64
+```
+
+Keep each `.sources.tar.zst` beside its binary archive when publishing to the
+versioned registry path. Publish source archives first. Never overwrite the older
+`7.2.2` object keys or change their catalog digests.
+
 Native PTY and protocol checks:
 
 ```sh
@@ -125,3 +142,16 @@ FIRECRAB_E2E_REQUIRE_GUEST_RESIZE=1 npm run test:console --prefix firecrab-e2e
 
 It requires the existing Linux/KVM guest-test setup and the installed helper.
 Installer CI enables this requirement; mocked browser fixtures do not prove guest integration.
+
+A second check boots a disposable Firecracker VM with no network device. It
+verifies the exact running kernel release, guest dimensions, foreground SIGWINCH,
+and usable vi/top sessions across resizes:
+
+```sh
+sudo python3 scripts/test-guest-console-vm.py --kernel /path/to/vmlinux \
+  --helper /path/to/firecrab-guest-console --busybox /usr/bin/busybox \
+  --expected-release 7.2.2-firecrab-vsock1 --report /tmp/guest-console-vm.json
+```
+
+This check requires a static BusyBox binary and access to KVM. It does not create
+host network interfaces or alter existing VM services.

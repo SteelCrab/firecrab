@@ -169,6 +169,13 @@ test.describe("terminal session end in a booted guest", () => {
   test("exit ends both viewers, keeps the VM running, and a new session executes commands", async ({ page }) => {
     const { reference, alias } = registry!.announcement;
     const vmId = await bootFixtureGuest(reference, alias);
+    const guestFrames: Buffer[] = [];
+    page.on("websocket", socket => {
+      if (new URL(socket.url()).pathname !== `/ws/vms/${vmId}/console`) return;
+      socket.on("framereceived", ({ payload }) => {
+        if (typeof payload !== "string") guestFrames.push(payload);
+      });
+    });
 
     await openEnglish(page, `/#/console/${vmId}`);
     await expect(consoleStatus(page)).toHaveText(/Connected/);
@@ -198,24 +205,30 @@ test.describe("terminal session end in a booted guest", () => {
         return expected;
       };
       await checkSize();
-      await typeInTerminal(page, "trap 'printf \"\\nFCR_WINCH_\"; /etc/firecrab/busybox stty size' WINCH");
-      await typeInTerminal(page, "printf 'FCR_TRAP_%s\\n' READY");
+      // ash's interactive editor owns WINCH; observe a foreground reader instead.
+      await typeInTerminal(page, "/etc/firecrab/busybox sh -c 'trap \"printf FCR_WINCH_; /etc/firecrab/busybox stty size\" WINCH; printf \"FCR_TRAP_%s\\n\" READY; read -r ignored'");
       await expect(page.locator(".terminal-output")).toContainText("FCR_TRAP_READY");
       const previousSize = await page.locator(".console-geometry").textContent();
       await page.setViewportSize({ width: 800, height: 600 });
       await expect(page.locator(".console-geometry")).not.toHaveText(previousSize!);
       await expect(page.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
-      const expected = await checkSize();
+      const size = (await geometry.textContent())!.match(/(\d+) × (\d+)/)!;
+      const expected = `${size[2]} ${size[1]}`;
       await expect(page.locator(".terminal-output")).toContainText(`FCR_WINCH_${expected}`);
-      await typeInTerminal(page, "trap - WINCH");
+      await page.keyboard.press("Enter");
+      await typeInTerminal(page, "printf 'FCR_MONITOR_%s\\n' DONE");
+      await expect(page.locator(".terminal-output")).toContainText("FCR_MONITOR_DONE");
+      await checkSize();
       await typeInTerminal(page, "printf 'FCR_VI_%s\\n' READY > /tmp/fcr-size; /etc/firecrab/busybox vi /tmp/fcr-size");
       await expect(page.locator(".terminal-output")).toContainText("FCR_VI_READY");
       const viSize = await page.locator(".console-geometry").textContent();
+      const viFrameStart = guestFrames.length;
       await page.setViewportSize({ width: 1400, height: 950 });
       await expect(page.locator(".console-geometry")).not.toHaveText(viSize!);
       await expect(page.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
+      const viRows = (await geometry.textContent())!.match(/(\d+) × (\d+)/)![2];
+      await expect.poll(() => Buffer.concat(guestFrames.slice(viFrameStart)).toString("utf8")).toContain(`\x1b[${viRows};1H\x1b[K`);
       await expect(page.locator(".terminal-output")).toContainText("FCR_VI_READY");
-      await page.keyboard.press("Escape");
       await page.keyboard.type(":q!");
       await page.keyboard.press("Enter");
       await expect(page.locator(".terminal-output")).toContainText(/~ #/);
@@ -226,6 +239,8 @@ test.describe("terminal session end in a booted guest", () => {
       await page.setViewportSize({ width: 900, height: 650 });
       await expect(page.locator(".console-geometry")).not.toHaveText(topSize!);
       await expect(page.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
+      const topFrameStart = guestFrames.length;
+      await expect.poll(() => Buffer.concat(guestFrames.slice(topFrameStart)).toString("utf8")).toContain("PID");
       await expect(page.locator(".terminal-output")).toContainText("PID");
       await page.keyboard.press("q");
       await expect(page.locator(".terminal-output")).toContainText(/~ #/);

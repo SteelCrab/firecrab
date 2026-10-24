@@ -596,18 +596,18 @@ async fn a_host_with_no_kernel_source_is_told_so() {
 }
 
 #[test]
-fn the_compiled_pins_name_the_latest_stable_registry_artifacts() {
+fn the_default_pins_name_the_console_capable_registry_artifacts() {
     let expected = [
         (
             Architecture::X86_64,
-            "vmlinux-7.2.2-x86_64",
-            "kernel/7.2.2/x86_64/vmlinux-7.2.2.tar.zst",
+            "vmlinux-7.2.2-vsock1-x86_64",
+            "kernel/7.2.2-vsock1/x86_64/vmlinux-7.2.2-vsock1.tar.zst",
             false,
         ),
         (
             Architecture::Aarch64,
-            "Image-7.2.2-aarch64",
-            "kernel/7.2.2/aarch64/vmlinux-7.2.2.tar.zst",
+            "Image-7.2.2-vsock1-aarch64",
+            "kernel/7.2.2-vsock1/aarch64/vmlinux-7.2.2-vsock1.tar.zst",
             true,
         ),
     ];
@@ -616,8 +616,8 @@ fn the_compiled_pins_name_the_latest_stable_registry_artifacts() {
         let pinned = kernel::pinned_kernel(architecture)
             .unwrap_or_else(|| panic!("{architecture} kernel is published"));
 
-        assert_eq!(pinned.alias, "vmlinux-7.2.2");
-        assert_eq!(pinned.version, "7.2.2");
+        assert_eq!(pinned.alias, "vmlinux-7.2.2-vsock1");
+        assert_eq!(pinned.version, "7.2.2-vsock1");
         assert_eq!(pinned.image, image);
         assert_eq!(kernel::package_key(architecture, &pinned), package_key);
         Sha256Digest::parse(pinned.package_digest).expect("package digest is pinned, not a tag");
