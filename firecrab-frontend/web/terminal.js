@@ -34,6 +34,7 @@ export async function mountTerminal(options, signal) {
         document.dispatchEvent(
           new CustomEvent("firecrab-terminal-input", { detail: bytes }),
         ),
+      (size) => document.dispatchEvent(new CustomEvent("firecrab-terminal-dimensions", { detail: JSON.stringify({ id, ...size }) })),
     );
   } catch (error) {
     mirror.remove();
@@ -45,6 +46,8 @@ export async function mountTerminal(options, signal) {
   container.closest(".console-surface").style.backgroundColor =
     settings.theme.background;
   return {
+    shared: (size) => session.setSharedDimensions(JSON.parse(size)),
+    reportDimensions: session.reportDimensions,
     write: (data) =>
       session.write(typeof data === "string" ? data : new Uint8Array(data)),
     options: (next) => {

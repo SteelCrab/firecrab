@@ -179,6 +179,16 @@ pub async fn create_micro_network(
     Extension(request_id): Extension<RequestId>,
     ValidatedJson(req): ValidatedJson<CreateMicroNetworkRequest>,
 ) -> Result<(StatusCode, Json<MicroNetworkResponse>), AppError> {
+    create_micro_network_with_id(state, request_id, req, Uuid::new_v4()).await
+}
+
+/// Provision through the normal network pipeline using an already-owned UUID.
+pub(crate) async fn create_micro_network_with_id(
+    state: AppState,
+    request_id: RequestId,
+    req: CreateMicroNetworkRequest,
+    id: Uuid,
+) -> Result<(StatusCode, Json<MicroNetworkResponse>), AppError> {
     let mut fields = validate_create(&req);
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
@@ -186,7 +196,6 @@ pub async fn create_micro_network(
 
     // Already checked by validate_create; re-parsed here (rather than
     // threaded through) since the request is consumed piecemeal below.
-    let id = Uuid::new_v4();
     // The v6 prefix is resolved before the overlap check so an auto-generated
     // one is held to the same rule as an explicitly requested one.
     let ipv6 = resolve_ipv6_plan(&req, id);

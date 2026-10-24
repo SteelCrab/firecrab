@@ -233,6 +233,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/stacks/{name}/plan", post(handlers::stacks::plan))
         .route(
+            "/api/stacks/{name}/apply",
+            post(handlers::stack_applies::apply),
+        )
+        .route(
+            "/api/stacks/{name}/applies/{id}",
+            get(handlers::stack_applies::get),
+        )
+        .route(
             "/api/stacks/{name}",
             get(handlers::stacks::get).delete(handlers::stacks::delete),
         )

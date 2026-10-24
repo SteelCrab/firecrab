@@ -11,6 +11,223 @@ const VM_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const NETWORK_ID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 #[test]
+fn stacks_apply_sends_reviewed_fingerprint_exact_retry_identity_and_stop_permission() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("stack.yaml");
+    let reviewed = directory.path().join("plan.json");
+    std::fs::write(&file, include_str!("../../examples/stacks/basic.yaml")).unwrap();
+    let fingerprint = "a".repeat(64);
+    std::fs::write(&reviewed,json!({"stackId":VM_ID,"name":"demo","revision":0,"fingerprint":fingerprint,"blocked":false,"changes":[]}).to_string()).unwrap();
+    for (state, expected_code) in [("queued", 0), ("failed", 1), ("interrupted", 1)] {
+        let status = json!({"operationId":NETWORK_ID,"stackId":VM_ID,"name":"demo","state":state,"changes":[],"error":null});
+        let (code, request) = run_once(
+            &[
+                "stack",
+                "apply",
+                "--file",
+                file.to_str().unwrap(),
+                "--expected-plan",
+                reviewed.to_str().unwrap(),
+                "--operation-id",
+                NETWORK_ID,
+                "--allow-stop",
+                "--no-wait",
+                "--json",
+            ],
+            "202 Accepted",
+            &status.to_string(),
+        );
+        assert_eq!(code, expected_code);
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/api/stacks/demo/apply");
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["operationId"], NETWORK_ID);
+        assert_eq!(body["expectedFingerprint"], fingerprint);
+        assert_eq!(body["allowStop"], true);
+        assert_eq!(body["stack"]["name"], "demo");
+    }
+    let status = json!({"operationId":NETWORK_ID,"stackId":VM_ID,"name":"demo","state":"interrupted","changes":[],"error":null});
+    let (code, request) = run_once(
+        &["stack", "apply-status", "demo", "--id", NETWORK_ID],
+        "200 OK",
+        &status.to_string(),
+    );
+    assert_eq!(code, 0);
+    assert_eq!(request.method, "GET");
+    assert_eq!(
+        request.path,
+        format!("/api/stacks/demo/applies/{NETWORK_ID}")
+    );
+}
+
+#[test]
+fn stacks_apply_retries_an_existing_operation_even_when_its_current_plan_is_blocked() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("stack.yaml");
+    std::fs::write(&file, include_str!("../../examples/stacks/basic.yaml")).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let plan = json!({"stackId":VM_ID,"name":"demo","revision":1,"fingerprint":"b".repeat(64),"blocked":true,"changes":[]});
+    let queued = json!({"operationId":NETWORK_ID,"stackId":VM_ID,"name":"demo","state":"queued","changes":[],"error":null});
+    let mut succeeded = queued.clone();
+    succeeded["state"] = json!("succeeded");
+    let server = thread::spawn(move || {
+        let mut requests = Vec::new();
+        for (status, body) in [
+            ("200 OK", plan),
+            ("202 Accepted", queued),
+            ("200 OK", succeeded),
+        ] {
+            let (mut stream, _) = listener.accept().unwrap();
+            requests.push(read_request(&mut stream));
+            let body = body.to_string();
+            write!(stream,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+        }
+        requests
+    });
+    let code = run(Cli::try_parse_from([
+        "firecrab",
+        "--api",
+        &base,
+        "stack",
+        "apply",
+        "--file",
+        file.to_str().unwrap(),
+        "--operation-id",
+        NETWORK_ID,
+        "--json",
+    ])
+    .unwrap());
+    let requests = server.join().unwrap();
+    assert_eq!(code, 0);
+    assert_eq!(requests[0].path, "/api/stacks/demo/plan");
+    assert_eq!(requests[1].path, "/api/stacks/demo/apply");
+    assert_eq!(
+        requests[2].path,
+        format!("/api/stacks/demo/applies/{NETWORK_ID}")
+    );
+    let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(body["operationId"], NETWORK_ID);
+}
+
+#[test]
+fn stacks_apply_rejects_invalid_reviewed_plans_and_nil_operation_ids_before_http() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("stack.yaml");
+    let reviewed = directory.path().join("plan.json");
+    std::fs::write(&file, include_str!("../../examples/stacks/basic.yaml")).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    for plan in [
+        "invalid json".to_owned(),
+        json!({"stackId":VM_ID,"name":"other","revision":0,"fingerprint":"a".repeat(64),"blocked":false,"changes":[]}).to_string(),
+        json!({"stackId":VM_ID,"name":"demo","revision":0,"fingerprint":"short","blocked":false,"changes":[]}).to_string(),
+    ] {
+        std::fs::write(&reviewed, plan).unwrap();
+        assert_eq!(run(Cli::try_parse_from([
+            "firecrab", "--api", &base, "stack", "apply", "--file", file.to_str().unwrap(), "--expected-plan", reviewed.to_str().unwrap(),
+        ]).unwrap()), 1);
+    }
+    for args in [
+        vec![
+            "stack",
+            "apply",
+            "--file",
+            file.to_str().unwrap(),
+            "--operation-id",
+            "00000000-0000-0000-0000-000000000000",
+        ],
+        vec![
+            "stack",
+            "apply-status",
+            "demo",
+            "--id",
+            "00000000-0000-0000-0000-000000000000",
+        ],
+    ] {
+        let mut command = vec!["firecrab", "--api", &base];
+        command.extend(args);
+        assert_eq!(run(Cli::try_parse_from(command).unwrap()), 1);
+    }
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
+fn stacks_apply_timeout_keeps_polling_the_same_operation_without_resubmitting_or_cancelling() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("stack.yaml");
+    let reviewed = directory.path().join("plan.json");
+    std::fs::write(&file, include_str!("../../examples/stacks/basic.yaml")).unwrap();
+    std::fs::write(&reviewed, json!({"stackId":VM_ID,"name":"demo","revision":0,"fingerprint":"a".repeat(64),"blocked":false,"changes":[]}).to_string()).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let mut requests = Vec::new();
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().unwrap();
+            requests.push(read_request(&mut stream));
+            let body = json!({"operationId":NETWORK_ID,"stackId":VM_ID,"name":"demo","state":"running","changes":[{"kind":"network","key":"app","action":"create","resourceId":NETWORK_ID,"fields":[],"state":"succeeded"},{"kind":"vm","key":"worker","action":"create","resourceId":null,"fields":[],"state":"pending"}],"error":null}).to_string();
+            write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+        }
+        requests
+    });
+    let code = run(Cli::try_parse_from([
+        "firecrab",
+        "--api",
+        &base,
+        "stack",
+        "apply",
+        "--file",
+        file.to_str().unwrap(),
+        "--expected-plan",
+        reviewed.to_str().unwrap(),
+        "--operation-id",
+        NETWORK_ID,
+        "--timeout",
+        "1",
+    ])
+    .unwrap());
+    let requests = server.join().unwrap();
+    assert_eq!(code, 1);
+    assert_eq!(requests[0].method, "POST");
+    assert!(requests[1..].iter().all(|request| request.method == "GET"
+        && request.path == format!("/api/stacks/demo/applies/{NETWORK_ID}")));
+}
+
+#[test]
+fn stacks_apply_prints_terminal_step_failures_and_returns_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("stack.yaml");
+    let reviewed = directory.path().join("plan.json");
+    std::fs::write(&file, include_str!("../../examples/stacks/basic.yaml")).unwrap();
+    std::fs::write(&reviewed, json!({"stackId":VM_ID,"name":"demo","revision":0,"fingerprint":"a".repeat(64),"blocked":false,"changes":[]}).to_string()).unwrap();
+    let status = json!({"operationId":NETWORK_ID,"stackId":VM_ID,"name":"demo","state":"failed","changes":[{"kind":"network","key":"app","action":"create","resourceId":NETWORK_ID,"fields":[],"state":"failed"},{"kind":"vm","key":"worker","action":"create","resourceId":null,"fields":[],"state":"skipped"}],"error":{"code":"validation_failed","message":"inspect the recorded UUIDs","fields":["hostPort"]}});
+    let (code, request) = run_once(
+        &[
+            "stack",
+            "apply",
+            "--file",
+            file.to_str().unwrap(),
+            "--expected-plan",
+            reviewed.to_str().unwrap(),
+        ],
+        "200 OK",
+        &status.to_string(),
+    );
+    assert_eq!(code, 1);
+    let body: Value = serde_json::from_slice(&request.body).unwrap();
+    assert!(
+        !uuid::Uuid::parse_str(body["operationId"].as_str().unwrap())
+            .unwrap()
+            .is_nil()
+    );
+}
+
+#[test]
 fn stacks_delete_sends_the_exact_registration_uuid() {
     let (code, request) = run_once(
         &["stack", "delete", "demo", "--id", VM_ID],

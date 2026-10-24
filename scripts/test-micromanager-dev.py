@@ -173,11 +173,21 @@ class GuestDevelopmentTest(unittest.TestCase):
             (tools / tool).write_text("#!/bin/sh\necho runtime-tool\n")
         ingress_builder = tools.parent / "build-ingress.sh"
         ingress_builder.write_text('#!/bin/bash\nset -eu\nmkdir -p "$1/ingress"\nprintf "#!/bin/sh\\nexit 0\\n" >"$1/firecrab-ingress"\nchmod +x "$1/firecrab-ingress"\nprintf "fixture" >"$1/ingress/LICENSE.nginx"\n')
+        guest_builder = tools.parent / "build-guest-console.sh"
+        guest_builder.write_text('#!/bin/bash\nset -eu\nmkdir -p "$1/guest-console"\nprintf "#!/bin/sh\\nexit 0\\n" >"$1/firecrab-guest-console"\nchmod +x "$1/firecrab-guest-console"\nprintf "musl fixture" >"$1/guest-console/LICENSE.musl"\n')
         self.archive = self.cache / "incoming-test.tar"
         with tarfile.open(self.archive, "w") as archive:
             archive.add(source, arcname="firecrab-api/src/main.rs")
             archive.add(tools, arcname="scripts/firecracker-menual")
             archive.add(ingress_builder, arcname="scripts/build-ingress.sh")
+            archive.add(guest_builder, arcname="scripts/build-guest-console.sh")
+
+    def test_guest_console_helper_and_attribution_are_staged_next_to_the_api(self):
+        result = self.run_guest()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        current = self.binaries / "bin"
+        self.assertTrue((current / "firecrab-guest-console").is_file())
+        self.assertEqual((current / "guest-console/LICENSE.musl").read_text(), "musl fixture")
 
     def run_guest(self, profile="debug", shell="bash", **flags):
         environment = os.environ.copy()

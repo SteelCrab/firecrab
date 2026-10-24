@@ -35,6 +35,7 @@ export async function createWasmTerminal(
   onOutput,
   onError,
   onInput,
+  onDimensions,
 ) {
   signal.throwIfAborted();
   const { Ghostty, Terminal } = await import("ghostty-web");
@@ -60,6 +61,8 @@ export async function createWasmTerminal(
   let disposed = false;
   let outputFrame = 0;
   let fitFrame = 0;
+  let shared = null;
+  let viewport;
   let mirrorTimer;
   let pending = [];
   let pendingBytes = 0;
@@ -95,10 +98,13 @@ export async function createWasmTerminal(
       // The bundled FitAddon drops resizes while locked for 50 ms. Use the final box.
       const viewingHistory = terminal.getViewportY() > 0;
       const top = terminal.getScrollbackLength() - terminal.getViewportY();
-      terminal.resize(
-        Math.max(2, Math.floor((mount.clientWidth - 12) / metrics.width)),
-        Math.max(2, Math.floor(mount.clientHeight / metrics.height)),
-      );
+      const size = { cols: Math.min(1000, Math.max(2, Math.floor((mount.clientWidth - 12) / metrics.width))), rows: Math.min(1000, Math.max(2, Math.floor(mount.clientHeight / metrics.height))) };
+      if (viewport?.cols !== size.cols || viewport?.rows !== size.rows) {
+        viewport = size;
+        onDimensions?.(size);
+      }
+      const grid = shared ?? size;
+      terminal.resize(grid.cols, grid.rows);
       if (viewingHistory)
         terminal.scrollToLine(terminal.getScrollbackLength() - top);
       scheduleMirror();
@@ -201,6 +207,12 @@ export async function createWasmTerminal(
   }
 
   return {
+    setSharedDimensions(size) {
+      if (shared?.rows === size?.rows && shared?.cols === size?.cols) return;
+      shared = size;
+      fit();
+    },
+    reportDimensions() { if (viewport) onDimensions?.(viewport); },
     terminal,
     fit,
     dispose,

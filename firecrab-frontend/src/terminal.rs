@@ -83,6 +83,7 @@ pub struct State {
     pub only: bool,
     pub surface: String,
     pub settings: bool,
+    guest_resize: Option<Value>,
     socket: Option<WebSocket>,
     callbacks: Vec<Closure<dyn FnMut(Event)>>,
     retry: Option<i32>,
@@ -128,7 +129,7 @@ pub fn html(app: &App, id: &str) -> String {
         .unwrap_or(id);
     let reconnect = render::button("Apply theme and reconnect", "console-reconnect", "");
     format!(
-        "<main class=\"console-page wasm-console\" id=\"console-page\"><header class=\"console-header\" id=\"console-header\"><a class=\"btn\" href=\"#/vms\">← MicroVM</a><h1 class=\"console-title\" id=\"console-title\">{}</h1><span id=\"console-address\"></span><span id=\"console-status\" class=\"console-status\" role=\"status\">{}</span><div role=\"tablist\" aria-label=\"Console surface\"><button role=\"tab\" aria-selected=\"true\" id=\"console-tab-serial\" data-action=\"console-tab\" data-id=\"serial\">{}</button><button role=\"tab\" aria-selected=\"false\" id=\"console-tab-ssh\" data-action=\"console-tab\" data-id=\"ssh\">SSH</button></div><div class=\"wasm-actions\" role=\"group\" aria-label=\"Export log\">{}{}{}{}{}<span id=\"console-retry\"></span></div></header><div id=\"messages\" aria-live=\"polite\"></div><div id=\"console-settings\" class=\"wasm-card\" role=\"dialog\" aria-label=\"{}\" hidden><label for=\"console-font\">{}</label><select id=\"console-font\">{}</select><label for=\"console-theme\">{}</label><select id=\"console-theme\">{}</select>{reconnect}</div><div class=\"wasm-console-layout\"><div id=\"terminal-surface\" class=\"console-surface\"><div id=\"terminal\"></div></div><section id=\"console-ssh\" hidden></section><aside id=\"console-inspector\" aria-label=\"VM details\" {}></aside></div><button class=\"btn console-exit-only\" id=\"console-exit-only\" data-action=\"console-only\" hidden>{}</button></main><div id=\"modal-root\"></div>",
+        "<main class=\"console-page wasm-console\" id=\"console-page\"><header class=\"console-header\" id=\"console-header\"><a class=\"btn\" href=\"#/vms\">← MicroVM</a><h1 class=\"console-title\" id=\"console-title\">{}</h1><span id=\"console-address\"></span><p id=\"console-geometry\" class=\"console-geometry\" aria-live=\"polite\" hidden></p><span id=\"console-status\" class=\"console-status\" role=\"status\">{}</span><div role=\"tablist\" aria-label=\"Console surface\"><button role=\"tab\" aria-selected=\"true\" id=\"console-tab-serial\" data-action=\"console-tab\" data-id=\"serial\">{}</button><button role=\"tab\" aria-selected=\"false\" id=\"console-tab-ssh\" data-action=\"console-tab\" data-id=\"ssh\">SSH</button></div><div class=\"wasm-actions\" role=\"group\" aria-label=\"Export log\">{}{}{}{}{}<span id=\"console-retry\"></span></div></header><div id=\"messages\" aria-live=\"polite\"></div><div id=\"console-settings\" class=\"wasm-card\" role=\"dialog\" aria-label=\"{}\" hidden><label for=\"console-font\">{}</label><select id=\"console-font\">{}</select><label for=\"console-theme\">{}</label><select id=\"console-theme\">{}</select>{reconnect}</div><div class=\"wasm-console-layout\"><div id=\"terminal-surface\" class=\"console-surface\"><div id=\"terminal\"></div></div><section id=\"console-ssh\" hidden></section><aside id=\"console-inspector\" aria-label=\"VM details\" {}></aside></div><button class=\"btn console-exit-only\" id=\"console-exit-only\" data-action=\"console-only\" hidden>{}</button></main><div id=\"modal-root\"></div>",
         escape(name),
         t("Connecting…"),
         t("Serial"),
@@ -192,6 +193,7 @@ pub fn start(app: Shared, id: String) {
         only: false,
         surface: "serial".into(),
         settings: false,
+        guest_resize: None,
         socket: None,
         callbacks: Vec::new(),
         retry: None,
@@ -232,6 +234,7 @@ fn connect(app: Shared) {
     state.callbacks.clear();
     state.epoch += 1;
     let epoch = state.epoch;
+    state.guest_resize = None;
     let id = state.id.clone();
     state.status = if state.attempt == 0 {
         "connecting"
@@ -240,6 +243,7 @@ fn connect(app: Shared) {
     }
     .into();
     drop(root);
+    binding("shared", JsValue::from_str("null"));
     redraw(&app);
     let protocol = if window().location().protocol().unwrap_or_default() == "https:" {
         "wss"
@@ -247,10 +251,10 @@ fn connect(app: Shared) {
         "ws"
     };
     let host = window().location().host().unwrap_or_default();
-    let socket = match WebSocket::new(&format!(
-        "{protocol}://{host}/ws/vms/{}/console",
-        api::encode(&id)
-    )) {
+    let socket = match WebSocket::new_with_str(
+        &format!("{protocol}://{host}/ws/vms/{}/console", api::encode(&id)),
+        "firecrab.console.v1",
+    ) {
         Ok(socket) => socket,
         Err(error) => {
             app.borrow_mut().error = api::error(error);
@@ -281,6 +285,37 @@ fn connect(app: Shared) {
             return;
         }
         if let Ok(message) = event.dyn_into::<MessageEvent>() {
+            if let Some(raw) = message.data().as_string() {
+                let mut root = received.borrow_mut();
+                let state = root.console.as_mut().unwrap();
+                if state
+                    .socket
+                    .as_ref()
+                    .is_some_and(|socket| socket.protocol() == "firecrab.console.v1")
+                {
+                    if let Some(update) = guest_resize_message(&raw) {
+                        let first = state.guest_resize.is_none();
+                        let size = update["size"].to_string();
+                        state.guest_resize = Some(update);
+                        drop(root);
+                        binding("shared", JsValue::from_str(&size));
+                        redraw(&received);
+                        if first {
+                            binding("reportDimensions", JsValue::UNDEFINED);
+                        }
+                        return;
+                    }
+                    if state.guest_resize.is_some() {
+                        if let Some(socket) = &state.socket {
+                            let _ = socket.close_with_code(4002);
+                        }
+                        root.error = "Invalid console control message".into();
+                        drop(root);
+                        crate::render_messages(&received);
+                        return;
+                    }
+                }
+            }
             binding("write", message.data());
         }
     });
@@ -305,6 +340,7 @@ fn connect(app: Shared) {
         let Some(state) = root.console.as_mut().filter(|state| state.epoch == epoch) else {
             return;
         };
+        state.guest_resize = None;
         if event.code() == 4000 {
             state.status = "ended".into();
             drop(root);
@@ -351,6 +387,31 @@ fn redraw(app: &Shared) {
     let Some(state) = root.console.as_ref() else {
         return;
     };
+    if let Some(geometry) =
+        element("console-geometry").and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        geometry
+            .set_hidden(state.only || state.surface != "serial" || state.guest_resize.is_none());
+        if let Some(update) = &state.guest_resize {
+            let status = text(update, "status");
+            let _ = geometry.set_attribute("data-status", status);
+            geometry.set_text_content(Some(&if status == "applied" {
+                format!(
+                    "{}: {} × {}",
+                    t("Guest size"),
+                    update["size"]["cols"],
+                    update["size"]["rows"]
+                )
+            } else {
+                t(if status == "unavailable" {
+                    "Guest size not synchronized"
+                } else {
+                    "Synchronizing guest size…"
+                })
+                .into()
+            }));
+        }
+    }
     let label = match state.status.as_str() {
         "connected" => "Connected",
         "reconnecting" => "Reconnecting…",
@@ -599,6 +660,41 @@ pub fn dispatch(app: &Shared, action: &str, _id: &str) -> bool {
     true
 }
 pub fn install(app: &Shared) -> Result<(), JsValue> {
+    let resized = app.clone();
+    let callback = Closure::<dyn FnMut(CustomEvent)>::new(move |event: CustomEvent| {
+        let Some(size) = event
+            .detail()
+            .as_string()
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        else {
+            return;
+        };
+        if !valid_dimension(&size["rows"]) || !valid_dimension(&size["cols"]) {
+            return;
+        }
+        let root = resized.borrow();
+        let Some(state) = root
+            .console
+            .as_ref()
+            .filter(|state| size["id"] == state.id && state.guest_resize.is_some())
+        else {
+            return;
+        };
+        if let Some(socket) = state
+            .socket
+            .as_ref()
+            .filter(|socket| socket.ready_state() == WebSocket::OPEN)
+        {
+            let _ = socket.send_with_str(
+                &json!({"type":"resize", "rows":size["rows"], "cols":size["cols"]}).to_string(),
+            );
+        }
+    });
+    document().add_event_listener_with_callback(
+        "firecrab-terminal-dimensions",
+        callback.as_ref().unchecked_ref(),
+    )?;
+    callback.forget();
     let retry = app.clone();
     app.borrow_mut().console_retry =
         Some(Closure::<dyn FnMut()>::new(move || connect(retry.clone())));
@@ -749,4 +845,55 @@ mod tests {
         assert_eq!(prefs.theme_id, "ember");
         assert!(!prefs.inspect_open);
     }
+    #[test]
+    fn guest_resize_accepts_status_and_bounded_dimensions() {
+        assert!(
+            guest_resize_message(r#"{"type":"resize","status":"pending","size":null,"viewers":1}"#)
+                .is_some()
+        );
+        assert!(
+            guest_resize_message(
+                r#"{"type":"resize","status":"applied","size":{"rows":2,"cols":1000},"viewers":2}"#
+            )
+            .is_some()
+        );
+        assert!(
+            guest_resize_message(
+                r#"{"type":"resize","status":"unavailable","size":null,"viewers":1}"#
+            )
+            .is_some()
+        );
+    }
+    #[test]
+    fn guest_resize_rejects_invalid_control_frames() {
+        for raw in [
+            r#"{"type":"resize","status":"applied","size":null,"viewers":1}"#,
+            r#"{"type":"resize","status":"pending","size":{"rows":1,"cols":80},"viewers":1}"#,
+            r#"{"type":"resize","status":"pending","size":null,"viewers":0}"#,
+            r#"{"type":"resize","status":"pending","viewers":1}"#,
+            "terminal output",
+        ] {
+            assert!(guest_resize_message(raw).is_none(), "{raw}");
+        }
+    }
+}
+
+fn valid_dimension(value: &Value) -> bool {
+    value.as_u64().is_some_and(|n| (2..=1000).contains(&n))
+}
+fn guest_resize_message(raw: &str) -> Option<Value> {
+    let value: Value = serde_json::from_str(raw).ok()?;
+    if value["type"] != "resize"
+        || !["pending", "applied", "unavailable"].contains(&text(&value, "status"))
+        || value["viewers"].as_u64().is_none_or(|n| n == 0)
+    {
+        return None;
+    }
+    let size = value.get("size")?;
+    if (value["status"] == "applied" && size.is_null())
+        || (!size.is_null() && (!valid_dimension(&size["rows"]) || !valid_dimension(&size["cols"])))
+    {
+        return None;
+    }
+    Some(value)
 }

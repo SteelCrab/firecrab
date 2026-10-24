@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use fs2::FileExt;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::micromanager::report;
@@ -43,6 +44,19 @@ struct Session {
     source: PathBuf,
     /// Unpredictable credential for ownership checks and graceful shutdown.
     session: Uuid,
+    /// Installation identity; older dashboard sessions have no dependency stamp.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    dependencies: String,
+}
+
+/// Track both manifests so branch changes cannot reuse stale installed packages.
+fn dependency_revision(frontend: &Path) -> Result<String, Error> {
+    let mut revision = Sha256::new();
+    for name in ["package.json", "package-lock.json"] {
+        revision.update(fs::read(frontend.join(name))?);
+        revision.update([0]);
+    }
+    Ok(format!("{:x}", revision.finalize()))
 }
 
 /// Prepare Node and locked frontend dependencies before changing the guest deployment.
@@ -64,7 +78,12 @@ pub fn prepare(source: &Path) -> Result<PathBuf, Error> {
     {
         return Err(Error::Failed("Node.js is required for the development dashboard; install Node.js and npm, then retry service dev".into()));
     }
-    if !frontend.join("node_modules/vite/package.json").is_file() {
+    let revision = dependency_revision(&frontend)?;
+    let stamp = frontend.join("node_modules/.firecrab-dev-dependencies");
+    let installed = fs::read_to_string(&stamp).unwrap_or_default();
+    if !frontend.join("node_modules/vite/package.json").is_file()
+        || installed.lines().next() != Some(revision.as_str())
+    {
         report!("[BUILD] dashboard dependencies: npm ci");
         #[cfg(windows)]
         let mut npm = {
@@ -83,6 +102,8 @@ pub fn prepare(source: &Path) -> Result<PathBuf, Error> {
                 "dashboard dependency installation failed; see npm output above".into(),
             ));
         }
+        // Even reinstalling the same lock must invalidate Vite's module cache.
+        fs::write(stamp, format!("{revision}\n{}", Uuid::new_v4()))?;
     }
     if frontend.join("Cargo.toml").is_file() {
         report!("[BUILD] dashboard: Rust/WASM");
@@ -243,8 +264,14 @@ fn start_at(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
     let url = format!("http://127.0.0.1:{port}");
     let _lock = lock(home)?;
     let client = client()?;
+    let dependencies = fs::read_to_string(
+        source.join("firecrab-frontend/node_modules/.firecrab-dev-dependencies"),
+    )?;
     if let Some(previous) = read_session(home)? {
-        if previous.source == source && running(&client, &previous, &url) {
+        if previous.source == source
+            && previous.dependencies == dependencies
+            && running(&client, &previous, &url)
+        {
             return report_ready(&client, home, &url);
         }
         stop_session(&client, &previous, &url)?;
@@ -261,6 +288,7 @@ fn start_at(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
     let state = Session {
         source: source.to_owned(),
         session: Uuid::new_v4(),
+        dependencies,
     };
     let log = fs::File::create(&log_path)?;
     let mut command = Command::new("node");
@@ -269,6 +297,7 @@ fn start_at(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
         .arg(source)
         .arg(port.to_string())
         .env("FIRECRAB_DEV_SESSION", state.session.to_string())
+        .env("FIRECRAB_DEV_DEPENDENCIES", &state.dependencies)
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);

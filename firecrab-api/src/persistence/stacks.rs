@@ -37,9 +37,14 @@ impl Store {
         if stack.id != id {
             return Err(PersistenceError::StackConflict);
         }
+        super::stack_applies::ensure_idle(&tx, stack.id)?;
         if !stack.bindings.is_empty() {
             return Err(PersistenceError::StackNotEmpty);
         }
+        tx.execute(
+            "DELETE FROM stack_applies WHERE stack_id = ?1",
+            [id.to_string()],
+        )?;
         tx.execute("DELETE FROM stacks WHERE id = ?1", [id.to_string()])?;
         tx.commit()?;
         Ok(())
@@ -110,6 +115,7 @@ impl Store {
             tx.commit()?;
             return Ok(stack);
         }
+        super::stack_applies::ensure_idle(&tx, stack.id)?;
         if stack.bindings.len() >= firecrab_stack::MAX_RESOURCES {
             return Err(PersistenceError::StackBindingLimit);
         }
@@ -155,6 +161,7 @@ impl Store {
         if current != binding {
             return Err(PersistenceError::StackConflict);
         }
+        super::stack_applies::ensure_idle(&tx, stack.id)?;
         tx.execute("DELETE FROM stack_bindings WHERE stack_id = ?1 AND kind = ?2 AND logical_key = ?3 AND resource_id = ?4", params![stack.id.to_string(), binding.kind.as_str(), binding.key, binding.resource_id.to_string()])?;
         tx.execute(
             "UPDATE stacks SET revision = revision + 1 WHERE id = ?1",
@@ -166,7 +173,10 @@ impl Store {
     }
 }
 
-fn read_stack(conn: &Connection, name: &str) -> Result<Option<StackRecord>, PersistenceError> {
+pub(super) fn read_stack(
+    conn: &Connection,
+    name: &str,
+) -> Result<Option<StackRecord>, PersistenceError> {
     let row: Option<(String, i64)> = conn
         .query_row(
             "SELECT id, revision FROM stacks WHERE name = ?1",

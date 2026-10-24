@@ -92,3 +92,5 @@ node --test firecrab-frontend/tests/frontend.test.mjs
 ```
 
 The terminal uses the pinned `ghostty-web` VT parser and canvas renderer. It loads a separate WASM asset on demand. Compiled code is shared; each session owns its memory. Rust owns socket state and session retries. Browser adapters handle canvas, pointer, IME and clipboard events. Upstream build patches remain checked against the pinned revision. Terminal licenses ship in `public/terminal-licenses.txt`.
+
+The Rust console negotiates `firecrab.console.v1`, reports local viewport dimensions, and renders the shared guest grid. See [guest resize support](../public-docs/development/console-resize.md) for kernel, guest helper and lifecycle requirements.

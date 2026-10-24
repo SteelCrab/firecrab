@@ -1,0 +1,25 @@
+{
+  "version": "7.2.2-vsock1",
+  "linuxVersion": "7.2.2",
+  "sourceUrl": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.2.tar.xz",
+  "sourceSha256": "7d0e7ce14f98c43efe880cffbf354a59be45928fdf7170d7333c374ae91c0d83",
+  "sourceDateEpoch": 1792800000,
+  "architectures": {
+    "x86_64": {
+      "basePackageUrl": "https://registry.firecrab.dev/kernel/7.2.2/x86_64/vmlinux-7.2.2.tar.zst",
+      "basePackageSha256": "716d7bcfcf9118a76d0c9f0b7ab06ba167f78b77cb16f928612809c75ebeffae",
+      "baseConfig": "config/vmlinux-7.2.2-x86_64.config",
+      "makeArch": "x86",
+      "target": "vmlinux",
+      "output": "vmlinux"
+    },
+    "aarch64": {
+      "basePackageUrl": "https://registry.firecrab.dev/kernel/7.2.2/aarch64/vmlinux-7.2.2.tar.zst",
+      "basePackageSha256": "885550806de246892df6f08b6d37a3062ac987228729ee50b9421d5caa98621f",
+      "baseConfig": "config/Image-7.2.2-aarch64.config",
+      "makeArch": "arm64",
+      "target": "Image",
+      "output": "arch/arm64/boot/Image"
+    }
+  }
+}

@@ -23,6 +23,13 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Browser console dimensions reach the guest serial terminal through a private
+  vsock resize helper. Connected viewers share the smallest available grid.
+  The console reports whether the guest applied the size and keeps working
+  when guest resize support is unavailable. The default OCI kernel is
+  `7.2.2-vsock1`, with built-in vsock on x86_64 and ARM64, versioned packages,
+  and matching source archives. Tracked in [#471](https://github.com/SteelCrab/firecrab/issues/471).
+
 - The browser console uses Ghostty WebAssembly for VT parsing, Unicode cells,
   terminal modes and history. It supports mobile editing, composition,
   bracketed paste, application mouse/focus reports and native grapheme export.
@@ -53,6 +60,12 @@ Entries land here as work merges, and move under the next version heading when t
   resource limits, overlapping subnets and service ports, and pinned service
   image syntax. Validation reports omit configuration values. Applying resources
   and continuous Git synchronization remain follow-up work for #437.
+
+- Native `stack apply` creates and updates owned resources, deploys services and
+  records redacted progress by retry UUID. Plan fingerprints reject stale input;
+  running VM changes and service replica replacement require explicit stop
+  permission. Interrupted work keeps its exact ownership for explicit recovery.
+  Automatic replacement, pruning and Git polling remain follow-up work for #437.
 
 - Host-local stack registration and UUID ownership bindings survive API restarts.
   `firecrab stack register/list/status/bind/unbind` manages metadata without

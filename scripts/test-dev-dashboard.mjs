@@ -14,8 +14,9 @@ test("embedded dashboard starts real Vite and authenticates shutdown", { timeout
   const port = reservation.address().port;
   await new Promise(resolve => reservation.close(resolve));
   const session = randomUUID();
+  const dependencies = randomUUID();
   const child = spawn(process.execPath, [resolve(root, "firecrab-cli/src/micromanager/dev/dashboard.mjs"), root, String(port)], {
-    cwd: tmpdir(), env: { ...process.env, FIRECRAB_DEV_SESSION: session }, stdio: ["ignore", "pipe", "pipe"],
+    cwd: tmpdir(), env: { ...process.env, FIRECRAB_DEV_SESSION: session, FIRECRAB_DEV_DEPENDENCIES: dependencies }, stdio: ["ignore", "pipe", "pipe"],
   });
   const exited = new Promise(resolve => child.once("exit", (code) => resolve(code)));
   let logs = "";
@@ -30,7 +31,7 @@ test("embedded dashboard starts real Vite and authenticates shutdown", { timeout
     try {
       const response = await fetch(`${url}/__firecrab_dev/`, { headers });
       if (response.headers.get("content-type")?.includes("application/json")) {
-        assert.deepEqual(await response.json(), { source: root, session });
+        assert.deepEqual(await response.json(), { source: root, session, dependencies });
         ready = true; break;
       }
     } catch {}
@@ -39,6 +40,11 @@ test("embedded dashboard starts real Vite and authenticates shutdown", { timeout
   assert.ok(ready, `Vite did not answer the ownership endpoint: ${logs}`);
   assert.equal((await fetch(url)).status, 200);
   assert.equal((await fetch(`${url}/@vite/client`)).status, 200);
+  const terminal = await fetch(`${url}/src/lib/wasmTerminal.ts`);
+  assert.equal(terminal.status, 200, await terminal.text());
+  const wasm = await fetch(`${url}/node_modules/ghostty-web/dist/ghostty-vt.wasm`);
+  assert.equal(wasm.status, 200);
+  assert.equal(WebAssembly.validate(await wasm.arrayBuffer()), true);
   assert.equal((await fetch(`${url}/__firecrab_dev/stop`, { method: "POST" })).status, 403);
   assert.equal((await fetch(`${url}/__firecrab_dev/stop`, { method: "POST", headers: { "X-Firecrab-Dev-Session": randomUUID() } })).status, 403);
   assert.equal((await fetch(`${url}/__firecrab_dev/stop`, { method: "POST", headers })).status, 202);

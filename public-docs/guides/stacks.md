@@ -120,4 +120,5 @@ OCI digest syntax is checked locally; registry reference resolution and digest v
 IPv6, uplink selection, VM shells, and standalone VM port forwards are outside this initial schema.
 
 Host-local ownership and read-only `stack plan` are documented in [Stack ownership and planning](stack-planning.md).
-Actual apply, drift correction, and Git polling remain follow-up work.
+Use [Native YAML stack apply](stack-apply.md) for explicit creation, changes, deployment and recovery.
+Continuous drift correction and Git polling remain follow-up work.
