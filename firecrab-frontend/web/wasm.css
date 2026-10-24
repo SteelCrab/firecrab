@@ -92,6 +92,7 @@
 .sg-rule {min-width:0;}
 
 @media(max-width:767px) {
+  .vm-filters { flex-wrap:wrap; min-width:0; max-width:100%; }
   .screen-head { flex-wrap:wrap; }
   .screen-heading { min-width:0; }
   .screen-head>.wasm-actions { max-width:100%; }

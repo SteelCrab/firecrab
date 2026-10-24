@@ -529,7 +529,13 @@ test('panel resize persists, tooltip is shared, and narrow screens start without
   await expect(page.locator('#detail-panel')).toBeHidden();
   await page.locator('.vm-row-name').first().click();
   await expect(page.locator('#detail-panel')).toBeVisible();
-  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  // A wider fallback font must not force the state tabs past a phone viewport.
+  await page.addStyleTag({ content: ':root { --font: monospace; }' });
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `No horizontal page overflow at ${width}px`);
+    await expect(page.getByRole('tab', { name: /^Error/ })).toBeInViewport();
+  }
 });
 
 test('registry pages preserve opaque cursors, tags and selected reference', async () => {
