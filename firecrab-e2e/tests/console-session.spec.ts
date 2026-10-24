@@ -219,8 +219,10 @@ test.describe("terminal session end in a booted guest", () => {
       await typeInTerminal(page, "printf 'FCR_MONITOR_%s\\n' DONE");
       await expect(page.locator(".terminal-output")).toContainText("FCR_MONITOR_DONE");
       await checkSize();
+      // The fixture app keeps writing to ttyS0 and can overwrite vi's visible rows.
+      const viStart = guestFrames.length;
       await typeInTerminal(page, "printf 'FCR_VI_%s\\n' READY > /tmp/fcr-size; /etc/firecrab/busybox vi /tmp/fcr-size");
-      await expect(page.locator(".terminal-output")).toContainText("FCR_VI_READY");
+      await expect.poll(() => Buffer.concat(guestFrames.slice(viStart)).toString("utf8")).toContain("FCR_VI_READY");
       const viSize = await page.locator(".console-geometry").textContent();
       const viFrameStart = guestFrames.length;
       await page.setViewportSize({ width: 1400, height: 950 });
@@ -228,20 +230,20 @@ test.describe("terminal session end in a booted guest", () => {
       await expect(page.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
       const viRows = (await geometry.textContent())!.match(/(\d+) × (\d+)/)![2];
       await expect.poll(() => Buffer.concat(guestFrames.slice(viFrameStart)).toString("utf8")).toContain(`\x1b[${viRows};1H\x1b[K`);
-      await expect(page.locator(".terminal-output")).toContainText("FCR_VI_READY");
+      await expect.poll(() => Buffer.concat(guestFrames.slice(viFrameStart)).toString("utf8")).toContain("FCR_VI_READY");
       await page.keyboard.type(":q!");
       await page.keyboard.press("Enter");
       await expect(page.locator(".terminal-output")).toContainText(/~ #/);
       await checkSize();
+      const topStart = guestFrames.length;
       await typeInTerminal(page, "/etc/firecrab/busybox top -d 1");
-      await expect(page.locator(".terminal-output")).toContainText("PID");
+      await expect.poll(() => Buffer.concat(guestFrames.slice(topStart)).toString("utf8")).toContain("PID");
       const topSize = await page.locator(".console-geometry").textContent();
       await page.setViewportSize({ width: 900, height: 650 });
       await expect(page.locator(".console-geometry")).not.toHaveText(topSize!);
       await expect(page.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
       const topFrameStart = guestFrames.length;
       await expect.poll(() => Buffer.concat(guestFrames.slice(topFrameStart)).toString("utf8")).toContain("PID");
-      await expect(page.locator(".terminal-output")).toContainText("PID");
       await page.keyboard.press("q");
       await expect(page.locator(".terminal-output")).toContainText(/~ #/);
       await checkSize();

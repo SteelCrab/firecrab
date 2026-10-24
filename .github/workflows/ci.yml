@@ -696,7 +696,10 @@ jobs:
           FIRECRAB_E2E_REQUIRE_GUEST_BOOT: "1"
           FIRECRAB_E2E_REQUIRE_RUNNING_API: "1"
           FIRECRAB_E2E_REQUIRE_GUEST_RESIZE: "1"
-        run: npm test --prefix firecrab-e2e 2>&1 | tee target/qa/browser.log
+        run: |
+          # Report console failures before running the broad dashboard suite.
+          npm run test:console --prefix firecrab-e2e 2>&1 | tee target/qa/console-browser.log
+          npm test --prefix firecrab-e2e -- --grep-invert 'terminal session end' 2>&1 | tee target/qa/browser.log
 
       - name: QA nginx env, port-forward, shells
         if: ${{ !cancelled() && steps.install-service.outcome == 'success' && steps.enable-kvm.outcome == 'success' }}
