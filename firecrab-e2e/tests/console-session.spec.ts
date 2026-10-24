@@ -193,12 +193,12 @@ test.describe("terminal session end in a booted guest", () => {
         await expect.poll(async () => (await page.locator(".console-geometry").textContent()) === (await secondViewer.locator(".console-geometry").textContent())).toBe(true);
         const dimensions = (await page.locator(".console-geometry").textContent())!.match(/(\d+) × (\d+)/)!;
         const expected = `${dimensions[2]} ${dimensions[1]}`;
-        await typeInTerminal(page, "printf '\\nFCR_SIZE_'; stty size");
+        await typeInTerminal(page, "printf '\\nFCR_SIZE_'; /etc/firecrab/busybox stty size");
         await expect(page.locator(".terminal-output")).toContainText(`FCR_SIZE_${expected}`);
         return expected;
       };
       await checkSize();
-      await typeInTerminal(page, "trap 'printf \"\\nFCR_WINCH_\"; stty size' WINCH");
+      await typeInTerminal(page, "trap 'printf \"\\nFCR_WINCH_\"; /etc/firecrab/busybox stty size' WINCH");
       await typeInTerminal(page, "printf 'FCR_TRAP_%s\\n' READY");
       await expect(page.locator(".terminal-output")).toContainText("FCR_TRAP_READY");
       const previousSize = await page.locator(".console-geometry").textContent();
