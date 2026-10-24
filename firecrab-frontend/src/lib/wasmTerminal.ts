@@ -3,6 +3,7 @@ import wasmUrl from "ghostty-web/ghostty-vt.wasm?url";
 import { defaultInteractiveTerminalOptions, enableTerminalInput } from "./terminal";
 import { terminalText } from "./terminalText";
 import { enableTerminalMouse } from "./terminalMouse";
+import { enableTerminalTouch } from "./terminalTouch";
 
 const OUTPUT_CHUNK_BYTES = 16 * 1024;
 const MAX_PENDING_BYTES = 8 * 1024 * 1024;
@@ -167,6 +168,7 @@ export async function createWasmTerminal(
     enableTerminalInput(terminal, listeners.signal);
     terminal.onData(onInput);
     enableTerminalMouse(terminal, listeners.signal, onInput);
+    enableTerminalTouch(terminal, listeners.signal);
     terminal.onScroll(scheduleMirror);
     observer.observe(container);
     window.addEventListener("resize", fit, { signal: listeners.signal });
