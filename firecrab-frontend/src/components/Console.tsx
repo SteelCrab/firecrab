@@ -3,6 +3,7 @@ import { Maximize2, PanelRight, PanelRightClose, SlidersHorizontal, SquareTermin
 import type { ITheme, Terminal } from "ghostty-web";
 import { createWasmTerminal, type WasmTerminalSession } from "../lib/wasmTerminal";
 import type { VmResponse } from "../bindings";
+import { CONSOLE_PROTOCOL, guestResizeMessage, type GuestResize } from "../lib/consoleProtocol";
 import { getVm, getVmLog } from "../api/client";
 import { formatVmExportBundle } from "../lib/formatVmLog";
 import { logDownloadFilename } from "../lib/textExport";
@@ -140,6 +141,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [status, setStatus] = useState<Status>("connecting");
+  const [guestResize, setGuestResize] = useState<GuestResize | null>(null);
   const [prefs, setPrefs] = useState<ConsolePrefs>(loadPrefs);
   const [appliedThemeId, setAppliedThemeId] = useState<ThemeId>(prefs.themeId);
   const prefsRef = useRef(prefs);
@@ -204,9 +206,11 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     const controller = new AbortController();
     const { signal } = controller;
     let session: WasmTerminalSession | undefined;
+    let resizeReady = false;
     let bootTimer: ReturnType<typeof setTimeout> | undefined;
     reconnectAttemptRef.current = 0;
     setTerminalError(null);
+    setGuestResize(null);
     setStatus("connecting");
     if (outputRef.current) outputRef.current.textContent = "";
 
@@ -241,7 +245,10 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
       const { terminal } = session;
       terminal.options.disableStdin = true;
       setStatus(isRetry ? "reconnecting" : "connecting");
-      const socket = new WebSocket(consoleWsUrl(vmId));
+      resizeReady = false;
+      setGuestResize(null);
+      session.setSharedDimensions(null);
+      const socket = new WebSocket(consoleWsUrl(vmId), CONSOLE_PROTOCOL);
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
       socket.onopen = () => {
@@ -254,6 +261,18 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
       };
       socket.onmessage = (event: MessageEvent<ArrayBuffer | string>) => {
         if (signal.aborted || socketRef.current !== socket) return;
+        if (socket.protocol === CONSOLE_PROTOCOL && typeof event.data === "string") {
+          const update = guestResizeMessage(event.data);
+          if (!update && resizeReady) { fail(new Error("Invalid console control message")); return; }
+          if (update) {
+            const first = !resizeReady;
+            resizeReady = true;
+            setGuestResize(update);
+            session?.setSharedDimensions(update.size);
+            if (first) session?.reportDimensions();
+            return;
+          }
+        }
         session?.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data));
       };
       socket.onerror = () => {
@@ -263,6 +282,8 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
         if (signal.aborted || socketRef.current !== socket) return;
         socketRef.current = null;
         terminal.options.disableStdin = true;
+        setGuestResize(null);
+        resizeReady = false;
         if (event.code === SESSION_ENDED_CLOSE_CODE) {
           setStatus("ended");
           session?.write(`\r\n\x1b[2m${sessionEndedNoticeRef.current}\x1b[0m\r\n`);
@@ -287,6 +308,9 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
         // The API removes queries from replay; live VT replies reach the guest.
         const socket = socketRef.current;
         if (socket?.readyState === WebSocket.OPEN) socket.send(typeof data === "string" ? encoder.encode(data) : Uint8Array.from(data));
+      }, size => {
+        const socket = socketRef.current;
+        if (resizeReady && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", ...size }));
       });
       if (signal.aborted) { session.dispose(); return; }
       const { terminal } = session;
@@ -495,6 +519,15 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
               termRef.current?.focus();
             }}
           />
+          {guestResize && surfaceTab === "serial" && !terminalOnly && (
+            <p className="console-geometry" data-status={guestResize.status} aria-live="polite"
+              title={t("Connected viewers share the smallest available grid. Guest support and a complete host installation are required; stop and start the VM after an upgrade.", "연결된 화면 중 가장 작은 행·열 크기를 사용합니다. 게스트 지원과 호스트 도구 설치가 필요합니다. 업그레이드 후 VM을 중지하고 다시 시작하세요.")}>
+              {guestResize.status === "applied" && guestResize.size
+                ? t(`Guest size: ${guestResize.size.cols} × ${guestResize.size.rows}`, `게스트 크기: ${guestResize.size.cols} × ${guestResize.size.rows}`)
+                : guestResize.status === "unavailable" ? t("Guest size not synchronized", "게스트 크기 동기화 안 됨")
+                : t("Synchronizing guest size…", "게스트 크기 동기화 중…")}
+            </p>
+          )}
           <pre ref={outputRef} className="terminal-output" aria-label={t("Terminal output", "터미널 출력")} aria-live="polite" aria-atomic="true" />
           {terminalError && <p role="alert" className="console-detail-note">{terminalError}</p>}
           {surfaceTab === "ssh" && (

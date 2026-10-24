@@ -95,14 +95,16 @@ jobs:
             "target/${{ matrix.target }}/release/firecrab" "${{ matrix.arch }}" "$libc"
 
       - name: Build private ingress engine
-        run: ./scripts/build-ingress.sh "target/${{ matrix.target }}/release"
+        run: |
+          ./scripts/build-ingress.sh "target/${{ matrix.target }}/release"
+          ./scripts/build-guest-console.sh "target/${{ matrix.target }}/release"
 
       - name: Package binaries
         run: |
           cd target/${{ matrix.target }}/release
           install -m 0755 firecrab-helper firecrab-net-helper
           tar -czvf ../../../firecrab-${{ matrix.target }}.tar.gz \
-            firecrab-api firecrab-helper firecrab-net-helper firecrab firecrab-ingress ingress
+            firecrab-api firecrab-helper firecrab-net-helper firecrab firecrab-ingress ingress firecrab-guest-console guest-console
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -402,7 +404,7 @@ jobs:
           set -euo pipefail
           tar -tzf "firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz" > members.txt
           for path in LICENSE THIRD_PARTY_NOTICES.txt release-license-inventory.json \
-              licenses/GPL-2.0-only.txt extract-vmlinux firecrab-ingress \
+              licenses/GPL-2.0-only.txt extract-vmlinux firecrab-ingress firecrab-guest-console guest-console/LICENSE.musl \
               ingress/LICENSE.nginx ingress/LICENSE.pcre2 ingress/LICENSE.musl ingress/sources.json; do
             grep -qx "$path" members.txt || { echo "missing $path" >&2; exit 1; }
           done

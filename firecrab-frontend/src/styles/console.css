@@ -180,3 +180,5 @@
   .console-status.connecting .console-status-dot { animation: none; }
   .console-settings-pop, .console-exit-only { transition: none; }
 }
+
+.console-geometry { margin: 5px 0 0; color: var(--text-3); font: 11px var(--mono); }

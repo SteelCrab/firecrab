@@ -35,8 +35,12 @@ The browser adapter supports composition/mobile editing, bracketed paste,
 application cursor keys, selection copy, history paging, SGR/legacy mouse and
 focus reports. Live cursor/status queries receive native replies; the API strips
 old queries from replay. Shift overrides application mouse capture for text selection.
-The existing serial transport does not propagate the browser's grid to a guest
-PTY. Real guest TUI resizing and actual OS IMEs require separate host validation.
+The versioned console protocol carries dimensions separately from input bytes.
+A static guest helper applies the common grid to ttyS0 through private vsock.
+Connected modern viewers use the minimum reported rows and columns; old clients
+remain raw byte streams. Guest acknowledgement controls the synchronization status.
+See [guest resize](../public-docs/development/console-resize.md) for installation,
+kernel support, protocol and real-guest checks. Actual OS IMEs need manual validation.
 See [browser E2E](../firecrab-e2e/README.md#wasm-console) for local checks.
 
 ---

@@ -238,6 +238,46 @@ pub fn install_binaries(
         }
     }
 
+    if let Some(src) = resolve_binary("firecrab-guest-console", Some(&payload.bin), &env.libdir) {
+        let notices = src
+            .parent()
+            .expect("binary has parent")
+            .join("guest-console/LICENSE.musl");
+        if !notices.is_file() {
+            return Err(Error::step(
+                STEP_BINARIES,
+                "missing guest console musl license",
+            ));
+        }
+        if src != env.libdir.join("firecrab-guest-console") {
+            privileged.install_file(
+                STEP_BINARIES,
+                &src,
+                &env.libdir.join("firecrab-guest-console"),
+                "root",
+                "root",
+                "0755",
+            )?;
+            privileged.run_ok(
+                STEP_BINARIES,
+                "install",
+                &[
+                    "-d",
+                    "-m",
+                    "0755",
+                    &env.libdir.join("guest-console").to_string_lossy(),
+                ],
+            )?;
+            privileged.install_file(
+                STEP_BINARIES,
+                &notices,
+                &env.libdir.join("guest-console/LICENSE.musl"),
+                "root",
+                "root",
+                "0644",
+            )?;
+        }
+    }
     let legacy = env.libdir.join("firecrab-net-helper");
     privileged.run_ok(
         STEP_BINARIES,

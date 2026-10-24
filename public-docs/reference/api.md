@@ -252,7 +252,7 @@ The kernel catalog is architecture-specific; inspect `GET /api/kernels` for avai
 | --- | --- | --- |
 | GET, POST | `/api/kernels/{version}/install` | Read / start verified download |
 | DELETE | `/api/kernels/{version}` | Delete an unused cache entry |
-| PUT | `/api/images/{alias}/kernel` | Pair using `{"kernelVersion":"7.2.2"}` |
+| PUT | `/api/images/{alias}/kernel` | Pair using `{"kernelVersion":"7.2.2-vsock1"}` |
 
 Pairing preserves rootfs/initrd and requires an installed, verified kernel.
 Missing/invalid cache returns `409 kernel_required`; referenced images return `409 in_use`.

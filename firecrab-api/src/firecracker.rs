@@ -108,6 +108,14 @@ pub struct FirecrackerConfig {
     /// vCPU/memory sizing.
     #[serde(rename = "machine-config")]
     machine_config: MachineConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vsock: Option<Vsock>,
+}
+
+#[derive(Debug, Serialize)]
+struct Vsock {
+    guest_cid: u32,
+    uds_path: PathBuf,
 }
 
 /// `boot-source` section of [`FirecrackerConfig`].
@@ -182,6 +190,7 @@ impl FirecrackerConfig {
         network: Option<&VmNetwork>,
     ) -> Self {
         Self {
+            vsock: None,
             boot_source: BootSource {
                 kernel_image_path: absolute(kernel_image_path),
                 initrd_path: initrd_path.map(absolute),
@@ -225,7 +234,7 @@ impl FirecrackerConfig {
 
     /// Saves this boot configuration in the VM's private runtime directory.
     pub(crate) fn write(
-        &self,
+        mut self,
         runtime: &crate::artifacts::HostRuntimePaths,
     ) -> Result<PathBuf, FirecrackerError> {
         fs::create_dir_all(&runtime.dir).map_err(|source| FirecrackerError::CreateDirectory {
@@ -233,8 +242,12 @@ impl FirecrackerConfig {
             source,
         })?;
         let path = runtime.config.clone();
+        self.vsock = Some(Vsock {
+            guest_cid: 3,
+            uds_path: absolute(&runtime.vsock_socket),
+        });
         let json =
-            serde_json::to_vec_pretty(self).map_err(|source| FirecrackerError::Serialize {
+            serde_json::to_vec_pretty(&self).map_err(|source| FirecrackerError::Serialize {
                 path: path.clone(),
                 source,
             })?;
@@ -764,6 +777,7 @@ fn attach(
     } = session;
     let console = Arc::new(ConsoleBroker::new());
     console.attach_control(control.clone());
+    console.resize.set_socket(api_sock.with_file_name("v.sock"));
     let (exit_tx, exit) = watch::channel(None);
     spawn_event_pump(id, events, Arc::clone(&console), process_metrics, exit_tx);
     FirecrackerProcess {
@@ -1174,6 +1188,11 @@ mod tests {
             "/images/vmlinux"
         );
         assert_eq!(config["boot-source"]["boot_args"], "console=ttyS0");
+        assert_eq!(config["vsock"]["guest_cid"], 3);
+        assert_eq!(
+            config["vsock"]["uds_path"],
+            runtime.vsock_socket.to_str().unwrap()
+        );
 
         let drive = &config["drives"][0];
         assert_eq!(drive["drive_id"], "rootfs");
@@ -1205,6 +1224,11 @@ mod tests {
         assert_eq!(json["drives"][1]["is_root_device"], false);
         assert_eq!(json["drives"][1]["path_on_host"], "/volumes/data.ext4");
         assert_eq!(json["drives"][1]["cache_type"], "Writeback");
+        assert_eq!(json["vsock"]["guest_cid"], 3);
+        assert_eq!(
+            json["vsock"]["uds_path"],
+            runtime.vsock_socket.to_str().unwrap()
+        );
     }
 
     #[test]
