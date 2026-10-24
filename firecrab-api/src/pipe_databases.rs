@@ -426,7 +426,8 @@ impl DatabaseConnection {
             Self::Postgres(_) => Engine::Postgres,
             Self::Mysql(_) => Engine::Mysql,
         };
-        let query = preview_sql(engine, request, &columns);
+        // preview_sql quotes every identifier; limit and offset remain bind parameters.
+        let query = sqlx::AssertSqlSafe(preview_sql(engine, request, &columns));
         let mut preview = Preview {
             columns,
             rows: Vec::new(),
@@ -436,7 +437,7 @@ impl DatabaseConnection {
         let mut bytes = 0;
         match self {
             Self::Postgres(c) => {
-                let mut stream = sqlx::query(&query)
+                let mut stream = sqlx::query(query)
                     .bind(i64::from(request.limit) + 1)
                     .bind(i64::from(request.offset))
                     .persistent(false)
@@ -451,7 +452,7 @@ impl DatabaseConnection {
                 }
             }
             Self::Mysql(c) => {
-                let mut stream = sqlx::query(&query)
+                let mut stream = sqlx::query(query)
                     .bind(request.limit + 1)
                     .bind(request.offset)
                     .persistent(false)

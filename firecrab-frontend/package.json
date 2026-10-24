@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "ghostty-web": "0.4.0-next.20.g1858a59",
-    "lucide-react": "1.52.0",
+    "lucide-react": "1.61.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
@@ -20,8 +20,8 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
-    "oxlint": "^1.88.0",
+    "oxlint": "^1.89.0",
     "tsrs": "0.18.0-ts7.1.0-dev.20260929",
-    "vite": "^8.3.4"
+    "vite": "^8.3.5"
   }
 }
