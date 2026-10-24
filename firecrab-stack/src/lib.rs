@@ -1,4 +1,4 @@
-//! Versioned stack validation, ownership types and a pure read-only planner.
+//! Versioned stack validation, ownership, pure planning and native apply wire types.
 //!
 //! Validation never reads host state, resolves images, or creates resources.
 //! A successful result is a structurally valid declaration, not a deployment plan.
@@ -9,10 +9,14 @@ use std::net::Ipv4Addr;
 use firecrab_api_types::{EgressPolicy, MicroServiceSpec};
 use serde::{Deserialize, Serialize};
 
+mod apply;
 mod planning;
+pub use apply::{
+    ApplyFailure, ApplyRequest, ApplyState, ApplyStatus, ApplyStep, StepState, desired_hash,
+};
 pub use planning::{
     Action, Binding, Change, DeleteStackRequest, Inventory, Plan, RegisterStackRequest,
-    ResourceKind, ServiceSnapshot, StackRecord, VmSnapshot, plan,
+    ResourceKind, ServiceSnapshot, StackRecord, VmSnapshot, fingerprint, plan,
 };
 
 /// Maximum UTF-8 manifest size, including comments.
@@ -44,7 +48,7 @@ pub struct Stack {
 /// Supported experimental manifest versions.
 #[derive(Clone, Deserialize, Serialize)]
 pub enum ApiVersion {
-    /// Initial validation-only schema; may change before apply support lands.
+    /// Initial experimental schema for explicit planning and native execution.
     #[serde(rename = "firecrab.dev/v1alpha1")]
     V1Alpha1,
 }

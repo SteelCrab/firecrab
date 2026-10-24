@@ -23,6 +23,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Configure and manage an app | [MicroService](guides/microservices.md) |
 | Validate a declarative YAML stack offline | [Stack validation](guides/stacks.md) |
 | Register stack ownership and preview configuration changes | [Stack planning](guides/stack-planning.md) |
+| Apply YAML stacks and inspect durable execution status | [Stack apply](guides/stack-apply.md) |
 | Try Terraform against the public REST API | [Experimental Terraform example](../examples/terraform/basic/README.md) |
 | Schedule MicroVM start and stop operations | [Schedules](guides/schedules.md) |
 | Store secrets and transfer them to external stores | [Secrets and PipeSecrets](guides/secrets.md) |

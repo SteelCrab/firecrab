@@ -289,6 +289,16 @@ pub async fn create_vm(
     Extension(request_id): Extension<RequestId>,
     ValidatedJson(req): ValidatedJson<CreateVmRequest>,
 ) -> Result<(StatusCode, Json<VmResponse>), AppError> {
+    create_vm_with_id(state, request_id, req, Uuid::new_v4()).await
+}
+
+/// Use a journal-reserved UUID while retaining normal validation and provisioning.
+pub(crate) async fn create_vm_with_id(
+    state: AppState,
+    request_id: RequestId,
+    req: CreateVmRequest,
+    id: Uuid,
+) -> Result<(StatusCode, Json<VmResponse>), AppError> {
     let fields = validate_create(&req, &state);
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
@@ -311,7 +321,7 @@ pub async fn create_vm(
     let response = insert_vm(
         &state,
         request_id,
-        Uuid::new_v4(),
+        id,
         req,
         &template,
         crate::model::VmPurpose::Instance,
@@ -947,7 +957,7 @@ fn restore_resources(state: &AppState, id: Uuid, previous: PreviousResources) {
     }
 }
 
-fn validate_update(
+pub(crate) fn validate_update(
     req: &UpdateVmResourcesRequest,
     current_disk_gb: u16,
 ) -> BTreeMap<String, String> {

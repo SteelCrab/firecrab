@@ -62,7 +62,7 @@ enum Command {
     },
     /// Serve local MCP tools over stdin/stdout using the selected REST host.
     Mcp,
-    /// Validate stack files, manage host ownership and preview changes without applying them.
+    /// Validate stack files, manage ownership, preview changes and explicitly apply them.
     Stack {
         #[command(subcommand)]
         command: stack::Command,

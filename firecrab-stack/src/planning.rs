@@ -7,6 +7,7 @@ use firecrab_api_types::{
     EgressPolicy, MicroNetworkResponse, MicroServiceDeployment, MicroServiceResponse,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{Diagnostic, Stack, diagnostic, logical_name, subnet, validate};
@@ -95,7 +96,7 @@ pub struct StackRecord {
 }
 
 /// Persisted VM configuration needed for planning. Runtime metrics are omitted.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct VmSnapshot {
     /// Host resource UUID.
     pub id: Uuid,
@@ -199,9 +200,12 @@ pub struct Change {
 }
 
 /// Read-only comparison against one observed host inventory.
-#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
+    /// Opaque configuration/ownership identity; apply rejects a stale observation.
+    #[serde(default)]
+    pub fingerprint: String,
     /// Registration identity on the selected host.
     pub stack_id: Uuid,
     /// Manifest/registration name.
@@ -451,12 +455,56 @@ pub fn plan(
         }
     }
     Ok(Plan {
+        fingerprint: fingerprint(stack, record, inventory),
         stack_id: record.id,
         name: stack.name.clone(),
         revision: record.revision,
         blocked: changes.iter().any(|c| c.action == Action::Blocked),
         changes,
     })
+}
+
+/// Hash canonical desired/observed configuration, excluding metrics and live health.
+pub fn fingerprint(stack: &Stack, record: &StackRecord, inventory: &Inventory) -> String {
+    let mut networks = inventory.networks.iter().collect::<Vec<_>>();
+    networks.sort_by_key(|n| n.id);
+    let mut vms = inventory.vms.iter().collect::<Vec<_>>();
+    vms.sort_by_key(|v| v.id);
+    let mut services = inventory.services.iter().collect::<Vec<_>>();
+    services.sort_by_key(|s| s.service.id);
+    let services = services
+        .into_iter()
+        .map(|s| {
+            let deployment = s.deployment.as_ref().map(|d| {
+                let mut instances = d.instances.iter().map(|i| i.vm_id).collect::<Vec<_>>();
+                instances.sort();
+                (
+                    d.id,
+                    &d.spec,
+                    &d.request,
+                    &d.digest,
+                    d.phase.is_busy(),
+                    d.domain_route_owned,
+                    instances,
+                )
+            });
+            (&s.service, deployment)
+        })
+        .collect::<Vec<_>>();
+    let mut bindings = record.bindings.iter().collect::<Vec<_>>();
+    bindings.sort_by_key(|b| (b.kind, &b.key, b.resource_id));
+    let bytes = serde_json::to_vec(&(
+        stack,
+        record.id,
+        &record.name,
+        record.revision,
+        bindings,
+        networks,
+        vms,
+        services,
+    ))
+    .expect("stack configuration is JSON");
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn entry(
