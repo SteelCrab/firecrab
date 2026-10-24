@@ -38,12 +38,13 @@ FIRECRAB_E2E_SKIP_GUEST_BOOT=1 node firecrab-e2e/node_modules/@playwright/test/c
 Start a disposable API with an empty private data directory and loopback-only
 access. Serve the built dashboard through `FIRECRAB_STATIC_ROOT`. Install the AWS
 CLI on the machine running the QA script. Select the intended local AWS profile
-before starting.
+before starting. Connect the image registry account in Auth before service checks.
 
 ```sh
 python3 scripts/test-pipe-storage-aws.py \
   --api http://127.0.0.1:15539 --isolated-api \
   --region ap-northeast-2 --cli /path/to/test/firecrab --browser \
+  --service-image ghcr.io/your-account/s3-qa:qa \
   --output target/qa/s3-live.json
 ```
 
@@ -100,14 +101,16 @@ python3 scripts/prepare-pipe-storage-qa-image.py \
 ```
 
 The registry binds to `127.0.0.1:15439`; run it inside the isolated API network.
-It publishes no image externally and includes no credentials. The application
+The preparation tool includes no credentials. Copy the generated image to a private
+GHCR namespace or ECR registry owned by an account connected in Auth. MicroService
+deployment rejects loopback registry references. The application
 uses boto3's environment provider, plus `FIRECRAB_S3_BUCKET` and
 `FIRECRAB_S3_PREFIX`. The API and MicroVM must use the real Firecracker backend.
 
 ```sh
 python3 scripts/test-pipe-storage-aws.py \
   --api http://127.0.0.1:15539 --isolated-api --region ap-northeast-2 \
-  --microvm-image 127.0.0.1:15439/qa/s3:latest \
+  --microvm-image ghcr.io/your-account/s3-qa:qa \
   --microvm-url http://127.0.0.1:15540 --browser --local-aws-auth \
   --output target/qa/s3-kvm-live.json
 ```

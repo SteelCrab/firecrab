@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, KeyRound } from "lucide-react";
-import { connectPipeAuth, disconnectPipeAuth, getPipeAuth, type AuthConnection, type AuthProvider } from "../api/pipeAuth";
+import { connectPipeAuth, disconnectPipeAuth, getPipeAuth, hasImageAuth, type AuthConnection, type AuthProvider } from "../api/pipeAuth";
 import { useI18n } from "../i18n";
 import { pipeCardHash, viewHash } from "../navigation";
+import { readServiceDeploymentDraft, resumeServiceDeployment } from "../lib/serviceDeploymentResume";
 import Screen from "./layout/Screen";
 import { useScreenStatus } from "./layout/screenStatus";
 import { DetailHead, DetailProp, DetailSection } from "./ui/DetailSection";
@@ -19,6 +20,7 @@ export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty:
   const { t } = useI18n();
   const { setDetailOpen } = useScreenStatus();
   const [connections, setConnections] = useState<AuthConnection[]>([]);
+  const [resumeDraft] = useState(readServiceDeploymentDraft);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -79,6 +81,14 @@ export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty:
       setConnections(rows => [...rows.filter(row => row.provider !== connection.provider), connection]);
       setEditor(null);
       setNotice(t("Connected. The registry is available in Pipe Registry.", "인증을 연결했다. Pipe Registry에서 레지스트리를 사용할 수 있다."));
+      if (!resumeDraft) return;
+      if (hasImageAuth(resumeDraft.image, [connection])) {
+        onUnsavedChange(false);
+        resumeServiceDeployment(resumeDraft);
+        return;
+      }
+      setNotice(null);
+      setError(t("This account does not match the deployment image. Connect its GitHub account or the matching AWS account and region.", "이 계정은 배포할 이미지와 일치하지 않는다. 이미지 소유자의 GitHub 계정 또는 같은 AWS 계정과 리전을 연결한다."));
     });
   }
   function disconnect(provider: AuthProvider) {
@@ -130,6 +140,9 @@ export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty:
         <h2>Auth</h2>
         <p className="detail-note">{t("Connect an account to use its Pipe services.", "계정을 인증하여 관련 Pipe 서비스를 사용한다.")}</p>
       </div>
+      {resumeDraft && <div className="banner info">
+        <span>{t(`Reconnect AUTH to continue deploying ${resumeDraft.serviceName}. You will return to the deployment screen with your network and port choices.`, `${resumeDraft.serviceName} 배포를 계속하려면 AUTH를 다시 연결한다. 연결이 완료되면 선택한 네트워크와 포트를 유지한 배포 화면으로 돌아간다.`)}<br /><code>{resumeDraft.image}</code></span>
+      </div>}
       {!selected && feedback}
       {loadError && <div className="pipe-auth-retry"><button className="btn" type="button" onClick={() => { setLoading(true); setLoadError(false); setError(null); setVersion(value => value + 1); }}>{t("Retry", "다시 시도")}</button></div>}
       {loading ? <p className="empty" role="status">{t("Loading connections…", "인증 조회 중…")}</p> : !loadError && <div className="table-scroll"><table className="vm-table pipe-auth-connections" aria-label={t("Provider connections", "공급자 인증")}>

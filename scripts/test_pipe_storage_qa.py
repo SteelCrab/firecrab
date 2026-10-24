@@ -55,6 +55,12 @@ class StorageQaCleanup(unittest.TestCase):
             self.assertIn("delete-role", calls)
             self.assertFalse(json.loads(path.read_text())["cleaned"])
 
+    def test_missing_image_stops_before_creating_cloud_resources(self):
+        args = argparse.Namespace(api="http://127.0.0.1:15539", isolated_api=True)
+        with patch.object(qa, "aws") as aws, self.assertRaisesRegex(ValueError, "Pipe Auth"):
+            qa.run(args)
+        aws.assert_not_called()
+
     def test_api_failures_cannot_skip_cloud_cleanup_or_persist_session_keys(self):
         calls = []
         def aws(service, operation, **_arguments):
@@ -75,7 +81,7 @@ class StorageQaCleanup(unittest.TestCase):
         class Connection(io.BytesIO):
             status = 201
         with tempfile.TemporaryDirectory() as directory:
-            args = argparse.Namespace(api="http://127.0.0.1:15539", isolated_api=True, region="ap-northeast-2", output=Path(directory)/"report.json")
+            args = argparse.Namespace(api="http://127.0.0.1:15539", isolated_api=True, service_image="ghcr.io/qa/app:test", region="ap-northeast-2", output=Path(directory)/"report.json")
             with patch.object(qa, "aws", side_effect=aws), patch.object(qa, "urlopen", side_effect=[Connection(b'{"id":"connection"}'), URLError("API stopped"), URLError("API stopped")]), self.assertRaises(RuntimeError):
                 qa.run(args)
             self.assertIn("delete-bucket", calls)

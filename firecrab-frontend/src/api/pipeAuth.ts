@@ -17,3 +17,12 @@ export const connectPipeAuth = (login: AuthLogin) => fetchJson<AuthConnection>(`
   method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(login),
 });
 export const disconnectPipeAuth = (provider: AuthProvider) => fetchJson<void>(`${base}/${provider}`, { method: "DELETE" });
+
+export function hasImageAuth(image: string, connections: AuthConnection[]): boolean {
+  const [registry, owner, repository] = image.split("/");
+  return connections.some((connection) => connection.services.includes("registry") && (
+    connection.provider === "github"
+      ? registry === "ghcr.io" && registry === connection.registry && !!repository && owner.toLowerCase() === connection.account.toLowerCase()
+      : registry === connection.registry
+  ));
+}

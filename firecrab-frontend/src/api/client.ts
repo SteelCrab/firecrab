@@ -186,6 +186,12 @@ export function getServiceDeployment(id: string): Promise<MicroServiceDeployment
   return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/deployment`);
 }
 
+export function checkServiceDeployment(id: string, request: DeployMicroServiceRequest, signal?: AbortSignal): Promise<null> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/deployment/check`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request), signal,
+  });
+}
+
 export function deployMicroService(id: string, request: DeployMicroServiceRequest): Promise<MicroServiceDeployment> {
   return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/deployment`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
@@ -567,8 +573,8 @@ export function releasePoolLease(id: string, leaseId: string): Promise<PoolLease
   return fetchJson(`/api/pools/${id}/leases/${leaseId}`, { method: "DELETE" });
 }
 
-export function listMicroNetworks(): Promise<MicroNetworkResponse[]> {
-  return fetchJson("/api/micro-networks");
+export function listMicroNetworks(signal?: AbortSignal): Promise<MicroNetworkResponse[]> {
+  return fetchJson("/api/micro-networks", { signal });
 }
 
 export function getMicroNetwork(id: string): Promise<MicroNetworkDetailResponse> {
