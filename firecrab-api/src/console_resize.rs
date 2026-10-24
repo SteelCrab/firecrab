@@ -10,43 +10,63 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::watch;
 
+/// Separates resize JSON from legacy raw console text.
 pub(crate) const WS_PROTOCOL: &str = "firecrab.console.v1";
+/// Collect the final viewport during a browser resize burst.
 const COALESCE: Duration = Duration::from_millis(50);
+/// Retry unsupported or not-yet-started guest listeners without busy-looping.
 const RETRY: Duration = Duration::from_secs(3);
+/// Bound the whole connect, handshake, ioctl and acknowledgement round trip.
 const TIMEOUT: Duration = Duration::from_millis(750);
 
+/// A bounded tty grid, independent of browser pixel measurements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Dimensions {
+    /// Visible character rows.
     pub rows: u16,
+    /// Visible character columns.
     pub cols: u16,
 }
 
 impl Dimensions {
+    /// Reject zero-sized, excessive and otherwise unusable terminal grids.
     pub fn valid(self) -> bool {
         (2..=1000).contains(&self.rows) && (2..=1000).contains(&self.cols)
     }
 }
 
+/// Whether the current shared target has been acknowledged by the guest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ResizeStatus {
+    /// A new target is waiting for the coalescing timer or guest reply.
     Pending,
+    /// The helper confirmed the current shared grid.
     Applied,
+    /// The last attempt failed; terminal input and output remain available.
     Unavailable,
 }
 
+/// Published state shared by WebSocket bridges and resize workers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Snapshot {
+    /// Minimum reported rows and columns across the current viewers.
     target: Option<Dimensions>,
+    /// Last grid actually acknowledged, retained while another target is pending.
     applied: Option<Dimensions>,
+    /// Result of applying the current target.
     status: ResizeStatus,
+    /// Number of negotiated viewers, including those not yet measured.
     viewers: usize,
+    /// Oldest live viewer; its worker owns guest I/O.
     coordinator: Option<u64>,
+    /// Changes when the target or coordinator changes, invalidating old replies.
     revision: u64,
 }
 
 impl Snapshot {
+    /// Serialize only the public status and last acknowledged grid.
     pub fn message(self) -> String {
         serde_json::json!({
             "type": "resize", "status": self.status, "size": self.applied,
@@ -56,21 +76,30 @@ impl Snapshot {
     }
 }
 
+/// Mutable membership and private socket identity for one VM process generation.
 #[derive(Debug)]
 struct State {
+    /// Local viewport reports, ordered by viewer arrival.
     viewers: BTreeMap<u64, Option<Dimensions>>,
+    /// Next connection identity within this VM generation.
     next: u64,
+    /// Firecracker's private vsock UDS, never an IP endpoint.
     socket: Option<PathBuf>,
+    /// Current published state.
     snapshot: Snapshot,
 }
 
+/// Coordinates the single shared tty while keeping guest I/O out of console forwarding.
 #[derive(Debug)]
 pub(crate) struct ResizeHub {
+    /// Short synchronous updates; this lock is never held over guest I/O.
     state: Mutex<State>,
+    /// Retains the newest state so bursts cannot accumulate queued resize jobs.
     changes: watch::Sender<Snapshot>,
 }
 
 impl ResizeHub {
+    /// Start without viewers or an acknowledged grid.
     pub fn new() -> Self {
         let snapshot = Snapshot {
             target: None,
@@ -92,14 +121,17 @@ impl ResizeHub {
         }
     }
 
+    /// Bind this hub to the socket for its VM's current runtime generation.
     pub fn set_socket(&self, path: PathBuf) {
         self.state.lock().unwrap_or_else(|p| p.into_inner()).socket = Some(path);
     }
 
+    /// Observe both membership and guest acknowledgement changes.
     pub fn subscribe(&self) -> watch::Receiver<Snapshot> {
         self.changes.subscribe()
     }
 
+    /// Join the shared grid; dropping the returned guard removes this viewer.
     pub fn register(self: &Arc<Self>) -> Viewer {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let id = state.next;
@@ -112,6 +144,7 @@ impl ResizeHub {
         }
     }
 
+    /// Elect the oldest viewer and independently minimize each reported dimension.
     fn recompute(&self, state: &mut State) {
         let target = state
             .viewers
@@ -143,6 +176,7 @@ impl ResizeHub {
         });
     }
 
+    /// Accept a result only while its target and coordinator revision is current.
     fn publish(&self, revision: u64, size: Dimensions, success: bool) {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if state.snapshot.revision != revision {
@@ -217,12 +251,16 @@ impl ResizeHub {
     }
 }
 
+/// Connection-scoped membership guard for a negotiated browser viewer.
 pub(crate) struct Viewer {
+    /// Identity used to elect one of the live connection workers.
     pub id: u64,
+    /// Shared process-generation state to release on disconnect.
     hub: Arc<ResizeHub>,
 }
 
 impl Viewer {
+    /// Update a valid viewport without waking workers for duplicate reports.
     pub fn report(&self, size: Dimensions) {
         let mut state = self.hub.state.lock().unwrap_or_else(|p| p.into_inner());
         if !size.valid() || state.viewers.get(&self.id) == Some(&Some(size)) {
@@ -241,6 +279,7 @@ impl Drop for Viewer {
     }
 }
 
+/// Negotiate Firecracker's host-vsock transport and verify the exact applied grid.
 async fn apply_size(path: PathBuf, size: Dimensions) -> io::Result<()> {
     let mut stream = UnixStream::connect(path).await?;
     stream.write_all(b"CONNECT 47100\n").await?;

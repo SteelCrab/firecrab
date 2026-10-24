@@ -174,12 +174,14 @@ async fn bridge_console<S, I, E>(
     }
 }
 
+/// The only text-frame operation accepted after protocol negotiation.
 #[derive(serde::Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 enum ResizeRequest {
     Resize { rows: u16, cols: u16 },
 }
 
+/// Abort background guest work when the owning WebSocket bridge exits.
 struct ResizeWorker(tokio::task::JoinHandle<()>);
 impl Drop for ResizeWorker {
     fn drop(&mut self) {

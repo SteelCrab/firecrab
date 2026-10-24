@@ -3,8 +3,10 @@ use std::path::Path;
 
 use crate::rootfs::{RootfsError, set_guest_file_mode, write_into_image};
 
+/// Fixed path invoked by the guest metrics service, never a caller-selected command.
 pub(crate) const GUEST_PATH: &str = "/usr/local/sbin/firecrab-console-resize";
 
+/// Find the host-bundled helper or an explicit local development build.
 pub(crate) fn install(rootfs: &Path) -> Result<(), RootfsError> {
     let path = std::env::var_os("FIRECRAB_GUEST_CONSOLE_BIN")
         .map(std::path::PathBuf::from)
@@ -19,6 +21,7 @@ pub(crate) fn install(rootfs: &Path) -> Result<(), RootfsError> {
     install_binary(rootfs, &path)
 }
 
+/// Refresh the executable on the offline disk; old payloads without it still boot.
 fn install_binary(rootfs: &Path, path: &Path) -> Result<(), RootfsError> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
