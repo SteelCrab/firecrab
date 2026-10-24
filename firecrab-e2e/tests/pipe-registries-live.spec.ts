@@ -62,9 +62,7 @@ test.describe("Pipe registries against the API", () => {
     ).toBeEnabled();
     for (const row of rows)
       await expect(
-        page
-          .locator("#registry-host")
-          .getByRole("option", { name: row.registry, exact: true }),
+        panel.getByRole("cell", { name: row.registry, exact: true }),
       ).toHaveCount(1);
     await expect(panel.getByRole("alert")).toHaveCount(0);
   });
@@ -82,9 +80,7 @@ test.describe("Pipe registries against the API", () => {
     await expect(page.getByLabel("Provider", { exact: true })).toHaveValue("");
     await page.getByLabel("Password / token", { exact: true }).fill(SECRET);
     await page.getByRole("button", { name: "Save", exact: true }).click();
-    const row = page
-      .locator("#registry-host")
-      .getByRole("option", { name: HOST, exact: true });
+    const row = panel.getByRole("row").filter({ has: page.getByRole("cell", { name: HOST, exact: true }) });
     await expect(row).toHaveCount(1);
 
     const saved = await connections();
@@ -100,10 +96,10 @@ test.describe("Pipe registries against the API", () => {
 
     await page.goto("/#/pipe");
     await pipe.getByRole("link", { name: /^Registry/ }).click();
-    await page.locator("#registry-host").selectOption(HOST);
+    await row.getByRole("button", { name: "Details", exact: true }).click();
     page.once("dialog", (dialog) => void dialog.accept());
     await page
-      .getByRole("button", { name: "Remove connection", exact: true })
+      .locator("#detail-panel").getByRole("button", { name: "Disconnect", exact: true })
       .click();
     await expect(row).toHaveCount(0);
     expect(

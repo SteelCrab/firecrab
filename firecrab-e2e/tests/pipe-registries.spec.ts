@@ -20,7 +20,7 @@ function localImage(reference: string, digestCharacter = "c"): RegistryImage {
 async function open(
   page: Page,
   options: {
-    saved?: "ghcr" | "harbor" | "dockerHub" | "both" | "ecr";
+    saved?: "ghcr" | "harbor" | "dockerHub" | "both" | "ecr" | "twoEcr";
     ecrRegistry?: string;
     failPull?: boolean;
     pollErrorOnce?: boolean;
@@ -69,6 +69,10 @@ async function open(
                   },
                 ]
               : [];
+  if (options.saved === "twoEcr") connections = [
+    { registry: "public.ecr.aws", username: "AWS", provider: "ecr" },
+    { registry: ECR, username: "AWS", provider: "ecr" },
+  ];
   let polls = 0;
   let failTags = options.tagError;
   let failCatalog = options.catalogError;
@@ -282,6 +286,19 @@ async function chooseRegistry(page: Page, host: string) {
   await page.getByRole("button", { name: "Repositories", exact: true }).click();
 }
 test.describe("Pipe registry automatic discovery @dashboard", () => {
+  test("disconnects the selected host when multiple connections use ECR", async ({ page }) => {
+    await open(page, { saved: "twoEcr" });
+    const row = page.locator("#content").getByRole("row").filter({ has: page.getByRole("cell", { name: ECR, exact: true }) });
+    await row.getByRole("button", { name: "Details", exact: true }).click();
+    const detail = page.locator("#detail-panel");
+    await expect(detail.getByRole("heading", { name: ECR, exact: true })).toBeVisible();
+    const removed = page.waitForRequest(request => request.method() === "DELETE" && decodeURIComponent(new URL(request.url()).pathname) === `/api/pipe/registries/${ECR}`);
+    page.once("dialog", dialog => dialog.accept());
+    await detail.getByRole("button", { name: "Disconnect", exact: true }).click();
+    await removed;
+    await expect(row).toHaveCount(0);
+    await expect(page.locator("#content").getByRole("cell", { name: "public.ecr.aws", exact: true })).toBeVisible();
+  });
   test("does not query catalogs or tags without a saved login", async ({
     page,
   }) => {

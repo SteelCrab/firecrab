@@ -599,16 +599,20 @@ fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> Stri
         "<th>{}</th></tr></thead><tbody>",
         crate::i18n::t("Actions")
     ));
+    let identity = if app.route == "pipe/registry" {
+        ["registry", "id", "alias", "version", "provider"]
+    } else {
+        ["id", "alias", "version", "provider", "registry"]
+    };
     for row in rows {
-        let id = ["id", "alias", "version", "provider", "registry"]
+        let id = identity
             .iter()
             .find_map(|key| row[key].as_str())
             .unwrap_or("");
-        let selected = app.detail.as_ref().is_some_and(|detail| {
-            ["id", "alias", "version", "provider", "registry"]
-                .iter()
-                .any(|key| detail[key] == id)
-        });
+        let selected = app
+            .detail
+            .as_ref()
+            .is_some_and(|detail| identity.iter().any(|key| detail[key] == id));
         let _ = write!(
             out,
             "<tr data-id=\"{}\" aria-selected=\"{selected}\">",
