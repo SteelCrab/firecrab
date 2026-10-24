@@ -134,19 +134,22 @@ pub async fn list(
     let mut connections: Vec<_> = rows.into_iter().map(connection).collect();
     for auth in auths {
         let auth = auth.connection();
+        let Some(registry) = auth.registry else {
+            continue;
+        };
         let account_name = connections
             .iter()
-            .find(|connection| connection.registry == auth.registry)
+            .find(|connection| connection.registry == registry)
             .and_then(|connection| connection.account_name.clone());
-        connections.retain(|connection| connection.registry != auth.registry);
+        connections.retain(|connection| connection.registry != registry);
         connections.push(Connection {
             username: if auth.provider == crate::pipe_auth::Provider::Aws {
                 "AWS".into()
             } else {
                 auth.account
             },
-            provider: provider(&auth.registry).unwrap_or("harbor"),
-            registry: auth.registry,
+            provider: provider(&registry).unwrap_or("harbor"),
+            registry,
             auth_provider: Some(auth.provider),
             account_name,
         });
@@ -247,7 +250,7 @@ async fn require_direct_login(
     if super::pipe_auth::saved(state, id)
         .await?
         .iter()
-        .any(|auth| auth.connection().registry == registry)
+        .any(|auth| auth.connection().registry.as_deref() == Some(registry))
     {
         return Err(AppError::conflict(
             "pipe_auth_managed",
@@ -283,7 +286,7 @@ pub async fn repositories(
         return Err(invalid("Invalid repository page", id));
     }
     for auth in super::pipe_auth::saved(&state, id).await? {
-        if auth.connection().registry == registry
+        if auth.connection().registry.as_deref() == Some(registry.as_str())
             && let crate::pipe_auth::SavedAuth::Aws {
                 account_id,
                 credentials,

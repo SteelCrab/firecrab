@@ -93,7 +93,24 @@ pub fn panel(app: &App) -> String {
             escape(&app.detail_tab)
         ));
     } else {
-        if let Some(body) = crate::advanced::detail(app, data) {
+        if app.route == "pipe/auth" && text(data, "provider") == "firecrab" {
+            let expires = data["expiresAt"]
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .map(|millis| {
+                    js_sys::Date::new(&JsValue::from_f64(millis))
+                        .to_iso_string()
+                        .as_string()
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "<dl>{}{}{}</dl>",
+                property("Account", text(data, "account")),
+                property("Account ID", text(data, "accountId")),
+                property("Token expires", &expires)
+            ));
+        } else if let Some(body) = crate::advanced::detail(app, data) {
             out.push_str(&body);
         } else {
             out.push_str(&render::properties(data));

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { AuthConnection, AuthLogin } from "../types/api/pipeAuth";
 
+const firecrab: AuthConnection = { provider: "firecrab", account: "owner@example.com", accountId: "11111111-1111-4111-8111-111111111111", expiresAt: 4102444800000, registry: null, region: null, services: [] };
 const github: AuthConnection = {
   provider: "github",
   account: "octocat",
@@ -31,6 +32,11 @@ async function open(
   const deletes: string[] = [];
   const catalogs: string[] = [];
   const transfers: string[] = [];
+  const tunnelSaves: unknown[] = [];
+  const snapshot: import("../types/api/pipe").PipeSnapshot = {
+    config: { listen: "127.0.0.1:8080", routes: [{ host: "app.example.com", pathPrefix: "/", upstreams: ["127.0.0.1:9000"] }], tunnel: null },
+    units: [], nginxAvailable: true, cloudflaredAvailable: true, firecrabTunnels: [],
+  };
   await page.addInitScript(
     (locale) => localStorage.setItem("firecrab.locale", locale),
     options.locale ?? "en",
@@ -63,11 +69,11 @@ async function open(
           json: {
             error: {
               message:
-                "GitHub rejected the token. Check its validity and permissions.",
+                provider === "firecrab" ? "The Firecrab account integration token is invalid, expired, or revoked" : "GitHub rejected the token. Check its validity and permissions.",
             },
           },
         });
-      const connection = provider === "github" ? github : aws;
+      const connection = provider === "github" ? github : provider === "firecrab" ? firecrab : aws;
       connections = [
         ...connections.filter((row) => row.provider !== provider),
         connection,
@@ -76,7 +82,7 @@ async function open(
     }
     if (path === "/api/pipe/registries")
       return route.fulfill({
-        json: connections.map((connection) => ({
+        json: connections.filter(connection => connection.registry !== null).map((connection) => ({
           registry: connection.registry,
           username: connection.provider === "aws" ? "AWS" : connection.account,
           provider: connection.provider === "aws" ? "ecr" : "ghcr",
@@ -85,7 +91,7 @@ async function open(
       });
     if (path.endsWith("/repositories")) {
       catalogs.push(url.search);
-      const isAws = path.includes(aws.registry);
+      const isAws = path.includes(aws.registry!);
       return route.fulfill({
         json: isAws
           ? {
@@ -124,8 +130,13 @@ async function open(
       });
     if (path === "/api/pipe/registry-images" || path === "/api/vms")
       return route.fulfill({ json: [] });
-    if (path === "/api/pipe")
-      return route.fulfill({
+    if (path === "/api/pipe") return route.fulfill({ json: snapshot });
+    if (path === "/api/pipe/firecrab-tunnels") {
+      tunnelSaves.push(route.request().postDataJSON());
+      snapshot.firecrabTunnels = [{ subdomain: "console-app", publicUrl: "https://console-app.firecrab.dev", target: { type: "nginx", host: "app.example.com" }, connectorId: "11111111-1111-4111-8111-111111111111", connected: true, error: null }];
+      return route.fulfill({ json: snapshot });
+    }
+    return route.fulfill({
         json: {
           config: null,
           units: [],
@@ -144,6 +155,7 @@ async function open(
     deletes,
     catalogs,
     transfers,
+    tunnelSaves,
     recover: () => {
       failLoad = false;
     },
@@ -156,6 +168,74 @@ async function open(
 
 // Assert API behavior and credential lifetime independently of the previous React layout.
 test.describe("Pipe Auth @dashboard", () => {
+  test("links a console account token, shows verified identity, and clears browser secrets", async ({ page }, info) => {
+    const mock = await open(page, { connections: [github] });
+    await page.getByRole("button", { name: "Connect Firecrab", exact: true }).click();
+    const input = page.getByLabel("Account integration token", { exact: true });
+    await expect(input).toHaveAttribute("type", "password");
+    await expect(page.getByRole("link", { name: "console.firecrab.dev", exact: true })).toHaveAttribute("href", "https://console.firecrab.dev/#account");
+    const token = "fca_" + "c".repeat(64);
+    await input.fill(token);
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("Connected to the Firecrab account");
+    expect(mock.writes).toEqual([{ provider: "firecrab", token }]);
+    const detail = page.locator("#detail-panel");
+    await expect(detail.getByText(firecrab.account, { exact: true })).toBeVisible();
+    await expect(detail.getByText(firecrab.accountId!, { exact: true })).toBeVisible();
+    await expect(detail.getByText("Token expires", { exact: true })).toBeVisible();
+    await expect(detail.getByRole("link", { name: "Firecrab Console", exact: true })).toHaveAttribute("href", "https://console.firecrab.dev/#account");
+    await expect(page.locator('input[type="password"]')).toHaveCount(0);
+    expect(await page.evaluate(() => JSON.stringify(localStorage) + JSON.stringify(sessionStorage))).not.toContain(token);
+    await page.screenshot({ path: info.outputPath("pipe-auth-firecrab-account.png"), fullPage: true });
+    page.once("dialog", dialog => { expect(dialog.message()).toContain("account integration token"); return dialog.accept(); });
+    await detail.getByRole("button", { name: "Disconnect", exact: true }).click();
+    await expect.poll(() => mock.deletes).toEqual(["firecrab"]);
+    await expect(page.getByRole("cell", { name: "octocat", exact: true })).toBeVisible();
+  });
+
+  test("keeps Tunnel tokens separate from the linked account", async ({ page }) => {
+    const mock = await open(page, { connections: [firecrab] });
+    await page.getByRole("button", { name: "Connect Firecrab", exact: true }).click();
+    await page.getByLabel("Account integration token", { exact: true }).fill("a".repeat(64));
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    expect(mock.writes).toHaveLength(0);
+    page.once("dialog", dialog => dialog.accept());
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.goto("/#/pipe/firecrab-tunnel");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await expect(page.getByLabel("Account integration token", { exact: true })).toHaveCount(0);
+    const token = "b".repeat(64);
+    await page.getByLabel("Ownership token", { exact: true }).fill(token);
+    await page.getByLabel("Target", { exact: true }).selectOption("nginx");
+    await page.getByLabel("Route host", { exact: true }).selectOption("app.example.com");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("link", { name: "https://console-app.firecrab.dev", exact: true })).toBeVisible();
+    expect(mock.tunnelSaves).toEqual([{ token, target: { type: "nginx", host: "app.example.com" } }]);
+  });
+
+  test("preserves the linked Firecrab account when its replacement token is rejected", async ({ page }) => {
+    const mock = await open(page, { connections: [firecrab], reject: true });
+    await page.getByRole("button", { name: "Connect Firecrab", exact: true }).click();
+    await page.getByLabel("Account integration token", { exact: true }).fill("fca_" + "a".repeat(64));
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("invalid, expired, or revoked");
+    expect(mock.connections).toEqual([firecrab]);
+    page.once("dialog", dialog => dialog.accept());
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByRole("cell", { name: firecrab.account, exact: true })).toBeVisible();
+    await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  });
+
+  test("shows the account token form on a narrow Korean screen", async ({ page }, info) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, { locale: "ko" });
+    await page.getByRole("button", { name: "Firecrab 연결", exact: true }).click();
+    await expect(page.getByLabel("계정 연동 토큰", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "console.firecrab.dev", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath("pipe-auth-firecrab-mobile-ko.png"), fullPage: true });
+  });
+
   test("discovers connected providers without loading credentials", async ({
     page,
   }) => {

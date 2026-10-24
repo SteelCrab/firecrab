@@ -931,6 +931,15 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
             ));
         }
         "pipe/auth" => {
+            if text(data, "provider") == "firecrab" {
+                out.push_str("<a class=\"btn\" href=\"https://console.firecrab.dev/#account\" target=\"_blank\" rel=\"noreferrer\">Firecrab Console</a>");
+            }
+            if list(&data["services"])
+                .iter()
+                .any(|service| service == "storage")
+            {
+                out.push_str("<a class=\"btn\" href=\"#/pipe/storage\">S3</a>");
+            }
             out.push_str(&button(
                 "Update credentials",
                 "create",
@@ -985,7 +994,7 @@ fn public_address(url: &str) -> String {
 fn pipe_cards(app: &App) -> String {
     let mut out = "<div class=\"wasm-cards\">".to_string();
     for (id, label, description) in [
-        ("auth", "Account", "AWS and GitHub credentials"),
+        ("auth", "Account", "AWS, GitHub and Firecrab accounts"),
         ("ai", "Pipe AI", "Connect and manage AI accounts"),
         ("storage", "PipeStorage", "Access your files in AWS"),
         ("route", "Routing", "Route traffic to applications"),
@@ -1020,6 +1029,7 @@ fn pipe(app: &App, card: &str) -> String {
         "auth" => {
             out.push_str(&button("Connect GitHub", "create", "github"));
             out.push_str(&button("Connect AWS", "create", "aws"));
+            out.push_str(&button("Connect Firecrab", "create", "firecrab"));
         }
         "route" => {
             out.push_str(&button("Edit routes", "create", "route"));

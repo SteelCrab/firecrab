@@ -206,6 +206,22 @@ pub fn t(value: &str) -> &str {
         "Connect" => "연결",
         "Disconnect" => "연결 해제",
         "Connect GitHub" => "GitHub 연결",
+        "Connect Firecrab" => "Firecrab 연결",
+        "Account integration token" => "계정 연동 토큰",
+        "Account ID" => "계정 ID",
+        "Token expires" => "토큰 만료",
+        "Issue an account integration token at" => "계정 연동 토큰 발급:",
+        "Open Account integration. The token verifies your account ID and email." => {
+            "계정 연동 메뉴에서 발급한다. 토큰으로 계정 ID와 이메일을 확인한다."
+        }
+        "Connected to the Firecrab account." => "Firecrab 계정을 연결했다.",
+        "Disconnect the Firecrab account from this host? To revoke its account integration token, open console.firecrab.dev." => {
+            "이 호스트에서 Firecrab 계정 연결을 해제할까요? 계정 연동 토큰을 폐기하려면 console.firecrab.dev를 연다."
+        }
+        "Enter a valid account integration token (fca_ and 64 lowercase hex characters)." => {
+            "fca_ 뒤에 소문자 16진수 64자리가 있는 계정 연동 토큰을 입력한다."
+        }
+        "AWS, GitHub and Firecrab accounts" => "AWS, GitHub와 Firecrab 계정",
         "Connect AWS" => "AWS 연결",
         "Token" => "토큰",
         "Access key ID" => "액세스 키 ID",

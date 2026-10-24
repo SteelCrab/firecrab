@@ -748,13 +748,8 @@ impl Store {
         ) STRICT",
             [],
         )?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS pipe_auth_credentials (
-                provider TEXT PRIMARY KEY CHECK (provider IN ('aws', 'github')),
-                credential TEXT NOT NULL
-            ) STRICT",
-            [],
-        )?;
+        conn.execute(pipe_auth::CREATE_TABLE_SQL, [])?;
+        pipe_auth::migrate(&conn)?;
         registries::migrate_account_name(&conn)?;
         conn.execute(CREATE_SHELL_REVISIONS_TABLE_SQL, [])?;
         conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;

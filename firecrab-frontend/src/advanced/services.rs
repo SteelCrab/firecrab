@@ -314,7 +314,10 @@ pub fn sync(app: &Shared) {
             let next = next.unchecked_into::<web_sys::HtmlButtonElement>();
             next.set_hidden(state.step == 3);
             next.set_disabled(
-                s.busy || state.loading || (state.step >= 1 && form.base["policyError"] == true),
+                s.busy
+                    || state.loading
+                    || (state.step == 0 && list(&state.accounts).is_empty())
+                    || (state.step >= 1 && form.base["policyError"] == true),
             );
         }
         if let Ok(Some(back)) = crate::document().query_selector("[data-action=service-back]") {
@@ -448,7 +451,10 @@ fn accounts(app: &Shared) {
                 st.accounts = json!(
                     list(&v)
                         .iter()
-                        .filter(|a| list(&a["services"]).iter().any(|s| s == "registry"))
+                        .filter(|a| {
+                            !text(a, "registry").is_empty()
+                                && list(&a["services"]).iter().any(|s| s == "registry")
+                        })
                         .collect::<Vec<_>>()
                 );
                 st.account = list(&st.accounts)

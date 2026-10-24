@@ -1169,10 +1169,11 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
             let path = button.get_attribute("data-path").unwrap_or_default();
             if (method == "DELETE" || path == "/api/update" || path.ends_with("/stop"))
                 && !window()
-                    .confirm_with_message(&format!(
-                        "{}?",
-                        button.text_content().unwrap_or_default()
-                    ))
+                    .confirm_with_message(&if path == "/api/pipe/auth/firecrab" {
+                        i18n::t("Disconnect the Firecrab account from this host? To revoke its account integration token, open console.firecrab.dev.").into()
+                    } else {
+                        format!("{}?", button.text_content().unwrap_or_default())
+                    })
                     .unwrap_or(false)
             {
                 return;
@@ -1473,10 +1474,15 @@ fn mutate(
                     rows.push(value.clone());
                     state.resource = json!(rows);
                 }
-                if path == "/api/schedules" || path == "/api/security-groups" {
+                if path == "/api/schedules"
+                    || path == "/api/security-groups"
+                    || (path.starts_with("/api/pipe/auth/") && method == "PUT")
+                {
                     state.detail = Some(value.clone());
                 }
-                state.notice = if path.ends_with("/rules") {
+                state.notice = if path == "/api/pipe/auth/firecrab" && method == "PUT" {
+                    "Connected to the Firecrab account."
+                } else if path.ends_with("/rules") {
                     "Rules saved."
                 } else {
                     "Saved."

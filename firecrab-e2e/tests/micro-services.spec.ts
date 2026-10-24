@@ -746,6 +746,20 @@ test("AUTH setup refuses a save after the account is disconnected", async ({
   );
 });
 
+test("keeps a console account out of the app's registry account choices", async ({ page }) => {
+  const account = { provider: "firecrab", account: "owner@example.com", registry: null, region: null, services: [] };
+  const accounts: object[] = [account];
+  await openServices(page, [], false, accounts);
+  await page.getByRole("button", { name: "New MicroService", exact: true }).click();
+  await expect(page.getByText("Connect an account first", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
+  accounts.push({ provider: "github", account: "team", registry: "ghcr.io", region: null, services: ["registry"] });
+  await page.getByRole("button", { name: "Check connections", exact: true }).click();
+  await expect(page.getByLabel("AUTH account", { exact: true }).getByRole("option", { name: /owner@example.com/ })).toHaveCount(0);
+  await selectServiceApp(page);
+  await expect(page.getByLabel("App version", { exact: true })).toHaveValue("1.0");
+});
+
 test("AUTH setup retains repository and version pages without accepting unlisted tags", async ({
   page,
 }) => {

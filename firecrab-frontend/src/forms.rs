@@ -99,6 +99,9 @@ impl Form {
         }
         let domain_deploy =
             self.title == "Deploy MicroService" && !text(&self.base, "domain").is_empty();
+        if self.path == "/api/pipe/auth/firecrab" {
+            html.push_str(&format!("<p class=\"wasm-wide\">{} <a href=\"https://console.firecrab.dev/#account\" target=\"_blank\" rel=\"noreferrer\">console.firecrab.dev</a>. {}</p>",crate::i18n::t("Issue an account integration token at"),crate::i18n::t("Open Account integration. The token verifies your account ID and email.")));
+        }
         if domain_deploy {
             html.push_str(&format!("<p class=\"wasm-wide\">{} · Healthy replicas will connect to this domain automatically.</p><details class=\"wasm-wide\"><summary>Advanced settings</summary>",escape(text(&self.base,"domain"))));
         }
@@ -208,6 +211,12 @@ impl Form {
             ) {
                 html.push_str(&format!("<textarea id=\"field-{key}\" name=\"{key}\" {required} {invalid} spellcheck=\"false\">{}</textarea>", escape(&field.value)));
             } else {
+                let constraints = if self.path == "/api/pipe/auth/firecrab" && field.key == "token"
+                {
+                    "maxlength=\"68\" pattern=\"fca_[a-f0-9]{64}\""
+                } else {
+                    ""
+                };
                 let kind = if field.kind == "number" {
                     "number"
                 } else if field.kind == "password" {
@@ -217,7 +226,7 @@ impl Form {
                 } else {
                     "text"
                 };
-                html.push_str(&format!("<input id=\"field-{key}\" name=\"{key}\" type=\"{kind}\" value=\"{}\" {required} {invalid} {} autocomplete=\"off\">", escape(&field.value), if kind == "number" { if field.key == "hostPort" && self.title == "Deploy MicroService" { format!("min=\"1\" max=\"{}\" step=\"1\"", 65536_u64.saturating_sub(self.base["replicas"].as_u64().unwrap_or(1))) } else { "min=\"0\" step=\"1\"".to_string() } } else { String::new() }));
+                html.push_str(&format!("<input id=\"field-{key}\" name=\"{key}\" type=\"{kind}\" value=\"{}\" {required} {invalid} {constraints} {} autocomplete=\"off\">", escape(&field.value), if kind == "number" { if field.key == "hostPort" && self.title == "Deploy MicroService" { format!("min=\"1\" max=\"{}\" step=\"1\"", 65536_u64.saturating_sub(self.base["replicas"].as_u64().unwrap_or(1))) } else { "min=\"0\" step=\"1\"".to_string() } } else { String::new() }));
             }
             if let Some(error) = field_error {
                 html.push_str(&format!(
@@ -307,6 +316,22 @@ impl Form {
             if let Some(error) = error {
                 errors.insert(field.key.into(), error);
             }
+        }
+        if self.path == "/api/pipe/auth/firecrab"
+            && values.get("token").is_none_or(|value| {
+                value.strip_prefix("fca_").is_none_or(|token| {
+                    token.len() != 64
+                        || !token
+                            .bytes()
+                            .all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(&ch))
+                })
+            })
+        {
+            errors.insert(
+                "token".into(),
+                "Enter a valid account integration token (fca_ and 64 lowercase hex characters)."
+                    .into(),
+            );
         }
         if ["Quick tunnel", "Firecrab address"].contains(&self.title.as_str()) {
             let apps = values.get("targetType").is_none_or(|kind| kind == "apps");
@@ -402,7 +427,7 @@ impl Form {
             "Quick tunnel" | "Firecrab address" => {
                 let target = if body["targetType"] == "apps" {
                     json!({"type":"apps","upstreams":body["upstreams"]})
-                } else if body["targetType"] == "nginx" {
+                } else if body["targetType"] == "nginx" && body["host"].is_null() {
                     json!({"type":"nginx"})
                 } else {
                     json!({"type":body["targetType"],"host":body["host"]})
@@ -805,6 +830,22 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
             ],
             "pipe/database",
         ),
+        "firecrab" => {
+            let mut f = Form::new(
+                "Connect Firecrab",
+                "/api/pipe/auth/firecrab".into(),
+                "PUT",
+                vec![Field::new(
+                    "token",
+                    "Account integration token",
+                    "password",
+                    "",
+                )],
+                "pipe/auth",
+            );
+            f.base = json!({"provider":"firecrab"});
+            f
+        }
         "github" => {
             let mut f = Form::new(
                 "Connect GitHub",
@@ -1193,7 +1234,10 @@ mod tests {
         )
         .unwrap();
         let body = edit.payload(&values(&edit)).unwrap();
-        assert_eq!(body, json!({"subdomain":"saved","target":{"type":"nginx"}}));
+        assert_eq!(
+            body,
+            json!({"subdomain":"saved","target":{"type":"nginx","host":"app.example.com"}})
+        );
     }
 }
 

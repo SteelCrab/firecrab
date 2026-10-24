@@ -13,6 +13,26 @@ unfinished credentials asks before discarding them.
 | --- | --- | --- |
 | GitHub | Personal access token (classic) with `read:packages` | GHCR in Pipe Registry |
 | AWS | Access key ID, secret access key, region, optional session token | The account's private Amazon ECR registry in Pipe Registry |
+| Firecrab | Account integration token issued by [console.firecrab.dev](https://console.firecrab.dev/#account) | Firecrab account identity |
+
+For Firecrab, open **Account integration** in the console and issue a token.
+Copy the `fca_` token shown once, then select **Connect Firecrab** in Pipe Auth.
+Firecrab verifies it at `https://console.firecrab.dev/api/account` and displays
+the verified account ID, email, and token expiry. The token has only
+`account:read` permission. It does not create a console browser session.
+
+Account integration tokens expire after 90 days by default. Choose 1–365 days
+when issuing one. A console token rotation or revocation invalidates the old
+token immediately. To update this host, use **Update credentials** and paste
+the replacement token. Disconnect removes this host's saved account credential;
+revoke it in the console to disable the token itself.
+
+Tunnel connection tokens authorize individual addresses. They cannot link an
+account in Pipe Auth. Firecrab Tunnel keeps its own connection-token flow.
+Existing prototype shared Tunnel credentials are removed when the host starts;
+reconnect with an account integration token. Saved Tunnel bindings and other
+providers are preserved. Firecrab account credentials are never used for image
+registries.
 
 GitHub authentication checks the token owner's identity and package scope. If an
 organization requires SSO, authorize the token for that organization. GitHub
@@ -47,5 +67,9 @@ routes:
 - `GET /api/pipe/auth`: list connected providers and available services.
 - `PUT /api/pipe/auth/github`: verify and save `{ "provider": "github", "token": "…" }`.
 - `PUT /api/pipe/auth/aws`: verify and save `{ "provider": "aws", "accessKeyId": "…", "secretAccessKey": "…", "region": "ap-northeast-2", "sessionToken": "…" }`.
+- `PUT /api/pipe/auth/firecrab`: verify and save `{ "provider": "firecrab", "token": "…" }`.
 - `DELETE /api/pipe/auth/{provider}`: disconnect a provider.
 
+Firecrab metadata returns the verified email as `account`, the stable UUID as
+`accountId`, the token's Unix-millisecond expiry as `expiresAt`, `registry: null`,
+and `services: []`. Account connection responses contain no token.
