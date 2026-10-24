@@ -120,7 +120,12 @@ pub async fn get_micro_network(
     // says how many ports the bridge really has right now.
     let attached_taps = members
         .iter()
-        .filter(|vm| vm.state == VmState::Running)
+        .filter(|vm| {
+            matches!(
+                vm.state,
+                VmState::Running | VmState::Pausing | VmState::Paused | VmState::Resuming
+            )
+        })
         .count() as u32;
 
     Ok(Json(MicroNetworkDetailResponse {
@@ -174,6 +179,16 @@ pub async fn create_micro_network(
     Extension(request_id): Extension<RequestId>,
     ValidatedJson(req): ValidatedJson<CreateMicroNetworkRequest>,
 ) -> Result<(StatusCode, Json<MicroNetworkResponse>), AppError> {
+    create_micro_network_with_id(state, request_id, req, Uuid::new_v4()).await
+}
+
+/// Provision through the normal network pipeline using an already-owned UUID.
+pub(crate) async fn create_micro_network_with_id(
+    state: AppState,
+    request_id: RequestId,
+    req: CreateMicroNetworkRequest,
+    id: Uuid,
+) -> Result<(StatusCode, Json<MicroNetworkResponse>), AppError> {
     let mut fields = validate_create(&req);
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
@@ -181,7 +196,6 @@ pub async fn create_micro_network(
 
     // Already checked by validate_create; re-parsed here (rather than
     // threaded through) since the request is consumed piecemeal below.
-    let id = Uuid::new_v4();
     // The v6 prefix is resolved before the overlap check so an auto-generated
     // one is held to the same rule as an explicitly requested one.
     let ipv6 = resolve_ipv6_plan(&req, id);
@@ -436,6 +450,18 @@ pub async fn delete_micro_network(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let group_guard = state.network_mutations.lock().await;
+    if state
+        .store
+        .network_has_security_groups(id)
+        .map_err(|_| AppError::internal(request_id.0))?
+    {
+        return Err(AppError::conflict(
+            "security_group_in_use",
+            "delete the network's security groups first",
+            request_id.0,
+        ));
+    }
 
     // A network still holding leases has VMs whose addresses come out of its
     // subnet and whose TAPs hang off its bridge — deleting it would strand
@@ -476,6 +502,7 @@ pub async fn delete_micro_network(
         })?;
     // Same reason as create: the removed network has to disappear from the
     // firewall ruleset and dnsmasq's served interfaces too.
+    drop(group_guard);
     apply_network_services(&state, request_id.0).await;
     Ok(StatusCode::NO_CONTENT)
 }

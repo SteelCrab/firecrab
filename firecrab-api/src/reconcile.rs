@@ -78,12 +78,7 @@ pub(crate) async fn reconcile(state: &AppState) -> ReconcileReport {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .values()
-        .filter(|vm| {
-            matches!(
-                vm.state,
-                VmState::Starting | VmState::Running | VmState::Stopping
-            )
-        })
+        .filter(|vm| vm.state.has_live_runtime())
         .cloned()
         .collect();
 
@@ -91,7 +86,7 @@ pub(crate) async fn reconcile(state: &AppState) -> ReconcileReport {
     // an exit monitor's teardown can never run before a TAP re-attach.
     let mut adopted: Vec<(VmRecord, FirecrackerProcess)> = Vec::new();
     let mut released: Vec<Uuid> = Vec::new();
-    for vm in active {
+    for mut vm in active {
         let checked_at_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_millis() as u64);
@@ -118,6 +113,24 @@ pub(crate) async fn reconcile(state: &AppState) -> ReconcileReport {
                 }
                 _ => {
                     let runtime = runtime.as_ref().expect("a live shim has a runtime");
+                    if vm.state != VmState::Stopping {
+                        vm.state = match crate::vm_execution::Client::new(&runtime.api_socket) {
+                            Ok(client) => match client.state().await {
+                                Ok(actual) => actual,
+                                Err(error) => {
+                                    result.detail = Some(format!(
+                                        "Cannot verify guest execution state: {error}; retry Pause/Resume or Stop"
+                                    ));
+                                    VmState::Pausing
+                                }
+                            },
+                            Err(error) => {
+                                result.detail = Some(error);
+                                VmState::Pausing
+                            }
+                        };
+                        record_state(state, vm.id, vm.state).await;
+                    }
                     let process =
                         firecracker::adopt(vm.id, runtime, session, state.process_metrics.clone());
                     report.adopted.push(vm.id);
@@ -193,7 +206,7 @@ pub(crate) async fn reconcile(state: &AppState) -> ReconcileReport {
     }
     let running: Vec<_> = adopted
         .iter()
-        .filter(|(vm, ..)| vm.state == VmState::Running)
+        .filter(|(vm, ..)| vm.state.has_live_runtime() && vm.state != VmState::Stopping)
         .map(|(vm, ..)| vm.clone())
         .collect();
     let recovery = {
@@ -314,7 +327,12 @@ pub(crate) async fn retry_networks(state: &AppState) -> Result<(), String> {
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .values()
-        .filter(|vm| vm.state == VmState::Running)
+        .filter(|vm| {
+            matches!(
+                vm.state,
+                VmState::Running | VmState::Pausing | VmState::Paused | VmState::Resuming
+            )
+        })
         .cloned()
         .collect();
     let recovery = recover_networks_locked(state, &running).await;
@@ -333,10 +351,12 @@ pub(crate) async fn retry_networks(state: &AppState) -> Result<(), String> {
         .unwrap_or_else(|p| p.into_inner());
     for vm in running {
         // Exit monitors can settle a VM while helper requests are in flight.
-        if !vms
-            .get(&vm.id)
-            .is_some_and(|vm| vm.state == VmState::Running)
-        {
+        if !vms.get(&vm.id).is_some_and(|vm| {
+            matches!(
+                vm.state,
+                VmState::Running | VmState::Pausing | VmState::Paused | VmState::Resuming
+            )
+        }) {
             continue;
         }
         let detail = recovery.failures.get(&vm.id).cloned();
@@ -624,6 +644,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pool_restart_reloads_ready_members_and_active_idempotent_leases() {
+        use crate::persistence::{MemberRow, PoolRow};
+        use firecrab_api_types::{EgressPolicy, PoolMemberState};
+
+        let host = host().await;
+        let pool_id = Uuid::new_v4();
+        host.state
+            .store
+            .insert_pool(&PoolRow {
+                id: pool_id,
+                name: "restart-pool".to_owned(),
+                template: "ubuntu-rootfs-26.04".to_owned(),
+                template_version: "v1".to_owned(),
+                cpu: 1,
+                ram: 128,
+                disk_gb: 1,
+                egress_policy: EgressPolicy::Internet,
+                micro_network_id: Uuid::from_u128(1),
+                storage_root: "default".to_owned(),
+                min_ready: 1,
+                max_size: 2,
+                lease_ttl_seconds: 600,
+                deleting: false,
+                created_at_ms: 1,
+            })
+            .unwrap();
+        let mut ids = Vec::new();
+        for name in ["pool-ready", "pool-leased"] {
+            let (id, runtime) = seed_active(&host, name, VmState::Running);
+            let mut vm = host.state.vms.lock().unwrap()[&id].clone();
+            vm.purpose = crate::model::VmPurpose::Pool;
+            host.state.store.update(&vm).unwrap();
+            host.state.vms.lock().unwrap().insert(id, vm);
+            host.state
+                .store
+                .insert_pool_member(&MemberRow {
+                    vm_id: id,
+                    pool_id,
+                    state: PoolMemberState::Ready,
+                    created_at_ms: 1,
+                })
+                .unwrap();
+            surviving_shim(&host, id, &runtime).await;
+            ids.push(id);
+        }
+        let lease = host
+            .state
+            .store
+            .acquire_pool_lease(pool_id, Some("restart-job"), crate::pool::now_ms(), |_| {
+                true
+            })
+            .unwrap()
+            .lease;
+        let before = host.state.store.pool_members(pool_id).unwrap();
+        // Open a new SQLite connection and rebuild the API state, while the
+        // independently owned shims and their Firecracker children keep running.
+        let reopened = AppState::with_db_file(
+            (*host.state.templates).clone(),
+            host._directory.path().join("data/firecrab.db"),
+        )
+        .await
+        .unwrap()
+        .with_test_runtime((*host.state.runtime).clone())
+        .with_test_network(host.state.network.clone());
+        let report = reconcile(&reopened).await;
+        assert_eq!(report.adopted.len(), 2);
+        crate::pool::reconcile(&reopened, crate::pool::now_ms()).await;
+        assert_eq!(reopened.store.pool_members(pool_id).unwrap(), before);
+        assert_eq!(
+            reopened.store.pool_lease(lease.id).unwrap(),
+            Some(lease.clone())
+        );
+        let retry = reopened
+            .store
+            .acquire_pool_lease(pool_id, Some("restart-job"), crate::pool::now_ms(), |_| {
+                true
+            })
+            .unwrap();
+        assert!(retry.replayed);
+        assert_eq!(retry.lease, lease);
+
+        let host = Host {
+            state: reopened,
+            ..host
+        };
+        for id in ids {
+            host.state.processes.lock().unwrap()[&id]
+                .control
+                .terminate();
+            wait_for(&host, id, VmState::Stopped).await;
+        }
+    }
+
+    #[tokio::test]
     async fn a_running_vm_whose_shim_answers_is_adopted_and_its_network_reverified() {
         let host = host().await;
         let (id, runtime) = seed_active(&host, "survivor", VmState::Running);
@@ -648,6 +762,31 @@ mod tests {
         let control = host.state.processes.lock().unwrap()[&id].control.clone();
         control.terminate();
         wait_for(&host, id, VmState::Stopped).await;
+    }
+
+    #[tokio::test]
+    async fn paused_and_interrupted_execution_states_are_read_from_the_vmm() {
+        let body = SERVE_LOOP
+            .replace("Content-Length: 19", "Content-Length: 18")
+            .replace("Running", "Paused");
+        for stored in [
+            VmState::Running,
+            VmState::Pausing,
+            VmState::Paused,
+            VmState::Resuming,
+        ] {
+            let host = host_running(&format!("{HONOR_SIGTERM}{body}"), None).await;
+            let (id, runtime) = seed_active(&host, "paused-survivor", stored);
+            surviving_shim(&host, id, &runtime).await;
+            let report = reconcile(&host.state).await;
+            assert_eq!(report.adopted, vec![id]);
+            assert_eq!(memory_state(&host, id), Some(VmState::Paused));
+            assert_eq!(db_state(&host, id), Some(VmState::Paused));
+            assert!(report.network_mismatches.is_empty());
+            let control = host.state.processes.lock().unwrap()[&id].control.clone();
+            control.terminate();
+            wait_for(&host, id, VmState::Stopped).await;
+        }
     }
 
     #[tokio::test]

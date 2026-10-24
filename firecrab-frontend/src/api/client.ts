@@ -1,9 +1,14 @@
 import type {
+  ScheduleSpec,
+  ScheduleResponse,
+  ScheduleRun,
   ApiError,
   AssignVmStorageRequest,
   CreateMicroNetworkRequest,
   CreateMicroStorageRequest,
+  CreatePoolRequest,
   CreateShellRequest,
+  CreateSecurityGroupRequest,
   CreateShellRevisionRequest,
   CreateVmRequest,
   ErrorResponse,
@@ -26,6 +31,10 @@ import type {
   MicroServiceDeployment,
   DeployMicroServiceRequest,
   NetworkInfoResponse,
+  ReplaceSecurityGroupRulesRequest,
+  SecurityGroupResponse,
+  PoolLeaseResponse,
+  PoolResponse,
   SshHostKeyResponse,
   ShellDetailResponse,
   ShellResponse,
@@ -36,6 +45,7 @@ import type {
   UpdateCheckResponse,
   UpdateImageKernelRequest,
   UpdateMicroNetworkRequest,
+  UpdatePoolRequest,
   UpdateProgressResponse,
   UpdateStartResponse,
   UpdateVmShellsRequest,
@@ -95,6 +105,11 @@ async function fail(response: Response): Promise<ApiClientError> {
 }
 
 export async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
+  return (await (await fetchApiResponse(input, init)).json()) as T;
+}
+
+/** Fetch a successful response, including streamed files and 204 mutations. */
+export async function fetchApiResponse(input: string, init?: RequestInit): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(input, init);
@@ -104,19 +119,77 @@ export async function fetchJson<T>(input: string, init?: RequestInit): Promise<T
   if (!response.ok) {
     throw await fail(response);
   }
-  return (await response.json()) as T;
+  return response;
 }
 
 export function listVms(): Promise<VmResponse[]> {
   return fetchJson("/api/vms");
 }
 
+export function listSchedules(): Promise<ScheduleResponse[]> {
+  return fetchJson("/api/schedules");
+}
+
+export function saveSchedule(id: string | null, spec: ScheduleSpec): Promise<ScheduleResponse> {
+  return fetchJson(id ? `/api/schedules/${encodeURIComponent(id)}` : "/api/schedules", {
+    method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec),
+  });
+}
+
+export function setScheduleEnabled(id: string, enabled: boolean): Promise<ScheduleResponse> {
+  return fetchJson(`/api/schedules/${encodeURIComponent(id)}/enabled`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }),
+  });
+}
+
+export function listScheduleRuns(id: string): Promise<ScheduleRun[]> {
+  return fetchJson(`/api/schedules/${encodeURIComponent(id)}/runs`);
+}
+
+export async function deleteSchedule(id: string): Promise<void> {
+  const response = await fetch(`/api/schedules/${encodeURIComponent(id)}`, { method: "DELETE" })
+    .catch(error => { throw ApiClientError.transport(transportDetail(error)); });
+  if (!response.ok) throw await fail(response);
+}
+
 export function listMicroServices(): Promise<MicroServiceResponse[]> {
   return fetchJson("/api/micro-services");
 }
 
+export function listSecurityGroups(): Promise<SecurityGroupResponse[]> {
+  return fetchJson("/api/security-groups");
+}
+
+export function getSecurityGroup(id: string): Promise<SecurityGroupResponse> {
+  return fetchJson(`/api/security-groups/${encodeURIComponent(id)}`);
+}
+
+export function createSecurityGroup(request: CreateSecurityGroupRequest): Promise<SecurityGroupResponse> {
+  return fetchJson("/api/security-groups", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  });
+}
+
+export function replaceSecurityGroupRules(id: string, request: ReplaceSecurityGroupRulesRequest): Promise<SecurityGroupResponse> {
+  return fetchJson(`/api/security-groups/${encodeURIComponent(id)}/rules`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  });
+}
+
+export async function deleteSecurityGroup(id: string): Promise<void> {
+  const response = await fetch(`/api/security-groups/${encodeURIComponent(id)}`, { method: "DELETE" })
+    .catch((error) => { throw ApiClientError.transport(transportDetail(error)); });
+  if (!response.ok) throw await fail(response);
+}
+
 export function getServiceDeployment(id: string): Promise<MicroServiceDeployment | null> {
   return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/deployment`);
+}
+
+export function checkServiceDeployment(id: string, request: DeployMicroServiceRequest, signal?: AbortSignal): Promise<null> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/deployment/check`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request), signal,
+  });
 }
 
 export function deployMicroService(id: string, request: DeployMicroServiceRequest): Promise<MicroServiceDeployment> {
@@ -220,6 +293,14 @@ export function updateVmResources(id: string, request: UpdateVmResourcesRequest)
 
 export function startVm(id: string): Promise<VmResponse> {
   return fetchJson(`/api/vms/${id}/start`, { method: "POST" });
+}
+
+export function pauseVm(id: string): Promise<VmResponse> {
+  return fetchJson<VmResponse>(`/api/vms/${id}/pause`, { method: "POST" });
+}
+
+export function resumeVm(id: string): Promise<VmResponse> {
+  return fetchJson<VmResponse>(`/api/vms/${id}/resume`, { method: "POST" });
 }
 
 export function stopVm(id: string): Promise<VmResponse> {
@@ -450,8 +531,50 @@ export async function deleteVm(id: string): Promise<void> {
   }
 }
 
-export function listMicroNetworks(): Promise<MicroNetworkResponse[]> {
-  return fetchJson("/api/micro-networks");
+export function listPools(): Promise<PoolResponse[]> {
+  return fetchJson("/api/pools");
+}
+
+export function createPool(request: CreatePoolRequest): Promise<PoolResponse> {
+  return fetchJson("/api/pools", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+export function updatePool(id: string, request: UpdatePoolRequest): Promise<PoolResponse> {
+  return fetchJson(`/api/pools/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+/** Flags the pool for deletion; refused (409) while a lease is active. */
+export function deletePool(id: string): Promise<PoolResponse> {
+  return fetchJson(`/api/pools/${id}`, { method: "DELETE" });
+}
+
+/** Leases one ready member. Retrying with the same key returns the same lease. */
+export function acquirePoolLease(id: string, idempotencyKey?: string): Promise<PoolLeaseResponse> {
+  return fetchJson(`/api/pools/${id}/acquire`, {
+    method: "POST",
+    headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+  });
+}
+
+export function listPoolLeases(id: string): Promise<PoolLeaseResponse[]> {
+  return fetchJson(`/api/pools/${id}/leases`);
+}
+
+/** Ends the lease; its VM is deleted and replaced, never reused. */
+export function releasePoolLease(id: string, leaseId: string): Promise<PoolLeaseResponse> {
+  return fetchJson(`/api/pools/${id}/leases/${leaseId}`, { method: "DELETE" });
+}
+
+export function listMicroNetworks(signal?: AbortSignal): Promise<MicroNetworkResponse[]> {
+  return fetchJson("/api/micro-networks", { signal });
 }
 
 export function getMicroNetwork(id: string): Promise<MicroNetworkDetailResponse> {

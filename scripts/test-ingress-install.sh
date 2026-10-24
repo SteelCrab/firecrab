@@ -16,6 +16,10 @@ for name in firecrab-api firecrab-helper firecrab; do
 done
 cp "$engine/firecrab-ingress" "$scratch/bin/firecrab-ingress"
 cp -R "$engine/ingress" "$scratch/bin/ingress"
+if [ -x "$engine/firecrab-guest-console" ]; then
+    cp "$engine/firecrab-guest-console" "$scratch/bin/firecrab-guest-console"
+    cp -R "$engine/guest-console" "$scratch/bin/guest-console"
+fi
 for name in ip nft dnsmasq dhcp_release fakeroot curl zstd firecracker; do
     printf '#!/bin/sh\nexit 0\n' >"$scratch/stubs/$name"
     chmod +x "$scratch/stubs/$name"
@@ -42,6 +46,11 @@ for _attempt in 1 2; do
         cmp "$engine/ingress/$name" "$scratch/installed/lib/firecrab/ingress/$name"
         [ "$(stat -c %a "$scratch/installed/lib/firecrab/ingress/$name")" = 644 ]
     done
+    if [ -x "$engine/firecrab-guest-console" ]; then
+        cmp "$engine/firecrab-guest-console" "$scratch/installed/lib/firecrab/firecrab-guest-console"
+        cmp "$engine/guest-console/LICENSE.musl" "$scratch/installed/lib/firecrab/guest-console/LICENSE.musl"
+        "$scratch/installed/lib/firecrab/firecrab-guest-console" --version
+    fi
     "$scratch/installed/lib/firecrab/firecrab-ingress" -v
     cmp "$scratch/original.json" "$scratch/config/pipe/manifest.json"
 done

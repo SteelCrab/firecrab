@@ -108,6 +108,14 @@ pub struct FirecrackerConfig {
     /// vCPU/memory sizing.
     #[serde(rename = "machine-config")]
     machine_config: MachineConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vsock: Option<Vsock>,
+}
+
+#[derive(Debug, Serialize)]
+struct Vsock {
+    guest_cid: u32,
+    uds_path: PathBuf,
 }
 
 /// `boot-source` section of [`FirecrackerConfig`].
@@ -179,6 +187,7 @@ impl FirecrackerConfig {
         network: Option<&VmNetwork>,
     ) -> Self {
         Self {
+            vsock: None,
             boot_source: BootSource {
                 kernel_image_path: absolute(kernel_image_path),
                 initrd_path: initrd_path.map(absolute),
@@ -231,7 +240,7 @@ pub fn write_config(
     })?;
 
     let path = runtime.config.clone();
-    let config = FirecrackerConfig::for_vm(
+    let mut config = FirecrackerConfig::for_vm(
         vm,
         kernel_image_path,
         initrd_path,
@@ -239,6 +248,10 @@ pub fn write_config(
         rootfs_path,
         network,
     );
+    config.vsock = Some(Vsock {
+        guest_cid: 3,
+        uds_path: absolute(&runtime.vsock_socket),
+    });
     let json =
         serde_json::to_vec_pretty(&config).map_err(|source| FirecrackerError::Serialize {
             path: path.clone(),
@@ -559,6 +572,7 @@ pub fn register_and_watch(state: &AppState, id: Uuid, mut process: FirecrackerPr
         }
         let _ = fs::remove_file(&api_sock);
 
+        let _guard = state.lock_vm(id).await;
         // Only tear down map/metrics entries for *this* process. After a
         // quick stop→start the new generation may already be registered under
         // the same VM id; a late exit monitor must not remove it or wipe the
@@ -596,13 +610,7 @@ pub fn register_and_watch(state: &AppState, id: Uuid, mut process: FirecrackerPr
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             match vms.get_mut(&id) {
-                Some(vm)
-                    if still_ours
-                        && matches!(
-                            vm.state,
-                            VmState::Starting | VmState::Running | VmState::Stopping
-                        ) =>
-                {
+                Some(vm) if still_ours && vm.state.has_live_runtime() => {
                     vm.state = if vm.state == VmState::Stopping || clean_exit || requested {
                         VmState::Stopped
                     } else {
@@ -744,6 +752,7 @@ fn attach(
     } = session;
     let console = Arc::new(ConsoleBroker::new());
     console.attach_control(control.clone());
+    console.resize.set_socket(api_sock.with_file_name("v.sock"));
     let (exit_tx, exit) = watch::channel(None);
     spawn_event_pump(id, events, Arc::clone(&console), process_metrics, exit_tx);
     FirecrackerProcess {
@@ -924,7 +933,7 @@ srv.listen(1)
 while True:
     conn, _ = srv.accept()
     conn.recv(1024)
-    conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+    conn.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{"state":"Running"}')
     conn.close()
 "#;
 
@@ -1018,6 +1027,7 @@ mod tests {
 
     fn record(cpu: u8, ram: u32) -> VmRecord {
         VmRecord {
+            security_group_id: None,
             id: Uuid::new_v4(),
             name: "test-vm".to_owned(),
             purpose: crate::model::VmPurpose::Instance,
@@ -1153,6 +1163,11 @@ mod tests {
             "/images/vmlinux"
         );
         assert_eq!(config["boot-source"]["boot_args"], "console=ttyS0");
+        assert_eq!(config["vsock"]["guest_cid"], 3);
+        assert_eq!(
+            config["vsock"]["uds_path"],
+            runtime.vsock_socket.to_str().unwrap()
+        );
 
         let drive = &config["drives"][0];
         assert_eq!(drive["drive_id"], "rootfs");

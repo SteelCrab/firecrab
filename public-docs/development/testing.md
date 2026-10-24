@@ -15,6 +15,7 @@ API, CLI, and browser checks are separate evidence.
 - [MicroNetwork](#micronetwork)
 - [MicroStorage](#microstorage)
 - [Shells](#shells)
+- [PipeSecrets](#pipesecrets)
 - [Images, kernels, OCI, and registry](#images-kernels-oci-and-registry)
 - [Pipe Registry](#pipe-registry)
 - [MicroVM and SSH](#microvm-and-ssh)
@@ -48,6 +49,7 @@ Commands: [CI local checks](ci.md#local-checks) and [installer/platform checks](
 - [ ] **A17 — Distribution dependencies:** check and install dependencies on Debian 12, Fedora, Arch, and openSUSE Tumbleweed.
 - [ ] **A18 — Development deployment contract:** run shared guest build/deploy/rollback regression checks; record live `service dev` validation separately.
 - [ ] **A19 — QA runner contracts:** verify guest failure/cleanup, native Windows phase aggregation, and browser mode/API guards without a VM.
+- [ ] **A20 — microManager settings and Sleepy:** validate settings save/discard and terminal restoration in a PTY; separately run `scripts/test-micromanager-sleepy.ps1 -CliPath ./firecrab.exe` on native Windows/WSL2 for actual idle shutdown, automatic wake, workload inhibition, and manual stop. See [settings and Sleepy](../guides/micromanager-settings.md). macOS runtime validation requires a native Mac.
 
 ## Platform and host
 
@@ -119,6 +121,29 @@ Routes: [API](../reference/api.md#other-endpoints); guest behavior: [shell revis
 - [ ] **L2 — Revision:** add a new shell revision.
 - [ ] **L3 — Read:** fetch the shell and its revision body.
 - [ ] **L4 — Pin to VM:** assign a shell on VM creation or update; confirm its executable file inside the guest.
+
+## PipeSecrets
+
+Commands and artifact rules: [Secrets QA](qa.md#pipesecrets-qa) and [browser suites](../../firecrab-e2e/README.md#pipesecrets).
+SEC1–SEC8 use mocked API responses. SEC9–SEC14 use actual Linux API processes and disposable stores.
+Real external accounts are separate manual evidence. Use synthetic values and `qa-` names throughout.
+
+- [ ] **SEC1 — Secret editor:** create a masked secret; edit metadata without loading or replacing the stored value.
+- [ ] **SEC2 — Explicit reveal:** reveal only on request; hide manually and on window blur.
+- [ ] **SEC3 — Import selection:** preview additions/replacements/unchanged rows; select replacements explicitly.
+- [ ] **SEC4 — Partial upload:** upload selected local IDs and display individual failures without claiming success.
+- [ ] **SEC5 — Provider forms:** configure Infisical/AWS/Firecrab; never repopulate saved credentials into forms.
+- [ ] **SEC6 — Failed edits:** keep failed saves editable and block unwanted navigation from an unsaved form.
+- [ ] **SEC7 — Responsive console:** check Korean labels, desktop/mobile layout, overflow, and browser errors.
+- [ ] **SEC8 — Time limits:** hide revealed values after 30 seconds or visibility change; disable an expired transfer preview.
+- [ ] **SEC9 — Durable CRUD:** create/edit/reveal/delete through the actual API; restart it and verify persistence, ciphertext, 0700/0600 permissions, and deletion.
+- [ ] **SEC10 — Import copies:** import a captured remote snapshot; preserve IDs and source metadata; replay fails; local values survive remote deletion/disconnection and local API restart.
+- [ ] **SEC11 — Actual upload:** reject a changed remote value; re-preview and upload only selected values; verify the remote after restart and reject preview replay.
+- [ ] **SEC12 — Concurrent edits:** stale form versions and stale local transfer previews fail without overwriting newer local values.
+- [ ] **SEC13 — Infisical protocol:** retain encrypted credentials through edits/restart; validate scope and raw references; mask provider failures and recover on retry using a local fixture.
+- [ ] **SEC14 — Damaged storage:** missing key and corrupted ciphertext return unavailable; preserve files and refuse automatic vault replacement.
+- [ ] **SEC15 — Real Infisical account (manual):** dedicated QA scope, import, selected upload, stale remote, denied/expired credential, and complete cleanup. Record WARNING if unavailable.
+- [ ] **SEC16 — Real AWS account (manual):** dedicated QA region/prefix, SecretString import, selected upload, stale remote, denied/expired credentials, and complete cleanup. Record WARNING if unavailable.
 
 ## Images, kernels, OCI, and registry
 

@@ -42,7 +42,7 @@ export default function CommandPalette({ open, onOpenChange, vms, onSelectView, 
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isPaletteShortcut(event)) return;
       // Ctrl+K kills the line in a shell, so keys typed into a terminal stay there.
-      if (event.target instanceof Element && event.target.closest(".xterm")) return;
+      if (event.target instanceof Element && event.target.closest("[data-terminal-engine]")) return;
       event.preventDefault();
       onOpenChange(!open);
     };

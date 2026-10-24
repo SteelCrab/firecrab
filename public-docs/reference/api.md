@@ -8,10 +8,12 @@ Keep the unauthenticated listener on a trusted loopback path.
 - [Request rules](#request-rules)
 - [VM endpoints and fields](#vm-endpoints)
 - [Startup reconciliation](#api-startup-reconciliation)
+- [Schedules](../guides/schedules.md#rest-api)
 - [Other endpoints](#other-endpoints)
 - [Host responses](#host)
 - [Update](#update)
 - [Images and kernels](#images-and-kernels)
+- [Security group](#security-group)
 - [MicroNetwork](#micronetwork)
 - [MicroRegistry](#microregistry)
 - [Docker Hub login](#docker-hub-login)
@@ -32,6 +34,7 @@ Keep the unauthenticated listener on a trusted loopback path.
 | GET, POST | `/api/vms` | List / create |
 | GET, PUT, DELETE | `/api/vms/{id}` | Read / edit / delete |
 | POST | `/api/vms/{id}/start`, `/stop` | Start / stop |
+| POST | `/api/vms/{id}/pause`, `/resume` | Preserve guest execution state / continue it |
 | GET | `/api/vms/{id}/log` | Full console transcript |
 | GET | `/api/vms/{id}/ssh-key` | Operator private key (`firecrab-<name>.pem`) |
 | GET | `/api/vms/{id}/ssh-host-key` | Guest fingerprint and public key |
@@ -64,6 +67,7 @@ Success returns `201` and the VM UUID.
 | `ram` | Power of two, 128–32768 MiB |
 | `diskGb` | Image minimum through 500 GiB; grow only |
 | `microNetworkId` | Existing network UUID, required |
+| `securityGroupId` | Optional group UUID from the same IPv4-only network; PUT omission preserves it, null detaches it |
 | `egressPolicy` | `internet` or `isolated` |
 | `storageRoot` | Optional registered storage ID |
 | `shellIds` | Optional shell IDs; latest revisions are pinned |
@@ -85,6 +89,17 @@ created -> starting -> running -> stopping -> stopped
 ```
 
 Start accepts `created`, `stopped`, and `error`; delete requires an inactive VM.
+Pause follows `running → pausing → paused`; resume follows `paused → resuming → running`.
+The same VMM, RAM, disks, and network identity remain allocated.
+Repeated pause/resume calls are safe and return a confirmed runtime state.
+A lost VMM answer is checked through its instance API before success is reported.
+An unconfirmed operation stays `pausing`/`resuming`; retry Pause/Resume or Stop.
+API restarts query the VMM and preserve a surviving paused guest.
+Stop works from paused or unconfirmed execution states and discards guest RAM.
+Start, delete, resource/env edits, and shell/storage changes remain unavailable while paused.
+MicroService-owned replicas and internal image builders return `409` for pause/resume.
+Existing serial consoles can read history while paused; keystrokes are discarded until Running.
+External requests and guest health probes cannot complete while paused.
 The console closes when a VM stops.
 Guest logout closes it with `4000 session_ended` while the VM keeps running.
 A new attachment replays only the new login session; reconnecting before logout retains current history.
@@ -127,8 +142,11 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | Resource | Paths |
 | --- | --- |
 | MicroService | `GET, POST /api/micro-services`, `GET, PUT, DELETE /api/micro-services/{id}` |
-| MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/stop` |
+| Stack ownership and planning | `GET, POST /api/stacks`, `GET, DELETE /api/stacks/{name}`, `POST /api/stacks/{name}/bindings`, `/unbind`, `/plan`; empty-registration deletion requires `?id=STACK_UUID`; see [Stack planning](../guides/stack-planning.md#rest) |
+| Native stack apply | `POST /api/stacks/{name}/apply`, `GET /api/stacks/{name}/applies/{id}`; durable, redacted execution with exact retry IDs; see [Stack apply](../guides/stack-apply.md#rest-and-limits) |
+| MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/deployment/check`, `POST /api/micro-services/{id}/stop` |
 | MicroNetwork | `/api/micro-networks`, `/{id}` |
+| Security group | `GET, POST /api/security-groups`, `GET, PUT, DELETE /api/security-groups/{id}`, `PUT /api/security-groups/{id}/rules` |
 | Storage | `/api/storage`, `/api/storage/devices`, `/api/micro-storages` |
 | Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}` |
 | Images | `/api/images`, `/{alias}`, `/{alias}/package`, `/{alias}/install`, `/{alias}/kernel`, `/{alias}/bootstrap` |
@@ -233,13 +251,35 @@ The kernel catalog is architecture-specific; inspect `GET /api/kernels` for avai
 | --- | --- | --- |
 | GET, POST | `/api/kernels/{version}/install` | Read / start verified download |
 | DELETE | `/api/kernels/{version}` | Delete an unused cache entry |
-| PUT | `/api/images/{alias}/kernel` | Pair using `{"kernelVersion":"7.2.2"}` |
+| PUT | `/api/images/{alias}/kernel` | Pair using `{"kernelVersion":"7.2.2-vsock1"}` |
 
 Pairing preserves rootfs/initrd and requires an installed, verified kernel.
 Missing/invalid cache returns `409 kernel_required`; referenced images return `409 in_use`.
 Kernel deletion also returns `409 in_use` while an image references it.
 Image deletion retains the independent kernel cache.
 See [Images](../guides/images.md) and [Kernels](../guides/kernels.md) for task examples.
+
+## Security group
+
+POST accepts `{"name":"database","microNetworkId":"NETWORK_ID"}` and returns `201`.
+PUT on the group replaces its name using `{"name":"new-name"}`.
+Names must contain 1–64 bytes without control characters.
+Responses contain `id`, `name`, `microNetworkId`, and `rules`.
+
+PUT on `/rules` replaces the complete rule list using `{"rules":[...]}`.
+Each rule requires `direction` (`ingress` or `egress`), `protocol` (`tcp` or `udp`), `portFrom`, `portTo`, and `peerCidr`.
+Ports are inclusive destination ports; `1 <= portFrom <= portTo <= 65535`.
+Peers must be IPv4 CIDRs; host bits are normalized.
+At most 256 rules are allowed.
+Unknown fields, invalid networks, and invalid rules return `400`.
+An unknown group returns `404`.
+Active VM runtimes or deployments block rule replacement with `409`.
+DELETE returns `204`, or `409` while any VM or MicroService references the group.
+
+VM create/update and MicroService configuration accept nullable `securityGroupId`.
+MicroService PUT resets omission to null; VM PUT preserves omission.
+The deployment snapshot and every new replica retain the selection.
+See [security groups](../guides/security-groups.md) for traffic behavior and examples.
 
 ## MicroNetwork
 
@@ -319,6 +359,35 @@ use `400 validation_failed` with a `cloudflare` field. An unavailable helper use
 See [token issuance and connection](../guides/cloudflare-tunnel.md) for permissions
 and manual verification. Actual public access requires a real Cloudflare domain.
 
+## Pipe AI
+
+These routes share the existing host REST policy and a 60-second request deadline.
+Connections contain only metadata and separately inference-verified model IDs, which may be empty after account connection.
+Credentials are stored only on the API host.
+Pipe AI UI manages accounts only. Model verification, selection, and response routes are shared integration APIs for AI Sandbox.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/api/pipe/ai/connections` | Secret-free connections, verified `models`, `authentication`, `streaming`, and `toolCalls` |
+| PUT | `/api/pipe/ai/connections/{id}` | Validate and save `{name, provider: "openai" \| "anthropic", apiKey, model?: string}`; check the provider's `/v1/models` without inference. Anthropic accepts no `model` and supports connection management only |
+| POST | `/api/pipe/ai/connections/{id}/verify` | Verify inference with saved credentials and add `{model}` |
+| DELETE | `/api/pipe/ai/connections/{id}` | Remove credentials/defaults; return `{deleted, remoteRevocationConfirmed}` |
+| POST | `/api/pipe/ai/connections/{id}/login` | Start official ChatGPT login with `{name, model?: string}`; no inference unless `model` is supplied; return `{loginId, authorizationUrl, expiresIn}` |
+| GET | `/api/pipe/ai/logins/{id}` | Return `{status, message}`; status is `pending`, `working`, `connected`, or `failed` |
+| GET | `/auth/callback` | One-time state-bound OAuth callback; never returns tokens to the browser |
+| GET | `/api/pipe/ai/projects/{id}/model` | Saved `{connectionId, model}` or null |
+| PUT | `/api/pipe/ai/projects/{id}/model` | Persist a verified `{connectionId, model}` |
+| POST | `/api/pipe/ai/responses` | Accept `{projectId, input, selection?: {connectionId, model}}`; return `{selection, text}` |
+
+Login requires a local API authority and a reachable `127.0.0.1` callback.
+The server validates OAuth state, PKCE, signed identity, and granted plan scopes before replacing a connection.
+Account connection requires neither a model nor a project. Inference permission is checked separately; the optional `model` preserves API-client inference probes.
+Project UUIDs identify model settings rather than newly created Project records.
+An explicit response selection is a task/request override and leaves the project default unchanged.
+Calls never fall back to another model or connection.
+See [Pipe AI](../guides/pipe-ai.md) for capabilities, limits, CLI/MCP setup, and recovery.
+Anthropic model verification, defaults, and responses return `409 ai_connection_only`. API key disconnect removes the local saved key; it does not revoke the key at the provider.
+
 ## Errors
 
 ```json
@@ -340,3 +409,57 @@ Use `requestId` to locate the server log.
 - [Guest runtime](guest-runtime.md)
 - [CLI](cli.md)
 - [Troubleshooting](../guides/troubleshooting.md)
+
+## Pools
+
+A pool keeps booted, never-used VMs ready to lease. A released or expired member is stopped,
+deleted, and replaced; its disk is never handed to another caller. Pools are host-local.
+
+| Method | Path | Job |
+| --- | --- | --- |
+| `GET`, `POST` | `/api/pools` | List or create pools |
+| `GET`, `PATCH`, `DELETE` | `/api/pools/{id}` | Read, resize, or delete a pool |
+| `POST` | `/api/pools/{id}/acquire` | Lease one ready VM |
+| `GET` | `/api/pools/{id}/leases` | List leases, newest first |
+| `GET`, `DELETE` | `/api/pools/{id}/leases/{leaseId}` | Read or release a lease |
+
+`POST /api/pools`:
+
+- `name` (1–40 characters), `template`, `cpu`, `ram`, `diskGb`, `microNetworkId`
+- optional `egressPolicy`, `storageRoot`
+- `minReady` (0 to `maxSize`), `maxSize` (1–32), `leaseTtlSeconds` (60–604800)
+- The VM spec is validated like `POST /api/vms`
+- The pool pins the image version `template` resolves to at creation; image and spec stay fixed
+- Image deletion and kernel replacement return `409 in_use` while any pool references the image,
+  including a pool with no members. Delete the pool first
+
+`PATCH /api/pools/{id}` changes `minReady`, `maxSize`, and `leaseTtlSeconds`. A new TTL applies to
+later leases. Lowering a limit drains the newest unleased members.
+
+Acquire:
+
+- `201` with the lease, including its `vm` (address, hostname, state)
+- `Idempotency-Key` header (1–255 visible ASCII characters): a retry returns the original lease
+  with `200`. Keys are per pool and kept until 24 hours after the lease ends
+- `409 pool_exhausted` when no member is ready. The pool keeps booting replacements up to
+  `maxSize`; retry with the same key
+- `409 pool_deleting` once the pool is being deleted
+
+Release (`DELETE /api/pools/{id}/leases/{leaseId}`) returns the ended lease; a repeat returns it
+unchanged.
+
+Members:
+
+- `provisioning` → `ready` → `leased` → `draining` → deleted
+- Members are listed on `GET /api/vms` with `purpose` `pool`.
+- `GET /api/vms/{id}`, the console, and the SSH key still work for a member.
+- `PUT`/`DELETE /api/vms/{id}`, start, stop, storage, shells, and port forwards answer `409 pool_owned` for a member.
+- `maxSize` counts every member, draining ones included
+- A lease ends as `expired` when its TTL passes or its VM stops. API startup reconnects surviving
+  VM shims before pool reconciliation. Ready members and unexpired active leases survive a restart;
+  missing or stopped VMs are replaced and their active leases expire
+- `lastError` names the most recent member that failed to create or boot; the pool waits 30
+  seconds before trying again
+
+`DELETE /api/pools/{id}` answers `409 pool_in_use` while a lease is active. Otherwise it returns
+`202` with `deleting: true`, and the pool disappears once its members are deleted.

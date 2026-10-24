@@ -8,11 +8,27 @@ use super::*;
 use crate::server::{HttpConfig, build_router};
 use crate::templates::TemplateRegistry;
 
-async fn app(root: &std::path::Path) -> Router {
+async fn state(root: &std::path::Path) -> AppState {
     let templates = TemplateRegistry::from_specs(root, std::iter::empty()).unwrap();
-    let state = AppState::with_db_file(templates, root.join("state.db"))
+    AppState::with_db_file(templates, root.join("state.db"))
         .await
-        .unwrap();
+        .unwrap()
+}
+
+async fn app(root: &std::path::Path) -> Router {
+    let state = state(root).await;
+    state.store.put_pipe_auth(&github("team")).unwrap();
+    router(state)
+}
+
+fn github(username: &str) -> SavedAuth {
+    SavedAuth::Github {
+        username: username.into(),
+        token: "test-only-secret".into(),
+    }
+}
+
+fn router(state: AppState) -> Router {
     let config = HttpConfig {
         bind_addr: "127.0.0.1:3000".parse().unwrap(),
         allowed_origins: vec![],
@@ -242,5 +258,248 @@ async fn micro_services_reject_unknown_fields_runtime_and_malformed_ids() {
             .await
             .0,
         StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn micro_services_auth_scopes_create_update_and_deploy_to_connected_accounts() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    state
+        .store
+        .put_pipe_auth(&SavedAuth::Firecrab {
+            account_id: "11111111-1111-4111-8111-111111111111".into(),
+            email: "owner@example.com".into(),
+            expires_at: 4102444800000,
+            token: format!("fca_{}", "a".repeat(64)),
+        })
+        .unwrap();
+    let router = router(state.clone());
+    // Neither a console account nor a standalone login authorizes service images.
+    state
+        .store
+        .put_registry_login(
+            &crate::oci::RegistryCredential {
+                registry: "ghcr.io".into(),
+                username: "team".into(),
+                secret: "standalone-secret".into(),
+            },
+            None,
+        )
+        .unwrap();
+    let (status, error) = request(&router, "POST", "/api/micro-services", minimal("orders")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(error["error"]["fields"]["image"].is_string());
+    assert!(!error.to_string().contains("standalone-secret"));
+    assert!(state.store.list_micro_services().unwrap().is_empty());
+
+    state.store.put_pipe_auth(&github("Team")).unwrap();
+    let (status, saved) = request(&router, "POST", "/api/micro-services", minimal("orders")).await;
+    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    let id = saved["id"].as_str().unwrap();
+    let path = format!("/api/micro-services/{id}");
+    for image in [
+        "ghcr.io/other/orders:1.0",
+        "ghcr.io/team-evil/orders:1.0",
+        "ghcr.io.evil.test/team/orders:1.0",
+        "ghcr.io:443/team/orders:1.0",
+        "nginx:1.27",
+        "docker.io/team/orders:1.0",
+        "127.0.0.1:5000/team/orders:1.0",
+    ] {
+        let mut changed = minimal("orders");
+        changed["image"] = json!(image);
+        for (method, target) in [("POST", "/api/micro-services"), ("PUT", path.as_str())] {
+            let (status, error) = request(&router, method, target, changed.clone()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{image}: {error}");
+            assert!(
+                error["error"]["fields"]["image"].is_string(),
+                "{image}: {error}"
+            );
+        }
+        assert_eq!(request(&router, "GET", &path, Value::Null).await.1, saved);
+    }
+    let (status, _) = request(&router, "DELETE", "/api/pipe/auth/github", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    for method in ["PUT", "POST"] {
+        let target = if method == "PUT" {
+            path.clone()
+        } else {
+            format!("{path}/deployment")
+        };
+        let body = if method == "PUT" {
+            minimal("orders")
+        } else {
+            json!({"hostPort": 30100})
+        };
+        let (status, error) = request(&router, method, &target, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(error["error"]["fields"]["image"].is_string());
+    }
+    assert!(
+        state
+            .store
+            .service_deployment(Uuid::parse_str(id).unwrap())
+            .unwrap()
+            .is_none()
+    );
+    // Removing AUTH does not strand a saved configuration: reads and deletion remain available.
+    assert_eq!(request(&router, "GET", &path, Value::Null).await.1, saved);
+    assert_eq!(
+        request(&router, "DELETE", &path, Value::Null).await.0,
+        StatusCode::NO_CONTENT
+    );
+}
+
+#[tokio::test]
+async fn micro_services_auth_accepts_only_the_connected_ecr_account_and_region() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    state
+        .store
+        .put_pipe_auth(&SavedAuth::Aws {
+            account_id: "123456789012".into(),
+            credentials: crate::pipe_auth::AwsCredentials {
+                access_key_id: "test-access-key".into(),
+                secret_access_key: "aws-private-secret".into(),
+                session_token: String::new(),
+                region: "ap-northeast-2".into(),
+            },
+        })
+        .unwrap();
+    let router = router(state.clone());
+    let host = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com";
+    for (index, image) in [
+        format!("{host}/orders:1.0"),
+        format!("{host}/nested/orders@sha256:{}", "a".repeat(64)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut body = minimal(&format!("orders-{index}"));
+        body["image"] = json!(image);
+        let (status, response) = request(&router, "POST", "/api/micro-services", body).await;
+        assert_eq!(status, StatusCode::CREATED, "{response}");
+        assert!(!response.to_string().contains("aws-private-secret"));
+    }
+    for image in [
+        "999999999999.dkr.ecr.ap-northeast-2.amazonaws.com/orders:v1",
+        "123456789012.dkr.ecr.us-east-1.amazonaws.com/orders:v1",
+        "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com.evil.test/orders:v1",
+        "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com:443/orders:v1",
+        "public.ecr.aws/team/orders:v1",
+        "ghcr.io/team/orders:v1",
+    ] {
+        let mut body = minimal("rejected");
+        body["image"] = json!(image);
+        let (status, error) = request(&router, "POST", "/api/micro-services", body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{image}: {error}");
+        assert!(error["error"]["fields"]["image"].is_string());
+        assert!(!error.to_string().contains("aws-private-secret"));
+    }
+    assert_eq!(state.store.list_micro_services().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn deployment_check_reports_missing_network_and_replica_port_without_creating_resources() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = state(directory.path()).await;
+    let id = Uuid::new_v4();
+    let spec: MicroServiceSpec = serde_json::from_value(json!({
+        "name": "orders", "image": "ghcr.io/team/orders:1.0", "port": 8080,
+        "ram": 512, "cpu": 1, "replicas": 2
+    }))
+    .unwrap();
+    state
+        .store
+        .insert_micro_service(&MicroServiceResponse { id, spec })
+        .unwrap();
+    let router = router(state.clone());
+    let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+    let occupied = listener.local_addr().unwrap().port();
+    let first = occupied - 1;
+    let path = format!("/api/micro-services/{id}/deployment/check");
+    let (status, error) = request(
+        &router,
+        "POST",
+        &path,
+        json!({
+            "hostPort": first, "microNetworkId": Uuid::new_v4()
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        error["error"]["fields"]["microNetworkId"],
+        "network does not exist"
+    );
+    assert!(
+        error["error"]["fields"]["hostPort"]
+            .as_str()
+            .unwrap()
+            .contains("already used")
+    );
+    assert!(state.store.service_deployment(id).unwrap().is_none());
+    assert!(state.store.list_micro_networks().unwrap().is_empty());
+    assert!(state.vms.lock().unwrap().is_empty());
+
+    drop(listener);
+    assert_eq!(
+        request(&router, "POST", &path, json!({"hostPort": occupied})).await,
+        (StatusCode::OK, Value::Null)
+    );
+    assert!(std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, occupied)).is_ok());
+    assert!(state.store.service_deployment(id).unwrap().is_none());
+    assert_eq!(
+        request(
+            &router,
+            "POST",
+            &format!("/api/micro-services/{}/deployment/check", Uuid::new_v4()),
+            json!({"hostPort": occupied})
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn deploy_rechecks_port_availability_after_a_successful_check() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = state(directory.path()).await;
+    state.store.put_pipe_auth(&github("team")).unwrap();
+    let router = router(state.clone());
+    let (_, service) = request(&router, "POST", "/api/micro-services", minimal("orders")).await;
+    let id = service["id"].as_str().unwrap();
+    let listener = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let path = format!("/api/micro-services/{id}/deployment");
+    assert_eq!(
+        request(
+            &router,
+            "POST",
+            &format!("{path}/check"),
+            json!({"hostPort": port})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let _listener = std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port)).unwrap();
+    let (status, error) = request(&router, "POST", &path, json!({"hostPort": port})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        error["error"]["fields"]["hostPort"]
+            .as_str()
+            .unwrap()
+            .contains(&port.to_string())
+    );
+    assert!(
+        state
+            .store
+            .service_deployment(Uuid::parse_str(id).unwrap())
+            .unwrap()
+            .is_none()
     );
 }

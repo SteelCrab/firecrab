@@ -9,11 +9,16 @@ mod hosts;
 mod image;
 #[cfg(target_os = "linux")]
 mod info;
+mod mcp;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod micromanager;
 mod microservice;
 mod network;
 mod pipe;
+mod pipe_ai;
+mod pipe_storage;
+mod pool;
+mod schedule;
 #[cfg(target_os = "linux")]
 mod service;
 #[cfg(any(target_os = "linux", all(test, unix)))]
@@ -42,10 +47,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Validate a declarative stack file locally, without connecting to a host.
+    /// Connect Pipe AI providers and select models through the host REST API.
+    Ai {
+        #[command(subcommand)]
+        command: pipe_ai::Command,
+    },
+    /// Serve local MCP tools over stdin/stdout using the selected REST host.
+    Mcp,
+    /// Validate stack files, manage ownership, preview changes and explicitly apply them.
     Stack {
         #[command(subcommand)]
         command: stack::Command,
+    },
+    /// Manage time-based MicroVM start and stop operations.
+    Schedule {
+        #[command(subcommand)]
+        command: schedule::Command,
     },
     /// Manage desired MicroService configurations through the host API.
     Microservice {
@@ -108,6 +125,11 @@ enum Command {
         #[command(subcommand)]
         command: network::Command,
     },
+    /// Manage warm MicroVM pools and lease their VMs.
+    Pool {
+        #[command(subcommand)]
+        command: pool::Command,
+    },
     /// Inspect template images through the host API.
     Image {
         #[command(subcommand)]
@@ -139,12 +161,33 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
-        Command::Stack { command } => stack::run(command),
+        Command::Ai { command } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+            pipe_ai::run(client, command)
+        }),
+        Command::Mcp => run_with_api_client(api.as_deref(), host.as_deref(), mcp::run),
+        Command::Stack {
+            command: stack::Command::Validate { file, json },
+        } => stack::validate_file(file, json),
+        Command::Stack { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                stack::run_remote(client, command)
+            })
+        }
+        Command::Schedule { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                schedule::run(client, command)
+            })
+        }
         Command::Microservice { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 microservice::run(client, command)
             })
         }
+        Command::Pipe {
+            command: pipe::Command::Storage { command },
+        } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+            pipe_storage::run(client, command)
+        }),
         Command::Pipe { command } => match pipe::run(command) {
             Ok(()) => 0,
             Err(error) => {
@@ -175,6 +218,11 @@ fn run(cli: Cli) -> i32 {
         Command::Network { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 network::run(client, command)
+            })
+        }
+        Command::Pool { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                pool::run(client, command)
             })
         }
         Command::Image { command } => {

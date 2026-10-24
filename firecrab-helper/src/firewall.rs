@@ -18,6 +18,10 @@ use uuid::Uuid;
 
 use crate::nat;
 
+#[cfg(test)]
+#[path = "firewall/security_group_tests.rs"]
+mod security_group_tests;
+
 /// Name of the owned `inet` table (NAT/egress dispatch).
 const TABLE_INET: &str = "firecrab";
 /// Prefix of each VM's own `netdev` table (L2 anti-spoofing on its TAP).
@@ -71,6 +75,8 @@ pub struct VmPolicy {
     pub mac: MacAddr,
     /// Outbound (egress) posture for this VM.
     pub egress: EgressPolicy,
+    /// An attached allow-only policy, including its network identity.
+    pub security_group: Option<firecrab_helper_protocol::security_group::SecurityGroupPolicySpec>,
     /// Open forwarded inbound TCP 22 to this VM. Note: host-*originated*
     /// traffic traverses the output hook, which this initial scope does not
     /// filter, so the admin's direct host->VM SSH already works; this flag
@@ -83,6 +89,12 @@ pub struct VmPolicy {
 /// Failure modes shared by every firewall operation.
 #[derive(Debug, Error)]
 pub enum FirewallError {
+    #[error("invalid security group policy: {0}")]
+    InvalidPolicy(String),
+    #[error(
+        "failed to clear VM connection tracking (conntrack is required for security groups): {0}"
+    )]
+    Conntrack(String),
     /// Couldn't open the rtnetlink socket.
     #[error("failed to open rtnetlink connection")]
     Connection(#[source] std::io::Error),
@@ -185,6 +197,9 @@ pub async fn ensure_firewall(
     let default_uplink = nat::detect_uplink(&handle).await?;
 
     let mut state = actor.state.lock().await;
+    for policy in vm_policies {
+        crate::security_groups::validate(policy, micro_networks)?;
+    }
     state.networks = micro_networks.to_vec();
     let base_ruleset = render_apply_ruleset(&default_uplink, micro_networks)?;
     let vm_policies = installable_policies(vm_policies, tap_exists);
@@ -231,10 +246,16 @@ pub async fn ensure_firewall(
         micro_networks,
         &vm_policies,
     );
-    ruleset.push_str(&render_stale_l2_removal(
-        &list_tables().await?,
+    let listing = list_tables().await?;
+    ruleset.push_str(&crate::security_groups::render(
         &vm_policies,
+        micro_networks,
+        &listing,
     ));
+    ruleset.push_str(&render_stale_l2_removal(&listing, &vm_policies));
+    for address in changed_connection_addresses(&state.applied_vms, &vm_policies) {
+        crate::security_groups::forget_connections(address).await?;
+    }
     state.kernel_snapshot = None;
     run_nft(&ruleset).await?;
     let kernel_snapshot = read_owned_snapshot().await?;
@@ -282,6 +303,7 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
     let default_uplink = nat::detect_uplink(&handle).await?;
 
     let mut state = actor.state.lock().await;
+    crate::security_groups::validate(&policy, &state.networks)?;
     let uplink = resolved_uplink(&default_uplink, &state.networks, policy.ipv4);
     let internet = network_internet_enabled(&state.networks, policy.ipv4);
     let previous = state.applied_vms.get(&policy.vm_id).cloned();
@@ -304,8 +326,17 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
         let base = render_apply_ruleset(&default_uplink, &state.networks)?;
         let mut ruleset =
             render_reconciled_ruleset(&base, &default_uplink, &state.networks, &policies);
-        ruleset.push_str(&render_stale_l2_removal(&list_tables().await?, &policies));
+        let listing = list_tables().await?;
+        ruleset.push_str(&crate::security_groups::render(
+            &policies,
+            &state.networks,
+            &listing,
+        ));
+        ruleset.push_str(&render_stale_l2_removal(&listing, &policies));
         let relays = state.relays.prepare(&policies).await?;
+        for address in changed_connection_addresses(&state.applied_vms, &policies) {
+            crate::security_groups::forget_connections(address).await?;
+        }
         state.kernel_snapshot = None;
         run_nft(&ruleset).await?;
         state.kernel_snapshot = Some(read_owned_snapshot().await?);
@@ -318,8 +349,8 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
     // the same chain names but may use different map keys. Delete the old
     // objects and build the new ones in one nft transaction so other VMs are
     // never affected and there is no unprotected intermediate state.
-    let ruleset = match previous {
-        Some((_, previous)) => render_vm_policy_replacement(&uplink, &previous, &policy, internet),
+    let mut ruleset = match &previous {
+        Some((_, previous)) => render_vm_policy_replacement(&uplink, previous, &policy, internet),
         None => render_vm_policy_for_network(&uplink, &policy, internet),
     };
     state.kernel_snapshot = None;
@@ -331,6 +362,14 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
         .chain(std::iter::once(policy.clone()))
         .collect();
     let relays = state.relays.prepare(&policies).await?;
+    ruleset.push_str(&crate::security_groups::render(
+        &policies,
+        &state.networks,
+        &list_tables().await?,
+    ));
+    for address in changed_connection_addresses(&state.applied_vms, &policies) {
+        crate::security_groups::forget_connections(address).await?;
+    }
     run_nft(&ruleset).await?;
     state.applied_vms.insert(policy.vm_id, (uplink, policy));
     state.relays.commit(relays).await;
@@ -344,17 +383,59 @@ pub async fn remove_vm_policy(actor: &FirewallActor, vm_id: Uuid) -> Result<(), 
     let Some((_, policy)) = state.applied_vms.get(&vm_id).cloned() else {
         return Ok(());
     };
-    state.kernel_snapshot = None;
-    run_nft(&render_vm_policy_removal(vm_id, policy.ipv4, policy.ipv6)).await?;
-    state.applied_vms.remove(&vm_id);
     let policies: Vec<_> = state
         .applied_vms
         .values()
-        .map(|(_, policy)| policy.clone())
+        .filter(|(_, vm)| vm.vm_id != vm_id)
+        .map(|(_, vm)| vm.clone())
         .collect();
+    let mut ruleset = render_vm_policy_removal(vm_id, policy.ipv4, policy.ipv6);
+    ruleset.push_str(&crate::security_groups::render(
+        &policies,
+        &state.networks,
+        &list_tables().await?,
+    ));
+    for address in changed_connection_addresses(&state.applied_vms, &policies) {
+        crate::security_groups::forget_connections(address).await?;
+    }
     let relays = state.relays.prepare(&policies).await?;
+    state.kernel_snapshot = None;
+    run_nft(&ruleset).await?;
+    state.applied_vms.remove(&vm_id);
     state.relays.commit(relays).await;
     Ok(())
+}
+
+/// IP-based tracked permissions must not survive a changed owner or group.
+/// An empty cache after helper restart also revokes unknown earlier flows.
+fn changed_connection_addresses(
+    previous: &std::collections::HashMap<Uuid, (String, VmPolicy)>,
+    desired: &[VmPolicy],
+) -> std::collections::BTreeSet<Ipv4Addr> {
+    let mut addresses = std::collections::BTreeSet::new();
+    if !previous.values().any(|(_, vm)| vm.security_group.is_some())
+        && !desired.iter().any(|vm| vm.security_group.is_some())
+    {
+        return addresses;
+    }
+    let by_id: std::collections::HashMap<_, _> = desired.iter().map(|vm| (vm.vm_id, vm)).collect();
+    for (_, old) in previous.values() {
+        if !by_id
+            .get(&old.vm_id)
+            .is_some_and(|vm| vm.ipv4 == old.ipv4 && vm.security_group == old.security_group)
+        {
+            addresses.insert(old.ipv4);
+        }
+    }
+    for vm in desired {
+        if !previous
+            .get(&vm.vm_id)
+            .is_some_and(|(_, old)| old.ipv4 == vm.ipv4 && old.security_group == vm.security_group)
+        {
+            addresses.insert(vm.ipv4);
+        }
+    }
+    addresses
 }
 
 /// Explicit uninstall: remove both Firecrab tables. VM stop/delete must
@@ -580,7 +661,6 @@ fn render_apply_ruleset(
     for (_, oif) in &egress6 {
         nat::validate_uplink(oif)?;
     }
-    let bridges = bridge_names(micro_networks);
     let subnets = subnet_cidrs(micro_networks);
     let subnets6 = subnet_cidrs6(micro_networks);
     let postrouting = nat::render_postrouting_chain(&subnets, &egress, &egress6);
@@ -588,15 +668,12 @@ fn render_apply_ruleset(
     // One dispatch pair per bridge: the per-VM verdict maps below are keyed
     // by leased IP (globally unique across networks, since their subnets
     // cannot overlap), so only the entry rules need to know about bridges.
-    let forward_dispatch: String = bridges
-        .iter()
-        .map(|bridge| {
-            format!(
-                "\t\tiifname \"{bridge}\" jump firecrab_egress\n\
-                 \t\toifname \"{bridge}\" jump firecrab_ingress\n"
-            )
-        })
-        .collect();
+    let forward_dispatch: String = micro_networks.iter().map(|network| {
+        let bridge = network.bridge_name();
+        let mask = u32::MAX.checked_shl(u32::from(32 - network.prefix)).unwrap_or(0);
+        let subnet = format!("{}/{}", Ipv4Addr::from(u32::from(network.gateway) & mask), network.prefix);
+        format!("\t\tiifname \"{bridge}\" oifname \"{bridge}\" ip saddr {subnet} ip daddr {subnet} return\n\t\tiifname \"{bridge}\" jump firecrab_egress\n\t\toifname \"{bridge}\" jump firecrab_ingress\n")
+    }).collect();
     // Routed traffic aimed at any Firecrab subnet is denied before the
     // per-VM egress map is consulted: that is what keeps two MicroNetworks
     // from reaching each other now that the host routes all of them. Traffic
@@ -800,7 +877,7 @@ fn render_vm_policy_for_network(uplink: &str, policy: &VmPolicy, internet_enable
          add chain inet {TABLE_INET} vm_{tag}_dnat {{ type nat hook prerouting priority dstnat; policy accept; }}\n\
          flush chain inet {TABLE_INET} vm_{tag}_dnat\n\
          {dnat_prerouting_rules}\
-         add chain inet {TABLE_INET} vm_{tag}_dnat_out {{ type nat hook output priority dstnat; policy accept; }}\n\
+         add chain inet {TABLE_INET} vm_{tag}_dnat_out {{ type nat hook output priority -100; policy accept; }}\n\
          flush chain inet {TABLE_INET} vm_{tag}_dnat_out\n\
          {dnat_output_rules}"
     )
@@ -851,7 +928,7 @@ fn render_vm_policy_removal(vm_id: Uuid, ipv4: Ipv4Addr, ipv6: Option<Ipv6Addr>)
          delete chain inet {TABLE_INET} vm_{tag}_in\n\
          add chain inet {TABLE_INET} vm_{tag}_dnat {{ type nat hook prerouting priority dstnat; policy accept; }}\n\
          delete chain inet {TABLE_INET} vm_{tag}_dnat\n\
-         add chain inet {TABLE_INET} vm_{tag}_dnat_out {{ type nat hook output priority dstnat; policy accept; }}\n\
+         add chain inet {TABLE_INET} vm_{tag}_dnat_out {{ type nat hook output priority -100; policy accept; }}\n\
          delete chain inet {TABLE_INET} vm_{tag}_dnat_out\n"
     )
 }
@@ -864,8 +941,9 @@ fn render_remove_ruleset(listing: &str) -> String {
     format!(
         "add table inet {TABLE_INET}\n\
          delete table inet {TABLE_INET}\n\
-         {}",
-        render_stale_l2_removal(listing, &[])
+         {}{}",
+        render_stale_l2_removal(listing, &[]),
+        crate::security_groups::render(&[], &[], listing)
     )
 }
 
@@ -913,6 +991,7 @@ fn owned_snapshot(bytes: &[u8]) -> Result<Vec<serde_json::Value>, FirewallError>
         };
         let owned = match (data["family"].as_str(), table.as_str()) {
             (Some("inet"), Some(TABLE_INET)) | (Some("bridge"), Some(LEGACY_BRIDGE_TABLE)) => true,
+            (Some("inet" | "bridge"), Some(crate::security_groups::TABLE)) => true,
             (Some("netdev"), Some(name)) => name.starts_with(L2_TABLE_PREFIX),
             _ => false,
         };
@@ -1548,6 +1627,7 @@ mod tests {
 
     fn sample_policy(egress: EgressPolicy, allow_host_ssh: bool) -> VmPolicy {
         VmPolicy {
+            security_group: None,
             vm_id: Uuid::from_u128(0x1234),
             ipv4: Ipv4Addr::new(172, 30, 0, 42),
             ipv6: None,
@@ -1725,7 +1805,7 @@ mod tests {
             "add chain inet firecrab vm_{tag}_dnat {{ type nat hook prerouting priority dstnat; policy accept; }}"
         )));
         assert!(ruleset.contains(&format!(
-            "add chain inet firecrab vm_{tag}_dnat_out {{ type nat hook output priority dstnat; policy accept; }}"
+            "add chain inet firecrab vm_{tag}_dnat_out {{ type nat hook output priority -100; policy accept; }}"
         )));
         assert!(ruleset.contains(&format!(
             "add rule inet firecrab vm_{tag}_dnat iifname \"eth0\" tcp dport 8080 dnat ip to 172.30.0.42:80"

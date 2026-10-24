@@ -13,6 +13,7 @@ use crate::extract::ValidatedJson;
 use crate::handlers::vms::{parse_id, validate_vm_env};
 use crate::oci::{ImageReference, ImageVersion};
 use crate::persistence::PersistenceError;
+use crate::pipe_auth::SavedAuth;
 use crate::server::RequestId;
 use crate::state::AppState;
 
@@ -45,11 +46,23 @@ pub async fn create(
     Extension(request_id): Extension<RequestId>,
     ValidatedJson(spec): ValidatedJson<MicroServiceSpec>,
 ) -> Result<(StatusCode, Json<MicroServiceResponse>), AppError> {
+    create_with_id(state, request_id, spec, Uuid::new_v4()).await
+}
+
+/// Save through normal validation and locks with a journal-reserved identity.
+pub(crate) async fn create_with_id(
+    state: AppState,
+    request_id: RequestId,
+    spec: MicroServiceSpec,
+    id: Uuid,
+) -> Result<(StatusCode, Json<MicroServiceResponse>), AppError> {
     validate(&spec, request_id.0)?;
-    let service = MicroServiceResponse {
-        id: Uuid::new_v4(),
-        spec,
-    };
+    let _claim = state.service_mutations.lock().await;
+    require_image_auth(&state, &spec.image, request_id.0).await?;
+    super::pipe_storage::validate_binding(&state, &spec, request_id.0).await?;
+    let _network = state.network_mutations.lock().await;
+    crate::network_policy::validate_selection(&state, spec.security_group_id, None, request_id.0)?;
+    let service = MicroServiceResponse { id, spec };
     let record = service.clone();
     database(request_id.0, move || {
         state.store.insert_micro_service(&record)
@@ -69,6 +82,10 @@ pub async fn update(
     validate(&spec, request_id.0)?;
     let _claim = state.service_mutations.lock().await;
     crate::service_runtime::ensure_editable(&state, id, request_id.0).await?;
+    require_image_auth(&state, &spec.image, request_id.0).await?;
+    super::pipe_storage::validate_binding(&state, &spec, request_id.0).await?;
+    let _network = state.network_mutations.lock().await;
+    crate::network_policy::validate_selection(&state, spec.security_group_id, None, request_id.0)?;
     let service = MicroServiceResponse { id, spec };
     let record = service.clone();
     let changed = database(request_id.0, move || {
@@ -96,6 +113,40 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Scope service images to the verified account, never to independent registry logins.
+/// Saving validates ownership locally; deployment resolves the image with this account's credentials.
+pub(crate) async fn require_image_auth(
+    state: &AppState,
+    image: &str,
+    request_id: Uuid,
+) -> Result<SavedAuth, AppError> {
+    let invalid = || {
+        let message = "must belong to an account connected in Pipe Auth; use that GitHub account's GHCR namespace or that AWS account's ECR registry and region";
+        AppError::validation(
+            BTreeMap::from([("image".into(), message.into())]),
+            request_id,
+        )
+    };
+    let reference = ImageReference::parse(image).map_err(|_| invalid())?;
+    let auths = super::pipe_auth::saved(state, RequestId(request_id)).await?;
+    auths
+        .into_iter()
+        .find(|auth| match auth {
+            SavedAuth::Firecrab { .. } => false,
+            SavedAuth::Github { username, .. } => {
+                reference.registry == "ghcr.io"
+                    && reference
+                        .repository
+                        .split_once('/')
+                        .is_some_and(|(owner, _)| owner.eq_ignore_ascii_case(username))
+            }
+            SavedAuth::Aws { .. } => {
+                auth.connection().registry.as_deref() == Some(reference.registry.as_str())
+            }
+        })
+        .ok_or_else(invalid)
+}
+
 /// Keep SQLite work off the async executor and never expose DB details or env values.
 pub(crate) async fn database<T: Send + 'static>(
     request_id: Uuid,
@@ -117,7 +168,7 @@ pub(crate) async fn database<T: Send + 'static>(
 }
 
 /// Collect configuration errors, including resource bounds and environment conflicts.
-fn validate(spec: &MicroServiceSpec, request_id: Uuid) -> Result<(), AppError> {
+pub(crate) fn validate(spec: &MicroServiceSpec, request_id: Uuid) -> Result<(), AppError> {
     let mut fields = BTreeMap::new();
     if !dns_label(&spec.name) {
         fields.insert("name".to_owned(), "must be 1-63 lowercase letters, digits or hyphens; start and end with a letter or digit".to_owned());
@@ -148,7 +199,7 @@ fn validate(spec: &MicroServiceSpec, request_id: Uuid) -> Result<(), AppError> {
         );
     }
     if let Some(domain) = &spec.domain
-        && (domain.len() > 253 || !domain.split('.').all(dns_label))
+        && !firecrab_helper_protocol::pipe::valid_route_hostname(domain)
     {
         fields.insert(
             "domain".to_owned(),
@@ -203,7 +254,7 @@ fn validate(spec: &MicroServiceSpec, request_id: Uuid) -> Result<(), AppError> {
     if spec.secrets.values().any(Uuid::is_nil) {
         fields.insert(
             "secrets".to_owned(),
-            "must reference non-nil CrabSecrets UUIDs".to_owned(),
+            "must reference non-nil PipeSecrets UUIDs".to_owned(),
         );
     }
     if spec.secrets.keys().any(|key| spec.env.contains_key(key)) {

@@ -4,6 +4,45 @@ React and TypeScript UI for firecrab.
 Develop it from the repository root as described in [README.md](../README.md).
 OCI inspect → import browser tests live in [firecrab-e2e](../firecrab-e2e/README.md).
 
+The Pools screen asks for a name and image. Network and resource settings use
+defaults and remain available under Advanced settings. Use VM opens a fresh
+session; End session deletes its VM and prepares a replacement automatically.
+
+
+## WASM console
+
+The serial console pins `ghostty-web` 0.4.0-next.20.g1858a59. This upstream
+prerelease fixes resize/high-output failures found in 0.4.0. Ghostty's WASM core owns VT parsing,
+terminal modes, Unicode cells, reflow and history. TypeScript connects browser
+input, Canvas rendering and the existing console WebSocket. There is no xterm
+runtime or engine switch.
+
+Compiled WASM code is cached; each session gets a separate memory and terminal.
+Output is processed in 16 KiB chunks with a 4 ms scheduling budget and an 8 MiB
+pending cap. History has an 8 MiB byte budget: the pinned package's `scrollback`
+option is bytes despite its documentation ([upstream #140](https://github.com/coder/ghostty-web/issues/140)).
+Session isolation avoids [shared-memory corruption](https://github.com/coder/ghostty-web/issues/141).
+Text export reads native graphemes to avoid [truncated clusters](https://github.com/coder/ghostty-web/issues/200).
+
+`build/ghosttyOptimizations.ts` verifies the pinned source and WASM bytes before
+externalizing the binary and correcting resize, DPI and selection behavior.
+Review its checks when upgrading. MIT notices ship in `terminal-licenses.txt`.
+
+Font size changes apply live. Color themes apply through an explicit reconnect,
+because the pinned native core cannot update an open terminal's default colors.
+
+The browser adapter supports composition/mobile editing, bracketed paste,
+application cursor keys, selection copy, history paging, SGR/legacy mouse and
+focus reports. Live cursor/status queries receive native replies; the API strips
+old queries from replay. Shift overrides application mouse capture for text selection.
+The versioned console protocol carries dimensions separately from input bytes.
+A static guest helper applies the common grid to ttyS0 through private vsock.
+Connected modern viewers use the minimum reported rows and columns; old clients
+remain raw byte streams. Guest acknowledgement controls the synchronization status.
+See [guest resize](../public-docs/development/console-resize.md) for installation,
+kernel support, protocol and real-guest checks. Actual OS IMEs need manual validation.
+See [browser E2E](../firecrab-e2e/README.md#wasm-console) for local checks.
+
 ---
 
 # React + TypeScript + Vite

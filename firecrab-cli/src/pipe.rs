@@ -12,6 +12,8 @@ mod guest;
 pub(crate) mod host;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 mod quick;
+#[cfg(target_os = "linux")]
+mod service_routes;
 #[cfg(any(target_os = "linux", test))]
 mod status;
 
@@ -26,6 +28,11 @@ pub(crate) const TUNNEL_UNIT: &str = "firecrab-tunnel.service";
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Connect existing S3 buckets and manage objects through the selected host API.
+    Storage {
+        #[command(subcommand)]
+        command: crate::pipe_storage::Command,
+    },
     /// Connect or remove a stable *.firecrab.dev address.
     Address {
         #[command(subcommand)]
@@ -35,6 +42,10 @@ pub enum Command {
     #[cfg(target_os = "linux")]
     #[command(hide = true)]
     FirecrabManage,
+    /// Apply one MicroService domain intent from the privileged helper.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    ServiceRoute,
     /// Refresh stable address targets independently of the API.
     #[cfg(target_os = "linux")]
     #[command(hide = true)]
@@ -119,6 +130,7 @@ pub enum AddressCommand {
 
 pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     match command {
+        Command::Storage { .. } => Err("Storage commands must use the selected API host".into()),
         Command::Address { command } => {
             use firecrab_helper_protocol::firecrab_tunnel::{Request, Target};
             let request = match command {
@@ -174,6 +186,8 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
         }
         #[cfg(target_os = "linux")]
         Command::FirecrabManage => firecrab::manage(),
+        #[cfg(target_os = "linux")]
+        Command::ServiceRoute => service_routes::manage(),
         #[cfg(target_os = "linux")]
         Command::FirecrabSync => firecrab::sync(),
         #[cfg(target_os = "linux")]

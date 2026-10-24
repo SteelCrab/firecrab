@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, KeyRound } from "lucide-react";
-import { connectPipeAuth, disconnectPipeAuth, getPipeAuth, type AuthConnection, type AuthLogin, type AuthProvider } from "../api/pipeAuth";
+import { connectPipeAuth, disconnectPipeAuth, getPipeAuth, hasImageAuth, type AuthConnection, type AuthLogin, type AuthProvider } from "../api/pipeAuth";
 import { useI18n } from "../i18n";
 import { pipeCardHash, viewHash } from "../navigation";
+import { readServiceDeploymentDraft, resumeServiceDeployment } from "../lib/serviceDeploymentResume";
 import Screen from "./layout/Screen";
 import { useScreenStatus } from "./layout/screenStatus";
 import { DetailHead, DetailProp, DetailSection } from "./ui/DetailSection";
@@ -20,6 +21,7 @@ export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty:
   const { t } = useI18n();
   const { setDetailOpen } = useScreenStatus();
   const [connections, setConnections] = useState<AuthConnection[]>([]);
+  const [resumeDraft] = useState(readServiceDeploymentDraft);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -83,6 +85,14 @@ export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty:
       setNotice(connection.provider === "firecrab"
         ? t("Connected to the Firecrab account.", "Firecrab 계정을 연결했다.")
         : t("Connected. The registry is available in Pipe Registry.", "인증을 연결했다. Pipe Registry에서 레지스트리를 사용할 수 있다."));
+      if (!resumeDraft) return;
+      if (hasImageAuth(resumeDraft.image, [connection])) {
+        onUnsavedChange(false);
+        resumeServiceDeployment(resumeDraft);
+        return;
+      }
+      setNotice(null);
+      setError(t("This account does not match the deployment image. Connect its GitHub account or the matching AWS account and region.", "이 계정은 배포할 이미지와 일치하지 않는다. 이미지 소유자의 GitHub 계정 또는 같은 AWS 계정과 리전을 연결한다."));
     });
   }
   function disconnect(provider: AuthProvider) {
@@ -104,11 +114,11 @@ export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty:
   </>;
   const status = (connected: boolean) => <span className={`badge${connected ? " running" : ""}`}>{connected ? t("Connected", "연결됨") : t("Not connected", "미연결")}</span>;
 
-  return <section className="pipe-auth-screen" aria-label="Pipe Auth">
+  return <section className="pipe-auth-screen" aria-label="Auth">
     <Screen view="pipe" flush
       actions={<nav aria-label={t("Pipe navigation", "Pipe 이동")}><a className="btn sm ghost" href={viewHash("pipe")}><ArrowLeft aria-hidden="true" />Pipe</a></nav>}
       detailLabel={t("Authentication detail", "인증 상세")}
-      detailKind={<><KeyRound aria-hidden="true" />Pipe Auth</>}
+      detailKind={<><KeyRound aria-hidden="true" />Auth</>}
       onCloseDetail={closeDetail}
       detail={selected ? <>
         <DetailHead title={selected.name} meta={status(!!selectedConnection)} />
@@ -137,9 +147,12 @@ export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty:
       </> : null}
     >
       <div className="pipe-auth-heading">
-        <h2>Pipe Auth</h2>
+        <h2>Auth</h2>
         <p className="detail-note">{t("Connect an account to use its Pipe services.", "계정을 인증하여 관련 Pipe 서비스를 사용한다.")}</p>
       </div>
+      {resumeDraft && <div className="banner info">
+        <span>{t(`Reconnect AUTH to continue deploying ${resumeDraft.serviceName}. You will return to the deployment screen with your network and port choices.`, `${resumeDraft.serviceName} 배포를 계속하려면 AUTH를 다시 연결한다. 연결이 완료되면 선택한 네트워크와 포트를 유지한 배포 화면으로 돌아간다.`)}<br /><code>{resumeDraft.image}</code></span>
+      </div>}
       {!selected && feedback}
       {loadError && <div className="pipe-auth-retry"><button className="btn" type="button" onClick={() => { setLoading(true); setLoadError(false); setError(null); setVersion(value => value + 1); }}>{t("Retry", "다시 시도")}</button></div>}
       {loading ? <p className="empty" role="status">{t("Loading connections…", "인증 조회 중…")}</p> : !loadError && <div className="table-scroll"><table className="vm-table pipe-auth-connections" aria-label={t("Provider connections", "공급자 인증")}>
@@ -150,7 +163,7 @@ export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty:
             <td className="name"><button className="link-button" type="button" onClick={event => { event.stopPropagation(); select(provider.id); }}>{provider.name}</button></td>
             <td className="pipe-auth-account">{connection ? <>{connection.account}{connection.region && <span className="pipe-auth-region">{connection.region}</span>}</> : "—"}</td>
             <td>{status(!!connection)}</td>
-            <td className="pipe-auth-services" onClick={event => event.stopPropagation()}>{connection ? <a href={provider.href} target={provider.external ? "_blank" : undefined} rel={provider.external ? "noreferrer" : undefined}>{provider.service}</a> : <span className="muted">{provider.service}</span>}</td>
+            <td className="pipe-auth-services" onClick={event => event.stopPropagation()}>{connection ? <><a href={provider.href} target={provider.external ? "_blank" : undefined} rel={provider.external ? "noreferrer" : undefined}>{provider.service}</a>{connection.services.includes("storage") && <> · <a href={pipeCardHash("storage")}>S3</a></>}</> : <span className="muted">{provider.service}</span>}</td>
             <td className="actions" onClick={event => event.stopPropagation()}>{connection ? <PipeServiceMenu label={t(`${provider.name} actions`, `${provider.name} 작업`)} disabled={busy || !!editor} items={[
               { label: t("Update credentials", "인증 정보 갱신"), onSelect: () => open(provider.id) },
               { label: t("Disconnect", "연결 해제"), danger: true, onSelect: () => disconnect(provider.id) },

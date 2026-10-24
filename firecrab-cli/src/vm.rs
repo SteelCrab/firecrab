@@ -56,6 +56,22 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Pause guest execution while keeping its memory allocated.
+    Pause {
+        /// MicroVM UUID.
+        id: Uuid,
+        /// Emit the resulting VM as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Resume a paused MicroVM without rebooting it.
+    Resume {
+        /// MicroVM UUID.
+        id: Uuid,
+        /// Emit the resulting VM as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Stop a running MicroVM.
     Stop {
         /// MicroVM UUID.
@@ -141,6 +157,7 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
             json,
         } => {
             let request = CreateVmRequest {
+                security_group_id: None,
                 name,
                 template,
                 ram,
@@ -159,6 +176,14 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
         Command::Start { id, json } => {
             let path = format!("/api/vms/{id}/start");
             let vm: VmResponse = client.post_empty(&path)?;
+            print_output(json, &vm, format_vm_human(&vm));
+        }
+        Command::Pause { id, json } => {
+            let vm: VmResponse = client.post_empty(&format!("/api/vms/{id}/pause"))?;
+            print_output(json, &vm, format_vm_human(&vm));
+        }
+        Command::Resume { id, json } => {
+            let vm: VmResponse = client.post_empty(&format!("/api/vms/{id}/resume"))?;
             print_output(json, &vm, format_vm_human(&vm));
         }
         Command::Stop { id, json } => {
@@ -296,6 +321,9 @@ fn state_name(state: VmState) -> &'static str {
         VmState::Created => "created",
         VmState::Starting => "starting",
         VmState::Running => "running",
+        VmState::Pausing => "pausing",
+        VmState::Paused => "paused",
+        VmState::Resuming => "resuming",
         VmState::Stopping => "stopping",
         VmState::Stopped => "stopped",
         VmState::Error => "error",
@@ -322,8 +350,10 @@ mod tests {
 
     fn sample_vm() -> VmResponse {
         VmResponse {
+            security_group_id: None,
             id: id("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
             name: "web-1".to_owned(),
+            purpose: firecrab_api_types::VmPurpose::Instance,
             state: VmState::Running,
             reconciliation: None,
             template: "alpine-3.24.1".to_owned(),
@@ -445,6 +475,25 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(cli.command, Command::Stop { json: true, .. }));
+    }
+
+    #[test]
+    fn pause_resume_commands_require_uuid_and_support_json() {
+        for action in ["pause", "resume"] {
+            assert!(TestCli::try_parse_from(["test", action, "bad-id"]).is_err());
+            let parsed = TestCli::try_parse_from([
+                "test",
+                action,
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "--json",
+            ])
+            .unwrap();
+            assert!(matches!(
+                parsed.command,
+                Command::Pause { json: true, .. } | Command::Resume { json: true, .. }
+            ));
+        }
+        assert_eq!(state_name(VmState::Paused), "paused");
     }
 
     #[test]

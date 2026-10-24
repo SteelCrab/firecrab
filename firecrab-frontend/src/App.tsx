@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { VmResponse } from "./bindings";
-import { deleteVm, listVms, startVm, stopVm } from "./api/client";
+import { deleteVm, listVms, startVm, stopVm, pauseVm, resumeVm } from "./api/client";
 import type { VmAction } from "./model";
 import BannerView from "./components/Banner";
 import CreateVm from "./components/CreateVm";
@@ -9,19 +9,23 @@ import VmScreen from "./components/vm/VmScreen";
 import FirecrabPanel from "./components/FirecrabPanel";
 import HostInfo from "./components/HostInfo";
 import Images from "./components/Images";
+import Pools from "./components/Pools";
 import Kernels from "./components/Kernels";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
 import MicroServices from "./components/MicroServices";
+import SecurityGroups from "./components/SecurityGroups";
+import Schedules from "./components/Schedules";
 import Shell from "./components/Shell";
 import Pipe from "./components/Pipe";
 import Shells from "./components/Shells";
+import Secrets from "./components/Secrets";
 import CommandPalette from "./components/CommandPalette";
 import Screen from "./components/layout/Screen";
 import { ScreenStatus } from "./components/layout/screenStatus";
 import { HostStatusProvider } from "./hostStatus";
 import { useDetailPanelOpen, useDetailPanelWidth } from "./lib/detailPanel";
-import { useAppRoute, viewHash } from "./navigation";
+import { parseAppRoute, useAppRoute, viewHash, vmDetailsHash } from "./navigation";
 import { useI18n } from "./i18n";
 
 const POLL_MILLIS = 3_000;
@@ -136,15 +140,28 @@ export default function App() {
   // Generation token so React StrictMode's mount→unmount→remount does not
   // leave a stuck "in flight" flag that skips the real first list fetch.
   const refreshGen = useRef(0);
-  const [pipeHasUnsavedChanges, setPipeHasUnsavedChanges] = useState(false);
+  const pipeHasUnsavedChanges = useRef(false);
+  const onPipeUnsavedChange = useCallback((dirty: boolean) => { pipeHasUnsavedChanges.current = dirty; }, []);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [detailOpen, setDetailOpen] = useDetailPanelOpen();
+  const initialRoute = parseAppRoute();
+  const [detailOpen, setDetailOpen] = useDetailPanelOpen(initialRoute.kind === "shell" && !!(initialRoute.vmId || initialRoute.scheduleId || initialRoute.createSchedule));
   const [detailWidth, setDetailWidth] = useDetailPanelWidth();
-  const confirmLeave = useCallback(() => !pipeHasUnsavedChanges || window.confirm(t(
-    "Pipe changes have not been saved. Leave without saving?",
-    "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?",
-  )), [pipeHasUnsavedChanges, t]);
+  const [secretsHasUnsavedChanges, setSecretsHasUnsavedChanges] = useState(false);
+  const confirmLeave = useCallback(() => !(pipeHasUnsavedChanges.current || secretsHasUnsavedChanges) || window.confirm(
+    secretsHasUnsavedChanges
+      ? t("Secrets changes have not been saved or are still processing. Leave this page?", "Secrets 변경을 저장하지 않았거나 처리 중이다. 이동할까요?")
+      : t("Pipe changes have not been saved. Leave without saving?", "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?"),
+  ), [secretsHasUnsavedChanges, t]);
   const { route, selectView, closeConsole } = useAppRoute(confirmLeave);
+
+  useEffect(() => {
+    const openLinkedVm = () => {
+      const next = parseAppRoute();
+      if (next.kind === "shell" && ((next.view === "vms" && next.vmId) || (next.view === "schedules" && (next.createSchedule || next.scheduleId)))) setDetailOpen(true);
+    };
+    window.addEventListener("hashchange", openLinkedVm);
+    return () => window.removeEventListener("hashchange", openLinkedVm);
+  }, [setDetailOpen]);
 
   const runRefresh = useCallback(() => {
     const gen = ++refreshGen.current;
@@ -183,6 +200,8 @@ export default function App() {
         try {
           let vm: VmResponse | null;
           if (action === "start") vm = await startVm(id);
+          else if (action === "pause") vm = await pauseVm(id);
+          else if (action === "resume") vm = await resumeVm(id);
           else if (action === "stop") vm = await stopVm(id);
           else {
             await deleteVm(id);
@@ -210,7 +229,10 @@ export default function App() {
   const onError = useCallback((message: string) => dispatch({ type: "error", message }), []);
   const dismiss = useCallback(() => dispatch({ type: "dismissBanner" }), []);
 
-  const onSelectVm = useCallback((id: string | null) => dispatch({ type: "select", id }), []);
+  const onSelectVm = useCallback((id: string | null) => {
+    dispatch({ type: "select", id });
+    window.location.hash = id ? vmDetailsHash(id) : viewHash("vms");
+  }, []);
   // The palette opens a VM by selecting it on the MicroVM screen.
   const onPaletteSelectVm = useCallback((id: string) => {
     dispatch({ type: "select", id });
@@ -260,17 +282,21 @@ export default function App() {
           vms={state.vms}
           loaded={state.loaded}
           busy={state.busy}
-          selectedVmId={state.selectedVmId}
+          selectedVmId={route.vmId ?? state.selectedVmId}
           onSelectVm={onSelectVm}
           onAction={onAction}
         />
       )}
       {/* Each page mounts only while selected, so its own polling stops
           the moment you navigate away. */}
+      {view === "pools" && <Screen view="pools"><Pools /></Screen>}
       {view === "networks" && <MicroNetworks />}
+      {view === "security-groups" && <SecurityGroups vms={state.vms} vmsAvailable={state.loaded && state.consecutiveFailures === 0} />}
       {view === "services" && <MicroServices />}
+      {view === "schedules" && <Schedules key={route.kind === "shell" ? `${route.vmId ?? "all"}-${!!route.createSchedule}-${route.scheduleId ?? ""}` : "all"} vms={state.vms} vmsLoaded={state.loaded && state.consecutiveFailures === 0} vmId={route.kind === "shell" ? route.vmId : undefined} create={route.kind === "shell" && route.createSchedule} scheduleId={route.kind === "shell" ? route.scheduleId : undefined} />}
+      {view === "secrets" && <Screen view="secrets"><Secrets onUnsavedChange={setSecretsHasUnsavedChanges} /></Screen>}
       {view === "pipe" && (
-        <Pipe card={route.kind === "pipe-card" ? route.card : null} vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />
+        <Pipe card={route.kind === "pipe-card" ? route.card : null} vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={onPipeUnsavedChange} />
       )}
       {view === "storages" && <MicroStorages />}
       {view === "images" && <Images />}

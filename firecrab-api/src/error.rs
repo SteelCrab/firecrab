@@ -29,6 +29,33 @@ pub struct AppError {
 }
 
 impl AppError {
+    /// Static category for redacted durable operation failures.
+    pub(crate) fn code(&self) -> &'static str {
+        self.code
+    }
+
+    /// Schema field names only; descriptions can contain submitted values.
+    pub(crate) fn field_names(&self) -> Vec<String> {
+        self.fields.keys().cloned().collect()
+    }
+
+    /// Preserve static guidance while removing potentially value-bearing field details.
+    pub(crate) fn redacted(mut self) -> Self {
+        for detail in self.fields.values_mut() {
+            *detail = "cannot apply this field on the selected host".into();
+        }
+        self
+    }
+
+    /// Concise operation failure suitable for a durable task result.
+    pub(crate) fn description(&self) -> String {
+        let mut text = format!("{}: {}", self.code, self.message);
+        for (field, detail) in &self.fields {
+            text.push_str(&format!(" ({field}: {detail})"));
+        }
+        text
+    }
+
     /// Builds an error with no per-field validation detail.
     pub fn new(
         status: StatusCode,

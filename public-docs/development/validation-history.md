@@ -40,6 +40,35 @@ Public-image guest QA passed Alpine 3.21, Ubuntu 24.04, and Fedora 42 with exit 
 The Linux lab host repeatedly attempted suspend, removing its network routes and causing QEMU connections to return `ENETUNREACH`. A temporary sleep inhibitor kept the network available during QA. Source fixes also bound registry connection retries, allow 60/65 seconds for API/CLI inspection, give APT network stages 600 seconds without interrupting dpkg configuration, recover DNF metadata once, and parse exported RPM headers correctly. Console and SSH tests wait for actual readiness before sending input.
 Final logs, JSON summaries, and JUnit/browser archives are retained in the local lab's `failure-fix-20261004` directory. Earlier failures remain in `qa-e2e-20261004` and separate failed-run artifacts. This validates the source lab's guest and full browser runs; Windows `-Phase all` was not rerun, and physical Windows, stock release, and native Windows Chromium remain unverified.
 
+## MicroVM pause/resume KVM QA, 2026-10-23
+
+Measured the PR #365 runtime at `b4882b7` on a Debian 13 ARM64 management VM,
+Linux `6.12.111+deb13-arm64`, and Firecracker `1.17.0`. The API and helper were
+temporary debug builds. `scripts/ci-qa-vm-pause.py` used private network/mount
+namespaces and a copied `traefik/whoami` image. The copy included the host's
+OpenSSH server and its libraries for offline SSH testing. Original images and
+installed services were preserved.
+
+| Check | Result |
+| --- | --- |
+| Three pause/resume cycles | PASS; RAM-only random token, guest shell PID, boot ID, VMM PID, and IP/MAC stayed unchanged |
+| Guest execution while paused | PASS; counter stopped and HTTP timed out |
+| New connections after each resume | PASS; HTTP 200 and host-key-verified SSH authentication, with the same boot ID |
+| API restart while paused | PASS; Paused was recovered and the counter stayed frozen until explicit Resume |
+| Sleepy activity | PASS; paused MicroVM kept management activity busy |
+| Stop from Paused | PASS; normal stop, VM deletion, and network deletion completed |
+| Isolation and cleanup | PASS; installed API/helper and three existing MicroVM service PIDs stayed unchanged; temporary namespaces, units, disks, and image copies were removed |
+
+The local worktree retains `target/qa/vm-pause/pause-qa-ssh.json` and
+`pause-qa-ssh.log`, plus before/after service and namespace records. These are
+local evidence files, not CI uploads. API SHA-256:
+`c300718fbbb8cdabf1987a370086fe7fb142fae578ddfdb28ae938750ff0f4eb`.
+Helper SHA-256:
+`9489645b04f1ae56b37811a5df1df402a89d853fdd514a1b5636c93b08d2e7c2`.
+
+No vsock device or guest agent was configured. This run does not validate vsock,
+x86_64 KVM, native Windows/macOS Sleepy runtime, or disk-backed suspend.
+
 ## Related
 
 - [Windows setup](../getting-started/windows.md)

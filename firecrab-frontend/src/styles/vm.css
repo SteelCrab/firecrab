@@ -71,7 +71,7 @@ table.vm-list { width: 100%; border-collapse: separate; border-spacing: 0; table
 .vm-col-ip { width: 120px; }
 .vm-col-cpu { width: 116px; }
 .vm-col-mem { width: 104px; }
-.vm-col-actions { width: 100px; }
+.vm-col-actions { width: 132px; }
 .vm-list th {
   position: sticky;
   top: 0;

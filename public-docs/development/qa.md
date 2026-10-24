@@ -43,6 +43,10 @@ The Firecrab API host is native Linux or managed Debian on macOS/Windows.
 | `scripts/test-ingress-install.sh` | Isolated initial install/reinstall; executable mode, all attributions, and saved routes, with fake service controls |
 | `scripts/ci-qa-pipe-databases.sh --browser` | PDB1–PDB12; real API, PostgreSQL/MySQL, TLS and desktop/mobile browser checks |
 | `scripts/test-pipe-databases-qa.py` | Database QA remote-host guard and cleanup after failures |
+| `firecrab-e2e` `test:secrets` | SEC1–SEC8; isolated Secrets UI checks with a mocked API |
+| `firecrab-e2e` `test:secrets:live` | SEC9–SEC14; Chromium, actual API processes, encrypted vaults, and local providers |
+| `scripts/ci-qa-secrets.py` | Secrets unit tests, lint/types/builds, SEC1–SEC14; JSON/Markdown report, SEC15/SEC16 manual warnings |
+| `scripts/test-ci-qa-secrets.py` | Failure aggregation, missing-case reporting, manual warnings, and stale-build prevention |
 
 See [PIPE database E2E and QA](pipe-databases-qa.md) for the case matrix,
 fixture-only browser commands, live database prerequisites and cloud acceptance limits.
@@ -55,6 +59,31 @@ nginx is a separate pass using `nginx:1.27-alpine`.
 
 R4f helper migration requires `FIRECRAB_QA_HELPER_UPGRADE=1` on a disposable Linux CI host.
 Manual cases outside Ubuntu CI include I2/I3/I4/I7/I10/U1.
+
+## PipeSecrets QA
+
+Install the frontend/E2E dependencies and Chromium using the [browser setup](../../firecrab-e2e/README.md#setup).
+Run `python3 scripts/ci-qa-secrets.py` on Linux or managed Debian.
+This pass does not require a VM, KVM, a network helper, or a running installed API.
+It uses temporary stores and local providers. It never targets the installed host database.
+See the [Secrets suite](../../firecrab-e2e/README.md#pipesecrets) for individual commands and artifact paths.
+
+Record SEC1–SEC14 from the generated report. The report retains each command and exit code.
+Missing or skipped automated cases are `WARNING` and produce a nonzero aggregate exit.
+SEC15 and SEC16 remain `WARNING` until the following external-account checks are performed separately.
+
+1. Use a dedicated Infisical QA project/environment/path and an AWS QA prefix such as `qa-<run>/`.
+2. Use short-lived credentials scoped to those resources. Enter them in the web console.
+3. Create synthetic source values. Preview and import them. Reveal a copy and check that its source is correct.
+4. Change a local copy. Preview the upload, select the replacement, and verify the external value.
+5. Change the remote value after preview. Confirm that upload refuses that stale preview.
+6. Check a denied read/write or expired credential. Confirm a visible error without raw provider data.
+7. Remove the connection. Confirm that imported local copies remain. Delete only this run's QA values in both stores.
+8. Record provider/region, scope, timestamp, case result, and cleanup status. Keep secret values and credentials out of reports and screenshots.
+
+Use `WARNING` if an account, permission, or cleanup step is unavailable.
+Infisical protocol fixtures and AWS SigV4 tests do not substitute for SEC15/SEC16.
+These checks validate web-console secret management; VM environment injection is outside this pass.
 
 ## Platform limits
 
@@ -82,3 +111,47 @@ Past source runs and their remaining limits are in [Validation history](validati
 - [Complete checklist](testing.md)
 - [Browser E2E](../../firecrab-e2e/README.md)
 - [Troubleshooting](../guides/troubleshooting.md)
+
+## MicroVM pause/resume memory continuity
+
+`scripts/ci-qa-vm-pause.py` prepares a temporary API, helper, image copy, and
+private network/mount namespaces on a Linux/KVM test host. It requires root,
+systemd, iproute2, unshare, dnsmasq, nftables, an SSH client, and a Firecracker
+binary on PATH. Choose an installed image that provides a serial root shell and
+sshd. The guest readiness DNS probe uses a local fixture inside the private
+helper mount namespace, so the test needs no external network access.
+
+```sh
+sudo python3 scripts/ci-qa-vm-pause.py \
+  --api-binary target/debug/firecrab-api \
+  --helper-binary target/debug/firecrab-helper \
+  --image-root /var/lib/firecrab/images --template IMAGE_ALIAS \
+  --report /tmp/firecrab-pause-qa.json
+```
+
+The test checks three pause/resume cycles, an in-memory random token and counter,
+guest process and boot identity, VMM PID, IP/MAC, HTTP and new authenticated SSH
+connections, Sleepy inhibition,
+API restart while paused, Stop from Paused, and cleanup. Existing workload units
+and installed services are preserved. A successful JSON report is native KVM
+evidence; API fixture and browser results alone do not establish memory continuity.
+
+## Pools
+
+Needs a network (N1) and an installed template (I3 or I6).
+`minReady` 0 does not boot a guest.
+
+| ID | Work | Add | Delete / cleanup |
+| --- | --- | --- | --- |
+| P1 | create idle | `POST /api/pools` name `qa-pool`, template, cpu, ram, diskGb, `microNetworkId`, `minReady` 0, `maxSize` 1, `leaseTtlSeconds` 600 → 201; `templateVersion` is pinned | after P5 |
+| P2 | list and detail | `GET /api/pools` and `GET /{id}` | with P1 |
+| P3 | resize | `PATCH` `minReady`, `maxSize`, `leaseTtlSeconds` | with P1 |
+| P4 | acquire empty | `POST /{id}/acquire` → 409 `pool_exhausted` | no lease row |
+| P5 | delete idle | `DELETE` → 202 `deleting: true`, then GET → 404 | leftover empty |
+| P6 | warm lease | `minReady` 1 boots one member; acquire → 201; `PUT` or `DELETE /api/vms/{id}` → 409 `pool_owned`; release deletes that VM and its disk | replacement VM id differs |
+| P7 | API restart | keep one ready and one leased member; restart the API; member IDs, states and shim/Firecracker PIDs stay unchanged; retry acquire with the same key → 200 and the original active lease | release, then delete pool |
+
+P6 boots a guest.
+Run it with V7, not in the API-only pass.
+CI runs P1–P7, C6, and X7 on the first OCI reference in `scripts/ci-qa-guest.sh`, after that guest boots and before the image delete.
+P7 requires `FIRECRAB_QA_POOL_RESTART=1` on a disposable host. Other runs report it as a warning.

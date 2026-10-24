@@ -6,7 +6,9 @@ The same cache is used by the dashboard, OCI import, and image kernel updates.
 ## Catalog
 
 `GET /api/kernels` lists the host architecture's supported releases and local cache state.
-Linux `7.2.2` is the newest release in this build.
+Linux `7.2.2-vsock1` is the default OCI kernel in this build. This Firecrab revision
+of Linux `7.2.2` includes built-in virtio-vsock for guest terminal resizing on both
+architectures. Older `7.2.2` packages remain available for rollback.
 Linux `7.1.9` remains available for compatibility testing and rollback.
 Each row includes the architecture, kernel filename, package digest, image digest, and usage state.
 
@@ -19,8 +21,8 @@ Set `FIRECRAB_IMAGE_BASE_URL` to the MicroRegistry or a compatible private mirro
 The default is `https://registry.firecrab.dev`.
 
 ```sh
-curl -s -X POST http://127.0.0.1:5523/api/kernels/7.2.2/install
-curl -s http://127.0.0.1:5523/api/kernels/7.2.2/install
+curl -s -X POST http://127.0.0.1:5523/api/kernels/7.2.2-vsock1/install
+curl -s http://127.0.0.1:5523/api/kernels/7.2.2-vsock1/install
 ```
 
 The POST returns `202` and the GET returns `running`, `succeeded`, or `failed` with an operator log.
@@ -35,7 +37,7 @@ Managed-kernel images also expose `kernelVersion`.
 ```sh
 curl -s -X PUT http://127.0.0.1:5523/api/images/ubuntu-26.04/kernel \
   -H 'Content-Type: application/json' \
-  -d '{"kernelVersion":"7.2.2"}'
+  -d '{"kernelVersion":"7.2.2-vsock1"}'
 ```
 
 The selected kernel must already be installed and verified.

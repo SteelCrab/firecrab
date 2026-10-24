@@ -1,4 +1,4 @@
-//! Versioned, offline stack validation shared by CLI and future GitOps callers.
+//! Versioned stack validation, ownership, pure planning and native apply wire types.
 //!
 //! Validation never reads host state, resolves images, or creates resources.
 //! A successful result is a structurally valid declaration, not a deployment plan.
@@ -9,13 +9,23 @@ use std::net::Ipv4Addr;
 use firecrab_api_types::{EgressPolicy, MicroServiceSpec};
 use serde::{Deserialize, Serialize};
 
+mod apply;
+mod planning;
+pub use apply::{
+    ApplyFailure, ApplyRequest, ApplyState, ApplyStatus, ApplyStep, StepState, desired_hash,
+};
+pub use planning::{
+    Action, Binding, Change, DeleteStackRequest, Inventory, Plan, RegisterStackRequest,
+    ResourceKind, ServiceSnapshot, StackRecord, VmSnapshot, fingerprint, plan,
+};
+
 /// Maximum UTF-8 manifest size, including comments.
 pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 /// Maximum total declared resources in one stack.
 pub const MAX_RESOURCES: usize = 256;
 
 /// An experimental stack declaration. Unknown fields are rejected at every level.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Stack {
     /// Explicit schema version; currently only `firecrab.dev/v1alpha1`.
@@ -36,22 +46,22 @@ pub struct Stack {
 }
 
 /// Supported experimental manifest versions.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub enum ApiVersion {
-    /// Initial validation-only schema; may change before apply support lands.
+    /// Initial experimental schema for explicit planning and native execution.
     #[serde(rename = "firecrab.dev/v1alpha1")]
     V1Alpha1,
 }
 
 /// Supported document kind.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub enum StackKind {
     /// A set of resources managed together.
     Stack,
 }
 
 /// Initial IPv4 network schema. Advanced network fields are not yet accepted.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Network {
     /// Name to use in the resource API.
@@ -64,7 +74,7 @@ pub struct Network {
 }
 
 /// Standalone VM declaration; `network` refers to a logical name in this stack.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Vm {
     /// Name to use in the resource API.
@@ -91,7 +101,7 @@ pub struct Vm {
 }
 
 /// Host-port service declaration, reusing the existing API configuration type.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Service {
     /// Existing MicroService configuration shape.
@@ -342,7 +352,8 @@ fn default_internet_enabled() -> bool {
     true
 }
 
-fn logical_name(name: &str) -> bool {
+/// Whether a stack name or logical resource key is a safe lowercase DNS label.
+pub fn logical_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     (1..=63).contains(&bytes.len())
         && bytes[0].is_ascii_alphanumeric()

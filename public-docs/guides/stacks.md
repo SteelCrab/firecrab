@@ -119,6 +119,6 @@ Host image availability, exact VM template and kernel content, image-specific di
 OCI digest syntax is checked locally; registry reference resolution and digest verification still need the host.
 IPv6, uplink selection, VM shells, and standalone VM port forwards are outside this initial schema.
 
-`stack plan`, `apply`, ownership persistence, drift correction, and Git polling are not implemented yet.
-The next step is durable ownership and read-only planning against the selected host.
-Application and continuous Git reconciliation follow that work.
+Host-local ownership and read-only `stack plan` are documented in [Stack ownership and planning](stack-planning.md).
+Use [Native YAML stack apply](stack-apply.md) for explicit creation, changes, deployment and recovery.
+Continuous drift correction and Git polling remain follow-up work.

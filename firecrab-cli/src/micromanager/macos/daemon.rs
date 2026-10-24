@@ -117,16 +117,35 @@ fn install_at(
         .map_err(|source| io_error("create daemon runtime directory", runtime, source))?;
 
     super::ssh::prepare(runtime, &settings.ssh)?;
-    write_atomic(
-        &paths.wrapper,
-        render_wrapper(layout, helper, ssh_private_key, paths, settings).as_bytes(),
-        0o700,
-    )?;
-    write_atomic(
-        &paths.plist,
-        render_plist(paths, settings).as_bytes(),
-        0o600,
-    )
+    let mut wrapper = render_wrapper(layout, helper, ssh_private_key, paths, settings);
+    let mut plist = render_plist(paths, settings);
+    if layout.managed_home.join("runtime/controlled").is_file() {
+        let settings = super::super::settings::Store::new(&layout.managed_home)
+            .load()
+            .map_err(|error| {
+                io_error(
+                    "read settings",
+                    &layout.managed_home,
+                    io::Error::other(error),
+                )
+            })?
+            .settings;
+        wrapper = wrapper.replace("127.0.0.1:5523:127.0.0.1:5523", "127.0.0.1:5524:127.0.0.1:5523")
+            .replace("http://127.0.0.1:5523/api/host", "http://127.0.0.1:5524/api/host")
+            .replace("FIRECRAB_MICROMANAGER_HOME=\"$root\"", &format!("FIRECRAB_MICROMANAGER_CPU={} FIRECRAB_MICROMANAGER_MEMORY_MIB={} FIRECRAB_MICROMANAGER_HOME=\"$root\"", settings.cpu, settings.memory_mib));
+        plist = plist
+            .replace(
+                "<key>RunAtLoad</key><true/>",
+                "<key>RunAtLoad</key><false/>",
+            )
+            .replace(
+                "<key>KeepAlive</key><true/>",
+                "<key>KeepAlive</key><false/>",
+            );
+    }
+    write_atomic(&paths.wrapper, wrapper.as_bytes(), 0o700)?;
+    write_atomic(&paths.plist, plist.as_bytes(), 0o600)?;
+    Ok(())
 }
 
 pub fn uninstall(layout: &Layout) -> Result<(), Error> {
@@ -170,6 +189,13 @@ pub fn start_with_runtime(layout: &Layout, settings: &Runtime) -> Result<Status,
         ],
         false,
     )?;
+    if layout.managed_home.join("runtime/controlled").is_file() {
+        launchctl(
+            "kickstart",
+            &[&format!("{}/{}", domain(layout)?, LABEL)],
+            false,
+        )?;
+    }
     let timeout = READY_TIMEOUT;
     report!(
         "[WAIT] VM/API readiness (up to {}s); console: {}",
@@ -225,7 +251,7 @@ pub fn status(layout: &Layout) -> Result<Status, Error> {
         None
     };
     let ready = detail.is_some();
-    let api_reachable = api_reachable();
+    let api_reachable = api_reachable(layout);
     Ok(Status {
         loaded,
         ready,
@@ -444,11 +470,16 @@ fn domain(_layout: &Layout) -> Result<String, Error> {
     ))
 }
 
-fn api_reachable() -> bool {
+fn api_reachable(layout: &Layout) -> bool {
+    let url = if layout.managed_home.join("runtime/controlled").is_file() {
+        "http://127.0.0.1:5524/api/host"
+    } else {
+        API_URL
+    };
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
-        .and_then(|client| client.get(API_URL).send())
+        .and_then(|client| client.get(url).send())
         .is_ok_and(|response| response.status().is_success())
 }
 
@@ -883,6 +914,60 @@ mod tests {
             assert_eq!(fs::read(path).unwrap(), b"preserved");
         }
         assert!(!layout.managed_home.join("downloads").exists());
+    }
+
+    #[test]
+    fn controlled_registration_preserves_ssh_policy_and_resource_service() {
+        let directory = tempfile::tempdir().unwrap();
+        let layout = Layout {
+            install_dir: directory.path().join("bin"),
+            managed_home: directory.path().join("micromanager"),
+        };
+        let runtime = layout.managed_home.join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(runtime.join("controlled"), b"1\n").unwrap();
+        let store = super::super::super::settings::Store::new(&layout.managed_home);
+        let snapshot = store.load().unwrap();
+        let mut settings = snapshot.settings.clone();
+        settings.cpu = 4;
+        settings.memory_mib = 8192;
+        store.save(&snapshot, settings).unwrap();
+        let paths = DaemonPaths {
+            plist: directory.path().join("LaunchAgents/agent.plist"),
+            wrapper: runtime.join("daemon.sh"),
+            ready: runtime.join("daemon-ready"),
+            manager_ready: runtime.join("manager-ready"),
+            log: runtime.join("daemon.log"),
+            platform: runtime.join("host-platform.json"),
+        };
+        let mut policy = Runtime::default();
+        policy.ssh.keepalive_interval_secs = 23;
+        install_at(
+            &layout,
+            &layout.helper_path(),
+            &runtime.join("key"),
+            &paths,
+            &policy,
+        )
+        .unwrap();
+        let wrapper = fs::read_to_string(&paths.wrapper).unwrap();
+        assert!(wrapper.contains("127.0.0.1:5524:127.0.0.1:5523"));
+        assert!(wrapper.contains("http://127.0.0.1:5524/api/host"));
+        assert!(wrapper.contains("FIRECRAB_MICROMANAGER_CPU=4"));
+        assert!(wrapper.contains("FIRECRAB_MICROMANAGER_MEMORY_MIB=8192"));
+        assert!(wrapper.contains("ServerAliveInterval=23"));
+        assert!(wrapper.contains("service resource-server --home"));
+        let plist = fs::read_to_string(&paths.plist).unwrap();
+        assert!(plist.contains("<key>RunAtLoad</key><false/>"));
+        assert!(plist.contains("<key>KeepAlive</key><false/>"));
+        assert!(
+            ProcessCommand::new("/bin/bash")
+                .arg("-n")
+                .arg(&paths.wrapper)
+                .status()
+                .unwrap()
+                .success()
+        );
     }
 
     #[test]

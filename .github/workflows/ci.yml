@@ -42,7 +42,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y dnsmasq fakeroot musl-tools
 
       - name: Build private ingress engine
-        run: ./scripts/build-ingress.sh target/ingress
+        run: |
+          ./scripts/build-ingress.sh target/ingress
+          ./scripts/build-guest-console.sh target/ingress
+          python3 scripts/test-guest-console.py
 
       - name: Verify bundled ingress installation
         run: sudo bash scripts/test-ingress-install.sh target/ingress
@@ -77,11 +80,15 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Unit and Pipe systemd tests + coverage
+      - name: Unit, settings terminal, and Pipe systemd tests + coverage
         run: |
           source <(cargo llvm-cov show-env --sh)
           cargo llvm-cov clean --workspace
           cargo test --workspace --locked
+          # The terminal test is ignored by cargo test because it needs a PTY.
+          # Run its instrumented binary before exporting the coverage report.
+          test_binary=$(cargo test -p firecrab-cli --no-run --message-format=json | python3 -c 'import json,sys; entries=[json.loads(line) for line in sys.stdin]; print(next(item["executable"] for item in entries if item.get("reason") == "compiler-artifact" and item.get("profile", {}).get("test") and item.get("target", {}).get("name") == "firecrab" and item.get("executable")))')
+          python3 scripts/test-micromanager-settings.py --test-binary "$test_binary"
           cargo build -p firecrab-cli -p firecrab-api -p firecrab-helper --locked
           bin="$CARGO_LLVM_COV_TARGET_DIR/debug"
           # The API runs as nobody; its helper runs in a systemd sandbox that
@@ -271,8 +278,8 @@ jobs:
       - name: rustdoc coverage floor
         # --show-coverage is nightly-only rustdoc; RUSTC_BOOTSTRAP=1 unlocks it
         # on the pinned stable toolchain. Floor is a documentation-completeness
-        # target (75%), not a regression guard — current baseline is ~14%, so
-        # this fails until doc comments are added across the workspace.
+        # target (75%), not a regression guard. Display enough precision to
+        # explain failures just below the floor without rounding them to 75.0%.
         run: |
           RUSTC_BOOTSTRAP=1 RUSTDOCFLAGS="-Z unstable-options --show-coverage" \
             cargo doc --workspace --no-deps --document-private-items | tee doc-coverage.txt
@@ -291,7 +298,7 @@ jobs:
 
           pct = (documented / total * 100) if total else 0.0
           threshold = 75.0
-          summary = f"**rustdoc coverage: {documented}/{total} items ({pct:.1f}%)** — floor {threshold}%\n"
+          summary = f"**rustdoc coverage: {documented}/{total} items ({pct:.4f}%)** — floor {threshold}%\n"
           print(summary)
           import os
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
@@ -302,7 +309,7 @@ jobs:
           PY
 
   e2e-dashboard:
-    name: Browser E2E (dashboard, no guest boot)
+    name: Browser E2E (dashboard and Secrets, no guest boot)
     # Playwright specs tagged @dashboard fake the API or console they need, so
     # they run without KVM or the net helper. Guest-boot halves stay manual.
     runs-on: ubuntu-latest
@@ -349,13 +356,65 @@ jobs:
       - name: PIPE database E2E types
         run: npm run typecheck:pipe --prefix firecrab-e2e
 
-      - name: Playwright traces (on failure)
-        if: failure()
+      - name: Secrets QA runner contracts
+        if: ${{ !cancelled() }}
+        run: python3 scripts/test-ci-qa-secrets.py
+
+      - name: PipeSecrets QA (unit, UI, real API and encrypted vault)
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci-qa-secrets.py
+
+      - name: Browser and Secrets QA reports
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: e2e-dashboard-results
+          path: |
+            firecrab-e2e/test-results
+            target/qa/secrets
+          retention-days: 14
+
+  wasm-terminal:
+    name: WASM terminal (${{ matrix.browser }}, production)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    env:
+      FIRECRAB_MOCKED_E2E_PRODUCTION: "1"
+      FIRECRAB_MOCKED_E2E_CROSS_BROWSER: "1"
+      FIRECRAB_MOCKED_E2E_BASE_URL: http://127.0.0.1:8099
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            firecrab-frontend/package-lock.json
+            firecrab-e2e/package-lock.json
+      - name: Install dashboard and browser test dependencies
+        run: |
+          npm ci --prefix firecrab-frontend
+          npm ci --prefix firecrab-e2e
+          npx --prefix firecrab-e2e playwright install --with-deps ${{ matrix.browser }}
+      - name: Check WASM browser test types
+        run: node firecrab-frontend/node_modules/tsrs/bin/tsrs -p firecrab-e2e/tsconfig.wasm.json
+      - name: Check the production WASM console and session behavior
+        run: >-
+          npm run test:mocked --prefix firecrab-e2e --
+          tests/wasm-terminal.spec.ts tests/console-session.spec.ts
+          --project ${{ matrix.browser }}
+      - name: Verify standalone WASM artifacts
+        run: node --test firecrab-e2e/scripts/test-terminal-build.mjs
+      - name: WASM terminal browser results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasm-terminal-${{ matrix.browser }}
           path: firecrab-e2e/test-results
-          retention-days: 7
+          retention-days: 14
 
   pipe-databases:
     name: PIPE databases (real API, PostgreSQL, MySQL, TLS and browser)
@@ -454,6 +513,8 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck install.sh scripts/ci-qa-helper-upgrade.sh scripts/ci-qa-pipe-databases.sh scripts/firecrab-release.sh scripts/package-host-release.sh \
+            scripts/build-guest-console.sh scripts/build-guest-kernel.sh \
+            scripts/firecracker-menual/install-linux-kernel.sh \
             scripts/build-micromanager-macos.sh \
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
             scripts/ci-qa-api.sh \
@@ -605,6 +666,28 @@ jobs:
           done
           curl -fsS http://127.0.0.1:5523/api/host >/dev/null
 
+      - name: Guest console vsock and foreground resize
+        if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
+        timeout-minutes: 3
+        run: |
+          python3 - <<'PY'
+          import json,time,urllib.request
+          url = "http://127.0.0.1:5523/api/kernels/7.2.2-vsock1/install"
+          urllib.request.urlopen(urllib.request.Request(url, method="POST"), timeout=20).close()
+          for _ in range(90):
+              with urllib.request.urlopen(url, timeout=10) as response:
+                  result = json.load(response)
+              if result["status"] == "succeeded": break
+              if result["status"] == "failed": raise SystemExit(result)
+              time.sleep(1)
+          else: raise SystemExit("Kernel installation timed out")
+          PY
+          sudo python3 scripts/test-guest-console-vm.py \
+            --kernel /var/lib/firecrab/images/.oci/kernel/x86_64/vmlinux-7.2.2-vsock1-x86_64 \
+            --helper /usr/local/lib/firecrab/firecrab-guest-console \
+            --busybox /usr/bin/busybox --expected-release 7.2.2-firecrab-vsock1 \
+            --report target/qa/guest-console-vm.json
+
       - name: Chromium E2E with real guest boot and dual-stack SSH
         if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
         timeout-minutes: 30
@@ -612,7 +695,11 @@ jobs:
           FIRECRAB_E2E_REUSE_SERVER: "1"
           FIRECRAB_E2E_REQUIRE_GUEST_BOOT: "1"
           FIRECRAB_E2E_REQUIRE_RUNNING_API: "1"
-        run: npm test --prefix firecrab-e2e 2>&1 | tee target/qa/browser.log
+          FIRECRAB_E2E_REQUIRE_GUEST_RESIZE: "1"
+        run: |
+          # Report console failures before running the broad dashboard suite.
+          npm run test:console --prefix firecrab-e2e 2>&1 | tee target/qa/console-browser.log
+          npm test --prefix firecrab-e2e -- --grep-invert 'terminal session end' 2>&1 | tee target/qa/browser.log
 
       - name: QA nginx env, port-forward, shells
         if: ${{ !cancelled() && steps.install-service.outcome == 'success' && steps.enable-kvm.outcome == 'success' }}
@@ -627,7 +714,8 @@ jobs:
         # The first reference additionally runs N6/V2/V6/V9/V12 and C1/C2/C4;
         # a pre-existing first alias is preserved and its unperformed import is
         # reported as WARNING rather than a false PASS.
-        run: scripts/ci-qa-guest.sh alpine:3.21 ubuntu:24.04 fedora:42 2>&1 | tee target/qa/guest.log
+        # The first reference also runs P1-P7, C6, and X7.
+        run: FIRECRAB_QA_POOL_RESTART=1 scripts/ci-qa-guest.sh alpine:3.21 ubuntu:24.04 fedora:42 2>&1 | tee target/qa/guest.log
 
       - name: QA VM lifetime
         timeout-minutes: 30

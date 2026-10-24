@@ -10,14 +10,19 @@ async-compression = { version = "0.4.43", features = ["gzip", "tokio", "zstd"] }
 axum = { version = "0.8.9", features = ["ws"] }
 base64 = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono-tz = "0.10.4"
+cron = "0.17.0"
 hmac = "0.12"
 firecrab-api-types = { path = "../firecrab-api-types" }
 firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
+firecrab-stack = { path = "../firecrab-stack" }
 filetime = "0.2.29"
 futures-util = "0.3"
 percent-encoding = "2.3"
+quick-xml = { version = "0.38", features = ["serialize"] }
 libc = "0.2.186"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+ring = "0.17.14"
 rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

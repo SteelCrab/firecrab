@@ -3,7 +3,7 @@ import type { AuthConnection, AuthLogin } from "../../firecrab-frontend/src/api/
 import type { PipeSnapshot } from "../../firecrab-frontend/src/api/pipe";
 
 const github = { provider: "github", account: "octocat", registry: "ghcr.io", region: null, services: ["registry"] } satisfies AuthConnection;
-const aws = { provider: "aws", account: "123456789012", registry: "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com", region: "ap-northeast-2", services: ["registry"] } satisfies AuthConnection;
+const aws = { provider: "aws", account: "123456789012", registry: "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com", region: "ap-northeast-2", services: ["registry", "storage"] } satisfies AuthConnection;
 const firecrab = { provider: "firecrab", account: "owner@example.com", accountId: "11111111-1111-4111-8111-111111111111", expiresAt: 4102444800000, registry: null, region: null, services: [] } satisfies AuthConnection;
 async function open(page: Page, options: { connections?: AuthConnection[]; reject?: boolean; loadFailure?: boolean; locale?: "ko"; overview?: boolean } = {}) {
   let connections = options.connections ?? [];
@@ -61,10 +61,10 @@ async function open(page: Page, options: { connections?: AuthConnection[]; rejec
     return route.fulfill({ status: 404, json: { error: { message: "Fixture route unavailable" } } });
   });
   await page.goto(options.overview ? "/#/pipe" : "/#/pipe/auth");
-  return { writes, deletes, catalogs, transfers, tunnelSaves, failAuthentication: () => { failLoad = true; }, recover: () => { failLoad = false; }, get connections() { return connections; }, panel: page.getByRole("region", { name: "Pipe Auth", exact: true }) };
+  return { writes, deletes, catalogs, transfers, tunnelSaves, failAuthentication: () => { failLoad = true; }, recover: () => { failLoad = false; }, get connections() { return connections; }, panel: page.getByRole("region", { name: "Auth", exact: true }) };
 }
 
-test.describe("Pipe Auth @dashboard", () => {
+test.describe("Auth @dashboard", () => {
   test("links a console account token, shows identity, and clears browser secrets", async ({ page }, info) => {
     const mock = await open(page, { connections: [github] });
     await mock.panel.getByRole("button", { name: "Connect Firecrab", exact: true }).click();
@@ -137,7 +137,7 @@ test.describe("Pipe Auth @dashboard", () => {
 
   test("shows the provider connection count and opens the authentication card", async ({ page }) => {
     await open(page, { connections: [github, aws], overview: true });
-    const card = page.getByRole("link", { name: "Pipe Auth", exact: true });
+    const card = page.getByRole("link", { name: "Auth", exact: true });
     await expect(card).toContainText("2 connected");
     await card.click();
     await expect(page).toHaveURL(/#\/pipe\/auth$/);
@@ -193,9 +193,9 @@ test.describe("Pipe Auth @dashboard", () => {
     await mock.panel.getByRole("link", { name: "GHCR", exact: true }).click();
     const registry = page.getByRole("region", { name: "Pipe Registry", exact: true });
     await expect(registry.getByRole("button", { name: "ghcr.io", exact: true })).toBeVisible();
-    await expect(registry.getByRole("link", { name: "Manage in Pipe Auth", exact: true })).toBeVisible();
+    await expect(registry.getByRole("link", { name: "Manage in Auth", exact: true })).toBeVisible();
     await expect(registry.getByRole("button", { name: "ghcr.io actions", exact: true })).toHaveCount(0);
-    await registry.getByRole("link", { name: "Manage in Pipe Auth", exact: true }).click();
+    await registry.getByRole("link", { name: "Manage in Auth", exact: true }).click();
     await mock.panel.getByRole("button", { name: "GitHub actions", exact: true }).click();
     await page.getByRole("menuitem", { name: "Update credentials", exact: true }).click();
     await expect(mock.panel.getByLabel("Personal access token (classic)")).toHaveValue("");
@@ -213,6 +213,7 @@ test.describe("Pipe Auth @dashboard", () => {
     expect(mock.writes).toEqual([{ provider: "aws", accessKeyId: "AKIAIOSFODNN7EXAMPLE", secretAccessKey: "aws-secret", sessionToken: "aws-session", region: "ap-northeast-2" }]);
     await expect(mock.panel.getByRole("cell", { name: /123456789012/ })).toBeVisible();
     await expect(mock.panel.getByRole("link", { name: "Amazon ECR", exact: true })).toBeVisible();
+    await expect(mock.panel.getByRole("link", { name: "S3", exact: true })).toHaveAttribute("href", "#/pipe/storage");
     await expect(mock.panel.locator('input[type="password"]')).toHaveCount(0);
   });
 

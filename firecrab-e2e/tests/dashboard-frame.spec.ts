@@ -42,7 +42,7 @@ test.describe("dashboard frame", () => {
     for (const group of ["Compute", "Network", "Data", "System"]) {
       await expect(nav(page).getByText(group, { exact: true })).toBeVisible();
     }
-    for (const name of ["MicroVM", "MicroService", "Networks", "Pipe", "Storage", "Images", "Kernels", "Shells", "Host"]) {
+    for (const name of ["MicroVM", "MicroService", "Networks", "Pipe", "Secrets", "Storage", "Images", "Kernels", "Shells", "Host"]) {
       await expect(nav(page).getByRole("button", { name, exact: true })).toBeVisible();
     }
   });
@@ -98,7 +98,7 @@ test.describe("dashboard frame", () => {
   test("the console terminal starts with the mono token font", async ({ page }) => {
     const target = VMS[0];
     await openDashboard(page, { vms: VMS, hash: `#/console/${target.id}`, routes: { [`/api/vms/${target.id}`]: target } });
-    const rows = page.locator(".console-page .xterm-rows");
+    const rows = page.locator(".console-page .terminal-emulator");
     await expect(rows).toBeAttached();
     await expect(rows).toHaveCSS("font-family", /^"JetBrains Mono"/);
   });

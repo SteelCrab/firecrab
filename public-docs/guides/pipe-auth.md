@@ -1,6 +1,6 @@
-# Pipe Auth
+# Auth
 
-Open **Pipe → Pipe Auth** to connect a provider account. Firecrab verifies the
+Open **Pipe → Auth** to connect a provider account. Firecrab verifies the
 credentials before saving them. Each host keeps one connection per provider.
 Supported Pipe services reuse that connection without asking for a second login.
 
@@ -44,15 +44,19 @@ the requested repositories.
 Firecrab signs requests with AWS Signature Version 4 and supplies the session
 token when present. It requests an ECR login token for each registry operation,
 so an expired ECR password does not need to be pasted into the dashboard.
-Temporary AWS access keys still expire and must be replaced in Pipe Auth.
+Temporary AWS access keys still expire and must be replaced in Auth.
 See [ECR authorization tokens](https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_GetAuthorizationToken.html).
 
-Pipe Registry displays these registries automatically. Its **Manage in Pipe Auth**
+Pipe Registry displays these registries automatically. Its **Manage in Auth**
 link opens credential rotation and disconnect controls. A failed replacement
 keeps the previous connection. Disconnect removes only that provider's shared
 authentication. Independently saved registry logins and pulled images remain.
 Existing Docker Hub, Harbor, GHCR and ECR direct logins remain supported.
-AWS Pipe Auth enables paginated ECR repository discovery. Direct ECR password
+AWS signing keys can also be referenced by [PipeStorage](pipe-storage.md).
+Each S3 connection verifies its own bucket/prefix permissions. AWS disconnect is
+blocked while a storage connection references it. Credential replacement rechecks
+those connections; restart/redeploy bound services to deliver new keys to guests.
+AWS Auth enables paginated ECR repository discovery. Direct ECR password
 logins cannot list repositories. Public ECR still uses direct authentication.
 
 Credentials stay in the existing owner-only SQLite database. They are not
