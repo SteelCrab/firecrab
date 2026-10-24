@@ -526,11 +526,18 @@ async fn database_services_api_real_engines() {
                 .ca_certificate,
             input.ca_certificate
         );
+        state
+            .store
+            .put_pipe_auth(&crate::pipe_auth::SavedAuth::Github {
+                username: "database-qa".into(),
+                token: "fixture-unused-for-deployment".into(),
+            })
+            .unwrap();
         let service = request(
             &app,
             "POST",
             "/api/micro-services",
-            json!({"name":"db-api-qa","image":"example/handler:1","port":3000,"ram":256,"cpu":1}),
+            json!({"name":"db-api-qa","image":"ghcr.io/database-qa/handler:1","port":3000,"ram":256,"cpu":1}),
             201,
         )
         .await;
