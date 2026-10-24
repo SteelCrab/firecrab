@@ -4,9 +4,9 @@ The default Firecrab dashboard, written in Rust and compiled to WebAssembly. The
 application state, HTML rendering, delegated events, forms, validation, HTTP
 requests, polling, and stale-response rejection. The repository no longer ships a React frontend.
 
-The JavaScript entry point loads WASM and lazily loads the xterm adapter. Rust
+The JavaScript entry point loads WASM and lazily loads the Ghostty adapter. Rust
 owns WebSocket connections, retry state, preferences, clipboard access, downloads
-and log bundles. The adapter only connects the xterm library to Rust. WebAssembly accesses browser APIs through
+and log bundles. The adapter only connects the Ghostty library to Rust. WebAssembly accesses browser APIs through
 [`wasm-bindgen` and `web-sys`](https://rustwasm.github.io/docs/wasm-bindgen/examples/fetch.html).
 CSS and public assets belong to this package.
 
@@ -47,7 +47,7 @@ builds. Its tests deserialize requests using the existing `firecrab-api-types`.
 | Pipe | Routing and service controls, AWS/GitHub auth, registry login/browsing/pull, S3 connections and binary object transfers, database connections/table previews, Firecrab addresses, quick tunnels, Cloudflare connection |
 | Host | Status, build information, update/start/progress, localhost microManager resource edit/apply with controller ID |
 | Browser | Hash routing, back/forward, dirty-form confirmation, keyboard navigation, VM/destination palette, responsive sidebar, English/Korean forms and actions |
-| Console | Lazy xterm, serial WebSocket, bounded reconnect, session-ended close code 4000, disconnect/dispose on navigation, saved + live buffer log copy/export, preferences, inspector, SSH, terminal-only mode |
+| Console | Lazy Ghostty WASM, serial WebSocket, bounded reconnect, session-ended close code 4000, disconnect/dispose on navigation, saved + live buffer log copy/export, preferences, inspector, SSH, terminal-only mode |
 
 ## Scope and validation
 
@@ -90,3 +90,5 @@ npm ci --prefix firecrab-e2e
 npm run install-browsers --prefix firecrab-e2e
 node --test firecrab-frontend/tests/frontend.test.mjs
 ```
+
+The terminal uses the pinned `ghostty-web` VT parser and canvas renderer. It loads a separate WASM asset on demand. Compiled code is shared; each session owns its memory. Rust owns socket state and session retries. Browser adapters handle canvas, pointer, IME and clipboard events. Upstream build patches remain checked against the pinned revision. Terminal licenses ship in `public/terminal-licenses.txt`.

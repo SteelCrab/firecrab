@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM"],
+    "allowJs": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": [
+    "playwright.mocked.config.ts",
+    "tests/wasm-terminal.spec.ts",
+    "tests/console-session.spec.ts",
+    "tests/ssh-console.spec.ts"
+  ]
+}

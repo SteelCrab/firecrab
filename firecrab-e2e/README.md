@@ -12,6 +12,32 @@ Isolated Playwright suite.
 - Local OCI registry fixture only — no Docker Hub
 - Playwright is a test-only dependency of this package, not of `firecrab-frontend`
 
+## WASM console
+
+`tests/wasm-terminal.spec.ts` checks the real WASM core with mocked console
+sockets: split UTF-8, grapheme export, keyboard and mobile editing, composition,
+application modes, bracketed paste, alternate screens, mouse protocols, selection,
+history, output limits, session isolation, failed loads and unmount cancellation.
+
+```sh
+npm run test:mocked --prefix firecrab-e2e -- tests/wasm-terminal.spec.ts tests/console-session.spec.ts
+```
+
+To run a production build in Chromium, Firefox and WebKit:
+
+```sh
+npm exec --prefix firecrab-e2e -- playwright install chromium firefox webkit
+FIRECRAB_MOCKED_E2E_PRODUCTION=1 FIRECRAB_MOCKED_E2E_CROSS_BROWSER=1 \
+  npm run test:mocked --prefix firecrab-e2e -- tests/wasm-terminal.spec.ts tests/console-session.spec.ts
+```
+
+`FIRECRAB_MOCKED_E2E_BASE_URL` selects the isolated frontend's address/port.
+CI runs each engine in its own production-build job and checks the emitted
+WASM with `node --test firecrab-e2e/scripts/test-terminal-build.mjs`.
+Live DPR emulation uses Chromium CDP; other browsers skip that case. The initial
+DPR-2 rendering check runs in all three engines. Guest reattachment (B13) needs
+host runtime checks; synthetic composition does not validate a real OS IME.
+
 ## Contents
 
 - [What it covers](#what-it-covers)

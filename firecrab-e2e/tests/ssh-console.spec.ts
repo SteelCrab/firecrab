@@ -166,7 +166,7 @@ test.describe("console page", () => {
     await page.getByRole("button", { name: "Display settings", exact: true }).click();
     const settings = page.getByRole("dialog", { name: "Terminal display settings" });
     await settings.getByLabel("Font size").selectOption("16");
-    await expect(page.locator(".console-page .xterm-rows")).toHaveCSS("font-size", "16px");
+    await expect(page.locator(".console-page .terminal-emulator")).toHaveCSS("font-size", "16px");
     await page.keyboard.press("Escape");
     await expect(settings).toHaveCount(0);
   });

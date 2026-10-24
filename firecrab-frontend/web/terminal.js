@@ -1,48 +1,64 @@
-import './styles/console.css';
-import './styles/ssh.css';
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
-import '@xterm/xterm/css/xterm.css';
+import "./styles/console.css";
+import "./styles/ssh.css";
+import { createWasmTerminal } from "./terminal/engine.js";
 
-// xterm adapter only. Rust owns connection, retries, preferences and exports.
-export function mountTerminal(options) {
-  const container = document.getElementById('terminal');
+// The library owns VT parsing and canvas rendering. Rust owns the session.
+export async function mountTerminal(options, signal) {
+  const container = document.getElementById("terminal");
   const { id, ...settings } = options;
-  const term = new Terminal(settings);
-  const fit = new FitAddon();
-  term.loadAddon(fit);
-  term.open(container);
-  term.attachCustomKeyEventHandler(window.firecrabTerminalKey);
-  const textarea = container.querySelector('textarea');
-  if (textarea) {
-    textarea.lang = document.documentElement.lang;
-    textarea.inputMode = 'text';
-    textarea.autocomplete = 'off';
-    textarea.autocapitalize = 'off';
-    textarea.spellcheck = false;
+  const mirror = document.createElement("pre");
+  mirror.className = "terminal-output";
+  mirror.setAttribute("role", "log");
+  mirror.setAttribute(
+    "aria-label",
+    document.documentElement.lang === "ko" ? "터미널 출력" : "Terminal output",
+  );
+  container.appendChild(mirror);
+  const report = (error) =>
+    document.dispatchEvent(
+      new CustomEvent("firecrab-terminal-error", {
+        detail: JSON.stringify({ id, message: error.message ?? String(error) }),
+      }),
+    );
+  let session;
+  try {
+    session = await createWasmTerminal(
+      container,
+      settings,
+      signal,
+      (text) => {
+        mirror.textContent = text;
+      },
+      report,
+      (bytes) =>
+        document.dispatchEvent(
+          new CustomEvent("firecrab-terminal-input", { detail: bytes }),
+        ),
+    );
+  } catch (error) {
+    mirror.remove();
+    throw error;
   }
-  const resize = () => requestAnimationFrame(() => {
-    if (!container.isConnected || container.clientWidth < 16 || container.clientHeight < 16) return;
-    const dimensions = fit.proposeDimensions();
-    if (dimensions?.cols >= 2 && dimensions.rows >= 2) fit.fit();
-  });
-  const observer = new ResizeObserver(resize);
-  observer.observe(container);
-  const input = term.onData(data => document.dispatchEvent(new CustomEvent('firecrab-terminal-input', { detail: data })));
-  resize();
-  document.dispatchEvent(new CustomEvent('firecrab-terminal-ready', { detail: id }));
+  const term = session.terminal;
+  const mount = container.querySelector(".terminal-emulator");
+  container.style.backgroundColor = settings.theme.background;
+  container.closest(".console-surface").style.backgroundColor =
+    settings.theme.background;
   return {
-    write: data => term.write(typeof data === 'string' ? data : new Uint8Array(data)),
-    options: next => { term.options.fontSize = next.fontSize; term.options.theme = next.theme; resize(); },
-    fit: resize,
+    write: (data) =>
+      session.write(typeof data === "string" ? data : new Uint8Array(data)),
+    options: (next) => {
+      term.options.fontSize = next.fontSize;
+      mount.style.fontSize = `${next.fontSize}px`;
+      term.renderer?.remeasureFont();
+      session.fit();
+    },
+    fit: session.fit,
     focus: () => term.focus(),
-    clear: () => term.reset(),
-    snapshot: () => new Promise(resolve => term.write('', () => {
-      const buffer = term.buffer.active;
-      const lines = Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString(true) ?? '');
-      while (lines.at(-1) === '') lines.pop();
-      resolve(lines.join('\n'));
-    })),
-    dispose: () => { observer.disconnect(); input.dispose(); term.dispose(); },
+    snapshot: session.readText,
+    dispose: () => {
+      session.dispose();
+      mirror.remove();
+    },
   };
 }

@@ -335,6 +335,7 @@ pub fn t(value: &str) -> &str {
         "No address yet — start the VM." => "주소가 없습니다. VM을 시작한다.",
         "Download SSH key" => "SSH 키 다운로드",
         "Serial" => "시리얼",
+        "Apply theme and reconnect" => "테마 적용 후 재연결",
         "Display settings" => "표시 설정",
         "Terminal display settings" => "터미널 표시 설정",
         "Font size" => "글자 크기",

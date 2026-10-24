@@ -889,6 +889,13 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         if event.is_composing() || event.key() == "Process" || event.key_code() == 229 {
             return;
         }
+        if event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+            .is_some_and(|target| target.closest("#terminal").ok().flatten().is_some())
+        {
+            return;
+        }
         if details::resize_key(&keyboard, &event) {
             return;
         }

@@ -206,6 +206,11 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
 pub fn policy(app: &Shared) {
     let a = app.clone();
     let generation = app.borrow().generation;
+    let form_identity = app
+        .borrow()
+        .form
+        .as_ref()
+        .map(|form| (form.title.clone(), form.path.clone()));
     let selected = app
         .borrow()
         .detail
@@ -235,9 +240,13 @@ pub fn policy(app: &Shared) {
             api::request("GET", "/api/security-groups", None).await
         };
         super::capture_form(&a);
-        super::capture_form(&a);
         let mut s = a.borrow_mut();
-        if s.generation != generation || s.form.is_none() {
+        if s.generation != generation
+            || s.form
+                .as_ref()
+                .map(|form| (form.title.clone(), form.path.clone()))
+                != form_identity
+        {
             return;
         }
         if let Some(pipe) = pipe {

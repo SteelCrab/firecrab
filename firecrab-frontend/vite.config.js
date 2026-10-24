@@ -1,11 +1,12 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
+import { ghosttyOptimizations } from './build/ghosttyOptimizations.js';
 import { buildWasm } from './scripts/wasm.mjs';
 
 export default defineConfig(({ command }) => {
   if (command === 'serve') buildWasm();
   return {
-  plugins: [{
+  plugins: [ghosttyOptimizations(), {
     name: 'firecrab-rust',
     configureServer(server) {
       const source = fileURLToPath(new URL('./src/', import.meta.url));

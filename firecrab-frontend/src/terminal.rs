@@ -72,7 +72,7 @@ impl Prefs {
             "solarized" => ("#002b36", "#839496", "#93a1a1", "rgba(147,161,161,.3)"),
             _ => ("#18181b", "#e4e4e7", "#e8492f", "rgba(232,73,47,.32)"),
         };
-        json!({"id":id,"fontSize":self.font_size,"theme":{"background":background,"foreground":foreground,"cursor":cursor,"selectionBackground":selection},"fontFamily":"\"JetBrains Mono\", \"Noto Sans KR\", \"Noto Sans JP\", \"Noto Sans SC\", \"D2Coding\", \"NanumGothicCoding\", \"Malgun Gothic\", \"Apple SD Gothic Neo\", \"Yu Gothic\", \"Microsoft YaHei\", ui-monospace, monospace","cols":80,"rows":24,"scrollback":5000,"convertEol":true,"cursorBlink":true,"rescaleOverlappingGlyphs":true,"macOptionIsMeta":false})
+        json!({"id":id,"fontSize":self.font_size,"theme":{"background":background,"foreground":foreground,"cursor":cursor,"selectionBackground":selection},"fontFamily":"\"JetBrains Mono\", \"Noto Sans KR\", \"Noto Sans JP\", \"Noto Sans SC\", \"D2Coding\", \"NanumGothicCoding\", \"Malgun Gothic\", \"Apple SD Gothic Neo\", \"Yu Gothic\", \"Microsoft YaHei\", ui-monospace, monospace","cols":80,"rows":24,"scrollback":8388608,"convertEol":false,"cursorBlink":true,"rescaleOverlappingGlyphs":true,"macOptionIsMeta":false})
     }
 }
 pub struct State {
@@ -126,8 +126,9 @@ pub fn html(app: &App, id: &str) -> String {
         .map(|state| text(&state.vm, "name"))
         .filter(|name| !name.is_empty())
         .unwrap_or(id);
+    let reconnect = render::button("Apply theme and reconnect", "console-reconnect", "");
     format!(
-        "<main class=\"console-page wasm-console\" id=\"console-page\"><header class=\"console-header\" id=\"console-header\"><a class=\"btn\" href=\"#/vms\">← MicroVM</a><h1 class=\"console-title\" id=\"console-title\">{}</h1><span id=\"console-address\"></span><span id=\"console-status\" class=\"console-status\" role=\"status\">{}</span><div role=\"tablist\" aria-label=\"Console surface\"><button role=\"tab\" aria-selected=\"true\" id=\"console-tab-serial\" data-action=\"console-tab\" data-id=\"serial\">{}</button><button role=\"tab\" aria-selected=\"false\" id=\"console-tab-ssh\" data-action=\"console-tab\" data-id=\"ssh\">SSH</button></div><div class=\"wasm-actions\">{}{}{}{}{}<span id=\"console-retry\"></span></div></header><div id=\"messages\" aria-live=\"polite\"></div><div id=\"console-settings\" class=\"wasm-card\" role=\"dialog\" aria-label=\"{}\" hidden><label for=\"console-font\">{}</label><select id=\"console-font\">{}</select><label for=\"console-theme\">{}</label><select id=\"console-theme\">{}</select></div><div class=\"wasm-console-layout\"><div id=\"terminal-surface\" class=\"console-surface\"><div id=\"terminal\"></div></div><section id=\"console-ssh\" hidden></section><aside id=\"console-inspector\" aria-label=\"VM details\" {}></aside></div><button class=\"btn console-exit-only\" id=\"console-exit-only\" data-action=\"console-only\" hidden>{}</button></main><div id=\"modal-root\"></div>",
+        "<main class=\"console-page wasm-console\" id=\"console-page\"><header class=\"console-header\" id=\"console-header\"><a class=\"btn\" href=\"#/vms\">← MicroVM</a><h1 class=\"console-title\" id=\"console-title\">{}</h1><span id=\"console-address\"></span><span id=\"console-status\" class=\"console-status\" role=\"status\">{}</span><div role=\"tablist\" aria-label=\"Console surface\"><button role=\"tab\" aria-selected=\"true\" id=\"console-tab-serial\" data-action=\"console-tab\" data-id=\"serial\">{}</button><button role=\"tab\" aria-selected=\"false\" id=\"console-tab-ssh\" data-action=\"console-tab\" data-id=\"ssh\">SSH</button></div><div class=\"wasm-actions\" role=\"group\" aria-label=\"Export log\">{}{}{}{}{}<span id=\"console-retry\"></span></div></header><div id=\"messages\" aria-live=\"polite\"></div><div id=\"console-settings\" class=\"wasm-card\" role=\"dialog\" aria-label=\"{}\" hidden><label for=\"console-font\">{}</label><select id=\"console-font\">{}</select><label for=\"console-theme\">{}</label><select id=\"console-theme\">{}</select>{reconnect}</div><div class=\"wasm-console-layout\"><div id=\"terminal-surface\" class=\"console-surface\"><div id=\"terminal\"></div></div><section id=\"console-ssh\" hidden></section><aside id=\"console-inspector\" aria-label=\"VM details\" {}></aside></div><button class=\"btn console-exit-only\" id=\"console-exit-only\" data-action=\"console-only\" hidden>{}</button></main><div id=\"modal-root\"></div>",
         escape(name),
         t("Connecting…"),
         t("Serial"),
@@ -547,8 +548,7 @@ pub fn dispatch(app: &Shared, action: &str, _id: &str) -> bool {
             if let Some(state) = app.borrow_mut().console.as_mut() {
                 state.attempt = 0;
             }
-            binding("clear", JsValue::UNDEFINED);
-            connect(app.clone());
+            remount(app);
         }
         "console-copy-log" | "console-save-log" | "export-log" => {
             let root = app.borrow();
@@ -618,14 +618,56 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
         callback.as_ref().unchecked_ref(),
     )?;
     callback.forget();
-    let input = app.clone();
+    let failed = app.clone();
     let callback = Closure::<dyn FnMut(CustomEvent)>::new(move |event: CustomEvent| {
-        let Some(data) = event.detail().as_string() else {
+        let Some(error) = event
+            .detail()
+            .as_string()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        else {
             return;
         };
-        if is_cpr(&data) {
+        let mut root = failed.borrow_mut();
+        let Some(state) = root
+            .console
+            .as_mut()
+            .filter(|state| error["id"] == state.id)
+        else {
             return;
+        };
+        if let Some(timer) = state.retry.take() {
+            window().clear_timeout_with_handle(timer);
         }
+        if let Some(socket) = state.socket.take() {
+            socket.set_onopen(None);
+            socket.set_onclose(None);
+            socket.set_onmessage(None);
+            socket.set_onerror(None);
+            let _ = socket.close_with_code(1000);
+        }
+        state.callbacks.clear();
+        state.epoch += 1;
+        state.status = "failed".into();
+        root.error = text(&error, "message").into();
+        drop(root);
+        redraw(&failed);
+        crate::render_messages(&failed);
+    });
+    document().add_event_listener_with_callback(
+        "firecrab-terminal-error",
+        callback.as_ref().unchecked_ref(),
+    )?;
+    callback.forget();
+    let input = app.clone();
+    let callback = Closure::<dyn FnMut(CustomEvent)>::new(move |event: CustomEvent| {
+        let detail = event.detail();
+        let data = if let Some(text) = detail.as_string() {
+            text.into_bytes()
+        } else if detail.is_instance_of::<js_sys::Uint8Array>() {
+            js_sys::Uint8Array::new(&detail).to_vec()
+        } else {
+            return;
+        };
         if let Some(socket) = input
             .borrow()
             .console
@@ -633,7 +675,7 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
             .and_then(|state| state.socket.as_ref())
             .filter(|socket| socket.ready_state() == WebSocket::OPEN)
         {
-            let _ = socket.send_with_u8_array(data.as_bytes());
+            let _ = socket.send_with_u8_array(&data);
         }
     });
     document().add_event_listener_with_callback(
@@ -643,16 +685,29 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
     callback.forget();
     Ok(())
 }
-fn is_cpr(data: &str) -> bool {
-    data.strip_prefix("\x1b[")
-        .and_then(|tail| tail.strip_suffix('R'))
-        .and_then(|tail| tail.split_once(';'))
-        .is_some_and(|(row, column)| {
-            !row.is_empty()
-                && !column.is_empty()
-                && row.bytes().all(|b| b.is_ascii_digit())
-                && column.bytes().all(|b| b.is_ascii_digit())
-        })
+fn remount(app: &Shared) {
+    let mut root = app.borrow_mut();
+    root.error.clear();
+    let Some(state) = root.console.as_mut() else {
+        return;
+    };
+    if let Some(timer) = state.retry.take() {
+        window().clear_timeout_with_handle(timer);
+    }
+    if let Some(socket) = state.socket.take() {
+        socket.set_onopen(None);
+        socket.set_onclose(None);
+        socket.set_onmessage(None);
+        socket.set_onerror(None);
+        let _ = socket.close_with_code(1000);
+    }
+    state.callbacks.clear();
+    state.epoch += 1;
+    state.status = "connecting".into();
+    let options = state.prefs.options(&state.id);
+    drop(root);
+    redraw(app);
+    binding("mount", JsValue::from_str(&options.to_string()));
 }
 pub fn download_text(name: &str, text: &str) {
     let parts = js_sys::Array::new();
@@ -693,12 +748,5 @@ mod tests {
         assert_eq!(prefs.font_size, 13);
         assert_eq!(prefs.theme_id, "ember");
         assert!(!prefs.inspect_open);
-    }
-    #[test]
-    fn cpr_filter_does_not_drop_normal_input() {
-        assert!(is_cpr("\x1b[12;80R"));
-        assert!(!is_cpr("hello"));
-        assert!(!is_cpr("\x1b[A"));
-        assert!(!is_cpr("\x1b[;R"));
     }
 }

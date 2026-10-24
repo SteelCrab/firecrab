@@ -376,7 +376,7 @@ test('manager resource editor uses the controller ID header without borrowing fa
   assert.equal(saved.controller, 'controller-fixture'); assert.equal(saved.body.cpu, 6);
 });
 
-test('console binds xterm, ends close-code 4000 sessions, and releases the socket on navigation', async () => {
+test('console binds Ghostty, ends close-code 4000 sessions, and releases the socket on navigation', async () => {
   let connections = 0;
   await page.routeWebSocket('**/ws/vms/**/console', socket => {
     connections++;
@@ -384,7 +384,7 @@ test('console binds xterm, ends close-code 4000 sessions, and releases the socke
     setTimeout(() => socket.close({ code: 4000, reason: 'session_ended' }), 100);
   });
   await open(`console/${fixture.state.vms[0].id}`);
-  await expect(page.locator('#terminal .xterm')).toBeVisible();
+  await expect(page.locator('#terminal [data-terminal-engine=ghostty]')).toBeVisible();
   await expect(page.locator('#console-status')).toHaveText('Session ended');
   await new Promise(resolve => setTimeout(resolve, 1200));
   assert.equal(connections, 1);
@@ -669,8 +669,9 @@ test('console preferences persist without reconnecting and exports include live 
   assert.equal(await page.evaluate(() => window.firecrabTerminalKey(new KeyboardEvent('keydown', { key: 'Process', keyCode: 229 }))), false);
   await page.evaluate(() => document.dispatchEvent(new CustomEvent('firecrab-terminal-input', { detail: '\x1b[12;80R' })));
   await page.evaluate(() => document.dispatchEvent(new CustomEvent('firecrab-terminal-input', { detail: '한글\r' })));
-  await expect.poll(() => inputs.length).toBe(1);
-  assert.ok(Buffer.isBuffer(inputs[0])); assert.equal(inputs[0].toString('utf8'), '한글\r');
+  await expect.poll(() => inputs.length).toBe(2);
+  assert.ok(Buffer.isBuffer(inputs[0])); assert.equal(inputs[0].toString('utf8'), '\x1b[12;80R');
+  assert.equal(inputs[1].toString('utf8'), '한글\r');
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save log', exact: true }).click()]);
   const { readFile } = await import('node:fs/promises');
   const contents = await readFile(await download.path(), 'utf8');
