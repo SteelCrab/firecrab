@@ -442,10 +442,6 @@ pub fn guest_inputs(store: &Store, vm: Uuid) -> Result<GuestInputs, PersistenceE
     let Some(service) = store.database_vm_service(vm)? else {
         return Ok((env, files));
     };
-    env.insert(
-        "FIRECRAB_EVENT_SECRET".into(),
-        store.database_service_secret(service)?,
-    );
     for binding in store
         .database_bindings()?
         .into_iter()
@@ -510,6 +506,17 @@ pub fn guest_inputs(store: &Store, vm: Uuid) -> Result<GuestInputs, PersistenceE
                 ),
             );
         }
+    }
+    if !env.is_empty()
+        || store
+            .database_triggers()?
+            .iter()
+            .any(|trigger| trigger.input.service_id == service)
+    {
+        env.insert(
+            "FIRECRAB_EVENT_SECRET".into(),
+            store.database_service_secret(service)?,
+        );
     }
     Ok((env, files))
 }
