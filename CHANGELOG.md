@@ -23,6 +23,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Browser console dimensions reach the guest serial terminal through a private
+  vsock resize helper. Connected viewers share the smallest available grid.
+  The console reports whether the guest applied the size and keeps working
+  when guest resize support is unavailable. Tracked in [#471](https://github.com/SteelCrab/firecrab/issues/471).
+
 - The browser console uses Ghostty WebAssembly for VT parsing, Unicode cells,
   terminal modes and history. It supports mobile editing, composition,
   bracketed paste, application mouse/focus reports and native grapheme export.

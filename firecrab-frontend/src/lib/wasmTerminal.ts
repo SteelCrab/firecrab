@@ -22,9 +22,13 @@ function loadModule(): Promise<WebAssembly.Module> {
   return compiled;
 }
 
+export interface TerminalDimensions { rows: number; cols: number }
+
 export interface WasmTerminalSession {
   terminal: Terminal;
   fit: () => void;
+  setSharedDimensions: (size: TerminalDimensions | null) => void;
+  reportDimensions: () => void;
   write: (data: string | Uint8Array) => void;
   readText: () => Promise<string>;
   dispose: () => void;
@@ -38,6 +42,7 @@ export async function createWasmTerminal(
   onOutput: (text: string) => void,
   onError: (error: unknown) => void,
   onInput: (bytes: string | Uint8Array) => void,
+  onDimensions?: (size: TerminalDimensions) => void,
 ): Promise<WasmTerminalSession> {
   signal.throwIfAborted();
   const { Ghostty, Terminal } = await import("ghostty-web");
@@ -58,6 +63,8 @@ export async function createWasmTerminal(
   let disposed = false;
   let outputFrame = 0;
   let fitFrame = 0;
+  let shared: TerminalDimensions | null = null;
+  let viewport: TerminalDimensions | undefined;
   let mirrorTimer: ReturnType<typeof setTimeout> | undefined;
   let pending: Uint8Array[] = [];
   let pendingBytes = 0;
@@ -93,7 +100,13 @@ export async function createWasmTerminal(
       // The bundled FitAddon drops resizes while locked for 50 ms. Use the final box.
       const viewingHistory = terminal.getViewportY() > 0;
       const top = terminal.getScrollbackLength() - terminal.getViewportY();
-      terminal.resize(Math.max(2, Math.floor((mount.clientWidth - 12) / metrics.width)), Math.max(2, Math.floor(mount.clientHeight / metrics.height)));
+      const size = { cols: Math.min(1000, Math.max(2, Math.floor((mount.clientWidth - 12) / metrics.width))), rows: Math.min(1000, Math.max(2, Math.floor(mount.clientHeight / metrics.height))) };
+      if (viewport?.cols !== size.cols || viewport?.rows !== size.rows) {
+        viewport = size;
+        onDimensions?.(size);
+      }
+      const grid = shared ?? size;
+      terminal.resize(grid.cols, grid.rows);
       if (viewingHistory) terminal.scrollToLine(terminal.getScrollbackLength() - top);
       scheduleMirror();
     });
@@ -174,6 +187,12 @@ export async function createWasmTerminal(
 
   return {
     terminal, fit, dispose,
+    setSharedDimensions(size) {
+      if (shared?.rows === size?.rows && shared?.cols === size?.cols) return;
+      shared = size;
+      fit();
+    },
+    reportDimensions() { if (viewport) onDimensions?.(viewport); },
     write(data) {
       if (disposed) return;
       const bytes = typeof data === "string" ? encoder.encode(data) : data;

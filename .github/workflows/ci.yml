@@ -42,7 +42,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y dnsmasq fakeroot musl-tools
 
       - name: Build private ingress engine
-        run: ./scripts/build-ingress.sh target/ingress
+        run: |
+          ./scripts/build-ingress.sh target/ingress
+          ./scripts/build-guest-console.sh target/ingress
+          python3 scripts/test-guest-console.py
 
       - name: Verify bundled ingress installation
         run: sudo bash scripts/test-ingress-install.sh target/ingress
@@ -668,6 +671,7 @@ jobs:
           FIRECRAB_E2E_REUSE_SERVER: "1"
           FIRECRAB_E2E_REQUIRE_GUEST_BOOT: "1"
           FIRECRAB_E2E_REQUIRE_RUNNING_API: "1"
+          FIRECRAB_E2E_REQUIRE_GUEST_RESIZE: "1"
         run: npm test --prefix firecrab-e2e 2>&1 | tee target/qa/browser.log
 
       - name: QA nginx env, port-forward, shells

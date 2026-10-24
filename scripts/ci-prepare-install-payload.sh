@@ -7,6 +7,7 @@ cd "$root"
 
 cargo build --release --locked -p firecrab-api -p firecrab-helper -p firecrab-cli
 ./scripts/build-ingress.sh target/release
+./scripts/build-guest-console.sh target/release
 npm ci --prefix firecrab-frontend
 npm run build --prefix firecrab-frontend
 

@@ -49,6 +49,8 @@ pub struct HostRuntimePaths {
     pub config: PathBuf,
     /// API Unix socket.
     pub api_socket: PathBuf,
+    /// Private guest terminal control socket for this start.
+    pub vsock_socket: PathBuf,
     /// Tee'd guest console log.
     pub console_log: PathBuf,
     /// The per-VM shim's control socket (`crate::vm_shim`).
@@ -73,6 +75,7 @@ impl HostRuntimePaths {
         Self {
             config: dir.join("fc.json"),
             api_socket: dir.join("fc.sock"),
+            vsock_socket: dir.join("v.sock"),
             console_log: dir.join("console.log"),
             shim_socket: dir.join("shim.sock"),
             exit_status: dir.join("exit.json"),

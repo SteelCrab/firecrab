@@ -11,7 +11,7 @@
 //! byte is ever duplicated or dropped between the two.
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::broadcast;
 
@@ -29,6 +29,7 @@ const BROADCAST_CAPACITY: usize = 256;
 #[derive(Debug)]
 pub struct ConsoleBroker {
     state: Mutex<ConsoleState>,
+    pub resize: Arc<crate::console_resize::ResizeHub>,
     /// Where keystrokes go: the VM's shim, which forwards them to the
     /// guest's ttyS0. Every attached WS session may write; the shim's request
     /// queue serializes them, matching the single-operator scenario this is
@@ -55,6 +56,7 @@ impl ConsoleBroker {
                 line_filter: Vec::new(),
             }),
             input: Mutex::new(None),
+            resize: Arc::new(crate::console_resize::ResizeHub::new()),
         }
     }
 
