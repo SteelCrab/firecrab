@@ -95,7 +95,7 @@ pub fn prepare(source: &Path) -> Result<PathBuf, Error> {
         let mut npm = Command::new("npm");
         let status = npm
             .args(["ci", "--no-audit", "--no-fund"])
-            .current_dir(frontend)
+            .current_dir(&frontend)
             .status()?;
         if !status.success() {
             return Err(Error::Failed(
@@ -104,6 +104,18 @@ pub fn prepare(source: &Path) -> Result<PathBuf, Error> {
         }
         // Even reinstalling the same lock must invalidate Vite's module cache.
         fs::write(stamp, format!("{revision}\n{}", Uuid::new_v4()))?;
+    }
+    if frontend.join("Cargo.toml").is_file() {
+        report!("[BUILD] dashboard: Rust/WASM");
+        let status = Command::new("node")
+            .arg(frontend.join("scripts/wasm.mjs"))
+            .current_dir(&frontend)
+            .status()?;
+        if !status.success() {
+            return Err(Error::Failed(
+                "dashboard WASM build failed; see build output above".into(),
+            ));
+        }
     }
     Ok(source)
 }
@@ -302,7 +314,7 @@ fn start_at(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
     let mut child = command.spawn()?;
     let started = Instant::now();
     while !running(&client, &state, &url) {
-        if child.try_wait()?.is_some() || started.elapsed() > Duration::from_secs(30) {
+        if child.try_wait()?.is_some() || started.elapsed() > Duration::from_secs(180) {
             let _ = child.kill();
             let _ = child.wait();
             return Err(Error::Failed(format!(

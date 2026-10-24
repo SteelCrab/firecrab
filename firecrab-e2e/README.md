@@ -78,6 +78,8 @@ Build/install the guest helper before this check; see
 ## Setup
 
 ```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack --version 0.14.0 --locked
 npm ci --prefix firecrab-frontend
 npm ci --prefix firecrab-e2e
 npm run install-browsers --prefix firecrab-e2e

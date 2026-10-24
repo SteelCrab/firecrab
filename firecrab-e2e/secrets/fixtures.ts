@@ -158,7 +158,7 @@ export async function connect(page: Page, remoteUrl: string) {
   await page.getByLabel("Provider", { exact: true }).selectOption("firecrab");
   await page.getByLabel("Base URL", { exact: true }).fill(remoteUrl);
   await page.getByRole("button", { name: "Save connection", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "qa-remote", exact: true })).toBeVisible();
+  await expect(page.locator("#content").getByRole("heading", { name: "qa-remote", exact: true })).toBeVisible();
 }
 
 export { expect };
