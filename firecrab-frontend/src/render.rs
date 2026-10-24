@@ -298,6 +298,7 @@ pub fn content(app: &App) -> String {
             ],
         ),
         "pipe/storage" => crate::advanced::storage::content(app),
+        "pipe/ai" => crate::advanced::ai::content(app),
         "host" => host(app),
         "pipe" => pipe_cards(app),
         route if route.starts_with("pipe/") => pipe(app, route.trim_start_matches("pipe/")),
@@ -979,6 +980,7 @@ fn pipe_cards(app: &App) -> String {
     let mut out = "<div class=\"wasm-cards\">".to_string();
     for (id, label, description) in [
         ("auth", "Account", "AWS and GitHub credentials"),
+        ("ai", "Pipe AI", "Connect and manage AI accounts"),
         ("storage", "PipeStorage", "Access your files in AWS"),
         ("route", "Routing", "Route traffic to applications"),
         ("registry", "Registry", "Connect and pull OCI images"),

@@ -110,6 +110,12 @@ pub struct AppState {
     pub templates: Arc<TemplateRegistry>,
     /// SQLite-backed durable storage.
     pub(crate) store: Store,
+    /// Fixed-endpoint provider client; credentials remain in the private store.
+    pub(crate) pipe_ai: crate::pipe_ai::OpenAi,
+    pub(crate) pipe_ai_anthropic: crate::pipe_ai::anthropic::Anthropic,
+    pub(crate) pipe_ai_logins: Arc<crate::pipe_ai::LoginRegistry>,
+    /// Serializes inference with disconnect/rotation, so successful disconnect blocks new calls.
+    pub(crate) pipe_ai_mutations: Arc<AsyncMutex<()>>,
     /// Encrypted, host-local PipeSecrets vault; opened lazily on first use.
     pub(crate) secrets: Arc<crate::secrets::Vault>,
     /// Active per-VM lifecycle locks; weak entries do not retain deleted VM IDs.
@@ -193,6 +199,10 @@ impl AppState {
             vms: Arc::new(Mutex::new(vms)),
             templates: Arc::new(templates),
             store,
+            pipe_ai: crate::pipe_ai::OpenAi::new(),
+            pipe_ai_anthropic: crate::pipe_ai::anthropic::Anthropic::new(),
+            pipe_ai_logins: Arc::new(crate::pipe_ai::LoginRegistry::default()),
+            pipe_ai_mutations: Arc::new(AsyncMutex::new(())),
             vm_mutations: Arc::new(Mutex::new(HashMap::new())),
             secrets,
             service_mutations: Arc::new(AsyncMutex::new(())),

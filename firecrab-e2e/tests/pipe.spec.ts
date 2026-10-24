@@ -112,7 +112,9 @@ async function switchCard(page: Page, title: string) {
 }
 
 async function editNginx(page: Page) {
-  await (await serviceMenu(page))
+  await (
+    await serviceMenu(page)
+  )
     .getByRole("menuitem", { name: "Edit", exact: true })
     .click();
 }
@@ -522,6 +524,7 @@ async function open(
     if (
       [
         "/api/pipe/auth",
+        "/api/pipe/ai/connections",
         "/api/pipe/registries",
         "/api/pipe/registry-images",
       ].includes(path)
@@ -631,10 +634,12 @@ async function save(page: Page) {
   await page.getByRole("button", { name: "Save", exact: true }).click();
 }
 test.describe("Pipe cards @dashboard", () => {
-  test("opens all seven destinations from their cards", async ({ page }) => {
+  test("opens all nine destinations from their cards", async ({ page }) => {
     await open(page, { card: null });
     const cards = [
       "auth",
+      "ai",
+      "storage",
       "route",
       "registry",
       "database",

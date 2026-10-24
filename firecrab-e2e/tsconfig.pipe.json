@@ -9,6 +9,7 @@
     "moduleResolution": "Bundler"
   },
   "include": [
+    "tests/pipe-ai.spec.ts",
     "playwright.pipe.config.ts",
     "playwright.pipe-live.config.ts",
     "playwright.mocked.config.ts",

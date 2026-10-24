@@ -377,6 +377,7 @@ fn route_from_hash() -> String {
         || route.starts_with("console/")
         || [
             "pipe/auth",
+            "pipe/ai",
             "pipe/storage",
             "pipe/route",
             "pipe/registry",
@@ -409,6 +410,7 @@ fn endpoint(route: &str) -> &'static str {
         "shells" => "/api/shells",
         "host" => "/api/host",
         "pipe/auth" => "/api/pipe/auth",
+        "pipe/ai" => "/api/pipe/ai/connections",
         "pipe/storage" => "/api/pipe/storage",
         "pipe/registry" => "/api/pipe/registries",
         "pipe/database" => "/api/pipe/databases",
@@ -703,6 +705,7 @@ fn navigate(app: &Shared) {
         .unwrap_or(state.history_index + 1);
     save_history_index(state.history_index, None);
     state.advanced.reveals.clear();
+    state.advanced.ai = advanced::ai::State::default();
     state.advanced.storage = advanced::storage::State::default();
     state.route = next;
     state.generation += 1;
@@ -784,6 +787,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 }
             }
             _ => {
+                if advanced::ai::input(&changed, &target) {
+                    return;
+                }
                 if target.closest("#editor").ok().flatten().is_some() {
                     changed.borrow_mut().dirty = true;
                     workflows::form_input(&changed, &target);
@@ -855,6 +861,11 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         else {
             return;
         };
+        if form.id() == "ai-editor" {
+            event.prevent_default();
+            advanced::ai::submit(&submitted);
+            return;
+        }
         if form.id() != "editor" {
             return;
         }

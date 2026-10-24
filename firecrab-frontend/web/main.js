@@ -3,6 +3,7 @@ import './styles/base.css';
 import './styles/frame.css';
 import './styles/vm.css';
 import './wasm.css';
+import './styles/pipe-ai.css';
 import init, { terminal_key_allowed } from '../pkg/firecrab_frontend.js';
 import wasmUrl from '../pkg/firecrab_frontend_bg.wasm?url';
 

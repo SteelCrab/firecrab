@@ -11,6 +11,7 @@ use uuid::Uuid;
 mod pool;
 pub use pool::*;
 mod micro_services;
+mod pipe_ai;
 mod pipe_storage;
 mod schedules;
 mod security_groups;
@@ -18,6 +19,7 @@ pub use micro_services::{
     DeployMicroServiceRequest, MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec,
     ServiceInstance, ServicePhase, ServiceRuntime,
 };
+pub use pipe_ai::*;
 pub use pipe_storage::{
     PipeStorageResponse, PipeStorageSpec, StorageCredentialRef, StorageObject, StorageObjectPage,
     StorageServiceRef,

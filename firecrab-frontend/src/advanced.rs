@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod images;
 pub mod pools;
 pub mod schedules;
@@ -18,6 +19,7 @@ use web_sys::{Element, Event, HtmlInputElement, HtmlSelectElement};
 pub struct State {
     pub context: String,
     pub storage: storage::State,
+    pub ai: ai::State,
     pub secrets_external: bool,
     pub reveal_generation: u64,
     pub reveals: BTreeMap<String, (String, f64)>,
@@ -83,7 +85,8 @@ pub fn dispatch(app: &Shared, action: &str, id: &str, button: &Element) -> bool 
         app.borrow_mut().dirty = true;
         return true;
     }
-    storage::dispatch(app, action, id)
+    ai::dispatch(app, action, id)
+        || storage::dispatch(app, action, id)
         || images::dispatch(app, action, id)
         || pools::dispatch(app, action, id)
         || schedules::dispatch(app, action, id)
@@ -91,7 +94,7 @@ pub fn dispatch(app: &Shared, action: &str, id: &str, button: &Element) -> bool 
         || security::dispatch(app, action, id)
 }
 pub fn change(app: &Shared, target: &Element) -> bool {
-    if storage::change(app, target) {
+    if ai::change(app, target) || storage::change(app, target) {
         return true;
     }
     if target.id() == "schedule-filter" {

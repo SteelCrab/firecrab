@@ -629,6 +629,29 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // Allow their bounded connection retries to finish while retaining the
     // same concurrency pool, body limit, CORS and origin checks as other REST.
     let inspection = Router::new()
+        .route(
+            "/api/pipe/ai/connections/{id}/login",
+            post(handlers::pipe_ai::login_start),
+        )
+        .route(
+            "/api/pipe/ai/logins/{id}",
+            get(handlers::pipe_ai::login_status),
+        )
+        .route("/auth/callback", get(handlers::pipe_ai::login_callback))
+        .route("/api/pipe/ai/connections", get(handlers::pipe_ai::list))
+        .route(
+            "/api/pipe/ai/connections/{id}",
+            axum::routing::put(handlers::pipe_ai::save).delete(handlers::pipe_ai::disconnect),
+        )
+        .route(
+            "/api/pipe/ai/connections/{id}/verify",
+            post(handlers::pipe_ai::verify),
+        )
+        .route(
+            "/api/pipe/ai/projects/{id}/model",
+            get(handlers::pipe_ai::get_default).put(handlers::pipe_ai::set_default),
+        )
+        .route("/api/pipe/ai/responses", post(handlers::pipe_ai::respond))
         .route("/api/oci/inspect", get(handlers::oci::inspect_oci_image))
         .route(
             "/api/pipe/registries/{registry}/repositories",
@@ -1640,3 +1663,7 @@ mod quick_tunnels_tests;
 #[cfg(test)]
 #[path = "server_pipe_auth_tests.rs"]
 mod pipe_auth_tests;
+
+#[cfg(test)]
+#[path = "server_pipe_ai_tests.rs"]
+mod pipe_ai_tests;

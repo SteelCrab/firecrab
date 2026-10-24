@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { createNetwork, importOci } from "./support/wasmDashboard";
 import { ApiCleanup } from "../src/api.js";
 import { openVmTab, vmPanel } from "./support/vmPanel";
 import {
@@ -14,7 +15,10 @@ import {
   REGISTER_VERSION,
   SKIP_GUEST_BOOT,
 } from "../src/constants.js";
-import { startLocalOciRegistry, type LocalOciRegistry } from "../src/registry.js";
+import {
+  startLocalOciRegistry,
+  type LocalOciRegistry,
+} from "../src/registry.js";
 
 /**
  * Issue #108 E2E — import in the browser, then register through the API.
@@ -78,7 +82,9 @@ test.beforeAll(async () => {
   expect(registry.announcement.reference).toBe(REGISTER_FIXED_REFERENCE);
   expect(registry.announcement.alias).toBe(REGISTER_FIXED_ALIAS);
   await cleanupOwned();
-  const leftover = (await api.listMicroregistry()).some((row) => row.alias === alias());
+  const leftover = (await api.listMicroregistry()).some(
+    (row) => row.alias === alias(),
+  );
   if (leftover) {
     throw new Error(
       `local catalog still has ${alias()} after deleting this suite's registration`,
@@ -94,29 +100,11 @@ test.afterAll(async () => {
   }
 });
 
-test("inspects the local fixture and imports it as an installed image", async ({ page }) => {
+test("inspects the local fixture and imports it as an installed image", async ({
+  page,
+}) => {
   await openEnglish(page, "/#/images");
-  await expect(page.locator("#oci-reference")).toBeVisible();
-  await expect(page.locator("#oci-import")).toBeDisabled();
-
-  await page.locator("#oci-reference").fill(reference());
-  await page.locator("#oci-inspect").click();
-
-  const oci = page.locator("section.panel", { has: page.getByRole("heading", { name: "OCI" }) });
-  await expect(oci.getByText("Compatible with this host.")).toBeVisible({ timeout: 30_000 });
-  await expect(oci.locator("dd", { hasText: alias() }).first()).toBeVisible();
-  await expect(page.locator("#oci-import")).toBeEnabled();
-
-  await page.locator("#oci-import").click();
-  const status = oci.locator(".state-badge");
-  await expect(status).toHaveText(/Imported|Import failed/, { timeout: 180_000 });
-  if ((await status.textContent())?.includes("failed")) {
-    const log = (await oci.locator(".image-install-log").textContent()) ?? "";
-    throw new Error(`OCI import failed for ${reference()}:\n${log}`);
-  }
-
-  await expect(oci.getByText("Registered image")).toBeVisible();
-  await expect(page.locator("table.image-table")).toContainText(alias());
+  await importOci(page, reference(), alias());
 });
 
 test("registers the installed image through the API and refuses a second register with 409", async () => {
@@ -124,7 +112,9 @@ test("registers the installed image through the API and refuses a second registe
   expect(accepted.status).toBe(202);
 
   await expect
-    .poll(async () => (await api.getRegister(alias()))?.status ?? "", { timeout: 180_000 })
+    .poll(async () => (await api.getRegister(alias()))?.status ?? "", {
+      timeout: 180_000,
+    })
     .toMatch(/^(succeeded|failed)$/);
   const finished = await api.getRegister(alias());
   if (finished?.status === "failed") {
@@ -132,13 +122,17 @@ test("registers the installed image through the API and refuses a second registe
   }
   expect(finished?.status).toBe("succeeded");
 
-  const listed = (await api.listMicroregistry()).filter((row) => row.alias === alias());
+  const listed = (await api.listMicroregistry()).filter(
+    (row) => row.alias === alias(),
+  );
   expect(listed).toEqual([{ alias: alias(), version: REGISTER_VERSION }]);
 
   const second = await api.startRegister(alias(), REGISTER_VERSION);
   expect(second.status).toBe(409);
   expect(conflictCode(second.json)).toBe("alias_collision");
-  expect((await api.listMicroregistry()).filter((row) => row.alias === alias())).toHaveLength(1);
+  expect(
+    (await api.listMicroregistry()).filter((row) => row.alias === alias()),
+  ).toHaveLength(1);
 });
 
 test("a failed register job leaves no current catalog row", async () => {
@@ -162,14 +156,20 @@ test("deletes the template, reinstalls through the API, and boots to FIRECRAB_NE
   );
 
   await openEnglish(page, "/#/images");
-  const imageRow = page.locator("table.image-table tbody tr", { hasText: alias() });
+  const imageRow = page.locator("table.image-table tbody tr", {
+    hasText: alias(),
+  });
   await expect(imageRow).toBeVisible();
-  await imageRow.locator("button.options-menu-trigger").click();
+  await imageRow.getByRole("button", { name: "Details", exact: true }).click();
   page.once("dialog", (dialog) => dialog.accept());
-  await imageRow.getByRole("menuitem", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "Delete image", exact: true }).click();
   await expect(imageRow).toHaveCount(0, { timeout: 15_000 });
   await expect
-    .poll(async () => (await api.listImages()).some((image) => image.alias === alias() && image.installed))
+    .poll(async () =>
+      (await api.listImages()).some(
+        (image) => image.alias === alias() && image.installed,
+      ),
+    )
     .toBe(false);
 
   const entry = await api.catalogEntry(alias());
@@ -180,10 +180,15 @@ test("deletes the template, reinstalls through the API, and boots to FIRECRAB_NE
   if (!entry?.packageStaged) {
     const downloaded = await request.post(`${imageUrl}/package`);
     expect(downloaded.ok(), await downloaded.text()).toBe(true);
-    await expect.poll(async () => {
-      const response = await request.get(`${imageUrl}/package`);
-      return (await response.json()).status;
-    }, { timeout: 180_000 }).toMatch(/^(succeeded|failed)$/);
+    await expect
+      .poll(
+        async () => {
+          const response = await request.get(`${imageUrl}/package`);
+          return (await response.json()).status;
+        },
+        { timeout: 180_000 },
+      )
+      .toMatch(/^(succeeded|failed)$/);
     const response = await request.get(`${imageUrl}/package`);
     const job = await response.json();
     expect(job.status, job.log).toBe("succeeded");
@@ -191,74 +196,96 @@ test("deletes the template, reinstalls through the API, and boots to FIRECRAB_NE
 
   const installed = await request.post(`${imageUrl}/install`);
   expect(installed.ok(), await installed.text()).toBe(true);
-  await expect.poll(async () => {
-    const response = await request.get(`${imageUrl}/install`);
-    return (await response.json()).status;
-  }, { timeout: 180_000 }).toMatch(/^(succeeded|failed)$/);
+  await expect
+    .poll(
+      async () => {
+        const response = await request.get(`${imageUrl}/install`);
+        return (await response.json()).status;
+      },
+      { timeout: 180_000 },
+    )
+    .toMatch(/^(succeeded|failed)$/);
   const response = await request.get(`${imageUrl}/install`);
   const job = await response.json();
   expect(job.status, job.log).toBe("succeeded");
 
   await page.reload();
-  await expect(imageRow.locator(".state-badge")).toHaveText("Installed");
+  await expect(imageRow).toBeVisible();
   await expect
-    .poll(async () => (await api.listImages()).some((image) => image.alias === alias() && image.installed), {
-      timeout: 30_000,
-    })
+    .poll(
+      async () =>
+        (await api.listImages()).some(
+          (image) => image.alias === alias() && image.installed,
+        ),
+      {
+        timeout: 30_000,
+      },
+    )
     .toBe(true);
 
   await openEnglish(page, "/#/networks");
-  const networkPanel = page.locator("section.panel", {
-    has: page.getByRole("heading", { name: "MicroNetwork" }),
-  });
-  const networkRows = networkPanel.locator("table.vm-table tbody tr");
-  if ((await networkRows.count()) === 0) {
-    await page.locator("#mn-name").fill(REGISTER_NETWORK_NAME);
-    await page.locator("#mn-subnet").fill(REGISTER_NETWORK_CIDR);
-    await networkPanel.locator('button[type="submit"]').click();
-    const created = networkRows.filter({ hasText: REGISTER_NETWORK_NAME });
-    const fieldError = networkPanel.locator(".field-error").filter({ hasText: /\S/ });
-    await expect(created.or(fieldError).first()).toBeVisible({ timeout: 30_000 });
-    if ((await created.count()) === 0) {
-      throw new Error(
-        `failed to create MicroNetwork ${REGISTER_NETWORK_NAME}: ${(await fieldError.allTextContents()).join("; ")}`,
-      );
-    }
+  await expect(page.locator("#content")).toHaveAttribute("data-loaded", "true");
+  if ((await page.locator("table.network-table tbody tr").count()) === 0) {
+    await createNetwork(page, REGISTER_NETWORK_NAME, REGISTER_NETWORK_CIDR);
     const networks = await api.listNetworks();
-    createdNetworkId = networks.find((network) => network.name === REGISTER_NETWORK_NAME)?.id ?? null;
+    createdNetworkId =
+      networks.find((network) => network.name === REGISTER_NETWORK_NAME)?.id ??
+      null;
   }
 
   await openEnglish(page, "/#/vms");
   await page.locator("#vm-list-add").click();
   await expect(page).toHaveURL(/#\/vms\/new$/);
-  await expect(page.locator("#vm-image")).toBeEnabled({ timeout: 15_000 });
-  await expect(page.locator(`#vm-image option[value="${alias()}"]`)).toHaveCount(1, {
+  await expect(page.locator("#field-template")).toBeEnabled({
     timeout: 15_000,
   });
-  await page.locator("#vm-name").fill(REGISTER_VM_NAME);
-  await page.locator("#vm-image").selectOption(alias());
-  await expect(page.locator("#vm-micro-network")).not.toHaveValue("");
-  await page.locator("#vm-create-submit").click();
-  await expect(page).toHaveURL(/#\/vms$/);
-  await expect(page.getByText(`Created: ${REGISTER_VM_NAME}`)).toBeVisible({ timeout: 30_000 });
+  await expect(
+    page.locator(`#field-template option[value="${alias()}"]`),
+  ).toHaveCount(1, {
+    timeout: 15_000,
+  });
+  await page.locator("#field-name").fill(REGISTER_VM_NAME);
+  await page.locator("#field-template").selectOption(alias());
+  await expect(page.locator("#field-microNetworkId")).not.toHaveValue("");
+  await page.locator("#editor button[type=submit]").click();
+  await expect(page).toHaveURL(/#\/vms(?:\?vm=.+)?$/);
 
-  const row = page.locator("table.vm-list tbody tr", { hasText: REGISTER_VM_NAME });
+  const row = page.locator("table.vm-list tbody tr", {
+    hasText: REGISTER_VM_NAME,
+  });
   await expect(row).toBeVisible();
   // Row actions live behind the Actions toggle now.
   await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
   await row.getByRole("menuitem", { name: "start", exact: true }).click();
-  await expect(row.locator(".vm-status-label")).toHaveAttribute("data-state", /running|error/, { timeout: 240_000 });
-  if ((await row.locator(".vm-status-label").getAttribute("data-state")) !== "running") {
+  await expect(row.locator(".vm-status-label")).toHaveAttribute(
+    "data-state",
+    /running|error/,
+    { timeout: 240_000 },
+  );
+  if (
+    (await row.locator(".vm-status-label").getAttribute("data-state")) !==
+    "running"
+  ) {
     await openVmTab(page, row, "Overview");
-    const steps = (await vmPanel(page).locator(".vm-timeline-step").allTextContents()).join("\n");
+    const steps = (
+      await vmPanel(page).locator(".vm-timeline-step").allTextContents()
+    ).join("\n");
     await vmPanel(page).getByRole("tab", { name: /^Log/ }).click();
     await expect
-      .poll(async () => (await page.locator("pre.detail-log").textContent())?.trim() ?? "", {
-        timeout: 10_000,
-      })
+      .poll(
+        async () =>
+          (await page.locator("pre.detail-log").textContent())?.trim() ?? "",
+        {
+          timeout: 10_000,
+        },
+      )
       .not.toBe("");
     const logText = (await page.locator("pre.detail-log").textContent()) ?? "";
-    const banner = (await page.locator(".banner").textContent().catch(() => "")) ?? "";
+    const banner =
+      (await page
+        .locator(".banner")
+        .textContent()
+        .catch(() => "")) ?? "";
     throw new Error(
       `VM ${REGISTER_VM_NAME} entered error instead of running.\nbanner: ${banner}\nsteps:\n${steps}\nlog:\n${logText}`,
     );
