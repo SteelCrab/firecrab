@@ -33,8 +33,7 @@ async fn pipe_auth_routes_protect_mutations_redact_secrets_and_disconnect_one_pr
             },
         })
         .unwrap();
-    let config =
-        HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false).unwrap();
+    let config = HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080").unwrap();
     let app = build_router(state.clone(), &config);
     for uri in ["/api/pipe/auth", "/api/pipe/registries"] {
         let response = app

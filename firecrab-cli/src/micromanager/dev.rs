@@ -39,6 +39,7 @@ const OPTIONAL_SOURCE_INPUTS: &[&str] = &[
     "packaging/ingress-sources.json",
     "firecrab-tunnel",
     "firecrab-stack",
+    "firecrab-pki",
     "examples/stacks/basic.yaml",
     "packaging/micromanager.toml",
     "packaging/systemd/firecrab-quick-tunnel.service",
@@ -353,6 +354,8 @@ members = ["firecrab-api", "firecrab-api-types", "firecrab-cli", "firecrab-helpe
             "firecrab-tunnel/Cargo.toml",
             "firecrab-stack/Cargo.toml",
             "firecrab-stack/src/lib.rs",
+            "firecrab-pki/Cargo.toml",
+            "firecrab-pki/src/lib.rs",
             "examples/stacks/basic.yaml",
         ] {
             assert_eq!(
