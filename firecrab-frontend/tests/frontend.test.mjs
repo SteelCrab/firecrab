@@ -47,6 +47,15 @@ test('WASM owns the app and filters the same names, images, addresses, and state
   await search.fill('10.42.0.2'); await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(1);
 });
 
+test('the precompressed gzip fallback boots when Brotli is unavailable', async () => {
+  await context.setExtraHTTPHeaders({ 'Accept-Encoding': 'gzip' });
+  const loaded = page.waitForResponse(response => response.url().endsWith('.wasm'));
+  await open();
+  assert.equal((await loaded).headers()['content-encoding'], 'gzip');
+  await expect(page.locator('#root')).toHaveAttribute('data-engine', 'wasm');
+  await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(12);
+});
+
 test('narrow searches restore consecutive and separated rows in server order', async () => {
   fixture.reset(200);
   for (const index of [2, 3, 9, 99, 150]) fixture.state.vms[index].template = "shared-image";
