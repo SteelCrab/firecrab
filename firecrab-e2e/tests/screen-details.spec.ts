@@ -103,23 +103,25 @@ test.describe("list screens with a detail panel", () => {
       hash: "#/services",
       routes: {
         "/api/micro-services": [service],
+        "/api/pipe/storage": [],
         "/api/security-groups": [],
         "/api/micro-networks": [],
         [`/api/micro-services/${id}`]: service,
         [`/api/micro-services/${id}/deployment`]: (route) => route.fulfill({ json: null }),
       },
     });
-    const detail = panel(page, "MicroService detail");
     await page.getByRole("button", { name: "New MicroService", exact: true }).click();
-    await expect(detail.getByRole("heading", { name: "New MicroService" })).toBeVisible();
-    await detail.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect(detail.getByRole("heading", { name: "New MicroService" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "New MicroService", exact: true })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Setup steps", exact: true })).toBeVisible();
+    await expect(panel(page, "MicroService detail")).toHaveCount(0);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "New MicroService", exact: true })).toHaveCount(0);
 
     await page.getByRole("button", { name: "Edit orders", exact: true }).click();
-    await expect(detail.getByRole("heading", { name: "Edit: orders", exact: true })).toBeVisible();
-    // Run stays disabled while a form is open, as before.
-    await expect(page.getByRole("button", { name: "Run orders", exact: true })).toBeDisabled();
-    await detail.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Edit: orders", exact: true })).toBeVisible();
+    await expect(panel(page, "MicroService detail")).toHaveCount(0);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    const detail = panel(page, "MicroService detail");
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(detail.getByRole("heading", { name: "Run: orders", exact: true })).toBeVisible();
     await expect(detail.getByRole("status")).toHaveText("Not deployed");

@@ -289,6 +289,16 @@ pub async fn create_vm(
     Extension(request_id): Extension<RequestId>,
     ValidatedJson(req): ValidatedJson<CreateVmRequest>,
 ) -> Result<(StatusCode, Json<VmResponse>), AppError> {
+    create_vm_with_id(state, request_id, req, Uuid::new_v4()).await
+}
+
+/// Use a journal-reserved UUID while retaining normal validation and provisioning.
+pub(crate) async fn create_vm_with_id(
+    state: AppState,
+    request_id: RequestId,
+    req: CreateVmRequest,
+    id: Uuid,
+) -> Result<(StatusCode, Json<VmResponse>), AppError> {
     let fields = validate_create(&req, &state);
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
@@ -311,7 +321,7 @@ pub async fn create_vm(
     let response = insert_vm(
         &state,
         request_id,
-        Uuid::new_v4(),
+        id,
         req,
         &template,
         crate::model::VmPurpose::Instance,
@@ -784,6 +794,30 @@ pub async fn update_vm(
             request_id.0,
         ));
     }
+    if req.env.is_some() {
+        let store = state.store.clone();
+        let owner = tokio::task::spawn_blocking(move || store.service_deployment_for_vm(id))
+            .await
+            .map_err(|_| AppError::internal(request_id.0))?
+            .map_err(|_| AppError::internal(request_id.0))?;
+        if owner
+            .as_ref()
+            .is_some_and(|deployment| deployment.spec.storage_connection_id.is_some())
+        {
+            return Err(AppError::conflict(
+                "service_storage_env",
+                "Stop and edit the MicroService configuration to change this VM's environment",
+                request_id.0,
+            ));
+        }
+        if owner.is_some_and(|deployment| !deployment.spec.secrets.is_empty()) {
+            return Err(AppError::conflict(
+                "vm_service_owned",
+                "Edit the MicroService configuration instead of its replica environment",
+                request_id.0,
+            ));
+        }
+    }
     let _network_guard = state.network_mutations.lock().await;
     if let Some(selection) = req.security_group_id {
         crate::service_runtime::ensure_vm_policy_editable(&state, id, request_id.0).await?;
@@ -935,7 +969,7 @@ fn restore_resources(state: &AppState, id: Uuid, previous: PreviousResources) {
     }
 }
 
-fn validate_update(
+pub(crate) fn validate_update(
     req: &UpdateVmResourcesRequest,
     current_disk_gb: u16,
 ) -> BTreeMap<String, String> {
@@ -1384,6 +1418,7 @@ pub(super) async fn persist_update(
 }
 
 async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess, String> {
+    let guest_env = crate::service_runtime::secrets::guest_env(state, vm).await?;
     let template = state
         .templates
         .resolve_version(&vm.template, &vm.template_version)
@@ -1407,7 +1442,7 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
     )
     .await?;
 
-    let result = finish_run_start(state, vm, template, &network).await;
+    let result = finish_run_start(state, vm, template, &network, guest_env).await;
     if result.is_err() {
         teardown_vm_network(state, vm.id).await;
     }
@@ -1419,6 +1454,7 @@ async fn finish_run_start(
     vm: &VmRecord,
     template: std::sync::Arc<crate::templates::TemplateVersion>,
     network: &VmNetwork,
+    mut guest_env: BTreeMap<String, String>,
 ) -> Result<FirecrackerProcess, String> {
     // Capture transport-derived values before the template Arc is moved into
     // the blocking disk/configuration task below. `runtime_boot_args` also
@@ -1464,13 +1500,21 @@ async fn finish_run_start(
         let target_bytes = u64::from(record.disk_gb) * 1024 * 1024 * 1024;
         let rootfs = rootfs::prepare_rootfs(&paths, generation, &mut source, target_bytes)
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
-        rootfs::specialize_guest(&rootfs, record.id, &record.env)
+        let storage_env = crate::pipe_storage::environment_for_vm(&store_for_shells, record.id)
+            .map_err(|error| error.message.to_owned())?;
+        let has_storage_secrets = !storage_env.is_empty();
+        guest_env.extend(storage_env);
+        rootfs::specialize_guest(&rootfs, record.id, &guest_env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
         let (private_env, private_files) =
             crate::pipe_databases::bindings::guest_inputs(&store_for_shells, record.id)
                 .map_err(|_| "Could not load private database bindings".to_owned())?;
-        rootfs::apply_private_service_inputs(&rootfs, &record.env, &private_env, &private_files)
+        rootfs::apply_private_service_inputs(&rootfs, &guest_env, &private_env, &private_files)
             .map_err(|_| "Could not install private database bindings".to_owned())?;
+        if has_storage_secrets {
+            rootfs::protect_vm_credentials(&rootfs)
+                .map_err(|_| "Could not protect the service's S3 credential file".to_owned())?;
+        }
         crate::guest_ssh::install_on_guest(&rootfs, &paths)
             .map_err(|error| format!("guest SSH install failed: {error}"))?;
         if let Some(ref program) = guest_fastfetch {

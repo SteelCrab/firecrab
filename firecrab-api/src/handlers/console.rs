@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::Extension;
@@ -27,7 +27,9 @@ pub async fn console_ws(
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, AppError> {
     let process = resolve_console_process(&state.processes, &id, request_id.0)?;
-    Ok(upgrade.on_upgrade(move |socket| stream_console(socket, process, state, id)))
+    let upgrade = upgrade.protocols([crate::console_resize::WS_PROTOCOL]);
+    let modern = upgrade.selected_protocol().is_some();
+    Ok(upgrade.on_upgrade(move |socket| stream_console(socket, process, state, id, modern)))
 }
 
 /// Parses the path id and looks up its live process — the same map entry
@@ -52,13 +54,20 @@ fn resolve_console_process(
 /// the rest of it before they are forwarded anyway.
 const MARKER_HOLD: Duration = Duration::from_millis(50);
 
-async fn stream_console(socket: WebSocket, process: VmProcess, state: AppState, id: String) {
+async fn stream_console(
+    socket: WebSocket,
+    process: VmProcess,
+    state: AppState,
+    id: String,
+    modern: bool,
+) {
     let (sink, inbound) = socket.split();
     bridge_console(
         sink,
         inbound,
         process,
         Some((state, id.parse().expect("validated VM id"))),
+        modern,
     )
     .await;
 }
@@ -70,6 +79,7 @@ async fn bridge_console<S, I, E>(
     mut inbound: I,
     process: VmProcess,
     vm: Option<(AppState, Uuid)>,
+    modern: bool,
 ) where
     S: Sink<Message> + Unpin,
     I: Stream<Item = Result<Message, E>> + Unpin,
@@ -79,6 +89,19 @@ async fn bridge_console<S, I, E>(
         console,
         ..
     } = process;
+    let mut sizes = console.resize.subscribe();
+    let viewer = modern.then(|| console.resize.register());
+    let _worker = viewer.as_ref().map(|viewer| {
+        ResizeWorker(tokio::spawn(
+            Arc::clone(&console.resize).synchronize(viewer.id, exited.clone()),
+        ))
+    });
+    if modern {
+        let greeting = sizes.borrow_and_update().message();
+        if sink.send(Message::Text(greeting.into())).await.is_err() {
+            return;
+        }
+    }
     let (backlog, mut output) = console.subscribe();
     let mut scanner = SessionEndScanner::default();
 
@@ -89,6 +112,11 @@ async fn bridge_console<S, I, E>(
 
     loop {
         tokio::select! {
+            changed = sizes.changed(), if modern => {
+                if changed.is_err() { return; }
+                let message = sizes.borrow_and_update().message();
+                if sink.send(Message::Text(message.into())).await.is_err() { return; }
+            }
             chunk = output.recv() => match chunk {
                 Ok(bytes) => match scanner.push(&bytes) {
                     ScannedOutput::Output(visible) => {
@@ -126,11 +154,38 @@ async fn bridge_console<S, I, E>(
                 None | Some(Ok(Message::Close(_))) => return,
                 Some(Err(_)) => return,
                 Some(Ok(Message::Binary(bytes))) => { write_console_input(&console, vm.as_ref(), &bytes).await; },
+                Some(Ok(Message::Text(text))) if modern => {
+                    let size = (text.len() <= 128).then(|| serde_json::from_str::<ResizeRequest>(&text).ok()).flatten();
+                    match (viewer.as_ref(), size) {
+                        (Some(viewer), Some(ResizeRequest::Resize { rows, cols })) if (crate::console_resize::Dimensions { rows, cols }).valid() => {
+                            viewer.report(crate::console_resize::Dimensions { rows, cols });
+                        }
+                        _ => {
+                            let _ = sink.send(Message::Close(Some(CloseFrame { code: 1008, reason: "Invalid console control frame".into() }))).await;
+                            return;
+                        }
+                    }
+                },
                 Some(Ok(Message::Text(text))) => { write_console_input(&console, vm.as_ref(), text.as_bytes()).await; },
                 // Ping/Pong and anything else: nothing to act on.
                 Some(Ok(_)) => {}
             },
         }
+    }
+}
+
+/// The only text-frame operation accepted after protocol negotiation.
+#[derive(serde::Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
+enum ResizeRequest {
+    Resize { rows: u16, cols: u16 },
+}
+
+/// Abort background guest work when the owning WebSocket bridge exits.
+struct ResizeWorker(tokio::task::JoinHandle<()>);
+impl Drop for ResizeWorker {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -181,6 +236,60 @@ mod tests {
             console: Arc::new(ConsoleBroker::new()),
             control: crate::vm_shim::client::ShimControl::for_test().0,
         }
+    }
+
+    #[tokio::test]
+    async fn resize_control_never_becomes_shell_input_and_the_viewer_is_released() {
+        let (exit, exited) = watch::channel(false);
+        let console = Arc::new(ConsoleBroker::new());
+        let (control, mut input) = crate::vm_shim::client::ShimControl::for_test();
+        console.attach_control(control.clone());
+        let process = VmProcess {
+            pid: 42,
+            exited,
+            console: Arc::clone(&console),
+            control,
+        };
+        let frames: Vec<Result<Message, std::convert::Infallible>> = vec![
+            Ok(Message::Text(
+                r#"{"type":"resize","rows":30,"cols":100}"#.into(),
+            )),
+            Ok(Message::Binary(b"hello\r".to_vec().into())),
+            Ok(Message::Text(
+                r#"{"type":"resize","rows":0,"cols":80}"#.into(),
+            )),
+        ];
+        let mut sent = Vec::new();
+        bridge_console(
+            &mut sent,
+            futures_util::stream::iter(frames),
+            process,
+            None,
+            true,
+        )
+        .await;
+        assert!(
+            matches!(input.try_recv(), Ok(crate::vm_shim::protocol::ShimRequest::Input(bytes)) if bytes == b"hello\r")
+        );
+        assert!(input.try_recv().is_err());
+        assert!(
+            sent.iter().any(
+                |message| matches!(message, Message::Close(Some(frame)) if frame.code == 1008)
+            )
+        );
+        assert!(
+            sent.iter()
+                .any(|message| matches!(message, Message::Text(text) if text.contains("resize")))
+        );
+        assert!(
+            console
+                .resize
+                .subscribe()
+                .borrow()
+                .message()
+                .contains("\"viewers\":0")
+        );
+        drop(exit);
     }
 
     #[tokio::test]
@@ -245,7 +354,10 @@ mod tests {
             feed.await;
         };
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            tokio::join!(bridge_console(&mut sent, inbound, process, None), drive)
+            tokio::join!(
+                bridge_console(&mut sent, inbound, process, None, false),
+                drive
+            )
         })
         .await
         .expect("the bridge must close the socket");

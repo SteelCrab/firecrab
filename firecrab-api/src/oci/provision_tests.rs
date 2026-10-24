@@ -3,7 +3,7 @@ use core::assert_matches;
 
 use std::collections::BTreeMap;
 use std::io::Cursor;
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
 use tar::{Builder, EntryType, Header};
 use tempfile::{TempDir, tempdir};
@@ -236,6 +236,7 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
     // The host fails the VM start unless one of these reaches the console.
     let boot = String::from_utf8(read_guest(&tree, "/etc/firecrab/rc.boot")).expect("script");
     assert!(boot.contains("FIRECRAB_NETWORK_READY $ipv4"));
+    assert!(boot.find("systemd-tmpfiles --create").unwrap() < boot.find("for service in").unwrap());
     assert!(boot.contains("FIRECRAB_NETWORK_FAILED no-ipv4-address"));
     assert!(boot.contains("FIRECRAB_NETWORK_FAILED dns-unreachable"));
     assert!(
@@ -1873,4 +1874,81 @@ async fn config_directories_and_broken_init_links_do_not_select_native_init() {
         // BusyBox init serves the console from its inittab.
         assert!(!tree.join("etc/firecrab/rc.serial").exists());
     }
+}
+
+#[test]
+fn runtime_preparation_recreates_image_directories_after_each_tmpfs_reset() {
+    let tmpfiles = Path::new("/usr/bin/systemd-tmpfiles");
+    if !cfg!(target_os = "linux") || !tmpfiles.is_file() {
+        return;
+    }
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("guest");
+    std::fs::create_dir_all(root.join("usr/lib/tmpfiles.d")).unwrap();
+    std::fs::create_dir_all(root.join("run")).unwrap();
+    let owner = std::fs::metadata(&root).unwrap();
+    std::fs::write(
+        root.join("usr/lib/tmpfiles.d/database.conf"),
+        format!(
+            "d /run/mysqld 0750 {} {} -\nd /var/lib/untouched 0755 {} {} -\n",
+            owner.uid(),
+            owner.gid(),
+            owner.uid(),
+            owner.gid()
+        ),
+    )
+    .unwrap();
+    let bin = directory.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let wrapper = bin.join("systemd-tmpfiles");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nexec /usr/bin/systemd-tmpfiles --root {} \"$@\"\n",
+            service::posix_quote(root.to_str().unwrap())
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for _ in 0..2 {
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(provision::PREPARE_RUNTIME)
+            .env("PATH", &bin)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(root.join("run/mysqld").is_dir());
+        assert_eq!(guest_mode(&root, "/run/mysqld"), 0o750);
+        assert!(!root.join("var/lib/untouched").exists());
+        assert!(!root.join("run/mysqld/stale.pid").exists());
+        std::fs::write(root.join("run/mysqld/stale.pid"), b"old pid").unwrap();
+        std::fs::remove_dir_all(root.join("run")).unwrap();
+        std::fs::create_dir(root.join("run")).unwrap();
+    }
+}
+
+#[test]
+fn runtime_preparation_blocks_services_on_failure_and_allows_images_without_tmpfiles() {
+    let directory = tempdir().unwrap();
+    let wrapper = directory.path().join("systemd-tmpfiles");
+    std::fs::write(&wrapper, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let script = format!("{}\nprintf app-started\n", provision::PREPARE_RUNTIME);
+    let run = || {
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&script)
+            .env("PATH", directory.path())
+            .output()
+            .unwrap()
+    };
+    let failed = run();
+    assert!(!failed.status.success());
+    assert!(failed.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("FIRECRAB_RUNTIME_FAILED tmpfiles"));
+    std::fs::remove_file(wrapper).unwrap();
+    let no_tmpfiles = run();
+    assert!(no_tmpfiles.status.success());
+    assert_eq!(no_tmpfiles.stdout, b"app-started");
 }

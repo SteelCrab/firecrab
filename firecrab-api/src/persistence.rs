@@ -21,11 +21,15 @@ mod database_services;
 mod pools;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod micro_services;
+mod pipe_ai;
 mod pipe_auth;
 mod pipe_databases;
+mod pipe_storage;
 mod registries;
 mod schedules;
 mod security_groups;
+mod stack_applies;
+mod stacks;
 pub use registries::RegistryLogin;
 pub(crate) use schedules::ScheduleMutation;
 
@@ -473,9 +477,36 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    /// Another durable stack operation is queued or running.
+    #[error("a stack apply is active")]
+    StackApplyBusy,
+    /// Ownership changed after the plan was observed.
+    #[error("stack plan is stale")]
+    StaleStackPlan,
+    /// An operation ID was reused with a different registration or request.
+    #[error("stack apply identity conflicts")]
+    StackApplyIdentity,
+    /// The requested operation is not recorded for this stack.
+    #[error("stack apply does not exist")]
+    MissingStackApply,
     /// A saved service or VM still references this policy.
     #[error("security group is still referenced")]
     SecurityGroupInUse,
+    /// The requested stack registration does not exist.
+    #[error("stack is not registered")]
+    MissingStack,
+    /// Bindings must be explicitly released before removing registration metadata.
+    #[error("stack still has ownership bindings")]
+    StackNotEmpty,
+    /// A binding would overwrite an existing ownership assignment.
+    #[error("stack ownership conflicts with an existing binding")]
+    StackConflict,
+    /// The ownership set cannot exceed the manifest resource limit.
+    #[error("stack ownership is limited to 256 bindings")]
+    StackBindingLimit,
+    /// An explicit adoption request targets a missing or protected resource.
+    #[error("resource is missing or cannot be owned by a stack")]
+    InvalidStackResource,
     #[error("MicroService name {name} is already registered")]
     DuplicateMicroServiceName { name: String },
     /// Couldn't create the database's parent directory.
@@ -702,7 +733,14 @@ impl Store {
         conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(database_services::CREATE_SQL)?;
+        conn.execute(pipe_ai::CONNECTIONS_SQL, [])?;
+        conn.execute(pipe_ai::DEFAULTS_SQL, [])?;
+        conn.execute(pipe_ai::SETTINGS_SQL, [])?;
+        conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
+        conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
+        conn.execute_batch(stacks::SCHEMA_SQL)?;
+        conn.execute_batch(stack_applies::SCHEMA_SQL)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;
@@ -712,13 +750,8 @@ impl Store {
         ) STRICT",
             [],
         )?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS pipe_auth_credentials (
-                provider TEXT PRIMARY KEY CHECK (provider IN ('aws', 'github')),
-                credential TEXT NOT NULL
-            ) STRICT",
-            [],
-        )?;
+        conn.execute(pipe_auth::CREATE_TABLE_SQL, [])?;
+        pipe_auth::migrate(&conn)?;
         registries::migrate_account_name(&conn)?;
         conn.execute(CREATE_SHELL_REVISIONS_TABLE_SQL, [])?;
         conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;

@@ -200,8 +200,8 @@ mod tests {
 
         let Json(kernels) = list_kernels(State(state)).await;
 
-        assert_eq!(kernels.len(), 4);
-        assert_eq!(kernels[0].version, "7.2.2");
+        assert_eq!(kernels.len(), 5);
+        assert_eq!(kernels[0].version, "7.2.2-vsock1");
         assert!(kernels.iter().all(|kernel| {
             kernel.architecture == Architecture::HOST.as_str()
                 && !kernel.installed

@@ -237,6 +237,9 @@ pub(crate) struct Contents {
     pub connections: Vec<Connection>,
     /// Temporary captured transfers awaiting application or expiry.
     pub plans: Vec<Plan>,
+    /// Immutable Secret environments for deployments, never returned by the API.
+    #[serde(default)]
+    pub service_environments: BTreeMap<Uuid, BTreeMap<String, String>>,
 }
 
 /// Encrypted file store opened lazily by Secrets requests.

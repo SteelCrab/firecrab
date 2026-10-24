@@ -7,7 +7,6 @@ network and Quick Tunnel, and removes them on exit. TLS verification stays enabl
 
 import argparse
 import http.client
-import importlib.util
 import json
 import ssl
 import subprocess
@@ -20,6 +19,7 @@ from urllib.parse import urlsplit
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api", default="http://127.0.0.1:15335")
+    parser.add_argument("--image", required=True, help="AUTH-owned fixture: port 8080, /health returns GREETING, /cgi-bin/identity returns the guest hostname")
     parser.add_argument("--output", type=Path, help="save a JSON report only when explicitly requested")
     parser.add_argument("--restart-unit", default="firecrab-qa335-api.service")
     parser.add_argument("--external-ack", type=Path)
@@ -155,106 +155,92 @@ def main():
         save()
         print("PUBLIC_URL: " + public_url, flush=True)
 
-        module_spec = importlib.util.spec_from_file_location("oci_fixture", Path(__file__).with_name("oci-e2e-registry.py"))
-        fixture = importlib.util.module_from_spec(module_spec)
-        module_spec.loader.exec_module(fixture)
-        fixture.READY_COMMAND = """mkdir -p /tmp/www/cgi-bin
-printf '%s\\n' "$GREETING" > /tmp/www/health
-cat > /tmp/www/cgi-bin/identity <<'CGI'
-#!/etc/firecrab/busybox sh
-printf 'Content-Type: application/json\\r\\nCache-Control: no-store\\r\\n\\r\\n'
-printf '{"marker":"%s","instance":"%s","host":"%s","proto":"%s"}\\n' "$GREETING" "$(/etc/firecrab/busybox cat /sys/class/net/eth0/address)" "$HTTP_HOST" "$HTTP_X_FORWARDED_PROTO"
-CGI
-/etc/firecrab/busybox chmod 755 /tmp/www/cgi-bin/identity
-exec /etc/firecrab/busybox httpd -f -p 8080 -h /tmp/www
-"""
-        with fixture.LocalOciRegistry() as registry:
-            spec = {"name": "qa335-live-" + run, "image": registry.reference, "port": 8080, "ram": 128, "cpu": 1,
-                    "replicas": 2, "domain": domain, "healthPath": "/health", "startupTimeout": 15, "drainTimeout": 1,
-                    "env": {"GREETING": marker}}
-            service = request("POST", "/api/micro-services", spec)
-            identifier = service["id"]
-            services.append(identifier)
-            report["serviceId"] = identifier
-            request("POST", f"/api/micro-services/{identifier}/deployment", {})
-            deployed = wait_service(identifier, {"running"})
-            assert deployed["domainRouteOwned"] and len(deployed["instances"]) == 2, deployed
-            assert all(item["healthy"] and item["hostPort"] == 0 for item in deployed["instances"]), deployed
-            report["instances"] = deployed["instances"]
-            expected = {}
-            for instance in deployed["instances"]:
-                vm = request("GET", f"/api/vms/{instance['vmId']}")
-                expected[vm["mac"].lower()] = vm["id"]
-                assert vm["portForwards"] == [], vm
-            passed("two real Firecracker VMs deploy without host ports", vmIds=list(expected.values()))
-            request("POST", "/api/pipe/quick-tunnels", {"id": quick_id, "name": "qa335-" + run, "target": {"type": "routes", "host": domain}})
-            deadline = time.monotonic() + 180
-            while True:
-                try:
-                    body, tls = public_get(public_url)
-                    assert body.strip() == marker, body
-                    break
-                except Exception:
-                    if time.monotonic() >= deadline:
-                        raise
-                    time.sleep(2)
-            passed("public HTTPS verifies its certificate and reaches the service", url=public_url, tls=tls)
-            seen = set()
-            for _ in range(20):
-                body, _ = public_get(public_url, "/cgi-bin/identity")
-                identity = json.loads(body)
-                assert identity["marker"] == marker and identity["host"] == domain and identity["proto"] == "https", identity
-                assert identity["instance"].lower() in expected, identity
-                seen.add(identity["instance"].lower())
-            assert seen == set(expected), seen
-            passed("public requests reach both VMs with the original Host and HTTPS scheme", replicas=sorted(seen))
-
-            units = ["firecrab-ingress.service", entry["unit"]["unit"]] + ["firecrab-vm-" + item["vmId"].replace("-", "") + ".service" for item in deployed["instances"]]
-            before = {unit: pid(unit) for unit in units}
-            assert all(before.values()), before
-            subprocess.run(["systemctl", "stop", args.restart_unit], check=True, timeout=30)
+        spec = {"name": "qa335-live-" + run, "image": args.image, "port": 8080, "ram": 128, "cpu": 1,
+                "replicas": 2, "domain": domain, "healthPath": "/health", "startupTimeout": 15, "drainTimeout": 1,
+                "env": {"GREETING": marker}}
+        service = request("POST", "/api/micro-services", spec)
+        identifier = service["id"]
+        services.append(identifier)
+        report["serviceId"] = identifier
+        request("POST", f"/api/micro-services/{identifier}/deployment", {})
+        deployed = wait_service(identifier, {"running"})
+        assert deployed["domainRouteOwned"] and len(deployed["instances"]) == 2, deployed
+        assert all(item["healthy"] and item["hostPort"] == 0 for item in deployed["instances"]), deployed
+        report["instances"] = deployed["instances"]
+        expected = {}
+        for instance in deployed["instances"]:
+            vm = request("GET", f"/api/vms/{instance['vmId']}")
+            expected[vm["mac"].lower()] = vm["id"]
+            assert vm["portForwards"] == [], vm
+        passed("two real Firecracker VMs deploy without host ports", vmIds=list(expected.values()))
+        request("POST", "/api/pipe/quick-tunnels", {"id": quick_id, "name": "qa335-" + run, "target": {"type": "routes", "host": domain}})
+        deadline = time.monotonic() + 180
+        while True:
             try:
-                for _ in range(5):
-                    assert public_get(public_url)[0].strip() == marker
-            finally:
-                subprocess.run(["systemctl", "start", args.restart_unit], check=True, timeout=30)
-            deadline = time.monotonic() + 45
-            while True:
-                try:
-                    recovered = request("GET", f"/api/micro-services/{identifier}/deployment")
-                    assert recovered["phase"] == "running", recovered
-                    break
-                except Exception:
-                    if time.monotonic() >= deadline:
-                        raise
-                    time.sleep(1)
-            assert before == {unit: pid(unit) for unit in units}
-            passed("HTTPS and VM processes survive API stop/start and services are re-adopted", processIds=before)
+                body, tls = public_get(public_url)
+                assert body.strip() == marker, body
+                break
+            except Exception:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(2)
+        passed("public HTTPS verifies its certificate and reaches the service", url=public_url, tls=tls)
+        seen = set()
+        for _ in range(20):
+            body, _ = public_get(public_url, "/cgi-bin/identity")
+            identity = json.loads(body)
+            assert identity["marker"] == marker and identity["host"] == domain and identity["proto"] == "https", identity
+            assert identity["instance"].lower() in expected, identity
+            seen.add(identity["instance"].lower())
+        assert seen == set(expected), seen
+        passed("public requests reach both VMs with the original Host and HTTPS scheme", replicas=sorted(seen))
 
-            failed = request("POST", "/api/micro-services", {**spec, "name": "qa335-failed-" + run, "domain": "qa335-" + run + ".example.test", "replicas": 1, "healthPath": "/missing", "startupTimeout": 2})
-            services.append(failed["id"])
-            request("POST", f"/api/micro-services/{failed['id']}/deployment", {})
-            failure = wait_service(failed["id"], {"failed"})
-            assert not failure["instances"] and not failure["domainRouteOwned"], failure
-            assert public_get(public_url)[0].strip() == marker
-            passed("failed app health removes its VM and leaves the public service serving")
+        units = ["firecrab-ingress.service", entry["unit"]["unit"]] + ["firecrab-vm-" + item["vmId"].replace("-", "") + ".service" for item in deployed["instances"]]
+        before = {unit: pid(unit) for unit in units}
+        assert all(before.values()), before
+        subprocess.run(["systemctl", "stop", args.restart_unit], check=True, timeout=30)
+        try:
+            for _ in range(5):
+                assert public_get(public_url)[0].strip() == marker
+        finally:
+            subprocess.run(["systemctl", "start", args.restart_unit], check=True, timeout=30)
+        deadline = time.monotonic() + 45
+        while True:
+            try:
+                recovered = request("GET", f"/api/micro-services/{identifier}/deployment")
+                assert recovered["phase"] == "running", recovered
+                break
+            except Exception:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(1)
+        assert before == {unit: pid(unit) for unit in units}
+        passed("HTTPS and VM processes survive API stop/start and services are re-adopted", processIds=before)
 
-            request("POST", f"/api/vms/{deployed['instances'][0]['vmId']}/stop")
-            survivor = next(mac for mac, vm_id in expected.items() if vm_id != deployed["instances"][0]["vmId"])
-            for _ in range(8):
-                body, _ = public_get(public_url, "/cgi-bin/identity")
-                assert json.loads(body)["instance"].lower() == survivor, body
-            passed("public HTTPS keeps serving after one real VM stops", survivor=survivor)
-            report["status"] = "awaiting_external_probe" if args.external_ack else "checks_passed"
-            save()
-            if args.external_ack:
-                deadline = time.monotonic() + 180
-                while not args.external_ack.is_file():
-                    assert time.monotonic() < deadline, "external HTTPS probe did not acknowledge"
-                    time.sleep(1)
-                external = json.loads(args.external_ack.read_text())
-                assert external["marker"] == marker and external["publicUrl"] == public_url, external
-                passed("independent external client verifies public HTTPS", evidence=external)
+        failed = request("POST", "/api/micro-services", {**spec, "name": "qa335-failed-" + run, "domain": "qa335-" + run + ".example.test", "replicas": 1, "healthPath": "/missing", "startupTimeout": 2})
+        services.append(failed["id"])
+        request("POST", f"/api/micro-services/{failed['id']}/deployment", {})
+        failure = wait_service(failed["id"], {"failed"})
+        assert not failure["instances"] and not failure["domainRouteOwned"], failure
+        assert public_get(public_url)[0].strip() == marker
+        passed("failed app health removes its VM and leaves the public service serving")
+
+        request("POST", f"/api/vms/{deployed['instances'][0]['vmId']}/stop")
+        survivor = next(mac for mac, vm_id in expected.items() if vm_id != deployed["instances"][0]["vmId"])
+        for _ in range(8):
+            body, _ = public_get(public_url, "/cgi-bin/identity")
+            assert json.loads(body)["instance"].lower() == survivor, body
+        passed("public HTTPS keeps serving after one real VM stops", survivor=survivor)
+        report["status"] = "awaiting_external_probe" if args.external_ack else "checks_passed"
+        save()
+        if args.external_ack:
+            deadline = time.monotonic() + 180
+            while not args.external_ack.is_file():
+                assert time.monotonic() < deadline, "external HTTPS probe did not acknowledge"
+                time.sleep(1)
+            external = json.loads(args.external_ack.read_text())
+            assert external["marker"] == marker and external["publicUrl"] == public_url, external
+            passed("independent external client verifies public HTTPS", evidence=external)
     except BaseException as error:
         report["status"] = "failed"
         report["error"] = str(error)

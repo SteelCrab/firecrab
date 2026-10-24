@@ -947,6 +947,8 @@ fi
 
 echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
 
+{prepare_runtime}
+
 # The image carries its application dependencies. Start it before optional
 # operational tools, which may be unavailable on an isolated network.
 $BB mkdir -p /run/firecrab
@@ -983,8 +985,11 @@ exit 0
         dhcp = GUEST_DHCP_SCRIPT,
         services = GUEST_SERVICES,
         base_packages = BASE_PACKAGE_INSTALL,
+        prepare_runtime = PREPARE_RUNTIME,
     )
 }
+
+pub(in crate::oci) const PREPARE_RUNTIME: &str = include_str!("guest/prepare-runtime.sh");
 
 pub(in crate::oci) const BASE_PACKAGE_INSTALL: &str = include_str!("guest/install-packages.sh");
 

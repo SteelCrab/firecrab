@@ -664,7 +664,7 @@ install_compliance() {
 
 # Puts the payload binaries, and the dashboard, where the units expect them.
 install_binaries() {
-    local name src ingress_notices
+    local name src ingress_notices guest_notices
     # Validate the new required component before replacing any installed binary.
     src=$(firecrab_resolve_binary firecrab-ingress "$PAYLOAD_BIN" "$LIBDIR") \
         || die "missing firecrab-ingress; build with scripts/build-ingress.sh or install a host release"
@@ -684,6 +684,19 @@ install_binaries() {
             $SUDO install -o root -g root -m 0755 "$src" "$LIBDIR/$name"
         fi
     done
+    # Old custom payloads retain a usable serial console without resize support.
+    if src=$(firecrab_resolve_binary firecrab-guest-console "$PAYLOAD_BIN" "$LIBDIR"); then
+        guest_notices="$PAYLOAD_BIN/guest-console/LICENSE.musl"
+        if [ "$src" -ef "$LIBDIR/firecrab-guest-console" ]; then guest_notices="$LIBDIR/guest-console/LICENSE.musl"; fi
+        [ -f "$guest_notices" ] || die "missing guest-console/LICENSE.musl in install payload"
+        if [ ! "$src" -ef "$LIBDIR/firecrab-guest-console" ]; then
+            $SUDO install -o root -g root -m 0755 "$src" "$LIBDIR/firecrab-guest-console"
+        fi
+        if [ ! "$guest_notices" -ef "$LIBDIR/guest-console/LICENSE.musl" ]; then
+            $SUDO install -d -o root -g root -m 0755 "$LIBDIR/guest-console"
+            $SUDO install -o root -g root -m 0644 "$guest_notices" "$LIBDIR/guest-console/LICENSE.musl"
+        fi
+    fi
     # Keep the historical executable path usable by old units and clients.
     $SUDO ln -sfn firecrab-helper "$LIBDIR/firecrab-net-helper"
     # extract-vmlinux and extract-arm64-image are shell scripts used at
@@ -1106,7 +1119,8 @@ do_uninstall() {
 
     $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-helper" "$LIBDIR/firecrab-net-helper" \
         "$LIBDIR/extract-vmlinux" "$LIBDIR/extract-arm64-image"
-    $SUDO rm -f "$PREFIX/bin/firecrab" "$LIBDIR/firecrab-ingress"
+    $SUDO rm -f "$PREFIX/bin/firecrab" "$LIBDIR/firecrab-ingress" "$LIBDIR/firecrab-guest-console"
+    $SUDO rm -rf "$LIBDIR/guest-console"
     $SUDO rm -rf "$LIBDIR/ingress"
     $SUDO rm -rf "$SHAREDIR/dashboard"
     $SUDO rm -f "$SHAREDIR/LICENSE" "$SHAREDIR/THIRD_PARTY_NOTICES.txt" \

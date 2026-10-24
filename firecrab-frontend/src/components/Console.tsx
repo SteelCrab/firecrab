@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Maximize2, PanelRight, PanelRightClose, SlidersHorizontal, SquareTerminal, X } from "lucide-react";
-import { Terminal, type ITheme } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import "@xterm/xterm/css/xterm.css";
+import type { ITheme, Terminal } from "ghostty-web";
+import { createWasmTerminal, type WasmTerminalSession } from "../lib/wasmTerminal";
 import type { VmResponse } from "../bindings";
+import { CONSOLE_PROTOCOL, guestResizeMessage, type GuestResize } from "../lib/consoleProtocol";
 import { getVm, getVmLog } from "../api/client";
-import { formatVmExportBundle, serializeXtermBuffer } from "../lib/formatVmLog";
+import { formatVmExportBundle } from "../lib/formatVmLog";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
 import SshAccess from "./ssh/SshAccess";
@@ -14,8 +14,6 @@ import StatusBadge from "./ui/StatusBadge";
 import VmUsage from "./vm/VmUsage";
 import { useI18n } from "../i18n";
 import {
-  defaultInteractiveTerminalOptions,
-  enableTerminalIme,
   isImeComposing,
 } from "../lib/terminal";
 
@@ -136,15 +134,18 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
+  const outputRef = useRef<HTMLPreElement>(null);
+  const sessionRef = useRef<WasmTerminalSession | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
-  const intentionalCloseRef = useRef(false);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const initialPrefsRef = useRef(loadPrefs());
 
   const [status, setStatus] = useState<Status>("connecting");
-  const [prefs, setPrefs] = useState<ConsolePrefs>(initialPrefsRef.current);
+  const [guestResize, setGuestResize] = useState<GuestResize | null>(null);
+  const [prefs, setPrefs] = useState<ConsolePrefs>(loadPrefs);
+  const [appliedThemeId, setAppliedThemeId] = useState<ThemeId>(prefs.themeId);
+  const prefsRef = useRef(prefs);
+  const [terminalError, setTerminalError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [reconnectKey, setReconnectKey] = useState(0);
   const [vm, setVm] = useState<VmResponse | null>(null);
@@ -173,39 +174,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     }
   }, []);
 
-  /**
-   * Fit only when the surface has a real box. Calling FitAddon.fit() with a
-   * 0×0 container (first paint / StrictMode remount) sets cols/rows to 0 and
-   * the terminal draws nothing until a later successful fit.
-   */
-  const doFit = useCallback(() => {
-    const fit = fitRef.current;
-    const term = termRef.current;
-    const el = containerRef.current;
-    if (!fit || !term || !el) return false;
-    if (el.clientWidth < 16 || el.clientHeight < 16) return false;
-    try {
-      const proposed = fit.proposeDimensions();
-      if (!proposed || proposed.cols < 2 || proposed.rows < 2) return false;
-      fit.fit();
-      return term.cols >= 2 && term.rows >= 2;
-    } catch {
-      return false;
-    }
-  }, []);
-
-  /** Fit after layout paints; retry a few times if the box is still empty. */
-  const scheduleFit = useCallback(() => {
-    let tries = 0;
-    const tick = () => {
-      if (doFit()) return;
-      tries += 1;
-      if (tries < 20) {
-        requestAnimationFrame(tick);
-      }
-    };
-    requestAnimationFrame(() => requestAnimationFrame(tick));
-  }, [doFit]);
+  const scheduleFit = useCallback(() => sessionRef.current?.fit(), []);
 
   // Poll VM metadata for the bottom detail panel + document title.
   useEffect(() => {
@@ -230,181 +199,148 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     };
   }, [vmId]);
 
-  // Terminal + WebSocket share one effect so StrictMode remount never leaves
-  // a live socket writing into a disposed Terminal (blank screen).
+  // An aborted mount owns no socket, WASM terminal or scheduled callbacks.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-
-    let disposed = false;
-    intentionalCloseRef.current = false;
+    const controller = new AbortController();
+    const { signal } = controller;
+    let session: WasmTerminalSession | undefined;
+    let resizeReady = false;
+    let bootTimer: ReturnType<typeof setTimeout> | undefined;
     reconnectAttemptRef.current = 0;
+    setTerminalError(null);
+    setGuestResize(null);
+    setStatus("connecting");
+    if (outputRef.current) outputRef.current.textContent = "";
 
-    const initial = initialPrefsRef.current;
-    const term = new Terminal(
-      defaultInteractiveTerminalOptions({
-        fontSize: initial.fontSize,
-        theme: THEMES[initial.themeId].theme,
-        // Avoid 0×0 first paint — FitAddon replaces these once the box is ready.
-        cols: 80,
-        rows: 24,
-      }),
-    );
-    const fitAddon = new FitAddon();
-    term.loadAddon(fitAddon);
-    term.open(container);
-    enableTerminalIme(term, container);
-    termRef.current = term;
-    fitRef.current = fitAddon;
-    scheduleFit();
-
-    const dataListener = term.onData((data) => {
-      // Drop xterm's synthetic CPR answer so it is not echoed by the guest
-      // tty into an `ESC[row;colR` garbage loop at the prompt.
-      // eslint-disable-next-line no-control-regex -- matching a literal ESC byte is the point
-      if (/^\x1b\[\d+;\d+R$/.test(data)) return;
+    const disconnect = () => {
       const socket = socketRef.current;
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(new TextEncoder().encode(data));
-      }
-    });
-
-    const ro = new ResizeObserver(() => {
-      if (!disposed) scheduleFit();
-    });
-    ro.observe(container);
-    const page = pageRef.current;
-    if (page) ro.observe(page);
-
-    const onWinResize = () => {
-      if (!disposed) scheduleFit();
+      socketRef.current = null;
+      if (!socket) return;
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      socket.close();
     };
-    window.addEventListener("resize", onWinResize);
-
-    const onKey = (event: KeyboardEvent) => {
-      if (isImeComposing(event)) return;
-      if (event.key !== "Escape" || event.ctrlKey || event.metaKey || event.altKey) return;
-      setSettingsOpen(false);
-      if (!terminalOnlyRef.current) return;
-      event.preventDefault();
-      setTerminalOnly(false);
+    const cleanup = () => {
+      controller.abort();
+      clearTimeout(bootTimer);
+      clearReconnectTimer();
+      disconnect();
+      session?.dispose();
+      if (termRef.current === session?.terminal) termRef.current = null;
+      if (sessionRef.current === session) sessionRef.current = null;
     };
-    window.addEventListener("keydown", onKey);
-
-    const connect = (isRetry: boolean) => {
-      if (disposed || intentionalCloseRef.current) return;
-
-      const prev = socketRef.current;
-      if (prev) {
-        socketRef.current = null;
-        prev.onopen = null;
-        prev.onmessage = null;
-        prev.onerror = null;
-        prev.onclose = null;
-        try {
-          prev.close();
-        } catch {
-          /* ignore */
-        }
-      }
-
+    const fail = (error: unknown) => {
+      if (signal.aborted) return;
+      cleanup();
+      setStatus("failed");
+      setTerminalError(error instanceof Error ? error.message : String(error));
+    };
+    const connect = (isRetry = false) => {
+      if (signal.aborted || !session) return;
+      disconnect();
+      const { terminal } = session;
+      terminal.options.disableStdin = true;
       setStatus(isRetry ? "reconnecting" : "connecting");
-
-      const socket = new WebSocket(consoleWsUrl(vmId));
+      resizeReady = false;
+      setGuestResize(null);
+      session.setSharedDimensions(null);
+      const socket = new WebSocket(consoleWsUrl(vmId), CONSOLE_PROTOCOL);
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
-
       socket.onopen = () => {
-        if (disposed || socketRef.current !== socket) return;
+        if (signal.aborted || socketRef.current !== socket) return;
         reconnectAttemptRef.current = 0;
+        terminal.options.disableStdin = false;
         setStatus("connected");
-        scheduleFit();
-        term.focus();
+        session?.fit();
+        terminal.focus();
       };
-
       socket.onmessage = (event: MessageEvent<ArrayBuffer | string>) => {
-        if (disposed || socketRef.current !== socket) return;
-        const live = termRef.current;
-        if (!live) return;
-        live.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data));
+        if (signal.aborted || socketRef.current !== socket) return;
+        if (socket.protocol === CONSOLE_PROTOCOL && typeof event.data === "string") {
+          const update = guestResizeMessage(event.data);
+          if (!update && resizeReady) { fail(new Error("Invalid console control message")); return; }
+          if (update) {
+            const first = !resizeReady;
+            resizeReady = true;
+            setGuestResize(update);
+            session?.setSharedDimensions(update.size);
+            if (first) session?.reportDimensions();
+            return;
+          }
+        }
+        session?.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data));
       };
-
       socket.onerror = () => {
-        if (disposed || socketRef.current !== socket) return;
-        if (socket.readyState !== WebSocket.OPEN && reconnectAttemptRef.current === 0) {
-          setStatus("failed");
-        }
+        if (!signal.aborted && socketRef.current === socket) setStatus("failed");
       };
-
       socket.onclose = (event: CloseEvent) => {
-        if (socketRef.current === socket) {
-          socketRef.current = null;
-        }
-        if (disposed || intentionalCloseRef.current) return;
-        // `exit` ended the guest session. Reattaching would silently drop the
-        // operator into the shell the guest respawns, so stay detached until
-        // they ask for a new session.
+        if (signal.aborted || socketRef.current !== socket) return;
+        socketRef.current = null;
+        terminal.options.disableStdin = true;
+        setGuestResize(null);
+        resizeReady = false;
         if (event.code === SESSION_ENDED_CLOSE_CODE) {
           setStatus("ended");
-          term.write(`\r\n\x1b[2m${sessionEndedNoticeRef.current}\x1b[0m\r\n`);
+          session?.write(`\r\n\x1b[2m${sessionEndedNoticeRef.current}\x1b[0m\r\n`);
           return;
         }
-        setStatus("disconnected");
-        scheduleReconnect();
+        clearReconnectTimer();
+        const delay = Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttemptRef.current++, RECONNECT_MAX_MS);
+        setStatus("reconnecting");
+        reconnectTimerRef.current = setTimeout(() => connect(true), delay);
       };
     };
 
-    const scheduleReconnect = () => {
-      if (disposed || intentionalCloseRef.current) return;
-      clearReconnectTimer();
-      const attempt = reconnectAttemptRef.current;
-      const delay = Math.min(RECONNECT_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS);
-      reconnectAttemptRef.current = attempt + 1;
-      setStatus("reconnecting");
-      reconnectTimerRef.current = setTimeout(() => connect(true), delay);
+    const initialize = async () => {
+      const encoder = new TextEncoder();
+      const initial = prefsRef.current;
+      session = await createWasmTerminal(container, {
+        fontSize: initial.fontSize, theme: THEMES[initial.themeId].theme,
+        cols: 80, rows: 24, disableStdin: true,
+      }, signal, text => {
+        if (outputRef.current) outputRef.current.textContent = text;
+      }, fail, data => {
+        // The API removes queries from replay; live VT replies reach the guest.
+        const socket = socketRef.current;
+        if (socket?.readyState === WebSocket.OPEN) socket.send(typeof data === "string" ? encoder.encode(data) : Uint8Array.from(data));
+      }, size => {
+        const socket = socketRef.current;
+        if (resizeReady && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", ...size }));
+      });
+      if (signal.aborted) { session.dispose(); return; }
+      const { terminal } = session;
+      const latest = prefsRef.current;
+      terminal.options.fontSize = latest.fontSize;
+      setAppliedThemeId(initial.themeId);
+      termRef.current = terminal;
+      sessionRef.current = session;
+      session.fit();
+      window.addEventListener("keydown", event => {
+        if (isImeComposing(event) || event.key !== "Escape" || event.ctrlKey || event.metaKey || event.altKey) return;
+        setSettingsOpen(false);
+        if (!terminalOnlyRef.current) return;
+        event.preventDefault();
+        setTerminalOnly(false);
+      }, { signal });
+      bootTimer = setTimeout(() => connect(), 0);
     };
+    void initialize().catch(fail);
+    return cleanup;
+  }, [vmId, reconnectKey, clearReconnectTimer]);
 
-    // Defer the first WS connect one frame so the terminal has painted and
-    // fit() can run before the backlog snapshot arrives.
-    const bootTimer = window.setTimeout(() => {
-      if (!disposed) connect(false);
-    }, 0);
-
-    return () => {
-      disposed = true;
-      intentionalCloseRef.current = true;
-      window.clearTimeout(bootTimer);
-      clearReconnectTimer();
-      dataListener.dispose();
-      ro.disconnect();
-      window.removeEventListener("resize", onWinResize);
-      window.removeEventListener("keydown", onKey);
-      const socket = socketRef.current;
-      if (socket) {
-        socketRef.current = null;
-        socket.onopen = null;
-        socket.onmessage = null;
-        socket.onerror = null;
-        socket.onclose = null;
-        try {
-          socket.close();
-        } catch {
-          /* ignore */
-        }
-      }
-      term.dispose();
-      if (termRef.current === term) termRef.current = null;
-      if (fitRef.current === fitAddon) fitRef.current = null;
-    };
-  }, [vmId, reconnectKey, clearReconnectTimer, scheduleFit]);
-
-  // Live-apply font size and color scheme without tearing down the session.
+  // Font changes are live. The native core applies a new theme on reconnect.
   useEffect(() => {
+    prefsRef.current = prefs;
+    savePrefs(prefs);
     const term = termRef.current;
     if (!term) return;
     term.options.fontSize = prefs.fontSize;
-    term.options.theme = THEMES[prefs.themeId].theme;
-    savePrefs(prefs);
+    if (term.element) term.element.style.fontSize = `${prefs.fontSize}px`;
     scheduleFit();
   }, [prefs, scheduleFit]);
 
@@ -436,7 +372,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     status === "disconnected" || status === "failed" || status === "reconnecting" || status === "ended";
   const sessionName = vm?.name ?? vmId.slice(0, 8);
 
-  /** Server console.log + startup timeline + live xterm buffer for copy/download. */
+  /** Server console.log + startup timeline + the drained WASM session for export. */
   const buildExportText = useCallback(async () => {
     let consoleLog = "";
     try {
@@ -445,8 +381,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     } catch {
       consoleLog = "";
     }
-    const term = termRef.current;
-    const liveTerminal = term ? serializeXtermBuffer(term) : undefined;
+    const liveTerminal = await sessionRef.current?.readText();
     return formatVmExportBundle({
       vm,
       vmId,
@@ -533,6 +468,11 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                       {Object.entries(THEMES).map(([id, { label }]) => <option key={id} value={id}>{label}</option>)}
                     </select>
                   </label>
+                  {prefs.themeId !== appliedThemeId && (
+                    <button type="button" className="btn sm" onClick={() => { setSettingsOpen(false); reconnectNow(); }}>
+                      {t("Apply theme and reconnect", "테마 적용 후 재연결")}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -573,12 +513,23 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
             className="console-surface"
             hidden={surfaceTab !== "serial"}
             ref={containerRef}
-            style={{ background: THEMES[prefs.themeId].theme.background }}
+            style={{ background: THEMES[appliedThemeId].theme.background }}
             onClick={() => {
               setSettingsOpen(false);
               termRef.current?.focus();
             }}
           />
+          {guestResize && surfaceTab === "serial" && !terminalOnly && (
+            <p className="console-geometry" data-status={guestResize.status} aria-live="polite"
+              title={t("Connected viewers share the smallest available grid. Guest support and a complete host installation are required; stop and start the VM after an upgrade.", "연결된 화면 중 가장 작은 행·열 크기를 사용합니다. 게스트 지원과 호스트 도구 설치가 필요합니다. 업그레이드 후 VM을 중지하고 다시 시작하세요.")}>
+              {guestResize.status === "applied" && guestResize.size
+                ? t(`Guest size: ${guestResize.size.cols} × ${guestResize.size.rows}`, `게스트 크기: ${guestResize.size.cols} × ${guestResize.size.rows}`)
+                : guestResize.status === "unavailable" ? t("Guest size not synchronized", "게스트 크기 동기화 안 됨")
+                : t("Synchronizing guest size…", "게스트 크기 동기화 중…")}
+            </p>
+          )}
+          <pre ref={outputRef} className="terminal-output" aria-label={t("Terminal output", "터미널 출력")} aria-live="polite" aria-atomic="true" />
+          {terminalError && <p role="alert" className="console-detail-note">{terminalError}</p>}
           {surfaceTab === "ssh" && (
             <div className="console-ssh-pane">
               <SshAccess vm={vm} />

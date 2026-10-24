@@ -97,7 +97,7 @@ pub struct Connection {
     registry: String,
     username: String,
     provider: &'static str,
-    /// Shared Pipe Auth provider, or `None` when this registry uses a direct login.
+    /// Shared Auth provider, or `None` when this registry uses a direct login.
     #[serde(skip_serializing_if = "Option::is_none")]
     auth_provider: Option<crate::pipe_auth::Provider>,
     /// Optional display name retained from a direct ECR login.
@@ -134,19 +134,22 @@ pub async fn list(
     let mut connections: Vec<_> = rows.into_iter().map(connection).collect();
     for auth in auths {
         let auth = auth.connection();
+        let Some(registry) = auth.registry else {
+            continue;
+        };
         let account_name = connections
             .iter()
-            .find(|connection| connection.registry == auth.registry)
+            .find(|connection| connection.registry == registry)
             .and_then(|connection| connection.account_name.clone());
-        connections.retain(|connection| connection.registry != auth.registry);
+        connections.retain(|connection| connection.registry != registry);
         connections.push(Connection {
             username: if auth.provider == crate::pipe_auth::Provider::Aws {
                 "AWS".into()
             } else {
                 auth.account
             },
-            provider: provider(&auth.registry).unwrap_or("harbor"),
-            registry: auth.registry,
+            provider: provider(&registry).unwrap_or("harbor"),
+            registry,
             auth_provider: Some(auth.provider),
             account_name,
         });
@@ -247,11 +250,11 @@ async fn require_direct_login(
     if super::pipe_auth::saved(state, id)
         .await?
         .iter()
-        .any(|auth| auth.connection().registry == registry)
+        .any(|auth| auth.connection().registry.as_deref() == Some(registry))
     {
         return Err(AppError::conflict(
             "pipe_auth_managed",
-            "Manage this registry in Pipe Auth",
+            "Manage this registry in Auth",
             id.0,
         ));
     }
@@ -266,7 +269,7 @@ pub struct RepositoriesQuery {
     namespace: Option<String>,
     /// One-based catalog page, defaulting to the first page.
     page: Option<u32>,
-    /// Opaque ECR continuation token, valid only with an AWS Pipe Auth connection.
+    /// Opaque ECR continuation token, valid only with an AWS Auth connection.
     cursor: Option<String>,
 }
 
@@ -283,7 +286,7 @@ pub async fn repositories(
         return Err(invalid("Invalid repository page", id));
     }
     for auth in super::pipe_auth::saved(&state, id).await? {
-        if auth.connection().registry == registry
+        if auth.connection().registry.as_deref() == Some(registry.as_str())
             && let crate::pipe_auth::SavedAuth::Aws {
                 account_id,
                 credentials,
@@ -301,7 +304,7 @@ pub async fn repositories(
         }
     }
     if query.cursor.is_some() {
-        return Err(invalid("Repository cursors require AWS Pipe Auth", id));
+        return Err(invalid("Repository cursors require AWS Auth", id));
     }
     let credential = super::oci::stored_credential_for(&state, &registry, id).await?;
     let kind = match provider(&registry) {
