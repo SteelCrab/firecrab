@@ -99,8 +99,7 @@ async fn fixture() -> Fixture {
         endpoint.replace("/v1/responses", "/anthropic/v1/models"),
     );
     state.pipe_ai = OpenAi::at(endpoint);
-    let config =
-        HttpConfig::from_values("127.0.0.1:5523", "http://localhost:8080", false, false).unwrap();
+    let config = HttpConfig::from_values("127.0.0.1:5523", "http://localhost:8080").unwrap();
     let app = build_router(state.clone(), &config);
     Fixture {
         _dir: dir,

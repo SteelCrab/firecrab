@@ -10,6 +10,7 @@ name = "firecrab"
 path = "src/main.rs"
 
 [dependencies]
+firecrab-pki = { path = "../firecrab-pki" }
 axum = "0.8.9"
 base64 = { workspace = true }
 clap = { version = "4", features = ["derive"] }

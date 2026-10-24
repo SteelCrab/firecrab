@@ -35,6 +35,9 @@ curl -fsS http://127.0.0.1:5523/api/host
 A new host has no network or guest image.
 Create a [network](../guides/networking.md), then install an [image](../guides/images.md) or [import OCI](../guides/oci.md).
 
+For direct remote API access, configure [mutual TLS](../guides/mtls.md).
+The default loopback API also remains accessible through an SSH forward.
+
 ## CLI-only installation
 
 The standalone CLI manages a remote API from Linux, macOS, or Windows.

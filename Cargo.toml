@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "firecrab-api",
+    "firecrab-pki",
     "firecrab-api-types",
     "firecrab-cli",
     "firecrab-stack",

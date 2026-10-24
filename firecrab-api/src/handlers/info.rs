@@ -17,17 +17,21 @@ const HELPER_UNIT: &str = "firecrab-helper.service";
 const LEGACY_HELPER_UNIT: &str = "firecrab-net-helper.service";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-fn info_for(bind: Option<String>) -> FirecrabInfo {
+fn info_for(bind: Option<String>, tls_enabled: bool) -> FirecrabInfo {
+    let scheme = if tls_enabled { "https" } else { "http" };
     FirecrabInfo::from_env(
         env!("CARGO_PKG_VERSION"),
-        &format!("http://{}", crate::server::bind_addr_or_default(bind)),
+        &format!("{scheme}://{}", crate::server::bind_addr_or_default(bind)),
     )
 }
 
 pub async fn get_info(State(state): State<AppState>) -> Json<FirecrabInfoResponse> {
     Json(
         collect(
-            info_for(std::env::var("FIRECRAB_BIND_ADDR").ok()),
+            info_for(
+                std::env::var("FIRECRAB_BIND_ADDR").ok(),
+                std::env::var_os("FIRECRAB_TLS_CERT").is_some(),
+            ),
             &state.runtime.firecracker_binary,
             Path::new("systemctl"),
         )
@@ -133,7 +137,7 @@ mod tests {
 
     #[test]
     fn the_running_version_and_the_default_address_are_reported() {
-        let info = info_for(None);
+        let info = info_for(None, false);
         assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(info.api_base, "http://127.0.0.1:5523");
     }
@@ -141,8 +145,8 @@ mod tests {
     #[test]
     fn the_address_the_api_listens_on_is_reported() {
         assert_eq!(
-            info_for(Some("0.0.0.0:8443".to_owned())).api_base,
-            "http://0.0.0.0:8443"
+            info_for(Some("0.0.0.0:8443".to_owned()), true).api_base,
+            "https://0.0.0.0:8443"
         );
     }
 

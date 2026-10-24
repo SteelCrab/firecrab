@@ -16,7 +16,7 @@ pub const API_ENV_TEMPLATE: &str = "\
 # assets and the working directory; uncomment only what you want to change.
 #
 # FIRECRAB_BIND_ADDR=127.0.0.1:5523
-# A non-loopback address requires authentication AND TLS to be enabled.
+# A non-loopback address requires valid FIRECRAB_TLS_CERT, FIRECRAB_TLS_KEY, and FIRECRAB_TLS_CA files (mode 0600).
 # FIRECRAB_ALLOWED_ORIGINS=
 # Empty is correct while the dashboard is served from this same origin.
 # FIRECRAB_FIRECRACKER_BIN=firecracker

@@ -126,7 +126,7 @@ See [Operations](../guides/operations.md#upgrade) and the [CLI/update diagram](.
 
 ## Security boundaries
 
-- The unauthenticated API listens on `127.0.0.1:5523` by default; keep it on a trusted loopback path.
+- The default API uses trusted loopback HTTP at `127.0.0.1:5523`. Remote binds require [mutual TLS](../guides/mtls.md) with certificates signed by one private CA.
 - Browser mutations require an allowed origin; REST requests have size, time, and concurrency limits.
 - The helper receives bounded Linux capabilities through systemd.
 - Artifact access stays inside configured image and storage roots.
