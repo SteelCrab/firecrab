@@ -35,6 +35,8 @@ const OPTIONAL_SOURCE_INPUTS: &[&str] = &[
     "install.sh",
     "scripts/firecrab-release.sh",
     "scripts/build-ingress.sh",
+    "scripts/build-guest-console.sh",
+    "packaging/guest-console",
     "scripts/verify-release-binary.sh",
     "packaging/ingress-sources.json",
     "firecrab-tunnel",

@@ -212,6 +212,10 @@ if [ "$profile" != restore ] && [ "$profile" != clean ]; then
     bash scripts/build-ingress.sh "$CARGO_TARGET_DIR/ingress" 9>&-
   fi
 
+  if [ -f scripts/build-guest-console.sh ]; then
+    bash scripts/build-guest-console.sh "$CARGO_TARGET_DIR/guest-console" 9>&-
+  fi
+
   # Compilation writes to the data disk. Check the OS disk again before staging
   # executables or stopping the running services.
   check_filesystems || exit 74
@@ -234,6 +238,10 @@ if [ "$profile" != restore ] && [ "$profile" != clean ]; then
     install -m 0755 "$CARGO_TARGET_DIR/ingress/firecrab-ingress" "$compressed/firecrab-ingress"
     cp -R "$CARGO_TARGET_DIR/ingress/ingress" "$compressed/ingress"
   fi
+  if [ -f scripts/build-guest-console.sh ]; then
+    install -m 0755 "$CARGO_TARGET_DIR/guest-console/firecrab-guest-console" "$compressed/firecrab-guest-console"
+    cp -R "$CARGO_TARGET_DIR/guest-console/guest-console" "$compressed/guest-console"
+  fi
   # Fail before touching the OS disk instead of with a partial install.
   need_kib=$(du -sk "$compressed" | cut -f1)
   free_kib=$(df -Pk "$bin_root" | awk 'NR == 2 { print $4 }')
@@ -251,6 +259,10 @@ if [ "$profile" != restore ] && [ "$profile" != clean ]; then
   if [ -f "$compressed/firecrab-ingress" ]; then
     install -m 0755 "$compressed/firecrab-ingress" "$binaries/firecrab-ingress"
     cp -R "$compressed/ingress" "$binaries/ingress"
+  fi
+  if [ -f "$compressed/firecrab-guest-console" ]; then
+    install -m 0755 "$compressed/firecrab-guest-console" "$binaries/firecrab-guest-console"
+    cp -R "$compressed/guest-console" "$binaries/guest-console"
   fi
   # The API resolves these runtime tools next to its executable. The source
   # snapshot is root-only, so its compile-time fallback path is not accessible.

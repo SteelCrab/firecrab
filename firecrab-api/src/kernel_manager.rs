@@ -145,11 +145,12 @@ mod tests {
 
         let kernels = list(directory.path(), &templates, &downloads).await;
 
-        assert_eq!(kernels.len(), 4);
-        assert_eq!(kernels[0].version, "7.2.2");
-        assert_eq!(kernels[1].version, "7.1.12");
-        assert_eq!(kernels[2].version, "7.1.9");
-        assert_eq!(kernels[3].version, "7.1.8");
+        assert_eq!(kernels.len(), 5);
+        assert_eq!(kernels[0].version, "7.2.2-vsock1");
+        assert_eq!(kernels[1].version, "7.2.2");
+        assert_eq!(kernels[2].version, "7.1.12");
+        assert_eq!(kernels[3].version, "7.1.9");
+        assert_eq!(kernels[4].version, "7.1.8");
         assert!(kernels.iter().all(|kernel| {
             kernel.architecture == Architecture::HOST.as_str()
                 && !kernel.installed

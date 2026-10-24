@@ -482,3 +482,77 @@ test("applies color themes on explicit reconnect while font changes stay live", 
   })).toBe(true);
   expect(connections).toBe(2);
 });
+
+test("synchronizes the final viewport and font size through control frames", async ({ page }) => {
+  const sizes: { rows: number; cols: number }[] = [];
+  const input: string[] = [];
+  await page.routeWebSocket(`**/ws/vms/${VM.id}/console`, socket => {
+    socket.send(JSON.stringify({ type: "resize", status: "pending", size: null, viewers: 1 }));
+    socket.onMessage(message => {
+      if (typeof message !== "string") { input.push(message.toString()); return; }
+      const { rows, cols } = JSON.parse(message);
+      sizes.push({ rows, cols });
+      socket.send(JSON.stringify({ type: "resize", status: "applied", size: { rows, cols }, viewers: 1 }));
+    });
+  });
+  await openDashboard(page, { vms: [VM], hash: `#/console/${VM.id}`, routes: { [`/api/vms/${VM.id}`]: VM } });
+  await expect(page.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
+  const first = sizes.at(-1)!;
+  await page.setViewportSize({ width: 1400, height: 950 });
+  await page.setViewportSize({ width: 1200, height: 800 });
+  await page.setViewportSize({ width: 900, height: 650 });
+  await expect.poll(() => sizes.at(-1)!.cols).toBeLessThan(first.cols);
+  await page.getByRole("button", { name: "Display settings", exact: true }).click();
+  const beforeFont = sizes.at(-1)!;
+  await page.getByRole("combobox", { name: "Font size", exact: true }).selectOption("18");
+  await expect.poll(() => sizes.at(-1)!.cols).toBeLessThan(beforeFont.cols);
+  await expect.poll(async () => (await page.locator(".console-geometry").textContent())?.trim()).toBe(`Guest size: ${sizes.at(-1)!.cols} × ${sizes.at(-1)!.rows}`);
+  await page.locator(".terminal-emulator textarea").focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => input.join("")).toBe("\r");
+  expect(input.join("")).not.toContain("resize");
+});
+
+test("renders a shared guest grid without reporting it as the local viewport", async ({ page }) => {
+  const sizes: { rows: number; cols: number }[] = [];
+  await page.routeWebSocket(`**/ws/vms/${VM.id}/console`, socket => {
+    socket.send(JSON.stringify({ type: "resize", status: "pending", size: null, viewers: 2 }));
+    socket.onMessage(message => {
+      if (typeof message !== "string") return;
+      sizes.push(JSON.parse(message));
+      socket.send(JSON.stringify({ type: "resize", status: "applied", size: { rows: 10, cols: 20 }, viewers: 2 }));
+      socket.send(Buffer.from("\x1b[2J\x1b[H12345678901234567890ABCDE"));
+    });
+  });
+  await openDashboard(page, { vms: [VM], hash: `#/console/${VM.id}`, routes: { [`/api/vms/${VM.id}`]: VM } });
+  await expect(page.locator(".console-geometry")).toHaveText("Guest size: 20 × 10");
+  await expect(page.locator(".terminal-output")).toHaveText("12345678901234567890\nABCDE");
+  expect(sizes.every(size => size.cols > 20 && size.rows > 10)).toBe(true);
+  await page.setViewportSize({ width: 1500, height: 1000 });
+  await expect.poll(() => sizes.at(-1)!.cols).toBeGreaterThan(sizes[0].cols);
+  await expect(page.locator(".terminal-output")).toHaveText("12345678901234567890\nABCDE");
+});
+
+test("reconnects and reports dimensions again when guest resizing is unavailable", async ({ page }) => {
+  let connections = 0;
+  const reports: number[] = [];
+  const received: string[] = [];
+  await page.routeWebSocket(`**/ws/vms/${VM.id}/console`, socket => {
+    const connection = ++connections;
+    socket.send(JSON.stringify({ type: "resize", status: "pending", size: null, viewers: 1 }));
+    socket.onMessage(message => {
+      if (typeof message !== "string") { received.push(message.toString()); return; }
+      reports.push(connection);
+      socket.send(JSON.stringify({ type: "resize", status: "unavailable", size: null, viewers: 1 }));
+      if (connection === 1) socket.close({ code: 1011, reason: "retry" });
+    });
+  });
+  await openDashboard(page, { vms: [VM], hash: `#/console/${VM.id}`, routes: { [`/api/vms/${VM.id}`]: VM } });
+  await expect.poll(() => reports.includes(2)).toBe(true);
+  await expect(page.locator(".console-geometry")).toHaveText("Guest size not synchronized");
+  await expect(page.locator(".console-status")).toHaveText("Connected");
+  await page.locator(".terminal-emulator textarea").focus();
+  await page.keyboard.type("still usable");
+  await expect.poll(() => received.join("")).toBe("still usable");
+  expect(connections).toBe(2);
+});

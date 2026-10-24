@@ -78,6 +78,12 @@ install -m 0755 "$bin_dir/firecrab-helper" "$stage/firecrab-net-helper"
 install -m 0755 "$bin_dir/firecrab" "$stage/firecrab"
 install -m 0755 "$bin_dir/firecrab-ingress" "$stage/firecrab-ingress"
 cp -R "$bin_dir/ingress" "$stage/ingress"
+if [ -f "$bin_dir/firecrab-guest-console" ]; then
+    firecrab_assert_binary_arch "$bin_dir/firecrab-guest-console" "$arch" || exit 1
+    [ -f "$bin_dir/guest-console/LICENSE.musl" ] || { echo 'missing guest console musl license' >&2; exit 1; }
+    install -m 0755 "$bin_dir/firecrab-guest-console" "$stage/firecrab-guest-console"
+    cp -R "$bin_dir/guest-console" "$stage/guest-console"
+fi
 install -m 0755 "$root/scripts/firecracker-menual/extract-vmlinux" "$stage/extract-vmlinux"
 install -m 0755 "$root/scripts/firecracker-menual/extract-arm64-image" "$stage/extract-arm64-image"
 install -m 0644 "$root/LICENSE" "$stage/LICENSE"
@@ -100,6 +106,7 @@ members=(
     firecrab-api firecrab-helper firecrab-net-helper extract-vmlinux extract-arm64-image
     firecrab firecrab-ingress ingress systemd dashboard LICENSE licenses
 )
+if [ -f "$stage/firecrab-guest-console" ]; then members+=(firecrab-guest-console guest-console); fi
 if [ -n "$compliance_dir" ]; then
     members+=(THIRD_PARTY_NOTICES.txt release-license-inventory.json)
 fi

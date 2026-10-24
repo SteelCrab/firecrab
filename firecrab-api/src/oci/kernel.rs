@@ -81,6 +81,14 @@ pub(crate) fn supported_kernels(architecture: Architecture) -> Vec<PinnedKernel<
     match architecture {
         Architecture::X86_64 => vec![
             PinnedKernel {
+                alias: "vmlinux-7.2.2-vsock1",
+                version: "7.2.2-vsock1",
+                image: "vmlinux-7.2.2-vsock1-x86_64",
+                package_digest: "sha256:b30660ab97a74c2929689b80cb8f513f68a881e15dd78043c1ccddc81394f614",
+                image_digest: "sha256:540c7de42c0ce8ddb46c58759fff3d83445c4cfe9d38e70e56c3b0cc2001a141",
+                boot_args: X86_64_BOOT_ARGS,
+            },
+            PinnedKernel {
                 alias: "vmlinux-7.2.2",
                 version: "7.2.2",
                 image: "vmlinux-7.2.2-x86_64",
@@ -114,6 +122,14 @@ pub(crate) fn supported_kernels(architecture: Architecture) -> Vec<PinnedKernel<
             },
         ],
         Architecture::Aarch64 => vec![
+            PinnedKernel {
+                alias: "vmlinux-7.2.2-vsock1",
+                version: "7.2.2-vsock1",
+                image: "Image-7.2.2-vsock1-aarch64",
+                package_digest: "sha256:bb11563f1ec8d47e14c93082f0a0536f7ee567f2930fb5665baee63cf36c012a",
+                image_digest: "sha256:a69c57bde32d811e311f35bf0d7d42e5188be1ed21b2150140796a92385ed863",
+                boot_args: AARCH64_BOOT_ARGS,
+            },
             PinnedKernel {
                 alias: "vmlinux-7.2.2",
                 version: "7.2.2",
