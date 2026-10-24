@@ -502,18 +502,12 @@ impl Drop for RelayChannel {
     }
 }
 
-/// Keep one unacknowledged delivery per trigger under the source advisory lock.
-async fn relay(
-    state: &AppState,
-    record: &DatabaseRecord,
+/// Share source ownership between delivery and trigger cleanup. Held until disconnect.
+pub(crate) async fn claim(
+    connection: &mut DatabaseConnection,
     trigger: &Trigger,
-    client: &Connection,
-    development: bool,
-) -> Result<(), Error> {
-    let settings = record.input.settings(record.id).map_err(Error::Invalid)?;
-    let mut connection = DatabaseConnection::connect_write(&record.input, &settings).await?;
-    write::verify_owner(&mut connection, record.id).await?;
-    let locked = match &mut connection {
+) -> Result<bool, Error> {
+    Ok(match connection {
         DatabaseConnection::Postgres(c) => {
             sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock(hashtextextended($1,0))")
                 .bind(trigger.id.to_string())
@@ -527,8 +521,29 @@ async fn relay(
                 .await?
                 == 1
         }
-    };
-    if !locked {
+    })
+}
+
+/// Keep one unacknowledged delivery per trigger under the source advisory lock.
+async fn relay(
+    state: &AppState,
+    record: &DatabaseRecord,
+    trigger: &Trigger,
+    client: &Connection,
+    development: bool,
+) -> Result<(), Error> {
+    let settings = record.input.settings(record.id).map_err(Error::Invalid)?;
+    let mut connection = DatabaseConnection::connect_write(&record.input, &settings).await?;
+    write::verify_owner(&mut connection, record.id).await?;
+    if !claim(&mut connection, trigger).await? {
+        return Ok(());
+    }
+    if state
+        .store
+        .database_trigger(trigger.id)
+        .map_err(|_| Error::Invalid("Cannot inspect trigger ownership"))?
+        .is_none_or(|current| current.paused || !current.installed)
+    {
         return Ok(());
     }
     let channel = rabbitmq::channel(client, &trigger.queue(), development).await?;

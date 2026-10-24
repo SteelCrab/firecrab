@@ -466,7 +466,13 @@ async fn durable_events_real_rabbitmq() {
             (0, 0, 5, 1)
         );
         assert_eq!(number(&mut c, &format!("SELECT COUNT(*) FROM {outbox} WHERE id=5 AND OCTET_LENGTH(payload)=524289 AND last_error='operator_acknowledged' AND delivered_at IS NULL")).await, 1);
-        detach(&mut c, &trigger).await.unwrap();
+        let axum::Json(detached) = crate::handlers::pipe_database_events::detach(
+            axum::extract::State(state.clone()),
+            axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+            axum::extract::Path(trigger.id.to_string()),
+        )
+        .await
+        .unwrap();
         execute(
             &mut c,
             &format!("INSERT INTO {qualified}(name) VALUES ('after detach')"),
@@ -476,21 +482,37 @@ async fn durable_events_real_rabbitmq() {
             number(&mut c, &format!("SELECT COUNT(*) FROM {outbox}")).await,
             6
         );
+        assert!(detached.detached);
         server.abort();
         super::super::bindings::revoke(&record, &binding)
             .await
             .unwrap();
-        channel
-            .queue_delete(trigger.queue().into(), QueueDeleteOptions::default())
+        let axum::Json(deleted) = crate::handlers::pipe_database_events::delete(
+            axum::extract::State(state.clone()),
+            axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+            axum::extract::Path(trigger.id.to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(deleted["deleted"], true);
+        assert!(state.store.database_trigger(trigger.id).unwrap().is_none());
+        // An old worker snapshot must not recreate a queue after removal.
+        relay(&state, &record, &trigger, &client, false)
             .await
             .unwrap();
-        channel
-            .queue_delete(
-                format!("{}.failed", trigger.queue()).into(),
-                QueueDeleteOptions::default(),
-            )
-            .await
-            .unwrap();
+        assert!(
+            channel
+                .queue_declare(
+                    trigger.queue().into(),
+                    QueueDeclareOptions {
+                        passive: true,
+                        ..Default::default()
+                    },
+                    Default::default()
+                )
+                .await
+                .is_err()
+        );
         execute(&mut c, &format!("DROP TABLE {qualified}")).await;
         let namespace = quote(engine, &write::internal_schema(record.id));
         execute(

@@ -392,7 +392,7 @@ pub async fn delete(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = super::vms::parse_id(&id, rid.0)?;
     let _claim = state.service_mutations.lock().await;
-    let trigger = state
+    let mut trigger = state
         .store
         .database_trigger(id)
         .map_err(|_| AppError::internal(rid.0))?
@@ -422,6 +422,11 @@ pub async fn delete(
             ));
         }
     }
+    trigger.paused = true;
+    state
+        .store
+        .save_database_trigger(&trigger)
+        .map_err(|_| AppError::internal(rid.0))?;
     let config = state
         .store
         .database_rabbitmq()
@@ -432,9 +437,20 @@ pub async fn delete(
                 rid.0,
             )
         })?;
+    let record = load(state.clone(), rid.0, trigger.database_id.to_string()).await?;
+    let settings = record
+        .input
+        .settings(record.id)
+        .map_err(|_| AppError::internal(rid.0))?;
     bounded_write(rid.0, async {
+        let mut source = DatabaseConnection::connect_write(&record.input, &settings).await?;
+        if !events::claim(&mut source, &trigger).await? {
+            return Err(Error::Invalid(
+                "An event delivery is finishing; retry trigger removal",
+            ));
+        }
         let client = config.connect().await?;
-        let result = async {
+        let result: Result<(), Error> = async {
             let channel = crate::pipe_databases::rabbitmq::channel(
                 &client,
                 &trigger.queue(),
@@ -451,13 +467,14 @@ pub async fn delete(
         }
         .await;
         let _ = client.close(200, "trigger removed".into()).await;
-        result
+        result?;
+        state
+            .store
+            .delete_database_trigger(id)
+            .map_err(|_| Error::Invalid("Cannot remove trigger ownership"))?;
+        Ok(())
     })
     .await?;
-    state
-        .store
-        .delete_database_trigger(id)
-        .map_err(|_| AppError::internal(rid.0))?;
     Ok(Json(serde_json::json!({"deleted":true})))
 }
 /// Return replayable failure IDs without source row contents.
