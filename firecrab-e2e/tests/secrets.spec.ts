@@ -8,7 +8,7 @@ const NEW = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const SECRET = { id: ID, name: "DB_PASSWORD", description: "Database credential", version: 1, createdAt: 1_792_544_000_000, updatedAt: 1_792_544_000_000, source: null };
 const LINK = { id: CONNECTION, name: "Production", provider: "infisical", settings: { baseUrl: "https://us.infisical.com", projectId: "project-id", environment: "prod", secretPath: "/", region: "", prefix: "" }, version: 1, updatedAt: 1_792_544_000_000 };
 
-async function openSecrets(page: Page, options: { empty?: boolean; failSave?: boolean; partial?: boolean; unavailable?: boolean } = {}) {
+async function openSecrets(page: Page, options: { empty?: boolean; failSave?: boolean; partial?: boolean; unavailable?: boolean; conflictApply?: boolean } = {}) {
   const writes: { path: string; method: string; body: Record<string, unknown> }[] = [];
   let rows: object[] = options.empty ? [] : [{ ...SECRET }];
   let connections: object[] = [{ ...LINK }];
@@ -31,6 +31,7 @@ async function openSecrets(page: Page, options: { empty?: boolean; failSave?: bo
         return route.fulfill({ json: { id: PLAN, connectionId: CONNECTION, direction, expiresAt: Date.now() + 600_000, changes: direction === "import" ? [{ name: "DB_PASSWORD", change: "update" }, { name: "NEW_TOKEN", change: "add" }, { name: "UNCHANGED", change: "unchanged" }] : [{ name: "DB_PASSWORD", change: "update" }] } });
       }
       if (path.endsWith("/apply")) {
+        if (options.conflictApply) { options.conflictApply = false; return route.fulfill({ status: 409, json: { error: { message: "The values changed" } } }); }
         if (direction === "import" && body.names.includes("NEW_TOKEN")) rows.push({ ...SECRET, id: NEW, name: "NEW_TOKEN", source: { connectionId: CONNECTION, connectionName: "Production", provider: "infisical", remoteKey: "NEW_TOKEN", importedAt: Date.now() } });
         return route.fulfill({ json: options.partial ? { applied: [], failed: [{ name: "DB_PASSWORD", message: "failed" }] } : { applied: body.names, failed: [] } });
       }
@@ -103,6 +104,23 @@ test.describe("Secrets web console @dashboard", () => {
     await expect(page.getByLabel("DB_PASSWORD value", { exact: true })).toHaveText("fixture-private-password");
     await page.evaluate(() => window.dispatchEvent(new Event("blur")));
     await expect(page.getByLabel("DB_PASSWORD value", { exact: true })).toHaveText("••••••••");
+  });
+
+  test("retains upload selection and destination when a stale preview is retried", async ({ page }) => {
+    const writes = await openSecrets(page, { conflictApply: true });
+    await page.getByLabel("Select DB_PASSWORD", { exact: true }).check();
+    await page.getByLabel("Upload destination", { exact: true }).selectOption(CONNECTION);
+    await page.getByRole("button", { name: "Preview upload", exact: true }).click();
+    await page.getByLabel("Apply DB_PASSWORD", { exact: true }).check();
+    await page.getByRole("button", { name: "Upload selected (1)", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("The values changed");
+    await expect(page.getByLabel("Select DB_PASSWORD", { exact: true })).toBeChecked();
+    await expect(page.getByLabel("Upload destination", { exact: true })).toHaveValue(CONNECTION);
+    await page.getByRole("button", { name: "Preview upload", exact: true }).click();
+    await page.getByLabel("Apply DB_PASSWORD", { exact: true }).check();
+    await page.getByRole("button", { name: "Upload selected (1)", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("1 secret(s) applied.");
+    expect(writes.filter(write => write.path.endsWith("/preview")).map(write => write.body.secretIds)).toEqual([[ID], [ID]]);
   });
 
   test("SEC3: previews imports and requires selection before replacing existing values", async ({ page }, testInfo) => {

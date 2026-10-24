@@ -304,10 +304,18 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
         .plan
         .as_ref()
         .is_some_and(|p| p["direction"] == "export");
-    app.borrow_mut().busy = true;
+    {
+        let mut state = app.borrow_mut();
+        state.busy = true;
+        if action == "secret-import" || action == "secret-export" {
+            state.advanced.plan = None;
+            state.advanced.plan_names.clear();
+        }
+    }
     render_plan(app);
     spawn_local(async move {
         let result = api::request("POST", &path, Some(&body)).await;
+        let succeeded = result.is_ok();
         let mut s = a.borrow_mut();
         s.busy = false;
         if s.generation != generation
@@ -357,8 +365,12 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
             Err(e) => s.error = e,
         };
         drop(s);
-        render_content(&a);
-        if action == "secret-apply" {
+        if succeeded && ["secret-apply", "secret-reveal"].contains(&action.as_str()) {
+            render_content(&a);
+        } else {
+            render_plan(&a);
+        }
+        if succeeded && action == "secret-apply" {
             crate::refresh(a.clone());
         }
         render_messages(&a);

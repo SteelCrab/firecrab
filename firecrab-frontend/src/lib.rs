@@ -149,6 +149,12 @@ fn render_editor(app: &Shared) {
         workflows::sync_form();
     }
     advanced::services::sync(app);
+    let state = app.borrow();
+    if let Some((path, html)) = &state.workflows.form_result
+        && state.form.as_ref().is_some_and(|form| &form.path == path)
+    {
+        set_html("form-result", html);
+    }
 }
 fn render_detail(app: &Shared) {
     let focused = document()
@@ -1265,6 +1271,7 @@ fn open_form(app: Shared, kind: &str, id: &str) {
         return;
     }
     let mut state = app.borrow_mut();
+    state.workflows.form_result = None;
     let mut data = state.detail.clone().unwrap_or(Value::Null);
     if matches!(kind, "route" | "named-tunnel") {
         data = state.resource["config"].clone();
@@ -1507,7 +1514,8 @@ fn mutate(
                     } else if path.ends_with("/deployment") || path.ends_with("/stop") {
                         state.service_deployment = Some(value.clone());
                         state.detail_result.clear();
-                    } else if let Some(base) = state.detail.as_mut().and_then(Value::as_object_mut)
+                    } else if text(&value, "id") == id
+                        && let Some(base) = state.detail.as_mut().and_then(Value::as_object_mut)
                         && let Some(updated) = value.as_object()
                     {
                         base.extend(updated.clone());

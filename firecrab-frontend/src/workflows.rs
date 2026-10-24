@@ -12,6 +12,7 @@ use web_sys::{Element, FormData, HtmlFormElement};
 
 #[derive(Default)]
 pub struct State {
+    pub form_result: Option<(String, String)>,
     pub registry: Registry,
     pub zones: Value,
     pub update_open: bool,
@@ -661,6 +662,7 @@ fn inspect_form(app: Shared, kind: &str) {
         ),
     };
     app.borrow_mut().busy = true;
+    app.borrow_mut().workflows.form_result = None;
     crate::render_editor(&app);
     let generation = app.borrow().generation;
     let form_path = form.path.clone();
@@ -712,21 +714,21 @@ fn inspect_form(app: Shared, kind: &str) {
                     crate::render_editor(&app);
                     select_zone(&app);
                 } else {
+                    let html = if kind == "database" {
+                        format!("<p role=\"status\">{}</p>", t("Connected"))
+                    } else {
+                        render::properties(&value)
+                    };
+                    state.workflows.form_result = Some((form_path, html.clone()));
                     drop(state);
-                    set_html(
-                        "form-result",
-                        &if kind == "database" {
-                            format!("<p role=\"status\">{}</p>", t("Connected"))
-                        } else {
-                            render::properties(&value)
-                        },
-                    );
+                    set_html("form-result", &html);
                 }
             }
         }
     });
 }
 pub fn form_input(app: &Shared, target: &Element) {
+    app.borrow_mut().workflows.form_result = None;
     set_html("form-result", "");
     if target.id() != "field-apiToken" {
         return;

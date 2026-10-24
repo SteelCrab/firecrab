@@ -778,12 +778,22 @@ test('Korean locale translates forms, detail tabs and console settings', async (
 });
 
 test('OCI inspection and database connection tests preserve the active draft', async () => {
+  let releaseKernels;
+  const kernels = new Promise(resolve => { releaseKernels = resolve; });
+  fixture.handlers.set('GET /api/kernels', async ({ send }) => { await kernels; send(200, []); });
   await open('images');
   await page.getByRole('button', { name: 'Import OCI image', exact: true }).click();
   await page.getByLabel('OCI reference', { exact: true }).fill('ghcr.io/example/app:v1');
   await page.getByRole('button', { name: 'Inspect image', exact: true }).click();
   await expect(page.locator('#form-result')).toContainText('aarch64');
+  const inventory = page.waitForResponse(response => response.url().endsWith('/api/kernels'));
+  releaseKernels();
+  await inventory;
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect(page.locator('#form-result')).toContainText('aarch64');
   await expect(page.getByLabel('OCI reference', { exact: true })).toHaveValue('ghcr.io/example/app:v1');
+  await page.getByLabel('OCI reference', { exact: true }).fill('ghcr.io/example/app:v2');
+  await expect(page.locator('#form-result')).toBeEmpty();
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await open('pipe/database');
