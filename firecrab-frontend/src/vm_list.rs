@@ -100,15 +100,21 @@ fn render_window(app: &Shared, reset: bool) {
     } else {
         (state.vm_scroll_top.max(0) as usize).min(max_top)
     };
+    // CSS row metrics can round differently after a viewport change.
+    let at_bottom = !reset
+        && port.scroll_top() > 0
+        && port.scroll_top() + port.client_height() + 1 >= port.scroll_height();
     state.vm_scroll_top = top as i32;
     let (start, end) = if state.vms.len() > WINDOW_THRESHOLD {
-        let start = (top.saturating_sub(HEADER_HEIGHT) / ROW_HEIGHT)
-            .saturating_sub(OVERSCAN)
-            .min(count);
-        (
-            start,
-            (start + height.div_ceil(ROW_HEIGHT) + 2 * OVERSCAN).min(count),
-        )
+        let window = height.div_ceil(ROW_HEIGHT) + 2 * OVERSCAN;
+        let start = if at_bottom {
+            count.saturating_sub(window)
+        } else {
+            (top.saturating_sub(HEADER_HEIGHT) / ROW_HEIGHT)
+                .saturating_sub(OVERSCAN)
+                .min(count)
+        };
+        (start, (start + window).min(count))
     } else {
         (0, count)
     };
@@ -175,7 +181,12 @@ fn render_window(app: &Shared, reset: bool) {
     if let Some(parent) = current.parent_node() {
         let _ = parent.replace_child(&body, &current);
     }
-    port.set_scroll_top(top as i32);
+    port.set_scroll_top(if at_bottom {
+        port.scroll_height()
+    } else {
+        top as i32
+    });
+    app.borrow_mut().vm_scroll_top = port.scroll_top();
     if let Some(active) = active.filter(|active| active.is_connected()) {
         let options = web_sys::FocusOptions::new();
         options.set_prevent_scroll(true);
