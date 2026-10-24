@@ -5,6 +5,7 @@ import {
 } from "./input.js";
 import { terminalText } from "./text.js";
 import { enableTerminalMouse } from "./mouse.js";
+import { enableTerminalTouch } from "./touch.js";
 
 const OUTPUT_CHUNK_BYTES = 16 * 1024;
 const MAX_PENDING_BYTES = 8 * 1024 * 1024;
@@ -180,6 +181,7 @@ export async function createWasmTerminal(
     enableTerminalInput(terminal, listeners.signal);
     terminal.onData(onInput);
     enableTerminalMouse(terminal, listeners.signal, onInput);
+    enableTerminalTouch(terminal, listeners.signal);
     terminal.onScroll(scheduleMirror);
     observer.observe(container);
     window.addEventListener("resize", fit, { signal: listeners.signal });
