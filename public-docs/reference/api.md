@@ -146,6 +146,7 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | MicroNetwork | `/api/micro-networks`, `/{id}` |
 | Security group | `GET, POST /api/security-groups`, `GET, PUT, DELETE /api/security-groups/{id}`, `PUT /api/security-groups/{id}/rules` |
 | Storage | `/api/storage`, `/api/storage/devices`, `/api/micro-storages` |
+| Persistent data volumes | `/api/microblockstorage`, `/api/microblockstorage/{id}`, `/{id}/attach`, `/{id}/detach`; see [Volumes](../guides/volumes.md#api) |
 | Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}` |
 | Images | `/api/images`, `/{alias}`, `/{alias}/package`, `/{alias}/install`, `/{alias}/kernel`, `/{alias}/bootstrap` |
 | Kernels | `/api/kernels`, `/{version}/install`, `/{version}` |

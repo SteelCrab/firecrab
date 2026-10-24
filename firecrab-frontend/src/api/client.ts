@@ -1,4 +1,7 @@
 import type {
+  MicroBlockStorageResponse,
+  CreateMicroBlockStorageRequest,
+  AttachMicroBlockStorageRequest,
   ScheduleSpec,
   ScheduleResponse,
   ScheduleRun,
@@ -466,6 +469,36 @@ export async function deleteStagedPackage(alias: string): Promise<void> {
 
 export function listStorageRoots(): Promise<StorageRootResponse[]> {
   return fetchJson("/api/storage");
+}
+
+export function listMicroBlockStorages(): Promise<MicroBlockStorageResponse[]> {
+  return fetchJson("/api/microblockstorage");
+}
+
+export function createMicroBlockStorage(request: CreateMicroBlockStorageRequest): Promise<MicroBlockStorageResponse> {
+  return fetchJson("/api/microblockstorage", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  });
+}
+
+export function attachMicroBlockStorage(id: string, request: AttachMicroBlockStorageRequest): Promise<MicroBlockStorageResponse> {
+  return fetchJson(`/api/microblockstorage/${id}/attach`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  });
+}
+
+export function detachMicroBlockStorage(id: string): Promise<MicroBlockStorageResponse> {
+  return fetchJson(`/api/microblockstorage/${id}/detach`, { method: "POST" });
+}
+
+export async function deleteMicroBlockStorage(id: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/microblockstorage/${id}`, { method: "DELETE" });
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) throw await fail(response);
 }
 
 export function listStorageDevices(): Promise<StorageDeviceResponse[]> {

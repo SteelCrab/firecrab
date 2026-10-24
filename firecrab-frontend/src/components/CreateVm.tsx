@@ -18,9 +18,11 @@ import type {
   ShellResponse,
   StorageRootResponse,
   VmResponse,
+  VmBlockStorageMount,
 } from "../bindings";
 import { isValidPort } from "../lib/portForward";
 import RamStepper from "./RamStepper";
+import VolumeSelection from "./VolumeSelection";
 import ShellCheckboxList from "./ShellCheckboxList";
 import { useI18n } from "../i18n";
 
@@ -88,6 +90,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [shellIds, setShellIds] = useState<string[]>([]);
   const [portForwards, setPortForwards] = useState<PortForward[]>([]);
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
+  const [blockStorages, setBlockStorages] = useState<VmBlockStorageMount[]>([]);
   /** Bumped after a successful create so Shell checkboxes remount cleared. */
   const [formEpoch, setFormEpoch] = useState(0);
   const [submitting, setSubmitting] = useState(false);
@@ -267,6 +270,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       shellIds: shellIds.length > 0 ? shellIds : undefined,
       portForwards: portForwards.length > 0 ? portForwards : undefined,
       env,
+      blockStorages: blockStorages.length > 0 ? blockStorages : undefined,
     };
 
     setSubmitting(true);
@@ -275,6 +279,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       const vm = await createVm(request);
       // Clear identity + shell pins + port forwards so the next create does not re-send
       setName("");
+      setBlockStorages([]);
       setShellIds([]);
       setPortForwards([]);
       setPortForwardsError(null);
@@ -461,6 +466,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         />
         {fieldError("shellIds")}
       </div>
+      <VolumeSelection key={`volumes-${formEpoch}`} mounts={blockStorages} onChange={setBlockStorages} disabled={submitting} />
       <div className="field" style={{ gridColumn: "1 / -1" }}>
         <label>{t("Port Forwarding", "포트 포워딩")}</label>
         <div className="port-forwards-list" style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
@@ -614,7 +620,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         {fieldError("env")}
       </div>
       <div className="field field-submit">
-        <label htmlFor="vm-create-submit">&nbsp;</label>
+        <label aria-hidden="true">&nbsp;</label>
         <button
           id="vm-create-submit"
           className="btn primary"

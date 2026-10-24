@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
+mod block_storage;
 mod pools;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod micro_services;
@@ -472,6 +473,12 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    /// The requested data disk no longer exists.
+    #[error("MicroBlockStorage {id} was not found")]
+    MissingBlockStorage { id: Uuid },
+    /// A disk is reserved, being prepared, or conflicts with another mount.
+    #[error("{message}")]
+    BlockStorageConflict { message: &'static str },
     /// A saved service or VM still references this policy.
     #[error("security group is still referenced")]
     SecurityGroupInUse,
@@ -697,6 +704,7 @@ impl Store {
         migrate_uplink_column(&conn)?;
         migrate_ipv6_columns(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
+        conn.execute_batch(block_storage::SCHEMA)?;
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
@@ -986,7 +994,18 @@ impl Store {
 
     /// Deletes a MicroStorage by id.
     pub fn delete_micro_storage(&self, id: Uuid) -> Result<(), PersistenceError> {
-        let changed = self.lock().execute(
+        let conn = self.lock();
+        let count: u32 = conn.query_row(
+            "SELECT COUNT(*) FROM micro_block_storages WHERE storage_root = ?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )?;
+        if count != 0 {
+            return Err(PersistenceError::BlockStorageConflict {
+                message: "MicroStorage still contains block volumes; delete them first",
+            });
+        }
+        let changed = conn.execute(
             "DELETE FROM micro_storages WHERE id = ?1",
             params![id.to_string()],
         )?;

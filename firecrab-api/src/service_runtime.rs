@@ -431,6 +431,7 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
             deployment.request.host_port + index
         };
         let request = CreateVmRequest {
+            block_storages: Vec::new(),
             name: format!(
                 "ms-{}-{}-{index}",
                 deployment.service_id.simple(),

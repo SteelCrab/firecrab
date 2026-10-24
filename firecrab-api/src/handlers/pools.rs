@@ -116,6 +116,7 @@ pub async fn create_pool(
         .unwrap_or_else(|| state.storage.default_id().to_owned());
     // Members are ordinary VMs, so the spec is checked exactly as a VM's.
     let member = firecrab_api_types::CreateVmRequest {
+        block_storages: Vec::new(),
         security_group_id: None,
         name: "pool-member".to_owned(),
         template: req.template.clone(),

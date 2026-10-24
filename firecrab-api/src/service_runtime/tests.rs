@@ -517,6 +517,7 @@ async fn stop_withdraws_ports_drains_and_deletes_a_running_replica() {
         State(state.clone()),
         Extension(RequestId(Uuid::new_v4())),
         ValidatedJson(CreateVmRequest {
+            block_storages: Vec::new(),
             security_group_id: None,
             name: "ms-stop-test".into(),
             template: alias,

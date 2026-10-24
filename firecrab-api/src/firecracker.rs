@@ -100,7 +100,7 @@ pub struct FirecrackerConfig {
     /// Kernel image path and boot args.
     #[serde(rename = "boot-source")]
     boot_source: BootSource,
-    /// Block devices, always exactly the one root drive today.
+    /// Root drive followed by independently reserved data disks.
     drives: Vec<Drive>,
     /// The VM's TAP interface, absent until TAP automation assigns one.
     #[serde(rename = "network-interfaces", skip_serializing_if = "Vec::is_empty")]
@@ -135,6 +135,9 @@ struct Drive {
     is_root_device: bool,
     /// Whether the drive is exposed read-only to the guest.
     is_read_only: bool,
+    /// Data disks honor guest flush requests before reporting completion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_type: Option<&'static str>,
 }
 
 /// `machine-config` section of [`FirecrackerConfig`].
@@ -189,6 +192,7 @@ impl FirecrackerConfig {
                 path_on_host: absolute(rootfs_path),
                 is_root_device: true,
                 is_read_only: false,
+                cache_type: None,
             }],
             network_interfaces: network
                 .map(|network| {
@@ -207,6 +211,41 @@ impl FirecrackerConfig {
     }
 }
 
+impl FirecrackerConfig {
+    /// Adds a writable data disk whose filesystem is mounted by UUID in the guest.
+    pub(crate) fn add_data_drive(&mut self, id: uuid::Uuid, path: &Path) {
+        self.drives.push(Drive {
+            drive_id: format!("volume-{id}"),
+            path_on_host: absolute(path),
+            is_root_device: false,
+            is_read_only: false,
+            cache_type: Some("Writeback"),
+        });
+    }
+
+    /// Saves this boot configuration in the VM's private runtime directory.
+    pub(crate) fn write(
+        &self,
+        runtime: &crate::artifacts::HostRuntimePaths,
+    ) -> Result<PathBuf, FirecrackerError> {
+        fs::create_dir_all(&runtime.dir).map_err(|source| FirecrackerError::CreateDirectory {
+            path: runtime.dir.clone(),
+            source,
+        })?;
+        let path = runtime.config.clone();
+        let json =
+            serde_json::to_vec_pretty(self).map_err(|source| FirecrackerError::Serialize {
+                path: path.clone(),
+                source,
+            })?;
+        fs::write(&path, json).map_err(|source| FirecrackerError::Write {
+            path: path.clone(),
+            source,
+        })?;
+        Ok(path)
+    }
+}
+
 /// `path` against this process's working directory. Storage roots and the
 /// image root may be relative to it, and Firecracker may not share it: a
 /// shim in a systemd unit runs in its runtime directory.
@@ -216,6 +255,7 @@ fn absolute(path: &Path) -> PathBuf {
 
 /// Renders the VM's Firecracker config into this start's runtime directory.
 /// The root drive points at the active generation file from `prepare_rootfs`.
+#[cfg(test)]
 pub fn write_config(
     runtime: &crate::artifacts::HostRuntimePaths,
     rootfs_path: &Path,
@@ -225,30 +265,15 @@ pub fn write_config(
     boot_args: &str,
     network: Option<&VmNetwork>,
 ) -> Result<PathBuf, FirecrackerError> {
-    fs::create_dir_all(&runtime.dir).map_err(|source| FirecrackerError::CreateDirectory {
-        path: runtime.dir.clone(),
-        source,
-    })?;
-
-    let path = runtime.config.clone();
-    let config = FirecrackerConfig::for_vm(
+    FirecrackerConfig::for_vm(
         vm,
         kernel_image_path,
         initrd_path,
         boot_args,
         rootfs_path,
         network,
-    );
-    let json =
-        serde_json::to_vec_pretty(&config).map_err(|source| FirecrackerError::Serialize {
-            path: path.clone(),
-            source,
-        })?;
-    fs::write(&path, json).map_err(|source| FirecrackerError::Write {
-        path: path.clone(),
-        source,
-    })?;
-    Ok(path)
+    )
+    .write(runtime)
 }
 
 /// Resolves the Firecracker binary path: `FIRECRAB_FIRECRACKER_BIN` if set,
@@ -1155,6 +1180,31 @@ mod tests {
         assert_eq!(drive["is_root_device"], true);
         assert_eq!(drive["is_read_only"], false);
         assert_eq!(drive["path_on_host"], rootfs.to_str().unwrap());
+    }
+
+    #[test]
+    fn block_storage_config_honors_guest_flushes_and_preserves_the_root_drive() {
+        let directory = tempdir().unwrap();
+        let vm = record(1, 512);
+        let runtime = runtime_for(&directory.path().join("vms"), vm.id);
+        let mut config = FirecrackerConfig::for_vm(
+            &vm,
+            Path::new("/images/vmlinux"),
+            None,
+            "console=ttyS0",
+            Path::new("/vm/rootfs.ext4"),
+            None,
+        );
+        let id = Uuid::new_v4();
+        config.add_data_drive(id, Path::new("/volumes/data.ext4"));
+        let path = config.write(&runtime).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(json["drives"].as_array().unwrap().len(), 2);
+        assert_eq!(json["drives"][0]["drive_id"], "rootfs");
+        assert_eq!(json["drives"][1]["drive_id"], format!("volume-{id}"));
+        assert_eq!(json["drives"][1]["is_root_device"], false);
+        assert_eq!(json["drives"][1]["path_on_host"], "/volumes/data.ext4");
+        assert_eq!(json["drives"][1]["cache_type"], "Writeback");
     }
 
     #[test]

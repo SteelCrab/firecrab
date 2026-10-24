@@ -110,7 +110,9 @@ fn program_header(p_type: u32, p_offset: u64, p_filesz: u64) -> [u8; 56] {
 /// A static program for this host, carrying the applet names the guest calls.
 fn static_program() -> Vec<u8> {
     let mut applets = vec![0_u8];
-    for applet in ["sh", "ip", "udhcpc", "awk", "mount", "sleep", "cut"] {
+    for applet in [
+        "sh", "ip", "udhcpc", "awk", "mount", "sleep", "cut", "blkid",
+    ] {
         applets.extend_from_slice(applet.as_bytes());
         applets.push(0);
     }
