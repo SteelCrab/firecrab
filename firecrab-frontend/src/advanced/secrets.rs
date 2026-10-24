@@ -65,6 +65,9 @@ pub fn content(app: &App) -> String {
         }
     } else {
         out.push_str("<section aria-label=\"Internal secrets\">");
+        if list(&app.resource).is_empty() {
+            out.push_str("<p>No secrets yet.</p>");
+        }
         for row in list(&app.resource) {
             let id = text(row, "id");
             let name = text(row, "name");
@@ -78,9 +81,14 @@ pub fn content(app: &App) -> String {
                 .unwrap_or(&Value::Null),
         ) {
             out.push_str(&format!(
-                "<option value=\"{}\">{}</option>",
+                "<option value=\"{}\">{} · {}</option>",
                 escape(text(link, "id")),
-                escape(text(link, "name"))
+                escape(text(link, "name")),
+                match text(link, "provider") {
+                    "firecrab" => "Firecrab · PipeSecrets",
+                    "infisical" => "Infisical",
+                    _ => "AWS Secrets Manager",
+                }
             ));
         }
         out.push_str("</select>");
@@ -89,6 +97,36 @@ pub fn content(app: &App) -> String {
     }
     out.push_str(&format!("<div id=\"secret-plan\">{}</div>", plan(app)));
     out
+}
+pub fn sync_editor() {
+    let Some(value) =
+        element("field-value").and_then(|el| el.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
+    else {
+        return;
+    };
+    let replacing = element("field-replaceValue")
+        .is_none_or(|el| el.unchecked_into::<web_sys::HtmlInputElement>().checked());
+    if let Some(field) = value
+        .closest(".field")
+        .ok()
+        .flatten()
+        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        field.set_hidden(!replacing);
+    }
+    if !replacing {
+        value.set_value("");
+    }
+    let visible = element("secret-show-value")
+        .is_some_and(|el| el.unchecked_into::<web_sys::HtmlInputElement>().checked());
+    let _ = value.set_attribute(
+        "style",
+        if visible {
+            ""
+        } else {
+            "-webkit-text-security:disc"
+        },
+    );
 }
 fn plan(app: &App) -> String {
     let Some(plan) = &app.advanced.plan else {

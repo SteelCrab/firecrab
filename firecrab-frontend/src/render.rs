@@ -188,8 +188,14 @@ pub fn messages(app: &App) -> String {
     let mut out = String::new();
     for error in [&app.error, &app.connection_error]
         .into_iter()
-        .filter(|error| !error.is_empty() && (app.field_errors.is_empty() || *error != &app.error))
+        .enumerate()
+        .filter(|(index, error)| {
+            !error.is_empty()
+                && (*index == 0 || *error != &app.error)
+                && (app.field_errors.is_empty() || *error != &app.error)
+        })
     {
+        let (_, error) = error;
         let _ = write!(
             out,
             "<div class=\"wasm-message wasm-error\" role=\"alert\">{}</div>",

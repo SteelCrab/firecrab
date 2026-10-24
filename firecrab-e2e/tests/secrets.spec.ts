@@ -8,7 +8,7 @@ const NEW = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const SECRET = { id: ID, name: "DB_PASSWORD", description: "Database credential", version: 1, createdAt: 1_792_544_000_000, updatedAt: 1_792_544_000_000, source: null };
 const LINK = { id: CONNECTION, name: "Production", provider: "infisical", settings: { baseUrl: "https://us.infisical.com", projectId: "project-id", environment: "prod", secretPath: "/", region: "", prefix: "" }, version: 1, updatedAt: 1_792_544_000_000 };
 
-async function openSecrets(page: Page, options: { empty?: boolean; failSave?: boolean; partial?: boolean } = {}) {
+async function openSecrets(page: Page, options: { empty?: boolean; failSave?: boolean; partial?: boolean; unavailable?: boolean } = {}) {
   const writes: { path: string; method: string; body: Record<string, unknown> }[] = [];
   let rows: object[] = options.empty ? [] : [{ ...SECRET }];
   let connections: object[] = [{ ...LINK }];
@@ -16,6 +16,7 @@ async function openSecrets(page: Page, options: { empty?: boolean; failSave?: bo
   await page.route(/^https?:\/\/[^/]+\/api\//, async (route) => {
     const path = new URL(route.request().url()).pathname;
     const method = route.request().method();
+    if (options.unavailable && method === "GET" && ["/api/secrets", "/api/secrets/connections"].includes(path)) return route.fulfill({ status: 503, json: { error: { message: "PipeSecrets storage or its encryption key is unavailable" } } });
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/update") return route.fulfill({ json: { current: "0.3.1", latest: "0.3.1", updateAvailable: false } });
     if (path === "/api/update/progress") return route.fulfill({ json: { phase: "idle", percent: 0, updatedAtMs: 0 } });
@@ -50,7 +51,7 @@ async function openSecrets(page: Page, options: { empty?: boolean; failSave?: bo
   });
   await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
   await page.goto("/#/secrets");
-  await expect(page.getByRole("button", { name: "New secret", exact: true })).toBeEnabled();
+  if (!options.unavailable) await expect(page.getByRole("button", { name: "New secret", exact: true })).toBeEnabled();
   return writes;
 }
 
@@ -59,17 +60,36 @@ test.describe("Secrets web console @dashboard", () => {
     const writes = await openSecrets(page, { empty: true });
     await page.getByRole("button", { name: "New secret", exact: true }).click();
     await page.getByLabel("Secret name", { exact: true }).fill("DB_PASSWORD");
-    await page.getByLabel("Secret value", { exact: true }).fill("typed-secret-value");
+    const value = "typed-secret-value\n두 번째 줄";
+    await page.getByLabel("Secret value", { exact: true }).fill(value);
+    expect(await page.getByLabel("Secret value", { exact: true }).evaluate(e => getComputedStyle(e).getPropertyValue('-webkit-text-security'))).toBe('disc');
+    await page.getByLabel("Show entered value", { exact: true }).check();
+    await expect(page.getByLabel("Secret value", { exact: true })).toHaveValue(value);
     await page.getByRole("button", { name: "Save secret", exact: true }).click();
     await expect(page.getByRole("heading", { name: "New secret", exact: true })).toHaveCount(0);
     await expect(page.getByLabel("DB_PASSWORD value", { exact: true })).toHaveText("••••••••");
-    expect(writes[0].body.value).toBe("typed-secret-value");
+    expect(writes[0].body.value).toBe(value);
     await page.getByRole("button", { name: "Edit DB_PASSWORD", exact: true }).click();
-    await expect(page.getByLabel("Secret value", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Secret value", { exact: true })).toBeHidden();
+    await expect(page.getByLabel("Secret value", { exact: true })).toHaveValue("");
     await page.getByLabel("Description", { exact: true }).fill("Updated description");
     await page.getByRole("button", { name: "Save secret", exact: true }).click();
     expect(writes[1].body).toEqual({ name: "DB_PASSWORD", description: "Updated description", version: 1 });
     await expect(page.getByText("Updated description", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Edit DB_PASSWORD", exact: true }).click();
+    await page.getByLabel("Replace secret value", { exact: true }).check();
+    await expect(page.getByLabel("Secret value", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Secret value", { exact: true })).toHaveValue("");
+    await page.getByRole("button", { name: "Save secret", exact: true }).click();
+    expect(writes[2].body.value).toBe("");
+    expect(writes[2].body).not.toHaveProperty("replaceValue");
+  });
+
+  test("unavailable encrypted storage shows one error and blocks creation", async ({ page }) => {
+    await openSecrets(page, { unavailable: true });
+    await expect(page.getByRole("alert")).toHaveCount(1);
+    await expect(page.getByRole("alert")).toContainText("encryption key is unavailable");
+    await expect(page.getByRole("button", { name: "New secret", exact: true })).toBeDisabled();
   });
 
   test("SEC2: reveals only on request and hides values again", async ({ page }) => {

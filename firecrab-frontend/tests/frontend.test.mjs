@@ -136,10 +136,12 @@ test('large lists keep all VMs reachable through scrolling, palette, keyboard an
   await expect(page.locator('#detail-panel')).toContainText('vm-02506');
   const previousTop = await port.evaluate(port => port.scrollTop);
   fixture.state.vms[2506].cpuUsagePercent = 25;
+  fixture.state.vms[2506].template = 'ubuntu-24.04-refreshed';
   const updated = page.waitForResponse(response => response.url().endsWith('/api/vms'));
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await updated;
   await expect(page.getByRole('button', { name: 'vm-02506', exact: true })).toBeVisible();
+  await expect(page.locator('#vm-rows tr[data-id]').filter({ has: page.getByRole('button', { name: 'vm-02506', exact: true }) })).toContainText('ubuntu-24.04-refreshed');
   assert.equal(await port.evaluate(port => port.scrollTop), previousTop);
   const search = page.getByRole('searchbox', { name: 'Filter MicroVMs' });
   await search.fill('vm-00000');

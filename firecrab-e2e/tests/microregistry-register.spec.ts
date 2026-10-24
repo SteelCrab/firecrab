@@ -256,7 +256,7 @@ test("deletes the template, reinstalls through the API, and boots to FIRECRAB_NE
   await expect(row).toBeVisible();
   // Row actions live behind the Actions toggle now.
   await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
-  await row.getByRole("menuitem", { name: "start", exact: true }).click();
+  await page.getByRole("menuitem", { name: "start", exact: true }).click();
   await expect(row.locator(".vm-status-label")).toHaveAttribute(
     "data-state",
     /running|error/,

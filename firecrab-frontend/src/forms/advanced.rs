@@ -230,21 +230,22 @@ pub fn resource(kind: &str, data: &Value, id: &str) -> Option<Form> {
             form
         }
         "secrets" => {
+            let mut fields = vec![
+                Field::new("name", "Secret name", "text", value("name")),
+                Field::new("description", "Description", "text", value("description")).optional(),
+            ];
+            if edit {
+                fields.push(
+                    Field::new("replaceValue", "Replace secret value", "checkbox", "false")
+                        .optional(),
+                );
+            }
+            fields.push(Field::new("value", "Secret value", "secret", "").optional());
             let mut form = Form::new(
                 if edit { "Edit secret" } else { "New secret" },
                 format!("/api/secrets{suffix}"),
                 method,
-                vec![
-                    Field::new("name", "Secret name", "text", value("name")),
-                    Field::new("description", "Description", "text", value("description"))
-                        .optional(),
-                    if edit {
-                        Field::new("value", "Replacement value (optional)", "password", "")
-                            .optional()
-                    } else {
-                        Field::new("value", "Secret value", "password", "")
-                    },
-                ],
+                fields,
                 "secrets",
             );
             if edit {
@@ -425,9 +426,10 @@ pub fn payload(title: &str, mut body: Value) -> Result<Value, String> {
             )
         }
         "New secret" | "Edit secret" => {
-            if title == "Edit secret" && text(&body, "value").is_empty() {
+            if title == "Edit secret" && body["replaceValue"] != true {
                 body.as_object_mut().unwrap().remove("value");
             }
+            body.as_object_mut().unwrap().remove("replaceValue");
             Ok(body)
         }
         "New connection" | "Edit connection" => {

@@ -123,7 +123,7 @@ impl Form {
                 "<div class=\"field {}\"><label for=\"field-{key}\">{}</label>",
                 if matches!(
                     field.kind,
-                    "textarea" | "pairs" | "ports" | "lines" | "routes"
+                    "textarea" | "secret" | "pairs" | "ports" | "lines" | "routes"
                 ) {
                     "wasm-wide"
                 } else {
@@ -187,6 +187,13 @@ impl Form {
                     ));
                 }
                 html.push_str("</select>");
+            } else if field.kind == "checkbox" {
+                html.push_str(&format!(
+                    "<input type=\"checkbox\" id=\"field-{key}\" name=\"{key}\" value=\"true\" {}>",
+                    if field.value == "true" { "checked" } else { "" }
+                ));
+            } else if field.kind == "secret" {
+                html.push_str(&format!("<textarea id=\"field-{key}\" name=\"{key}\" autocomplete=\"off\" autocapitalize=\"off\" spellcheck=\"false\" maxlength=\"16384\" style=\"-webkit-text-security:disc\" {invalid}>{}</textarea><label><input type=\"checkbox\" id=\"secret-show-value\">{}</label>", escape(&field.value), crate::i18n::t("Show entered value")));
             } else if field.kind == "rules" {
                 html.push_str(&crate::advanced::security::rules_editor(&field.value));
             } else if field.kind == "days" {
@@ -345,7 +352,7 @@ impl Form {
                         .filter(|line| !line.is_empty())
                         .collect::<Vec<_>>()
                 ),
-                "bool" => json!(value == "true"),
+                "bool" | "checkbox" => json!(value == "true"),
                 "nullable" | "nullable-select" if value.is_empty() => Value::Null,
                 "routes" => {
                     let mut routes = Vec::new();

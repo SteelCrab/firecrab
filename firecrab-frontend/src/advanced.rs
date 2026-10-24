@@ -131,6 +131,7 @@ pub fn form_input(_app: &Shared, _target: &Element) {
     sync_form();
 }
 pub fn sync_form() {
+    secrets::sync_editor();
     if let Some(network) =
         element("field-microNetworkId").and_then(|el| el.dyn_into::<HtmlSelectElement>().ok())
         && element("editor").is_some_and(|el| el.get_attribute("data-policy-network").is_some())

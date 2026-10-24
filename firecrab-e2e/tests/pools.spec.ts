@@ -150,6 +150,7 @@ test("shows a pool create form with image, network, capacity and lease settings"
 }) => {
   await openEnglish(page, "/#/pools");
   await page.locator('[data-action="create"][data-id="pools"]').click();
+  await page.locator("#editor").getByText("Advanced settings", { exact: true }).click();
   for (const field of [
     "name",
     "template",
@@ -190,6 +191,7 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
   ).toHaveCount(1);
   await page.locator("#field-name").fill(POOL_E2E_NAME);
   await page.locator("#field-template").selectOption(alias);
+  await page.locator("#editor").getByText("Advanced settings", { exact: true }).click();
   await page.locator("#field-microNetworkId").selectOption(network.id);
   await page.locator("#field-minReady").fill(MIN_READY);
   await page.locator("#field-maxSize").fill(MAX_SIZE);

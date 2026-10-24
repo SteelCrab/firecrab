@@ -76,6 +76,8 @@ pub fn t(value: &str) -> &str {
         "Edit secret" => "시크릿 편집",
         "Secret name" => "시크릿 이름",
         "Secret value" => "시크릿 값",
+        "Replace secret value" => "시크릿 값 교체",
+        "Show entered value" => "입력한 값 표시",
         "Save secret" => "시크릿 저장",
         "New connection" => "외부 연결 추가",
         "Edit connection" => "외부 연결 편집",

@@ -47,7 +47,7 @@ test("connects, reads and removes a real database through the dashboard", async 
     await page.reload();
     await panel
       .getByRole("row")
-      .filter({ has: panel.getByRole("cell", { name, exact: true }) })
+      .filter({ has: page.getByRole("cell", { name, exact: true }) })
       .getByRole("button", { name: "Details", exact: true })
       .click();
     await panel.getByRole("button", { name: "Tables", exact: true }).click();
@@ -102,6 +102,6 @@ test("connects, reads and removes a real database through the dashboard", async 
     expect(removed.status()).toBe(404);
   } finally {
     // Also remove the test connection after an assertion failure.
-    await page.request.delete(`/api/pipe/databases/${summary.id}`);
+    await page.request.delete(`/api/pipe/databases/${summary.id}`, { timeout: 5000 });
   }
 });

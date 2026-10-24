@@ -32,7 +32,7 @@ async function removeLogin(): Promise<void> {
 async function openCards(page: Page) {
   await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
   await page.goto("/#/pipe");
-  return page.getByRole("region", { name: "Pipe", exact: true });
+  return page.locator("#content");
 }
 
 test.describe("Pipe registries against the API", () => {

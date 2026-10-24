@@ -235,7 +235,7 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   await expect(row).toBeVisible();
   // Row actions live behind the Actions toggle now.
   await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
-  await row.getByRole("menuitem", { name: "start" }).click();
+  await page.getByRole("menuitem", { name: "start", exact: true }).click();
   await expect(row.locator(".vm-status-label")).toHaveAttribute(
     "data-state",
     /running|error/,
@@ -318,7 +318,7 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
     hasText: DHCP_VM_NAME,
   });
   await sshRow.getByRole("button", { name: /^Actions$|^작업$/ }).click();
-  await sshRow.getByRole("menuitem", { name: /SSH connect|SSH 연결/ }).click();
+  await page.getByRole("menuitem", { name: /SSH connect|SSH 연결/ }).click();
   const sshDialog = page.getByRole("dialog", {
     name: "SSH connection",
     exact: true,

@@ -257,6 +257,15 @@ fn render_detail(app: &Shared) {
 fn render_messages(app: &Shared) {
     let state = app.borrow();
     set_html("messages", &render::messages(&state));
+    if state.route == "secrets"
+        && let Ok(Some(button)) = document().query_selector("[data-action=create][data-id=secrets]")
+    {
+        if !state.loaded || !state.connection_error.is_empty() {
+            let _ = button.set_attribute("disabled", "");
+        } else {
+            let _ = button.remove_attribute("disabled");
+        }
+    }
     if let Some(status) = element("api-status") {
         status.set_text_content(Some(if state.connection_error.is_empty() {
             ""
