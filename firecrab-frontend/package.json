@@ -8,7 +8,7 @@
     "build:wasm": "node scripts/wasm.mjs",
     "dev": "vite",
     "lint": "cargo fmt -- --check && cargo clippy --target wasm32-unknown-unknown --locked -- -D warnings",
-    "test": "cargo test --locked && node --test tests/frontend.test.mjs",
+    "test": "cargo test --locked && node --test tests/frontend.test.mjs tests/compression.test.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 8080"
   },
   "dependencies": {

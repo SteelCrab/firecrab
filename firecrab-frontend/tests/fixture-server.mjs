@@ -62,6 +62,16 @@ export async function createFixtureServer(root, initialRows = 100) {
         if (!filename.startsWith(root + sep)) return send(403, 'Forbidden', 'text/plain');
         let contents = files.get(filename);
         if (!contents) { try { contents = await readFile(filename); files.set(filename, contents); } catch { return send(404, 'Missing file', 'text/plain'); } }
+        for (const [encoding, suffix] of [['br', 'br'], ['gzip', 'gz']]) {
+          if (!req.headers['accept-encoding']?.split(',').some(value => value.trim().split(';')[0] === encoding && !/;\s*q=0(?:\.0*)?$/.test(value.trim()))) continue;
+          const encodedPath = `${filename}.${suffix}`;
+          if (!files.has(encodedPath)) { try { files.set(encodedPath, await readFile(encodedPath)); } catch { files.set(encodedPath, null); } }
+          const encoded = files.get(encodedPath);
+          if (!encoded) continue;
+          const types = { '.wasm': 'application/wasm', '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html' };
+          res.writeHead(200, { 'Content-Type': types[extname(filename)] ?? 'application/octet-stream', 'Content-Encoding': encoding, 'Content-Length': encoded.length, 'Vary': 'accept-encoding' });
+          res.end(encoded); return;
+        }
         const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
         return send(200, contents, types[extname(filename)] ?? 'application/octet-stream');
       }
