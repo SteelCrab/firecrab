@@ -255,8 +255,8 @@ export default function DatabaseServices({
         <h4>{t("Database events", "DB 이벤트")}</h4>
         <p className="poll-note">
           {t(
-            "Changes and delivery records commit together. Delivery retries automatically. Use the provided receiver to commit duplicate checks and business changes together.",
-            "변경과 전송 기록을 함께 저장한다. 전달은 자동으로 재시도한다. 제공하는 수신 모듈로 중복 검사와 업무 변경을 함께 저장한다.",
+            "Firecrab prepares the handler account and duplicate tracking automatically. Use the provided receiver for duplicate protection. Choose read/write access if the handler changes application data.",
+            "처리 서비스의 계정과 중복 기록 테이블을 자동으로 준비한다. 제공한 수신 모듈로 중복 처리를 막는다. 업무 데이터를 수정하는 서비스에는 읽기·쓰기 권한을 선택한다.",
           )}
         </p>
         {!rabbitmq.configured && (
