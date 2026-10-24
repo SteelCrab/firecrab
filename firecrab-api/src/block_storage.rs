@@ -194,7 +194,7 @@ pub(crate) fn recover(state: &AppState) -> Result<(), String> {
             "creating" | "deleting" => {
                 state
                     .store
-                    .begin_block_storage_delete(volume.id)
+                    .abort_block_storage_create(volume.id)
                     .map_err(|error| error.to_string())?;
                 if let Err(error) = remove_disk(state, &volume) {
                     tracing::warn!(volume_id = %volume.id, %error, "volume cleanup requires a retry");

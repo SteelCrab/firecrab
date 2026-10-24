@@ -230,6 +230,8 @@ async fn block_storage_competing_attachments_and_live_vm_mutations_are_rejected(
         .is_err()
     );
     drop(held);
+    // The failed delete marks ownership uncertain until reconciliation settles it.
+    state.vms.lock().unwrap().get_mut(&owner).unwrap().state = crate::model::VmState::Stopped;
     let _ = detach(State(state.clone()), request(), Path(volume.id.to_string()))
         .await
         .unwrap();
@@ -238,6 +240,42 @@ async fn block_storage_competing_attachments_and_live_vm_mutations_are_rejected(
         .unwrap();
     assert!(state.store.block_storages().unwrap().is_empty());
     assert!(!block_storage::disk_path(&state, &volume).unwrap().exists());
+}
+
+#[tokio::test]
+async fn block_storage_delete_cannot_interrupt_creation() {
+    let temp = tempfile::Builder::new()
+        .prefix("v247-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let state = test_state(temp.path()).await;
+    let mut pending = volume(&state, "original").await;
+    pending.id = Uuid::new_v4();
+    pending.name = "still-formatting".into();
+    state.store.insert_block_storage(&pending, None).unwrap();
+    let error = delete(
+        State(state.clone()),
+        request(),
+        Path(pending.id.to_string()),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    assert_eq!(
+        state.store.block_storage(pending.id).unwrap().state,
+        "creating"
+    );
+    block_storage::create_disk(&state, &pending).unwrap();
+    state.store.finish_block_storage_create(pending.id).unwrap();
+    delete(
+        State(state.clone()),
+        request(),
+        Path(pending.id.to_string()),
+    )
+    .await
+    .unwrap();
+    assert!(!block_storage::disk_path(&state, &pending).unwrap().exists());
+    assert!(state.store.block_storage(pending.id).is_err());
 }
 
 #[tokio::test]

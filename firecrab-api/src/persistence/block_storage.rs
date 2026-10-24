@@ -131,6 +131,15 @@ impl Store {
         Ok(())
     }
 
+    /// Reserves an interrupted or failed creation for cleanup by its owning worker.
+    pub(crate) fn abort_block_storage_create(&self, id: Uuid) -> Result<(), PersistenceError> {
+        self.lock().execute(
+            "UPDATE micro_block_storages SET phase = 'deleting' WHERE id = ?1 AND phase = 'creating'",
+            [id.to_string()],
+        )?;
+        Ok(())
+    }
+
     /// Reserves an unattached disk against concurrent attach before removing its file.
     pub(crate) fn begin_block_storage_delete(&self, id: Uuid) -> Result<(), PersistenceError> {
         let conn = self.lock();
@@ -138,6 +147,11 @@ impl Store {
             .query_row(&format!("{SELECT} WHERE id = ?1"), [id.to_string()], decode)
             .optional()?
             .ok_or(PersistenceError::MissingBlockStorage { id })?;
+        if volume.state == "creating" {
+            return Err(PersistenceError::BlockStorageConflict {
+                message: "volume creation is still in progress",
+            });
+        }
         if volume.attached_vm_id.is_some() {
             return Err(PersistenceError::BlockStorageConflict {
                 message: "detach the volume before deleting it",

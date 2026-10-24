@@ -112,7 +112,7 @@ pub async fn create(
             .map_err(|error| persistence_error(error, request.0))?;
         if let Err(error) = block_storage::create_disk(&state, &volume) {
             tracing::error!(volume_id = %volume.id, %error, "volume format failed");
-            if state.store.begin_block_storage_delete(volume.id).is_ok()
+            if state.store.abort_block_storage_create(volume.id).is_ok()
                 && block_storage::remove_disk(&state, &volume).is_ok()
             {
                 let _ = state.store.finish_block_storage_delete(volume.id);
