@@ -345,12 +345,12 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             post(handlers::pipe_databases::mutate),
         )
         .route(
-            "/api/pipe/database-kafka",
-            get(handlers::pipe_database_events::kafka_get)
-                .put(handlers::pipe_database_events::kafka_save),
+            "/api/pipe/database-rabbitmq",
+            get(handlers::pipe_database_events::rabbitmq_get)
+                .put(handlers::pipe_database_events::rabbitmq_save),
         )
         .route(
-            "/api/pipe/database-kafka/managed",
+            "/api/pipe/database-rabbitmq/managed",
             get(handlers::pipe_database_events::managed_get)
                 .post(handlers::pipe_database_events::managed_create),
         )

@@ -8,7 +8,7 @@ use crate::{
     extract::ValidatedJson,
     pipe_databases::{
         DatabaseConnection,
-        events::{self, KafkaInput, Trigger, TriggerInput, TriggerStatus},
+        events::{self, RabbitMQInput, Trigger, TriggerInput, TriggerStatus},
         write::Error,
     },
     server::RequestId,
@@ -19,24 +19,24 @@ use axum::{
     extract::{Extension, Path, State},
 };
 
-/// Return Kafka endpoint metadata without authentication material.
-pub async fn kafka_get(
+/// Return RabbitMQ endpoint metadata without authentication material.
+pub async fn rabbitmq_get(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let config = database(rid.0, move || state.store.database_kafka()).await?;
+    let config = database(rid.0, move || state.store.database_rabbitmq()).await?;
     Ok(Json(match config {
         Some(c) => {
-            serde_json::json!({"configured":true,"brokers":c.brokers,"tls":c.tls,"authenticated":c.username.is_some(),"development":c.development})
+            serde_json::json!({"configured":true,"brokers":c.brokers,"tls":c.tls,"authenticated":!c.username.is_empty(),"development":c.development})
         }
         None => serde_json::json!({"configured":false}),
     }))
 }
-/// Validate external Kafka and prohibit cluster replacement with retained triggers.
-pub async fn kafka_save(
+/// Validate external RabbitMQ and prohibit cluster replacement with retained triggers.
+pub async fn rabbitmq_save(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
-    ValidatedJson(input): ValidatedJson<KafkaInput>,
+    ValidatedJson(input): ValidatedJson<RabbitMQInput>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let _claim = state.service_mutations.lock().await;
     if !state
@@ -46,23 +46,23 @@ pub async fn kafka_save(
         .is_empty()
     {
         return Err(crate::pipe_databases::validation(
-            "Finish retained triggers before changing the Kafka cluster",
+            "Finish retained triggers before changing the RabbitMQ cluster",
             rid.0,
         ));
     }
     bounded_write(rid.0, async { input.connect().await.map(|_| ()) }).await?;
     if let Some(mut cluster) = state
         .store
-        .managed_database_kafka()
+        .managed_database_rabbitmq()
         .map_err(|_| AppError::internal(rid.0))?
     {
         cluster.enabled = false;
         state
             .store
-            .save_managed_database_kafka(&cluster)
+            .save_managed_database_rabbitmq(&cluster)
             .map_err(|_| AppError::internal(rid.0))?;
     }
-    database(rid.0, move || state.store.save_database_kafka(&input)).await?;
+    database(rid.0, move || state.store.save_database_rabbitmq(&input)).await?;
     Ok(Json(serde_json::json!({"configured":true})))
 }
 /// Return capture lifecycle, delivery counts and redacted worker health.
@@ -111,13 +111,13 @@ pub async fn list(
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-/// Explicit choice of durable or development Kafka profile.
+/// Explicit choice of durable or development RabbitMQ profile.
 pub struct ManagedInput {
     #[serde(default)]
     /// Explicit single-broker profile instead of three replicas.
     development: bool,
 }
-/// Return public state of the owned Kafka cluster.
+/// Return public state of the owned RabbitMQ cluster.
 pub async fn managed_get(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
@@ -125,7 +125,7 @@ pub async fn managed_get(
     Ok(Json(
         state
             .store
-            .managed_database_kafka()
+            .managed_database_rabbitmq()
             .map_err(|_| AppError::internal(rid.0))?
             .map(|c| c.summary())
             .unwrap_or(serde_json::Value::Null),
@@ -137,7 +137,7 @@ pub async fn managed_create(
     Extension(rid): Extension<RequestId>,
     ValidatedJson(input): ValidatedJson<ManagedInput>,
 ) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
-    use crate::pipe_databases::managed_kafka::{self, Cluster};
+    use crate::pipe_databases::managed_rabbitmq::{self, Cluster};
     let _claim = state.service_mutations.lock().await;
     if !state
         .store
@@ -146,21 +146,21 @@ pub async fn managed_create(
         .is_empty()
     {
         return Err(crate::pipe_databases::validation(
-            "Finish retained triggers before replacing the Kafka cluster",
+            "Finish retained triggers before replacing the RabbitMQ cluster",
             rid.0,
         ));
     }
     let existing = state
         .store
-        .managed_database_kafka()
+        .managed_database_rabbitmq()
         .map_err(|_| AppError::internal(rid.0))?;
     let cluster = if let Some(mut cluster) = existing {
         if (cluster.enabled && cluster.phase != "failed")
             || cluster.development != input.development
         {
             return Err(AppError::conflict(
-                "kafka_in_use",
-                "The managed Kafka cluster already exists",
+                "rabbitmq_in_use",
+                "The managed RabbitMQ cluster already exists",
                 rid.0,
             ));
         }
@@ -168,14 +168,14 @@ pub async fn managed_create(
         cluster.phase = "queued".into();
         cluster
     } else {
-        managed_kafka::preflight(&state, input.development).map_err(|e| match e {
+        managed_rabbitmq::preflight(&state, input.development).map_err(|e| match e {
             Error::Invalid(message) => crate::pipe_databases::validation(message, rid.0),
             _ => AppError::internal(rid.0),
         })?;
         Cluster {
             id: uuid::Uuid::new_v4(),
             enabled: true,
-            image: managed_kafka::default_image(),
+            image: managed_rabbitmq::default_image(),
             development: input.development,
             phase: "queued".into(),
             error: None,
@@ -185,13 +185,13 @@ pub async fn managed_create(
     };
     state
         .store
-        .save_managed_database_kafka(&cluster)
+        .save_managed_database_rabbitmq(&cluster)
         .map_err(|_| AppError::internal(rid.0))?;
     let summary = cluster.summary();
-    managed_kafka::queue(state.clone(), cluster);
+    managed_rabbitmq::queue(state.clone(), cluster);
     Ok((axum::http::StatusCode::ACCEPTED, Json(summary)))
 }
-/// Own the topic before capture DDL and preserve partial setup for retries.
+/// Own the queues before capture DDL and preserve partial setup for retries.
 pub async fn create(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
@@ -223,10 +223,10 @@ pub async fn create(
         return Err(AppError::not_found(rid.0));
     }
     let store = state.store.clone();
-    let kafka = database(rid.0, move || store.database_kafka())
+    let rabbitmq = database(rid.0, move || store.database_rabbitmq())
         .await?
         .ok_or_else(|| {
-            crate::pipe_databases::validation("Set up Kafka before enabling triggers", rid.0)
+            crate::pipe_databases::validation("Set up RabbitMQ before enabling triggers", rid.0)
         })?;
     let mut trigger = Trigger {
         id: input.request_id,
@@ -236,7 +236,6 @@ pub async fn create(
         installed: false,
         detached: false,
     };
-    let mut retrying = false;
     if let Some(existing) = state
         .store
         .database_trigger(trigger.id)
@@ -246,8 +245,7 @@ pub async fn create(
             || serde_json::to_value(&existing.input).ok()
                 != serde_json::to_value(&trigger.input).ok()
         {
-            return Err(AppError::new(
-                axum::http::StatusCode::CONFLICT,
+            return Err(AppError::conflict(
                 "request_conflict",
                 "The request ID belongs to another trigger",
                 rid.0,
@@ -256,32 +254,45 @@ pub async fn create(
         if existing.installed {
             return Ok(Json(existing));
         }
-        retrying = true;
     }
-    let client = bounded_write(rid.0, kafka.connect()).await?;
-    let topic = trigger.topic();
-    let topics = bounded_write(rid.0, async {
-        client
-            .list_topics()
-            .await
-            .map_err(|_| Error::Invalid("Cannot inspect Kafka topics"))
-    })
-    .await?;
-    let exists = topics.iter().any(|t| t.name == topic);
-    if exists && !retrying {
-        return Err(crate::pipe_databases::validation(
-            "A Kafka topic with this name already exists; use a new request ID",
-            rid.0,
-        ));
-    }
-    // Intent owns a topic even if the controller acknowledges after our timeout.
+    // Persist ownership before any broker declaration or nontransactional DDL.
     state
         .store
         .save_database_trigger(&trigger)
         .map_err(|_| AppError::internal(rid.0))?;
-    if !exists {
-        bounded_write(rid.0,async {client.controller_client().map_err(|_|Error::Invalid("Cannot connect to the Kafka controller"))?.create_topic(topic,1,if kafka.development{1}else{3},5000).await.map_err(|_|Error::Invalid("Cannot create the Kafka topic; check replication capacity and CREATE permission"))}).await?;
-    }
+    bounded_write(rid.0, async {
+        let client = rabbitmq.connect().await?;
+        let result = crate::pipe_databases::rabbitmq::channel(
+            &client,
+            &trigger.queue(),
+            rabbitmq.development,
+        )
+        .await;
+        let _ = client.close(200, "setup complete".into()).await;
+        result.map(|_| ())
+    })
+    .await?;
+    // A handler needs a durable inbox. Reuse its account without broadening
+    // business-table privileges, or create a read-only account automatically.
+    bounded_write(rid.0, async {
+        use crate::pipe_databases::bindings::{self, Access, BindingInput, BindingRecord};
+        let bindings = state.store.database_bindings().map_err(|_|Error::Invalid("Cannot inspect service access"))?;
+        let mut binding = if let Some(binding) = bindings.into_iter().find(|b|b.input.service_id == trigger.input.service_id && b.input.env_name == "DATABASE_URL") {
+            if binding.database_id != record.id { return Err(Error::Invalid("The handler DATABASE_URL belongs to another database; choose a separate handler service")); }
+            binding
+        } else {
+            let service = state.store.micro_service(trigger.input.service_id).map_err(|_|Error::Invalid("Cannot inspect service settings"))?.ok_or(Error::Invalid("Handler service is unavailable"))?;
+            if service.spec.env.contains_key("DATABASE_URL") || service.spec.secrets.contains_key("DATABASE_URL") {return Err(Error::Invalid("Remove the handler DATABASE_URL override before enabling events"));}
+            BindingRecord::new(&record,BindingInput {request_id:trigger.id,service_id:trigger.input.service_id,access:Access::Read,env_name:"DATABASE_URL".into()}).await?
+        };
+        binding.event_inbox = true;
+        binding.ready = false;
+        state.store.save_database_binding(&binding).map_err(|_|Error::Invalid("Cannot save handler inbox ownership"))?;
+        bindings::provision(&record,&binding).await?;
+        binding.ready = true;
+        state.store.save_database_binding(&binding).map_err(|_|Error::Invalid("Cannot activate handler inbox"))?;
+        Ok(())
+    }).await?;
     state
         .store
         .database_service_secret(trigger.input.service_id)
@@ -401,7 +412,7 @@ pub async fn delete(
             .map_err(|_| AppError::internal(rid.0))?;
         let status = bounded_write(rid.0, async {
             let mut c = DatabaseConnection::connect(&record.input, &settings).await?;
-            events::status(&mut c, trigger).await
+            events::status(&mut c, trigger.clone()).await
         })
         .await?;
         if status.pending != 0 || status.failed != 0 {
@@ -411,6 +422,38 @@ pub async fn delete(
             ));
         }
     }
+    let config = state
+        .store
+        .database_rabbitmq()
+        .map_err(|_| AppError::internal(rid.0))?
+        .ok_or_else(|| {
+            crate::pipe_databases::validation(
+                "Reconnect RabbitMQ before removing its owned queues",
+                rid.0,
+            )
+        })?;
+    bounded_write(rid.0, async {
+        let client = config.connect().await?;
+        let result = async {
+            let channel = crate::pipe_databases::rabbitmq::channel(
+                &client,
+                &trigger.queue(),
+                config.development,
+            )
+            .await?;
+            for queue in [trigger.queue(), format!("{}.failed", trigger.queue())] {
+                channel
+                    .queue_delete(queue.into(), lapin::options::QueueDeleteOptions::default())
+                    .await
+                    .map_err(|_| Error::Invalid("Cannot remove the owned RabbitMQ queues"))?;
+            }
+            Ok(())
+        }
+        .await;
+        let _ = client.close(200, "trigger removed".into()).await;
+        result
+    })
+    .await?;
     state
         .store
         .delete_database_trigger(id)

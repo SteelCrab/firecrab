@@ -774,7 +774,7 @@ pub async fn update_vm(
             .is_some()
             || state
                 .store
-                .managed_database_kafka()
+                .managed_database_rabbitmq()
                 .map_err(|_| AppError::internal(request_id.0))?
                 .is_some_and(|c| c.brokers.iter().any(|b| b.id == id)))
     {
@@ -1191,13 +1191,13 @@ pub async fn delete_vm(
     let _guard = state.lock_vm(id).await;
     if state
         .store
-        .managed_database_kafka()
+        .managed_database_rabbitmq()
         .map_err(|_| AppError::internal(request_id.0))?
         .is_some_and(|c| c.brokers.iter().any(|b| b.id == id))
     {
         return Err(AppError::conflict(
             "database_broker_in_use",
-            "This VM stores managed Kafka data and cannot be deleted through the VM API",
+            "This VM stores managed RabbitMQ data and cannot be deleted through the VM API",
             request_id.0,
         ));
     }

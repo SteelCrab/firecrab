@@ -1,19 +1,19 @@
 //! Private database service configuration. Payloads and credentials are never logged.
 use super::{PersistenceError, Store};
 use crate::pipe_databases::bindings::BindingRecord;
-use crate::pipe_databases::events::{KafkaInput, Trigger};
+use crate::pipe_databases::events::{RabbitMQInput, Trigger};
 use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
 /// Private SQLite tables for account ownership, delivery and maintenance state.
 pub(super) const CREATE_SQL:&str="
-CREATE TABLE IF NOT EXISTS database_kafka (id INTEGER PRIMARY KEY CHECK(id=1), spec TEXT NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS database_rabbitmq (id INTEGER PRIMARY KEY CHECK(id=1), spec TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS database_triggers (id TEXT PRIMARY KEY, spec TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS database_service_secrets (id TEXT PRIMARY KEY, secret TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS database_bindings (id TEXT PRIMARY KEY, service_id TEXT NOT NULL, database_id TEXT NOT NULL, spec TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS database_vm_services (id TEXT PRIMARY KEY, service_id TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS database_trigger_health (id TEXT PRIMARY KEY, error TEXT) STRICT;
-CREATE TABLE IF NOT EXISTS database_managed_kafka (id INTEGER PRIMARY KEY CHECK(id=1), spec TEXT NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS database_managed_rabbitmq (id INTEGER PRIMARY KEY CHECK(id=1), spec TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS database_jobs (id TEXT PRIMARY KEY, database_id TEXT NOT NULL, spec TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS database_setup_claims (id TEXT NOT NULL, target_hash TEXT NOT NULL, PRIMARY KEY(id,target_hash)) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS database_binding_environment ON database_bindings(service_id,json_extract(spec,'$.input.envName'));
@@ -153,13 +153,13 @@ impl Store {
         Ok(())
     }
     /// Read private broker ownership and generated TLS material.
-    pub fn managed_database_kafka(
+    pub fn managed_database_rabbitmq(
         &self,
-    ) -> Result<Option<crate::pipe_databases::managed_kafka::Cluster>, PersistenceError> {
+    ) -> Result<Option<crate::pipe_databases::managed_rabbitmq::Cluster>, PersistenceError> {
         let spec: Option<String> = self
             .lock()
             .query_row(
-                "SELECT spec FROM database_managed_kafka WHERE id=1",
+                "SELECT spec FROM database_managed_rabbitmq WHERE id=1",
                 [],
                 |r| r.get(0),
             )
@@ -167,11 +167,11 @@ impl Store {
         spec.as_deref().map(decode).transpose()
     }
     /// Persist broker ownership before VM preparation or activation.
-    pub fn save_managed_database_kafka(
+    pub fn save_managed_database_rabbitmq(
         &self,
-        cluster: &crate::pipe_databases::managed_kafka::Cluster,
+        cluster: &crate::pipe_databases::managed_rabbitmq::Cluster,
     ) -> Result<(), PersistenceError> {
-        self.lock().execute("INSERT INTO database_managed_kafka VALUES (1,?1) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",[encode(cluster)?])?;
+        self.lock().execute("INSERT INTO database_managed_rabbitmq VALUES (1,?1) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",[encode(cluster)?])?;
         Ok(())
     }
     /// Read private generated account bindings for service deployment.
@@ -217,19 +217,19 @@ impl Store {
             .optional()?
             .flatten())
     }
-    /// Read private Kafka authentication settings for relay workers.
-    pub fn database_kafka(&self) -> Result<Option<KafkaInput>, PersistenceError> {
+    /// Read private RabbitMQ authentication settings for relay workers.
+    pub fn database_rabbitmq(&self) -> Result<Option<RabbitMQInput>, PersistenceError> {
         let spec: Option<String> = self
             .lock()
-            .query_row("SELECT spec FROM database_kafka WHERE id=1", [], |r| {
+            .query_row("SELECT spec FROM database_rabbitmq WHERE id=1", [], |r| {
                 r.get(0)
             })
             .optional()?;
         spec.as_deref().map(decode).transpose()
     }
-    /// Replace private Kafka settings after the caller checks retained triggers.
-    pub fn save_database_kafka(&self, input: &KafkaInput) -> Result<(), PersistenceError> {
-        self.lock().execute("INSERT INTO database_kafka VALUES (1,?1) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",[encode(input)?])?;
+    /// Replace private RabbitMQ settings after the caller checks retained triggers.
+    pub fn save_database_rabbitmq(&self, input: &RabbitMQInput) -> Result<(), PersistenceError> {
+        self.lock().execute("INSERT INTO database_rabbitmq VALUES (1,?1) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",[encode(input)?])?;
         Ok(())
     }
     /// Read capture definitions and persisted delivery controls.

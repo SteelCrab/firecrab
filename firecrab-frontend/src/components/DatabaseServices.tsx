@@ -21,8 +21,8 @@ export default function DatabaseServices({
   const [services, setServices] = useState<MicroServiceResponse[]>([]),
     [bindings, setBindings] = useState<db.DatabaseBinding[]>([]),
     [triggers, setTriggers] = useState<db.DatabaseTrigger[]>([]);
-  const [kafka, setKafka] = useState<db.KafkaStatus>({ configured: false }),
-    [managed, setManaged] = useState<db.ManagedKafka | null>(null),
+  const [rabbitmq, setRabbitMQ] = useState<db.RabbitMQStatus>({ configured: false }),
+    [managed, setManaged] = useState<db.ManagedRabbitMQ | null>(null),
     [development, setDevelopment] = useState(false);
   const [service, setService] = useState(""),
     [access, setAccess] = useState<"read" | "write">("read"),
@@ -35,6 +35,7 @@ export default function DatabaseServices({
     [ca, setCa] = useState(""),
     [username, setUsername] = useState(""),
     [password, setPassword] = useState(""),
+    [virtualHost, setVirtualHost] = useState("firecrab"),
     [tls, setTls] = useState(true);
   const [clientCertificate, setClientCertificate] = useState(""),
     [clientKey, setClientKey] = useState("");
@@ -61,13 +62,13 @@ export default function DatabaseServices({
       listMicroServices(),
       db.databaseBindings(connection.id),
       db.databaseTriggers(connection.id),
-      db.kafkaStatus(),
-      db.managedKafkaStatus(),
+      db.rabbitmqStatus(),
+      db.managedRabbitMQStatus(),
     ]);
     setServices(s);
     setBindings(b);
     setTriggers(tr);
-    setKafka(k);
+    setRabbitMQ(k);
     setManaged(m);
   }, [connection.id]);
   useEffect(() => {
@@ -254,49 +255,14 @@ export default function DatabaseServices({
         <h4>{t("Database events", "DB 이벤트")}</h4>
         <p className="poll-note">
           {t(
-            "Changes commit with an outbox entry. Kafka and HTTP delivery retry automatically. Handlers must deduplicate by event ID in their own transaction.",
-            "변경과 이벤트를 같은 트랜잭션에 저장한다. Kafka와 HTTP 전달은 자동으로 재시도한다. 처리 서비스는 자체 트랜잭션에서 이벤트 ID의 중복을 검사해야 한다.",
+            "Changes and delivery records commit together. Delivery retries automatically. Use the provided receiver to commit duplicate checks and business changes together.",
+            "변경과 전송 기록을 함께 저장한다. 전달은 자동으로 재시도한다. 제공하는 수신 모듈로 중복 검사와 업무 변경을 함께 저장한다.",
           )}
         </p>
-        {!kafka.configured && (
+        {!rabbitmq.configured && (
           <div className="pipe-database-form">
-            <h4>{t("Prepare Kafka once", "Kafka 최초 준비")}</h4>
-            <div className="field">
-              <label htmlFor="database-kafka-profile">
-                {t("Kafka profile", "Kafka 구성")}
-              </label>
-              <select
-                id="database-kafka-profile"
-                value={development ? "development" : "durable"}
-                disabled={busy}
-                onChange={(e) =>
-                  setDevelopment(e.target.value === "development")
-                }
-              >
-                <option value="durable">
-                  {t(
-                    "Durable · 3 brokers, 30 GiB",
-                    "내구성 구성 · 브로커 3개, 30 GiB",
-                  )}
-                </option>
-                <option value="development">
-                  {t(
-                    "Development · 1 broker, 10 GiB",
-                    "개발용 · 브로커 1개, 10 GiB",
-                  )}
-                </option>
-              </select>
-            </div>
             <p className="poll-note">
-              {development
-                ? t(
-                    "Single-broker development cannot tolerate broker data loss.",
-                    "개발용 단일 브로커는 브로커 데이터 손실을 견디지 못한다.",
-                  )
-                : t(
-                    "Each broker uses 1536 MiB RAM. All local brokers share one host failure domain. Use an external cluster for host failover.",
-                    "브로커당 메모리 1536 MiB를 사용한다. 로컬 브로커는 같은 호스트에 위치한다. 호스트 장애 전환에는 외부 클러스터를 사용한다.",
-                  )}
+              {t("Firecrab prepares a private RabbitMQ cluster with replicated queues, TLS and automatic recovery.", "Firecrab이 복제 큐, TLS, 자동 복구를 갖춘 전용 RabbitMQ를 준비한다.")}
             </p>
             <button
               className="btn primary"
@@ -304,40 +270,40 @@ export default function DatabaseServices({
               disabled={busy || (!!managed && managed.phase !== "failed")}
               onClick={() =>
                 void run(
-                  () => db.createManagedKafka(development),
-                  t("Kafka preparation started.", "Kafka 준비를 시작했다."),
+                  () => db.createManagedRabbitMQ(false),
+                  t("RabbitMQ preparation started.", "RabbitMQ 준비를 시작했다."),
                 )
               }
             >
               {managed?.phase === "failed"
-                ? t("Retry Kafka setup", "Kafka 준비 재시도")
-                : t("Prepare Kafka automatically", "Kafka 자동 준비")}
+                ? t("Retry RabbitMQ setup", "RabbitMQ 준비 재시도")
+                : t("Prepare RabbitMQ automatically", "RabbitMQ 자동 준비")}
             </button>
           </div>
         )}
         {managed && (
           <p className="poll-note" role="status">
-            Kafka · {managed.phase}
+            RabbitMQ · {managed.phase}
             {managed.error ? ` · ${managed.error}` : ""}
           </p>
         )}
-        {kafka.configured && (
+        {rabbitmq.configured && (
           <p className="poll-note">
-            Kafka ·{" "}
-            {kafka.development
+            RabbitMQ ·{" "}
+            {rabbitmq.development
               ? t("Development", "개발용")
               : t("TLS enabled", "TLS 사용")}{" "}
-            · {kafka.brokers?.join(", ")}
+            · {rabbitmq.brokers?.join(", ")}
           </p>
         )}
         <details>
-          <summary>{t("Use existing Kafka", "기존 Kafka 연결")}</summary>
+          <summary>{t("Use existing RabbitMQ", "기존 RabbitMQ 연결")}</summary>
           <form
             onSubmit={(e) => {
               e.preventDefault();
               void run(
                 async () => {
-                  await db.saveKafka({
+                  await db.saveRabbitMQ({
                     brokers: brokers
                       .split(",")
                       .map((b) => b.trim())
@@ -345,7 +311,7 @@ export default function DatabaseServices({
                     tls,
                     development,
                     ...(ca.trim() ? { caCertificate: ca } : {}),
-                    ...(username ? { username, password } : {}),
+                    username, password, virtualHost,
                     ...(clientCertificate
                       ? { clientCertificate, clientKey }
                       : {}),
@@ -357,33 +323,38 @@ export default function DatabaseServices({
                   setClientCertificate("");
                   setClientKey("");
                 },
-                t("Kafka connection saved.", "Kafka 연결을 저장했다."),
+                t("RabbitMQ connection saved.", "RabbitMQ 연결을 저장했다."),
               );
             }}
           >
             <div className="field">
-              <label htmlFor="database-kafka-brokers">
+              <label htmlFor="database-rabbitmq-brokers">
                 {t("Broker addresses", "브로커 주소")}
               </label>
               <input
-                id="database-kafka-brokers"
-                placeholder="broker-1:9093, broker-2:9093, broker-3:9093"
+                id="database-rabbitmq-brokers"
+                placeholder="broker-1:5671, broker-2:5671, broker-3:5671"
                 value={brokers}
                 required
                 disabled={busy}
                 onChange={(e) => setBrokers(e.target.value)}
               />
             </div>
+            <div className="field">
+              <label htmlFor="database-rabbitmq-vhost">{t("Virtual host", "가상 호스트")}</label>
+              <input id="database-rabbitmq-vhost" value={virtualHost} disabled={busy} required onChange={(e) => setVirtualHost(e.target.value)} />
+            </div>
             <div className="pipe-database-fields">
               <div className="field">
-                <label htmlFor="database-kafka-user">
+                <label htmlFor="database-rabbitmq-user">
                   {t(
-                    "SASL/PLAIN username (optional)",
-                    "SASL/PLAIN 계정 (선택)",
+                    "RabbitMQ username",
+                    "RabbitMQ 계정",
                   )}
                 </label>
                 <input
-                  id="database-kafka-user"
+                  id="database-rabbitmq-user"
+                  required
                   autoComplete="off"
                   value={username}
                   disabled={busy}
@@ -391,11 +362,12 @@ export default function DatabaseServices({
                 />
               </div>
               <div className="field">
-                <label htmlFor="database-kafka-password">
-                  {t("SASL password", "SASL 비밀번호")}
+                <label htmlFor="database-rabbitmq-password">
+                  {t("RabbitMQ password", "RabbitMQ 비밀번호")}
                 </label>
                 <input
-                  id="database-kafka-password"
+                  id="database-rabbitmq-password"
+                  required
                   type="password"
                   autoComplete="new-password"
                   value={password}
@@ -405,14 +377,14 @@ export default function DatabaseServices({
               </div>
             </div>
             <div className="field">
-              <label htmlFor="database-kafka-ca">
+              <label htmlFor="database-rabbitmq-ca">
                 {t(
-                  "Kafka CA certificate (PEM, optional)",
-                  "Kafka CA 인증서 (PEM, 선택)",
+                  "RabbitMQ CA certificate (PEM, optional)",
+                  "RabbitMQ CA 인증서 (PEM, 선택)",
                 )}
               </label>
               <textarea
-                id="database-kafka-ca"
+                id="database-rabbitmq-ca"
                 value={ca}
                 rows={3}
                 maxLength={32768}
@@ -428,11 +400,11 @@ export default function DatabaseServices({
                 )}
               </summary>
               <div className="field">
-                <label htmlFor="kafka-client-certificate">
+                <label htmlFor="rabbitmq-client-certificate">
                   {t("Client certificate PEM", "클라이언트 인증서 PEM")}
                 </label>
                 <textarea
-                  id="kafka-client-certificate"
+                  id="rabbitmq-client-certificate"
                   value={clientCertificate}
                   disabled={busy}
                   maxLength={32768}
@@ -440,11 +412,11 @@ export default function DatabaseServices({
                 />
               </div>
               <div className="field">
-                <label htmlFor="kafka-client-key">
+                <label htmlFor="rabbitmq-client-key">
                   {t("Client private key PEM", "클라이언트 개인 키 PEM")}
                 </label>
                 <textarea
-                  id="kafka-client-key"
+                  id="rabbitmq-client-key"
                   value={clientKey}
                   disabled={busy}
                   maxLength={32768}
@@ -475,7 +447,7 @@ export default function DatabaseServices({
               TLS
             </label>
             <button className="btn" type="submit" disabled={busy}>
-              {t("Save Kafka connection", "Kafka 연결 저장")}
+              {t("Save RabbitMQ connection", "RabbitMQ 연결 저장")}
             </button>
           </form>
         </details>
@@ -693,7 +665,7 @@ export default function DatabaseServices({
                   id="database-event-table"
                   value={table}
                   required
-                  disabled={busy || !kafka.configured}
+                  disabled={busy || !rabbitmq.configured}
                   onChange={(e) => {
                     setTable(e.target.value);
                     setTriggerId(crypto.randomUUID());
@@ -715,7 +687,7 @@ export default function DatabaseServices({
                   id="database-event-handler"
                   value={handler}
                   required
-                  disabled={busy || !kafka.configured}
+                  disabled={busy || !rabbitmq.configured}
                   onChange={(e) => {
                     setHandler(e.target.value);
                     setTriggerId(crypto.randomUUID());
@@ -752,7 +724,7 @@ export default function DatabaseServices({
             <button
               className="btn"
               type="submit"
-              disabled={busy || !kafka.configured || !handler || table === ""}
+              disabled={busy || !rabbitmq.configured || !handler || table === ""}
             >
               {t("Enable events", "이벤트 사용")}
             </button>

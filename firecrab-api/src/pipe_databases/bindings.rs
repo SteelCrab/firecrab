@@ -52,6 +52,9 @@ pub struct BindingRecord {
     pub tables: Vec<TableRequest>,
     /// True only after account creation and grants finish.
     pub ready: bool,
+    #[serde(default)]
+    /// Grant only INSERT on the generated deduplication inbox for event handlers.
+    pub event_inbox: bool,
 }
 impl std::fmt::Debug for BindingRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -190,6 +193,7 @@ impl BindingRecord {
             role,
             tables,
             ready: false,
+            event_inbox: false,
         })
     }
 }
@@ -237,7 +241,7 @@ pub async fn provision(admin: &DatabaseRecord, binding: &BindingRecord) -> Resul
                 .await?;
             }
             let role = quote(Engine::Postgres, &binding.role);
-            if binding.input.access == Access::Write {
+            if binding.input.access == Access::Write || binding.event_inbox {
                 let schema = quote(Engine::Postgres, &write::internal_schema(admin.id));
                 let inbox = format!(
                     "{schema}.{}",
@@ -318,7 +322,7 @@ pub async fn provision(admin: &DatabaseRecord, binding: &BindingRecord) -> Resul
                 )
                 .await?;
             }
-            if binding.input.access == Access::Write {
+            if binding.input.access == Access::Write || binding.event_inbox {
                 let inbox = format!(
                     "{}.{}",
                     quote(Engine::Mysql, &write::internal_schema(admin.id)),
@@ -430,10 +434,10 @@ type GuestInputs = (BTreeMap<String, String>, BTreeMap<String, String>);
 pub fn guest_inputs(store: &Store, vm: Uuid) -> Result<GuestInputs, PersistenceError> {
     let mut env = BTreeMap::new();
     let mut files = BTreeMap::new();
-    if let Some(cluster) = store.managed_database_kafka()?
+    if let Some(cluster) = store.managed_database_rabbitmq()?
         && let Some(broker) = cluster.brokers.into_iter().find(|b| b.id == vm)
     {
-        return Ok((broker.env, files));
+        return Ok((broker.env, broker.files));
     }
     let Some(service) = store.database_vm_service(vm)? else {
         return Ok((env, files));
@@ -482,7 +486,7 @@ pub fn guest_inputs(store: &Store, vm: Uuid) -> Result<GuestInputs, PersistenceE
             );
         }
         env.insert(binding.input.env_name.clone(), uri);
-        if binding.input.access == Access::Write {
+        if binding.input.access == Access::Write || binding.event_inbox {
             let engine = binding
                 .connection
                 .settings(binding.id)

@@ -82,26 +82,27 @@ export interface DatabaseTrigger {
   skipped: number;
   lastError: string | null;
 }
-export interface KafkaStatus {
+export interface RabbitMQStatus {
   configured: boolean;
   brokers?: string[];
   tls?: boolean;
   authenticated?: boolean;
   development?: boolean;
 }
-export interface ManagedKafka {
+export interface ManagedRabbitMQ {
   id: string;
   phase: string;
   development: boolean;
   error: string | null;
   brokers: { id: string; ipv4: string }[];
 }
-export interface KafkaInput {
+export interface RabbitMQInput {
   brokers: string[];
   tls: boolean;
   caCertificate?: string;
-  username?: string;
-  password?: string;
+  username: string;
+  password: string;
+  virtualHost?: string;
   development: boolean;
   clientCertificate?: string;
   clientKey?: string;
@@ -248,18 +249,18 @@ export const replayDatabaseEvent = (
     `/api/pipe/database-triggers/${encodeURIComponent(id)}/replay/${encodeURIComponent(eventId.split(":").at(-1)!)}`,
     {},
   );
-export const kafkaStatus = (): Promise<KafkaStatus> =>
-  fetchJson("/api/pipe/database-kafka");
+export const rabbitmqStatus = (): Promise<RabbitMQStatus> =>
+  fetchJson("/api/pipe/database-rabbitmq");
 export const acknowledgeDatabaseEvent = (id: string, eventId: string): Promise<unknown> =>
   post(`/api/pipe/database-triggers/${encodeURIComponent(id)}/acknowledge/${encodeURIComponent(eventId.split(":").at(-1)!)}`, { confirmEventId: eventId });
-export const saveKafka = (input: KafkaInput): Promise<unknown> =>
-  post("/api/pipe/database-kafka", input, "PUT");
-export const managedKafkaStatus = (): Promise<ManagedKafka | null> =>
-  fetchJson("/api/pipe/database-kafka/managed");
-export const createManagedKafka = (
+export const saveRabbitMQ = (input: RabbitMQInput): Promise<unknown> =>
+  post("/api/pipe/database-rabbitmq", input, "PUT");
+export const managedRabbitMQStatus = (): Promise<ManagedRabbitMQ | null> =>
+  fetchJson("/api/pipe/database-rabbitmq/managed");
+export const createManagedRabbitMQ = (
   development: boolean,
-): Promise<ManagedKafka> =>
-  post("/api/pipe/database-kafka/managed", { development });
+): Promise<ManagedRabbitMQ> =>
+  post("/api/pipe/database-rabbitmq/managed", { development });
 
 export const updatePipeDatabase = (
   id: string,

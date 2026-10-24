@@ -19,10 +19,10 @@ filetime = "0.2.29"
 futures-util = "0.3"
 percent-encoding = "2.3"
 libc = "0.2.186"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 ring = "0.17.14"
 rusqlite = { version = "0.39", features = ["bundled"] }
-rskafka = { version = "0.6", default-features = false, features = ["transport-tls"] }
+lapin = { version = "4.12.3", default-features = false, features = ["tokio", "rustls--ring", "rustls-webpki-roots-certs"] }
 rcgen = "0.14.5"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2"

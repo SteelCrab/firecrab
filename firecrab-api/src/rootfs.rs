@@ -657,8 +657,32 @@ pub(crate) fn apply_private_service_inputs(
     set_guest_file_mode(rootfs, crate::oci::service::GUEST_VM_ENV_FILE, "0100600");
     for (path, value) in files {
         write_into_image(rootfs, path, value.as_bytes())?;
-        // CA certificates are public trust anchors. Non-root drivers must read them.
-        set_guest_file_mode(rootfs, path, "0100644");
+        if path == "/etc/firecrab/rabbitmq.key" {
+            // The official image drops to its rabbitmq account. Only that UID
+            // may read its TLS private key; certificates remain public.
+            let staging = rootfs.with_extension("rabbitmq-passwd.tmp");
+            dump_from_image(rootfs, "/etc/passwd", &staging)?;
+            let passwd = fs::read_to_string(&staging).unwrap_or_default();
+            let _ = fs::remove_file(&staging);
+            let owner = passwd
+                .lines()
+                .filter_map(|line| {
+                    let fields = line.split(':').collect::<Vec<_>>();
+                    (fields.len() >= 4 && fields[0] == "rabbitmq")
+                        .then(|| (fields[2].parse::<u32>().ok(), fields[3].parse::<u32>().ok()))
+                })
+                .find_map(|(uid, gid)| uid.zip(gid))
+                .ok_or_else(|| RootfsError::Specialize {
+                    path: rootfs.to_owned(),
+                    detail: "RabbitMQ image has no broker account".into(),
+                })?;
+            set_guest_file_mode(rootfs, path, "0100400");
+            run_debugfs(rootfs, &format!("set_inode_field {path} uid {}", owner.0))?;
+            run_debugfs(rootfs, &format!("set_inode_field {path} gid {}", owner.1))?;
+        } else {
+            // CA certificates are public trust anchors. Non-root drivers read them.
+            set_guest_file_mode(rootfs, path, "0100644");
+        }
     }
     Ok(())
 }
@@ -2363,6 +2387,42 @@ mod tests {
         assert_eq!(
             debugfs_cat(&rootfs, "/etc/firecrab/database-ca.pem"),
             "public-ca-test"
+        );
+    }
+
+    #[test]
+    fn rabbitmq_tls_key_is_readable_only_by_the_guest_broker_account() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        seed_services_d_app(&rootfs, &sample_app_service());
+        write_into_image(
+            &rootfs,
+            "/etc/passwd",
+            b"rabbitmq:x:999:998::/var/lib/rabbitmq:/bin/sh\n",
+        )
+        .unwrap();
+        apply_private_service_inputs(
+            &rootfs,
+            &BTreeMap::new(),
+            &BTreeMap::from([("RABBITMQ_NODENAME".into(), "rabbit@10.0.0.2".into())]),
+            &BTreeMap::from([(
+                "/etc/firecrab/rabbitmq.key".into(),
+                "private-broker-key".into(),
+            )]),
+        )
+        .unwrap();
+        let output = Command::new("debugfs")
+            .arg("-R")
+            .arg("stat /etc/firecrab/rabbitmq.key")
+            .arg(&rootfs)
+            .output()
+            .unwrap();
+        let metadata = String::from_utf8_lossy(&output.stdout);
+        assert!(metadata.contains("Mode:  0400"), "{metadata}");
+        assert!(
+            metadata.contains("User:   999") && metadata.contains("Group:   998"),
+            "{metadata}"
         );
     }
 

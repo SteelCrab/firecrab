@@ -154,7 +154,7 @@ async fn run() -> Result<(), StartupError> {
     let local_address = listener.local_addr().map_err(StartupError::LocalAddress)?;
     state.api_port = local_address.port();
     pipe_databases::events::spawn(state.clone());
-    pipe_databases::managed_kafka::recover(state.clone());
+    pipe_databases::managed_rabbitmq::recover(state.clone());
     pipe_databases::maintenance::spawn(state.clone());
     scheduler::spawn(state.clone(), scheduler_ownership)
         .await

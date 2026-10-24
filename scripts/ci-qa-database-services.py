@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Disposable TLS database/Kafka QA. Owns and cleans only this run's containers.
+"""Disposable TLS database/RabbitMQ QA. Owns and cleans only this run's containers.
 
 Pass a Linux firecrab-api unit-test executable compiled on this checkout.
 All credentials and certificate keys stay in a private temporary directory.
@@ -54,12 +54,21 @@ def main():
             time.sleep(1)
         raise RuntimeError("QA database readiness timed out")
 
-    def start(name, image, environment):
+    def start(name, image, environment, files=None):
         containers.append(name)  # Cleanup includes unknown docker-run outcomes.
         path = temporary / (name + ".env")
         path.write_text("".join(f"{key}={value}\n" for key, value in environment.items()))
         path.chmod(0o600)
-        run(["docker", "run", "-d", "--name", name, "--network", prefix, "--env-file", str(path), image], quiet=True)
+        mounts=[]
+        if files:
+            config=temporary / (name+"-config")
+            config.mkdir(mode=0o755)
+            for target,content in files.items():
+                source=config / Path(target).name
+                source.write_text(content)
+                source.chmod(0o444)
+                mounts.extend(["-v",f"{source}:{target}:ro"])
+        run(["docker", "run", "-d", "--name", name, "--network", prefix, "--env-file", str(path), *mounts, image], quiet=True)
 
     try:
         with tempfile.TemporaryDirectory(prefix=prefix) as directory:
@@ -73,8 +82,8 @@ def main():
             runner=prefix+"-tests"
             containers.append(runner)
             base = ["docker", "run", "--rm", "--init", "--name", runner, "--network", prefix, *mount]
-            run([*base, "--user", f"{os.getuid()}:{os.getgid()}", "-e", "FIRECRAB_KAFKA_EXPORT=/qa/kafka.json", "-e", f"FIRECRAB_KAFKA_QA_PREFIX={prefix}-kafka", "firecrab-database-services-qa", f"/tests/{binary.name}", "export_managed_kafka_fixture", "--ignored", "--nocapture"])
-            cluster = json.loads((temporary / "kafka.json").read_text())
+            run([*base, "--user", f"{os.getuid()}:{os.getgid()}", "-e", "FIRECRAB_RABBITMQ_EXPORT=/qa/rabbitmq.json", "-e", f"FIRECRAB_RABBITMQ_QA_PREFIX={prefix}-rabbitmq", "firecrab-database-services-qa", f"/tests/{binary.name}", "export_managed_rabbitmq_fixture", "--ignored", "--nocapture"])
+            cluster = json.loads((temporary / "rabbitmq.json").read_text())
             # Never print the cluster object: it contains private TLS keys.
             pg, mysql = prefix + "-postgres", prefix + "-mysql"
             password = passwords[0]
@@ -113,18 +122,18 @@ def main():
             (temporary / "input.json").write_text(json.dumps(inputs))
             (temporary / "input.json").chmod(0o600)
             for broker in cluster["brokers"]:
-                start(broker["ipv4"], "apache/kafka:4.3.1", broker["env"])
+                start(broker["ipv4"], "rabbitmq:4.3.0", broker["env"], broker["files"])
             deadline = time.monotonic() + 120
-            while not all("Kafka Server started" in run(["docker", "logs", broker["ipv4"]], quiet=True) for broker in cluster["brokers"]):
+            while not all("Server startup complete" in run(["docker", "logs", broker["ipv4"]], quiet=True) for broker in cluster["brokers"]):
                 if time.monotonic() > deadline:
-                    raise RuntimeError("QA Kafka startup timed out")
+                    raise RuntimeError("QA RabbitMQ startup timed out")
                 time.sleep(1)
-            tests = [*base, "-e", "FIRECRAB_DB_SERVICES_QA_JSON=/qa/input.json", "-e", "FIRECRAB_KAFKA_FIXTURE=/qa/kafka.json", "firecrab-database-services-qa", f"/tests/{binary.name}"]
+            tests = [*base, "-e", "FIRECRAB_DB_SERVICES_QA_JSON=/qa/input.json", "-e", "FIRECRAB_RABBITMQ_FIXTURE=/qa/rabbitmq.json", "firecrab-database-services-qa", f"/tests/{binary.name}"]
             for name in ["database_services_real_engines", "cancelled_mysql_setup_repairs_only_a_host_claimed_namespace", "native_backups_migrations_and_restore", "database_services_api_real_engines"]:
                 run([*tests, name, "--ignored", "--nocapture"])
             gate = temporary / "restart-gate"
             gate.mkdir()
-            command = [*base, "-e", "FIRECRAB_DB_SERVICES_QA_JSON=/qa/input.json", "-e", "FIRECRAB_KAFKA_FIXTURE=/qa/kafka.json", "-e", "FIRECRAB_QA_RESTART_GATE=/qa/restart-gate", "firecrab-database-services-qa", f"/tests/{binary.name}", "durable_events_real_kafka", "--ignored", "--nocapture"]
+            command = [*base, "-e", "FIRECRAB_DB_SERVICES_QA_JSON=/qa/input.json", "-e", "FIRECRAB_RABBITMQ_FIXTURE=/qa/rabbitmq.json", "-e", "FIRECRAB_QA_RESTART_GATE=/qa/restart-gate", "firecrab-database-services-qa", f"/tests/{binary.name}", "durable_events_real_rabbitmq", "--ignored", "--nocapture"]
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             try:
                 deadline, completed = time.monotonic() + 480, set()
@@ -132,7 +141,7 @@ def main():
                     for engine, database in [("postgres", pg), ("mysql", mysql)]:
                         if engine in completed or not (gate / (engine + ".ready")).exists():
                             continue
-                        print("Restarting disposable " + engine + " and three TLS Kafka brokers", flush=True)
+                        print("Restarting disposable " + engine + " and three TLS RabbitMQ brokers", flush=True)
                         run(["docker", "restart", "-t", "5", *[broker["ipv4"] for broker in cluster["brokers"]], database], quiet=True)
                         ready(database, probes[database])
                         time.sleep(8)
@@ -143,7 +152,7 @@ def main():
                     time.sleep(.2)
                 print(scrub(process.stdout.read()), end="", flush=True)
                 if process.returncode:
-                    raise RuntimeError("Kafka event recovery QA failed")
+                    raise RuntimeError("RabbitMQ event recovery QA failed")
             finally:
                 if process.poll() is None:
                     process.terminate()

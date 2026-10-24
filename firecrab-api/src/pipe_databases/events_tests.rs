@@ -20,6 +20,7 @@ use std::sync::{
 struct Receiver {
     secret: String,
     fail: Arc<AtomicBool>,
+    lose_reply: Arc<AtomicBool>,
     calls: Arc<Mutex<Vec<String>>>,
     effects: Arc<Mutex<std::collections::HashSet<String>>>,
 }
@@ -42,6 +43,9 @@ async fn receive(State(state): State<Receiver>, headers: HeaderMap, body: Bytes)
         return StatusCode::SERVICE_UNAVAILABLE;
     }
     state.effects.lock().unwrap().insert(id);
+    if state.lose_reply.swap(false, Ordering::SeqCst) {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
     StatusCode::NO_CONTENT
 }
 async fn execute(c: &mut DatabaseConnection, sql: &str) {
@@ -100,7 +104,7 @@ async fn restart_checkpoint(engine: Engine) {
     let path = std::path::Path::new(&dir);
     tokio::fs::write(
         path.join(format!("{name}.ready")),
-        b"restart QA database and Kafka brokers",
+        b"restart QA database and RabbitMQ brokers",
     )
     .await
     .unwrap();
@@ -114,18 +118,24 @@ async fn restart_checkpoint(engine: Engine) {
 }
 
 #[tokio::test]
-#[ignore = "requires disposable DB and three TLS Kafka fixtures"]
-async fn durable_events_real_kafka() {
+#[ignore = "requires disposable DB and three TLS RabbitMQ fixtures"]
+async fn durable_events_real_rabbitmq() {
     let inputs: Vec<DatabaseInput> = serde_json::from_slice(
         &std::fs::read(std::env::var("FIRECRAB_DB_SERVICES_QA_JSON").unwrap()).unwrap(),
     )
     .unwrap();
-    let cluster: super::super::managed_kafka::Cluster = serde_json::from_slice(
-        &std::fs::read(std::env::var("FIRECRAB_KAFKA_FIXTURE").unwrap()).unwrap(),
+    let cluster: super::super::managed_rabbitmq::Cluster = serde_json::from_slice(
+        &std::fs::read(std::env::var("FIRECRAB_RABBITMQ_FIXTURE").unwrap()).unwrap(),
     )
     .unwrap();
-    let kafka = cluster.config.unwrap();
-    let client = kafka.connect().await.unwrap();
+    let rabbitmq = cluster.config.unwrap();
+    let mut untrusted = rabbitmq.clone();
+    untrusted.ca_certificate = None;
+    assert!(
+        untrusted.connect().await.is_err(),
+        "an untrusted broker must fail closed"
+    );
+    let mut client = rabbitmq.connect().await.unwrap();
     for input in inputs {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("firecrab.db");
@@ -182,18 +192,11 @@ async fn durable_events_real_kafka() {
             installed: true,
             detached: false,
         };
-        client
-            .controller_client()
-            .unwrap()
-            .create_topic(trigger.topic(), 1, 3, 5000)
-            .await
-            .unwrap();
-        install(&mut c, &trigger).await.unwrap();
-        install(&mut c, &trigger).await.unwrap();
         let outbox = trigger.outbox(engine);
         let receiver = Receiver {
             secret: state.store.database_service_secret(service_id).unwrap(),
             fail: Arc::new(AtomicBool::new(true)),
+            lose_reply: Arc::new(AtomicBool::new(false)),
             calls: Arc::new(Mutex::new(vec![])),
             effects: Arc::new(Mutex::new(std::collections::HashSet::new())),
         };
@@ -211,6 +214,40 @@ async fn durable_events_real_kafka() {
                 spec: spec.clone(),
             })
             .unwrap();
+        state.store.save_database_rabbitmq(&rabbitmq).unwrap();
+        let axum::Json(created) = crate::handlers::pipe_database_events::create(
+            axum::extract::State(state.clone()),
+            axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+            axum::extract::Path(record.id.to_string()),
+            crate::extract::ValidatedJson(trigger.input.clone()),
+        )
+        .await
+        .unwrap();
+        assert!(created.installed && !created.paused);
+        install(&mut c, &trigger).await.unwrap();
+        let binding = state
+            .store
+            .database_bindings()
+            .unwrap()
+            .into_iter()
+            .find(|b| b.input.service_id == service_id)
+            .unwrap();
+        assert!(binding.ready && binding.event_inbox);
+        assert_eq!(
+            binding.input.access,
+            super::super::bindings::Access::Read,
+            "enabling events must not promote business privileges"
+        );
+        let vm = Uuid::new_v4();
+        state
+            .store
+            .link_database_service_vm(vm, service_id)
+            .unwrap();
+        let (env, _) = super::super::bindings::guest_inputs(&state.store, vm).unwrap();
+        assert!(
+            env.contains_key("FIRECRAB_INBOX_TABLE"),
+            "the handler receives its generated inbox without manual configuration"
+        );
         state
             .store
             .save_service_deployment(&MicroServiceDeployment {
@@ -240,7 +277,9 @@ async fn durable_events_real_kafka() {
             &format!("INSERT INTO {qualified}(name) VALUES ('first'),('second')"),
         )
         .await;
-        relay(&state, &record, &trigger, &client).await.unwrap();
+        relay(&state, &record, &trigger, &client, false)
+            .await
+            .unwrap();
         assert_eq!(
             receiver.calls.lock().unwrap().len(),
             1,
@@ -249,34 +288,62 @@ async fn durable_events_real_kafka() {
         assert_eq!(
             number(
                 &mut c,
-                &format!("SELECT COUNT(*) FROM {outbox} WHERE kafka_offset IS NOT NULL")
+                &format!("SELECT COUNT(*) FROM {outbox} WHERE attempts=1 AND status='pending'")
             )
             .await,
             1
         );
+        let probe = rabbitmq::channel(&client, &trigger.queue(), false)
+            .await
+            .unwrap();
+        let unacked = probe
+            .basic_get(trigger.queue().into(), BasicGetOptions::default())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            unacked.redelivered,
+            "a handler failure must return the broker delivery"
+        );
+        assert_eq!(
+            unacked.properties.message_id().as_ref().unwrap().as_str(),
+            format!("{}:1", trigger.id)
+        );
+        probe
+            .close(200, "simulate receiver channel loss".into())
+            .await
+            .unwrap();
         // Reconnect the source after an optional real DB/broker restart.
         drop(c);
         restart_checkpoint(engine).await;
         let mut c = DatabaseConnection::connect_write(&record.input, &settings)
             .await
             .unwrap();
-        // Lose the acknowledged Kafka record. The source copy must repair publication.
-        client
-            .controller_client()
-            .unwrap()
-            .delete_topic(trigger.topic(), 5000)
+        let _ = client.close(200, "restart checkpoint".into()).await;
+        client = rabbitmq.connect().await.unwrap();
+        let channel = rabbitmq::channel(&client, &trigger.queue(), false)
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        client
-            .controller_client()
-            .unwrap()
-            .create_topic(trigger.topic(), 1, 3, 5000)
+        // The source repairs a lost broker copy without inventing a new ID.
+        channel
+            .queue_purge(trigger.queue().into(), QueuePurgeOptions::default())
             .await
             .unwrap();
         receiver.fail.store(false, Ordering::SeqCst);
         execute(&mut c, &format!("UPDATE {outbox} SET next_attempt=0")).await;
-        relay(&state, &record, &trigger, &client).await.unwrap();
+        receiver.lose_reply.store(true, Ordering::SeqCst);
+        relay(&state, &record, &trigger, &client, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            receiver.effects.lock().unwrap().len(),
+            1,
+            "lost HTTP reply may follow a committed business effect"
+        );
+        execute(&mut c, &format!("UPDATE {outbox} SET next_attempt=0")).await;
+        relay(&state, &record, &trigger, &client, false)
+            .await
+            .unwrap();
         assert_eq!(receiver.effects.lock().unwrap().len(), 2);
         // Reopen persisted API state and repeat an HTTP-success/checkpoint crash window.
         execute(
@@ -290,7 +357,9 @@ async fn durable_events_real_kafka() {
         )
         .await
         .unwrap();
-        relay(&reopened, &record, &trigger, &client).await.unwrap();
+        relay(&reopened, &record, &trigger, &client, false)
+            .await
+            .unwrap();
         assert_eq!(
             receiver.effects.lock().unwrap().len(),
             2,
@@ -312,15 +381,45 @@ async fn durable_events_real_kafka() {
         )
         .await;
         receiver.fail.store(true, Ordering::SeqCst);
-        relay(&state, &record, &trigger, &client).await.unwrap();
-        assert!(relay(&state, &record, &trigger, &client).await.is_err());
+        relay(&state, &record, &trigger, &client, false)
+            .await
+            .unwrap();
+        assert!(
+            relay(&state, &record, &trigger, &client, false)
+                .await
+                .is_err()
+        );
         let failures = failed(&mut c, &trigger).await.unwrap();
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].attempts, 12);
         assert_eq!(failures[0].error.as_deref(), Some("handler_unavailable"));
+        let dead = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(message) = channel
+                    .basic_get(
+                        format!("{}.failed", trigger.queue()).into(),
+                        BasicGetOptions::default(),
+                    )
+                    .await
+                    .unwrap()
+                {
+                    break message;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            dead.properties.message_id().as_ref().unwrap().as_str(),
+            format!("{}:3", trigger.id)
+        );
+        dead.ack(BasicAckOptions::default()).await.unwrap();
         receiver.fail.store(false, Ordering::SeqCst);
         replay(&mut c, &trigger, 3).await.unwrap();
-        relay(&state, &record, &trigger, &client).await.unwrap();
+        relay(&state, &record, &trigger, &client, false)
+            .await
+            .unwrap();
         assert_eq!(receiver.effects.lock().unwrap().len(), 4);
         let status = status(&mut c, trigger.clone()).await.unwrap();
         assert_eq!((status.pending, status.failed, status.delivered), (0, 0, 4));
@@ -334,13 +433,17 @@ async fn durable_events_real_kafka() {
             &format!("INSERT INTO {qualified}(name) VALUES ('after oversized')"),
         )
         .await;
-        relay(&state, &record, &trigger, &client).await.unwrap();
+        relay(&state, &record, &trigger, &client, false)
+            .await
+            .unwrap();
         assert_eq!(
             failed(&mut c, &trigger).await.unwrap()[0].error.as_deref(),
             Some("payload_too_large")
         );
         replay(&mut c, &trigger, 5).await.unwrap();
-        relay(&state, &record, &trigger, &client).await.unwrap();
+        relay(&state, &record, &trigger, &client, false)
+            .await
+            .unwrap();
         assert!(
             acknowledge(&mut c, &trigger, 6).await.is_err(),
             "pending delivery cannot be skipped"
@@ -348,7 +451,9 @@ async fn durable_events_real_kafka() {
         acknowledge(&mut c, &trigger, 5).await.unwrap();
         acknowledge(&mut c, &trigger, 5).await.unwrap();
         assert!(replay(&mut c, &trigger, 5).await.is_err());
-        relay(&state, &record, &trigger, &client).await.unwrap();
+        relay(&state, &record, &trigger, &client, false)
+            .await
+            .unwrap();
         assert_eq!(receiver.effects.lock().unwrap().len(), 5);
         let status = super::status(&mut c, trigger.clone()).await.unwrap();
         assert_eq!(
@@ -372,10 +477,18 @@ async fn durable_events_real_kafka() {
             6
         );
         server.abort();
-        client
-            .controller_client()
-            .unwrap()
-            .delete_topic(trigger.topic(), 5000)
+        super::super::bindings::revoke(&record, &binding)
+            .await
+            .unwrap();
+        channel
+            .queue_delete(trigger.queue().into(), QueueDeleteOptions::default())
+            .await
+            .unwrap();
+        channel
+            .queue_delete(
+                format!("{}.failed", trigger.queue()).into(),
+                QueueDeleteOptions::default(),
+            )
             .await
             .unwrap();
         execute(&mut c, &format!("DROP TABLE {qualified}")).await;

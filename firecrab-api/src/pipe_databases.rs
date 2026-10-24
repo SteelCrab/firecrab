@@ -14,7 +14,8 @@ use uuid::Uuid;
 pub(crate) mod bindings;
 pub(crate) mod events;
 pub(crate) mod maintenance;
-pub(crate) mod managed_kafka;
+pub(crate) mod managed_rabbitmq;
+pub(crate) mod rabbitmq;
 #[cfg(test)]
 mod services_tests;
 pub(crate) mod write;

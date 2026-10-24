@@ -1,5 +1,7 @@
 //! A source transaction writes the outbox. A single host worker publishes and delivers it.
-//! Kafka acknowledgments never cause deletion: the source retains delivery receipts.
+//! RabbitMQ acknowledgments never cause deletion: the source retains delivery receipts.
+use super::rabbitmq;
+pub use super::rabbitmq::RabbitMQInput;
 use super::{
     DatabaseConnection, DatabaseRecord, Engine, quote,
     write::{self, Error, TableRequest},
@@ -7,168 +9,14 @@ use super::{
 use crate::state::AppState;
 use chrono::Utc;
 use hmac::{Hmac, Mac};
-use rskafka::{
-    client::{
-        Client, ClientBuilder,
-        partition::{Compression, UnknownTopicHandling},
-    },
-    record::Record,
-};
+use lapin::{Connection, options::*};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 #[cfg(test)]
 #[path = "events_tests.rs"]
 mod tests;
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-/// Private Kafka transport and authentication settings.
-pub struct KafkaInput {
-    /// Bootstrap addresses in host:port form.
-    pub brokers: Vec<String>,
-    #[serde(default = "yes")]
-    /// Require verified TLS for Kafka connections.
-    pub tls: bool,
-    #[serde(default)]
-    /// Optional PEM trust bundle; never a host file path.
-    pub ca_certificate: Option<String>,
-    #[serde(default)]
-    /// Optional SASL/PLAIN username used only over TLS.
-    pub username: Option<String>,
-    #[serde(default)]
-    /// Private SASL/PLAIN password, excluded from summaries.
-    pub password: Option<String>,
-    #[serde(default)]
-    /// Optional PEM client certificate for mutual TLS.
-    pub client_certificate: Option<String>,
-    #[serde(default)]
-    /// Private PEM key paired with the client certificate.
-    pub client_key: Option<String>,
-    /// Three replicas in production; explicitly opt into one for development.
-    #[serde(default)]
-    pub development: bool,
-}
-/// Default Kafka connections to verified TLS.
-fn yes() -> bool {
-    true
-}
-impl std::fmt::Debug for KafkaInput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("KafkaInput { credentials: [REDACTED] }")
-    }
-}
-
-impl KafkaInput {
-    /// Validate transport policy and establish an authenticated Kafka client.
-    pub async fn connect(&self) -> Result<Client, Error> {
-        if self.brokers.is_empty()
-            || self.brokers.len() > 20
-            || self.brokers.iter().any(|b| {
-                b.len() > 256
-                    || b.contains('/')
-                    || b.chars().any(char::is_whitespace)
-                    || !b
-                        .rsplit_once(':')
-                        .is_some_and(|(_, port)| port.parse::<u16>().is_ok_and(|p| p != 0))
-            })
-        {
-            return Err(Error::Invalid("Enter valid Kafka host:port addresses"));
-        }
-        if !self.development && (!self.tls || self.brokers.len() < 3) {
-            return Err(Error::Invalid(
-                "Production Kafka requires TLS and at least three bootstrap brokers",
-            ));
-        }
-        if !self.tls
-            && (self.ca_certificate.is_some()
-                || self.client_certificate.is_some()
-                || self.client_key.is_some())
-        {
-            return Err(Error::Invalid(
-                "Enable TLS before setting Kafka certificates",
-            ));
-        }
-        let mut builder = ClientBuilder::new(self.brokers.clone())
-            .client_id("firecrab-database-events")
-            .max_message_size(2 * 1024 * 1024)
-            .backoff_config(rskafka::BackoffConfig {
-                deadline: Some(Duration::from_secs(6)),
-                ..Default::default()
-            });
-        if self.tls {
-            let mut roots = rustls::RootCertStore::empty();
-            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            if let Some(pem) = &self.ca_certificate {
-                if pem.len() > 32768 {
-                    return Err(Error::Invalid("Kafka CA bundle is too large"));
-                }
-                let certificates = rustls_pemfile::certs(&mut pem.as_bytes())
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|_| Error::Invalid("Invalid Kafka CA certificate"))?;
-                if certificates.is_empty() {
-                    return Err(Error::Invalid("Kafka CA certificate is empty"));
-                }
-                for cert in certificates {
-                    roots
-                        .add(cert)
-                        .map_err(|_| Error::Invalid("Invalid Kafka CA certificate"))?;
-                }
-            }
-            let provider = Arc::new(rustls::crypto::ring::default_provider());
-            let config = rustls::ClientConfig::builder_with_provider(provider)
-                .with_safe_default_protocol_versions()
-                .map_err(|_| Error::Invalid("Unsupported TLS version"))?
-                .with_root_certificates(roots);
-            let config = match (&self.client_certificate, &self.client_key) {
-                (None, None) => config.with_no_client_auth(),
-                (Some(pem), Some(key)) if pem.len() < 32768 && key.len() < 32768 => {
-                    let chain = rustls_pemfile::certs(&mut pem.as_bytes())
-                        .collect::<Result<Vec<_>, _>>()
-                        .map_err(|_| Error::Invalid("Invalid Kafka client certificate"))?;
-                    let key = rustls_pemfile::private_key(&mut key.as_bytes())
-                        .map_err(|_| Error::Invalid("Invalid Kafka client key"))?
-                        .ok_or(Error::Invalid("Kafka client key is empty"))?;
-                    config.with_client_auth_cert(chain, key).map_err(|_| {
-                        Error::Invalid("Kafka client certificate does not match its key")
-                    })?
-                }
-                _ => {
-                    return Err(Error::Invalid(
-                        "Kafka mutual TLS requires a certificate and private key",
-                    ));
-                }
-            };
-            builder = builder.tls_config(Arc::new(config));
-        }
-        match (&self.username, &self.password) {
-            (Some(username), Some(password))
-                if !username.is_empty()
-                    && !password.is_empty()
-                    && username.len() <= 256
-                    && password.len() <= 4096
-                    && self.tls =>
-            {
-                builder = builder.sasl_config(rskafka::client::SaslConfig::Plain(
-                    rskafka::client::Credentials {
-                        username: username.clone(),
-                        password: password.clone(),
-                    },
-                ));
-            }
-            (None, None) => {}
-            _ => {
-                return Err(Error::Invalid(
-                    "Kafka authentication requires TLS, username and password",
-                ));
-            }
-        }
-        builder.build().await.map_err(|_| {
-            Error::Invalid("Cannot connect to Kafka; check brokers, TLS and authentication")
-        })
-    }
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -211,8 +59,8 @@ pub struct Trigger {
     pub detached: bool,
 }
 impl Trigger {
-    /// Derive the Kafka topic owned by this trigger UUID.
-    pub fn topic(&self) -> String {
+    /// Derive the RabbitMQ queue owned by this trigger UUID.
+    pub fn queue(&self) -> String {
         format!("firecrab.database.{}", self.id.simple())
     }
     fn table(&self) -> TableRequest {
@@ -280,7 +128,7 @@ pub async fn install(connection: &mut DatabaseConnection, trigger: &Trigger) -> 
     match connection {
         DatabaseConnection::Postgres(c) => {
             let mut tx = write::pg_transaction(c).await?;
-            write::pg_batch(&mut tx,&format!("CREATE TABLE IF NOT EXISTS {outbox} (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,payload text NOT NULL,status text NOT NULL DEFAULT 'pending',attempts integer NOT NULL DEFAULT 0,next_attempt bigint NOT NULL DEFAULT 0,kafka_offset bigint,last_error text,created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,delivered_at timestamptz); CREATE INDEX IF NOT EXISTS pending_{index_name} ON {outbox}(status,next_attempt,id); CREATE OR REPLACE FUNCTION {schema}.{function}() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog SET timezone='UTC' AS $fc$ BEGIN INSERT INTO {outbox}(payload) VALUES (json_build_object('operation',lower(TG_OP),'schema',TG_TABLE_SCHEMA,'table',TG_TABLE_NAME,'before',CASE WHEN TG_OP='INSERT' THEN NULL ELSE (SELECT jsonb_object_agg(key,CASE WHEN jsonb_typeof(value)='number' THEN to_jsonb(value::text) ELSE value END) FROM jsonb_each(to_jsonb(OLD))) END,'after',CASE WHEN TG_OP='DELETE' THEN NULL ELSE (SELECT jsonb_object_agg(key,CASE WHEN jsonb_typeof(value)='number' THEN to_jsonb(value::text) ELSE value END) FROM jsonb_each(to_jsonb(NEW))) END,'occurredAt',clock_timestamp())::text); RETURN NULL; END $fc$; REVOKE ALL ON FUNCTION {schema}.{function}() FROM PUBLIC; CREATE OR REPLACE TRIGGER {function} AFTER INSERT OR UPDATE OR DELETE ON {source} FOR EACH ROW EXECUTE FUNCTION {schema}.{function}();")).await?;
+            write::pg_batch(&mut tx,&format!("CREATE TABLE IF NOT EXISTS {outbox} (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,payload text NOT NULL,status text NOT NULL DEFAULT 'pending',attempts integer NOT NULL DEFAULT 0,next_attempt bigint NOT NULL DEFAULT 0,last_error text,created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,delivered_at timestamptz); CREATE INDEX IF NOT EXISTS pending_{index_name} ON {outbox}(status,next_attempt,id); CREATE OR REPLACE FUNCTION {schema}.{function}() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog SET timezone='UTC' AS $fc$ BEGIN INSERT INTO {outbox}(payload) VALUES (json_build_object('operation',lower(TG_OP),'schema',TG_TABLE_SCHEMA,'table',TG_TABLE_NAME,'before',CASE WHEN TG_OP='INSERT' THEN NULL ELSE (SELECT jsonb_object_agg(key,CASE WHEN jsonb_typeof(value)='number' THEN to_jsonb(value::text) ELSE value END) FROM jsonb_each(to_jsonb(OLD))) END,'after',CASE WHEN TG_OP='DELETE' THEN NULL ELSE (SELECT jsonb_object_agg(key,CASE WHEN jsonb_typeof(value)='number' THEN to_jsonb(value::text) ELSE value END) FROM jsonb_each(to_jsonb(NEW))) END,'occurredAt',clock_timestamp())::text); RETURN NULL; END $fc$; REVOKE ALL ON FUNCTION {schema}.{function}() FROM PUBLIC; CREATE OR REPLACE TRIGGER {function} AFTER INSERT OR UPDATE OR DELETE ON {source} FOR EACH ROW EXECUTE FUNCTION {schema}.{function}();")).await?;
             tx.commit().await?;
         }
         DatabaseConnection::Mysql(c) => {
@@ -305,7 +153,7 @@ pub async fn install(connection: &mut DatabaseConnection, trigger: &Trigger) -> 
                     "MySQL generated columns require a CDC connector",
                 ));
             }
-            sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {outbox} (id bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,payload longtext NOT NULL,status varchar(16) NOT NULL DEFAULT 'pending',attempts int NOT NULL DEFAULT 0,next_attempt bigint NOT NULL DEFAULT 0,kafka_offset bigint,last_error text,created_at timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),delivered_at timestamp(6) NULL,KEY pending_events(status,next_attempt,id)) ENGINE=InnoDB")).execute(&mut *c).await?;
+            sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {outbox} (id bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,payload longtext NOT NULL,status varchar(16) NOT NULL DEFAULT 'pending',attempts int NOT NULL DEFAULT 0,next_attempt bigint NOT NULL DEFAULT 0,last_error text,created_at timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),delivered_at timestamp(6) NULL,KEY pending_events(status,next_attempt,id)) ENGINE=InnoDB")).execute(&mut *c).await?;
             // MySQL DDL commits implicitly. Install all three before returning success.
             // A failed install remains paused in the host store and is never advertised active.
             for (operation, timing) in [
@@ -634,15 +482,33 @@ fn retry_delay(attempt: i32) -> i64 {
     (1_i64 << attempt.clamp(1, 9)).min(300)
 }
 
-/// Bounded outbox row used by one delivery attempt.
-type DeliveryRow = (i64, String, i32, Option<i64>, String, i64, i64);
+/// One canonical source event. Publication is repaired when its broker copy is absent.
+type DeliveryRow = (i64, String, i32, String, i64, i64);
 
-/// Serialize publication and signed HTTP delivery under a source advisory lock.
+struct RelayChannel(lapin::Channel);
+impl Drop for RelayChannel {
+    fn drop(&mut self) {
+        if !self.0.status().connected() {
+            return;
+        }
+        let channel = self.0.clone();
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(
+                Duration::from_secs(3),
+                channel.close(200, "relay stopped".into()),
+            )
+            .await;
+        });
+    }
+}
+
+/// Keep one unacknowledged delivery per trigger under the source advisory lock.
 async fn relay(
     state: &AppState,
     record: &DatabaseRecord,
     trigger: &Trigger,
-    client: &Client,
+    client: &Connection,
+    development: bool,
 ) -> Result<(), Error> {
     let settings = record.input.settings(record.id).map_err(Error::Invalid)?;
     let mut connection = DatabaseConnection::connect_write(&record.input, &settings).await?;
@@ -665,12 +531,25 @@ async fn relay(
     if !locked {
         return Ok(());
     }
+    let channel = rabbitmq::channel(client, &trigger.queue(), development).await?;
+    let guard = RelayChannel(channel.clone());
+    // Always close the channel, including failed/cancelled attempts. Dropping an
+    // unacknowledged delivery alone does not requeue it while a channel is open.
+    let result = drain(state, trigger, &mut connection, &channel).await;
+    let _ = channel.close(200, "relay complete".into()).await;
+    drop(guard);
+    result
+}
+
+async fn drain(
+    state: &AppState,
+    trigger: &Trigger,
+    connection: &mut DatabaseConnection,
+    channel: &lapin::Channel,
+) -> Result<(), Error> {
     let engine = connection.engine();
     let outbox = trigger.outbox(engine);
-    let partition = client
-        .partition_client(trigger.topic(), 0, UnknownTopicHandling::Error)
-        .await
-        .map_err(|_| Error::Invalid("Kafka topic is unavailable"))?;
+    let queue = trigger.queue();
     let secret = state
         .store
         .database_service_secret(trigger.input.service_id)
@@ -691,22 +570,78 @@ async fn relay(
             .store
             .database_trigger(trigger.id)
             .map_err(|_| Error::Invalid("Cannot inspect trigger state"))?
-            .is_some_and(|current| current.paused)
+            .is_some_and(|t| t.paused)
         {
             break;
         }
-
         let sql = format!(
-            "SELECT id,LEFT(payload,1048577),attempts,kafka_offset,status,next_attempt,CAST(OCTET_LENGTH(payload) AS {length_type}) FROM {outbox} WHERE status IN ('pending','failed') ORDER BY id LIMIT 1"
+            "SELECT id,LEFT(payload,1048577),attempts,status,next_attempt,CAST(OCTET_LENGTH(payload) AS {length_type}) FROM {outbox} WHERE status IN ('pending','failed') ORDER BY id LIMIT 1"
         );
-        let row: Option<DeliveryRow> = match &mut connection {
+        let row: Option<DeliveryRow> = match connection {
             DatabaseConnection::Postgres(c) => sqlx::query_as(&sql).fetch_optional(c).await?,
             DatabaseConnection::Mysql(c) => sqlx::query_as(&sql).fetch_optional(c).await?,
         };
-        let Some((id, payload, attempts, offset, status, next, payload_bytes)) = row else {
+        if row
+            .as_ref()
+            .is_some_and(|r| r.3 == "pending" && r.4 > Utc::now().timestamp())
+        {
+            break;
+        }
+        let mut message = channel
+            .basic_get(queue.as_str().into(), BasicGetOptions::default())
+            .await
+            .map_err(|_| Error::Invalid("RabbitMQ delivery is unavailable"))?;
+        // Discard broker duplicates only after consulting durable source state.
+        // Source rows are retained, including explicit skips and failed deliveries.
+        if let Some(delivery) = &message {
+            let expected = row.as_ref().map(|r| format!("{}:{}", trigger.id, r.0));
+            if delivery
+                .properties
+                .message_id()
+                .as_ref()
+                .map(|s| s.as_str())
+                != expected.as_deref()
+            {
+                let id = delivery
+                    .properties
+                    .message_id()
+                    .as_ref()
+                    .and_then(|s| s.as_str().strip_prefix(&format!("{}:", trigger.id)))
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .ok_or(Error::Invalid("Unexpected RabbitMQ event identity"))?;
+                let sql = format!("SELECT status FROM {outbox} WHERE id={id}");
+                let stored: Option<String> = match connection {
+                    DatabaseConnection::Postgres(c) => {
+                        sqlx::query_scalar(&sql).fetch_optional(c).await?
+                    }
+                    DatabaseConnection::Mysql(c) => {
+                        sqlx::query_scalar(&sql).fetch_optional(c).await?
+                    }
+                };
+                if stored.is_none() {
+                    return Err(Error::Invalid(
+                        "RabbitMQ event has no retained source record",
+                    ));
+                }
+                delivery
+                    .ack(BasicAckOptions::default())
+                    .await
+                    .map_err(|_| {
+                        Error::Invalid("Cannot acknowledge a retained broker duplicate")
+                    })?;
+                continue;
+            }
+        }
+        let Some((id, payload, attempts, status, next, payload_bytes)) = row else {
             break;
         };
         if status == "failed" {
+            if let Some(delivery) = message {
+                delivery
+                    .reject(BasicRejectOptions { requeue: false })
+                    .await
+                    .map_err(|_| Error::Invalid("Cannot retain failed delivery in RabbitMQ"))?;
+            }
             return Err(Error::Invalid(
                 "Replay the failed event before later events can be delivered",
             ));
@@ -714,81 +649,59 @@ async fn relay(
         if next > Utc::now().timestamp() {
             break;
         }
+        let event_id = format!("{}:{id}", trigger.id);
         if payload_bytes > 512 * 1024 {
             update_delivery(
-                &mut connection,
+                connection,
                 &outbox,
                 id,
                 12,
                 false,
-                offset,
                 Some("payload_too_large"),
             )
             .await?;
             break;
         }
-
-        let event_id = format!("{}:{id}", trigger.id);
         let change: Box<serde_json::value::RawValue> =
             serde_json::from_str(&payload).map_err(|_| Error::Invalid("Invalid stored event"))?;
         let body = event_body(&event_id, trigger, &change)?;
         if body.len() > 512 * 1024 {
             update_delivery(
-                &mut connection,
+                connection,
                 &outbox,
                 id,
                 12,
                 false,
-                offset,
                 Some("payload_too_large"),
             )
             .await?;
             break;
         }
-        let mut published = offset;
-        // A retained source event repairs a missing Kafka record after broker data loss.
-        let verified = if let Some(offset) = offset {
-            partition
-                .fetch_records(offset, 0..2 * 1024 * 1024, 100)
+        if message.is_none() {
+            rabbitmq::publish(channel, &queue, &event_id, &body).await?;
+            message = channel
+                .basic_get(queue.as_str().into(), BasicGetOptions::default())
                 .await
-                .ok()
-                .is_some_and(|(rows, _)| {
-                    rows.iter().any(|row| {
-                        row.offset == offset
-                            && row.record.key.as_deref() == Some(event_id.as_bytes())
-                            && row.record.value.as_deref() == Some(body.as_slice())
-                    })
-                })
-        } else {
-            false
-        };
-        if !verified {
-            let offsets = partition
-                .produce(
-                    vec![Record {
-                        key: Some(event_id.as_bytes().to_vec()),
-                        value: Some(body.clone()),
-                        headers: BTreeMap::new(),
-                        timestamp: Utc::now(),
-                    }],
-                    Compression::NoCompression,
-                )
+                .map_err(|_| Error::Invalid("RabbitMQ delivery is unavailable"))?;
+        }
+        let delivery = message.ok_or(Error::Invalid(
+            "Confirmed RabbitMQ delivery is not yet available",
+        ))?;
+        if delivery
+            .properties
+            .message_id()
+            .as_ref()
+            .map(|s| s.as_str())
+            != Some(event_id.as_str())
+            || delivery.data != body
+        {
+            delivery
+                .reject(BasicRejectOptions { requeue: false })
                 .await
-                .map_err(|_| Error::Invalid("Kafka publication failed; source event retained"))?;
-            published = offsets.first().copied();
-            if published.is_none() {
-                return Err(Error::Invalid("Kafka did not acknowledge the event"));
-            }
-            update_delivery(
-                &mut connection,
-                &outbox,
-                id,
-                attempts,
-                false,
-                published,
-                None,
-            )
-            .await?;
+                .map_err(|_| Error::Invalid("Cannot isolate an invalid RabbitMQ delivery"))?;
+            return Err(Error::Invalid(
+                "RabbitMQ payload differs from its retained source",
+            ));
         }
         let deployment = state
             .store
@@ -797,36 +710,40 @@ async fn relay(
         let endpoint = deployment.as_ref().and_then(|d| {
             d.instances
                 .iter()
-                .find(|vm| vm.healthy && vm.state == firecrab_api_types::VmState::Running)
-                .map(|vm| format!("http://{}:{}{}", vm.ipv4, d.spec.port, trigger.input.path))
+                .find(|v| v.healthy && v.state == firecrab_api_types::VmState::Running)
+                .map(|v| format!("http://{}:{}{}", v.ipv4, d.spec.port, trigger.input.path))
         });
         let timestamp = Utc::now().timestamp().to_string();
         let mut signature = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
             .map_err(|_| Error::Invalid("Invalid signing key"))?;
         signature.update(timestamp.as_bytes());
         signature.update(b".");
-        signature.update(&body);
-        let signature = format!("sha256={:x}", signature.finalize().into_bytes());
+        signature.update(&delivery.data);
         let delivered = if let Some(endpoint) = endpoint {
             http.post(endpoint)
                 .header("content-type", "application/json")
                 .header("x-firecrab-event-id", &event_id)
                 .header("x-firecrab-timestamp", timestamp)
-                .header("x-firecrab-signature", signature)
-                .body(body)
+                .header(
+                    "x-firecrab-signature",
+                    format!("sha256={:x}", signature.finalize().into_bytes()),
+                )
+                .body(delivery.data.clone())
                 .send()
                 .await
                 .is_ok_and(|r| r.status().is_success())
         } else {
             false
         };
+        // A handler returns success only after committing its inbox and business
+        // effect. Persist completion before ACK; an uncertain HTTP result retries
+        // the same event ID and the transactional inbox suppresses duplicates.
         update_delivery(
-            &mut connection,
+            connection,
             &outbox,
             id,
             attempts + 1,
             delivered,
-            published,
             if delivered {
                 None
             } else {
@@ -834,21 +751,31 @@ async fn relay(
             },
         )
         .await?;
-        if !delivered {
+        if delivered {
+            delivery
+                .ack(BasicAckOptions::default())
+                .await
+                .map_err(|_| Error::Invalid("RabbitMQ completion acknowledgement failed"))?;
+        } else {
+            delivery
+                .reject(BasicRejectOptions {
+                    requeue: attempts + 1 < 12,
+                })
+                .await
+                .map_err(|_| Error::Invalid("RabbitMQ retry acknowledgement failed"))?;
             break;
         }
     }
     Ok(())
 }
 
-/// Persist retry scheduling, offsets and completion in the source DB.
+/// Persist retry scheduling and completion before changing broker delivery state.
 async fn update_delivery(
     connection: &mut DatabaseConnection,
     outbox: &str,
     id: i64,
     attempts: i32,
     delivered: bool,
-    offset: Option<i64>,
     error: Option<&str>,
 ) -> Result<(), Error> {
     let status = if delivered {
@@ -866,10 +793,10 @@ async fn update_delivery(
     };
     match connection {
         DatabaseConnection::Postgres(c) => {
-            sqlx::query(&format!("UPDATE {outbox} SET status=$2,attempts=$3,next_attempt=$4,kafka_offset=$5,last_error=$6,delivered_at={stamp} WHERE id=$1")).bind(id).bind(status).bind(attempts).bind(next).bind(offset).bind(error).execute(c).await?;
+            sqlx::query(&format!("UPDATE {outbox} SET status=$2,attempts=$3,next_attempt=$4,last_error=$5,delivered_at={stamp} WHERE id=$1")).bind(id).bind(status).bind(attempts).bind(next).bind(error).execute(c).await?;
         }
         DatabaseConnection::Mysql(c) => {
-            sqlx::query(&format!("UPDATE {outbox} SET status=?,attempts=?,next_attempt=?,kafka_offset=?,last_error=?,delivered_at={stamp} WHERE id=?")).bind(status).bind(attempts).bind(next).bind(offset).bind(error).bind(id).execute(c).await?;
+            sqlx::query(&format!("UPDATE {outbox} SET status=?,attempts=?,next_attempt=?,last_error=?,delivered_at={stamp} WHERE id=?")).bind(status).bind(attempts).bind(next).bind(error).bind(id).execute(c).await?;
         }
     }
     Ok(())
@@ -880,25 +807,30 @@ pub fn spawn(state: AppState) {
     tokio::spawn(async move {
         use futures_util::{StreamExt, stream};
         use sha2::Digest;
-        let mut cached: Option<(String, Arc<Client>)> = None;
+        let mut cached: Option<(String, Arc<Connection>)> = None;
         loop {
             let configs = (
-                state.store.database_kafka(),
+                state.store.database_rabbitmq(),
                 state.store.database_triggers(),
             );
-            if let (Ok(Some(kafka)), Ok(triggers)) = configs {
+            if let (Ok(Some(rabbitmq)), Ok(triggers)) = configs {
                 let hash = format!(
                     "{:x}",
-                    Sha256::digest(serde_json::to_vec(&kafka).unwrap_or_default())
+                    Sha256::digest(serde_json::to_vec(&rabbitmq).unwrap_or_default())
                 );
-                if cached.as_ref().is_none_or(|(key, _)| *key != hash) {
-                    cached =
-                        match tokio::time::timeout(Duration::from_secs(8), kafka.connect()).await {
-                            Ok(Ok(client)) => Some((hash, Arc::new(client))),
-                            _ => None,
-                        };
+                if cached
+                    .as_ref()
+                    .is_none_or(|(key, client)| *key != hash || !client.status().connected())
+                {
+                    cached = match tokio::time::timeout(Duration::from_secs(8), rabbitmq.connect())
+                        .await
+                    {
+                        Ok(Ok(client)) => Some((hash, Arc::new(client))),
+                        _ => None,
+                    };
                 }
                 if let Some((_, client)) = &cached {
+                    let development = rabbitmq.development;
                     let results =
                         stream::iter(triggers.into_iter().filter(|t| t.installed && !t.paused))
                             .map(|trigger| {
@@ -912,7 +844,7 @@ pub fn spawn(state: AppState) {
                                     };
                                     let result = tokio::time::timeout(
                                         Duration::from_secs(45),
-                                        relay(state, &record, &trigger, &client),
+                                        relay(state, &record, &trigger, &client, development),
                                     )
                                     .await;
                                     (
@@ -935,7 +867,7 @@ pub fn spawn(state: AppState) {
                     for trigger in triggers.into_iter().filter(|t| t.installed && !t.paused) {
                         let _ = state
                             .store
-                            .set_database_trigger_health(trigger.id, Some("kafka_unavailable"));
+                            .set_database_trigger_health(trigger.id, Some("rabbitmq_unavailable"));
                     }
                 }
             }
