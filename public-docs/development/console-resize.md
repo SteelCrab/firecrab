@@ -11,6 +11,13 @@ The shell remains the same shared serial session; no independent PTY is created.
 - A complete host installation containing `firecrab-guest-console` beside the API.
 - VM stop/start after upgrading: specialization writes the helper into the guest.
 
+The published OCI kernel `vmlinux-7.2.2` currently has `CONFIG_VSOCKETS` disabled.
+It cannot synchronize guest dimensions. A new kernel package and updated catalog
+digests are required before this feature works with the default OCI kernel.
+`scripts/firecracker-menual/install-linux-kernel.sh` enables built-in vsock for new
+builds and refuses to reuse an older build that lacks those options. Publishing a
+replacement package is separate from installing the host helper.
+
 The static musl helper runs in glibc, musl and minimal images. The existing metrics
 service starts it on systemd, OpenRC and BusyBox paths. It has no SSH, IP network
 or additional guest-package dependency. Unsupported guests keep their serial
