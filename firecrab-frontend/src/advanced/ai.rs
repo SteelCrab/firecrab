@@ -189,7 +189,10 @@ pub fn change(app: &Shared, target: &Element) -> bool {
         .into();
     }
     drop(state);
-    render_content(app);
+    let app = app.clone();
+    spawn_local(async move {
+        render_content(&app);
+    });
     true
 }
 fn uuid() -> Result<String, String> {

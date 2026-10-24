@@ -148,6 +148,13 @@ async function open(
 }
 
 test.describe("Pipe AI accounts @dashboard", () => {
+  const errors = new WeakMap<Page, string[]>();
+  test.beforeEach(({ page }) => {
+    const messages: string[] = [];
+    errors.set(page, messages);
+    page.on("pageerror", (error) => messages.push(error.message));
+  });
+  test.afterEach(({ page }) => expect(errors.get(page)).toEqual([]));
   for (const locale of ["en", "ko"] as const)
     for (const width of [1280, 390])
       test(`${locale} Anthropic API key lifecycle fits ${width}px without CLI login`, async ({
