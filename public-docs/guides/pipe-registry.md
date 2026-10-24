@@ -4,8 +4,8 @@ Pipe Registry connects to Docker Hub, GitHub Container Registry (GHCR), Amazon
 ECR, and Harbor. It pulls OCI container images to the API host without a Docker
 daemon. Image uploads are managed by the source registry.
 
-Connect AWS or GitHub in [Pipe Auth](pipe-auth.md) to share provider credentials.
-The connected registry appears automatically. Use **Manage in Pipe Auth** to
+Connect AWS or GitHub in [Auth](pipe-auth.md) to share provider credentials.
+The connected registry appears automatically. Use **Manage in Auth** to
 rotate or disconnect it. The direct registry login flow below remains available.
 
 1. Select **Add registry** and choose the provider.
@@ -59,7 +59,7 @@ rotate or disconnect it. The direct registry login flow below remains available.
    can be retried; page reloads resume a running build's status.
 
 ECR login passwords cannot call the signed AWS `DescribeRepositories` API.
-Connect AWS in [Pipe Auth](pipe-auth.md) with `ecr:DescribeRepositories` access
+Connect AWS in [Auth](pipe-auth.md) with `ecr:DescribeRepositories` access
 to browse private ECR repositories. Shared AWS authentication issues registry
 passwords on demand and supports repository pagination.
 
@@ -101,7 +101,7 @@ Installed M2Images and pulled sources waiting for a build:
 | `GET /api/pipe/registries` | Saved registry hosts, providers, usernames, and optional ECR `accountName`; no secrets |
 | `PUT /api/pipe/registries/{registry}` | Save `{username, secret}`; optional ECR `accountName` or `provider: "harbor"` for a custom Harbor host |
 | `DELETE /api/pipe/registries/{registry}` | Remove one saved login |
-| `GET /api/pipe/registries/{registry}/repositories?page=…` | Repository names, `nextPage`, and `listingSupported`; AWS Pipe Auth also returns `nextCursor`, passed as `cursor` on the next request |
+| `GET /api/pipe/registries/{registry}/repositories?page=…` | Repository names, `nextPage`, and `listingSupported`; AWS Auth also returns `nextCursor`, passed as `cursor` on the next request |
 | `GET /api/pipe/registry-tags?reference=…&last=…` | One tag page and optional `nextLast` cursor |
 | `POST /api/pipe/registry-transfers` | Start `{action: "pull", reference}`; returns 202 |
 | `GET /api/pipe/registry-transfers/{id}` | Transfer status; ID is the POST response's `alias` |

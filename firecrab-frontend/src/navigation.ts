@@ -128,7 +128,7 @@ export function newVmHash(): string {
 }
 
 /** Pipe service cards. `#/pipe` lists them; `#/pipe/<id>` opens one. */
-export const PIPE_CARDS = ["auth", "route", "registry", "database", "firecrab-tunnel", "quick-tunnel", "named-tunnel"] as const;
+export const PIPE_CARDS = ["auth", "ai", "route", "registry", "database", "storage", "firecrab-tunnel", "quick-tunnel", "named-tunnel"] as const;
 export type PipeCardId = (typeof PIPE_CARDS)[number];
 const PIPE_CARD_RE = /^pipe\/([^/?#]+)$/;
 
@@ -139,7 +139,7 @@ export function pipeCardHash(card: PipeCardId): string {
 /**
  * Shell views live under `#/vms` etc.; the terminal is a separate full-page
  * route (`#/console/<id>`) so it never shares the modal overlay layout that
- * clipped xterm after leaving "fullscreen".
+ * clipped terminal after leaving "fullscreen".
  */
 export type AppRoute =
   | { kind: "shell"; view: ViewId; vmId?: string; createSchedule?: boolean; scheduleId?: string }

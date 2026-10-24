@@ -5,19 +5,285 @@ use firecrab_api_types::{MicroServiceResponse, MicroServiceSpec};
 
 fn spec() -> MicroServiceSpec {
     serde_json::from_value(serde_json::json!({
-        "name": "web", "image": "127.0.0.1:1/app:v1", "port": 8080,
+        "name": "web", "image": "ghcr.io/team/app:v1", "port": 8080,
         "ram": 128, "cpu": 1,
     }))
     .unwrap()
 }
 
+fn stored_secret(state: &AppState, value: &str) -> Uuid {
+    use crate::secrets::{Secret, SecretSummary};
+    let id = Uuid::new_v4();
+    state
+        .secrets
+        .write(|contents| {
+            contents.secrets.push(Secret {
+                summary: SecretSummary {
+                    id,
+                    name: "test-password".into(),
+                    description: String::new(),
+                    version: 1,
+                    created_at: 0,
+                    updated_at: 0,
+                    source: None,
+                },
+                value: value.into(),
+            });
+            Ok(())
+        })
+        .unwrap();
+    id
+}
+
+fn replica(state: &AppState, deployment: &mut MicroServiceDeployment) -> crate::model::VmRecord {
+    let mut vm = vms::test_support::record("replica", Uuid::new_v4());
+    vm.env = deployment.spec.env.clone();
+    state.store.insert(&vm).unwrap();
+    state.vms.lock().unwrap().insert(vm.id, vm.clone());
+    deployment.instances.push(ServiceInstance {
+        vm_id: vm.id,
+        ipv4: "127.0.0.1".into(),
+        host_port: 30100,
+        state: VmState::Created,
+        healthy: false,
+    });
+    state.store.save_service_deployment(deployment).unwrap();
+    vm
+}
+
+#[tokio::test]
+async fn secret_preflight_rejects_missing_and_invalid_values_without_creating_resources() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let secret = stored_secret(&state, "valid");
+    for value in [None, Some("x".repeat(4097)), Some("bad\0value".into())] {
+        let mut spec = spec();
+        let reference = if let Some(value) = value {
+            state
+                .secrets
+                .write(|contents| {
+                    contents.secrets[0].value = value;
+                    Ok(())
+                })
+                .unwrap();
+            secret
+        } else {
+            Uuid::new_v4()
+        };
+        spec.secrets.insert("PASSWORD".into(), reference);
+        let id = Uuid::new_v4();
+        spec.name = id.simple().to_string();
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse { id, spec })
+            .unwrap();
+        let error = deploy(
+            State(state.clone()),
+            Extension(RequestId(id)),
+            Path(id.to_string()),
+            ValidatedJson(DeployMicroServiceRequest {
+                host_port: 30100,
+                micro_network_id: None,
+            }),
+        )
+        .await
+        .unwrap_err()
+        .into_response();
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(error.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(body["error"]["fields"]["secrets"].is_string());
+        assert!(state.store.service_deployment(id).unwrap().is_none());
+    }
+    assert!(state.store.load_all().unwrap().is_empty());
+    assert!(state.store.list_micro_networks().unwrap().is_empty());
+    state
+        .secrets
+        .read(|contents| {
+            assert!(contents.service_environments.is_empty());
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[tokio::test]
+async fn secret_snapshot_is_shared_by_replicas_and_survives_restart_without_public_plaintext() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let value = "SECRET-only-in-guest-'quoted'\n$(printf literal)";
+    let secret = stored_secret(&state, value);
+    let mut record = deployment(Uuid::new_v4());
+    record.spec.secrets.insert("PASSWORD".into(), secret);
+    record.spec.secrets.insert("ALIAS".into(), secret);
+    record.spec.env.insert("PLAIN".into(), "kept".into());
+    secrets::capture(&state, &record).await.unwrap();
+    let first = replica(&state, &mut record);
+    state
+        .secrets
+        .write(|contents| {
+            contents.secrets[0].value = "new-value".into();
+            Ok(())
+        })
+        .unwrap();
+    secrets::capture(&state, &record).await.unwrap();
+    let second = replica(&state, &mut record);
+    for vm in [&first, &second] {
+        let env = secrets::guest_env(&state, vm).await.unwrap();
+        assert_eq!(env["PASSWORD"], value);
+        assert_eq!(env["ALIAS"], value);
+        assert_eq!(env["PLAIN"], "kept");
+        let public = vms::vm_response(&state, vm, None);
+        let public = serde_json::to_string(&public).unwrap();
+        assert!(!public.contains("PASSWORD"));
+        assert!(!vm.env.contains_key("PASSWORD"));
+    }
+    let reopened = self::state(root.path()).await;
+    assert_eq!(
+        secrets::guest_env(&reopened, &first).await.unwrap()["PASSWORD"],
+        value
+    );
+    let public = serde_json::to_string(&record).unwrap();
+    assert!(!public.contains("SECRET-only-in-guest"));
+    for file in [
+        root.path().join("state.db"),
+        root.path().join("state.secrets/vault.bin"),
+    ] {
+        let bytes = std::fs::read(file).unwrap();
+        let marker = b"SECRET-only-in-guest-";
+        assert!(!bytes.windows(marker.len()).any(|bytes| bytes == marker));
+    }
+    // A different deployment captures the new value without changing the old one.
+    let mut next = deployment(Uuid::new_v4());
+    next.spec.secrets.insert("PASSWORD".into(), secret);
+    secrets::capture(&reopened, &next).await.unwrap();
+    let next_vm = replica(&reopened, &mut next);
+    assert_eq!(
+        secrets::guest_env(&reopened, &next_vm).await.unwrap()["PASSWORD"],
+        "new-value"
+    );
+    assert_eq!(
+        secrets::guest_env(&reopened, &first).await.unwrap()["PASSWORD"],
+        value
+    );
+}
+
+#[tokio::test]
+async fn secret_capture_rechecks_queued_references_before_import_or_vm_creation() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let id = stored_secret(&state, "before-queue");
+    let mut record = deployment(Uuid::new_v4());
+    record.spec.secrets.insert("PASSWORD".into(), id);
+    secrets::preflight(&state, &record.spec, record.id)
+        .await
+        .unwrap();
+    state
+        .secrets
+        .write(|contents| {
+            contents.secrets.clear();
+            Ok(())
+        })
+        .unwrap();
+    let auth = require_image_auth(&state, &record.spec.image, record.id)
+        .await
+        .unwrap();
+    let credential = auth.registry_credential().await.unwrap();
+    let error = execute(&state, &mut record, credential).await.unwrap_err();
+    assert!(error.contains("Secrets"));
+    assert!(record.digest.is_none());
+    assert!(record.instances.is_empty());
+    assert!(state.store.list_micro_networks().unwrap().is_empty());
+    assert!(state.store.load_all().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn missing_or_damaged_snapshots_fail_closed_without_affecting_standalone_vms() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let mut record = deployment(Uuid::new_v4());
+    record
+        .spec
+        .secrets
+        .insert("PASSWORD".into(), stored_secret(&state, "sensitive"));
+    let vm = replica(&state, &mut record);
+    assert!(secrets::guest_env(&state, &vm).await.is_err());
+    secrets::capture(&state, &record).await.unwrap();
+    std::fs::write(root.path().join("state.secrets/vault.bin"), b"damaged").unwrap();
+    let error = secrets::guest_env(&state, &vm).await.unwrap_err();
+    assert!(!error.contains("sensitive"));
+    assert!(
+        secrets::preflight(&state, &record.spec, record.id)
+            .await
+            .is_err()
+    );
+    let mut standalone = vms::test_support::record("standalone", Uuid::new_v4());
+    standalone.env.insert("PLAIN".into(), "works".into());
+    assert_eq!(
+        secrets::guest_env(&state, &standalone).await.unwrap(),
+        standalone.env
+    );
+    secrets::preflight(&state, &spec(), Uuid::new_v4())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn secret_snapshots_are_removed_after_cleanup_and_replica_env_edits_are_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let mut record = deployment(Uuid::new_v4());
+    record
+        .spec
+        .secrets
+        .insert("PASSWORD".into(), stored_secret(&state, "private"));
+    secrets::capture(&state, &record).await.unwrap();
+    let vm = replica(&state, &mut record);
+    let request = serde_json::from_value(
+        serde_json::json!({"cpu": 1, "ram": 128, "diskGb": 0, "env": {"PASSWORD": "override"}}),
+    )
+    .unwrap();
+    let error = vms::update_vm(
+        State(state.clone()),
+        Extension(RequestId(record.id)),
+        Path(vm.id.to_string()),
+        ValidatedJson(request),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    assert!(state.store.load_all().unwrap()[&vm.id].env.is_empty());
+    // Simulate a replica already removed by an interrupted cleanup.
+    state.vms.lock().unwrap().remove(&vm.id);
+    state.store.delete(vm.id).unwrap();
+    cleanup(&state, &mut record).await.unwrap();
+    assert!(record.instances.is_empty());
+    state
+        .secrets
+        .read(|contents| {
+            assert!(!contents.service_environments.contains_key(&record.id));
+            Ok(())
+        })
+        .unwrap();
+    secrets::remove(&state, &record).await.unwrap();
+}
+
 async fn state(root: &std::path::Path) -> AppState {
-    AppState::with_db_file(
+    let state = AppState::with_db_file(
         TemplateRegistry::from_specs(root, std::iter::empty()).unwrap(),
         root.join("state.db"),
     )
     .await
-    .unwrap()
+    .unwrap();
+    state
+        .store
+        .put_pipe_auth(&crate::pipe_auth::SavedAuth::Github {
+            username: "team".into(),
+            token: "test-only-secret".into(),
+        })
+        .unwrap();
+    state
 }
 
 fn deployment(id: Uuid) -> MicroServiceDeployment {
@@ -39,7 +305,7 @@ fn deployment(id: Uuid) -> MicroServiceDeployment {
 }
 
 #[test]
-fn deployments_reject_unsupported_configuration_and_port_overflow_before_claiming() {
+fn deployments_accept_secret_references_and_reject_port_overflow_before_claiming() {
     let request = DeployMicroServiceRequest {
         micro_network_id: None,
         host_port: 30100,
@@ -51,7 +317,7 @@ fn deployments_reject_unsupported_configuration_and_port_overflow_before_claimin
     let fields = deployment_fields(&spec, &request, 5523);
     assert!(!fields.contains_key("domain"));
     spec.domain = None;
-    assert!(fields.contains_key("secrets"));
+    assert!(!fields.contains_key("secrets"));
     spec.replicas = 2;
     for port in [0, 80, 5522, 5523, 65535] {
         assert!(
@@ -335,6 +601,159 @@ async fn bootable_service(root: &std::path::Path) -> (AppState, Uuid, MicroServi
     (state, id, spec, alias)
 }
 
+#[tokio::test]
+async fn s3_and_service_secrets_reach_the_guest_together_after_vm_restart() {
+    use crate::artifacts::VmArtifactPaths;
+    use crate::pipe_storage::tests::{keys, record};
+
+    let directory = crate::firecracker::test_support::short_tempdir();
+    let (state, id, mut spec, alias) = bootable_service(directory.path()).await;
+    let connection = record();
+    let signing_keys = keys();
+    state.store.save_pipe_storage(&connection).unwrap();
+    let private_value = "SECRET-combined-only-in-guest";
+    spec.storage_connection_id = Some(connection.id);
+    spec.secrets
+        .insert("PASSWORD".into(), stored_secret(&state, private_value));
+    spec.env.insert("APP_MODE".into(), "combined".into());
+    state
+        .store
+        .update_micro_service(&MicroServiceResponse {
+            id,
+            spec: spec.clone(),
+        })
+        .unwrap();
+
+    // The fake VMM still uses the real boot path and a real ext4 service launcher.
+    let image = directory.path().join("rootfs");
+    for command in ["mkdir /etc/firecrab", "mkdir /etc/firecrab/services.d"] {
+        let output = std::process::Command::new("debugfs")
+            .args(["-w", "-R", command])
+            .arg(&image)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+    }
+    crate::rootfs::write_into_image(
+        &image,
+        "/etc/firecrab/services.d/app",
+        b"#!/bin/sh\nexec /bin/true\n",
+    )
+    .unwrap();
+    let template = state.templates.resolve_alias(&alias).unwrap();
+    state
+        .templates
+        .register_spec(crate::templates::TemplateSpec {
+            alias: alias.clone(),
+            version: template.version.clone(),
+            kernel: "kernel".into(),
+            initrd: None,
+            rootfs: "rootfs".into(),
+            boot_args: "console=ttyS0".into(),
+        })
+        .unwrap();
+
+    let network_id = default_network(&state, Uuid::new_v4()).await.unwrap();
+    let (_, Json(vm)) = vms::create_vm(
+        State(state.clone()),
+        Extension(RequestId(Uuid::new_v4())),
+        ValidatedJson(CreateVmRequest {
+            name: "combined-env".into(),
+            template: alias,
+            ram: spec.ram,
+            cpu: spec.cpu,
+            disk_gb: 1,
+            egress_policy: EgressPolicy::Internet,
+            security_group_id: None,
+            micro_network_id: network_id,
+            storage_root: None,
+            shell_ids: vec![],
+            env: spec.env.clone(),
+            port_forwards: vec![],
+        }),
+    )
+    .await
+    .unwrap();
+    let mut deployment = deployment(id);
+    deployment.spec = spec;
+    deployment.instances.push(ServiceInstance {
+        vm_id: vm.id,
+        ipv4: vm.ipv4.unwrap_or_default(),
+        host_port: 0,
+        state: vm.state,
+        healthy: false,
+    });
+    secrets::capture(&state, &deployment).await.unwrap();
+    save(&state, &deployment).await.unwrap();
+
+    let mut generation = None;
+    for boot in 0..2 {
+        let Json(running) = vms::start_vm(
+            State(state.clone()),
+            Extension(RequestId(deployment.id)),
+            Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(running.state, VmState::Running);
+        let stored = state.store.load_all().unwrap().remove(&vm.id).unwrap();
+        if boot == 0 {
+            generation = stored.disk_generation;
+        }
+        assert_eq!(stored.disk_generation, generation);
+        for metadata in [
+            serde_json::to_string(&running).unwrap(),
+            serde_json::to_string(&stored).unwrap(),
+            serde_json::to_string(&state.store.micro_service(id).unwrap()).unwrap(),
+            serde_json::to_string(&state.store.service_deployment(id).unwrap()).unwrap(),
+        ] {
+            for value in [
+                private_value,
+                signing_keys.access_key_id.as_str(),
+                signing_keys.secret_access_key.as_str(),
+                signing_keys.session_token.as_str(),
+            ] {
+                assert!(!metadata.contains(value));
+            }
+        }
+        let Json(stopped) = vms::stop_vm(
+            State(state.clone()),
+            Extension(RequestId(deployment.id)),
+            Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stopped.state, VmState::Stopped);
+        let paths = VmArtifactPaths::for_vm(&state.vms_dir_for(&stored.storage_root), vm.id);
+        let rootfs = paths.rootfs(stored.disk_generation.unwrap());
+        let output = std::process::Command::new("debugfs")
+            .args(["-R", "cat /etc/firecrab/vm.env"])
+            .arg(&rootfs)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let guest = String::from_utf8(output.stdout).unwrap();
+        assert!(guest.contains(&format!("export PASSWORD='{private_value}'")));
+        assert!(guest.contains(&format!(
+            "export AWS_SECRET_ACCESS_KEY='{}'",
+            signing_keys.secret_access_key
+        )));
+        assert!(guest.contains("export FIRECRAB_S3_PREFIX='team/'"));
+        assert!(guest.contains("export APP_MODE='combined'"));
+        if boot == 0 {
+            state
+                .secrets
+                .write(|contents| {
+                    contents.secrets[0].value = "changed-after-deployment".into();
+                    Ok(())
+                })
+                .unwrap();
+        }
+    }
+    cleanup(&state, &mut deployment).await.unwrap();
+    assert!(state.store.load_all().unwrap().is_empty());
+}
+
 /// A free host port for a replica's forward.
 fn free_port() -> u16 {
     std::net::TcpListener::bind("0.0.0.0:0")
@@ -392,17 +811,24 @@ async fn replicas_inherit_the_group_before_boot_and_redeploy_with_the_same_selec
         .unwrap();
     let mut previous_ids = std::collections::HashSet::new();
     for _ in 0..2 {
-        let (_, Json(snapshot)) = deploy(
-            State(state.clone()),
-            Extension(RequestId(Uuid::new_v4())),
-            Path(id.to_string()),
-            ValidatedJson(DeployMicroServiceRequest {
-                micro_network_id: Some(network.id),
-                host_port: free_port().min(65000),
-            }),
-        )
-        .await
-        .unwrap();
+        // The loopback registry fixture executes after AUTH admission; API tests
+        // separately reject unowned images. Keep the real VM/policy lifecycle here.
+        let mut snapshot = deployment(id);
+        snapshot.spec = spec.clone();
+        snapshot.request = DeployMicroServiceRequest {
+            micro_network_id: Some(network.id),
+            host_port: free_port().min(65000),
+        };
+        validate_placement(&state, &spec, &snapshot.request, snapshot.id)
+            .await
+            .unwrap();
+        save(&state, &snapshot).await.unwrap();
+        let credential = oci::RegistryCredential {
+            registry: ImageReference::parse(&spec.image).unwrap().registry,
+            username: "fixture".into(),
+            secret: "fixture".into(),
+        };
+        execute(&state, &mut snapshot, credential).await.unwrap();
         assert_eq!(snapshot.spec.security_group_id, Some(group.id));
         let running = wait_for_phase(&state, id, ServicePhase::Running).await;
         assert_eq!(running.instances.len(), 2);
@@ -458,20 +884,24 @@ async fn replicas_inherit_the_group_before_boot_and_redeploy_with_the_same_selec
 #[tokio::test]
 async fn failed_app_health_deletes_the_booted_replica_and_records_the_reason() {
     let directory = crate::firecracker::test_support::short_tempdir();
-    let (state, id, _, _) = bootable_service(directory.path()).await;
-    let (status, Json(queued)) = deploy(
-        State(state.clone()),
-        Extension(RequestId(Uuid::new_v4())),
-        Path(id.to_string()),
-        ValidatedJson(DeployMicroServiceRequest {
-            micro_network_id: None,
-            host_port: free_port(),
-        }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(status, StatusCode::ACCEPTED);
-    assert_eq!(queued.phase, ServicePhase::Queued);
+    let (state, id, spec, _) = bootable_service(directory.path()).await;
+    // Exercise VM lifecycle with the loopback manifest fixture after the AUTH
+    // boundary. Separate API tests reject loopback images and revoked accounts.
+    let mut queued = deployment(id);
+    queued.spec = spec;
+    queued.request.host_port = free_port();
+    save(&state, &queued).await.unwrap();
+    let task_state = state.clone();
+    tokio::spawn(async move {
+        let credential = oci::RegistryCredential {
+            registry: ImageReference::parse(&queued.spec.image).unwrap().registry,
+            username: "fixture".into(),
+            secret: "fixture".into(),
+        };
+        if let Err(error) = execute(&task_state, &mut queued, credential).await {
+            fail_deployment(&task_state, &mut queued, error).await;
+        }
+    });
     let record = wait_for_phase(&state, id, ServicePhase::Failed).await;
     let error = record.error.unwrap();
     assert!(error.contains("App health check /health failed"), "{error}");
@@ -662,6 +1092,111 @@ async fn get_reports_live_instance_state_and_rejects_unknown_services() {
     };
     assert_eq!(live.phase, ServicePhase::Degraded);
     assert_eq!(live.instances[0].state, VmState::Stopped);
+}
+
+#[tokio::test]
+async fn service_runtime_auth_rejects_unowned_saved_images_before_queuing() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let _queue = state.service_deploy_permits.acquire().await.unwrap();
+    for image in [
+        "nginx:1.27",
+        "127.0.0.1:5000/app:v1",
+        "ghcr.io/other/app:v1",
+    ] {
+        let id = Uuid::new_v4();
+        let mut spec = spec();
+        spec.name = format!("service-{}", id.simple());
+        spec.image = image.into();
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse { id, spec })
+            .unwrap();
+        let error = deploy(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(id.to_string()),
+            ValidatedJson(DeployMicroServiceRequest {
+                micro_network_id: None,
+                host_port: 30100,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+        assert!(state.store.service_deployment(id).unwrap().is_none());
+    }
+    assert!(state.vms.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn service_runtime_auth_rechecks_revoked_and_replaced_accounts_after_queueing() {
+    for replacement in [None, Some("other")] {
+        let root = tempfile::tempdir().unwrap();
+        let state = state(root.path()).await;
+        let id = Uuid::new_v4();
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse { id, spec: spec() })
+            .unwrap();
+        state
+            .store
+            .put_registry_login(
+                &oci::RegistryCredential {
+                    registry: "ghcr.io".into(),
+                    username: "team".into(),
+                    secret: "fallback-must-not-be-used".into(),
+                },
+                None,
+            )
+            .unwrap();
+        let queue = state.service_deploy_permits.acquire().await.unwrap();
+        let (_, Json(queued)) = deploy(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(id.to_string()),
+            ValidatedJson(DeployMicroServiceRequest {
+                micro_network_id: None,
+                host_port: 30100,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(queued.phase, ServicePhase::Queued);
+        state
+            .store
+            .delete_pipe_auth(crate::pipe_auth::Provider::Github)
+            .unwrap();
+        if let Some(username) = replacement {
+            state
+                .store
+                .put_pipe_auth(&crate::pipe_auth::SavedAuth::Github {
+                    username: username.into(),
+                    token: "other-private-token".into(),
+                })
+                .unwrap();
+        }
+        drop(queue);
+        let failed = wait_for_phase(&state, id, ServicePhase::Failed).await;
+        assert_eq!(
+            failed.error.as_deref(),
+            Some("Image account is no longer connected in Pipe Auth")
+        );
+        assert!(failed.digest.is_none());
+        assert!(failed.instances.is_empty());
+        assert!(
+            !failed
+                .log
+                .iter()
+                .any(|line| line.contains("Resolving image"))
+        );
+        assert!(
+            !serde_json::to_string(&failed)
+                .unwrap()
+                .contains("fallback-must-not-be-used")
+        );
+        assert!(state.vms.lock().unwrap().is_empty());
+    }
 }
 
 /// A framed helper with an isolated Pipe manifest. No host services or networking are changed.
@@ -991,6 +1526,43 @@ async fn domain_publication_retries_only_exact_transient_lock_errors() {
             "{name}"
         );
     }
+}
+
+#[tokio::test]
+async fn placement_checks_reserved_vm_tcp_ports_across_all_replicas_but_allows_udp() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = state(directory.path()).await;
+    let owner = Uuid::new_v4();
+    let port = free_port().min(65534);
+    let request = DeployMicroServiceRequest {
+        micro_network_id: None,
+        host_port: port,
+    };
+    let forward = |protocol| PortForward {
+        host_port: port + 1,
+        guest_port: 8080,
+        protocol,
+    };
+    state
+        .store
+        .set_vm_port_forwards(owner, &[forward(PortProtocol::Udp)])
+        .unwrap();
+    assert!(
+        host_port_conflict(&state, &request, 2, Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    state
+        .store
+        .set_vm_port_forwards(owner, &[forward(PortProtocol::Tcp)])
+        .unwrap();
+    let conflict = host_port_conflict(&state, &request, 2, Uuid::new_v4())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(conflict.contains(&(port + 1).to_string()));
+    assert!(conflict.contains("MicroVM"));
 }
 
 #[tokio::test]

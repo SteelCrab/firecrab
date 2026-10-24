@@ -41,7 +41,7 @@ function consoleStatus(page: Page) {
 }
 
 async function typeInTerminal(page: Page, line: string): Promise<void> {
-  await page.locator(".console-page .xterm").click();
+  await page.locator(".console-page .terminal-emulator").click();
   await page.keyboard.type(line);
   await page.keyboard.press("Enter");
 }
@@ -105,7 +105,7 @@ test.describe("terminal session end @dashboard", () => {
       await typeInTerminal(page, command);
 
       await expect(consoleStatus(page)).toHaveText(/Session ended/);
-      await expect(page.locator(".console-page .xterm-rows")).toContainText("Guest session ended");
+      await expect(page.locator(".console-page .terminal-output")).toContainText("Guest session ended");
       // Longer than the first reconnect backoff: the page must stay detached.
       await page.waitForTimeout(2500);
       expect(connections).toBe(1);
@@ -113,7 +113,7 @@ test.describe("terminal session end @dashboard", () => {
       await page.getByRole("button", { name: "New session" }).click();
       await expect(consoleStatus(page)).toHaveText(/Connected/);
       expect(connections).toBe(2);
-      await expect(page.locator(".console-page .xterm-rows")).toContainText(
+      await expect(page.locator(".console-page .terminal-output")).toContainText(
         "session ended — starting a new one",
       );
     });
@@ -177,11 +177,11 @@ test.describe("terminal session end in a booted guest", () => {
     await expect(consoleStatus(secondViewer)).toHaveText(/Connected/);
     // `running` and a connected socket can precede the fixture's interactive
     // shell. Wait for its prompt before sending input into the serial console.
-    await expect(page.locator(".console-page .xterm-rows")).toContainText(/~ #/, {
+    await expect(page.locator(".console-page .terminal-output")).toContainText(/~ #/, {
       timeout: 30_000,
     });
     await typeInTerminal(page, "printf ';1R;145R;1R;145R\\n'");
-    await expect(page.locator(".console-page .xterm-rows")).toContainText(";1R;145R;1R;145R");
+    await expect(page.locator(".console-page .terminal-output")).toContainText(";1R;145R;1R;145R");
     await typeInTerminal(page, "exit");
 
     await expect(consoleStatus(page)).toHaveText(/Session ended/, { timeout: 30_000 });
@@ -204,13 +204,13 @@ test.describe("terminal session end in a booted guest", () => {
       timeout: 30_000,
     }).toMatch(/session ended — starting a new one[\s\S]*~ #/);
     expect(Buffer.concat(newSessionFrames).toString("utf8")).not.toContain(";1R;145R;1R;145R");
-    await expect(page.locator(".console-page .xterm-rows")).toContainText(/~ #/, {
+    await expect(page.locator(".console-page .terminal-output")).toContainText(/~ #/, {
       timeout: 30_000,
     });
     const log = (await request("GET", `/api/vms/${vmId}/log`)) as { consoleLog: string };
     expect(log.consoleLog).toContain(";1R;145R;1R;145R");
     await typeInTerminal(page, "printf 'FIRECRAB_REATTACH_%s\\n' READY");
-    await expect(page.locator(".console-page .xterm-rows")).toContainText(
+    await expect(page.locator(".console-page .terminal-output")).toContainText(
       "FIRECRAB_REATTACH_READY",
       { timeout: 15_000 },
     );

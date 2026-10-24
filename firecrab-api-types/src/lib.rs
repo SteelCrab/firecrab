@@ -14,11 +14,18 @@ pub use pool::*;
 mod block_storage;
 pub use block_storage::*;
 mod micro_services;
+mod pipe_ai;
+mod pipe_storage;
 mod schedules;
 mod security_groups;
 pub use micro_services::{
     DeployMicroServiceRequest, MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec,
     ServiceInstance, ServicePhase, ServiceRuntime,
+};
+pub use pipe_ai::*;
+pub use pipe_storage::{
+    PipeStorageResponse, PipeStorageSpec, StorageCredentialRef, StorageObject, StorageObjectPage,
+    StorageServiceRef,
 };
 pub use schedules::*;
 pub use security_groups::*;
@@ -1957,7 +1964,7 @@ mod tests {
             serde_json::to_value(cleared).unwrap()["securityGroupId"],
             serde_json::Value::Null
         );
-        let id = uuid::Uuid::new_v4();
+        let id = uuid::Uuid::from_u128(1);
         body["securityGroupId"] = serde_json::json!(id);
         let selected: UpdateVmResourcesRequest = serde_json::from_value(body).unwrap();
         assert_eq!(selected.security_group_id, Some(Some(id)));

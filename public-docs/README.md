@@ -22,6 +22,8 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Create VMs, use the console, and connect with SSH | [Dashboard](guides/dashboard.md) |
 | Configure and manage an app | [MicroService](guides/microservices.md) |
 | Validate a declarative YAML stack offline | [Stack validation](guides/stacks.md) |
+| Register stack ownership and preview configuration changes | [Stack planning](guides/stack-planning.md) |
+| Try Terraform against the public REST API | [Experimental Terraform example](../examples/terraform/basic/README.md) |
 | Schedule MicroVM start and stop operations | [Schedules](guides/schedules.md) |
 | Store secrets and transfer them to external stores | [Secrets and PipeSecrets](guides/secrets.md) |
 | Configure subnets, internet access, and IPv6 | [Networking](guides/networking.md) |
@@ -35,8 +37,10 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Install or change a guest kernel | [Kernels](guides/kernels.md) |
 | Configure services, upgrade, or uninstall | [Operations](guides/operations.md) |
 | Route domains and paths across apps | [Pipe ingress and tunnel](guides/pipe.md) |
-| Connect AWS and GitHub accounts to Pipe services | [Pipe Auth](guides/pipe-auth.md) |
+| Connect AWS and GitHub accounts to Pipe services | [Auth](guides/pipe-auth.md) |
+| Manage AI account connections and use shared CLI/MCP integration APIs | [Pipe AI](guides/pipe-ai.md) |
 | Connect and browse an existing database | [Pipe databases](guides/pipe-databases.md) |
+| Connect an existing Amazon S3 bucket and manage files | [PipeStorage](guides/pipe-storage.md) |
 | Pull images from Docker Hub, GHCR or Amazon ECR | [Pipe Registry](guides/pipe-registry.md) |
 | Diagnose a failure | [Troubleshooting](guides/troubleshooting.md) |
 

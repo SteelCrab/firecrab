@@ -29,6 +29,18 @@ Entries land here as work merges, and move under the next version heading when t
   Data disks honor guest flush requests, and API restarts retain reservations.
   Tracked in [#247](https://github.com/SteelCrab/firecrab/issues/247).
 
+- The browser console uses Ghostty WebAssembly for VT parsing, Unicode cells,
+  terminal modes and history. It supports mobile editing, composition,
+  bracketed paste, application mouse/focus reports and native grapheme export.
+  Session memory stays isolated; output and resize work are scheduled in frames.
+  The xterm dependency is removed. Tracked in [#453](https://github.com/SteelCrab/firecrab/issues/453).
+
+- MicroServices inject PipeSecrets into every replica using an encrypted
+  deployment snapshot that survives API and VM restarts. Missing or invalid
+  references fail before VM creation. Values stay out of public VM/deployment
+  records and SQLite; guest environment files are root-only. Stop and failed
+  deployment cleanup remove snapshots after deleting owned replicas.
+
 - MicroService domains connect healthy replicas to PipeIngress automatically,
   without host ports or manual routes. The dashboard shows the domain and DNS
   setup guidance, and the CLI accepts domain deployments without `--host-port`.
@@ -47,6 +59,19 @@ Entries land here as work merges, and move under the next version heading when t
   resource limits, overlapping subnets and service ports, and pinned service
   image syntax. Validation reports omit configuration values. Applying resources
   and continuous Git synchronization remain follow-up work for #437.
+
+- Host-local stack registration and UUID ownership bindings survive API restarts.
+  `firecrab stack register/list/status/bind/unbind` manages metadata without
+  changing resources. `firecrab stack plan --file YAML [--json]` reports a
+  read-only configuration diff, blocks implicit adoption and conflicting ownership,
+  and retains removed declarations. Field values stay out of plans. Actual apply
+  and Git polling remain follow-up work for #437.
+  Empty registrations can be removed with `stack delete NAME --id STACK_UUID`;
+  bound resources and newer registrations with the same name are protected.
+
+- An experimental Terraform REST example provisions a network, stopped VM and
+  saved service configuration through the public API. It includes a provider
+  lock file and explicit response-field exclusions that preserve drift detection.
 
 - Warm MicroVM pools keep booted, never-used VMs ready to lease. A pool pins an
   image version and VM spec, keeps `minReady` members booted within `maxSize`,
@@ -129,6 +154,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
+- OCI guests recreate image-declared `/run` directories with `systemd-tmpfiles`
+  before app services on every boot. MariaDB can restart after tmpfs clears
+  `/run/mysqld`, without a manual guest startup hook.
+
 - macOS and Windows `service dev clean` and `service dev --restore` stop
   workload MicroVM units before switching back to installed services. Older
   installed APIs no longer start a second Firecracker against a TAP or disk
@@ -166,6 +195,24 @@ Entries land here as work merges, and move under the next version heading when t
 - The helper logs failed host firewall commands with their arguments, exit
   status, and stderr. Warnings also identify failed nftables and firewall-state
   queries that keep their existing empty or disabled fallback ([#305]).
+
+- MicroService setup guides users through app, connection, resources, and review
+  steps, with field explanations and a configuration summary. App selection
+  uses only Pipe Auth-connected GitHub or AWS accounts and their repository/tag
+  lists, rechecks the connection before saving, and directs unconnected users
+  to Auth. The API also checks image ownership when saving, updating, and
+  deploying; queued work rechecks Auth and pulls only with its credentials.
+  Deployment controls recheck Auth in the background and before submitting,
+  disable deployment after disconnection or a failed check, and link to Auth
+  reconnection while keeping service stop available. Reconnecting the matching
+  account returns to the same deployment panel with the selected network and
+  host port, ready for an explicit deploy action. Placement checks verify that
+  the restored network still exists and all replica TCP ports are available;
+  invalid choices block deployment with field errors and direct editing. The
+  deploy API rechecks placement before queueing, including VM forwards and host
+  listeners.
+  Saving opens deployment management with image/start/health progress, an app
+  link after a successful health check, and guidance for failed deployments.
 
 ## [0.3.1] - 2026-10-06
 
