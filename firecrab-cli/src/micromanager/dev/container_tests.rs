@@ -133,6 +133,7 @@ elif args[0]=='exec' and '-i' in args:
             script.extend(byte)
         event['profile']=args[args.index('--')+1]
         event['script_size']=len(script)
+        event['isolated']=script.startswith(b'FIRECRAB_DEV_ISOLATED=1\n')
     else:
         event['archive_size']=len(sys.stdin.buffer.read())
 elif args[0]!='exec':
@@ -303,6 +304,7 @@ record()
             .unwrap();
         assert!(upload < deploy);
         assert!(events[deploy]["script_size"].as_u64().unwrap() > 0);
+        assert_eq!(events[deploy]["isolated"], true);
         assert!(
             events
                 .iter()

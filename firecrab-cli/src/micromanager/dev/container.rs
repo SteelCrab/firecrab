@@ -608,7 +608,7 @@ fn guest(
         channel,
         archive,
     ]);
-    let input = guest_script().map_err(|error| failed(error.to_string()))?;
+    let input = guest_script(true).map_err(|error| failed(error.to_string()))?;
     if session::Input::Session(input)
         .status(&mut command)?
         .success()

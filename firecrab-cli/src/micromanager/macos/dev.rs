@@ -5,7 +5,7 @@ use super::lifecycle::Layout;
 pub use crate::micromanager::dev::{Checkout, Error};
 use crate::micromanager::{
     DevCommand,
-    dev::{guest_script, io_error, session},
+    dev::{instance, io_error, session},
     report,
 };
 
@@ -14,7 +14,7 @@ pub fn control(layout: &Layout, ip: IpAddr, command: DevCommand) -> Result<(), E
         layout,
         ip,
         &format!("bash -s -- {}", command.as_str()),
-        session::Input::File(guest_script()?),
+        session::Input::File(guest_script(layout)?),
         "guest service control",
     )
 }
@@ -28,7 +28,7 @@ pub fn deploy(
     // A guest marker is written before the host tunnel succeeds and can survive
     // a failed boot. Verify the live SSH connection before uploading the snapshot.
     let output = ssh_command(layout, ip, "bash -s -- check")?
-        .stdin(Stdio::from(guest_script()?))
+        .stdin(Stdio::from(guest_script(layout)?))
         .output()
         .map_err(|source| io_error("probe management SSH", source))?;
     if !output.status.success() {
@@ -68,7 +68,7 @@ pub fn deploy(
     };
     // Send the embedded script independently of the snapshot so an installed CLI
     // can run from any checkout directory and restore without source files.
-    let script = guest_script()?;
+    let script = guest_script(layout)?;
     report!("[GUEST] {profile}: API + helper + CLI");
     run_ssh(
         layout,
@@ -80,6 +80,14 @@ pub fn deploy(
         session::Input::Session(script),
         "guest development build/deployment",
     )
+}
+
+/// Carry validated private scope into guest diagnostics without selecting another VM.
+fn guest_script(layout: &Layout) -> Result<std::fs::File, Error> {
+    let isolated = instance::load(&layout.managed_home)
+        .map_err(|source| io_error("read guest development scope", source))?
+        .is_some();
+    crate::micromanager::dev::guest_script(isolated)
 }
 
 fn run_ssh(

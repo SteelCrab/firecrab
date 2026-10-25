@@ -227,10 +227,12 @@ fn tar_program() -> &'static str {
 }
 
 /// LF-only even when the CLI was built from a Windows checkout with CRLF.
-pub(super) fn guest_script() -> Result<std::fs::File, Error> {
+pub(super) fn guest_script(isolated: bool) -> Result<std::fs::File, Error> {
     use std::io::{Seek, Write};
     let mut script =
         tempfile::tempfile().map_err(|source| io_error("create guest build script", source))?;
+    writeln!(script, "FIRECRAB_DEV_ISOLATED={}", u8::from(isolated))
+        .map_err(|source| io_error("write guest development scope", source))?;
     script
         .write_all(GUEST_SCRIPT.replace("\r\n", "\n").as_bytes())
         .and_then(|_| script.rewind())
