@@ -292,3 +292,4 @@ one. On failure it prints a retry command with that key; use it to recover the s
 ## AI Sandbox
 
 `firecrab sandbox` uses the shared durable Sandbox REST lifecycle. See the [AI Sandbox guide](../guides/ai-sandbox.md#cli-and-local-stdio-mcp) for model verification, project/task JSON, cancellation, review and selected-file apply. `firecrab mcp` exposes the corresponding `sandbox_*` tools.
+Operator-only `sandbox get-access`, `set-access`, and `revoke-access` manage [host resource grants](../guides/sandbox-access.md) through the same API.

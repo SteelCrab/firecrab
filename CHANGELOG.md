@@ -40,6 +40,12 @@ Entries land here as work merges, and move under the next version heading when t
   recovery, actual tool results, and selected-file apply with source conflict checks.
   Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
 
+- AI Sandbox persists caller and runtime references, authorizes project and
+  resource operations, and checks current grants before model/file/guest actions.
+  Operators manage delegated host policies through REST, CLI, and stdio MCP.
+  Scoped hosts cannot bypass grants through other controller APIs.
+  Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
 - Named MicroBlockStorage data volumes persist after VM deletion. REST, CLI, and
   Dashboard support creation and exclusive attachment to inactive user VMs.
   Guest mounts use filesystem UUIDs and gate managed application startup.

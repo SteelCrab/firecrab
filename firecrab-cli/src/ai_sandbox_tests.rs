@@ -50,15 +50,66 @@ fn reply(
 }
 
 #[test]
+fn sandbox_access_cli_uses_the_same_typed_operator_rest_policy() {
+    let principal = Uuid::new_v4();
+    let policy = json!({"grants":[{"resource":{"kind":"project","id":Uuid::new_v4()},"permissions":["read","execute"]}]});
+    for (command, method, body, response, input) in [
+        (
+            Command::GetAccess { principal },
+            "GET",
+            Value::Null,
+            policy.clone(),
+            vec![],
+        ),
+        (
+            Command::SetAccess { principal },
+            "PUT",
+            policy.clone(),
+            policy.clone(),
+            policy.to_string().into_bytes(),
+        ),
+        (
+            Command::RevokeAccess { principal },
+            "DELETE",
+            Value::Null,
+            json!({"grants":[]}),
+            vec![],
+        ),
+    ] {
+        let (client, server) = reply(
+            method,
+            format!("/api/ai-sandbox/access/{principal}"),
+            body,
+            200,
+            response.clone(),
+        );
+        assert_eq!(
+            request(&client, command, input.as_slice()).unwrap(),
+            response
+        );
+        server.join().unwrap();
+    }
+    let client = ApiClient::new("http://127.0.0.1:1".into());
+    assert!(
+        request(
+            &client,
+            Command::SetAccess { principal },
+            br#"{"grants":[],"operator":true}"#.as_slice()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn sandbox_cli_preserves_ids_overrides_and_explicit_review_paths_on_the_wire() {
     let id = Uuid::new_v4();
     let project = Uuid::new_v4();
     let connection = Uuid::new_v4();
     let selection = json!({"connectionId":connection,"model":"configured-model"});
     let spec = json!({"name":"Project","sourcePath":"/project","vmId":null,"selection":selection,"instructions":"Keep changes small"});
-    let project_row = json!({"id":project,"spec":spec,"createdAt":1});
+    let project_row = json!({"id":project,"owner":"local","spec":spec,"createdAt":1});
     let input = json!({"kind":"code","input":"Check the build","selection":selection,"retryOf":Uuid::new_v4()});
-    let task = json!({"id":id,"projectId":project,"attemptId":Uuid::new_v4(),"request":input,"selection":selection,"state":"interrupted","createdAt":1,"updatedAt":2,"result":"","errorCode":"sandbox_restart","error":"Reconcile first","events":[],"changes":[]});
+    let task = json!({"id":id,"projectId":project,"attemptId":Uuid::new_v4(),"runtime":null,"request":input,"selection":selection,"state":"interrupted","createdAt":1,"updatedAt":2,"result":"","errorCode":"sandbox_restart","error":"Reconcile first","events":[],"changes":[]});
     let mut summary = task.clone();
     summary.as_object_mut().unwrap().remove("events");
     summary.as_object_mut().unwrap().remove("changes");

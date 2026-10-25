@@ -70,10 +70,12 @@ async fn real_guest_operator_transport_runs_exports_cancels_and_cleans_owned_dat
         model: "no-provider-used".into(),
     };
     let mut saved = SavedTask {
+        caller: Default::default(),
         task: SandboxTask {
             id,
             project_id: Uuid::new_v4(),
             attempt_id: Uuid::new_v4(),
+            runtime: Some(guest::binding(&state, target.vm_id).unwrap()),
             request: SandboxTaskInput {
                 kind: SandboxTaskKind::Code,
                 input: "Explicit guest transport QA".into(),
@@ -103,6 +105,15 @@ async fn real_guest_operator_transport_runs_exports_cancels_and_cleans_owned_dat
         guest_command: None,
         guest_staged: false,
     };
+    state
+        .store
+        .save_sandbox_project(&SandboxProject {
+            id: saved.task.project_id,
+            owner: SandboxPrincipal::Local,
+            spec: saved.project.clone(),
+            created_at: 0,
+        })
+        .unwrap();
     eprintln!(
         "Real guest QA vm={} runtime={} attempt={}",
         target.vm_id, target.runtime_id, saved.task.attempt_id

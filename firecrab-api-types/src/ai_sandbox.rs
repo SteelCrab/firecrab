@@ -3,6 +3,75 @@ use crate::AiModelSelection;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Transport-authenticated caller. Clients cannot supply this in project/task inputs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxPrincipal {
+    /// Operator on the controller's loopback listener.
+    #[default]
+    Local,
+    /// Host UUID from a verified mTLS certificate.
+    Host(Uuid),
+}
+
+/// Immutable MicroVM generation selected when an attempt is admitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxRuntimeRef {
+    /// Borrowed MicroVM.
+    #[serde(alias = "vm_id")]
+    pub vm_id: Uuid,
+    /// Captured runtime generation; never silently replaced for execution.
+    #[serde(alias = "runtime_id")]
+    pub runtime_id: Uuid,
+}
+
+/// Resource authorization is independent of model inference permission proofs.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SandboxResource {
+    /// Saved project, or an explicitly reserved UUID for project creation.
+    Project { id: Uuid },
+    /// Saved provider connection.
+    Connection { id: Uuid },
+    /// Borrowed VM; execution still checks its current runtime identity.
+    Vm { id: Uuid },
+    /// Exact canonical API-host source directory, without recursive implicit grants.
+    Source { path: String },
+}
+
+/// Explicit rights; one right does not imply another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxPermission {
+    /// Inspect metadata, results, or source context.
+    Read,
+    /// Change project configuration or original source files.
+    Write,
+    /// Admit work, invoke a provider/VM, cancel, or reconcile.
+    Execute,
+    /// Apply reviewed changes from a project.
+    Apply,
+}
+
+/// One exact resource and its allowed operations.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxResourceGrant {
+    /// Authorized resource identity.
+    pub resource: SandboxResource,
+    /// Explicit allowed operations.
+    pub permissions: Vec<SandboxPermission>,
+}
+
+/// Operator-managed policy for one authenticated host; missing policy denies access.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxAccessPolicy {
+    /// Bounded resource grants, persisted in the private server database.
+    pub grants: Vec<SandboxResourceGrant>,
+}
+
 /// User-controlled project settings. A missing source or VM permits conversation only.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -26,6 +95,9 @@ pub struct SandboxProjectSpec {
 pub struct SandboxProject {
     /// Stable project identity.
     pub id: Uuid,
+    /// Creator derived from the authenticated transport, never the request body.
+    #[serde(default)]
+    pub owner: SandboxPrincipal,
     /// Project settings without credentials.
     pub spec: SandboxProjectSpec,
     /// Creation time in Unix milliseconds.
@@ -133,6 +205,9 @@ pub struct SandboxTask {
     pub project_id: Uuid,
     /// Unique execution identity used for guest ownership and reconciliation.
     pub attempt_id: Uuid,
+    /// Original runtime generation captured before dispatch; absent for conversation.
+    #[serde(default)]
+    pub runtime: Option<SandboxRuntimeRef>,
     /// Original task request, with credentials redacted.
     pub request: SandboxTaskInput,
     /// Effective connection and model fixed at admission.
@@ -207,6 +282,9 @@ pub struct SandboxTaskSummary {
     pub project_id: Uuid,
     /// Unique execution identity used for guest ownership and reconciliation.
     pub attempt_id: Uuid,
+    /// Original runtime generation for this attempt.
+    #[serde(default)]
+    pub runtime: Option<SandboxRuntimeRef>,
     /// Original task request, with credentials redacted.
     pub request: SandboxTaskInput,
     /// Effective connection and model fixed at admission.
@@ -237,6 +315,7 @@ impl From<&SandboxTask> for SandboxTaskSummary {
             id: task.id,
             project_id: task.project_id,
             attempt_id: task.attempt_id,
+            runtime: task.runtime,
             request: task.request.clone(),
             selection: task.selection.clone(),
             state: task.state,

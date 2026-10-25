@@ -1,6 +1,6 @@
 //! AI Sandbox REST lifecycle. Credentials and host process execution are never client inputs.
 use crate::{
-    ai_sandbox::{self, ModelProof, SavedTask},
+    ai_sandbox::{self, ModelProof, SavedTask, access::Caller},
     error::AppError,
     extract::ValidatedJson,
     pipe_ai::{self, Failure, SavedConnection},
@@ -33,6 +33,126 @@ fn invalid(id: RequestId, field: &str, message: impl ToString) -> AppError {
         id.0,
     )
 }
+fn denied(id: RequestId, _message: String) -> AppError {
+    AppError::new(
+        StatusCode::FORBIDDEN,
+        "sandbox_permission_denied",
+        "Sandbox project or resource permission denied",
+        id.0,
+    )
+}
+
+/// Only the controller operator may inspect or replace delegated host policies.
+pub async fn get_access(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    caller: Caller,
+    Path(principal): Path<Uuid>,
+) -> Result<Json<SandboxAccessPolicy>, AppError> {
+    caller.operator().map_err(|e| denied(id, e))?;
+    let store = state.store.clone();
+    Ok(Json(db(id, move || store.sandbox_access(principal)).await?))
+}
+
+/// Replace exact resource grants. Empty grants revoke all delegated Sandbox access.
+pub async fn set_access(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    caller: Caller,
+    Path(principal): Path<Uuid>,
+    ValidatedJson(mut policy): ValidatedJson<SandboxAccessPolicy>,
+) -> Result<Json<SandboxAccessPolicy>, AppError> {
+    caller.operator().map_err(|e| denied(id, e))?;
+    let _claim = state.sandbox.admission.lock().await;
+    if principal.is_nil() || policy.grants.len() > 256 {
+        return Err(invalid(
+            id,
+            "grants",
+            "Use a host UUID and at most 256 resource grants",
+        ));
+    }
+    let mut resources = Vec::new();
+    for grant in &mut policy.grants {
+        grant.permissions.sort();
+        grant.permissions.dedup();
+        if grant.permissions.is_empty() {
+            return Err(invalid(
+                id,
+                "permissions",
+                "A resource grant needs at least one permission",
+            ));
+        }
+        match &grant.resource {
+            SandboxResource::Source { path } => {
+                let canonical = std::fs::canonicalize(path).map_err(|_| {
+                    invalid(id, "path", "Source must be an existing canonical directory")
+                })?;
+                if !canonical.is_dir() || canonical.to_str() != Some(path.as_str()) {
+                    return Err(invalid(
+                        id,
+                        "path",
+                        "Use the exact canonical source directory",
+                    ));
+                }
+                if grant
+                    .permissions
+                    .iter()
+                    .any(|p| !matches!(p, SandboxPermission::Read | SandboxPermission::Write))
+                {
+                    return Err(invalid(
+                        id,
+                        "permissions",
+                        "Sources support read/write grants",
+                    ));
+                }
+            }
+            SandboxResource::Project { id: key }
+            | SandboxResource::Connection { id: key }
+            | SandboxResource::Vm { id: key } => {
+                if key.is_nil() {
+                    return Err(invalid(id, "resource", "Resource UUID cannot be nil"));
+                }
+                if !matches!(grant.resource, SandboxResource::Project { .. })
+                    && grant
+                        .permissions
+                        .iter()
+                        .any(|p| !matches!(p, SandboxPermission::Read | SandboxPermission::Execute))
+                {
+                    return Err(invalid(
+                        id,
+                        "permissions",
+                        "Connections and VMs support read/execute grants",
+                    ));
+                }
+            }
+        }
+        if resources.contains(&grant.resource) {
+            return Err(invalid(id, "grants", "Use one grant per exact resource"));
+        }
+        resources.push(grant.resource.clone());
+    }
+    let store = state.store.clone();
+    let saved = policy.clone();
+    db(id, move || store.save_sandbox_access(principal, &saved)).await?;
+    Ok(Json(policy))
+}
+
+/// Revocation persists across controller restart and affects subsequent tool actions.
+pub async fn revoke_access(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    caller: Caller,
+    Path(principal): Path<Uuid>,
+) -> Result<Json<SandboxAccessPolicy>, AppError> {
+    caller.operator().map_err(|e| denied(id, e))?;
+    let _claim = state.sandbox.admission.lock().await;
+    let store = state.store.clone();
+    db(id, move || {
+        store.save_sandbox_access(principal, &SandboxAccessPolicy::default())
+    })
+    .await?;
+    Ok(Json(SandboxAccessPolicy::default()))
+}
 async fn db<T: Send + 'static>(
     id: RequestId,
     work: impl FnOnce() -> Result<T, crate::persistence::PersistenceError> + Send + 'static,
@@ -42,17 +162,37 @@ async fn db<T: Send + 'static>(
         .map_err(|_| AppError::internal(id.0))?
         .map_err(|_| AppError::internal(id.0))
 }
-async fn project(state: &AppState, id: RequestId, key: Uuid) -> Result<SandboxProject, AppError> {
+async fn project(
+    state: &AppState,
+    id: RequestId,
+    key: Uuid,
+    caller: Caller,
+    permission: SandboxPermission,
+) -> Result<SandboxProject, AppError> {
+    caller
+        .project(state, key, permission)
+        .map_err(|e| denied(id, e))?;
     let store = state.store.clone();
     db(id, move || store.sandbox_project(key))
         .await?
         .ok_or_else(|| AppError::not_found(id.0))
 }
-async fn task(state: &AppState, id: RequestId, key: Uuid) -> Result<SavedTask, AppError> {
+async fn task(
+    state: &AppState,
+    id: RequestId,
+    key: Uuid,
+    caller: Caller,
+    permission: SandboxPermission,
+) -> Result<SavedTask, AppError> {
     let store = state.store.clone();
-    db(id, move || store.sandbox_task(key))
+    let saved = db(id, move || store.sandbox_task(key))
         .await?
-        .ok_or_else(|| AppError::not_found(id.0))
+        .ok_or_else(|| AppError::not_found(id.0))?;
+    caller
+        .task(state, &saved, permission)
+        .map_err(|e| denied(id, e))?;
+    project(state, id, saved.task.project_id, caller, permission).await?;
+    Ok(saved)
 }
 async fn account(state: &AppState, id: RequestId, key: Uuid) -> Result<SavedConnection, AppError> {
     let store = state.store.clone();
@@ -77,27 +217,49 @@ async fn account(state: &AppState, id: RequestId, key: Uuid) -> Result<SavedConn
 pub async fn projects(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
+    caller: Caller,
 ) -> Result<Json<Vec<SandboxProject>>, AppError> {
     let store = state.store.clone();
-    Ok(Json(db(id, move || store.sandbox_projects()).await?))
+    let projects = db(id, move || store.sandbox_projects()).await?;
+    let mut visible = Vec::new();
+    for project in projects {
+        if caller
+            .allowed(
+                &state,
+                &SandboxResource::Project { id: project.id },
+                SandboxPermission::Read,
+            )
+            .map_err(|e| denied(id, e))?
+        {
+            visible.push(project);
+        }
+    }
+    Ok(Json(visible))
 }
 /// Fetch one project's current settings.
 pub async fn get_project(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
+    caller: Caller,
     Path(key): Path<Uuid>,
 ) -> Result<Json<SandboxProject>, AppError> {
-    Ok(Json(project(&state, id, key).await?))
+    Ok(Json(
+        project(&state, id, key, caller, SandboxPermission::Read).await?,
+    ))
 }
 
 /// Save explicit user authorization for a source directory, borrowed VM and model default.
 pub async fn save_project(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
+    caller: Caller,
     Path(key): Path<Uuid>,
     ValidatedJson(mut spec): ValidatedJson<SandboxProjectSpec>,
 ) -> Result<Json<SandboxProject>, AppError> {
     let _claim = state.sandbox.admission.lock().await;
+    caller
+        .project(&state, key, SandboxPermission::Write)
+        .map_err(|e| denied(id, e))?;
     spec.name = spec.name.trim().to_owned();
     if spec.name.is_empty()
         || spec.name.len() > 200
@@ -119,6 +281,13 @@ pub async fn save_project(
         ));
     }
     if let Some(path) = spec.source_path.as_ref().filter(|s| !s.trim().is_empty()) {
+        caller
+            .require(
+                &state,
+                &SandboxResource::Source { path: path.clone() },
+                SandboxPermission::Read,
+            )
+            .map_err(|e| denied(id, e))?;
         let path = FilePath::new(path);
         if !path.is_absolute() {
             return Err(invalid(
@@ -151,6 +320,7 @@ pub async fn save_project(
     } else {
         spec.source_path = None;
     }
+    caller.settings(&state, &spec).map_err(|e| denied(id, e))?;
     if let Some(selection) = &spec.selection {
         pipe_ai::validate_model(&selection.model).map_err(|e| provider(id, e))?;
         ai_sandbox::proof(&state, selection, false)
@@ -170,6 +340,18 @@ pub async fn save_project(
         ));
     }
     if let Some(vm) = spec.vm_id {
+        if state
+            .store
+            .cluster_worker(vm)
+            .map_err(|_| AppError::internal(id.0))?
+            .is_some()
+        {
+            return Err(invalid(
+                id,
+                "vmId",
+                "Choose a user MicroVM without a controller placement owner",
+            ));
+        }
         let vm = state
             .vms
             .lock()
@@ -207,6 +389,10 @@ pub async fn save_project(
     }
     let value = SandboxProject {
         id: key,
+        owner: existing
+            .iter()
+            .find(|p| p.id == key)
+            .map_or(caller.principal, |p| p.owner),
         created_at: existing
             .iter()
             .find(|p| p.id == key)
@@ -223,10 +409,11 @@ pub async fn save_project(
 pub async fn delete_project(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
+    caller: Caller,
     Path(key): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let _claim = state.sandbox.admission.lock().await;
-    project(&state, id, key).await?;
+    project(&state, id, key, caller, SandboxPermission::Write).await?;
     let store = state.store.clone();
     if db(id, move || store.sandbox_project_busy(key)).await? {
         return Err(error(
@@ -259,9 +446,23 @@ pub struct Discovery {
 pub async fn models(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
+    caller: Caller,
     Path(key): Path<Uuid>,
     Query(query): Query<Discovery>,
 ) -> Result<Json<SandboxModelCatalog>, AppError> {
+    let mut rights = vec![(
+        SandboxResource::Connection { id: key },
+        SandboxPermission::Read,
+    )];
+    if query.discover {
+        rights.push((
+            SandboxResource::Connection { id: key },
+            SandboxPermission::Execute,
+        ));
+    }
+    caller
+        .require_all(&state, &rights)
+        .map_err(|e| denied(id, e))?;
     let _guard = if query.discover {
         Some(
             state
@@ -282,6 +483,9 @@ pub async fn models(
     };
     let discovery_available = true;
     let catalogue = if discovery_available && query.discover {
+        caller
+            .require_all(&state, &rights)
+            .map_err(|e| denied(id, e))?;
         ai_sandbox::model::catalogue(&state, &saved)
             .await
             .map_err(|e| provider(id, e))?
@@ -331,9 +535,14 @@ pub async fn models(
 pub async fn verify_model(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
+    caller: Caller,
     Path(key): Path<Uuid>,
     ValidatedJson(input): ValidatedJson<SandboxVerifyModel>,
 ) -> Result<Json<SandboxModel>, AppError> {
+    let resource = SandboxResource::Connection { id: key };
+    caller
+        .require(&state, &resource, SandboxPermission::Execute)
+        .map_err(|e| denied(id, e))?;
     pipe_ai::validate_model(&input.model).map_err(|e| provider(id, e))?;
     let _guard = state
         .pipe_ai_mutations
@@ -351,6 +560,9 @@ pub async fn verify_model(
     } else {
         vec![]
     };
+    caller
+        .require(&state, &resource, SandboxPermission::Execute)
+        .map_err(|e| denied(id, e))?;
     let turn = ai_sandbox::model::turn(&state, &saved, &input.model, &history, &tools, input.tools)
         .await
         .map_err(|e| provider(id, e))?;
@@ -371,6 +583,9 @@ pub async fn verify_model(
             saved.connection.provider,
             &[(turn.calls[0].clone(), "OK".into(), false)],
         );
+        caller
+            .require(&state, &resource, SandboxPermission::Execute)
+            .map_err(|e| denied(id, e))?;
         let final_turn =
             ai_sandbox::model::turn(&state, &saved, &input.model, &history, &tools, false)
                 .await
@@ -385,6 +600,9 @@ pub async fn verify_model(
     } else if turn.text.trim().is_empty() || !turn.calls.is_empty() {
         return Err(provider(id, Failure::NoText));
     }
+    caller
+        .require(&state, &resource, SandboxPermission::Execute)
+        .map_err(|e| denied(id, e))?;
     let old_proofs = state
         .store
         .sandbox_models(key)
@@ -427,10 +645,12 @@ pub struct TaskQuery {
 pub async fn tasks(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
+    caller: Caller,
     Path(key): Path<Uuid>,
     Query(query): Query<TaskQuery>,
 ) -> Result<Json<Vec<SandboxTaskSummary>>, AppError> {
-    project(&state, id, key).await?;
+    project(&state, id, key, caller, SandboxPermission::Read).await?;
+    let sources = caller.sources(&state, key).map_err(|e| denied(id, e))?;
     let store = state.store.clone();
     let before = if let Some(cursor) = query.before {
         let store = state.store.clone();
@@ -444,7 +664,7 @@ pub async fn tasks(
     };
     Ok(Json(
         db(id, move || {
-            store.sandbox_summaries(key, query.since, before)
+            store.sandbox_visible_summaries(key, query.since, before, sources)
         })
         .await?,
     ))
@@ -453,20 +673,29 @@ pub async fn tasks(
 pub async fn get_task(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
+    caller: Caller,
     Path(key): Path<Uuid>,
 ) -> Result<Json<SandboxTask>, AppError> {
-    Ok(Json(task(&state, id, key).await?.task))
+    Ok(Json(
+        task(&state, id, key, caller, SandboxPermission::Read)
+            .await?
+            .task,
+    ))
 }
 
 /// Persist admission before dispatch. Repeating an identical task id never starts another attempt.
 pub async fn create_task(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
+    caller: Caller,
     Path((project_id, key)): Path<(Uuid, Uuid)>,
     ValidatedJson(mut input): ValidatedJson<SandboxTaskInput>,
 ) -> Result<(StatusCode, Json<SandboxTask>), AppError> {
     let claim = state.sandbox.admission.clone().lock_owned().await;
-    let project = project(&state, id, project_id).await?;
+    caller
+        .project(&state, project_id, SandboxPermission::Read)
+        .map_err(|e| denied(id, e))?;
+    let project = project(&state, id, project_id, caller, SandboxPermission::Execute).await?;
     let store = state.store.clone();
     let previous = db(id, move || store.sandbox_task(key)).await?;
     let accounts = state
@@ -475,7 +704,13 @@ pub async fn create_task(
         .map_err(|_| AppError::internal(id.0))?;
     input.input = ai_sandbox::redact(&accounts, input.input.trim());
     if let Some(previous) = previous {
-        if previous.task.project_id != project_id || previous.task.request != input {
+        if previous.task.project_id != project_id {
+            return Err(AppError::not_found(id.0));
+        }
+        caller
+            .task(&state, &previous, SandboxPermission::Execute)
+            .map_err(|e| denied(id, e))?;
+        if previous.task.request != input {
             return Err(error(
                 id,
                 "sandbox_task_conflict",
@@ -547,9 +782,22 @@ pub async fn create_task(
                 "Choose a verified project default or task model",
             )
         })?;
+    caller
+        .require(
+            &state,
+            &SandboxResource::Connection {
+                id: selection.connection_id,
+            },
+            SandboxPermission::Execute,
+        )
+        .map_err(|e| denied(id, e))?;
     ai_sandbox::proof(&state, &selection, input.kind == SandboxTaskKind::Code)
         .map_err(|e| invalid(id, "selection", e))?;
+    let mut runtime = None;
     if input.kind == SandboxTaskKind::Code {
+        caller
+            .settings(&state, &project.spec)
+            .map_err(|e| denied(id, e))?;
         if project.spec.source_path.is_none() {
             return Err(invalid(
                 id,
@@ -561,14 +809,16 @@ pub async fn create_task(
             .spec
             .vm_id
             .ok_or_else(|| invalid(id, "vmId", "Select a MicroVM for code tasks"))?;
-        ai_sandbox::guest::binding(&state, vm).map_err(|e| invalid(id, "vmId", e))?;
+        runtime = Some(ai_sandbox::guest::binding(&state, vm).map_err(|e| invalid(id, "vmId", e))?);
     }
     let timestamp = ai_sandbox::now();
     let saved = SavedTask {
+        caller,
         task: SandboxTask {
             id: key,
             project_id,
             attempt_id: Uuid::new_v4(),
+            runtime,
             request: input,
             selection,
             state: SandboxTaskState::Waiting,
@@ -582,11 +832,14 @@ pub async fn create_task(
         },
         project: project.spec,
         workspace: None,
-        guest: None,
+        guest: runtime,
         guest_pending: false,
         guest_command: None,
         guest_staged: false,
     };
+    caller
+        .task(&state, &saved, SandboxPermission::Execute)
+        .map_err(|e| denied(id, e))?;
     let state = state.clone();
     let response = tokio::spawn(async move { ai_sandbox::admit(state, saved, claim).await })
         .await
@@ -599,9 +852,10 @@ pub async fn create_task(
 pub async fn cancel_task(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
+    caller: Caller,
     Path(key): Path<Uuid>,
 ) -> Result<(StatusCode, Json<SandboxTask>), AppError> {
-    let saved = task(&state, id, key).await?;
+    let saved = task(&state, id, key, caller, SandboxPermission::Execute).await?;
     if let Some(cancel) = state
         .sandbox
         .cancellations
@@ -617,10 +871,11 @@ pub async fn cancel_task(
 pub async fn reconcile_task(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
+    caller: Caller,
     Path(key): Path<Uuid>,
 ) -> Result<Json<SandboxTask>, AppError> {
     let _claim = state.sandbox.admission.lock().await;
-    let mut saved = task(&state, id, key).await?;
+    let mut saved = task(&state, id, key, caller, SandboxPermission::Execute).await?;
     if saved.task.state.active() {
         return Err(error(
             id,
@@ -674,11 +929,12 @@ pub async fn reconcile_task(
 pub async fn apply_task(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
+    caller: Caller,
     Path(key): Path<Uuid>,
     ValidatedJson(input): ValidatedJson<SandboxApply>,
 ) -> Result<Json<SandboxTask>, AppError> {
     let _claim = state.sandbox.admission.lock().await;
-    let mut saved = task(&state, id, key).await?;
+    let mut saved = task(&state, id, key, caller, SandboxPermission::Apply).await?;
     if saved.task.state.active() || saved.guest_pending || saved.guest_staged {
         return Err(error(
             id,
@@ -695,7 +951,14 @@ pub async fn apply_task(
             "Finish or reconcile the project's active attempt before applying changes",
         ));
     }
-    let project = project(&state, id, saved.task.project_id).await?;
+    let project = project(
+        &state,
+        id,
+        saved.task.project_id,
+        caller,
+        SandboxPermission::Apply,
+    )
+    .await?;
     if project.spec.source_path != saved.project.source_path {
         return Err(error(
             id,
