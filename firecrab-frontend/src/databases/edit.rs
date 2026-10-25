@@ -445,8 +445,16 @@ pub(super) fn row_payload(row: &Row, schema: &str, table: &str) -> Value {
         .iter()
         .filter_map(
             |(key, value)| match row.modes.get(key).map(String::as_str) {
-                Some("value") => Some((key.clone(), json!(value))),
-                Some("null") => Some((key.clone(), Value::Null)),
+                Some("value")
+                    if row.operation != "update" || row.original["values"][key] != json!(value) =>
+                {
+                    Some((key.clone(), json!(value)))
+                }
+                Some("null")
+                    if row.operation != "update" || !row.original["values"][key].is_null() =>
+                {
+                    Some((key.clone(), Value::Null))
+                }
                 _ => None,
             },
         )
@@ -475,6 +483,12 @@ pub fn save_row(app: Shared) {
         return;
     }
     let body = row_payload(row, &schema, &table);
+    if row.operation == "update" && body["values"].as_object().is_none_or(|v| v.is_empty()) {
+        s.error = tr("Change at least one field.", "변경할 필드를 입력한다.").into();
+        drop(s);
+        redraw(&app);
+        return;
+    }
     let path = format!(
         "/api/pipe/databases/{}/mutations",
         api::encode(&s.databases.selected)

@@ -503,7 +503,7 @@ test("keeps original primary keys and releases edits after a definitive conflict
   await editor.getByRole("button", { name: "Save row", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("row changed");
   await expect(editor.getByLabel("name value", { exact: true })).toBeEnabled();
-  expect(mock.mutations[0]).toMatchObject({ key: { id: "9007199254740993" }, version: "abc123", operation: "update" });
+  expect(mock.mutations[0]).toMatchObject({ key: { id: "9007199254740993" }, version: "abc123", operation: "update", values:{name:"Changed"} });
   await editor.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(editor).toHaveCount(0);
 });
@@ -588,4 +588,14 @@ test("removes a retained backup only after confirmation @dashboard",async({page}
   page.once("dialog",d=>d.accept());
   await page.getByRole("button",{name:"Remove backup",exact:true}).click();
   await expect.poll(()=>mock.jobs[0].status).toBe("expired");
+});
+
+test("prevents empty row updates and hides unsupported update defaults @dashboard",async({page})=>{
+  const mock=await openWritable(page);
+  await page.getByRole("button",{name:"Edit row",exact:true}).click();
+  const editor=page.getByRole("form",{name:"Row editor"});
+  await expect(editor.getByRole("option",{name:"Use default",exact:true})).toHaveCount(0);
+  await editor.getByRole("button",{name:"Save row",exact:true}).click();
+  await expect(page.getByRole("alert")).toContainText("Change at least one field");
+  expect(mock.mutations).toHaveLength(0);
 });

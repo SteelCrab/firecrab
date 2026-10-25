@@ -397,7 +397,8 @@ fn row_editor(app: &App, row: &Row) -> String {
                 ("default", tr("Use default", "기본값 사용")),
                 ("keep", tr("Unchanged", "변경 안 함")),
             ] {
-                if value == "null" && column["nullable"] != true
+                if value == "default" && !row.original.is_null()
+                    || value == "null" && column["nullable"] != true
                     || value == "keep" && row.original.is_null()
                 {
                     continue;
