@@ -115,6 +115,9 @@ See [CLI endpoint selection](../reference/cli.md#host-profiles).
 Each linked worktree provisions fresh OS and data disks with separate SSH keys, source caches, logs, and VM identity.
 It does not attach the primary environment's disks or share its managed home.
 Each instance has a separate launchd label and API tunnel.
+Explicit installation and reinstallation of a private instance use the verified v0.3.1 release baseline.
+This release preserves catalog-image startup files when development cleanup restores the release.
+The primary installation's release pins remain unchanged.
 Its plist stays in its own runtime directory and is loaded explicitly.
 Private instances are not all scheduled to boot at the next login.
 
@@ -192,7 +195,8 @@ It starts with fresh guest compiler caches, so allow more time and disk space th
 A manual run of the CI workflow includes this check with a 45-minute limit.
 It does not prepare the host dashboard.
 macOS live checks cover two private management VMs, independent dashboards and data, and stop/start while preserving the primary environment.
-Native Windows Docker/WSL and macOS application-MicroVM lifecycle checks remain pending.
+macOS checks also cover a real MicroVM's network readiness, SSH, and process identity while another worktree stops and starts.
+Native Windows Docker/WSL runtime checks remain pending.
 Unit, proxy, and command-fixture tests do not replace that runtime check.
 
 ## Related

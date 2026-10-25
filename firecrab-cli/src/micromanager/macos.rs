@@ -248,6 +248,18 @@ fn development_logs(home: &Path) -> Result<String, Error> {
     })
 }
 
+/// Select install inputs only after private ownership has been validated.
+fn installation_manifest(home: &Path) -> Result<manifest::Manifest, Error> {
+    let private = super::dev::instance::load(home)
+        .map_err(|source| super::dev::io_error("select development installation manifest", source))?
+        .is_some();
+    Ok(if private {
+        manifest::Manifest::for_development_install(home)?
+    } else {
+        manifest::Manifest::for_install(home)?
+    })
+}
+
 fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
     let cli_source = std::env::current_exe().map_err(Error::CurrentExecutable)?;
     let helper_source = resolve_helper_source(
@@ -263,7 +275,7 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
         lifecycle::check_install(&cli_source, &helper_source, &layout, reinstall)?;
     }
     // Before anything changes, so declining the download leaves the host as it was.
-    let manifest = manifest::Manifest::for_install(&layout.managed_home)?;
+    let manifest = installation_manifest(&layout.managed_home)?;
     let artifacts = provision::download_all(&layout.managed_home, &manifest, assume_yes)?;
     if reinstall {
         daemon::uninstall(&layout)?;
@@ -1136,6 +1148,41 @@ fn command_arguments(command: &Command) -> Vec<OsString> {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn installation_manifest_selects_private_pins_only_for_valid_ownership() {
+        let directory = tempfile::tempdir().unwrap();
+        let instance = super::super::dev::instance::test_instance(
+            directory.path(),
+            "0123456789abcdef",
+            36001,
+            36002,
+        );
+        assert_eq!(
+            installation_manifest(&instance.primary_home)
+                .unwrap()
+                .firecrab
+                .version,
+            "v0.2.2"
+        );
+        assert_eq!(
+            installation_manifest(&instance.managed_home)
+                .unwrap()
+                .firecrab
+                .version,
+            "v0.3.1"
+        );
+        assert!(!instance.managed_home.join(manifest::FILE_NAME).exists());
+
+        let record = instance.managed_home.join("dev-instance.json");
+        let mut foreign = instance.clone();
+        foreign.managed_home = instance.primary_home.clone();
+        fs::write(&record, serde_json::to_vec(&foreign).unwrap()).unwrap();
+        assert!(installation_manifest(&instance.managed_home).is_err());
+        fs::remove_file(record).unwrap();
+        assert!(installation_manifest(&instance.managed_home).is_err());
+        assert!(!instance.primary_home.exists());
+    }
 
     #[test]
     fn service_runtime_failures_recommend_repair() {
