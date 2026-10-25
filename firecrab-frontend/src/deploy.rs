@@ -54,11 +54,11 @@ fn recovering(deployment: &Value) -> bool {
 fn action(label: &str, action: &str, disabled: bool) -> String {
     crate::render::button(label, action, "").replace(
         "type=\"button\"",
-        if disabled {
-            "type=\"button\" disabled"
-        } else {
-            "type=\"button\""
-        },
+        &format!(
+            "type=\"button\" id=\"{}\"{}",
+            escape(action),
+            if disabled { " disabled" } else { "" }
+        ),
     )
 }
 

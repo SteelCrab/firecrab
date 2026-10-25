@@ -351,10 +351,11 @@ test('network, storage and Shell creation send the expected wire fields', async 
 });
 
 test('MicroService deployment collects hostPort instead of sending unsupported replicas', async () => {
+  fixture.handlers.set('GET /api/micro-services/service-1/deployment', ({ send }) => send(200, null));
   await open('services');
-  await page.getByRole('button', { name: 'Details', exact: true }).click();
-  await page.getByRole('button', { name: 'Deploy', exact: true }).click();
+  await page.getByRole('button', { name: 'Open web', exact: true }).click();
   const deploy = page.getByRole('button', { name: 'Deploy and run', exact: true });
+  await expect(page.locator('#service-status').getByRole('status')).toHaveText('Not deployed');
   await expect(deploy).toBeEnabled();
   const checkedPort = page.waitForResponse(response =>
     new URL(response.url()).pathname === '/api/micro-services/service-1/deployment/check' &&
@@ -458,9 +459,9 @@ test('navigation cancels dirty forms and ignores late responses from the previou
   await page.locator('nav a.sidebar-item[href="#/vms"]').click();
   await page.locator('nav a.sidebar-item[href="#/services"]').click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('MicroService');
-  await expect(page.locator('#content')).toContainText('ghcr.io/team/orders:1.0');
+  await expect(page.locator('.service-image')).toHaveAttribute('title', 'ghcr.io/team/orders:1.0');
   await new Promise(resolve => setTimeout(resolve, 550));
-  await expect(page.locator('#content')).toContainText('ghcr.io/team/orders:1.0');
+  await expect(page.locator('.service-image')).toHaveAttribute('title', 'ghcr.io/team/orders:1.0');
 });
 
 test('untrusted API text cannot create DOM elements or execute handlers', async () => {

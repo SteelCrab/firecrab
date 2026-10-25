@@ -8,6 +8,7 @@ import './styles/pipe-ai.css';
 import './styles/pipe-database.css';
 import './styles/ai-sandbox.css';
 import './styles/queues.css';
+import './styles/services.css';
 import init, { terminal_key_allowed } from '../pkg/firecrab_frontend.js';
 import wasmUrl from '../pkg/firecrab_frontend_bg.wasm?url';
 

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { serviceAction } from "./support/serviceSetup";
 import { openDashboard, vm } from "./support/mockApi";
 
 const panel = (page: Page, name: string) => page.getByRole("complementary", { name });
@@ -117,12 +118,12 @@ test.describe("list screens with a detail panel", () => {
     await detail.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(detail.getByRole("heading", { name: "New MicroService" })).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Edit orders", exact: true }).click();
+    await serviceAction(page, "orders", "Edit");
     await expect(detail.getByRole("heading", { name: "Edit MicroService", exact: true })).toBeVisible();
-    // Run stays disabled while a form is open, as before.
-    await expect(page.getByRole("button", { name: "Run orders", exact: true })).toBeDisabled();
+    // Opening another runtime panel must not discard an active form.
+    await expect(page.getByRole("button", { name: "Open orders", exact: true })).toBeDisabled();
     await detail.getByRole("button", { name: "Cancel", exact: true }).click();
-    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
     await expect(detail.getByRole("heading", { name: "Deploy MicroService", exact: true })).toBeVisible();
     await expect(detail.getByRole("status")).toHaveText("Not deployed");
     await page.keyboard.press("Escape");
@@ -167,9 +168,9 @@ test.describe("list screens with a detail panel", () => {
       expect(await fits()).toBe(true);
 
       await page.getByRole("link", { name: "MicroService", exact: true }).click();
-      await page.getByRole("button", { name: "Run orders-api", exact: true }).click();
+      await page.getByRole("button", { name: "Open orders-api", exact: true }).click();
       await expect(panel(page, "MicroService detail").getByRole("heading", { name: "Deploy MicroService" })).toBeVisible();
-      expect(await fits()).toBe(true);
+      expect(await page.locator(".service-list").evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
     });
   }
 });
