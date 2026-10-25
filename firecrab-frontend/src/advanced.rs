@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod cluster;
 pub mod images;
 pub mod pools;
 pub mod queues;
@@ -19,6 +20,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{Element, Event, HtmlInputElement, HtmlSelectElement};
 #[derive(Default)]
 pub struct State {
+    pub cluster: cluster::State,
     pub context: String,
     pub storage: storage::State,
     pub ai: ai::State,
@@ -34,6 +36,7 @@ pub struct State {
 }
 pub fn content(app: &App) -> String {
     match app.route.as_str() {
+        "cluster" => cluster::content(app),
         "pools" => pools::content(app),
         "queues" => queues::content(app),
         "schedules" => schedules::content(app),
@@ -64,6 +67,9 @@ pub fn actions(app: &App, data: &Value) -> String {
     }
 }
 pub fn dispatch(app: &Shared, action: &str, id: &str, button: &Element) -> bool {
+    if cluster::dispatch(app, action, id) {
+        return true;
+    }
     if action == "schedule-day" {
         let Some(input) =
             element("field-days").and_then(|el| el.dyn_into::<HtmlInputElement>().ok())
@@ -101,6 +107,9 @@ pub fn dispatch(app: &Shared, action: &str, id: &str, button: &Element) -> bool 
         || security::dispatch(app, action, id)
 }
 pub fn change(app: &Shared, target: &Element) -> bool {
+    if cluster::input(app, target) {
+        return true;
+    }
     if services::change(app, target) || ai::change(app, target) || storage::change(app, target) {
         return true;
     }

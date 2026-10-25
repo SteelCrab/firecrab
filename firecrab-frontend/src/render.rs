@@ -188,13 +188,14 @@ pub fn page(app: &App) -> String {
     };
     let panel = crate::details::panel(app);
     let panel_width = app.panel_width;
-    let panel_hidden =
-        if app.panel_open && !["vms/new", "queues", "ai-sandbox"].contains(&app.route.as_str()) {
-            ""
-        } else {
-            "hidden"
-        };
-    let panel_toggle = if section == "ai-sandbox" {
+    let panel_hidden = if app.panel_open
+        && !["vms/new", "queues", "cluster", "ai-sandbox"].contains(&app.route.as_str())
+    {
+        ""
+    } else {
+        "hidden"
+    };
+    let panel_toggle = if ["cluster", "ai-sandbox"].contains(&section) {
         String::new()
     } else if section == "secrets" {
         let label = crate::i18n::t(if app.panel_open {
@@ -218,7 +219,7 @@ pub fn page(app: &App) -> String {
         )
     };
     let category = match section {
-        "vms" | "services" | "pools" | "schedules" => tr(app, "Compute", "컴퓨팅"),
+        "vms" | "services" | "pools" | "schedules" | "cluster" => tr(app, "Compute", "컴퓨팅"),
         "networks" | "pipe" | "security-groups" => tr(app, "Network", "네트워크"),
         "storages" | "volumes" | "images" | "kernels" | "secrets" | "queues" => {
             tr(app, "Data", "데이터")
@@ -337,7 +338,7 @@ pub fn content(app: &App) -> String {
                 "조건에 맞는 MicroVM이 없습니다."
             )
         ),
-        "pools" | "schedules" | "security-groups" | "secrets" | "queues" => {
+        "pools" | "schedules" | "security-groups" | "secrets" | "queues" | "cluster" => {
             crate::advanced::content(app)
         }
         "services" => resource_table(
@@ -1057,7 +1058,7 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
         "kernels" => {
             let version = encode(text(data, "version"));
             out.push_str(&request(
-                "Install",
+                "Build kernel",
                 "POST",
                 &format!("/api/kernels/{version}/install"),
                 Value::Null,

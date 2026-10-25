@@ -1,17 +1,18 @@
-//! Detect-only Git polling. Repository content is data and is never checked out or executed.
+//! Git polling and explicit native synchronization. Repository content is never executed.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use firecrab_stack::{
-    Action, GitCheck, GitCheckState, GitCredential, GitSourceStatus, MAX_MANIFEST_BYTES, Stack,
+    Action, ApplyRequest, GitCheck, GitCheckState, GitCredential, GitSourceStatus, GitSyncMode,
+    MAX_MANIFEST_BYTES, Stack,
 };
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Deserialize, de::DeserializeOwned};
 
 use crate::error::AppError;
 use crate::handlers::stacks::{database, inventory};
-use crate::persistence::PersistenceError;
+use crate::persistence::{PersistenceError, SourceTrigger};
 use crate::pipe_auth::SavedAuth;
 use crate::state::AppState;
 
@@ -35,13 +36,28 @@ pub(crate) fn spawn_reconciler(state: AppState) -> tokio::task::JoinHandle<()> {
                 tracing::error!("could not read Git source schedule");
                 continue;
             };
-            for source in sources {
+            for mut source in sources {
+                if source
+                    .latest
+                    .as_ref()
+                    .is_some_and(|c| c.state == GitCheckState::Applying)
+                {
+                    let store = state.store.clone();
+                    let name = source.name.clone();
+                    let Ok(updated) = database(uuid::Uuid::new_v4(), move || {
+                        store.refresh_stack_sync(&name, now())
+                    })
+                    .await
+                    else {
+                        continue;
+                    };
+                    source = updated;
+                }
                 if source.source.paused
+                    || (source.source.sync_mode == GitSyncMode::Automatic
+                        && source.recovery_operation_id.is_some())
                     || source.next_check_at > now()
-                    || source
-                        .latest
-                        .as_ref()
-                        .is_some_and(|c| c.state == GitCheckState::Checking)
+                    || source.latest.as_ref().is_some_and(|c| c.state.is_active())
                 {
                     continue;
                 }
@@ -59,9 +75,38 @@ pub(crate) async fn start_check(
     generation: u64,
     periodic: bool,
 ) -> Result<Option<GitSourceStatus>, AppError> {
+    start_observation(
+        state,
+        name,
+        generation,
+        if periodic {
+            SourceTrigger::Poll
+        } else {
+            SourceTrigger::Check
+        },
+    )
+    .await
+}
+
+pub(crate) async fn start_sync(
+    state: AppState,
+    name: String,
+    generation: u64,
+    recovery: Option<uuid::Uuid>,
+) -> Result<Option<GitSourceStatus>, AppError> {
+    start_observation(state, name, generation, SourceTrigger::Sync(recovery)).await
+}
+
+async fn start_observation(
+    state: AppState,
+    name: String,
+    generation: u64,
+    trigger: SourceTrigger,
+) -> Result<Option<GitSourceStatus>, AppError> {
     let store = state.store.clone();
     let admitted = database(uuid::Uuid::new_v4(), move || {
-        store.begin_stack_check(&name, generation, now(), periodic)
+        store.refresh_stack_sync(&name, now())?;
+        store.begin_stack_check(&name, generation, now(), trigger)
     })
     .await?;
     let Some((source, fresh)) = admitted else {
@@ -77,17 +122,16 @@ pub(crate) async fn start_check(
                 .acquire_owned()
                 .await
                 .expect("Git source semaphore stays open");
-            let mut check = worker_source
+            let check = worker_source
                 .latest
                 .clone()
                 .expect("admission created a check");
-            let result = tokio::time::timeout(Duration::from_secs(90), async {
-                let github = Github::new()?;
-                inspect(&worker_state, &worker_source, &mut check, &github).await
-            })
-            .await
-            .unwrap_or(Err("source_timeout"));
-            complete(&worker_state, worker_source.stack_id, check, result).await;
+            match Github::new() {
+                Ok(github) => reconcile(&worker_state, &worker_source, check, &github).await,
+                Err(error) => {
+                    complete(&worker_state, worker_source.stack_id, check, Err(error)).await
+                }
+            }
         });
         let failed_source = source.clone();
         tokio::spawn(async move {
@@ -107,6 +151,47 @@ pub(crate) async fn start_check(
         });
     }
     Ok(Some(source))
+}
+
+async fn reconcile(
+    state: &AppState,
+    source: &GitSourceStatus,
+    mut check: GitCheck,
+    github: &Github,
+) {
+    let result = tokio::time::timeout(
+        Duration::from_secs(90),
+        inspect(state, source, &mut check, github),
+    )
+    .await
+    .unwrap_or(Err("source_timeout"));
+    match result {
+        Ok(stack) if check.sync && check.state == GitCheckState::Drifted => {
+            let request = ApplyRequest {
+                stack,
+                expected_fingerprint: check
+                    .plan
+                    .as_ref()
+                    .expect("inspection produced a plan")
+                    .fingerprint
+                    .clone(),
+                operation_id: check.id,
+                allow_stop: source.source.allow_stop,
+            };
+            // Successful admission atomically links the source and apply. The scheduler/status
+            // endpoint follows that journal; a timeout must never start a replacement operation.
+            if let Err(error) =
+                crate::handlers::stack_applies::admit(state.clone(), request, Some(check.clone()))
+                    .await
+            {
+                check.state = GitCheckState::Failed;
+                check.error = Some(error.code().into());
+                complete(state, source.stack_id, check, Ok(())).await;
+            }
+        }
+        Ok(_) => complete(state, source.stack_id, check, Ok(())).await,
+        Err(error) => complete(state, source.stack_id, check, Err(error)).await,
+    }
 }
 
 async fn complete(
@@ -136,7 +221,7 @@ async fn inspect(
     source: &GitSourceStatus,
     check: &mut GitCheck,
     github: &Github,
-) -> Result<(), &'static str> {
+) -> Result<Stack, &'static str> {
     source.source.validate().map_err(|_| "invalid_source")?;
     let token = if source.source.credential_ref == Some(GitCredential::Github) {
         let store = state.store.clone();
@@ -161,6 +246,7 @@ async fn inspect(
     }
     check.desired_hash = Some(firecrab_stack::desired_hash(&stack));
     let store = state.store.clone();
+    let templates = state.templates.clone();
     let name = source.name.clone();
     let expected_id = source.stack_id;
     let (record, observed) = database(check.id, move || {
@@ -168,11 +254,25 @@ async fn inspect(
             .stack(&name)?
             .filter(|r| r.id == expected_id)
             .ok_or(PersistenceError::MissingStack)?;
-        Ok((record, inventory(&store)?))
+        Ok((record, inventory(&store, &templates)?))
     })
     .await
     .map_err(|_| "inventory_unavailable")?;
-    let plan = firecrab_stack::plan(&stack, &record, &observed).map_err(|_| "planning_failed")?;
+    let mut plan =
+        firecrab_stack::plan(&stack, &record, &observed).map_err(|_| "planning_failed")?;
+    // Git declarations must survive host alias updates and controller restarts.
+    for change in &mut plan.changes {
+        if change.kind == firecrab_stack::ResourceKind::Vm
+            && stack
+                .micro_vms
+                .get(&change.key)
+                .is_some_and(|vm| vm.template_pin.is_none())
+        {
+            change.action = Action::Blocked;
+            change.reason = Some("Git-managed VMs require templatePin; copy the approved plan input identity into the manifest".into());
+            plan.blocked = true;
+        }
+    }
     check.state = if plan.blocked
         || plan
             .changes
@@ -190,7 +290,7 @@ async fn inspect(
         GitCheckState::InSync
     };
     check.plan = Some(plan);
-    Ok(())
+    Ok(stack)
 }
 
 /// Fixed GitHub API origin. Redirects, repository scripts, submodules and symlinks are excluded.

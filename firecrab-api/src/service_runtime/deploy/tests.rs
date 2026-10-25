@@ -361,6 +361,7 @@ async fn operation_identity_rejects_conflicting_retries_and_other_services() {
         body.clone(),
         None,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -375,6 +376,7 @@ async fn operation_identity_rejects_conflicting_retries_and_other_services() {
         changed,
         None,
         None,
+        None,
     )
     .await
     .unwrap_err();
@@ -384,6 +386,7 @@ async fn operation_identity_rejects_conflicting_retries_and_other_services() {
         RequestId(Uuid::new_v4()),
         Uuid::new_v4(),
         body,
+        None,
         None,
         None,
     )
@@ -509,6 +512,7 @@ async fn direct_port_updates_fail_before_mutating_a_live_release() {
         body,
         None,
         None,
+        None,
     )
     .await
     .unwrap_err();
@@ -607,6 +611,7 @@ async fn stale_release_and_stale_retry_do_not_mutate_the_active_operation() {
             spec: record.spec.clone(),
             strategy: DeployStrategy::Rolling,
         },
+        None,
         None,
         None,
     )

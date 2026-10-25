@@ -6,12 +6,9 @@
 //! modules need their matching initrd, and that initrd would take PID 1 away
 //! from the injected guest init.
 //!
-//! Firecrab publishes a kernel that meets exactly those requirements
-//! (`kernel.rs`), so an import no longer has to borrow one from a catalog
-//! image: fetching 14 MB beats installing Ubuntu's 890 MB package to read a
-//! single file out of it. A host that cannot reach the registry still boots
-//! an installed catalog kernel — the first host artifact without an initrd,
-//! which is Ubuntu's. This stage records the pair and registers nothing.
+//! Firecrab builds the latest kernel.org stable source on this host. Verified
+//! cached kernels and installed catalog images keep offline hosts importing.
+//! This stage records the pair and registers nothing.
 
 use std::io::Read as _;
 use std::os::unix::fs::OpenOptionsExt as _;
@@ -27,7 +24,7 @@ use crate::templates::{KernelFormat, kernel_architecture};
 pub(super) struct KernelBootPair {
     /// Architecture the kernel boots, which must be this host's.
     pub architecture: Architecture,
-    /// Registry alias or catalog image the kernel came from, named in errors.
+    /// Upstream release, operator override, or catalog image named in errors.
     pub source_alias: String,
     /// Image-root-relative kernel path.
     pub kernel: PathBuf,
@@ -43,39 +40,25 @@ pub(super) async fn host_kernel_pair(image_root: &Path) -> Result<KernelBootPair
         image_root,
         Architecture::HOST,
         kernel::configured_kernel_override().as_deref(),
-        kernel::configured_base_url().as_deref(),
+        kernel::configured_releases_url().as_deref(),
     )
     .await
 }
 
-/// Resolves the pair for `architecture`, preferring the published kernel.
-///
-/// The dedicated kernel is what this stage is for, so it is tried first even
-/// on a host that already has a catalog image installed. An installed catalog
-/// kernel is the fallback rather than the default: it keeps an air-gapped or
-/// registry-outage host importing exactly as it did before, without making
-/// every other host download a distro package for one file.
+/// Builds the current stable kernel, with verified local kernels as fallback.
 pub(super) async fn resolve_kernel_pair(
     image_root: &Path,
     architecture: Architecture,
     override_path: Option<&Path>,
-    base_url: Option<&str>,
+    releases_url: Option<&str>,
 ) -> Result<KernelBootPair, ResolveError> {
-    let Some(pinned) = kernel::pinned_kernel(architecture) else {
-        return catalog_kernel_pair(architecture);
-    };
-    let error = match kernel::ensure_pinned_kernel(
-        image_root,
-        architecture,
-        &pinned,
-        override_path,
-        base_url,
-    )
-    .await
-    {
-        Ok(pair) => return Ok(pair),
-        Err(error) => error,
-    };
+    let error =
+        match kernel::ensure_host_kernel(image_root, architecture, override_path, releases_url)
+            .await
+        {
+            Ok(pair) => return Ok(pair),
+            Err(error) => error,
+        };
     let Some(installed) = installed_catalog_pair(image_root, architecture) else {
         return Err(error);
     };

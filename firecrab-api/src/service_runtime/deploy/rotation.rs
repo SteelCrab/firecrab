@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 const MAX_ATTEMPTS: u8 = 5;
-const ADMISSION_FAILED: &str = "Secret rotation could not enter Deploy; check Auth, Secret references and Nginx. Automatic retries are limited to five attempts.";
+const ADMISSION_FAILED: &str = "Secret rotation could not enter Deploy; check Auth, Secret references, Nginx and stack ownership. Automatic retries are limited to five attempts.";
 const PAUSED: &str =
     "Secret rotation paused after five failed attempts; fix the cause and use Deploy to retry.";
 

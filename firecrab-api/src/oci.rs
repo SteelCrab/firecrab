@@ -879,21 +879,13 @@ pub enum ResolveError {
         /// What every configured source had to say.
         reason: String,
     },
-    /// The published kernel package could not be downloaded.
+    /// Kernel release metadata or a source archive could not be downloaded.
     #[error("OCI kernel download from {url} failed: {message}")]
     KernelDownloadFailed {
         /// Object URL that was requested.
         url: String,
         /// Transport or filesystem diagnostic.
         message: String,
-    },
-    /// The verified package does not carry the kernel it is pinned for.
-    #[error("OCI kernel package {package} has no member {member}")]
-    KernelPackageMemberMissing {
-        /// Registry object key of the package.
-        package: String,
-        /// Archive member the pin named.
-        member: String,
     },
     /// A filesystem operation failed while inspecting the paired kernel.
     #[error("OCI kernel pairing {operation} failed at {path}: {source}")]
@@ -2129,9 +2121,10 @@ mod boot;
 mod boot_tests;
 
 pub(crate) mod kernel;
+pub(crate) mod kernel_legacy;
 
 #[cfg(test)]
-mod kernel_tests;
+pub(crate) mod kernel_tests;
 
 mod name;
 
@@ -3210,10 +3203,9 @@ pub async fn write_provisioned_ext4(
 /// boot args.
 ///
 /// `TemplateSpec` requires both; an OCI image supplies neither. The kernel is
-/// the digest-pinned artifact Firecrab publishes for this architecture,
-/// fetched once and cached under `image_root`; a host that cannot reach the
-/// registry falls back to an installed catalog kernel. The ext4 is left in
-/// place. This stage does not register a template.
+/// built from kernel.org's current stable source and cached under `image_root`.
+/// A host that cannot fetch or build it reuses a verified installed kernel or
+/// an installed catalog kernel. The ext4 stays in place; nothing is registered.
 pub async fn pair_ext4_with_host_kernel(
     image: OciExt4Image,
     image_root: &Path,

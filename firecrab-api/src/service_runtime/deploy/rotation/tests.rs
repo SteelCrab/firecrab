@@ -291,6 +291,55 @@ async fn rotation_keeps_the_current_digest_and_tag_while_waiting_for_the_shared_
 }
 
 #[tokio::test]
+async fn git_managed_services_keep_their_stack_writer_and_running_secret_values() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let secret = secret(&state, OLD);
+    let active = running(&state, "managed", secret).await;
+    state.store.register_stack("rotation").unwrap();
+    state
+        .store
+        .bind_stack_resource(
+            "rotation",
+            &firecrab_stack::Binding {
+                kind: firecrab_stack::ResourceKind::Service,
+                key: "web".into(),
+                resource_id: active.service_id,
+            },
+        )
+        .unwrap();
+    let source = serde_json::from_value(serde_json::json!({
+        "expectedGeneration": 0,
+        "source": {"repository":"https://github.com/example/infra", "ref":"main", "manifestPath":"stack.yaml", "paused":true, "pollIntervalSeconds":60}
+    })).unwrap();
+    state
+        .store
+        .configure_stack_source("rotation", &source, 0)
+        .unwrap();
+    edit(&state, secret, Some(NEW));
+    let operation = Uuid::new_v4();
+    let error = rotate(state.clone(), &active, operation).await.unwrap_err();
+    assert_eq!(error.code(), "stack_source_managed");
+    assert!(state.store.service_attempt(operation).unwrap().is_none());
+    assert_eq!(reconcile(&state, 0).await.unwrap(), 0);
+    let current = state
+        .store
+        .service_deployment(active.service_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.id, active.id);
+    assert_eq!(current.phase, ServicePhase::Running);
+    assert!(current.error.unwrap().contains("stack ownership"));
+    state
+        .secrets
+        .read(|contents| {
+            assert_eq!(contents.service_environments[&active.id]["PASSWORD"], OLD);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[tokio::test]
 async fn invalid_inputs_fail_closed_and_repeated_status_reads_do_not_grow_the_log() {
     for invalid in ["missing", "oversized", "snapshot", "domain"] {
         let root = tempfile::tempdir().unwrap();

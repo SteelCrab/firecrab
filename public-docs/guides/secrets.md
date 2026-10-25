@@ -147,6 +147,8 @@ seconds and waits for admitted Deploy work to finish. The update keeps the
 current image digest, tag declaration, service configuration, domain, and network.
 Metadata edits and unchanged values keep the current replicas. Stopped and
 unrelated services stay as they are.
+Git-managed services keep their stack's single-writer rule. Use Git sync or
+explicitly release stack ownership before a direct deployment.
 
 Every attempt captures one encrypted Secret environment when its worker starts.
 Edits made during an update are reconciled after that attempt finishes. API
