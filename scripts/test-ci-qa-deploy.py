@@ -12,12 +12,30 @@ import subprocess
 import unittest
 from unittest.mock import Mock, patch
 
+import deploy_fleet_qa as fleet
+
 module = importlib.util.spec_from_file_location("deploy_qa", Path(__file__).with_name("ci-qa-deploy.py"))
 qa = importlib.util.module_from_spec(module)
 module.loader.exec_module(qa)
 
 
 class DeployQaTests(unittest.TestCase):
+    def test_fleet_refuses_cpu_oversubscription_before_reading_host_files(self):
+        with patch.object(fleet.subprocess, "check_output", return_value="4\n"), patch.object(Path, "read_text") as read:
+            with self.assertRaisesRegex(AssertionError, "at least 16 CPUs"):
+                fleet.host_evidence("/unused")
+            read.assert_not_called()
+
+    def test_fleet_refuses_insufficient_memory_or_disk_before_reading_binaries(self):
+        for memory, disk, message in [(6399, 32 * 1024**3, "6400 MiB"), (12000, 15 * 1024**3, "16 GiB")]:
+            with self.subTest(message=message), patch.object(fleet.subprocess, "check_output", return_value="16\n"), \
+                    patch.object(Path, "read_text", return_value=f"MemAvailable: {memory * 1024} kB\n"), \
+                    patch.object(fleet.shutil, "disk_usage", return_value=Mock(free=disk)), \
+                    patch.object(Path, "read_bytes") as read:
+                with self.assertRaisesRegex(AssertionError, message):
+                    fleet.host_evidence("/unused")
+                read.assert_not_called()
+
     def test_image_descriptors_match_actual_layer_config_and_process(self):
         for healthy in [True, False]:
             identity, manifest, blobs = qa.image_fixture(b"static-toolbox-fixture", "A", healthy)
