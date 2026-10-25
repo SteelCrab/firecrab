@@ -8,6 +8,14 @@ use axum::{
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+#[test]
+fn engine_template_matches_the_alias_registered_by_the_oci_importer() {
+    let reference = crate::oci::ImageReference::parse(IMAGE).unwrap();
+    let name = crate::oci::template_name_from_reference(&reference).unwrap();
+    assert_eq!(name.alias, TEMPLATE);
+    assert_eq!(name.version, IMAGE.split_once('@').unwrap().1);
+}
+
 async fn state(root: &std::path::Path) -> AppState {
     let templates = TemplateRegistry::from_specs(root, std::iter::empty()).unwrap();
     AppState::with_db_file(templates, root.join("state.db"))

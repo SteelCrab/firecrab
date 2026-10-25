@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 /// Immutable official RabbitMQ management image used by the internal engine.
 pub(crate) const IMAGE: &str = "docker.io/library/rabbitmq@sha256:79fb281ef7e0a15e3c5e0e12e66e944cebbf14a129493ef464369abd2c48d01a";
-/// Private image alias reserved for broker provisioning.
-pub(crate) const TEMPLATE: &str = "firecrab-rabbitmq-4-3-7";
+/// Canonical alias that the OCI importer derives from the pinned broker image.
+pub(crate) const TEMPLATE: &str = "rabbitmq-sha256-79fb281ef7e0";
 
 // Intentionally no Debug: these private records contain passwords.
 /// Private durable broker identity, lifecycle checkpoint and administrator credentials.
