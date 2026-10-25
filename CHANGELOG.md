@@ -52,6 +52,12 @@ Entries land here as work merges, and move under the next version heading when t
   records and SQLite; guest environment files are root-only. Stop and failed
   deployment cleanup remove snapshots after deleting owned replicas.
 
+- Remote API listeners require mutual TLS with a private CA and UUID host
+  identities. `firecrab ca` generates the CA and host certificates offline.
+  HTTPS API and WSS console clients share certificate configuration, and Linux
+  `doctor` checks validity and upcoming expiration. Boolean TLS/authentication
+  flags cannot enable plaintext remote access. Tracked in [#157](https://github.com/SteelCrab/firecrab/issues/157).
+
 - MicroService domains connect healthy replicas to PipeIngress automatically,
   without host ports or manual routes. The dashboard shows the domain and DNS
   setup guidance, and the CLI accepts domain deployments without `--host-port`.

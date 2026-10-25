@@ -50,6 +50,21 @@ Names allow letters, digits, `.`, `_`, and `-`.
 URLs require HTTP or HTTPS and reject credentials, queries, and fragments.
 The config stores only endpoints; unknown TOML keys block profile changes.
 
+## Private CA and mutual TLS
+
+`firecrab ca init [--dir PATH]` creates a private root CA offline.
+`firecrab ca issue-host-cert HOST_UUID [--dir PATH] [--san DNS_OR_IP] [--days 365]`
+issues a certificate for an API host or authenticated caller. Repeat `--san` for
+additional server names. Existing CA and host output directories are never replaced.
+The default directory is `~/.firecrab/pki`, or `FIRECRAB_CONFIG_DIR/pki`.
+
+For HTTPS API and WSS console connections, set `FIRECRAB_TLS_CERT`,
+`FIRECRAB_TLS_KEY`, and `FIRECRAB_TLS_CA` to the caller's certificate, private key,
+and private CA certificate. Unix files must have mode `0600`.
+See [mutual TLS setup](../guides/mtls.md) for issuance, server configuration,
+client examples, and certificate renewal. Linux `firecrab doctor` checks the
+configured leaf and CA and fails when either expires within 30 days.
+
 ## Resource commands
 
 `firecrab stack validate --file stack.yaml [--json]` checks a declarative YAML stack offline.
