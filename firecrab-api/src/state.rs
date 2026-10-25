@@ -191,7 +191,6 @@ impl AppState {
         let sandbox_database = db_file.clone();
         let (store, vms) = tokio::task::spawn_blocking(move || {
             let store = Store::open(&db_file)?;
-            store.interrupt_stack_applies()?;
             // Live states from the previous run stay as they are: the VM
             // may still be running, and `reconcile::reconcile` decides.
             let vms = store.load_all()?;

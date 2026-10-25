@@ -11,6 +11,8 @@ use firecrab_stack::{Binding, ConfigureGitSource, ResourceKind};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 
+mod sync;
+
 const YAML: &str = "apiVersion: firecrab.dev/v1alpha1\nkind: Stack\nname: demo\nmicroNetworks:\n  app:\n    name: existing\n    subnetCidr: 172.31.20.0/24\n    internetEnabled: true\n";
 const COMMIT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const COMMIT_B: &str = "cccccccccccccccccccccccccccccccccccccccc";
@@ -162,12 +164,12 @@ async fn fixture(root: &std::path::Path) -> (AppState, GitSourceStatus) {
 async fn checked(state: &AppState, github: &Github) -> GitCheck {
     let (source, _) = state
         .store
-        .begin_stack_check("demo", 1, now(), false)
+        .begin_stack_check("demo", 1, now(), SourceTrigger::Check)
         .unwrap()
         .unwrap();
     let mut check = source.latest.clone().unwrap();
     let result = inspect(state, &source, &mut check, github).await;
-    complete(state, source.stack_id, check, result).await;
+    complete(state, source.stack_id, check, result.map(|_| ())).await;
     state.store.stack_source("demo").unwrap().latest.unwrap()
 }
 
@@ -316,13 +318,13 @@ async fn failed_sources_never_become_empty_stacks_or_expose_remote_errors() {
         let source = state.store.stack_source("demo").unwrap();
         let (source, _) = state
             .store
-            .begin_stack_check("demo", source.generation, now(), false)
+            .begin_stack_check("demo", source.generation, now(), SourceTrigger::Check)
             .unwrap()
             .unwrap();
         let mut check = source.latest.clone().unwrap();
         let result = inspect(&state, &source, &mut check, &github).await;
         assert!(result.is_err(), "{case}");
-        complete(&state, source.stack_id, check, result).await;
+        complete(&state, source.stack_id, check, result.map(|_| ())).await;
         let check = state.store.stack_source("demo").unwrap().latest.unwrap();
         assert_eq!(check.state, GitCheckState::Failed, "{case}");
         assert!(check.plan.is_none(), "{case}");
@@ -375,13 +377,13 @@ async fn private_source_uses_only_referenced_auth_and_keeps_the_token_out_of_sta
     let (github, task) = github(remote.clone()).await;
     let (source, _) = state
         .store
-        .begin_stack_check("demo", 2, now(), false)
+        .begin_stack_check("demo", 2, now(), SourceTrigger::Check)
         .unwrap()
         .unwrap();
     let mut check = source.latest.clone().unwrap();
     let result = inspect(&state, &source, &mut check, &github).await;
     assert!(result.is_ok());
-    complete(&state, source.stack_id, check, result).await;
+    complete(&state, source.stack_id, check, result.map(|_| ())).await;
     assert!(
         remote
             .lock()
@@ -403,13 +405,13 @@ async fn private_source_uses_only_referenced_auth_and_keeps_the_token_out_of_sta
     let before = remote.lock().unwrap().seen.len();
     let (source, _) = state
         .store
-        .begin_stack_check("demo", 2, now(), false)
+        .begin_stack_check("demo", 2, now(), SourceTrigger::Check)
         .unwrap()
         .unwrap();
     let mut check = source.latest.clone().unwrap();
     assert_eq!(
-        inspect(&state, &source, &mut check, &github).await,
-        Err("credential_unavailable")
+        inspect(&state, &source, &mut check, &github).await.err(),
+        Some("credential_unavailable")
     );
     assert_eq!(remote.lock().unwrap().seen.len(), before);
     task.abort();
@@ -512,18 +514,18 @@ async fn live_github_source_resolves_and_verifies_the_public_stack_manifest() {
         .unwrap();
     let (source, _) = state
         .store
-        .begin_stack_check("demo", source.generation, now(), false)
+        .begin_stack_check("demo", source.generation, now(), SourceTrigger::Check)
         .unwrap()
         .unwrap();
     let mut check = source.latest.clone().unwrap();
     let result = inspect(&state, &source, &mut check, &Github::new().unwrap()).await;
-    assert!(result.is_ok(), "{result:?}");
+    assert!(result.is_ok(), "{:?}", result.as_ref().err());
     assert_eq!(
         check.commit.as_deref(),
         Some(source.source.git_ref.as_str())
     );
     assert!(check.blob.is_some());
-    assert_eq!(check.state, GitCheckState::Drifted);
+    assert_eq!(check.state, GitCheckState::Blocked);
     assert_eq!(check.plan.as_ref().unwrap().changes.len(), 3);
     println!(
         "commit={} blob={} desiredHash={}",
@@ -531,7 +533,7 @@ async fn live_github_source_resolves_and_verifies_the_public_stack_manifest() {
         check.blob.as_deref().unwrap(),
         check.desired_hash.as_deref().unwrap()
     );
-    complete(&state, source.stack_id, check, result).await;
+    complete(&state, source.stack_id, check, result.map(|_| ())).await;
     assert!(state.store.load_all().unwrap().is_empty());
     assert!(state.store.list_micro_networks().unwrap().is_empty());
     assert!(state.store.list_micro_services().unwrap().is_empty());

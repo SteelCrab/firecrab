@@ -148,6 +148,7 @@ async fn run() -> Result<(), StartupError> {
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
         store.interrupt_sandbox_tasks()?;
+        store.interrupt_stack_applies()?;
         store.interrupt_stack_checks(stack_source::now())
     })
     .await

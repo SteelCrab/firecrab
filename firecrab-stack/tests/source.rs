@@ -1,4 +1,4 @@
-use firecrab_stack::GitSource;
+use firecrab_stack::{GitSource, GitSourceStatus, GitSyncMode};
 use serde_json::json;
 
 fn source() -> GitSource {
@@ -10,6 +10,11 @@ fn source_accepts_explicit_refs_and_credential_references() {
     let mut config = source();
     assert_eq!(config.poll_interval_seconds, 900);
     assert!(!config.paused);
+    assert_eq!(config.sync_mode, GitSyncMode::DetectOnly);
+    assert!(!config.allow_stop);
+    let wire = serde_json::to_value(&config).unwrap();
+    assert!(wire.get("syncMode").is_none());
+    assert!(wire.get("allowStop").is_none());
     for reference in [
         "main",
         "heads/main",
@@ -30,6 +35,39 @@ fn source_accepts_explicit_refs_and_credential_references() {
     );
     json["token"] = "do-not-print".into();
     assert!(serde_json::from_value::<GitSource>(json).is_err());
+}
+
+#[test]
+fn automatic_sync_and_stop_permission_require_explicit_configuration() {
+    let mut json = serde_json::to_value(source()).unwrap();
+    json["syncMode"] = "automatic".into();
+    json["allowStop"] = true.into();
+    let config: GitSource = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(config.sync_mode, GitSyncMode::Automatic);
+    assert!(config.allow_stop);
+    json["syncMode"] = "enabled".into();
+    assert!(serde_json::from_value::<GitSource>(json).is_err());
+}
+
+#[test]
+fn legacy_source_status_and_active_checks_remain_detect_only() {
+    let config = json!({"repository":"https://github.com/example/infra","ref":"main","manifestPath":"stack.yaml"});
+    let legacy = json!({
+        "stackId":"11111111-1111-4111-8111-111111111111", "name":"demo", "generation":1,
+        "source":config, "nextCheckAt":0, "failures":0,
+        "latest":{
+            "id":"22222222-2222-4222-8222-222222222222", "generation":1,
+            "source":config, "startedAt":0, "finishedAt":null, "state":"checking",
+            "commit":null, "blob":null, "desiredHash":null, "plan":null, "error":null
+        }
+    });
+    let source: GitSourceStatus = serde_json::from_value(legacy).unwrap();
+    assert_eq!(source.source.sync_mode, GitSyncMode::DetectOnly);
+    let check = source.latest.unwrap();
+    assert!(!check.sync);
+    assert!(check.operation_id.is_none());
+    assert!(source.attempted_revision.is_none());
+    assert!(source.recovery_operation_id.is_none());
 }
 
 #[test]

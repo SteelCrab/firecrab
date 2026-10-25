@@ -144,7 +144,11 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | MicroService | `GET, POST /api/micro-services`, `GET, PUT, DELETE /api/micro-services/{id}` |
 | Stack ownership and planning | `GET, POST /api/stacks`, `GET, DELETE /api/stacks/{name}`, `POST /api/stacks/{name}/bindings`, `/unbind`, `/plan`; empty-registration deletion requires `?id=STACK_UUID`; see [Stack planning](../guides/stack-planning.md#rest) |
 | Native stack apply | `POST /api/stacks/{name}/apply`, `GET /api/stacks/{name}/applies/{id}`; durable, redacted execution with exact retry IDs; see [Stack apply](../guides/stack-apply.md#rest-and-limits) |
-| Git source checks | `GET, PUT /api/stacks/{name}/source`, `POST /api/stacks/{name}/source/check`, `GET /api/stacks/{name}/source/history`; detect-only polling and exact-commit observations; see [Git source checks](../guides/stack-git-source.md#rest) |
+| Git source synchronization | `GET, PUT /api/stacks/{name}/source`, `POST /api/stacks/{name}/source/check`, `POST /api/stacks/{name}/source/sync`, `GET /api/stacks/{name}/source/history`; detect-only by default, opt-in automatic apply and explicit recovery; see [Git source synchronization](../guides/stack-git-source.md#rest) |
+
+Stack plans and apply status expose redacted `inputs.templates` and `inputs.serviceDigests` identities.
+Git VM declarations require `templatePin`; direct apply and service mutations return `409 stack_source_managed` while Git owns synchronization.
+See [immutable inputs and controller ownership](../guides/stack-git-source.md#immutable-inputs-and-controller-ownership).
 | MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/deployment/check`, `POST /api/micro-services/{id}/stop` |
 | MicroNetwork | `/api/micro-networks`, `/{id}` |
 | Security group | `GET, POST /api/security-groups`, `GET, PUT, DELETE /api/security-groups/{id}`, `PUT /api/security-groups/{id}/rules` |

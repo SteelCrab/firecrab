@@ -33,6 +33,7 @@ mod schedules;
 mod security_groups;
 mod stack_applies;
 mod stack_sources;
+pub(crate) use stack_sources::SourceTrigger;
 mod stacks;
 pub use registries::RegistryLogin;
 pub(crate) use schedules::ScheduleMutation;
@@ -496,6 +497,9 @@ pub enum PersistenceError {
     /// Configuration remains stable while a durable check is active.
     #[error("stack Git source check is active")]
     StackSourceBusy,
+    /// A failed or interrupted Git apply needs explicit acknowledgement before another mutation.
+    #[error("inspect the recorded Git apply before explicit recovery")]
+    StackSyncRecoveryRequired,
     /// Invalid source configuration must not reach the network.
     #[error("invalid stack Git source")]
     InvalidStackSource,
@@ -508,6 +512,9 @@ pub enum PersistenceError {
     /// An operation ID was reused with a different registration or request.
     #[error("stack apply identity conflicts")]
     StackApplyIdentity,
+    /// Git source ownership prohibits an independent apply writer.
+    #[error("stack is managed by its Git source")]
+    StackSourceManaged,
     /// The requested operation is not recorded for this stack.
     #[error("stack apply does not exist")]
     MissingStackApply,

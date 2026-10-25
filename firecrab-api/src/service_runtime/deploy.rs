@@ -59,7 +59,17 @@ pub async fn update(
     Path(id): Path<String>,
     ValidatedJson(body): ValidatedJson<UpdateServiceRequest>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
-    accept(state, request, vms::parse_id(&id, request.0)?, body, None).await
+    update_from_stack(state, request, vms::parse_id(&id, request.0)?, body, None).await
+}
+
+pub(crate) async fn update_from_stack(
+    state: AppState,
+    request: RequestId,
+    id: Uuid,
+    body: UpdateServiceRequest,
+    operation: Option<Uuid>,
+) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
+    accept(state, request, id, body, None, operation).await
 }
 
 /// Rollback chooses immutable inputs from a successful release of the same service.
@@ -70,6 +80,7 @@ pub async fn rollback(
     ValidatedJson(body): ValidatedJson<RollbackServiceRequest>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let id = vms::parse_id(&id, request.0)?;
+    crate::handlers::micro_services::ensure_stack_writer(&state, id, None, request.0).await?;
     let operation_id = body.operation_id;
     let store = state.store.clone();
     if let Some(saved) = database(request.0, move || store.service_attempt(operation_id)).await? {
@@ -115,6 +126,7 @@ pub async fn rollback(
             strategy: body.strategy,
         },
         Some(release_id),
+        None,
     )
     .await
 }
@@ -128,6 +140,7 @@ pub async fn retry(
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let id = vms::parse_id(&id, request.0)?;
     let claim = state.service_mutations.clone().lock_owned().await;
+    crate::handlers::micro_services::ensure_stack_writer(&state, id, None, request.0).await?;
     let store = state.store.clone();
     let mut deployment = database(request.0, move || store.service_deployment(id))
         .await?
@@ -158,6 +171,7 @@ async fn accept(
     id: Uuid,
     body: UpdateServiceRequest,
     rollback_of: Option<Uuid>,
+    operation: Option<Uuid>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     crate::handlers::micro_services::validate(&body.spec, request.0)?;
     if body.operation_id.is_nil() {
@@ -167,6 +181,7 @@ async fn accept(
         ));
     }
     let claim = state.service_mutations.clone().lock_owned().await;
+    crate::handlers::micro_services::ensure_stack_writer(&state, id, operation, request.0).await?;
     let store = state.store.clone();
     let operation_id = body.operation_id;
     if let Some(saved) = database(request.0, move || store.service_attempt(operation_id)).await? {

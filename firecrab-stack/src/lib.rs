@@ -10,18 +10,20 @@ use firecrab_api_types::{EgressPolicy, MicroServiceSpec};
 use serde::{Deserialize, Serialize};
 
 mod apply;
+mod inputs;
 mod planning;
 mod source;
 pub use apply::{
     ApplyFailure, ApplyRequest, ApplyState, ApplyStatus, ApplyStep, StepState, desired_hash,
 };
+pub use inputs::{PlanInputs, TemplatePin, TemplateSnapshot};
 pub use planning::{
     Action, Binding, Change, DeleteStackRequest, Inventory, Plan, RegisterStackRequest,
     ResourceKind, ServiceSnapshot, StackRecord, VmSnapshot, fingerprint, plan,
 };
 pub use source::{
-    ConfigureGitSource, GitCheck, GitCheckState, GitCredential, GitSource, GitSourceGeneration,
-    GitSourceStatus,
+    ConfigureGitSource, GitCheck, GitCheckState, GitCredential, GitRevision, GitSource,
+    GitSourceGeneration, GitSourceStatus, GitSyncMode, SyncGitSource,
 };
 
 /// Maximum UTF-8 manifest size, including comments.
@@ -86,6 +88,9 @@ pub struct Vm {
     pub name: String,
     /// Installed template alias. Availability and content identity need host validation.
     pub template: String,
+    /// Optional exact content pin. Required for Git-managed standalone VMs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_pin: Option<TemplatePin>,
     /// RAM in MiB, matching the VM API's power-of-two sizes.
     pub ram: u32,
     /// Virtual CPU count.
@@ -251,6 +256,12 @@ pub fn validate(stack: &Stack) -> Result<(), Vec<Diagnostic>> {
             errors.push(diagnostic(
                 &format!("{path}.template"),
                 "must be an installed template alias of 1-64 safe ASCII characters",
+            ));
+        }
+        if vm.template_pin.as_ref().is_some_and(|pin| !pin.valid()) {
+            errors.push(diagnostic(
+                &format!("{path}.templatePin"),
+                "requires a safe version and lowercase 64-character SHA256 hashes",
             ));
         }
         if !(1..=500).contains(&vm.disk_gb) {
