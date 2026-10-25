@@ -259,6 +259,7 @@ body[data-panel-resizing] { cursor: col-resize; user-select: none; }
   .sidebar-item { position: relative; justify-content: center; width: 36px; padding: 0; }
   .sidebar-alert { position: absolute; top: -4px; right: -6px; margin: 0; }
   .sidebar-foot { flex-direction: column; padding: 0; }
+  .sidebar-foot > .btn { width: 36px; padding: 0; }
   .update-indicator-action { max-width: 44px; padding: 0 5px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; }
   .sidebar-language { margin: 0; }
   .sidebar-language select { width: 40px; }

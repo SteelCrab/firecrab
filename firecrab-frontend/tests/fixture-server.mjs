@@ -68,7 +68,7 @@ export async function createFixtureServer(root, initialRows = 100) {
           if (!files.has(encodedPath)) { try { files.set(encodedPath, await readFile(encodedPath)); } catch { files.set(encodedPath, null); } }
           const encoded = files.get(encodedPath);
           if (!encoded) continue;
-          const types = { '.wasm': 'application/wasm', '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html' };
+          const types = { '.wasm': 'application/wasm', '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml' };
           res.writeHead(200, { 'Content-Type': types[extname(filename)] ?? 'application/octet-stream', 'Content-Encoding': encoding, 'Content-Length': encoded.length, 'Vary': 'accept-encoding' });
           res.end(encoded); return;
         }
