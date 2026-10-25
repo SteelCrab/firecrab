@@ -204,8 +204,7 @@ Tunnel references this hostname, remove that connector before stopping the servi
 Interrupted publication is recorded durably, so Stop can clean it up after an API
 restart. A completed domain route keeps serving independently of API restarts.
 
-Changing the configured domain still requires stopping the service first. This
-step does not add rolling updates or release rollback.
+Changing the configured domain requires stopping the service first.
 
 ## Deploy behavior
 
@@ -255,17 +254,8 @@ Deploy exits nonzero when deployment or health fails.
 ## Inject Secrets
 
 Create values in **Secrets**. Reference their UUIDs in **Resources → Advanced settings**.
-Every replica receives one encrypted deployment snapshot. Changed values rotate
-running domain services through the shared Deploy queue and keep the current image.
+Each encrypted deployment snapshot supports automatic rotation of running domain services.
 See [Secret injection](secrets.md#microservice-injection) for limits, storage and restart behavior.
-
-For shared-Secret rotation, restart recovery, failure rollback, and cleanup, use
-an empty disposable Linux/KVM host with at least four CPUs:
-
-```sh
-sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation \
-  --report target/qa/secret-rotation.json
-```
 
 ## Verification
 

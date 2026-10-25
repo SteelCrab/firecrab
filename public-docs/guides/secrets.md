@@ -183,3 +183,13 @@ or a service without Secret references does not need the vault.
 Stop and failed-deploy cleanup remove the encrypted snapshot after removing all
 owned replicas. If cleanup fails, the snapshot remains available for a retry.
 Normal PipeSecrets records remain stored for reuse by other services.
+
+## Verification
+
+Verify shared-Secret rotation, restart recovery, failed-health rollback, and cleanup
+on an empty disposable Linux/KVM host with at least four CPUs:
+
+```sh
+sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation \
+  --report target/qa/secret-rotation.json
+```
