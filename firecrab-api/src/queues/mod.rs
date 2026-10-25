@@ -1,8 +1,10 @@
 //! Application messaging through one host-local, stateful RabbitMQ MicroVM.
 //! Credentials never enter VM records, service specs, or ordinary read responses.
 mod client;
+mod disk;
 mod engine;
 pub(crate) use client::RabbitClient;
+pub(crate) use disk::prepare_engine_disk;
 pub(crate) use engine::{create_engine, engine_status, recover, start_engine, stop_engine};
 
 use crate::{error::AppError, persistence::Store, state::AppState};

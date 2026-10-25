@@ -17,6 +17,8 @@ Image installation requires internet access; normal messaging does not require a
 
 The engine keeps the same VM identifier, node name and writable disk across stop/start.
 The broker's data stays inside that VM's persistent disk generation.
+Firecrab prepares the private Erlang authentication file before boot with the broker user's ownership.
+Its value is derived from the existing engine secret, so recovery can repair an empty authentication file while preserving message data.
 **Stop** pauses messaging without deleting queues, users or messages.
 **Start / recover** starts the existing VM and verifies RabbitMQ's management API.
 An interrupted initial installation can be retried with the same operation.
@@ -172,6 +174,7 @@ Results are saved to `target/qa/queue.json` in the Linux runtime QA artifact.
 The report includes the tested source revision and disk generation before and after restart.
 Use `--api http://127.0.0.1:PORT`, `--restart-api-unit` and `--database` for a dedicated local QA installation.
 The API target must be a localhost HTTP origin with an explicit port.
+Use `--subnet 172.28.249.0/24` to avoid another QA network; only private IPv4 /24–/28 networks are accepted.
 Run this script only on a fresh disposable localhost Linux/KVM installation.
 The stateful engine and its network remain stopped until that installation is purged.
 A fixture test or a Docker broker test does not verify MicroVM persistence.

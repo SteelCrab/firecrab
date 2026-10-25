@@ -125,6 +125,55 @@ async fn queue_records_survive_restart_without_exposing_passwords() {
     assert_eq!(saved.phase, QueuePhase::Ready);
 }
 #[tokio::test]
+async fn offline_cookie_repair_preserves_node_identity_and_existing_broker_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path()).await;
+    let (engine, _) = fixtures(&state);
+    let image = dir.path().join("broker.ext4");
+    assert!(
+        std::process::Command::new("mkfs.ext4")
+            .args(["-q", "-F"])
+            .arg(&image)
+            .arg("16M")
+            .status()
+            .unwrap()
+            .success()
+    );
+    for path in ["/etc", "/var", "/var/lib", "/var/lib/rabbitmq"] {
+        crate::rootfs::run_debugfs(&image, &format!("mkdir {path}")).unwrap();
+    }
+    crate::rootfs::write_into_image(
+        &image,
+        "/etc/passwd",
+        b"rabbitmq:x:999:999:RabbitMQ:/var/lib/rabbitmq:/bin/sh\n",
+    )
+    .unwrap();
+    let work = "/var/lib/rabbitmq/work";
+    crate::rootfs::write_into_image(&image, work, b"existing-broker-data").unwrap();
+    prepare_engine_disk(&state.store, engine.vm_id, &image).unwrap();
+    let cookie_path = "/var/lib/rabbitmq/.erlang.cookie";
+    let read = |path: &str| {
+        let output = dir.path().join("dump");
+        crate::rootfs::dump_from_image(&image, path, &output).unwrap();
+        std::fs::read(output).unwrap()
+    };
+    let original = read(cookie_path);
+    assert_eq!(original.len(), 64);
+    assert!(original.iter().all(u8::is_ascii_hexdigit));
+    let stat = crate::rootfs::run_debugfs(&image, &format!("stat {cookie_path}")).unwrap();
+    let stat = String::from_utf8_lossy(&stat.stdout);
+    let fields: Vec<_> = stat.split_whitespace().collect();
+    for (key, value) in [("Mode:", "0400"), ("User:", "999"), ("Group:", "999")] {
+        assert!(fields.windows(2).any(|pair| pair == [key, value]), "{stat}");
+    }
+    // Reproduce the empty authentication file found after an early guest power-off.
+    crate::rootfs::write_into_image(&image, cookie_path, b"").unwrap();
+    prepare_engine_disk(&state.store, engine.vm_id, &image).unwrap();
+    assert_eq!(read(cookie_path), original);
+    assert_eq!(read(work), b"existing-broker-data");
+}
+
+#[tokio::test]
 async fn binding_credentials_are_private_role_scoped_and_references_cannot_be_deleted() {
     let dir = tempfile::tempdir().unwrap();
     let state = state(dir.path()).await;

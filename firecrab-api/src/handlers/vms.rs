@@ -1484,6 +1484,9 @@ async fn finish_run_start(
             rootfs::protect_vm_credentials(&rootfs)
                 .map_err(|_| "Could not protect the service credential file".to_owned())?;
         }
+        if record.purpose == crate::model::VmPurpose::Queue {
+            crate::queues::prepare_engine_disk(&store_for_shells, record.id, &rootfs)?;
+        }
         crate::guest_ssh::install_on_guest(&rootfs, &paths)
             .map_err(|error| format!("guest SSH install failed: {error}"))?;
         if let Some(ref program) = guest_fastfetch {
@@ -1661,6 +1664,25 @@ fn network_timeout_result(console: &crate::console::ConsoleBroker) -> Result<(),
 /// line can straddle two separate console reads.
 fn find_network_sentinel(buffer: &[u8]) -> Option<Result<(), String>> {
     let text = String::from_utf8_lossy(buffer);
+    // Kernel printk can interrupt a userspace serial write in the middle of
+    // the token. Remove complete timestamped kernel messages before scanning.
+    let text: String = text
+        .split_inclusive('\n')
+        .map(|line| {
+            if line.ends_with('\n')
+                && let Some((prefix, kernel)) = line.split_once('[')
+                && let Some((timestamp, _)) = kernel.split_once(']')
+                && let Some((seconds, fraction)) = timestamp.trim().split_once('.')
+                && !seconds.is_empty()
+                && !fraction.is_empty()
+                && seconds.bytes().all(|b| b.is_ascii_digit())
+                && fraction.bytes().all(|b| b.is_ascii_digit())
+            {
+                return prefix;
+            }
+            line
+        })
+        .collect();
     for line in text.lines() {
         if line.contains("FIRECRAB_NETWORK_READY") {
             return Some(Ok(()));
@@ -5452,6 +5474,21 @@ while True:
         assert_matches!(find_network_sentinel(b"FIRECRAB_NETWORK_FAILED dns unreachable\n"),
             Some(Err(reason)) if reason.contains("dns unreachable"));
         assert_eq!(find_network_sentinel(b"just a normal boot line\n"), None);
+    }
+
+    #[test]
+    fn network_sentinel_survives_kernel_output_inside_the_token() {
+        let interrupted = b"FIRECRAB_NETWORK[    0.783028] busybox (61) used greatest stack depth: 12992 bytes left\r\n_READY 172.28.250.2\r\n";
+        assert_eq!(find_network_sentinel(interrupted), Some(Ok(())));
+        assert_matches!(
+            find_network_sentinel(b"FIRECRAB_NET[    1.000000] boot log\nWORK_FAILED dns-unreachable\n"),
+            Some(Err(reason)) if reason.contains("dns-unreachable")
+        );
+        assert_eq!(
+            find_network_sentinel(b"FIRECRAB_NETWORK[    0.783028] incomplete"),
+            None
+        );
+        assert_eq!(find_network_sentinel(b"FIRECRAB_NETWORK\n_READY"), None);
     }
 
     #[test]
