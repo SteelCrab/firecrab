@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import deploy_fleet_qa as fleet
+import deploy_recovery_qa as recovery
 
 module = importlib.util.spec_from_file_location("deploy_qa", Path(__file__).with_name("ci-qa-deploy.py"))
 qa = importlib.util.module_from_spec(module)
@@ -20,6 +21,23 @@ module.loader.exec_module(qa)
 
 
 class DeployQaTests(unittest.TestCase):
+    def test_recovery_reads_the_network_detail_response_before_creating_resources(self):
+        api = Mock()
+
+        def call(method, path, body=None):
+            if (method, path) == ("GET", "/api/micro-networks/network-id"):
+                return {"subnet": {"cidr": "172.30.0.0/24", "gateway": "172.30.0.1"}}
+            if (method, path) == ("POST", "/api/secrets"):
+                raise RuntimeError("fixture stopped before resource creation")
+            self.fail(f"unexpected request: {method} {path}")
+
+        api.call.side_effect = call
+        evidence = {}
+        with self.assertRaisesRegex(RuntimeError, "fixture stopped before resource creation"):
+            recovery.run_recovery(api, None, None, "network-id", {}, 8080, evidence)
+        self.assertEqual(evidence["replicaRecovery"]["cleanupErrors"], [])
+        self.assertEqual(api.call.call_count, 2)
+
     def test_rotation_fixture_reports_labels_and_rejects_unhealthy_private_inputs(self):
         fixture = qa.image_fixture(b"static-toolbox-fixture", "A")
         manifest = json.loads(fixture[1])

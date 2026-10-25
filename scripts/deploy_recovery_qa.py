@@ -3,7 +3,6 @@
 import concurrent.futures
 import contextlib
 import json
-import ipaddress
 import subprocess
 import threading
 import time
@@ -33,7 +32,7 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
         record = current(service)
         return record if record["phase"] == "running" and not (record.get("recovery") or {}).get("repair") else None
 
-    gateway = str(ipaddress.ip_network(api.call("GET", "/api/micro-networks/" + network)["subnetCidr"]).network_address + 1)
+    gateway = api.call("GET", "/api/micro-networks/" + network)["subnet"]["gateway"]
 
     def create(replicas, private=False):
         name = "repair-" + uuid.uuid4().hex[:8]
