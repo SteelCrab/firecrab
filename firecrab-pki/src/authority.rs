@@ -12,12 +12,14 @@ use uuid::Uuid;
 use crate::{Error, HOST_URI_PREFIX, TlsPaths, parse, read_private, root_certificate};
 
 fn new_directory(path: &Path) -> Result<(), Error> {
-    let mut builder = fs::DirBuilder::new();
+    let builder = fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let builder = {
         use std::os::unix::fs::DirBuilderExt;
+        let mut builder = builder;
         builder.mode(0o700);
-    }
+        builder
+    };
     builder.create(path).map_err(|e| {
         Error(format!(
             "{}: {e}; existing certificates are never overwritten",
