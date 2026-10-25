@@ -48,10 +48,24 @@ struct Session {
     /// Older sessions used the fixed dashboard port and did not record it.
     #[serde(default = "default_port")]
     port: u16,
+    #[serde(default = "default_api_port")]
+    api_port: u16,
+    #[serde(default = "default_resource_port")]
+    resource_port: u16,
+    #[serde(default)]
+    isolated: bool,
 }
 
 fn default_port() -> u16 {
     8080
+}
+
+fn default_api_port() -> u16 {
+    5523
+}
+
+fn default_resource_port() -> u16 {
+    5524
 }
 
 impl Session {
@@ -154,11 +168,29 @@ fn client() -> Result<Client, Error> {
 
 /// Load remembered checkout information; a stopped server deliberately retains it.
 fn read_session(home: &Path) -> Result<Option<Session>, Error> {
-    match fs::read(home.join("runtime/dev-dashboard.json")) {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
+    let instance = super::instance::load(home)?;
+    let state: Session = match fs::read(home.join("runtime/dev-dashboard.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let (api_port, resource_port) = instance
+        .as_ref()
+        .map_or((default_api_port(), default_resource_port()), |instance| {
+            (instance.api_port, instance.resource_port)
+        });
+    if state.api_port != api_port
+        || state.resource_port != resource_port
+        || state.isolated != instance.is_some()
+        || instance
+            .as_ref()
+            .is_some_and(|instance| state.source != instance.source)
+    {
+        return Err(Error::Failed(
+            "dashboard ownership does not match the selected development instance".into(),
+        ));
     }
+    Ok(Some(state))
 }
 
 /// Check both session and source so another server cannot be mistaken for our dashboard.
@@ -206,6 +238,24 @@ fn listening(url: &str) -> bool {
     // Windows can time out before a closed loopback port reports connection refused.
     // Vite's strictPort still rejects any bind conflict when starting the server.
     TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok()
+}
+
+fn check_listening_port(client: &Client, state: Option<&Session>, port: u16) -> Result<(), Error> {
+    let url = format!("http://127.0.0.1:{port}");
+    if listening(&url)
+        && !state.is_some_and(|state| state.port == port && running(client, state, &url))
+    {
+        return Err(Error::Failed(format!(
+            "dashboard port {port} is already in use by another server; choose --port PORT or stop that server and retry service dev"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate ownership and reject foreign listeners without changing dashboard state.
+pub fn check_port(home: &Path, port: u16) -> Result<(), Error> {
+    let state = read_session(home)?;
+    check_listening_port(&client()?, state.as_ref(), port)
 }
 
 /// Stop only a server that proves ownership; stale state never authorizes killing a PID.
@@ -263,26 +313,36 @@ pub fn clean(home: &Path) -> Result<(), Error> {
 
 /// Launch one detached Node process, or reuse the matching healthy dashboard.
 pub fn start(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
+    let instance = super::instance::load(home)?;
+    if instance
+        .as_ref()
+        .is_some_and(|instance| instance.source != source)
+    {
+        return Err(Error::Failed(
+            "dashboard source does not match the selected development instance".into(),
+        ));
+    }
     let url = format!("http://127.0.0.1:{port}");
     let _lock = lock(home)?;
     let client = client()?;
     let dependencies = fs::read_to_string(
         source.join("firecrab-frontend/node_modules/.firecrab-dev-dependencies"),
     )?;
+    let (api_port, resource_port) = instance
+        .as_ref()
+        .map_or((default_api_port(), default_resource_port()), |instance| {
+            (instance.api_port, instance.resource_port)
+        });
+    let isolated = instance.is_some();
     let previous = read_session(home)?;
-    if listening(&url)
-        && !previous
-            .as_ref()
-            .is_some_and(|state| state.port == port && running(&client, state, &url))
-    {
-        return Err(Error::Failed(format!(
-            "dashboard port {port} is already in use by another server; choose --port PORT or stop that server and retry service dev"
-        )));
-    }
+    check_listening_port(&client, previous.as_ref(), port)?;
     if let Some(previous) = previous {
         if previous.source == source
             && previous.port == port
             && previous.dependencies == dependencies
+            && previous.api_port == api_port
+            && previous.resource_port == resource_port
+            && previous.isolated == isolated
             && running(&client, &previous, &url)
         {
             return report_ready(&client, home, &url);
@@ -298,15 +358,30 @@ pub fn start(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
         session: Uuid::new_v4(),
         dependencies,
         port,
+        api_port,
+        resource_port,
+        isolated,
     };
     let log = fs::File::create(&log_path)?;
     let mut command = Command::new("node");
     command
-        .arg(script)
+        // Resolve the entry inside runtime instead of passing a Windows verbatim
+        // path to Node's ESM CLI. Ownership metadata remains canonical.
+        .current_dir(&runtime)
+        .arg("dev-dashboard.mjs")
         .arg(source)
         .arg(port.to_string())
         .env("FIRECRAB_DEV_SESSION", state.session.to_string())
         .env("FIRECRAB_DEV_DEPENDENCIES", &state.dependencies)
+        .env("FIRECRAB_DEV_API_PORT", state.api_port.to_string())
+        .env(
+            "FIRECRAB_DEV_RESOURCE_PORT",
+            state.resource_port.to_string(),
+        )
+        .env(
+            "FIRECRAB_DEV_ISOLATED",
+            if state.isolated { "1" } else { "0" },
+        )
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);

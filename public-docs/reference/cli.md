@@ -158,14 +158,22 @@ Use the [macOS](../getting-started/macos.md#service-commands) or [Windows](../ge
 Use [service dev](../development/micromanager.md) to deploy source-built API/helper binaries.
 `firecrab service dev --port 8098` selects the development dashboard port (default 8080).
 Development start/restart controls reuse the saved port; the API port stays unchanged.
+Git-linked worktrees use [independent development instances](../development/worktree-dev.md).
+Backend API/resource ports are allocated and saved separately from the manual dashboard port.
+Linux `service dev` uses a private Docker runtime from both primary and linked checkouts.
 
 On macOS and Windows, lifecycle controls have separate scopes:
 
 | Commands | Scope |
 | --- | --- |
 | `firecrab service start` / `stop` / `restart` | The management VM and its resident host service |
-| `firecrab service dev start` / `stop` / `restart` | Guest API/helper and the host development dashboard |
-| `firecrab service dev clean` | Restore installed release services, remove guest development files, and clear host dashboard state |
+| `firecrab service dev start` / `stop` / `restart` | The selected checkout's development backend and dashboard |
+| `firecrab service dev clean` | Restore that environment's release, remove development files, and clear its dashboard state |
+
+Non-development service controls retain their primary scope, even inside a linked worktree.
+General VM/API commands do not automatically select the worktree API.
+Pass the development command's printed API URL with `--api URL`.
+Docker `dev clean` and `--restore` preserve its named data volume and runtime resources.
 
 ## Pipe ingress and tunnel
 

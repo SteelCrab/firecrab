@@ -40,6 +40,10 @@ pub(crate) fn validate(connection: &Connection) -> Result<(), SecretError> {
             &["token"]
         }
         Provider::AwsSecretsManager => {
+            // AWS treats a leading `!` as negation; prefixes must stay literal.
+            if !settings.prefix.is_empty() {
+                validate_name(&settings.prefix)?;
+            }
             if settings.region.is_empty()
                 || settings.region.len() > 40
                 || !settings

@@ -55,6 +55,9 @@ pub fn apply(home: &Path, settings: &ManagerResources) -> Result<(), Error> {
     let mut layout =
         Layout::from_process_env().map_err(|error| Error::Invalid(error.to_string()))?;
     layout.managed_home = home.to_owned();
+    if let Some(instance) = super::super::dev::instance::load(home)? {
+        layout.install_dir = instance.install_dir;
+    }
     let ssh_settings = super::ssh::load(home).map_err(|error| Error::Invalid(error.to_string()))?;
     let disk = home.join("data/firecrab-data.raw");
     let original = fs::symlink_metadata(&disk)?;

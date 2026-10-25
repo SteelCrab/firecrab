@@ -480,6 +480,33 @@ test('manager resource editor uses the controller ID header without borrowing fa
   assert.equal(saved.controller, 'controller-fixture'); assert.equal(saved.body.cpu, 6);
 });
 
+test('development resource bootstrap uses its own origin instead of the primary controller', async () => {
+  const endpoint = '/__firecrab_resources/api/service/resources';
+  const primaryRequests = [];
+  let saved;
+  page.on('request', request => { if (request.url().startsWith('http://127.0.0.1:5524/')) primaryRequests.push(request.url()); });
+  await page.route(`${fixture.url}/`, async route => {
+    const response = await route.fetch();
+    const headers = { ...response.headers() };
+    delete headers['content-encoding']; delete headers['content-length'];
+    await route.fulfill({ response, headers, body: (await response.text()).replace('<head>', `<head><meta name="firecrab-resource-endpoint" content="${endpoint}">`) });
+  });
+  await page.route(`${fixture.url}${endpoint}`, async route => {
+    if (route.request().method() === 'PUT') saved = {
+      body: route.request().postDataJSON(), controller: route.request().headers()['x-firecrab-controller-id'],
+    };
+    await route.fulfill({ json: { controllerId: 'private-controller', settings: { cpu: 2, memoryMib: 4096, diskGib: 64, networkMode: 'nat', networkInterface: null } } });
+  });
+  await open('host');
+  await page.getByRole('button', { name: 'Edit resources', exact: true }).click();
+  await page.getByLabel('CPU', { exact: true }).fill('6');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.locator('#editor')).toHaveCount(0);
+  assert.equal(saved.controller, 'private-controller');
+  assert.equal(saved.body.cpu, 6);
+  assert.deepEqual(primaryRequests, [], 'a worktree resource edit must never reach the primary controller');
+});
+
 test('console binds Ghostty, ends close-code 4000 sessions, and releases the socket on navigation', async () => {
   let connections = 0;
   await page.routeWebSocket('**/ws/vms/**/console', socket => {
