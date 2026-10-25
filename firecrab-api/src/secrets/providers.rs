@@ -517,3 +517,62 @@ fn sign_aws(
 
 #[cfg(test)]
 mod tests;
+
+/// Fetch only the linked account's values. Production callers supply the fixed console endpoint.
+pub(crate) async fn account_snapshot(
+    endpoint: &str,
+    token: &str,
+    account_id: uuid::Uuid,
+) -> Result<BTreeMap<String, String>, SecretError> {
+    let client = client()?;
+    let response = client
+        .get(endpoint)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| SecretError::Provider)?;
+    if matches!(response.status().as_u16(), 401 | 403 | 410) {
+        return Err(SecretError::Invalid(
+            "The account token expired, was revoked, or lacks secrets-read permission. Issue a secrets-read token in console.firecrab.dev and reconnect Auth",
+        ));
+    }
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > MAX_RESPONSE as u64)
+    {
+        return Err(SecretError::Provider);
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.try_next().await.map_err(|_| SecretError::Provider)? {
+        if bytes.len() + chunk.len() > MAX_RESPONSE {
+            return Err(SecretError::Provider);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Snapshot {
+        account_id: uuid::Uuid,
+        secrets: Vec<Entry>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        name: String,
+        value: String,
+    }
+    let snapshot: Snapshot = serde_json::from_slice(&bytes).map_err(|_| SecretError::Provider)?;
+    if snapshot.account_id != account_id || snapshot.secrets.len() > MAX_SECRETS {
+        return Err(SecretError::Provider);
+    }
+    let mut values = BTreeMap::new();
+    for entry in snapshot.secrets {
+        validate_name(&entry.name)?;
+        validate_value(&entry.value)?;
+        if values.insert(entry.name, entry.value).is_some() {
+            return Err(SecretError::Provider);
+        }
+    }
+    Ok(values)
+}

@@ -65,6 +65,17 @@ pub fn t(value: &str) -> &str {
         "A VM can have at most eight volumes." => "한 VM에는 최대 8개 볼륨을 연결합니다.",
         "Select a volume and an absolute mount path." => "볼륨과 절대 마운트 경로를 지정합니다.",
         "A volume can be selected only once." => "한 볼륨은 한 번만 선택합니다.",
+        "Firecrab account secrets" => "Firecrab 계정 비밀키",
+        "Preview account secrets" => "계정 비밀키 가져오기 미리보기",
+        "Loading account connection…" => "계정 연결을 확인한다…",
+        "Preview secrets from the Firecrab account connected in Auth. Only selected secrets are copied locally." => {
+            "Auth에 연결된 Firecrab 계정의 비밀키를 미리 확인한다. 선택한 비밀키만 로컬에 복사한다."
+        }
+        "Connect a Firecrab account in Auth to import account secrets." => {
+            "계정 비밀키를 가져오려면 Auth에서 Firecrab 계정을 연결한다."
+        }
+        "Open Auth" => "Auth 열기",
+        "Imported from" => "가져온 위치",
         "Connect bucket" => "버킷 연결",
         "Connect S3 bucket" => "S3 버킷 연결",
         "Edit S3 connection" => "S3 연결 수정",
