@@ -695,3 +695,556 @@ async fn database_services_api_real_engines() {
         .await;
     }
 }
+
+// Exercise the public control API as well as the underlying SQL operations.
+async fn api_call(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    input: Value,
+    status: u16,
+) -> Value {
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header("origin", "http://localhost:8080")
+                .header("content-type", "application/json")
+                .body(Body::from(input.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), status, "{method} {path}");
+    serde_json::from_slice(
+        &to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap()
+}
+async fn api_job(app: &axum::Router, base: &str, id: &Value) -> Value {
+    for _ in 0..300 {
+        let jobs = api_call(app, "GET", &format!("{base}/jobs"), Value::Null, 200).await;
+        let job = jobs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["id"] == *id)
+            .unwrap();
+        if job["status"] == "succeeded" {
+            return job.clone();
+        }
+        assert!(
+            !matches!(job["status"].as_str(), Some("failed" | "needs_recovery")),
+            "maintenance did not succeed: {job}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("maintenance API job did not finish");
+}
+
+#[tokio::test]
+#[ignore = "requires disposable DB and three TLS RabbitMQ fixtures"]
+async fn database_event_and_maintenance_api_real_engines() {
+    let inputs: Vec<DatabaseInput> = serde_json::from_slice(
+        &std::fs::read(std::env::var("FIRECRAB_DB_SERVICES_QA_JSON").unwrap()).unwrap(),
+    )
+    .unwrap();
+    let cluster: super::managed_rabbitmq::Cluster = serde_json::from_slice(
+        &std::fs::read(std::env::var("FIRECRAB_RABBITMQ_FIXTURE").unwrap()).unwrap(),
+    )
+    .unwrap();
+    for input in inputs {
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::state::AppState::with_db_file(
+            crate::templates::TemplateRegistry::load_default().unwrap(),
+            dir.path().join("workflow.db"),
+        )
+        .await
+        .unwrap();
+        let app =
+            crate::server::build_router(state.clone(), &crate::server::HttpConfig::load().unwrap());
+        let settings = input.settings(Uuid::new_v4()).unwrap();
+        let engine = settings.summary.engine;
+        let table = TableRequest {
+            schema: if engine == Engine::Postgres {
+                "public".into()
+            } else {
+                settings.summary.database.clone()
+            },
+            table: format!("workflow_{}", Uuid::new_v4().simple()),
+        };
+        let qualified = table.qualified(engine);
+        let mut c = DatabaseConnection::connect_write(&input, &settings)
+            .await
+            .unwrap();
+        execute(&mut c,&format!("CREATE TABLE {qualified}(id bigint PRIMARY KEY,name varchar(100) NOT NULL); INSERT INTO {qualified} VALUES(1,'original')")).await;
+        let saved = api_call(
+            &app,
+            "POST",
+            "/api/pipe/databases",
+            serde_json::to_value(&input).unwrap(),
+            201,
+        )
+        .await;
+        let id = Uuid::parse_str(saved["id"].as_str().unwrap()).unwrap();
+        let base = format!("/api/pipe/databases/{id}");
+        state
+            .store
+            .put_pipe_auth(&crate::pipe_auth::SavedAuth::Github {
+                username: "database-qa".into(),
+                token: "fixture-unused-for-deployment".into(),
+            })
+            .unwrap();
+        let service = api_call(
+            &app,
+            "POST",
+            "/api/micro-services",
+            json!({"name":"workflow-handler","image":"ghcr.io/database-qa/handler:1","port":3000,"ram":256,"cpu":1}),
+            201,
+        )
+        .await;
+        let service_id = service["id"].as_str().unwrap();
+
+        // External configuration disables managed supervision and never exposes credentials.
+        assert_eq!(
+            api_call(&app, "GET", "/api/pipe/database-rabbitmq", Value::Null, 200).await["configured"],
+            false
+        );
+        assert!(
+            api_call(
+                &app,
+                "GET",
+                "/api/pipe/database-rabbitmq/managed",
+                Value::Null,
+                200
+            )
+            .await
+            .is_null()
+        );
+        let tid = Uuid::new_v4();
+        let trigger_input = json!({"requestId":tid,"schema":table.schema,"table":table.table,"serviceId":service_id});
+        api_call(&app,"POST",&format!("{base}/triggers"),json!({"requestId":Uuid::nil(),"schema":table.schema,"table":table.table,"serviceId":service_id}),400).await;
+        api_call(
+            &app,
+            "POST",
+            &format!("{base}/triggers"),
+            trigger_input.clone(),
+            400,
+        )
+        .await;
+        let mut managed = cluster.clone();
+        managed.enabled = true;
+        managed.phase = "ready".into();
+        state
+            .store
+            .save_managed_database_rabbitmq(&managed)
+            .unwrap();
+        let metadata = api_call(
+            &app,
+            "GET",
+            "/api/pipe/database-rabbitmq/managed",
+            Value::Null,
+            200,
+        )
+        .await;
+        assert_eq!(metadata["brokers"].as_array().unwrap().len(), 3);
+        assert!(metadata.get("config").is_none() && metadata["brokers"][0].get("files").is_none());
+        api_call(
+            &app,
+            "POST",
+            "/api/pipe/database-rabbitmq/managed",
+            json!({"development":false}),
+            409,
+        )
+        .await;
+        api_call(
+            &app,
+            "POST",
+            "/api/pipe/database-rabbitmq/managed",
+            json!({"development":true}),
+            409,
+        )
+        .await;
+        let config = managed.config.as_ref().unwrap();
+        api_call(
+            &app,
+            "PUT",
+            "/api/pipe/database-rabbitmq",
+            serde_json::to_value(config).unwrap(),
+            200,
+        )
+        .await;
+        assert!(
+            !state
+                .store
+                .managed_database_rabbitmq()
+                .unwrap()
+                .unwrap()
+                .enabled
+        );
+        let metadata = api_call(&app, "GET", "/api/pipe/database-rabbitmq", Value::Null, 200).await;
+        assert_eq!(metadata["configured"], true);
+        assert_eq!(metadata["tls"], true);
+        for field in ["password", "username", "caCertificate", "clientKey"] {
+            assert!(metadata.get(field).is_none());
+        }
+
+        // A retry keeps capture ownership and the auto-created read-only handler account.
+        let created = api_call(
+            &app,
+            "POST",
+            &format!("{base}/triggers"),
+            trigger_input.clone(),
+            200,
+        )
+        .await;
+        assert_eq!(created["installed"], true);
+        let binding =
+            api_call(&app, "GET", &format!("{base}/bindings"), Value::Null, 200).await[0].clone();
+        assert_eq!(binding["access"], "read");
+        assert!(binding.get("eventInbox").is_none());
+        assert!(
+            state
+                .store
+                .database_bindings()
+                .unwrap()
+                .iter()
+                .any(|b| b.id.to_string() == binding["id"].as_str().unwrap() && b.event_inbox)
+        );
+        let path = format!("/api/pipe/database-triggers/{tid}");
+        api_call(&app, "PUT", &path, json!({"paused":true}), 200).await;
+        assert_eq!(
+            api_call(
+                &app,
+                "POST",
+                &format!("{base}/triggers"),
+                trigger_input.clone(),
+                200
+            )
+            .await["paused"],
+            true
+        );
+        let mut changed = trigger_input.clone();
+        changed["path"] = json!("/different");
+        api_call(&app, "POST", &format!("{base}/triggers"), changed, 409).await;
+        api_call(
+            &app,
+            "PUT",
+            "/api/pipe/database-rabbitmq",
+            serde_json::to_value(config).unwrap(),
+            400,
+        )
+        .await;
+        api_call(
+            &app,
+            "POST",
+            "/api/pipe/database-rabbitmq/managed",
+            json!({"development":false}),
+            400,
+        )
+        .await;
+        api_call(&app, "DELETE", &path, Value::Null, 400).await;
+        execute(
+            &mut c,
+            &format!("UPDATE {qualified} SET name='retained by API' WHERE id=1"),
+        )
+        .await;
+        let outbox = format!(
+            "{}.{}",
+            quote(engine, &internal_schema(id)),
+            quote(engine, &format!("outbox_{}", tid.simple()))
+        );
+        let mark_failed = format!(
+            "UPDATE {outbox} SET status='failed',attempts=12,last_error='handler_unavailable' WHERE id=1"
+        );
+        execute(&mut c, &mark_failed).await;
+        state
+            .store
+            .set_database_trigger_health(tid, Some("rabbitmq_unavailable"))
+            .unwrap();
+        let status = api_call(&app, "GET", &format!("{base}/triggers"), Value::Null, 200).await;
+        assert_eq!(status[0]["failed"], 1);
+        assert_eq!(status[0]["lastError"], "rabbitmq_unavailable");
+        state.store.set_database_trigger_health(tid, None).unwrap();
+        let failures = api_call(&app, "GET", &format!("{path}/failures"), Value::Null, 200).await;
+        let event_id = format!("{tid}:1");
+        assert_eq!(failures[0]["eventId"], event_id);
+        assert!(failures[0].get("payload").is_none());
+        api_call(&app, "POST", &format!("{path}/replay/1"), Value::Null, 200).await;
+        assert!(
+            api_call(&app, "GET", &format!("{path}/failures"), Value::Null, 200)
+                .await
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        api_call(
+            &app,
+            "POST",
+            &format!("{path}/replay/999"),
+            Value::Null,
+            404,
+        )
+        .await;
+        execute(&mut c, &mark_failed).await;
+        api_call(
+            &app,
+            "POST",
+            &format!("{path}/acknowledge/1"),
+            json!({"confirmEventId":"another-event"}),
+            400,
+        )
+        .await;
+        assert_eq!(
+            api_call(&app, "GET", &format!("{base}/triggers"), Value::Null, 200).await[0]["failed"],
+            1
+        );
+        api_call(
+            &app,
+            "POST",
+            &format!("{path}/acknowledge/1"),
+            json!({"confirmEventId":event_id}),
+            200,
+        )
+        .await;
+        // Repeating the same explicit skip is safe, but cannot skip a different event.
+        api_call(
+            &app,
+            "POST",
+            &format!("{path}/acknowledge/1"),
+            json!({"confirmEventId":event_id}),
+            200,
+        )
+        .await;
+        assert_eq!(
+            api_call(&app, "GET", &format!("{base}/triggers"), Value::Null, 200).await[0]["skipped"],
+            1
+        );
+        api_call(&app, "POST", &format!("{path}/detach"), Value::Null, 200).await;
+        api_call(&app, "PUT", &path, json!({"paused":true}), 200).await;
+        assert_eq!(
+            api_call(&app, "PUT", &path, json!({"paused":false}), 200).await["detached"],
+            true
+        );
+        api_call(&app, "DELETE", &path, Value::Null, 200).await;
+        assert!(
+            api_call(&app, "GET", &format!("{base}/triggers"), Value::Null, 200)
+                .await
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+
+        // Failed setup retains ownership, is visible, cannot resume, and can be cleaned.
+        let partial = Uuid::new_v4();
+        let partial_path = format!("/api/pipe/database-triggers/{partial}");
+        api_call(&app,"POST",&format!("{base}/triggers"),json!({"requestId":partial,"schema":table.schema,"table":format!("missing_{}",partial.simple()),"serviceId":service_id}),404).await;
+        assert_eq!(
+            api_call(&app, "GET", &format!("{base}/triggers"), Value::Null, 200).await[0]["lastError"],
+            "setup_incomplete"
+        );
+        api_call(&app, "PUT", &partial_path, json!({"paused":false}), 400).await;
+        api_call(
+            &app,
+            "POST",
+            &format!("{partial_path}/detach"),
+            Value::Null,
+            200,
+        )
+        .await;
+        api_call(&app, "DELETE", &partial_path, Value::Null, 200).await;
+
+        // Backups must finish before download/removal; retries reuse their receipt.
+        let capabilities = api_call(
+            &app,
+            "GET",
+            "/api/pipe/database-maintenance/tools",
+            Value::Null,
+            200,
+        )
+        .await;
+        assert_eq!(capabilities["postgres"], true);
+        assert_eq!(capabilities["mysql"], true);
+        let backup_input = json!({"requestId":Uuid::new_v4()});
+        let backup = api_call(
+            &app,
+            "POST",
+            &format!("{base}/backups"),
+            backup_input.clone(),
+            202,
+        )
+        .await;
+        let backup_id = backup["id"].as_str().unwrap();
+        let archive = format!("/api/pipe/database-jobs/{backup_id}/backup");
+        api_call(&app, "DELETE", &archive, Value::Null, 400).await;
+        api_call(&app, "GET", &archive, Value::Null, 404).await;
+        api_call(
+            &app,
+            "POST",
+            &format!("{base}/backups"),
+            backup_input.clone(),
+            200,
+        )
+        .await;
+        super::maintenance::spawn(state.clone());
+        let snapshot = api_job(&app, &base, &backup["id"]).await;
+        use axum::{
+            body::{Body, to_bytes},
+            http::Request,
+        };
+        use tower::ServiceExt;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&archive)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/octet-stream"
+        );
+        assert!(
+            response.headers()["content-disposition"]
+                .to_str()
+                .unwrap()
+                .contains(backup_id)
+        );
+        let bytes = to_bytes(response.into_body(), 16 * 1024 * 1024)
+            .await
+            .unwrap();
+        use sha2::Digest;
+        assert_eq!(
+            format!("{:x}", sha2::Sha256::digest(&bytes)),
+            snapshot["checksum"].as_str().unwrap()
+        );
+        api_call(&app, "POST", &format!("{base}/backups"), backup_input, 200).await;
+        api_call(&app, "DELETE", &base, Value::Null, 400).await;
+
+        let migration = json!({"requestId":Uuid::new_v4(),"version":"api-v1","sql":format!("ALTER TABLE {qualified} ADD COLUMN note varchar(100)"),"confirmDatabase":settings.summary.database,"externalWritersStopped":true});
+        let mut denied = migration.clone();
+        denied["externalWritersStopped"] = json!(false);
+        api_call(&app, "POST", &format!("{base}/migrations"), denied, 400).await;
+        let mut escaped = migration.clone();
+        escaped["sql"] = json!("COMMIT");
+        api_call(&app, "POST", &format!("{base}/migrations"), escaped, 400).await;
+        let mut reused = migration.clone();
+        reused["requestId"] = backup["id"].clone();
+        api_call(&app, "POST", &format!("{base}/migrations"), reused, 409).await;
+        let queued = api_call(
+            &app,
+            "POST",
+            &format!("{base}/migrations"),
+            migration.clone(),
+            202,
+        )
+        .await;
+        api_job(&app, &base, &queued["id"]).await;
+        assert!(
+            c.table_info(&table)
+                .await
+                .unwrap()
+                .columns
+                .iter()
+                .any(|col| col.name == "note")
+        );
+        api_call(
+            &app,
+            "POST",
+            &format!("{base}/migrations"),
+            migration.clone(),
+            200,
+        )
+        .await;
+        let mut changed = migration;
+        changed["sql"] = json!(format!("ALTER TABLE {qualified} ADD COLUMN changed text"));
+        api_call(&app, "POST", &format!("{base}/migrations"), changed, 409).await;
+
+        let restore = json!({"requestId":Uuid::new_v4(),"backupId":backup_id,"confirmDatabase":settings.summary.database,"externalWritersStopped":true});
+        let mut denied = restore.clone();
+        denied["confirmDatabase"] = json!("wrong database");
+        api_call(&app, "POST", &format!("{base}/restore"), denied, 400).await;
+        let mut missing = restore.clone();
+        missing["backupId"] = json!(Uuid::new_v4());
+        api_call(&app, "POST", &format!("{base}/restore"), missing, 404).await;
+        let restored = api_call(
+            &app,
+            "POST",
+            &format!("{base}/restore"),
+            restore.clone(),
+            202,
+        )
+        .await;
+        api_job(&app, &base, &restored["id"]).await;
+        assert!(
+            !c.table_info(&table)
+                .await
+                .unwrap()
+                .columns
+                .iter()
+                .any(|col| col.name == "note")
+        );
+        assert_eq!(
+            count(
+                &mut c,
+                &format!("SELECT COUNT(*) FROM {qualified} WHERE id=1 AND name='retained by API'")
+            )
+            .await,
+            1
+        );
+        api_call(&app, "POST", &format!("{base}/restore"), restore, 200).await;
+        let jobs = api_call(&app, "GET", &format!("{base}/jobs"), Value::Null, 200).await;
+        for job in jobs.as_array().unwrap().iter().filter(|j| {
+            j["kind"] == "backup" && matches!(j["status"].as_str(), Some("succeeded" | "failed"))
+        }) {
+            api_call(
+                &app,
+                "DELETE",
+                &format!(
+                    "/api/pipe/database-jobs/{}/backup",
+                    job["id"].as_str().unwrap()
+                ),
+                Value::Null,
+                200,
+            )
+            .await;
+        }
+        api_call(&app, "GET", &archive, Value::Null, 404).await;
+        api_call(
+            &app,
+            "DELETE",
+            &format!(
+                "/api/pipe/database-bindings/{}",
+                binding["id"].as_str().unwrap()
+            ),
+            Value::Null,
+            200,
+        )
+        .await;
+        api_call(&app, "DELETE", &base, Value::Null, 200).await;
+        execute(&mut c, &format!("DROP TABLE {qualified}")).await;
+        let namespace = quote(engine, &internal_schema(id));
+        execute(
+            &mut c,
+            &if engine == Engine::Postgres {
+                format!("DROP SCHEMA {namespace} CASCADE")
+            } else {
+                format!("DROP DATABASE {namespace}")
+            },
+        )
+        .await;
+    }
+}

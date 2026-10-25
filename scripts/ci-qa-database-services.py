@@ -129,7 +129,7 @@ def main():
                     raise RuntimeError("QA RabbitMQ startup timed out")
                 time.sleep(1)
             tests = [*base, "-e", "FIRECRAB_DB_SERVICES_QA_JSON=/qa/input.json", "-e", "FIRECRAB_RABBITMQ_FIXTURE=/qa/rabbitmq.json", "firecrab-database-services-qa", f"/tests/{binary.name}"]
-            for name in ["database_services_real_engines", "cancelled_mysql_setup_repairs_only_a_host_claimed_namespace", "native_backups_migrations_and_restore", "database_services_api_real_engines"]:
+            for name in ["database_services_real_engines", "cancelled_mysql_setup_repairs_only_a_host_claimed_namespace", "native_backups_migrations_and_restore", "database_services_api_real_engines", "database_event_and_maintenance_api_real_engines"]:
                 run([*tests, name, "--ignored", "--nocapture"])
             gate = temporary / "restart-gate"
             gate.mkdir()
