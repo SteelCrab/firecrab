@@ -452,6 +452,9 @@ async fn execute(
     let alias = oci::template_name_from_reference(&pinned)
         .map_err(|error| error.to_string())?
         .alias;
+    if state.templates.resolve_alias(&alias).is_none() {
+        deploy::cache::restore_cached(state, &alias, &digest).await?;
+    }
     if let Some(template) = state.templates.resolve_alias(&alias) {
         if template.version != digest {
             return Err("Pinned image alias belongs to a different digest".into());
@@ -462,12 +465,13 @@ async fn execute(
             .begin_with(&alias, "service image import started")
         {
             Ok(_) => {
-                oci::run_oci_import(
+                oci::run_deploy_import(
                     state.oci_imports.clone(),
                     (*state.templates).clone(),
                     pinned,
                     alias.clone(),
                     Some(credential),
+                    state.store.clone(),
                 )
                 .await
             }

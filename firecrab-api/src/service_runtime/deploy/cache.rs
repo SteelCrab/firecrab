@@ -66,7 +66,7 @@ pub(super) async fn collect(state: &AppState) -> Result<usize, String> {
 }
 
 /// A crash can leave the published, journaled file before alias registration.
-pub(super) async fn restore_cached(
+pub(crate) async fn restore_cached(
     state: &AppState,
     alias: &str,
     digest: &str,

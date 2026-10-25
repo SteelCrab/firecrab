@@ -194,6 +194,37 @@ async fn published_image_before_registration_is_recovered_without_an_import() {
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
+async fn initial_deploy_recovers_a_published_image_without_registry_access() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let mut record = release(Uuid::new_v4(), 8);
+    let spec = owned_image(&state, &record, false);
+    record.spec.image = pinned_reference(&record).unwrap();
+    record.digest = None;
+    record.phase = ServicePhase::Queued;
+    record.spec.domain = Some("web.example.test".into());
+    record.request.micro_network_id = Some(Uuid::new_v4());
+    // Stop after image preparation at the normal placement validation boundary.
+    record.spec.security_group_id = Some(Uuid::new_v4());
+    let credential = require_image_auth(&state, &record.spec.image, record.id)
+        .await
+        .unwrap()
+        .registry_credential()
+        .await
+        .unwrap();
+    let error = execute(&state, &mut record, credential).await.unwrap_err();
+    assert_eq!(error, "security group does not exist");
+    assert_eq!(record.digest.as_deref(), Some(spec.version.as_str()));
+    assert!(state.templates.resolve_alias(&spec.alias).is_some());
+    assert_eq!(
+        state.oci_imports.snapshot(&spec.alias).status,
+        ImageInstallStatus::Idle
+    );
+    assert_eq!(collect(&state).await.unwrap(), 0);
+}
+
+#[tokio::test]
 async fn explicit_digest_reuses_verified_cache_without_registry_access() {
     let root = tempfile::tempdir().unwrap();
     let state = state(root.path()).await;
