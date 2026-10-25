@@ -93,7 +93,7 @@ async fn database_services_real_engines() {
                     table: table.clone(),
                     operation: Operation::Insert,
                     values: BTreeMap::from([
-                        ("id".into(), json!(1)),
+                        ("id".into(), json!("1")),
                         (column.into(), json!(value)),
                     ]),
                     key: BTreeMap::new(),
@@ -114,7 +114,7 @@ async fn database_services_real_engines() {
                 table,
                 operation: Operation::Insert,
                 values: BTreeMap::from([
-                    ("id".into(), json!(1)),
+                    ("id".into(), json!("1")),
                     ("v".into(), json!("ab")),
                     ("c".into(), json!("xy")),
                     ("b".into(), json!("10")),
