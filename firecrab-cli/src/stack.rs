@@ -13,10 +13,16 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::api_client::{ApiClient, ApiError};
+mod source;
 
 /// Stack validation, ownership metadata, planning and explicit native execution.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Configure a Git source and detect drift without applying resources.
+    Source {
+        #[command(subcommand)]
+        command: source::Command,
+    },
     /// Apply a fresh or explicitly reviewed plan with durable retry identity.
     Apply(ApplyArgs),
     /// Read durable, redacted execution status after a disconnect or API restart.
@@ -183,6 +189,7 @@ pub fn validate_file(file: PathBuf, json: bool) -> i32 {
 /// Use the selected API for ownership metadata, plans and durable apply operations.
 pub fn run_remote(client: &ApiClient, command: Command) -> Result<(), Error> {
     match command {
+        Command::Source { command } => source::run(client, command)?,
         Command::Apply(args) => apply_file(client, args)?,
         Command::ApplyStatus { name, id } => {
             name_valid(&name)?;
