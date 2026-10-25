@@ -263,7 +263,18 @@ fn scheduler_ownership_is_exclusive_until_its_process_releases_it() {
     let lock = first.scheduler_lock().unwrap();
     assert!(second.scheduler_lock().is_err());
     drop(lock);
-    assert!(second.scheduler_lock().is_ok());
+    // Other tests may fork while this descriptor is open. CLOEXEC releases
+    // their inherited copies when exec completes, rather than at this drop.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match second.scheduler_lock() {
+            Ok(_) => break,
+            Err(error) => {
+                assert!(std::time::Instant::now() < deadline, "{error}");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+    }
 }
 
 #[test]
