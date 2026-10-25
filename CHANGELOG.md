@@ -23,6 +23,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Replicated controller services declare stateless or shared external application
+  state and distribute version-pinned PipeSecrets through encrypted deployment
+  snapshots. Invalid state, credential references and exclusive work fail before
+  dispatch. Tracked in [#457](https://github.com/SteelCrab/firecrab/issues/457).
+
 - Changed PipeSecret values automatically rotate running domain services through
   Deploy. Rotation keeps the current image and encrypted per-attempt values,
   shares queue/capacity limits, and retains bounded retries across API restarts.

@@ -7,6 +7,8 @@ making a remote request.
 
 This is the VM placement foundation in [#455](https://github.com/SteelCrab/firecrab/issues/455).
 Controller services add shared MicroService identity and release generations in [#456](https://github.com/SteelCrab/firecrab/issues/456).
+[Application state and credentials](service-state.md) define stateless and external-state
+services with version-pinned controller PipeSecrets.
 Networks, storage, VM processes, and pools remain host-local. Placement does not
 provide service load balancing, application-state replication, or VM migration.
 
@@ -275,8 +277,10 @@ intent. Worker service routes under `/api/cluster/worker/services/{id}` require 
 enrolled controller's mutual-TLS identity. Worker receipts reject stale generations
 and foreign service/deployment ownership before changing local resources.
 
-Only replicated mode is available. Host roles remain unset for #463. Cross-host
-domain routing, host-local Secrets/Queue/storage/security-group bindings, target
+Only replicated mode is available. Host roles remain unset for #463. Use the
+[state and credential contract](service-state.md) for shared external application
+state and scoped controller credentials. Cross-host domain routing,
+host-local Secrets/Queue/storage/security-group bindings, target
 migration and availability-preserving rollouts require separate work. Their
 unsupported inputs are rejected at admission.
 

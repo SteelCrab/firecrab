@@ -24,6 +24,11 @@ pub(super) fn content(app: &App) -> String {
         let id = text(service, "id");
         out.push_str(&format!("<article class=\"wasm-card\" data-cluster-service=\"{}\"><h3>{}</h3><p>Service: {} · Release: {} · Generation: {}</p><p>Desired: {} · Observed: {} · Pending: {} · Degraded: {}</p><p>Image: {}</p>",
             escape(id),escape(text(&service["spec"]["service"],"name")),escape(id),service["releaseGeneration"],service["generation"],escape(text(service,"desired")),escape(text(service,"observed")),service["pending"],service["degraded"],escape(text(&service["spec"]["service"],"image"))));
+        out.push_str(&format!(
+            "<details><summary>Application state and credential versions</summary>{}{}</details>",
+            crate::render::properties(&service["spec"]["state"]),
+            crate::render::properties(&service["spec"]["credentials"])
+        ));
         for host in list(&service["hosts"]) {
             out.push_str(&format!(
                 "<p>Host: {} · Deployment: {} · Replicas: {} · {}</p>",
@@ -84,7 +89,23 @@ pub(super) fn content(app: &App) -> String {
     ] {
         out.push_str(&field(state, key, label, default, kind));
     }
-    out.push_str("</div><h4>Replica distribution</h4>");
+    out.push_str("</div><details><summary>Application state and configuration</summary><p>Defaults declare stateless HTTP, duplicate-safe requests and no background work. External state references environment variable names for shared session, upload or database URLs. Exclusive work requires an ownership protocol.</p><p>Credentials map environment names to controller PipeSecret references: {&quot;TOKEN&quot;:{&quot;secretId&quot;:&quot;UUID&quot;,&quot;version&quot;:1}}. Values remain in encrypted vaults.</p>");
+    for (key, label, default) in [
+        (
+            "service-state",
+            "Application state contract (JSON)",
+            "{\"mode\":\"stateless_http\"}",
+        ),
+        ("service-env", "Environment variables (JSON)", "{}"),
+        (
+            "service-credentials",
+            "Versioned controller credentials (JSON)",
+            "{}",
+        ),
+    ] {
+        out.push_str(&field(state, key, label, default, "text"));
+    }
+    out.push_str("</details><h4>Replica distribution</h4>");
     for host in list(&app.resource) {
         let report = &host["report"];
         let id = text(report, "id");
@@ -173,6 +194,22 @@ fn spec(app: &App) -> Result<Value, String> {
         }
         spec["service"] = service;
     }
+    for (key, default, target) in [
+        ("service-state", "{\"mode\":\"stateless_http\"}", "state"),
+        ("service-credentials", "{}", "credentials"),
+        ("service-env", "{}", "env"),
+    ] {
+        let parsed: Value = serde_json::from_str(value(state, key, default))
+            .map_err(|_| format!("Enter a JSON object for {target}."))?;
+        if !parsed.is_object() {
+            return Err(format!("Enter a JSON object for {target}."));
+        }
+        if target == "env" {
+            spec["service"]["env"] = parsed;
+        } else {
+            spec[target] = parsed;
+        }
+    }
     Ok(spec)
 }
 
@@ -211,6 +248,15 @@ fn edit(app: &Shared, id: &str) {
         id.into(),
         service["generation"].as_u64().unwrap_or_default(),
     ));
+    for (key, value) in [
+        ("service-state", &service["spec"]["state"]),
+        ("service-credentials", &service["spec"]["credentials"]),
+        ("service-env", &service["spec"]["service"]["env"]),
+    ] {
+        if value.is_object() {
+            state.values.insert(key.into(), value.to_string());
+        }
+    }
     for (key, field) in [
         ("service-name", "name"),
         ("service-image", "image"),

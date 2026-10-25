@@ -6,6 +6,94 @@ use firecrab_api_types::MicroServiceResponse;
 const OLD: &str = "rotation-private-old-value-6b18f329";
 const NEW: &str = "rotation-private-new-value-72d9421a";
 
+#[tokio::test]
+async fn controller_credentials_never_fall_back_or_rotate_to_host_local_values() {
+    use firecrab_api_types::{
+        ClusterServiceCredential, ClusterServiceDesired, ServiceWorkerIntent,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let local = secret(&state, "host-local-secret-with-the-same-uuid");
+    let mut record = deployment(Uuid::new_v4());
+    record.spec.secrets.insert("PASSWORD".into(), local);
+    state
+        .store
+        .cluster_service_worker_admit(
+            record.service_id,
+            Uuid::new_v4(),
+            ServiceWorkerIntent {
+                generation: 1,
+                release_generation: 1,
+                desired: ClusterServiceDesired::Running,
+                deployment_id: record.id,
+                spec: record.spec.clone(),
+                request: record.request.clone(),
+                state: Default::default(),
+                credentials: BTreeMap::from([(
+                    "PASSWORD".into(),
+                    ClusterServiceCredential {
+                        secret_id: local,
+                        version: 1,
+                    },
+                )]),
+            },
+        )
+        .unwrap();
+    assert!(
+        secrets::preflight_reserved(&state, &record.spec, record.id, Uuid::new_v4())
+            .await
+            .is_err()
+    );
+    assert!(secrets::capture(&state, &record).await.is_err());
+    state
+        .secrets
+        .write(|contents| {
+            contents
+                .service_environments
+                .insert(record.id, BTreeMap::from([("PASSWORD".into(), OLD.into())]));
+            Ok(())
+        })
+        .unwrap();
+    secrets::preflight_reserved(&state, &record.spec, record.id, Uuid::new_v4())
+        .await
+        .unwrap();
+    secrets::capture(&state, &record).await.unwrap();
+    record.phase = ServicePhase::Running;
+    record.instances.push(ServiceInstance {
+        vm_id: Uuid::new_v4(),
+        ipv4: "172.30.0.2".into(),
+        host_port: 30100,
+        state: VmState::Running,
+        healthy: true,
+    });
+    state
+        .store
+        .insert_micro_service(&MicroServiceResponse {
+            id: record.service_id,
+            spec: record.spec.clone(),
+        })
+        .unwrap();
+    save(&state, &record).await.unwrap();
+    edit(&state, local, Some(NEW));
+    assert_eq!(reconcile(&state, 100).await.unwrap(), 0);
+    assert_eq!(
+        state
+            .store
+            .service_deployment(record.service_id)
+            .unwrap()
+            .unwrap(),
+        record
+    );
+    state
+        .secrets
+        .read(|contents| {
+            assert_eq!(contents.service_environments[&record.id]["PASSWORD"], OLD);
+            assert!(contents.service_rotations.is_empty());
+            Ok(())
+        })
+        .unwrap();
+}
+
 fn secret(state: &AppState, value: &str) -> Uuid {
     let id = Uuid::new_v4();
     state

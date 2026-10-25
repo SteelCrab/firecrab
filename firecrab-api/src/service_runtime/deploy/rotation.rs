@@ -54,9 +54,20 @@ async fn reconcile(state: &AppState, now: u64) -> Result<usize, String> {
         return Ok(0);
     }
     let store = state.store.clone();
+    let controller_owned: BTreeSet<_> =
+        crate::cluster::stored(move || store.cluster_service_workers())
+            .await
+            .map_err(|_| "Could not read controller service ownership")?
+            .into_iter()
+            .map(|receipt| receipt.id)
+            .collect();
+    let store = state.store.clone();
     let deployments = database(Uuid::new_v4(), move || {
         let mut records = Vec::new();
         for service in store.list_micro_services()? {
+            if controller_owned.contains(&service.id) {
+                continue;
+            }
             if let Some(record) = store.service_deployment(service.id)? {
                 records.push(record);
             }
