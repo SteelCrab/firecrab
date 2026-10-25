@@ -17,8 +17,16 @@ use uuid::Uuid;
 use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
+mod block_storage;
+mod cluster;
+mod cluster_services;
+mod database_services;
 mod pools;
+mod queues;
+pub(crate) use cluster::ClusterError;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
+mod ai_sandbox;
+mod deploy_images;
 mod micro_services;
 mod pipe_ai;
 mod pipe_auth;
@@ -27,6 +35,9 @@ mod pipe_storage;
 mod registries;
 mod schedules;
 mod security_groups;
+mod stack_applies;
+mod stack_sources;
+pub(crate) use stack_sources::SourceTrigger;
 mod stacks;
 pub use registries::RegistryLogin;
 pub(crate) use schedules::ScheduleMutation;
@@ -475,6 +486,42 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    /// The requested data disk no longer exists.
+    #[error("MicroBlockStorage {id} was not found")]
+    MissingBlockStorage { id: Uuid },
+    /// A disk is reserved, being prepared, or conflicts with another mount.
+    #[error("{message}")]
+    BlockStorageConflict { message: &'static str },
+    /// A source needs explicit configuration before it can be checked.
+    #[error("stack Git source does not exist")]
+    MissingStackSource,
+    /// A stale client cannot replace or check a newer source generation.
+    #[error("stack Git source generation changed")]
+    StaleStackSource,
+    /// Configuration remains stable while a durable check is active.
+    #[error("stack Git source check is active")]
+    StackSourceBusy,
+    /// A failed or interrupted Git apply needs explicit acknowledgement before another mutation.
+    #[error("inspect the recorded Git apply before explicit recovery")]
+    StackSyncRecoveryRequired,
+    /// Invalid source configuration must not reach the network.
+    #[error("invalid stack Git source")]
+    InvalidStackSource,
+    /// Another durable stack operation is queued or running.
+    #[error("a stack apply is active")]
+    StackApplyBusy,
+    /// Ownership changed after the plan was observed.
+    #[error("stack plan is stale")]
+    StaleStackPlan,
+    /// An operation ID was reused with a different registration or request.
+    #[error("stack apply identity conflicts")]
+    StackApplyIdentity,
+    /// Git source ownership prohibits an independent apply writer.
+    #[error("stack is managed by its Git source")]
+    StackSourceManaged,
+    /// The requested operation is not recorded for this stack.
+    #[error("stack apply does not exist")]
+    MissingStackApply,
     /// A saved service or VM still references this policy.
     #[error("security group is still referenced")]
     SecurityGroupInUse,
@@ -715,16 +762,25 @@ impl Store {
         migrate_uplink_column(&conn)?;
         migrate_ipv6_columns(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
+        conn.execute_batch(block_storage::SCHEMA)?;
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
+        conn.execute_batch(database_services::CREATE_SQL)?;
         conn.execute(pipe_ai::CONNECTIONS_SQL, [])?;
         conn.execute(pipe_ai::DEFAULTS_SQL, [])?;
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
+        conn.execute_batch(ai_sandbox::SCHEMA)?;
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
+        conn.execute_batch(micro_services::HISTORY_SQL)?;
+        conn.execute(deploy_images::SCHEMA, [])?;
+        micro_services::migrate_history(&conn)?;
         conn.execute_batch(stacks::SCHEMA_SQL)?;
+        conn.execute_batch(stack_applies::SCHEMA_SQL)?;
+        conn.execute_batch(queues::SCHEMA)?;
+        conn.execute_batch(stack_sources::SCHEMA_SQL)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;
@@ -734,19 +790,16 @@ impl Store {
         ) STRICT",
             [],
         )?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS pipe_auth_credentials (
-                provider TEXT PRIMARY KEY CHECK (provider IN ('aws', 'github')),
-                credential TEXT NOT NULL
-            ) STRICT",
-            [],
-        )?;
+        conn.execute(pipe_auth::CREATE_TABLE_SQL, [])?;
+        pipe_auth::migrate(&conn)?;
         registries::migrate_account_name(&conn)?;
         conn.execute(CREATE_SHELL_REVISIONS_TABLE_SQL, [])?;
         conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_UNIQUE_HOST_PORT_SQL, [])?;
         pools::create_tables(&conn)?;
+        conn.execute_batch(cluster::SCHEMA)?;
+        conn.execute_batch(cluster_services::SCHEMA)?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
         // that still have NULL micro_network_id onto one explicit row.
         promote_implicit_default_network(&conn)?;
@@ -755,6 +808,8 @@ impl Store {
             conn: Arc::new(Mutex::new(conn)),
         };
         store.import_legacy(&path.with_file_name(LEGACY_FILE_NAME))?;
+        store.rebuild_sandbox_references()?;
+        store.rebuild_sandbox_index()?;
         Ok(store)
     }
 
@@ -1010,7 +1065,18 @@ impl Store {
 
     /// Deletes a MicroStorage by id.
     pub fn delete_micro_storage(&self, id: Uuid) -> Result<(), PersistenceError> {
-        let changed = self.lock().execute(
+        let conn = self.lock();
+        let count: u32 = conn.query_row(
+            "SELECT COUNT(*) FROM micro_block_storages WHERE storage_root = ?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )?;
+        if count != 0 {
+            return Err(PersistenceError::BlockStorageConflict {
+                message: "MicroStorage still contains block volumes; delete them first",
+            });
+        }
+        let changed = conn.execute(
             "DELETE FROM micro_storages WHERE id = ?1",
             params![id.to_string()],
         )?;
@@ -1906,6 +1972,7 @@ fn decode_purpose(id: &str, purpose: &str) -> Result<crate::model::VmPurpose, Pe
         "instance" => Ok(crate::model::VmPurpose::Instance),
         "builder" => Ok(crate::model::VmPurpose::Builder),
         "pool" => Ok(crate::model::VmPurpose::Pool),
+        "queue" => Ok(crate::model::VmPurpose::Queue),
         other => Err(PersistenceError::CorruptRecord {
             id: id.to_owned(),
             reason: format!("unknown purpose {other:?}"),

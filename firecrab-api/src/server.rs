@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::env;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -29,8 +29,6 @@ const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 pub enum ConfigError {
     #[error("invalid FIRECRAB_BIND_ADDR: {0}")]
     InvalidBindAddress(String),
-    #[error("non-loopback bind requires both authentication and TLS")]
-    InsecureNonLoopbackBind,
     #[error("invalid FIRECRAB_ALLOWED_ORIGINS value: {0}")]
     InvalidOrigin(String),
 }
@@ -52,8 +50,6 @@ pub struct HttpConfig {
 impl HttpConfig {
     pub fn load() -> Result<Self, ConfigError> {
         let bind = bind_addr_or_default(env::var("FIRECRAB_BIND_ADDR").ok());
-        let authentication_enabled = env_flag("FIRECRAB_AUTHENTICATION_ENABLED");
-        let tls_enabled = env_flag("FIRECRAB_TLS_ENABLED");
         let production = env::var("FIRECRAB_ENV").is_ok_and(|value| value == "production");
         let origins = env::var("FIRECRAB_ALLOWED_ORIGINS").unwrap_or_else(|_| {
             if production {
@@ -63,22 +59,14 @@ impl HttpConfig {
             }
         });
 
-        let mut config = Self::from_values(&bind, &origins, authentication_enabled, tls_enabled)?;
+        let mut config = Self::from_values(&bind, &origins)?;
         config.static_root = resolve_static_root(env::var("FIRECRAB_STATIC_ROOT").ok());
         Ok(config)
     }
 
-    fn from_values(
-        bind: &str,
-        origins: &str,
-        authentication_enabled: bool,
-        tls_enabled: bool,
-    ) -> Result<Self, ConfigError> {
+    fn from_values(bind: &str, origins: &str) -> Result<Self, ConfigError> {
         let bind_addr = SocketAddr::from_str(bind)
             .map_err(|_| ConfigError::InvalidBindAddress(bind.to_owned()))?;
-        if !(is_loopback(bind_addr.ip()) || authentication_enabled && tls_enabled) {
-            return Err(ConfigError::InsecureNonLoopbackBind);
-        }
 
         let allowed_origins = origins
             .split(',')
@@ -118,14 +106,6 @@ fn resolve_static_root(configured: Option<String>) -> Option<PathBuf> {
 
 pub(crate) fn bind_addr_or_default(configured: Option<String>) -> String {
     configured.unwrap_or_else(|| "127.0.0.1:5523".to_owned())
-}
-
-fn env_flag(name: &str) -> bool {
-    env::var(name).is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"))
-}
-
-fn is_loopback(ip: IpAddr) -> bool {
-    ip.is_loopback()
 }
 
 #[derive(Clone)]
@@ -233,6 +213,30 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/stacks/{name}/plan", post(handlers::stacks::plan))
         .route(
+            "/api/stacks/{name}/source",
+            get(handlers::stack_sources::get).put(handlers::stack_sources::configure),
+        )
+        .route(
+            "/api/stacks/{name}/source/check",
+            post(handlers::stack_sources::check),
+        )
+        .route(
+            "/api/stacks/{name}/source/history",
+            get(handlers::stack_sources::history),
+        )
+        .route(
+            "/api/stacks/{name}/source/sync",
+            post(handlers::stack_sources::sync),
+        )
+        .route(
+            "/api/stacks/{name}/apply",
+            post(handlers::stack_applies::apply),
+        )
+        .route(
+            "/api/stacks/{name}/applies/{id}",
+            get(handlers::stack_applies::get),
+        )
+        .route(
             "/api/stacks/{name}",
             get(handlers::stacks::get).delete(handlers::stacks::delete),
         )
@@ -283,6 +287,26 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/micro-services/{id}/deployment",
             get(crate::service_runtime::get).post(crate::service_runtime::deploy),
+        )
+        .route(
+            "/api/micro-services/{id}/updates",
+            post(crate::service_runtime::deploy::update),
+        )
+        .route(
+            "/api/micro-services/{id}/releases",
+            get(crate::service_runtime::deploy::releases),
+        )
+        .route(
+            "/api/micro-services/{id}/rollback",
+            post(crate::service_runtime::deploy::rollback),
+        )
+        .route(
+            "/api/micro-services/{id}/deployment/retry",
+            post(crate::service_runtime::deploy::retry),
+        )
+        .route(
+            "/api/micro-services/{id}/deployments/{operation_id}",
+            get(crate::service_runtime::deploy::operation),
         )
         .route(
             "/api/micro-services/{id}/deployment/check",
@@ -355,7 +379,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/pipe/databases/{id}",
-            delete(handlers::pipe_databases::delete),
+            delete(handlers::pipe_databases::delete).put(handlers::pipe_databases::update),
         )
         .route(
             "/api/pipe/databases/{id}/tables",
@@ -364,6 +388,85 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/pipe/databases/{id}/preview",
             post(handlers::pipe_databases::preview),
+        )
+        .route(
+            "/api/pipe/databases/{id}/access",
+            axum::routing::put(handlers::pipe_databases::access),
+        )
+        .route(
+            "/api/pipe/databases/{id}/rows",
+            post(handlers::pipe_databases::rows),
+        )
+        .route(
+            "/api/pipe/databases/{id}/mutations",
+            post(handlers::pipe_databases::mutate),
+        )
+        .route(
+            "/api/pipe/database-rabbitmq",
+            get(handlers::pipe_database_events::rabbitmq_get),
+        )
+        .route(
+            "/api/pipe/database-rabbitmq/managed",
+            get(handlers::pipe_database_events::managed_get)
+                .post(handlers::pipe_database_events::managed_create),
+        )
+        .route(
+            "/api/pipe/databases/{id}/triggers",
+            get(handlers::pipe_database_events::list),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}",
+            axum::routing::put(handlers::pipe_database_events::pause),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}/detach",
+            post(handlers::pipe_database_events::detach),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}/failures",
+            get(handlers::pipe_database_events::failures),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}/replay/{event}",
+            post(handlers::pipe_database_events::replay),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}/acknowledge/{event}",
+            post(handlers::pipe_database_events::acknowledge),
+        )
+        .route(
+            "/api/pipe/databases/{id}/bindings",
+            get(handlers::pipe_database_bindings::list)
+                .post(handlers::pipe_database_bindings::create),
+        )
+        .route(
+            "/api/pipe/database-bindings/{id}",
+            delete(handlers::pipe_database_bindings::delete),
+        )
+        .route(
+            "/api/pipe/database-maintenance/tools",
+            get(handlers::pipe_database_maintenance::capabilities),
+        )
+        .route(
+            "/api/pipe/databases/{id}/jobs",
+            get(handlers::pipe_database_maintenance::list),
+        )
+        .route(
+            "/api/pipe/databases/{id}/backups",
+            post(handlers::pipe_database_maintenance::backup),
+        )
+        .route(
+            "/api/pipe/databases/{id}/migrations",
+            post(handlers::pipe_database_maintenance::migrate),
+        )
+        .route(
+            "/api/pipe/databases/{id}/restore",
+            post(handlers::pipe_database_maintenance::restore),
+        )
+        .route(
+            "/api/pipe/database-jobs/{id}/backup",
+            get(handlers::pipe_database_maintenance::download)
+                .delete(handlers::pipe_database_maintenance::delete_backup),
         )
         .route("/api/pipe/registries", get(handlers::registries::list))
         .route(
@@ -468,6 +571,22 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/storage", get(handlers::storage::list_storage))
         .route(
+            "/api/microblockstorage",
+            get(handlers::block_storage::list).post(handlers::block_storage::create),
+        )
+        .route(
+            "/api/microblockstorage/{id}",
+            get(handlers::block_storage::get).delete(handlers::block_storage::delete),
+        )
+        .route(
+            "/api/microblockstorage/{id}/attach",
+            post(handlers::block_storage::attach),
+        )
+        .route(
+            "/api/microblockstorage/{id}/detach",
+            post(handlers::block_storage::detach),
+        )
+        .route(
             "/api/storage/devices",
             get(handlers::storage::list_storage_devices),
         )
@@ -480,6 +599,29 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/micro-storages/{id}",
             get(handlers::micro_storages::get_micro_storage)
                 .delete(handlers::micro_storages::delete_micro_storage),
+        )
+        .route(
+            "/api/queue/engine",
+            get(handlers::queues::engine).post(handlers::queues::create_engine),
+        )
+        .route(
+            "/api/queue/engine/start",
+            post(handlers::queues::start_engine),
+        )
+        .route(
+            "/api/queue/engine/stop",
+            post(handlers::queues::stop_engine),
+        )
+        .route(
+            "/api/queues",
+            get(handlers::queues::list).post(handlers::queues::create),
+        )
+        .route("/api/queues/{id}", delete(handlers::queues::delete))
+        .route("/api/queues/{id}/retry", post(handlers::queues::retry))
+        .route("/api/queues/{id}/metrics", get(handlers::queues::metrics))
+        .route(
+            "/api/queues/{id}/connection/{access}",
+            post(handlers::queues::reveal),
         )
         .route(
             "/api/pools",
@@ -600,6 +742,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/secrets/{id}",
             axum::routing::put(handlers::secrets::update).delete(handlers::secrets::delete),
         )
+        .route(
+            "/api/secrets/account/preview",
+            post(handlers::secrets::account_preview),
+        )
         .route("/api/secrets/{id}/reveal", post(handlers::secrets::reveal))
         .route(
             "/api/secrets/connections",
@@ -629,10 +775,81 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         ))
         .layer(middleware::from_fn(handlers::secrets::no_store));
 
-    // Inspection performs registry authentication and multiple manifest GETs.
-    // Allow their bounded connection retries to finish while retaining the
-    // same concurrency pool, body limit, CORS and origin checks as other REST.
+    // Model verification and explicit guest recovery need longer bounded HTTP waits.
+    let sandbox = Router::new()
+        .route(
+            "/api/ai-sandbox/access/{principal}",
+            get(handlers::ai_sandbox::get_access)
+                .put(handlers::ai_sandbox::set_access)
+                .delete(handlers::ai_sandbox::revoke_access),
+        )
+        .route(
+            "/api/ai-sandbox/projects",
+            get(handlers::ai_sandbox::projects),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{id}",
+            get(handlers::ai_sandbox::get_project)
+                .put(handlers::ai_sandbox::save_project)
+                .delete(handlers::ai_sandbox::delete_project),
+        )
+        .route(
+            "/api/ai-sandbox/connections/{id}/models",
+            get(handlers::ai_sandbox::models),
+        )
+        .route(
+            "/api/ai-sandbox/connections/{id}/verify",
+            post(handlers::ai_sandbox::verify_model),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{project}/tasks",
+            get(handlers::ai_sandbox::tasks),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{project}/tasks/{id}",
+            axum::routing::put(handlers::ai_sandbox::create_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}",
+            get(handlers::ai_sandbox::get_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}/cancel",
+            post(handlers::ai_sandbox::cancel_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}/reconcile",
+            post(handlers::ai_sandbox::reconcile_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}/apply",
+            post(handlers::ai_sandbox::apply_task),
+        )
+        .layer(cors.clone())
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn_with_state(
+            RequestLimits {
+                permits: limits.permits.clone(),
+                timeout: Some(Duration::from_secs(180)),
+            },
+            enforce_limits,
+        ))
+        .layer(middleware::from_fn(handlers::secrets::no_store));
+
+    // Registry authentication and manifest GETs retain their bounded inspection deadline.
     let inspection = Router::new()
+        .route(
+            "/api/pipe/database-rabbitmq",
+            axum::routing::put(handlers::pipe_database_events::rabbitmq_save),
+        )
+        .route(
+            "/api/pipe/databases/{id}/triggers",
+            post(handlers::pipe_database_events::create),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}",
+            delete(handlers::pipe_database_events::delete),
+        )
         .route(
             "/api/pipe/ai/connections/{id}/login",
             post(handlers::pipe_ai::login_start),
@@ -693,7 +910,16 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             enforce_limits,
         ));
 
+    let cluster = crate::cluster::handlers::router()
+        .layer(cors.clone())
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn_with_state(
+            limits.clone(),
+            enforce_limits,
+        ));
     let app = rest
+        .merge(cluster)
+        .merge(sandbox)
         .merge(recovery)
         .merge(inspection)
         .merge(secrets)
@@ -704,20 +930,35 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         // a client's URL never comes back as an HTML page.
         .route("/api/{*rest}", any(not_found))
         .route("/ws/{*rest}", any(not_found))
-        .with_state(state);
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::cluster::protect_vm,
+        ))
+        .with_state(state.clone());
 
     let app = match &config.static_root {
         // Anything else is the dashboard: a real file if it exists, otherwise
         // index.html, because the router's routes only exist in the browser
         // (a reload on /vms/<id> must not 404).
         Some(root) => app.fallback_service(
-            ServeDir::new(root).fallback(ServeFile::new(root.join("index.html"))),
+            ServeDir::new(root)
+                .precompressed_br()
+                .precompressed_gzip()
+                .fallback(
+                    ServeFile::new(root.join("index.html"))
+                        .precompressed_br()
+                        .precompressed_gzip(),
+                ),
         ),
         None => app.fallback(not_found),
     };
 
-    app.layer(middleware::from_fn_with_state(policy, enforce_origin))
-        .layer(middleware::from_fn(assign_request_id))
+    app.layer(middleware::from_fn_with_state(
+        state,
+        crate::ai_sandbox::access::restrict_delegates,
+    ))
+    .layer(middleware::from_fn_with_state(policy, enforce_origin))
+    .layer(middleware::from_fn(assign_request_id))
 }
 
 async fn assign_request_id(mut request: Request, next: Next) -> Response {
@@ -830,20 +1071,11 @@ pub fn request_id(request: &Request) -> Uuid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::assert_matches;
 
     #[test]
     fn defaults_are_loopback_only() {
-        let config =
-            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
-                .unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080").unwrap();
         assert!(config.bind_addr.ip().is_loopback());
-    }
-
-    #[test]
-    fn rejects_insecure_non_loopback_bind() {
-        let result = HttpConfig::from_values("0.0.0.0:3000", "", false, false);
-        assert_matches!(result, Err(ConfigError::InsecureNonLoopbackBind));
     }
 
     #[test]
@@ -926,7 +1158,7 @@ mod tests {
             axum::serve(listener, registry).await.unwrap();
         });
         let directory = tempfile::tempdir().unwrap();
-        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         config.request_timeout = Duration::from_millis(10);
         config.max_concurrent_requests = 1;
         let app = build_router(test_state(directory.path()).await, &config);
@@ -977,7 +1209,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         // The installed shape: dashboard served from this API, so nothing is
         // listed as a cross-origin caller.
-        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         let app = build_router(test_state(directory.path()).await, &config);
 
         let post = |origin: &'static str| {
@@ -1039,7 +1271,7 @@ mod tests {
         use tower::ServiceExt;
 
         let directory = tempfile::tempdir().unwrap();
-        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         let state = test_state(directory.path()).await;
         let mut vm = crate::handlers::vms::test_support::record("pool-ci-1", uuid::Uuid::new_v4());
         vm.purpose = crate::model::VmPurpose::Pool;
@@ -1096,7 +1328,7 @@ mod tests {
         state.network = crate::network::NetworkClient::with_socket_path(
             directory.path().join("unused-helper.sock"),
         );
-        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         let app = build_router(state, &config);
         let valid = json!({"config":{"routes":[],"quickTunnel":{"upstreams":["172.30.1.2:80"]}}});
         let mut both = valid.clone();
@@ -1157,6 +1389,8 @@ mod tests {
         .unwrap();
         let expected_request = request.clone();
         let snapshot = Snapshot {
+            ingress_graceful_drain: false,
+            ingress_workers: None,
             firecrab_tunnels: Vec::new(),
             config: Some(request.config.clone()),
             units: Vec::new(),
@@ -1194,7 +1428,7 @@ mod tests {
         });
         let mut state = test_state(directory.path()).await;
         state.network = crate::network::NetworkClient::with_socket_path(socket);
-        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         config.request_timeout = Duration::from_millis(10);
         let app = build_router(state, &config);
         for (origin, expected_status) in [
@@ -1243,7 +1477,7 @@ mod tests {
         state.network = crate::network::NetworkClient::with_socket_path(
             directory.path().join("unused-helper.sock"),
         );
-        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         let app = build_router(state, &config);
         for body in [
             r#"{"service":"firecrab-api.service","action":"stop"}"#,
@@ -1301,6 +1535,8 @@ mod tests {
             .collect::<Vec<_>>();
         let expected_requests = requests.clone();
         let snapshot = Snapshot {
+            ingress_graceful_drain: false,
+            ingress_workers: None,
             firecrab_tunnels: Vec::new(),
             config: None,
             units: Vec::new(),
@@ -1336,7 +1572,7 @@ mod tests {
         });
         let mut state = test_state(directory.path()).await;
         state.network = crate::network::NetworkClient::with_socket_path(socket);
-        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         config.request_timeout = Duration::from_millis(10);
         let app = build_router(state, &config);
         for (origin, expected_status) in [
@@ -1379,7 +1615,7 @@ mod tests {
     #[tokio::test]
     async fn without_a_static_root_every_unknown_path_is_a_json_404() {
         let directory = tempfile::tempdir().unwrap();
-        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         let app = build_router(test_state(directory.path()).await, &config);
 
         for path in ["/", "/api/nope", "/dashboard"] {
@@ -1394,6 +1630,7 @@ mod tests {
 
     #[tokio::test]
     async fn with_a_static_root_the_dashboard_is_served_but_api_paths_still_answer_json() {
+        use tower::ServiceExt;
         let directory = tempfile::tempdir().unwrap();
         let assets = directory.path().join("dist");
         std::fs::create_dir_all(&assets).unwrap();
@@ -1403,8 +1640,12 @@ mod tests {
         )
         .unwrap();
         std::fs::write(assets.join("app.js"), "console.log(1)").unwrap();
+        let wasm = b"\0asm\x01\0\0\0";
+        std::fs::write(assets.join("dashboard.wasm"), wasm).unwrap();
+        std::fs::write(assets.join("dashboard.wasm.br"), b"brotli representation").unwrap();
+        std::fs::write(assets.join("dashboard.wasm.gz"), b"gzip representation").unwrap();
 
-        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         config.static_root = Some(assets);
         let app = build_router(test_state(directory.path()).await, &config);
 
@@ -1415,6 +1656,65 @@ mod tests {
         let (status, body) = get(&app, "/app.js").await;
         assert_eq!(status, axum::http::StatusCode::OK);
         assert_eq!(body, "console.log(1)");
+
+        // Streaming WebAssembly compilation requires this exact MIME type.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/dashboard.wasm")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/wasm");
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(bytes.as_ref(), wasm);
+
+        for (accepted, encoding, expected) in [
+            ("br, gzip", Some("br"), b"brotli representation".as_slice()),
+            ("gzip", Some("gzip"), b"gzip representation".as_slice()),
+            ("br;q=0, gzip;q=0", None, wasm.as_slice()),
+            (
+                "br;q=0.5, gzip;q=1",
+                Some("gzip"),
+                b"gzip representation".as_slice(),
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/dashboard.wasm")
+                        .header(header::ACCEPT_ENCODING, accepted)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "application/wasm");
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::CONTENT_ENCODING)
+                    .map(|v| v.to_str().unwrap()),
+                encoding
+            );
+            assert_eq!(response.headers()[header::VARY], "accept-encoding");
+            assert_eq!(
+                response.headers()[header::CONTENT_LENGTH].to_str().unwrap(),
+                expected.len().to_string()
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(bytes.as_ref(), expected);
+        }
 
         // A client-side route the browser reloads on: no such file, so the
         // SPA entry point answers instead of a 404.
@@ -1463,7 +1763,7 @@ mod tests {
         let (_helper, calls) = crate::network::test_support::spawn_recording_helper(&socket, None);
         let mut state = test_state(directory.path()).await;
         state.network = crate::network::NetworkClient::with_socket_path(socket);
-        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         config.request_timeout = Duration::from_millis(100);
         let app = build_router(state.clone(), &config);
 
@@ -1495,7 +1795,7 @@ mod tests {
     async fn network_recovery_still_counts_against_the_concurrency_limit() {
         let directory = tempfile::tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         config.max_concurrent_requests = 1;
         let app = build_router(state.clone(), &config);
 
@@ -1517,9 +1817,7 @@ mod tests {
         use tower::ServiceExt;
 
         let directory = tempfile::tempdir().unwrap();
-        let config =
-            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
-                .unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080").unwrap();
         let app = build_router(test_state(directory.path()).await, &config);
 
         let preflight = app
@@ -1545,9 +1843,7 @@ mod tests {
         use axum::http::StatusCode;
         use tower::ServiceExt;
         let dir = tempfile::tempdir().unwrap();
-        let config =
-            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
-                .unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080").unwrap();
         let app = build_router(test_state(dir.path()).await, &config);
         for (host, status) in [
             ("untrusted.invalid", StatusCode::OK),
@@ -1575,9 +1871,7 @@ mod tests {
         use axum::http::StatusCode;
         use tower::ServiceExt;
         let dir = tempfile::tempdir().unwrap();
-        let config =
-            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
-                .unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080").unwrap();
         let app = build_router(test_state(dir.path()).await, &config);
         for (origin, status) in [
             ("https://untrusted.invalid", StatusCode::FORBIDDEN),
@@ -1650,3 +1944,15 @@ mod pipe_auth_tests;
 #[cfg(test)]
 #[path = "server_pipe_ai_tests.rs"]
 mod pipe_ai_tests;
+
+#[cfg(test)]
+#[path = "server_ai_sandbox_tests.rs"]
+mod ai_sandbox_tests;
+
+#[cfg(test)]
+#[path = "server_ai_sandbox_live_tests.rs"]
+mod live_provider_tests;
+
+#[cfg(test)]
+#[path = "server_live_guest_tests.rs"]
+mod live_guest_tests;

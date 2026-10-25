@@ -83,12 +83,24 @@ impl ApiClient {
     /// response instead of timing out first. [`Self::get_host_status`] keeps
     /// its shorter 3s timeout so `status` stays responsive when the API is
     /// down.
-    pub fn new(base: String) -> Self {
-        let client = reqwest::blocking::Client::builder()
+    pub fn try_new(base: String) -> Result<Self, ApiError> {
+        let mut builder = reqwest::blocking::Client::builder()
             .timeout(DEFAULT_REQUEST_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none());
+        if base.starts_with("https://") {
+            let config =
+                crate::tls::client_config().map_err(|e| ApiError::Unreachable(e.to_string()))?;
+            builder = builder.use_preconfigured_tls(config);
+        }
+        let client = builder
             .build()
-            .expect("reqwest client build");
-        Self { base, client }
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Ok(Self { base, client })
+    }
+
+    #[cfg(test)]
+    pub fn new(base: String) -> Self {
+        Self::try_new(base).expect("test API client")
     }
 
     /// Resolved API origin without a trailing slash.
@@ -113,6 +125,11 @@ impl ApiClient {
         let resp = self
             .client
             .get(self.url(path))
+            .timeout(if path.starts_with("/api/ai-sandbox/") {
+                Duration::from_secs(185)
+            } else {
+                DEFAULT_REQUEST_TIMEOUT
+            })
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(resp)
@@ -129,7 +146,9 @@ impl ApiClient {
             .client
             .get(self.url(path))
             .query(query)
-            .timeout(if path == "/api/oci/inspect" {
+            .timeout(if path.starts_with("/api/ai-sandbox/") {
+                std::time::Duration::from_secs(185)
+            } else if path == "/api/oci/inspect" {
                 OCI_INSPECT_TIMEOUT
             } else {
                 DEFAULT_REQUEST_TIMEOUT
@@ -150,7 +169,9 @@ impl ApiClient {
             .client
             .post(self.url(path))
             .json(body)
-            .timeout(if path.starts_with("/api/pipe/ai/") {
+            .timeout(if path.starts_with("/api/ai-sandbox/") {
+                std::time::Duration::from_secs(185)
+            } else if path.starts_with("/api/pipe/ai/") {
                 self.mutation_timeout().max(OCI_INSPECT_TIMEOUT)
             } else {
                 self.mutation_timeout()
@@ -189,6 +210,23 @@ impl ApiClient {
         Self::decode_json(resp)
     }
 
+    /// A JSON mutation whose retry identity survives an unknown HTTP result.
+    pub fn post_idempotent<B: Serialize + ?Sized, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        key: &str,
+    ) -> Result<T, ApiError> {
+        let response = self
+            .client
+            .post(self.url(path))
+            .json(body)
+            .header(firecrab_api_types::IDEMPOTENCY_KEY_HEADER, key)
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::decode_json(response)
+    }
+
     /// Sends `body` as JSON with `PATCH` and deserializes any successful 2xx
     /// response body.
     pub fn patch<B, T>(&self, path: &str, body: &B) -> Result<T, ApiError>
@@ -211,7 +249,9 @@ impl ApiClient {
         let resp = self
             .client
             .delete(self.url(path))
-            .timeout(if path.starts_with("/api/pipe/ai/") {
+            .timeout(if path.starts_with("/api/ai-sandbox/") {
+                std::time::Duration::from_secs(185)
+            } else if path.starts_with("/api/pipe/ai/") {
                 self.mutation_timeout().max(OCI_INSPECT_TIMEOUT)
             } else {
                 self.mutation_timeout()
@@ -232,7 +272,9 @@ impl ApiClient {
             .client
             .put(self.url(path))
             .json(body)
-            .timeout(if path.starts_with("/api/pipe/ai/") {
+            .timeout(if path.starts_with("/api/ai-sandbox/") {
+                std::time::Duration::from_secs(185)
+            } else if path.starts_with("/api/pipe/ai/") {
                 self.mutation_timeout().max(OCI_INSPECT_TIMEOUT)
             } else {
                 self.mutation_timeout()

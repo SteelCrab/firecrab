@@ -37,6 +37,39 @@ pub(super) async fn preflight(
     })
 }
 
+/// Controller workers already hold a pinned snapshot instead of local Secret records.
+pub(super) async fn preflight_reserved(
+    state: &AppState,
+    spec: &MicroServiceSpec,
+    deployment_id: Uuid,
+    request_id: Uuid,
+) -> Result<(), AppError> {
+    if spec.secrets.is_empty() {
+        return Ok(());
+    }
+    let spec = spec.clone();
+    vault(state, move |vault| {
+        vault.read(|contents| {
+            if let Some(values) = contents.service_environments.get(&deployment_id) {
+                let mut env = spec.env.clone();
+                env.extend(values.clone());
+                if !values.keys().eq(spec.secrets.keys()) || validate_vm_env(&env).is_some() {
+                    return Err(SecretError::Invalid(
+                        "pinned deployment credentials do not match",
+                    ));
+                }
+                Ok(())
+            } else {
+                Err(SecretError::Invalid(
+                    "pinned deployment credentials are unavailable",
+                ))
+            }
+        })
+    })
+    .await
+    .map_err(|_| AppError::unavailable("Pinned deployment Secrets are unavailable.", request_id))
+}
+
 /// Capture one atomic set after queue admission and before any deployment side effect.
 pub(super) async fn capture(
     state: &AppState,
@@ -47,10 +80,21 @@ pub(super) async fn capture(
     }
     let spec = deployment.spec.clone();
     let id = deployment.id;
+    let store = state.store.clone();
+    let service_id = deployment.service_id;
+    let controller_owned = crate::cluster::stored(move || store.cluster_service_worker(service_id))
+        .await
+        .map_err(|_| "Could not read controller service ownership")?
+        .is_some();
     vault(state, move |vault| {
         vault.write(|contents| {
             if contents.service_environments.contains_key(&id) {
                 return Ok(());
+            }
+            if controller_owned {
+                return Err(SecretError::Invalid(
+                    "pinned controller credentials are unavailable",
+                ));
             }
             let env = resolve(contents, &spec)?;
             contents.service_environments.insert(id, env);
@@ -132,7 +176,7 @@ pub(crate) async fn guest_env(
 }
 
 /// Resolve all references under one vault lock and validate the combined guest environment.
-fn resolve(
+pub(crate) fn resolve(
     contents: &Contents,
     spec: &MicroServiceSpec,
 ) -> Result<BTreeMap<String, String>, SecretError> {
@@ -163,7 +207,7 @@ fn resolve(
 }
 
 /// Keep locked file I/O and encryption off the async executor.
-async fn vault<T: Send + 'static>(
+pub(crate) async fn vault<T: Send + 'static>(
     state: &AppState,
     operation: impl FnOnce(&Vault) -> Result<T, SecretError> + Send + 'static,
 ) -> Result<T, SecretError> {

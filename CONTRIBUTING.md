@@ -47,6 +47,11 @@ A full installation is unnecessary for unit tests and frontend builds.
 
 Run these commands from the repository root.
 
+Use [independent worktree development](public-docs/development/worktree-dev.md) to keep the primary environment running while testing other checkouts.
+Linked worktrees use a separate management VM on macOS and a private Docker runtime on Windows.
+Linux `service dev` uses private Docker instances from both primary and linked checkouts.
+The Docker backend requires a local rootful Linux engine with KVM, TUN, and cgroup v2 support.
+
 **Linux:** Build the API and network helper, then run each command in a separate terminal.
 VMs run in systemd units the helper starts, so the host needs systemd; rerun the helper script after rebuilding either binary.
 
@@ -59,7 +64,10 @@ cargo build -p firecrab-api -p firecrab-helper
 # Terminal 2: API
 cargo run -p firecrab-api
 
-# Terminal 3: dashboard
+# Terminal 3: Rust/WASM dashboard
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack --version 0.14.0 --locked
+npm ci --prefix firecrab-frontend
 npm run dev --prefix firecrab-frontend
 ```
 
@@ -81,9 +89,11 @@ cargo build -p firecrab-cli --locked
 .\target\debug\firecrab.exe service dev
 ```
 
-`service dev` installs microManager when missing, builds the local API and network
+In the primary macOS/Windows checkout, `service dev` installs microManager when missing, builds the local API and network
 helper inside WSL2, and restarts them. On macOS and Windows it also starts the
 source dashboard at `http://localhost:8080`; Node.js and npm are required.
+Use `service dev --port 8098` to select another dashboard port.
+Run development controls from their worktree. Use the printed API URL explicitly with `firecrab --api URL` for general VM commands.
 The command verifies both the dashboard and its API connection before returning. See the
 [Windows guide](public-docs/development/micromanager.md#windows)
 for build, restore, and frontend options.
@@ -103,6 +113,8 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --document-private-items
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack --version 0.14.0 --locked
 npm ci --prefix firecrab-frontend
 npm run lint --prefix firecrab-frontend
 npm run build --prefix firecrab-frontend
@@ -216,13 +228,20 @@ See [#216](https://github.com/SteelCrab/firecrab/pull/216) for an example.
 Write issue bodies in English. Follow the [issue template](.github/ISSUE_TEMPLATE/task.md) and use only these four sections, in this order:
 
 - `## Summary`: describe the change or problem in 1–3 short sentences.
-- `## Scope`: list the work and essential constraints as a short checklist. For bugs and installation failures, include reproduction steps, environment details, and relevant logs here.
+- `## Scope`: list the work and essential constraints as a short, flat checklist with one action per item.
 - `## Architecture`: include a compact Mermaid diagram of the affected components and data flow. Keep supporting text short.
-- `## Notes`: add brief caveats, dependencies, or related issue links.
+- `## Notes`: keep only brief caveats, dependencies, evidence references, or consolidation history. Do not repeat Scope items, implementation status, or PR references already listed there.
+
+Use plain GitHub references such as `#449`, `#490`, and `#496` for issues and PRs in this repository. Do not use Markdown links or full GitHub URLs for these references. Keep normal links for files, QA records, and external sources.
+
+Every checked checklist item (`- [x]`) must include its implementing PR number on the same line, such as `PR #449`. Repeat the PR number on every checked item it completes. Leave items without an implementing PR unchecked. Distinguish a merged implementation from a Draft or partial implementation. Leave unfinished work unchecked.
+
+For bugs and installation failures, put reproduction steps, environment details, and relevant logs in Scope.
+Keep detailed requirements and verification checks under Scope, and detailed component diagrams under Architecture. Collapse long material with `<details>` or link a separate design or QA record.
 
 Do not add `Motivation` or `Acceptance` sections, or other top-level sections.
-Keep issues concise. Put detailed implementation designs in separate documents when needed.
-Prefer one problem per issue. Report sensitive security problems privately to the maintainers.
+Keep issues concise. Prefer one problem per issue.
+Report sensitive security problems privately to the maintainers.
 
 ## CI
 

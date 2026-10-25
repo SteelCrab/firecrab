@@ -1,5 +1,9 @@
 # CLI
 
+For authenticated hosts, drain, and durable VM placement, use
+[`firecrab cluster`](../guides/multihost.md#cli-and-dashboard). Existing
+`firecrab host` commands continue to manage saved API profiles.
+
 `firecrab` manages the same REST API as the dashboard on Linux, macOS, and Windows.
 Install it with the [CLI installer](../getting-started/installation.md#cli-only-installation).
 Use `firecrab --help` or `firecrab COMMAND --help` for flags.
@@ -50,6 +54,21 @@ Names allow letters, digits, `.`, `_`, and `-`.
 URLs require HTTP or HTTPS and reject credentials, queries, and fragments.
 The config stores only endpoints; unknown TOML keys block profile changes.
 
+## Private CA and mutual TLS
+
+`firecrab ca init [--dir PATH]` creates a private root CA offline.
+`firecrab ca issue-host-cert HOST_UUID [--dir PATH] [--san DNS_OR_IP] [--days 365]`
+issues a certificate for an API host or authenticated caller. Repeat `--san` for
+additional server names. Existing CA and host output directories are never replaced.
+The default directory is `~/.firecrab/pki`, or `FIRECRAB_CONFIG_DIR/pki`.
+
+For HTTPS API and WSS console connections, set `FIRECRAB_TLS_CERT`,
+`FIRECRAB_TLS_KEY`, and `FIRECRAB_TLS_CA` to the caller's certificate, private key,
+and private CA certificate. Unix files must have mode `0600`.
+See [mutual TLS setup](../guides/mtls.md) for issuance, server configuration,
+client examples, and certificate renewal. Linux `firecrab doctor` checks the
+configured leaf and CA and fails when either expires within 30 days.
+
 ## Resource commands
 
 `firecrab stack validate --file stack.yaml [--json]` checks a declarative YAML stack offline.
@@ -60,12 +79,20 @@ See [Stack validation](../guides/stacks.md) for the experimental schema and its 
 `stack register --name NAME`, `list`, `status NAME`, `bind`, and `unbind` manage host-local ownership metadata.
 `stack delete NAME --id STACK_UUID` removes an empty registration after matching its exact UUID; bound resources and disks are never deleted.
 `stack plan --file YAML [--json]` compares a manifest to explicitly bound resource UUIDs without applying it.
+`stack apply --file YAML [--expected-plan PLAN_JSON] [--operation-id UUID] [--allow-stop] [--no-wait] [--timeout SECONDS] [--json]` executes supported changes with durable status.
+`stack apply-status NAME --id OPERATION_UUID` reads redacted progress as JSON.
+`stack source configure NAME --file SOURCE_JSON --expected-generation N` configures a GitHub source separately from its resource manifest.
+`stack source status NAME`, `history NAME`, and `check NAME --generation N` expose read-only exact-commit comparisons.
+`stack source sync NAME --generation N [--recover-operation-id UUID]` resolves Git and applies supported changes. A failed/interrupted apply requires its operation ID before fresh recovery.
+`stack source pause|resume NAME --generation N` controls periodic checks and opt-in automatic synchronization. See [Git source synchronization](../guides/stack-git-source.md).
+See [Native YAML stack apply](../guides/stack-apply.md) for stop permissions, retry identity and explicit failure recovery.
 These commands use normal host selection; see [Stack ownership and planning](../guides/stack-planning.md) for the full workflow.
 
 | Resource | Commands |
 | --- | --- |
 | VM | `vm list`, `create`, `start ID`, `stop ID`, `delete ID` |
 | MicroService | `microservice list`, `get ID`, `create --file JSON`, `update ID --file JSON`, `delete ID`, `deploy ID [--host-port PORT]`, `status ID`, `stop ID`; `--host-port` may be omitted only for services with a domain; see [MicroService](../guides/microservices.md) |
+| Deploy | `microservice rollout ID --file JSON`, `releases ID`, `rollback ID --release UUID`, `retry ID`; rollout and rollback accept `--strategy rolling\|blue_green`, `--operation-id UUID`, `--expected-release UUID`, `--no-wait`, and `--timeout SECONDS`; see [Deploy](../guides/deploy.md) |
 | Console | `vm console ID` (`terminal` alias) |
 | Network | `network list`, `create`, `delete ID` |
 | Image | `image list`, `inspect REFERENCE`, `import REFERENCE`, `import-status ALIAS` |
@@ -96,6 +123,9 @@ Replace IDs with values returned by the previous commands.
 Defaults are one vCPU, 512 MiB RAM, and 2 GiB disk.
 Override with `--cpu`, `--ram`, and `--disk-gb`.
 Use `--egress internet|isolated` and `--storage-root ID` for policy and disk placement.
+Use repeated `--volume NAME_OR_UUID:/guest/path` options for independent data disks.
+Manage them with `firecrab volume list|create|inspect|attach|detach|delete`.
+See [Persistent volumes](../guides/volumes.md) for the full workflow.
 
 ### Console
 
@@ -127,14 +157,24 @@ See [OCI images](../guides/oci.md) for registry access and import limits.
 `firecrab service` controls native systemd on Linux and managed Debian on macOS/Windows.
 Use the [macOS](../getting-started/macos.md#service-commands) or [Windows](../getting-started/windows.md#service-commands) command table for managed services.
 Use [service dev](../development/micromanager.md) to deploy source-built API/helper binaries.
+`firecrab service dev --port 8098` selects the development dashboard port (default 8080).
+Development start/restart controls reuse the saved port; the API port stays unchanged.
+Git-linked worktrees use [independent development instances](../development/worktree-dev.md).
+Backend API/resource ports are allocated and saved separately from the manual dashboard port.
+Linux `service dev` uses a private Docker runtime from both primary and linked checkouts.
 
 On macOS and Windows, lifecycle controls have separate scopes:
 
 | Commands | Scope |
 | --- | --- |
 | `firecrab service start` / `stop` / `restart` | The management VM and its resident host service |
-| `firecrab service dev start` / `stop` / `restart` | Guest API/helper and the host development dashboard |
-| `firecrab service dev clean` | Restore installed release services, remove guest development files, and clear host dashboard state |
+| `firecrab service dev start` / `stop` / `restart` | The selected checkout's development backend and dashboard |
+| `firecrab service dev clean` | Restore that environment's release, remove development files, and clear its dashboard state |
+
+Non-development service controls retain their primary scope, even inside a linked worktree.
+General VM/API commands do not automatically select the worktree API.
+Pass the development command's printed API URL with `--api URL`.
+Docker `dev clean` and `--restore` preserve its named data volume and runtime resources.
 
 ## Pipe ingress and tunnel
 
@@ -248,3 +288,13 @@ See [API: Pools](api.md#pools) for sizing, TTL, and release rules.
 
 Pool acquire always sends an idempotency key. If `--idempotency-key` is omitted, the CLI generates
 one. On failure it prints a retry command with that key; use it to recover the same lease.
+
+## AI Sandbox
+
+`firecrab sandbox` uses the shared durable Sandbox REST lifecycle. See the [AI Sandbox guide](../guides/ai-sandbox.md#cli-and-local-stdio-mcp) for model verification, project/task JSON, cancellation, review and selected-file apply. `firecrab mcp` exposes the corresponding `sandbox_*` tools. Operator-only `sandbox get-access`, `set-access`, and `revoke-access` manage [host resource grants](../guides/sandbox-access.md) through the same API.
+
+## Controller services
+
+`firecrab cluster service` provides `create`, `update`, `stop`, `list`, `show`, `reconcile` and `operations`.
+Mutations require `--idempotency-key`. Update and Stop also require `--expected-generation`. Create and Update read `--file service.json`.
+See [controller services](../guides/multihost.md#controller-services) for examples.

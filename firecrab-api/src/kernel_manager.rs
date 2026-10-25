@@ -1,105 +1,111 @@
-//! Independent catalog and cache management for digest-pinned guest kernels.
-//!
-//! M2Image rootfs files stay immutable and are registered separately from this
-//! cache. An image may reference one of these kernels, but installing or
-//! removing a kernel does not by itself change any image alias.
-
-use std::path::{Path, PathBuf};
-
-use firecrab_api_types::{KernelInstallResponse, KernelResponse};
+//! Catalog and installation jobs for host-built stable Linux guest kernels.
 
 use crate::image_install::{Architecture, ImageInstallTracker};
-use crate::oci::kernel;
+use crate::oci::{kernel, kernel_legacy};
 use crate::templates::TemplateRegistry;
+use firecrab_api_types::{KernelInstallResponse, KernelResponse};
+use std::path::{Path, PathBuf};
 
-/// Builds the host-architecture catalog with verified local cache state.
+/// Current upstream stable plus locally installed versions for rollback.
 pub async fn list(
     image_root: &Path,
     templates: &TemplateRegistry,
     downloads: &ImageInstallTracker,
-) -> Vec<KernelResponse> {
-    let base_url = downloads.base_url();
+) -> Result<Vec<KernelResponse>, crate::oci::ResolveError> {
+    let architecture = Architecture::HOST;
+    let mut versions = kernel::installed_versions(image_root, architecture).await;
+    match kernel::latest_stable(image_root, downloads.base_url()).await {
+        Ok(release) => {
+            versions.retain(|version| version != &release.version);
+            versions.insert(0, release.version);
+        }
+        Err(error) if versions.is_empty() && downloads.base_url().is_some() => return Err(error),
+        Err(error) => {
+            tracing::debug!(%error, "kernel stable catalog is unavailable; listing local kernels")
+        }
+    }
     let mut result = Vec::new();
-    for pinned in kernel::supported_kernels(Architecture::HOST) {
-        let installed =
-            kernel::cached_kernel_is_valid(image_root, Architecture::HOST, pinned.version).await;
-        let relative = kernel::cache_relative(Architecture::HOST, &pinned);
-        let size_bytes = if installed {
-            tokio::fs::metadata(image_root.join(&relative))
-                .await
-                .ok()
-                .map(|metadata| metadata.len())
-        } else {
-            None
-        };
-        let in_use = templates
-            .list_aliases()
-            .into_iter()
-            .any(|template| template.kernel.relative_path() == relative);
-        let package_url = base_url.map(|base| {
-            format!(
-                "{}/{}",
-                base.trim_end_matches('/'),
-                kernel::package_key(Architecture::HOST, &pinned)
-            )
-        });
+    for version in versions {
+        let installed = kernel::cached_kernel_is_valid(image_root, architecture, &version).await;
+        let relative =
+            kernel::cache_relative(architecture, &version).expect("validated catalog version");
+        let receipt = kernel::built_kernel(image_root, architecture, &version).await;
+        let legacy = kernel_legacy::image_digest(architecture, &version);
+        let image_sha256 = receipt
+            .as_ref()
+            .map(|receipt| receipt.image_sha256.clone())
+            .or_else(|| legacy.as_ref().map(|pin| digest_body(pin)))
+            .unwrap_or_default();
+        let package_sha256 = receipt
+            .as_ref()
+            .map(|receipt| receipt.source_sha256.clone())
+            .unwrap_or_default();
         result.push(KernelResponse {
-            version: pinned.version.to_owned(),
-            architecture: Architecture::HOST.as_str().to_owned(),
-            image: pinned.image.to_owned(),
-            image_sha256: digest_body(pinned.image_digest),
-            package_sha256: digest_body(pinned.package_digest),
-            size_bytes,
+            version: version.clone(),
+            architecture: architecture.as_str().to_owned(),
+            image: kernel::image_name(architecture, &version).expect("validated image name"),
+            image_sha256,
+            package_sha256,
+            size_bytes: if installed {
+                tokio::fs::metadata(image_root.join(&relative))
+                    .await
+                    .ok()
+                    .map(|metadata| metadata.len())
+            } else {
+                None
+            },
             installed,
-            in_use,
-            package_url,
+            in_use: templates
+                .list_aliases()
+                .into_iter()
+                .any(|template| template.kernel.relative_path() == relative),
+            package_url: downloads
+                .base_url()
+                .and_then(|_| kernel::source_url(&version)),
         });
     }
-    result
+    Ok(result)
 }
 
-/// Relative cache path for a catalog version, or `None` when it is unknown.
+/// Version validation is independent from network availability.
 pub fn cache_path(version: &str) -> Option<PathBuf> {
-    let pinned = kernel::kernel_for_version(Architecture::HOST, version)?;
-    Some(kernel::cache_relative(Architecture::HOST, &pinned))
+    kernel::cache_relative(Architecture::HOST, version)
 }
 
-/// Managed kernel release encoded by an image's relative kernel path.
+/// Recover a kernel version only from a managed path for the host architecture.
 pub fn version_for_path(path: &Path) -> Option<String> {
-    kernel::supported_kernels(Architecture::HOST)
-        .into_iter()
-        .find(|pinned| kernel::cache_relative(Architecture::HOST, pinned) == path)
-        .map(|pinned| pinned.version.to_owned())
+    kernel::version_for_path(Architecture::HOST, path)
 }
 
-/// Starts the actual download/verify operation for one kernel job.
+/// Build or reuse a kernel and record the install job's final result.
 pub async fn run_install(
     tracker: ImageInstallTracker,
     templates: TemplateRegistry,
     version: String,
-    base_url: Option<String>,
+    releases_url: Option<String>,
 ) {
     tracker.append_log(
         &version,
-        format!("resolving digest-pinned Linux kernel {}", version),
+        format!("resolving Linux {version} from kernel.org source"),
     );
-    let result = kernel::ensure_managed_kernel(
+    match kernel::ensure_managed_kernel(
         templates.image_root_path(),
         Architecture::HOST,
         &version,
-        base_url.as_deref(),
+        releases_url.as_deref(),
+        Some(&tracker),
     )
-    .await;
-    match result {
+    .await
+    {
         Ok(path) => {
             tracker.append_log(&version, format!("verified and cached {}", path.display()));
-            tracker.finish_ok_with(&version, "kernel ready — digest verified");
+            tracker.finish_ok_with(&version, "kernel ready — source and image verified");
         }
         Err(error) => tracker.finish_err_with(&version, format!("kernel install failed: {error}")),
     }
 }
 
-/// Converts the shared job tracker wire shape to the kernel-specific shape.
+/// Expose the current install status, log, timing, and source download progress.
 pub fn snapshot(tracker: &ImageInstallTracker, version: &str) -> KernelInstallResponse {
     let snapshot = tracker.snapshot(version);
     KernelInstallResponse {
@@ -113,6 +119,7 @@ pub fn snapshot(tracker: &ImageInstallTracker, version: &str) -> KernelInstallRe
     }
 }
 
+/// Convert a prefixed legacy digest to the API's bare hexadecimal form.
 fn digest_body(value: &str) -> String {
     value.strip_prefix("sha256:").unwrap_or(value).to_owned()
 }
@@ -120,63 +127,55 @@ fn digest_body(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image_install::ImageInstallTracker;
-    use crate::templates::TemplateRegistry;
     use tempfile::tempdir;
 
     #[test]
-    fn cache_path_only_accepts_catalog_versions() {
-        assert!(cache_path("7.2.2").is_some());
-        assert!(cache_path("not-a-kernel").is_none());
+    fn cache_path_accepts_numeric_releases_and_rejects_paths_and_prereleases() {
+        assert!(cache_path("7.2.12").is_some());
+        for version in ["not-a-kernel", "../7.2.12", "7.3-rc1"] {
+            assert!(cache_path(version).is_none());
+        }
     }
 
     #[test]
-    fn managed_path_round_trips_to_its_version() {
-        let path = cache_path("7.2.2").expect("catalog kernel");
-        assert_eq!(version_for_path(&path).as_deref(), Some("7.2.2"));
-        assert!(version_for_path(Path::new("kernel/vmlinux-7.2.2-x86_64")).is_none());
+    fn managed_paths_round_trip_for_new_and_legacy_releases() {
+        for version in ["7.2.12", "7.2.2-vsock1"] {
+            let path = cache_path(version).unwrap();
+            assert_eq!(version_for_path(&path).as_deref(), Some(version));
+        }
+        assert!(version_for_path(Path::new("kernel/vmlinux-7.2.12-x86_64")).is_none());
     }
 
     #[tokio::test]
-    async fn list_reports_catalog_versions_and_remote_package_urls() {
-        let directory = tempdir().unwrap();
-        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty()).unwrap();
-        let downloads = ImageInstallTracker::with_base_url("https://mirror.example/");
-
-        let kernels = list(directory.path(), &templates, &downloads).await;
-
-        assert_eq!(kernels.len(), 4);
-        assert_eq!(kernels[0].version, "7.2.2");
-        assert_eq!(kernels[1].version, "7.1.12");
-        assert_eq!(kernels[2].version, "7.1.9");
-        assert_eq!(kernels[3].version, "7.1.8");
-        assert!(kernels.iter().all(|kernel| {
-            kernel.architecture == Architecture::HOST.as_str()
-                && !kernel.installed
-                && !kernel.in_use
-                && kernel.size_bytes.is_none()
-                && kernel
-                    .package_url
-                    .as_deref()
-                    .is_some_and(|url| url.starts_with("https://mirror.example/kernel/"))
-        }));
-    }
-
-    #[tokio::test]
-    async fn run_install_marks_a_disabled_remote_as_failed() {
+    async fn disabled_source_lists_only_local_kernels_and_fails_a_new_build() {
         let directory = tempdir().unwrap();
         let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty()).unwrap();
         let tracker = ImageInstallTracker::disabled();
-        tracker.begin_with("7.2.2", "test install").unwrap();
-
-        run_install(tracker.clone(), templates, "7.2.2".to_owned(), None).await;
-
-        let snapshot = snapshot(&tracker, "7.2.2");
+        assert!(
+            list(directory.path(), &templates, &tracker)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        tracker.begin_with("7.2.12", "test install").unwrap();
+        run_install(tracker.clone(), templates, "7.2.12".to_owned(), None).await;
+        let result = snapshot(&tracker, "7.2.12");
         assert_eq!(
-            snapshot.status,
+            result.status,
             firecrab_api_types::ImageInstallStatus::Failed
         );
-        assert!(snapshot.log.contains("kernel install failed"));
-        assert!(snapshot.ended_at_ms.is_some());
+        assert!(result.log.contains("kernel source downloads are disabled"));
+    }
+
+    #[tokio::test]
+    async fn unavailable_upstream_is_reported_when_no_local_catalog_exists() {
+        let directory = tempdir().unwrap();
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty()).unwrap();
+        let downloads = ImageInstallTracker::with_base_url("http://127.0.0.1:1");
+        assert!(
+            list(directory.path(), &templates, &downloads)
+                .await
+                .is_err()
+        );
     }
 }

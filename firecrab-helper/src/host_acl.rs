@@ -555,6 +555,26 @@ fn expected_rule_miss(bin: &str, args: &[&str], output: &Output) -> bool {
     }
 }
 
+/// Retry only test-fixture spawn failures, before any tool process exists.
+/// Installed tools retain their existing fail-fast behavior.
+async fn tool_output(command: &mut Command) -> io::Result<Output> {
+    let mut attempt = 0;
+    let child = loop {
+        match command.spawn() {
+            Err(error)
+                if cfg!(test)
+                    && error.kind() == io::ErrorKind::ExecutableFileBusy
+                    && attempt < 8 =>
+            {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(10 * attempt)).await;
+            }
+            result => break result?,
+        }
+    };
+    child.wait_with_output().await
+}
+
 async fn run_tool(bin: &str, args: &[&str]) -> bool {
     let mut last_error = None;
     for path in tool_search_order(bin) {
@@ -598,26 +618,6 @@ async fn output_tool(bin: &str, args: &[&str]) -> Option<String> {
     output_tool_env(bin, args, &[]).await
 }
 
-/// Parallel test children can briefly inherit a writer for a stub executable.
-/// Retry that test-only race, as the helper's Pipe runner does. Installed tools
-/// still fail immediately on a spawn error.
-async fn tool_output(command: &mut Command) -> io::Result<Output> {
-    let mut attempt = 0;
-    loop {
-        match command.output().await {
-            Err(error)
-                if cfg!(test)
-                    && error.kind() == io::ErrorKind::ExecutableFileBusy
-                    && attempt < 8 =>
-            {
-                attempt += 1;
-                tokio::time::sleep(std::time::Duration::from_millis(10 * attempt)).await;
-            }
-            result => return result,
-        }
-    }
-}
-
 async fn output_tool_env(bin: &str, args: &[&str], envs: &[(&str, &str)]) -> Option<String> {
     let mut last_error = None;
     for path in tool_search_order(bin) {
@@ -625,6 +625,7 @@ async fn output_tool_env(bin: &str, args: &[&str], envs: &[(&str, &str)]) -> Opt
             Command::new(&path)
                 .args(args)
                 .envs(envs.iter().copied())
+                .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped()),
         )
@@ -687,15 +688,22 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn busy_fixture_tools_recover_without_duplicate_execution_or_warnings() {
+    async fn a_busy_tool_runs_once_after_its_writer_closes() {
         for capture_output in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let tool = fake_tool(
                 dir.path(),
                 "firewall-tool",
-                "printf run >> \"${0%/*}/runs\"; printf ready",
+                "printf 'run\\n' >> \"${0%/*}/runs\"; printf '%s' \"$LC_ALL\"",
             );
             let writer = fs::OpenOptions::new().write(true).open(&tool).unwrap();
+            assert_eq!(
+                std::process::Command::new(&tool)
+                    .status()
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::ExecutableFileBusy
+            );
             let releaser = std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(60));
                 drop(writer);
@@ -703,32 +711,48 @@ mod tests {
             let (capture, subscriber) = log_capture();
             async {
                 if capture_output {
-                    assert_eq!(output_tool(&tool, &[]).await.as_deref(), Some("ready"));
+                    assert_eq!(
+                        output_tool_env(&tool, &["list"], &[("LC_ALL", "C")]).await,
+                        Some("C".to_owned())
+                    );
                 } else {
-                    assert!(run_tool(&tool, &[]).await);
+                    assert!(run_tool(&tool, &["list"]).await);
                 }
             }
             .with_subscriber(subscriber)
             .await;
             releaser.join().unwrap();
-            assert_eq!(fs::read(dir.path().join("runs")).unwrap(), b"run");
+            assert_eq!(fs::read(dir.path().join("runs")).unwrap(), b"run\n");
             assert_eq!(fs::read_to_string(capture.path()).unwrap(), "");
         }
     }
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn a_tool_that_stays_busy_returns_failure_without_running() {
+    async fn a_tool_that_stays_busy_fails_with_the_original_error() {
         let dir = tempfile::tempdir().unwrap();
         let tool = fake_tool(dir.path(), "firewall-tool", "touch \"${0%/*}/runs\"");
         let _writer = fs::OpenOptions::new().write(true).open(&tool).unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            assert!(!run_tool(&tool, &[]).await);
-            assert_eq!(output_tool(&tool, &[]).await, None);
-        })
+        let (capture, subscriber) = log_capture();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            async {
+                assert!(!run_tool(&tool, &["list"]).await);
+                assert_eq!(output_tool(&tool, &["list"]).await, None);
+            }
+            .with_subscriber(subscriber),
+        )
         .await
         .expect("busy retries must be bounded");
         assert!(!dir.path().join("runs").exists());
+        let logged = fs::read_to_string(capture.path()).unwrap();
+        assert_eq!(
+            logged.matches("host firewall tool unavailable").count(),
+            2,
+            "{logged}"
+        );
+        assert_eq!(logged.matches("os error 26").count(), 2, "{logged}");
+        assert!(!logged.contains("os error 2)"), "{logged}");
     }
 
     #[tokio::test]
@@ -803,12 +827,53 @@ mod tests {
         assert!(logged.contains("error="), "{logged}");
     }
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn busy_fixture_retries_before_execution_without_repeating_the_tool() {
+        let directory = tempfile::tempdir().unwrap();
+        let tool = fake_tool(
+            directory.path(),
+            "iptables",
+            r#"printf 'run\n' >> "${0%/*}/runs"; printf 'observed\n'"#,
+        );
+        let (capture, subscriber) = log_capture();
+        async {
+            for capture_output in [true, false] {
+                let writer = std::fs::OpenOptions::new().write(true).open(&tool).unwrap();
+                assert_eq!(
+                    std::process::Command::new(&tool)
+                        .status()
+                        .unwrap_err()
+                        .kind(),
+                    io::ErrorKind::ExecutableFileBusy
+                );
+                let release = std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(60));
+                    drop(writer);
+                });
+                if capture_output {
+                    assert_eq!(output_tool(&tool, &[]).await.as_deref(), Some("observed\n"));
+                } else {
+                    assert!(run_tool(&tool, &[]).await);
+                }
+                release.join().unwrap();
+            }
+        }
+        .with_subscriber(subscriber)
+        .await;
+        assert_eq!(
+            fs::read_to_string(directory.path().join("runs")).unwrap(),
+            "run\nrun\n"
+        );
+        assert_eq!(fs::read_to_string(capture.path()).unwrap(), "");
+    }
+
     #[tokio::test]
     async fn absent_iptables_rules_keep_false_without_warning() {
-        let dir = tempfile::tempdir().unwrap();
         let (capture, subscriber) = log_capture();
         async {
             for name in ["iptables", "ip6tables"] {
+                let dir = tempfile::tempdir().unwrap();
                 let tool = fake_tool(
                     dir.path(),
                     name,
@@ -817,7 +882,8 @@ mod tests {
                 for action in ["-C", "--check", "-D", "--delete"] {
                     assert!(!run_tool(&tool, &[action, "INPUT"]).await);
                 }
-                let tool = fake_tool(dir.path(), name, "exit 1");
+                let empty = tempfile::tempdir().unwrap();
+                let tool = fake_tool(empty.path(), name, "exit 1");
                 assert!(!run_tool(&tool, &["-C", "INPUT"]).await);
             }
         }
@@ -828,7 +894,6 @@ mod tests {
 
     #[tokio::test]
     async fn unexpected_iptables_failures_still_warn() {
-        let dir = tempfile::tempdir().unwrap();
         let (capture, subscriber) = log_capture();
         async {
             for name in ["iptables", "ip6tables"] {
@@ -844,6 +909,8 @@ mod tests {
                         "echo 'Bad rule (does a matching rule exist in that chain?).' >&2; exit 2",
                     ),
                 ] {
+                    // Keep the executable inode unchanged after a child has used it.
+                    let dir = tempfile::tempdir().unwrap();
                     let tool = fake_tool(dir.path(), name, script);
                     assert!(!run_tool(&tool, &[action, "INPUT"]).await);
                 }

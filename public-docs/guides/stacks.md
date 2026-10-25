@@ -2,7 +2,7 @@
 
 Validate a declarative YAML stack before committing it to Git.
 This is the first part of [GitOps IaC #437](https://github.com/SteelCrab/firecrab/issues/437).
-The experimental `firecrab.dev/v1alpha1` schema may change before resource application is available.
+The experimental `firecrab.dev/v1alpha1` schema may change.
 
 ## Run
 
@@ -72,7 +72,7 @@ No resource is adopted from the host by name.
 | Group | Required fields | Optional fields |
 | --- | --- | --- |
 | `microNetworks` | `name`, `subnetCidr` | `internetEnabled` (default `true`) |
-| `microVMs` | `name`, `template`, `network`, `cpu`, `ram`, `diskGb` | `egressPolicy` (default `internet`), `storageRoot`, `env` |
+| `microVMs` | `name`, `template`, `network`, `cpu`, `ram`, `diskGb` | `templatePin`, `egressPolicy` (default `internet`), `storageRoot`, `env` |
 | `microServices` | `config`, `network`, `hostPort` | Defaults inside `config` follow the MicroService API |
 
 All three maps may be omitted, but the stack must contain 1-256 resources in total.
@@ -115,9 +115,14 @@ The shared `firecrab-stack` crate provides the parser and local validation for l
 ## Limits and next steps
 
 Passing offline validation does not establish deployment readiness.
-Host image availability, exact VM template and kernel content, image-specific disk minimums, registered storage, capacity, and conflicts with existing host resources remain unchecked.
+Offline validation does not check host image availability, image-specific disk minimums, registered storage, capacity, or existing resource conflicts.
+`templatePin` declares `version`, `kernelSha256`, `rootfsSha256`, `initrdSha256` (nullable), and `bootArgsSha256`.
+Hashes must contain 64 lowercase hexadecimal characters. The host plan resolves and checks installed template identities.
+Git-managed VMs require this pin; see [immutable Git inputs](stack-git-source.md#immutable-inputs-and-controller-ownership).
 OCI digest syntax is checked locally; registry reference resolution and digest verification still need the host.
 IPv6, uplink selection, VM shells, and standalone VM port forwards are outside this initial schema.
 
 Host-local ownership and read-only `stack plan` are documented in [Stack ownership and planning](stack-planning.md).
-Actual apply, drift correction, and Git polling remain follow-up work.
+Use [Native YAML stack apply](stack-apply.md) for explicit creation, changes, deployment and recovery.
+[Git source synchronization](stack-git-source.md) supports GitHub polling, read-only drift detection, and opt-in native apply, including drift at unchanged commits.
+Failed or interrupted Git applies require explicit recovery before automatic mutation continues.

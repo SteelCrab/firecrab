@@ -319,7 +319,7 @@ impl Config {
     /// Standalone config: never includes or edits the host's nginx.conf.
     pub fn nginx(&self) -> String {
         let mut text = format!(
-            "worker_processes auto;\npid nginx.pid;\nerror_log stderr notice;\nworker_shutdown_timeout 5m;\nevents {{ worker_connections 1024; }}\nhttp {{\n  server_names_hash_bucket_size 512;\n  access_log off;\n  server_tokens off;\n  client_body_temp_path body;\n  proxy_temp_path proxy;\n  map $http_upgrade $fc_connection {{ default upgrade; '' ''; }}\n  map $http_x_forwarded_proto $fc_proto {{ default $scheme; https https; http http; }}\n  server {{ listen unix:{STATUS_SOCKET}; location / {{ return 200 \"{}\"; }} }}\n",
+            "worker_processes auto;\nworker_shutdown_timeout 0;\npid nginx.pid;\nerror_log stderr notice;\nevents {{ worker_connections 1024; }}\nhttp {{\n  server_names_hash_bucket_size 512;\n  access_log off;\n  server_tokens off;\n  client_body_temp_path body;\n  proxy_temp_path proxy;\n  map $http_upgrade $fc_connection {{ default upgrade; '' ''; }}\n  map $http_x_forwarded_proto $fc_proto {{ default $scheme; https https; http http; }}\n  server {{ listen unix:{STATUS_SOCKET}; location / {{ return 200 \"{}\"; }} }}\n",
             self.generation()
         );
         let has_quick_tunnels = self.quick_tunnel.is_some() || !self.quick_tunnels.is_empty();
@@ -614,6 +614,12 @@ pub struct QuickTunnelStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
+    /// Installed Nginx configuration keeps old workers alive until clients finish.
+    #[serde(default)]
+    pub ingress_graceful_drain: bool,
+    /// Exact Nginx worker identities. None means this host cannot verify drain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingress_workers: Option<Vec<IngressWorker>>,
     /// Stable public addresses, with ownership credentials removed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub firecrab_tunnels: Vec<crate::firecrab_tunnel::Address>,
@@ -631,6 +637,21 @@ pub struct Snapshot {
     /// Independent anonymous connectors, including a normalized legacy singleton.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quick_tunnels: Vec<QuickTunnelSnapshot>,
+}
+
+/// A PID alone is insufficient because it can be reused after a process exits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngressWorker {
+    /// Worker belongs to an earlier graceful reload and is already draining.
+    #[serde(default)]
+    pub draining: bool,
+    /// Worker process ID on the managed Linux host.
+    pub pid: u32,
+    /// Linux process start time, in clock ticks since boot.
+    pub start_time: u64,
+    /// Host boot identity, preventing false matches after a host restart.
+    pub boot_id: String,
 }
 
 #[cfg(test)]

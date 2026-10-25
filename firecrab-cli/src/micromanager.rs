@@ -2,23 +2,33 @@
 //!
 //! Each host has its own backend module; everything they share lives beside them.
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod artifact;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod controller;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod debug;
-mod dev;
+pub(crate) mod dev;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod host_platform;
 #[cfg(target_os = "macos")]
 mod macos;
 mod managed_home;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod manifest;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod os_repair;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod resource;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod resource_server;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod runtime;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod settings;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod settings_tui;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod sleepy;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod snapshot;
@@ -98,6 +108,7 @@ fn write_retrying_transient_errors(writer: &mut impl Write, mut bytes: &[u8]) {
 /// `firecrab service` on every host that runs Firecrab inside a managed Debian
 /// VM. Common lifecycle verbs share one definition; platform tools are gated.
 #[derive(Subcommand)]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub enum Command {
     /// Show or change management VM CPU, RAM, disk, and networking.
     #[command(name = "resorce", visible_alias = "resource")]
@@ -180,7 +191,7 @@ pub enum Command {
         #[arg(long, requires = "logs", value_parser = clap::value_parser!(u16).range(1..=1000))]
         tail: Option<u16>,
     },
-    /// Build/deploy guest services and start the source dashboard on localhost:8080.
+    /// Build/deploy guest services and start the source dashboard.
     #[command(args_conflicts_with_subcommands = true)]
     Dev {
         #[command(subcommand)]
@@ -188,6 +199,9 @@ pub enum Command {
         /// Checkout root (defaults to the current directory).
         #[arg(long, conflicts_with = "restore")]
         source: Option<std::path::PathBuf>,
+        /// Development dashboard port (does not change the API port).
+        #[arg(long, default_value_t = 8080, conflicts_with = "restore", value_parser = clap::value_parser!(u16).range(1..))]
+        port: u16,
         /// Build optimized guest binaries instead of debug binaries.
         #[arg(long, conflicts_with = "restore")]
         release: bool,
@@ -220,6 +234,7 @@ pub enum Command {
     },
 }
 
+/// Lifecycle operations shared by native and container development backends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Subcommand)]
 pub enum DevCommand {
     /// Start the deployed API/helper and dashboard without rebuilding or booting the VM.
@@ -233,6 +248,7 @@ pub enum DevCommand {
 }
 
 impl DevCommand {
+    /// Verb accepted by the shared in-guest development transaction script.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Start => "start",
@@ -388,6 +404,7 @@ mod tests {
         ));
         assert!(TestCli::try_parse_from(["test", "dev", "--restore", "--source", "."]).is_err());
         assert!(TestCli::try_parse_from(["test", "dev", "--restore", "--release"]).is_err());
+        assert!(TestCli::try_parse_from(["test", "dev", "--restore", "--port", "8098"]).is_err());
         let cli = TestCli::try_parse_from([
             "test",
             "dev",
@@ -406,6 +423,22 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn dev_dashboard_port_defaults_to_8080_and_accepts_only_nonzero_ports() {
+        let cli = TestCli::try_parse_from(["test", "dev"]).unwrap();
+        assert!(matches!(cli.command, Command::Dev { port: 8080, .. }));
+        for port in ["1", "8098", "65535"] {
+            let cli = TestCli::try_parse_from(["test", "dev", "--port", port]).unwrap();
+            assert!(
+                matches!(cli.command, Command::Dev { port: parsed, .. } if parsed.to_string() == port)
+            );
+        }
+        for port in ["0", "65536", "-1", "invalid"] {
+            assert!(TestCli::try_parse_from(["test", "dev", "--port", port]).is_err());
+        }
+        assert!(TestCli::try_parse_from(["test", "dev", "--port"]).is_err());
     }
 
     #[test]
@@ -446,6 +479,7 @@ mod tests {
             ));
             for options in [
                 &["--source", "."][..],
+                &["--port", "8098"][..],
                 &["--release"][..],
                 &["--restore"][..],
                 &["--yes"][..],

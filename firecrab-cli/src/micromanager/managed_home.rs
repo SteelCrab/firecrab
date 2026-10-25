@@ -5,6 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 const INSTALLATION_FILES: &[&str] = &[
     "micromanager.toml",
     "runtime/provisioned",
@@ -19,6 +20,7 @@ const INSTALLATION_FILES: &[&str] = &[
 pub enum Error {
     #[error("refusing to use managed path containing a symlink: {0}")]
     UnsafeManagedPath(PathBuf),
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     #[error("refusing to purge unsafe managed path {0}")]
     UnsafePurge(PathBuf),
     #[error("could not {action} {path}: {source}")]
@@ -31,6 +33,7 @@ pub enum Error {
 }
 
 /// Deletes the managed home after re-checking it, and treats "already gone" as done.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub fn purge(path: &Path) -> Result<(), Error> {
     validate_purge(path)?;
     match fs::remove_dir_all(path) {
@@ -42,6 +45,7 @@ pub fn purge(path: &Path) -> Result<(), Error> {
 
 /// Reinstallation discards only replaceable installation state. Disks, keys,
 /// and verified downloads remain available to the new TOML installation.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub fn clear_installation_state(home: &Path) -> Result<(), Error> {
     let provision = home.join("provision");
     reject_symlink_components(&provision)?;
@@ -65,6 +69,7 @@ pub fn clear_installation_state(home: &Path) -> Result<(), Error> {
 }
 
 /// Only an absolute, symlink-free directory named `micromanager` may be purged.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub fn validate_purge(path: &Path) -> Result<(), Error> {
     validate_purge_path(path)?;
     reject_symlink_components(path)?;
@@ -107,6 +112,7 @@ pub fn reject_symlink_components(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn validate_purge_path(path: &Path) -> Result<(), Error> {
     let safe = path.is_absolute()
         && path.file_name().is_some_and(|name| name == "micromanager")

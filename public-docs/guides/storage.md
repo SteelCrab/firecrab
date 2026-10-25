@@ -1,7 +1,8 @@
 # Storage
 
 A MicroStorage is a named host directory for VM disks, optionally on a separate mounted device.
-Firecrab does not partition, format, or mount disks.
+Firecrab does not partition, format, or mount host devices.
+It can create ext4 image files for [persistent data volumes](volumes.md).
 Paths belong to the API host: native Linux or managed Debian on macOS/Windows.
 
 ## Register and select
@@ -37,7 +38,7 @@ curl -fsS -X PUT http://127.0.0.1:5523/api/vms/VM_ID/storage \
 ```
 
 An existing rootfs returns `409`; Firecrab does not move prepared disks between pools.
-A pool cannot be deleted while a VM uses it.
+A pool cannot be deleted while a VM uses it or it contains data volumes.
 Deleting a pool does not unmount or format its filesystem.
 
 ## Installed MicroVM state
@@ -49,6 +50,7 @@ A default Linux installation uses this layout:
   data/
     firecrab.db                  resource records
     firecrab.db-wal, -shm        SQLite WAL companion files
+    volumes/<volume-id>/data.ext4 independent persistent data disks
     vms/<vm-id>/
       vm.lock
       d/<generation>.ext4       persistent writable disk

@@ -211,9 +211,21 @@ pub(crate) struct PlannedValue {
     pub remote_value: Option<String>,
 }
 
+/// Account credential binding captured by an import preview; contains no bearer token.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct AccountImport {
+    /// Console account UUID that owns the captured values.
+    pub account_id: Uuid,
+    /// SHA-256 of the host credential; changing or disconnecting invalidates the preview.
+    pub token_hash: String,
+}
+
 /// Encrypted, single-use transfer snapshot with a ten-minute lifetime.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Plan {
+    /// Present only for imports from the linked console account.
+    #[serde(default)]
+    pub account: Option<AccountImport>,
     /// Identifier used to apply selected names from this preview.
     pub id: Uuid,
     /// Connection whose scope and credentials were used for the snapshot.
@@ -240,6 +252,36 @@ pub(crate) struct Contents {
     /// Immutable Secret environments for deployments, never returned by the API.
     #[serde(default)]
     pub service_environments: BTreeMap<Uuid, BTreeMap<String, String>>,
+    /// Version-pinned controller credentials, retained for durable cross-host retries.
+    #[serde(default)]
+    pub cluster_credentials: BTreeMap<String, ClusterCredentials>,
+    /// Durable rotation admission/retry state; never exposed through Secrets APIs.
+    #[serde(default)]
+    pub service_rotations: BTreeMap<Uuid, ServiceRotation>,
+}
+
+/// Private credential snapshot; values and fingerprints never enter public journals.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct ClusterCredentials {
+    pub references: BTreeMap<String, firecrab_api_types::ClusterServiceCredential>,
+    pub values: BTreeMap<String, String>,
+}
+
+/// Private reconciliation state. The value fingerprint remains encrypted in the vault.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ServiceRotation {
+    /// Successful source release fenced by the automatic update request.
+    pub release_id: Uuid,
+    /// Reused after a lost admission acknowledgement or a retryable admission error.
+    pub operation_id: Uuid,
+    /// Canonical value fingerprint; encrypted and excluded from public metadata.
+    pub fingerprint: String,
+    /// Number of admission attempts for these private values and this source release.
+    pub attempts: u8,
+    /// Earliest retry in Unix milliseconds, retained across API restarts.
+    pub retry_after: u64,
+    /// Exhausted retries wait for a different value or an explicit Deploy.
+    pub paused: bool,
 }
 
 /// Encrypted file store opened lazily by Secrets requests.
@@ -255,6 +297,11 @@ impl Vault {
     /// Records the vault directory without creating files or reading its key.
     pub(crate) fn new(root: PathBuf) -> Self {
         Self { root }
+    }
+
+    /// Avoid creating an unused vault during periodic service reconciliation.
+    pub(crate) fn is_initialized(&self) -> bool {
+        self.root.join("vault.bin").is_file()
     }
 
     /// Runs a read operation on decrypted contents under an exclusive file lock.

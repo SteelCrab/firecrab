@@ -21,6 +21,7 @@ See [OCI activation](oci-import.md#guest-activation) for detection rules.
 | `/etc/firecrab/services.d/sshd` | Key-only root SSH service |
 | `/etc/firecrab/base-packages.ok` | Successful first-boot package-install marker |
 | `/usr/local/sbin/firecrab-guest-agent` | CPU and memory sampling |
+| `/usr/local/sbin/firecrab-console-resize` | Host-only vsock requests to update ttyS0 dimensions |
 
 Native init owns mounts and service supervision.
 BusyBox uses `/etc/inittab` to run boot setup once and respawn the console.
@@ -72,6 +73,15 @@ Memory used is `MemTotal - MemAvailable`.
 The API parses those samples and removes them from interactive terminals and console logs.
 Without an agent, usage is null and startup still succeeds.
 Stop/start refreshes the injected agent after an API upgrade.
+
+## Console dimensions
+
+The metrics service starts the static console resize helper and stops it on exit.
+Its private vsock port is 47100; it accepts only the host CID and changes only ttyS0.
+Connected browser viewers share the minimum reported rows and columns.
+A complete host installation and a guest kernel with virtio-vsock support are required.
+Stop/start injects the helper after an upgrade; unsupported guests keep a working serial console.
+See [console resize](../development/console-resize.md) for protocol and validation.
 
 ## SSH
 

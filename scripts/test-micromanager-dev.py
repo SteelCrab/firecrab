@@ -36,6 +36,8 @@ PY
 case "$name" in
   chmod|rm|install)
     if [ "$1" = --version ]; then exit 0; fi
+    if [ "$name" = rm ] && [ "${CLEANUP_FAIL:-0}" = 1 ] \
+      && [[ "${2:-}" = "$TEST_ROOT"/cache/rollback.* ]]; then exit 49; fi
     if [ "$name" = install ]; then exec /usr/bin/install "$@"; fi
     exec "/bin/$name" "$@"
     ;;
@@ -173,15 +175,25 @@ class GuestDevelopmentTest(unittest.TestCase):
             (tools / tool).write_text("#!/bin/sh\necho runtime-tool\n")
         ingress_builder = tools.parent / "build-ingress.sh"
         ingress_builder.write_text('#!/bin/bash\nset -eu\nmkdir -p "$1/ingress"\nprintf "#!/bin/sh\\nexit 0\\n" >"$1/firecrab-ingress"\nchmod +x "$1/firecrab-ingress"\nprintf "fixture" >"$1/ingress/LICENSE.nginx"\n')
+        guest_builder = tools.parent / "build-guest-console.sh"
+        guest_builder.write_text('#!/bin/bash\nset -eu\nmkdir -p "$1/guest-console"\nprintf "#!/bin/sh\\nexit 0\\n" >"$1/firecrab-guest-console"\nchmod +x "$1/firecrab-guest-console"\nprintf "musl fixture" >"$1/guest-console/LICENSE.musl"\n')
         self.archive = self.cache / "incoming-test.tar"
         with tarfile.open(self.archive, "w") as archive:
             archive.add(source, arcname="firecrab-api/src/main.rs")
             archive.add(tools, arcname="scripts/firecracker-menual")
             archive.add(ingress_builder, arcname="scripts/build-ingress.sh")
+            archive.add(guest_builder, arcname="scripts/build-guest-console.sh")
+
+    def test_guest_console_helper_and_attribution_are_staged_next_to_the_api(self):
+        result = self.run_guest()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        current = self.binaries / "bin"
+        self.assertTrue((current / "firecrab-guest-console").is_file())
+        self.assertEqual((current / "guest-console/LICENSE.musl").read_text(), "musl fixture")
 
     def run_guest(self, profile="debug", shell="bash", **flags):
         environment = os.environ.copy()
-        environment.update(TEST_ROOT=str(self.root), PATH=str(self.commands) + ":" + environment["PATH"])
+        environment.update(TEST_ROOT=str(self.root), FIRECRAB_DEV_ISOLATED="0", PATH=str(self.commands) + ":" + environment["PATH"])
         environment.update({key: str(value) for key, value in flags.items()})
         args = [shell, str(self.script), profile]
         if profile not in ["start", "stop", "restart", "clean", "check"]:
@@ -199,7 +211,7 @@ class GuestDevelopmentTest(unittest.TestCase):
         flock.write_text("#!/usr/bin/env python3\nimport fcntl\nfcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)\n")
         flock.chmod(0o755)
         environment = os.environ.copy()
-        environment.update(TEST_ROOT=str(self.root), PATH=str(self.commands) + ":" + environment["PATH"])
+        environment.update(TEST_ROOT=str(self.root), FIRECRAB_DEV_ISOLATED="0", PATH=str(self.commands) + ":" + environment["PATH"])
         environment.update({key: str(value) for key, value in flags.items()})
         output = open(self.root / "session.stdout", "w+")
         errors = open(self.root / "session.stderr", "w+")
@@ -344,14 +356,49 @@ class GuestDevelopmentTest(unittest.TestCase):
         self.assertFalse((self.root / "events").exists())
         self.assertFalse(self.override().exists())
 
+    def test_private_disk_failure_preserves_state_without_primary_repair_advice(self):
+        result = self.run_guest(DISK_FAIL_AFTER_BUILD=1, FIRECRAB_DEV_ISOLATED=1)
+        self.assertEqual(result.returncode, 74, result.stderr)
+        self.assertIn("selected private guest OS filesystem is unhealthy", result.stderr)
+        self.assertIn("[PRESERVE]", result.stderr)
+        self.assertNotIn("firecrab service", result.stdout + result.stderr)
+        self.assertTrue(self.archive.exists())
+        self.assertFalse((self.root / "events").exists())
+        self.assertFalse(self.override().exists())
+
     def test_low_os_disk_space_fails_before_staging_or_stopping_services(self):
         result = self.run_guest(OS_FREE_KIB=1024)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("[FAIL] guest OS disk has 1 MiB free", result.stderr)
         self.assertIn("[HINT]", result.stderr)
+        self.assertIn("firecrab service shell --", result.stderr)
         self.assertFalse((self.root / "events").exists())
         self.assertFalse(self.override().exists())
         self.assertEqual(list(self.binaries.glob("build.*")), [])
+
+    def test_private_low_disk_space_does_not_suggest_the_primary_shell(self):
+        result = self.run_guest(OS_FREE_KIB=1024, FIRECRAB_DEV_ISOLATED=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[FAIL] guest OS disk has 1 MiB free", result.stderr)
+        self.assertIn("disk usage and logs in the selected private guest", result.stderr)
+        self.assertNotIn("firecrab service", result.stdout + result.stderr)
+        self.assertFalse((self.root / "events").exists())
+        self.assertFalse(self.override().exists())
+        self.assertEqual(list(self.binaries.glob("build.*")), [])
+
+    def test_cleanup_failure_advice_keeps_the_selected_guest_scope(self):
+        archive = self.archive.read_bytes()
+        for isolated in [0, 1]:
+            with self.subTest(isolated=isolated):
+                self.archive.write_bytes(archive)
+                result = self.run_guest(CLEANUP_FAIL=1, FIRECRAB_DEV_ISOLATED=isolated)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("deployment cleanup failed", result.stderr)
+                if isolated:
+                    self.assertIn("selected private guest", result.stderr)
+                    self.assertNotIn("firecrab service", result.stdout + result.stderr)
+                else:
+                    self.assertIn("firecrab service debug --logs", result.stderr)
 
     def test_staging_compresses_debug_sections_and_removes_interrupted_builds(self):
         running = self.binaries / "build.running"
@@ -375,6 +422,18 @@ class GuestDevelopmentTest(unittest.TestCase):
         result = self.run_guest("start")
         self.assertEqual(result.returncode, 74, result.stderr)
         self.assertIn("OS cannot execute chmod", result.stderr)
+        self.assertIn("firecrab service debug --logs", result.stderr)
+        self.assertFalse((self.root / "events").exists())
+
+    def test_private_unreadable_executable_does_not_suggest_primary_debug(self):
+        chmod = self.commands / "chmod"
+        chmod.unlink()
+        chmod.write_text("#!/bin/sh\necho 'Input/output error' >&2\nexit 126\n")
+        chmod.chmod(0o755)
+        result = self.run_guest("start", FIRECRAB_DEV_ISOLATED=1)
+        self.assertEqual(result.returncode, 74, result.stderr)
+        self.assertIn("selected private guest OS cannot execute chmod", result.stderr)
+        self.assertNotIn("firecrab service", result.stdout + result.stderr)
         self.assertFalse((self.root / "events").exists())
 
     def test_legacy_service_uses_the_new_helper_executable_and_restore_removes_its_override(self):

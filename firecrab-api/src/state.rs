@@ -97,6 +97,8 @@ const DISK_PREP_CONCURRENCY: usize = 2;
 /// table, template registry, and runtime config.
 #[derive(Debug, Clone)]
 pub struct AppState {
+    /// Authenticated cluster transport and worker enrollment; journals live in SQLite.
+    pub(crate) cluster: Arc<crate::cluster::Runtime>,
     /// Loopback fixture override, absent from production builds.
     #[cfg(test)]
     pub(crate) s3_test_origin: Option<String>,
@@ -116,12 +118,20 @@ pub struct AppState {
     pub(crate) pipe_ai_logins: Arc<crate::pipe_ai::LoginRegistry>,
     /// Serializes inference with disconnect/rotation, so successful disconnect blocks new calls.
     pub(crate) pipe_ai_mutations: Arc<AsyncMutex<()>>,
+    /// Durable AI projects and bounded model/guest execution coordination.
+    pub(crate) sandbox: Arc<crate::ai_sandbox::Runtime>,
     /// Encrypted, host-local PipeSecrets vault; opened lazily on first use.
     pub(crate) secrets: Arc<crate::secrets::Vault>,
     /// Active per-VM lifecycle locks; weak entries do not retain deleted VM IDs.
     pub(crate) vm_mutations: Arc<Mutex<HashMap<Uuid, Weak<AsyncMutex<()>>>>>,
     /// Short service configuration/operation claims; never held while booting a guest.
     pub(crate) service_mutations: Arc<AsyncMutex<()>>,
+    /// Serializes durable apply admission and identical retry lookup, never worker execution.
+    pub(crate) stack_apply_admission: Arc<AsyncMutex<()>>,
+    /// Serializes RabbitMQ engine lifecycle and queue declarations.
+    pub(crate) queue_mutations: Arc<AsyncMutex<()>>,
+    /// Bound Git network work across all sources; checks never mutate host resources.
+    pub(crate) stack_source_permits: Arc<Semaphore>,
     /// One image/VM deployment at a time bounds replica surge on one host.
     pub(crate) service_deploy_permits: Arc<Semaphore>,
     /// Live VM id -> its running Firecracker process handle.
@@ -179,6 +189,8 @@ impl AppState {
         let secrets = Arc::new(crate::secrets::Vault::new(
             db_file.with_extension("secrets"),
         ));
+        let sandbox_root = db_file.with_extension("sandbox");
+        let sandbox_database = db_file.clone();
         let (store, vms) = tokio::task::spawn_blocking(move || {
             let store = Store::open(&db_file)?;
             // Live states from the previous run stay as they are: the VM
@@ -193,19 +205,27 @@ impl AppState {
         let network = NetworkClient::from_env();
         let runtime = RuntimeConfig::from_defaults(&storage, &network);
         Ok(AppState {
+            cluster: Arc::new(crate::cluster::Runtime::default()),
             #[cfg(test)]
             s3_test_origin: None,
             api_port: 5523,
             vms: Arc::new(Mutex::new(vms)),
             templates: Arc::new(templates),
             store,
+            stack_apply_admission: Arc::new(AsyncMutex::new(())),
+            stack_source_permits: Arc::new(Semaphore::new(4)),
             pipe_ai: crate::pipe_ai::OpenAi::new(),
             pipe_ai_anthropic: crate::pipe_ai::anthropic::Anthropic::new(),
             pipe_ai_logins: Arc::new(crate::pipe_ai::LoginRegistry::default()),
             pipe_ai_mutations: Arc::new(AsyncMutex::new(())),
+            sandbox: Arc::new(crate::ai_sandbox::Runtime::new(
+                sandbox_root,
+                sandbox_database,
+            )),
             vm_mutations: Arc::new(Mutex::new(HashMap::new())),
             secrets,
             service_mutations: Arc::new(AsyncMutex::new(())),
+            queue_mutations: Arc::new(AsyncMutex::new(())),
             service_deploy_permits: Arc::new(Semaphore::new(1)),
             processes: Arc::new(Mutex::new(HashMap::new())),
             reconciliation: Arc::new(Mutex::new(HashMap::new())),
@@ -216,7 +236,9 @@ impl AppState {
             network_mutations: Arc::new(AsyncMutex::new(())),
             image_installs: ImageInstallTracker::from_env(),
             image_packages: ImageInstallTracker::from_env(),
-            kernel_installs: ImageInstallTracker::from_env(),
+            kernel_installs: ImageInstallTracker::with_base_url(
+                crate::oci::kernel::configured_releases_url().unwrap_or_else(|| "none".to_owned()),
+            ),
             bootstraps: crate::bootstrap::BootstrapTracker::default(),
             oci_imports: ImageInstallTracker::default(),
             registry_transfers: ImageInstallTracker::default(),

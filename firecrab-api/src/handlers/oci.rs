@@ -143,7 +143,7 @@ pub(crate) async fn stored_credential_for(
     }
     let registry = registry.to_ascii_lowercase();
     for auth in super::pipe_auth::saved(state, request_id).await? {
-        if auth.connection().registry == registry {
+        if auth.connection().registry.as_deref() == Some(registry.as_str()) {
             return auth
                 .registry_credential()
                 .await

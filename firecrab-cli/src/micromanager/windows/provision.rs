@@ -19,7 +19,7 @@ pub const FIRECRACKER_VERSION: &str = "v1.17.0";
 pub const FIRECRAB_VERSION: &str = "v0.2.2";
 
 /// Bumped whenever the guest steps change, so an older marker forces a re-run.
-const PROVISION_SCHEMA: u32 = 1;
+const PROVISION_SCHEMA: u32 = 3;
 
 const INSTALLER: ArtifactSpec<'static> = ArtifactSpec {
     label: "Firecrab guest installer",
@@ -427,8 +427,8 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 phase apt-install
 {clean_guest_installation}
-apt-get install -y ca-certificates curl sudo tar findutils xz-utils gzip zstd lz4 lzop \
-  nftables conntrack dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat \
+apt-get install -y ca-certificates curl git openssh-client sudo tar findutils xz-utils gzip zstd lz4 lzop \
+  nftables conntrack dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat postgresql-client mariadb-client \
   binutils initramfs-tools {kernel_package}
 
 phase firecracker

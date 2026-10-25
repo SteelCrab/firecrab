@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { VmReconciliationOutcome } from "../../firecrab-frontend/src/bindings/VmReconciliationOutcome.js";
+import type { VmReconciliationOutcome } from "../types/bindings/VmReconciliationOutcome.js";
 
 interface MockVm {
   id: string;
@@ -119,29 +119,27 @@ test.describe("VM startup reconciliation @dashboard", () => {
       for (const [outcome, english, korean] of CASES) {
         await page.getByRole("button", { name: `vm-${outcome}`, exact: true }).click();
         const panel = page.locator(".detail-panel");
-        const detail = panel.locator(".reconciliation-detail");
+        const detail = panel.getByRole("region", { name: "API-STATUS", exact: true });
         const vm = vms.find((item) => item.name === `vm-${outcome}`)!;
         await expect(panel.locator(".detail-title")).toHaveText(vm.name);
-        await expect(panel.locator(".detail-meta .badge")).toHaveClass(new RegExp(`\\b${vm.state}\\b`));
+        await expect(panel.getByRole("region", { name: "Properties", exact: true })).toContainText(vm.state);
         await expect(panel.locator(".props").first()).toContainText(vm.id);
         await expect(panel.getByRole("heading", { name: "API-STATUS", exact: true })).toBeVisible();
-        await expect(detail.locator(".api-status-service")).toHaveText("Firecrab API firecrab-api");
-        await expect(detail.locator(".reconciliation-badge")).toHaveText(locale === "ko" ? korean : english);
-        await expect(detail.locator("time")).toHaveAttribute("datetime", new Date(CHECKED_AT).toISOString());
-        await expect(detail.locator("time")).toHaveText("2026-10-03 13:00:00 UTC+09:00");
-        await expect(detail.locator(".reconciliation-note")).toContainText(locale === "ko" ? "VM 상태 확인 결과" : "VM lifecycle check");
+        await expect(detail).toContainText("Firecrab API · firecrab-api");
+        await expect(detail).toContainText(locale === "ko" ? korean : english);
+        await expect(detail).toContainText(new Date(CHECKED_AT).toISOString());
         if (outcome === "networkFailed") {
-          await expect(detail.locator(".reconciliation-diagnostic")).toHaveText(DIAGNOSTIC);
+          await expect(detail.locator(".wasm-diagnostic")).toHaveText(DIAGNOSTIC);
           await page.screenshot({ path: testInfo.outputPath(`detail-${locale}.png`), fullPage: true });
         } else {
-          await expect(detail.locator(".reconciliation-diagnostic")).toHaveCount(0);
+          await expect(detail.locator(".wasm-diagnostic")).toHaveCount(0);
         }
       }
 
       await page.getByRole("button", { name: "vm-unchecked-7", exact: true }).click();
       await expect(page.locator(".detail-panel .detail-title")).toHaveText("vm-unchecked-7");
       await expect(page.locator(".detail-body")).toBeVisible();
-      await expect(page.locator(".reconciliation-detail")).toHaveCount(0);
+      await expect(page.getByRole("region", { name: "API-STATUS", exact: true })).toHaveCount(0);
     });
   }
 
@@ -150,12 +148,12 @@ test.describe("VM startup reconciliation @dashboard", () => {
     const vms = [vm];
     await openDashboard(page, "en", vms);
     await page.getByRole("button", { name: vm.name, exact: true }).click();
-    await expect(page.locator(".reconciliation-detail")).toBeVisible();
+    await expect(page.getByRole("region", { name: "API-STATUS", exact: true })).toBeVisible();
     vm.state = "starting";
     vm.reconciliation = null;
     await expect(page.locator("table.vm-list .vm-status-label")).toHaveAttribute("data-state", "starting");
     await expect(page.locator("table.vm-list .vm-status-label")).toHaveCSS("color", "rgb(180, 83, 9)");
-    await expect(page.locator(".reconciliation-detail")).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "API-STATUS", exact: true })).toHaveCount(0);
   });
 
   test("Korean diagnostics wrap within a narrow detail panel", async ({ page }, testInfo) => {
@@ -167,7 +165,7 @@ test.describe("VM startup reconciliation @dashboard", () => {
     await expect(page.locator(".vm-status-label")).toHaveText(["실행 중"]);
     await page.screenshot({ path: testInfo.outputPath("list-mobile-ko.png"), fullPage: true });
     await page.getByRole("button", { name: vm.name, exact: true }).click();
-    const detail = page.locator(".reconciliation-detail");
+    const detail = page.getByRole("region", { name: "API-STATUS", exact: true });
     await expect(detail).toBeVisible();
     const bounds = await detail.boundingBox();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);

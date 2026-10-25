@@ -1,3 +1,4 @@
+import { installWasmClock } from "./support/wasmClock.js";
 import { expect, test, type Page } from "@playwright/test";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -7,7 +8,7 @@ const NEW = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const SECRET = { id: ID, name: "DB_PASSWORD", description: "Database credential", version: 1, createdAt: 1_792_544_000_000, updatedAt: 1_792_544_000_000, source: null };
 const LINK = { id: CONNECTION, name: "Production", provider: "infisical", settings: { baseUrl: "https://us.infisical.com", projectId: "project-id", environment: "prod", secretPath: "/", region: "", prefix: "" }, version: 1, updatedAt: 1_792_544_000_000 };
 
-async function openSecrets(page: Page, options: { empty?: boolean; failSave?: boolean; partial?: boolean } = {}) {
+async function openSecrets(page: Page, options: { empty?: boolean; failSave?: boolean; partial?: boolean; unavailable?: boolean; conflictApply?: boolean } = {}) {
   const writes: { path: string; method: string; body: Record<string, unknown> }[] = [];
   let rows: object[] = options.empty ? [] : [{ ...SECRET }];
   let connections: object[] = [{ ...LINK }];
@@ -15,9 +16,11 @@ async function openSecrets(page: Page, options: { empty?: boolean; failSave?: bo
   await page.route(/^https?:\/\/[^/]+\/api\//, async (route) => {
     const path = new URL(route.request().url()).pathname;
     const method = route.request().method();
+    if (options.unavailable && method === "GET" && ["/api/secrets", "/api/secrets/connections"].includes(path)) return route.fulfill({ status: 503, json: { error: { message: "PipeSecrets storage or its encryption key is unavailable" } } });
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/update") return route.fulfill({ json: { current: "0.3.1", latest: "0.3.1", updateAvailable: false } });
     if (path === "/api/update/progress") return route.fulfill({ json: { phase: "idle", percent: 0, updatedAtMs: 0 } });
+    if (path === "/api/pipe/auth") return route.fulfill({ json: [] });
     if (path === "/api/secrets" && method === "GET") return route.fulfill({ json: rows });
     if (path === "/api/secrets/connections" && method === "GET") return route.fulfill({ json: connections });
     if (path.endsWith("/reveal")) return route.fulfill({ json: { value: "fixture-private-password", version: 1 } });
@@ -29,6 +32,7 @@ async function openSecrets(page: Page, options: { empty?: boolean; failSave?: bo
         return route.fulfill({ json: { id: PLAN, connectionId: CONNECTION, direction, expiresAt: Date.now() + 600_000, changes: direction === "import" ? [{ name: "DB_PASSWORD", change: "update" }, { name: "NEW_TOKEN", change: "add" }, { name: "UNCHANGED", change: "unchanged" }] : [{ name: "DB_PASSWORD", change: "update" }] } });
       }
       if (path.endsWith("/apply")) {
+        if (options.conflictApply) { options.conflictApply = false; return route.fulfill({ status: 409, json: { error: { message: "The values changed" } } }); }
         if (direction === "import" && body.names.includes("NEW_TOKEN")) rows.push({ ...SECRET, id: NEW, name: "NEW_TOKEN", source: { connectionId: CONNECTION, connectionName: "Production", provider: "infisical", remoteKey: "NEW_TOKEN", importedAt: Date.now() } });
         return route.fulfill({ json: options.partial ? { applied: [], failed: [{ name: "DB_PASSWORD", message: "failed" }] } : { applied: body.names, failed: [] } });
       }
@@ -49,7 +53,7 @@ async function openSecrets(page: Page, options: { empty?: boolean; failSave?: bo
   });
   await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
   await page.goto("/#/secrets");
-  await expect(page.getByRole("button", { name: "New secret", exact: true })).toBeEnabled();
+  if (!options.unavailable) await expect(page.getByRole("button", { name: "New secret", exact: true })).toBeEnabled();
   return writes;
 }
 
@@ -58,17 +62,36 @@ test.describe("Secrets web console @dashboard", () => {
     const writes = await openSecrets(page, { empty: true });
     await page.getByRole("button", { name: "New secret", exact: true }).click();
     await page.getByLabel("Secret name", { exact: true }).fill("DB_PASSWORD");
-    await page.getByLabel("Secret value", { exact: true }).fill("typed-secret-value");
+    const value = "typed-secret-value\n두 번째 줄";
+    await page.getByLabel("Secret value", { exact: true }).fill(value);
+    expect(await page.getByLabel("Secret value", { exact: true }).evaluate(e => getComputedStyle(e).getPropertyValue('-webkit-text-security'))).toBe('disc');
+    await page.getByLabel("Show entered value", { exact: true }).check();
+    await expect(page.getByLabel("Secret value", { exact: true })).toHaveValue(value);
     await page.getByRole("button", { name: "Save secret", exact: true }).click();
     await expect(page.getByRole("heading", { name: "New secret", exact: true })).toHaveCount(0);
     await expect(page.getByLabel("DB_PASSWORD value", { exact: true })).toHaveText("••••••••");
-    expect(writes[0].body.value).toBe("typed-secret-value");
+    expect(writes[0].body.value).toBe(value);
     await page.getByRole("button", { name: "Edit DB_PASSWORD", exact: true }).click();
-    await expect(page.getByLabel("Secret value", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Secret value", { exact: true })).toBeHidden();
+    await expect(page.getByLabel("Secret value", { exact: true })).toHaveValue("");
     await page.getByLabel("Description", { exact: true }).fill("Updated description");
     await page.getByRole("button", { name: "Save secret", exact: true }).click();
     expect(writes[1].body).toEqual({ name: "DB_PASSWORD", description: "Updated description", version: 1 });
     await expect(page.getByText("Updated description", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Edit DB_PASSWORD", exact: true }).click();
+    await page.getByLabel("Replace secret value", { exact: true }).check();
+    await expect(page.getByLabel("Secret value", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Secret value", { exact: true })).toHaveValue("");
+    await page.getByRole("button", { name: "Save secret", exact: true }).click();
+    expect(writes[2].body.value).toBe("");
+    expect(writes[2].body).not.toHaveProperty("replaceValue");
+  });
+
+  test("unavailable encrypted storage shows one error and blocks creation", async ({ page }) => {
+    await openSecrets(page, { unavailable: true });
+    await expect(page.getByRole("alert")).toHaveCount(1);
+    await expect(page.getByRole("alert")).toContainText("encryption key is unavailable");
+    await expect(page.getByRole("button", { name: "New secret", exact: true })).toBeDisabled();
   });
 
   test("SEC2: reveals only on request and hides values again", async ({ page }) => {
@@ -82,6 +105,45 @@ test.describe("Secrets web console @dashboard", () => {
     await expect(page.getByLabel("DB_PASSWORD value", { exact: true })).toHaveText("fixture-private-password");
     await page.evaluate(() => window.dispatchEvent(new Event("blur")));
     await expect(page.getByLabel("DB_PASSWORD value", { exact: true })).toHaveText("••••••••");
+  });
+
+  test("retains upload selection and destination when a stale preview is retried", async ({ page }) => {
+    const writes = await openSecrets(page, { conflictApply: true });
+    await page.getByLabel("Select DB_PASSWORD", { exact: true }).check();
+    await page.getByLabel("Upload destination", { exact: true }).selectOption(CONNECTION);
+    await page.getByRole("button", { name: "Preview upload", exact: true }).click();
+    await page.getByLabel("Apply DB_PASSWORD", { exact: true }).check();
+    await page.getByRole("button", { name: "Upload selected (1)", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("The values changed");
+    await expect(page.getByLabel("Select DB_PASSWORD", { exact: true })).toBeChecked();
+    await expect(page.getByLabel("Upload destination", { exact: true })).toHaveValue(CONNECTION);
+    await page.getByRole("button", { name: "Preview upload", exact: true }).click();
+    await page.getByLabel("Apply DB_PASSWORD", { exact: true }).check();
+    await page.getByRole("button", { name: "Upload selected (1)", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("1 secret(s) applied.");
+    expect(writes.filter(write => write.path.endsWith("/preview")).map(write => write.body.secretIds)).toEqual([[ID], [ID]]);
+  });
+
+  test("delete confirmations name the target and cancellation keeps Secrets and connections", async ({ page }) => {
+    const writes = await openSecrets(page);
+    for (const [name, path] of [
+      ["Delete DB_PASSWORD", `/api/secrets/${ID}`],
+      ["Delete connection Production", `/api/secrets/connections/${CONNECTION}`],
+    ]) {
+      if (path.includes("/connections/")) await page.getByRole("tab", { name: /External connections/ }).click();
+      const remove = page.getByRole("button", { name, exact: true });
+      for (const accept of [false, true]) {
+        const confirmation = page.waitForEvent("dialog");
+        const click = remove.click();
+        const dialog = await confirmation;
+        expect(dialog.message()).toBe(`${name}?`);
+        if (accept) await dialog.accept();
+        else await dialog.dismiss();
+        await click;
+        await expect(remove).toHaveCount(accept ? 0 : 1);
+        expect(writes.filter(write => write.method === "DELETE" && write.path === path)).toHaveLength(accept ? 1 : 0);
+      }
+    }
   });
 
   test("SEC3: previews imports and requires selection before replacing existing values", async ({ page }, testInfo) => {
@@ -119,12 +181,12 @@ test.describe("Secrets web console @dashboard", () => {
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
     await page.getByLabel("Connection name", { exact: true }).fill("AWS production");
     await page.getByLabel("Provider", { exact: true }).selectOption("awsSecretsManager");
-    await page.getByLabel("Access key ID", { exact: true }).fill("FIXTURE_KEY");
-    await page.getByLabel("Secret access key", { exact: true }).fill("fixture-credential");
+    await page.getByLabel("AWS access key ID", { exact: true }).fill("FIXTURE_KEY");
+    await page.getByLabel("AWS secret access key", { exact: true }).fill("fixture-credential");
     await page.getByRole("button", { name: "Save connection", exact: true }).click();
     expect(writes[0].body.provider).toBe("awsSecretsManager");
     await page.getByRole("button", { name: "Edit connection AWS production", exact: true }).click();
-    await expect(page.getByLabel("Secret access key", { exact: true })).toHaveValue("");
+    await expect(page.getByLabel("AWS secret access key", { exact: true })).toHaveValue("");
     await page.getByLabel("Name prefix (optional)", { exact: true }).fill("production/");
     await page.getByRole("button", { name: "Save connection", exact: true }).click();
     expect(writes[1].body.credentials).toEqual({});
@@ -146,7 +208,7 @@ test.describe("Secrets web console @dashboard", () => {
     await expect(page.getByRole("alert")).toContainText("is already registered");
     await expect(page.getByLabel("Secret value", { exact: true })).toHaveValue("typed-private-value");
     page.once("dialog", (dialog) => dialog.dismiss());
-    await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
     await expect(page).toHaveURL(/#\/secrets$/);
     await expect(page.getByRole("heading", { name: "New secret", exact: true })).toBeVisible();
   });
@@ -164,13 +226,13 @@ test.describe("Secrets web console @dashboard", () => {
     await page.screenshot({ path: testInfo.outputPath("secrets-mobile.png"), fullPage: true });
     await page.getByRole("button", { name: "Open menu", exact: true }).click();
     await page.getByRole("combobox", { name: "Language", exact: true }).selectOption("ko");
-    await page.getByRole("navigation", { name: "주요 메뉴", exact: true }).getByRole("button", { name: "Secrets", exact: true }).click();
+    await page.getByRole("navigation", { name: "주요 메뉴", exact: true }).getByRole("link", { name: "Secrets", exact: true }).click();
     await expect(page.getByRole("heading", { name: "외부 연결 추가", exact: true })).toBeVisible();
     expect(errors).toEqual([]);
   });
 
   test("SEC8: automatically masks revealed values and disables expired previews", async ({ page }) => {
-    await page.clock.install();
+    await installWasmClock(page);
     const writes = await openSecrets(page);
     await page.getByRole("button", { name: "Reveal DB_PASSWORD", exact: true }).click();
     await expect(page.getByLabel("DB_PASSWORD value", { exact: true })).toHaveText("fixture-private-password");

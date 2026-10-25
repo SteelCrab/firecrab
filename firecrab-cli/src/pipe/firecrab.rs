@@ -455,6 +455,7 @@ fn resolve_token(endpoint: &str, token: &str) -> Result<(String, RegistryProtoco
     let response = client
         .post(format!("{endpoint}/v1/register"))
         .header("host", "tunnel.firecrab.dev")
+        .header("x-firecrab-protocol", "2")
         .bearer_auth(token)
         .json(&serde_json::json!({}))
         .send()
@@ -581,6 +582,7 @@ fn refresh_bindings(
                 client
                     .post(format!("{origin}/__firecrab/heartbeat"))
                     .header("host", format!("{}.{}", binding.subdomain, DOMAIN))
+                    .header("x-firecrab-protocol", "2")
                     .json(&serde_json::json!({"tunnel_url":url}))
             }
         };
@@ -718,6 +720,7 @@ mod tests {
         assert!(protocol == RegistryProtocol::RegisterV1);
         let requests = server.join().unwrap();
         assert!(requests[0].starts_with("POST /v1/register HTTP/1.1\r\n"));
+        assert!(requests[0].contains("x-firecrab-protocol: 2\r\n"));
         assert!(requests[0].ends_with("{}"));
     }
 
@@ -821,6 +824,7 @@ mod tests {
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].starts_with("POST /__firecrab/heartbeat HTTP/1.1"));
+        assert!(requests[0].contains("x-firecrab-protocol: 2\r\n"));
         assert!(
             requests[0].ends_with(r#"{"tunnel_url":"https://recovered-crab.trycloudflare.com"}"#)
         );

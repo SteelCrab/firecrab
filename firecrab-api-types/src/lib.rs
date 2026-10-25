@@ -1,5 +1,4 @@
-//! Wire types shared between `firecrab-api` and `firecrab-frontend`'s
-//! generated bindings: request/response bodies and the VM lifecycle state
+//! Wire types shared between `firecrab-api` and browser clients and test fixtures: request/response bodies and the VM lifecycle state
 //! machine.
 
 use std::collections::BTreeMap;
@@ -9,16 +8,27 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod queues;
+pub use queues::*;
 mod pool;
 pub use pool::*;
+mod cluster;
+pub use cluster::*;
+mod cluster_services;
+pub use cluster_services::*;
+mod ai_sandbox;
+mod block_storage;
+pub use block_storage::*;
 mod micro_services;
 mod pipe_ai;
 mod pipe_storage;
 mod schedules;
 mod security_groups;
+pub use ai_sandbox::*;
 pub use micro_services::{
-    DeployMicroServiceRequest, MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec,
-    ServiceInstance, ServicePhase, ServiceRuntime,
+    DeployMicroServiceRequest, DeployStrategy, MicroServiceDeployment, MicroServiceResponse,
+    MicroServiceSpec, RetryServiceRequest, RollbackServiceRequest, ServiceInstance, ServicePhase,
+    ServiceRouteTransition, ServiceRuntime, ServiceUpdate, UpdateServiceRequest,
 };
 pub use pipe_ai::*;
 pub use pipe_storage::{
@@ -163,6 +173,9 @@ impl VmState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateVmRequest {
+    /// Existing data disks, reserved exclusively for this VM at creation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub block_storages: Vec<VmBlockStorageMount>,
     /// 1–64 chars, alphanumeric plus `.`/`_`/`-`.
     pub name: String,
     /// Template registry alias (e.g. `ubuntu-26.04`), not a specific version.
@@ -434,8 +447,8 @@ pub struct StartupStepRun {
 
 /// What a VM record represents.
 ///
-/// Wire values are `instance`, `builder`, and `pool` — the same three
-/// purposes the API stores. `GET /api/vms` returns `instance` and `pool`.
+/// Wire values are `instance`, `builder`, `pool`, and `queue`.
+/// `GET /api/vms` excludes image builders.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VmPurpose {
@@ -446,6 +459,8 @@ pub enum VmPurpose {
     Builder,
     /// A warm-pool member. `GET /api/vms` lists it.
     Pool,
+    /// Stateful RabbitMQ engine, managed through Queue lifecycle controls.
+    Queue,
 }
 
 /// What the latest API startup or operator network retry learned about a VM.
@@ -1379,8 +1394,8 @@ pub struct ImageResponse {
     pub has_guest_service: bool,
 }
 
-/// A kernel release known to this Firecracker build, plus its local cache
-/// state. Kernels are managed independently from M2Image rootfs artifacts.
+/// An upstream stable or locally cached kernel release, plus its cache state.
+/// Kernels are managed independently from M2Image rootfs artifacts.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KernelResponse {
@@ -1388,11 +1403,11 @@ pub struct KernelResponse {
     pub version: String,
     /// Firecracker architecture label (`x86_64` or `aarch64`).
     pub architecture: String,
-    /// Kernel filename inside the verified package.
+    /// Host-built or previously installed kernel filename.
     pub image: String,
-    /// SHA256 of the unpacked kernel image.
+    /// SHA256 of the kernel image; empty until a source build completes.
     pub image_sha256: String,
-    /// SHA256 of the compressed MicroRegistry package.
+    /// SHA256 of the upstream source archive; empty before installation.
     pub package_sha256: String,
     /// Local unpacked image size when installed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1401,7 +1416,7 @@ pub struct KernelResponse {
     pub installed: bool,
     /// Whether an installed image currently references this kernel.
     pub in_use: bool,
-    /// Remote package URL when kernel downloads are enabled.
+    /// Upstream kernel source archive URL when source downloads are enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package_url: Option<String>,
 }
@@ -2108,7 +2123,7 @@ mod tests {
     }
 
     /// The dashboard switches on these exact strings
-    /// (`firecrab-frontend/src/bindings/SshHostKeyCheckStatus.ts`).
+    /// (`firecrab-e2e/types/bindings/SshHostKeyCheckStatus.ts`).
     #[test]
     fn ssh_host_key_check_status_serializes_camel_case() {
         for (status, json) in [

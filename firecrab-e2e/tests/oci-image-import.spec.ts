@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { createNetwork, importOci } from "./support/wasmDashboard";
 import { ApiCleanup } from "../src/api.js";
 import { openVmTab, vmPanel } from "./support/vmPanel";
 import {
@@ -12,7 +13,10 @@ import {
   SKIP_GUEST_BOOT,
   VM_NAME,
 } from "../src/constants.js";
-import { startLocalOciRegistry, type LocalOciRegistry } from "../src/registry.js";
+import {
+  startLocalOciRegistry,
+  type LocalOciRegistry,
+} from "../src/registry.js";
 
 /**
  * Issue #90 browser E2E.
@@ -73,31 +77,11 @@ test.afterAll(async () => {
   }
 });
 
-test("inspects the local fixture and imports it as a registered image", async ({ page }) => {
+test("inspects the local fixture and imports it as a registered image", async ({
+  page,
+}) => {
   await openEnglish(page, "/#/images");
-  await expect(page.locator("#oci-reference")).toBeVisible();
-  await expect(page.locator("#oci-import")).toBeDisabled();
-
-  await page.locator("#oci-reference").fill(reference());
-  await page.locator("#oci-inspect").click();
-
-  const oci = page.locator("section.panel", { has: page.getByRole("heading", { name: "OCI" }) });
-  await expect(oci.getByText("Compatible with this host.")).toBeVisible({ timeout: 30_000 });
-  await expect(oci.locator("dd", { hasText: alias() }).first()).toBeVisible();
-  await expect(page.locator("#oci-import")).toBeEnabled();
-
-  await page.locator("#oci-import").click();
-  const status = oci.locator(".state-badge");
-  await expect(status).toHaveText(/Imported|Import failed/, { timeout: 180_000 });
-  if ((await status.textContent())?.includes("failed")) {
-    const log = (await oci.locator(".image-install-log").textContent()) ?? "";
-    throw new Error(`OCI import failed for ${reference()}:\n${log}`);
-  }
-
-  await expect(oci.getByText("Registered image")).toBeVisible();
-  await expect(oci.getByText(new RegExp(`${alias()}.*Installed`))).toBeVisible();
-  await expect(page.locator("table.image-table")).toContainText(alias());
-  await expect(page.locator("table.image-table").getByText("Installed").first()).toBeVisible();
+  await importOci(page, reference(), alias());
 });
 
 test("creates a VM from the imported image and asserts the guest service started", async ({
@@ -109,59 +93,65 @@ test("creates a VM from the imported image and asserts the guest service started
   );
 
   await openEnglish(page, "/#/networks");
-  const networkPanel = page.locator("section.panel", {
-    has: page.getByRole("heading", { name: "MicroNetwork" }),
-  });
-  const networkRows = networkPanel.locator("table.vm-table tbody tr");
-  // Prefer an already-provisioned network. Creating one needs the helper and
-  // a free CIDR; a developer host usually already has `default`.
-  if ((await networkRows.count()) === 0) {
-    await page.locator("#mn-name").fill(NETWORK_NAME);
-    await page.locator("#mn-subnet").fill(NETWORK_CIDR);
-    await networkPanel.locator('button[type="submit"]').click();
-    const created = networkRows.filter({ hasText: NETWORK_NAME });
-    const fieldError = networkPanel.locator(".field-error").filter({ hasText: /\S/ });
-    await expect(created.or(fieldError).first()).toBeVisible({ timeout: 30_000 });
-    if ((await created.count()) === 0) {
-      throw new Error(
-        `failed to create MicroNetwork ${NETWORK_NAME}: ${(await fieldError.allTextContents()).join("; ")}`,
-      );
-    }
+  await expect(page.locator("#content")).toHaveAttribute("data-loaded", "true");
+  if ((await page.locator("table.network-table tbody tr").count()) === 0) {
+    await createNetwork(page, NETWORK_NAME, NETWORK_CIDR);
     const networks = await api.listNetworks();
-    createdNetworkId = networks.find((network) => network.name === NETWORK_NAME)?.id ?? null;
+    createdNetworkId =
+      networks.find((network) => network.name === NETWORK_NAME)?.id ?? null;
   }
 
   await openEnglish(page, "/#/vms");
   await page.locator("#vm-list-add").click();
   await expect(page).toHaveURL(/#\/vms\/new$/);
-  await expect(page.locator("#vm-image")).toBeEnabled({ timeout: 15_000 });
-  await expect(page.locator(`#vm-image option[value="${alias()}"]`)).toHaveCount(1, {
+  await expect(page.locator("#field-template")).toBeEnabled({
     timeout: 15_000,
   });
-  await page.locator("#vm-name").fill(VM_NAME);
-  await page.locator("#vm-image").selectOption(alias());
-  await expect(page.locator("#vm-micro-network")).not.toHaveValue("");
-  await page.locator("#vm-create-submit").click();
-  await expect(page).toHaveURL(/#\/vms$/);
-  await expect(page.getByText(`Created: ${VM_NAME}`)).toBeVisible({ timeout: 30_000 });
+  await expect(
+    page.locator(`#field-template option[value="${alias()}"]`),
+  ).toHaveCount(1, {
+    timeout: 15_000,
+  });
+  await page.locator("#field-name").fill(VM_NAME);
+  await page.locator("#field-template").selectOption(alias());
+  await expect(page.locator("#field-microNetworkId")).not.toHaveValue("");
+  await page.locator("#editor button[type=submit]").click();
+  await expect(page).toHaveURL(/#\/vms(?:\?vm=.+)?$/);
 
   const row = page.locator("table.vm-list tbody tr", { hasText: VM_NAME });
   await expect(row).toBeVisible();
   // Row actions live behind the Actions toggle now.
   await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
-  await row.getByRole("menuitem", { name: "start", exact: true }).click();
-  await expect(row.locator(".vm-status-label")).toHaveAttribute("data-state", /running|error/, { timeout: 240_000 });
-  if ((await row.locator(".vm-status-label").getAttribute("data-state")) !== "running") {
+  await page.getByRole("menuitem", { name: "start", exact: true }).click();
+  await expect(row.locator(".vm-status-label")).toHaveAttribute(
+    "data-state",
+    /running|error/,
+    { timeout: 240_000 },
+  );
+  if (
+    (await row.locator(".vm-status-label").getAttribute("data-state")) !==
+    "running"
+  ) {
     await openVmTab(page, row, "Overview");
-    const steps = (await vmPanel(page).locator(".vm-timeline-step").allTextContents()).join("\n");
+    const steps = (
+      await vmPanel(page).locator(".vm-timeline-step").allTextContents()
+    ).join("\n");
     await vmPanel(page).getByRole("tab", { name: /^Log/ }).click();
     await expect
-      .poll(async () => (await page.locator("pre.detail-log").textContent())?.trim() ?? "", {
-        timeout: 10_000,
-      })
+      .poll(
+        async () =>
+          (await page.locator("pre.detail-log").textContent())?.trim() ?? "",
+        {
+          timeout: 10_000,
+        },
+      )
       .not.toBe("");
     const logText = (await page.locator("pre.detail-log").textContent()) ?? "";
-    const banner = (await page.locator(".banner").textContent().catch(() => "")) ?? "";
+    const banner =
+      (await page
+        .locator(".banner")
+        .textContent()
+        .catch(() => "")) ?? "";
     throw new Error(
       `VM ${VM_NAME} entered error instead of running.\nbanner: ${banner}\nsteps:\n${steps}\nlog:\n${logText}`,
     );

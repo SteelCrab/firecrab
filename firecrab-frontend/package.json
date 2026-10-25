@@ -4,24 +4,18 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:wasm": "node scripts/wasm.mjs",
     "dev": "vite",
-    "build": "tsrs -b && vite build",
-    "lint": "oxlint",
-    "preview": "vite preview"
+    "lint": "cargo fmt -- --check && cargo clippy --target wasm32-unknown-unknown --locked -- -D warnings",
+    "test": "cargo test --locked && node --test tests/wasm-build.test.mjs tests/frontend.test.mjs tests/compression.test.mjs",
+    "preview": "vite preview --host 127.0.0.1 --port 8080"
   },
   "dependencies": {
-    "ghostty-web": "0.4.0-next.20.g1858a59",
-    "lucide-react": "1.52.0",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "ghostty-web": "0.4.0-next.20.g1858a59"
   },
   "devDependencies": {
-    "@types/node": "^26.6.5",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.2",
-    "oxlint": "^1.88.0",
-    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
-    "vite": "^8.3.4"
+    "@gfx/zopfli": "1.0.15",
+    "vite": "8.3.4"
   }
 }

@@ -17,15 +17,24 @@ use crate::state::AppState;
 
 /// `GET /api/kernels` — host-architecture kernel catalog plus local cache
 /// state.
-pub async fn list_kernels(State(state): State<AppState>) -> Json<Vec<KernelResponse>> {
-    Json(
-        kernel_manager::list(
-            state.templates.image_root_path(),
-            state.templates.as_ref(),
-            &state.kernel_installs,
-        )
-        .await,
+pub async fn list_kernels(
+    State(state): State<AppState>,
+    axum::Extension(request_id): axum::Extension<RequestId>,
+) -> Result<Json<Vec<KernelResponse>>, AppError> {
+    kernel_manager::list(
+        state.templates.image_root_path(),
+        state.templates.as_ref(),
+        &state.kernel_installs,
     )
+    .await
+    .map(Json)
+    .map_err(|error| {
+        tracing::warn!(%error, "cannot query kernel.org stable releases");
+        AppError::unavailable(
+            "cannot query kernel.org stable releases; check host network access",
+            request_id.0,
+        )
+    })
 }
 
 /// `GET /api/kernels/{version}/install` — latest acquisition snapshot.
@@ -34,7 +43,7 @@ pub async fn get_kernel_install(
     Path(version): Path<String>,
     axum::Extension(request_id): axum::Extension<RequestId>,
 ) -> Result<Json<firecrab_api_types::KernelInstallResponse>, AppError> {
-    if kernel_manager::cache_path(&version).is_none() {
+    if version != "stable" && kernel_manager::cache_path(&version).is_none() {
         return Err(AppError::not_found(request_id.0));
     }
     Ok(Json(kernel_manager::snapshot(
@@ -43,14 +52,14 @@ pub async fn get_kernel_install(
     )))
 }
 
-/// `POST /api/kernels/{version}/install` — download and verify one catalog
-/// kernel into the shared cache.
+/// `POST /api/kernels/{version}/install` — build and verify a source release
+/// into the shared cache. `stable` resolves the current upstream stable.
 pub async fn start_kernel_install(
     State(state): State<AppState>,
     Path(version): Path<String>,
     axum::Extension(request_id): axum::Extension<RequestId>,
 ) -> Result<impl IntoResponse, AppError> {
-    if kernel_manager::cache_path(&version).is_none() {
+    if version != "stable" && kernel_manager::cache_path(&version).is_none() {
         return Err(AppError::not_found(request_id.0));
     }
     if state.kernel_installs.is_running(&version) {
@@ -71,14 +80,14 @@ pub async fn start_kernel_install(
         .await
     {
         return Err(AppError::unavailable(
-            "FIRECRAB_IMAGE_BASE_URL is not set; cannot download kernels",
+            "FIRECRAB_KERNEL_RELEASES_URL is disabled; cannot build kernels",
             request_id.0,
         ));
     }
 
     let _started = match state
         .kernel_installs
-        .begin_with(&version, "kernel install started")
+        .begin_with(&version, "kernel source build started")
     {
         Ok(snapshot) => snapshot,
         Err("running") => {
@@ -120,6 +129,20 @@ pub async fn delete_kernel(
             request_id.0,
         ));
     }
+    let lock = kernel_cache::cache_lock(
+        state.templates.image_root_path(),
+        Architecture::HOST,
+        &version,
+    )
+    .await
+    .map_err(|_| AppError::internal(request_id.0))?;
+    let _guard = lock.try_lock().map_err(|_| {
+        AppError::conflict(
+            "kernel_install_in_progress",
+            "this kernel is being prepared",
+            request_id.0,
+        )
+    })?;
 
     let users: Vec<String> = state
         .templates
@@ -160,6 +183,12 @@ pub async fn delete_kernel(
             return Err(AppError::internal(request_id.0));
         }
     }
+    for metadata in [
+        path.with_added_extension("json"),
+        path.with_added_extension("config"),
+    ] {
+        let _ = tokio::fs::remove_file(metadata).await;
+    }
     state.kernel_installs.clear(&version);
     Ok(StatusCode::NO_CONTENT)
 }
@@ -198,16 +227,9 @@ mod tests {
         let mut state = empty_state(directory.path()).await;
         state.kernel_installs = ImageInstallTracker::disabled();
 
-        let Json(kernels) = list_kernels(State(state)).await;
+        let Json(kernels) = list_kernels(State(state), request_id()).await.unwrap();
 
-        assert_eq!(kernels.len(), 4);
-        assert_eq!(kernels[0].version, "7.2.2");
-        assert!(kernels.iter().all(|kernel| {
-            kernel.architecture == Architecture::HOST.as_str()
-                && !kernel.installed
-                && !kernel.in_use
-                && kernel.package_url.is_none()
-        }));
+        assert!(kernels.is_empty());
     }
 
     #[tokio::test]
@@ -232,23 +254,30 @@ mod tests {
         let directory = tempdir().unwrap();
         let state = empty_state(directory.path()).await;
 
-        let get_result =
-            get_kernel_install(State(state.clone()), Path("9.9.9".to_owned()), request_id()).await;
+        let get_result = get_kernel_install(
+            State(state.clone()),
+            Path("9.9.9-rc1".to_owned()),
+            request_id(),
+        )
+        .await;
         assert_eq!(
             get_result.err().unwrap().into_response().status(),
             StatusCode::NOT_FOUND
         );
 
-        let start_result =
-            start_kernel_install(State(state.clone()), Path("9.9.9".to_owned()), request_id())
-                .await;
+        let start_result = start_kernel_install(
+            State(state.clone()),
+            Path("9.9.9-rc1".to_owned()),
+            request_id(),
+        )
+        .await;
         assert_eq!(
             start_result.err().unwrap().into_response().status(),
             StatusCode::NOT_FOUND
         );
 
         let delete_result =
-            delete_kernel(State(state), Path("9.9.9".to_owned()), request_id()).await;
+            delete_kernel(State(state), Path("9.9.9-rc1".to_owned()), request_id()).await;
         assert_eq!(
             delete_result.err().unwrap().into_response().status(),
             StatusCode::NOT_FOUND
@@ -307,6 +336,8 @@ mod tests {
         let relative = kernel_manager::cache_path("7.2.2").unwrap();
         let path = root.join(&relative);
         write_file(&path, b"cached kernel");
+        write_file(&path.with_added_extension("json"), b"receipt");
+        write_file(&path.with_added_extension("config"), b"config");
 
         let status = delete_kernel(State(state.clone()), Path("7.2.2".to_owned()), request_id())
             .await
@@ -314,9 +345,26 @@ mod tests {
 
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert!(!path.exists());
+        assert!(!path.with_added_extension("json").exists());
+        assert!(!path.with_added_extension("config").exists());
         assert_eq!(
             state.kernel_installs.snapshot("7.2.2").status,
             firecrab_api_types::ImageInstallStatus::Idle
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_kernel_refuses_an_oci_or_stable_alias_build() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+        let lock = kernel_cache::cache_lock(directory.path(), Architecture::HOST, "7.2.12")
+            .await
+            .unwrap();
+        let _building = lock.lock().await;
+        let result = delete_kernel(State(state), Path("7.2.12".to_owned()), request_id()).await;
+        assert_eq!(
+            result.err().unwrap().into_response().status(),
+            StatusCode::CONFLICT
         );
     }
 

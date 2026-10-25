@@ -46,6 +46,21 @@ tool() {
 tool mkdir -p /run
 echo $$ >/run/firecrab-guest-agent.pid 2>/dev/null || true
 
+# The helper uses vsock only and never reads terminal input bytes.
+console_pid=
+if [ -x /usr/local/sbin/firecrab-console-resize ]; then
+  /usr/local/sbin/firecrab-console-resize >/dev/null 2>&1 &
+  console_pid=$!
+fi
+stop_console() {
+  if [ -n "$console_pid" ]; then
+    kill "$console_pid" 2>/dev/null || true
+    wait "$console_pid" 2>/dev/null || true
+  fi
+}
+trap stop_console EXIT
+trap 'exit 0' HUP INT TERM
+
 read_cpu() {
   tool awk '/^cpu / {
     idle=$5; total=0
@@ -142,6 +157,7 @@ pub(crate) fn install(rootfs: &Path) -> Result<(), RootfsError> {
     if !ensure_bin_dir(rootfs)? {
         return Ok(());
     }
+    crate::guest_console::install(rootfs)?;
     write_into_image(rootfs, BIN_PATH, AGENT_SCRIPT.as_bytes())?;
     set_guest_file_mode(rootfs, BIN_PATH, "0100755");
 
@@ -327,11 +343,11 @@ esac
             }
             let mut script = AGENT_SCRIPT.to_string();
             for (guest, fixture) in [
+                ("/run", root.join("run")),
                 (crate::oci::provision::GUEST_TOOLBOX, toolbox),
                 ("/proc/stat", root.join("stat")),
                 ("/proc/meminfo", root.join("meminfo")),
                 ("/dev/console", root.join("console")),
-                ("/run", root.join("run")),
             ] {
                 script = script.replace(guest, fixture.to_str().unwrap());
             }

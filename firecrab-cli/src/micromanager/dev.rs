@@ -5,7 +5,10 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+pub(crate) mod container;
 pub(super) mod dashboard;
+pub(crate) mod instance;
 pub(super) mod session;
 
 pub(super) const GUEST_SCRIPT: &str =
@@ -32,15 +35,24 @@ const SOURCE_INPUTS: &[&str] = &[
 ];
 // Older checkouts predate these resources and remain valid development sources.
 const OPTIONAL_SOURCE_INPUTS: &[&str] = &[
+    "scripts/micromanager/dev-container.Dockerfile",
+    "scripts/micromanager/dev-container-bootstrap.sh",
+    "scripts/micromanager/dev-container-entrypoint.sh",
+    "scripts/micromanager/dev-container-publish.sh",
+    "scripts/install-firecracker.sh",
     "install.sh",
     "scripts/firecrab-release.sh",
     "scripts/build-ingress.sh",
+    "scripts/build-guest-console.sh",
+    "packaging/guest-console",
     "scripts/verify-release-binary.sh",
     "packaging/ingress-sources.json",
     "firecrab-tunnel",
     "firecrab-stack",
+    "firecrab-pki",
     "examples/stacks/basic.yaml",
     "packaging/micromanager.toml",
+    "packaging/micromanager-dev.toml",
     "packaging/systemd/firecrab-quick-tunnel.service",
     "packaging/systemd/firecrab-address-updater.service",
 ];
@@ -76,6 +88,7 @@ pub enum Error {
     #[cfg(target_os = "macos")]
     #[error("management SSH failed during {0}; inspect `firecrab service debug --logs`")]
     GuestSshInterrupted(&'static str),
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     #[error(
         "guest services are ready but the localhost API is unavailable; inspect `firecrab service debug --logs`"
     )]
@@ -83,6 +96,7 @@ pub enum Error {
 }
 
 pub struct Checkout {
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     pub(super) root: PathBuf,
     pub(super) channel: String,
     pub(super) archive: tempfile::NamedTempFile,
@@ -126,6 +140,7 @@ impl Checkout {
             return Err(Error::Command("source archive"));
         }
         Ok(Self {
+            #[cfg(any(target_os = "macos", target_os = "windows", test))]
             root,
             channel,
             archive,
@@ -213,10 +228,12 @@ fn tar_program() -> &'static str {
 }
 
 /// LF-only even when the CLI was built from a Windows checkout with CRLF.
-pub(super) fn guest_script() -> Result<std::fs::File, Error> {
+pub(super) fn guest_script(isolated: bool) -> Result<std::fs::File, Error> {
     use std::io::{Seek, Write};
     let mut script =
         tempfile::tempfile().map_err(|source| io_error("create guest build script", source))?;
+    writeln!(script, "FIRECRAB_DEV_ISOLATED={}", u8::from(isolated))
+        .map_err(|source| io_error("write guest development scope", source))?;
     script
         .write_all(GUEST_SCRIPT.replace("\r\n", "\n").as_bytes())
         .and_then(|_| script.rewind())
@@ -353,6 +370,8 @@ members = ["firecrab-api", "firecrab-api-types", "firecrab-cli", "firecrab-helpe
             "firecrab-tunnel/Cargo.toml",
             "firecrab-stack/Cargo.toml",
             "firecrab-stack/src/lib.rs",
+            "firecrab-pki/Cargo.toml",
+            "firecrab-pki/src/lib.rs",
             "examples/stacks/basic.yaml",
         ] {
             assert_eq!(

@@ -3,6 +3,7 @@
 Register a stack on one Firecrab host and compare its YAML declaration to existing configuration.
 This extends [offline stack validation](stacks.md) for [GitOps IaC #437](https://github.com/SteelCrab/firecrab/issues/437).
 Planning does not create, update, stop, or delete resources.
+For explicit execution and recovery, see [Native YAML stack apply](stack-apply.md).
 
 For a separate Terraform REST API proof, see the [experimental example](../../examples/terraform/basic/README.md).
 It manages network, stopped VM and saved service configuration through an external REST provider.
@@ -80,6 +81,11 @@ A stale UUID cannot delete a newer registration with the same name.
 
 Plans compare declared fields to resource UUIDs in the ownership record.
 They report field names, not old/new values or environment contents.
+The `inputs` object reports exact template versions and artifact hashes, plus declared service digests.
+These identities are covered by the plan fingerprint and retained with accepted apply status.
+Missing templates and mismatched `templatePin` values block VM plans.
+Changing recorded boot content requires replacement instead of an in-place resource update.
+See [immutable inputs and controller ownership](stack-git-source.md#immutable-inputs-and-controller-ownership).
 Network dependencies appear before standalone VMs and services.
 Removed declarations appear last in reverse dependency order.
 
@@ -106,7 +112,7 @@ For example, a new network produces an entry such as:
 }
 ```
 
-The plan envelope includes `stackId`, `name`, `revision`, `blocked`, and `changes`.
+The plan envelope includes `stackId`, `name`, `revision`, `fingerprint`, `blocked`, and `changes`.
 `revision` identifies the observed ownership set.
 It increases when a binding is added or removed.
 Plans and status reads do not change it.
@@ -137,7 +143,7 @@ Offline YAML validation still permits files up to 1 MiB, including comments.
 ## Limits
 
 The plan is advisory and can become stale immediately.
-It cannot be passed to an apply endpoint; no stack apply endpoint exists yet.
+Native [apply](stack-apply.md) checks the fingerprint before admitting mutations.
 Ownership metadata survives API restarts but does not prevent manual resource edits or deletion.
 A later plan detects differences or reports a missing bound resource.
 
@@ -148,4 +154,5 @@ An omitted VM `storageRoot` preserves existing placement during comparison; new 
 Template availability and immutable content identity, registry resolution, capacity, free ports, and conflicts outside the declared configuration still require later host validation.
 The planner does not authorize replacement or data deletion.
 
-Actual apply, stale-plan protection for mutations, deployment scheduling, dashboard status, and continuous Git reconciliation remain follow-up work.
+Native apply supports explicit creation, updates and service deployment with durable status.
+Automatic replacement/pruning, dashboard stack status and continuous Git reconciliation remain follow-up work.

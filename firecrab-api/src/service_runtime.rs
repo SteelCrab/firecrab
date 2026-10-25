@@ -24,6 +24,7 @@ use crate::oci::{self, ImageReference, ImageVersion, Sha256Digest};
 use crate::server::RequestId;
 use crate::state::AppState;
 
+pub(crate) mod deploy;
 mod domain;
 mod internal;
 pub(crate) mod secrets;
@@ -36,20 +37,75 @@ pub async fn deploy(
     ValidatedJson(request): ValidatedJson<DeployMicroServiceRequest>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let id = vms::parse_id(&id, request_id.0)?;
+    deploy_from_stack(state, request_id.0, id, request, None).await
+}
+
+pub(crate) async fn deploy_from_stack(
+    state: AppState,
+    request_id: Uuid,
+    id: Uuid,
+    request: DeployMicroServiceRequest,
+    operation: Option<Uuid>,
+) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
+    deploy_with_id(
+        state,
+        request_id,
+        id,
+        request,
+        operation,
+        Uuid::new_v4(),
+        false,
+    )
+    .await
+}
+
+/// The controller reserves this deployment UUID before a remote dispatch.
+pub(crate) async fn deploy_reserved(
+    state: AppState,
+    request_id: Uuid,
+    id: Uuid,
+    request: DeployMicroServiceRequest,
+    deployment_id: Uuid,
+) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
+    deploy_with_id(state, request_id, id, request, None, deployment_id, true).await
+}
+
+async fn deploy_with_id(
+    state: AppState,
+    request_id: Uuid,
+    id: Uuid,
+    mut request: DeployMicroServiceRequest,
+    operation: Option<Uuid>,
+    deployment_id: Uuid,
+    controller_credentials: bool,
+) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
+    let request_id = RequestId(request_id);
     let _claim = state.service_mutations.lock().await;
+    crate::handlers::micro_services::ensure_stack_writer(&state, id, operation, request_id.0)
+        .await?;
     ensure_editable(&state, id, request_id.0).await?;
     let store = state.store.clone();
     let service = database(request_id.0, move || store.micro_service(id))
         .await?
         .ok_or_else(|| AppError::not_found(request_id.0))?;
+    validate_database_bindings(&state, id, request_id.0)?;
     require_image_auth(&state, &service.spec.image, request_id.0).await?;
+    crate::queues::validate_bindings(&state, &service.spec, request_id.0).await?;
+    crate::queues::placement(&state, &service.spec, &mut request, request_id.0)?;
     validate_placement(&state, &service.spec, &request, request_id.0).await?;
     crate::handlers::pipe_storage::validate_binding(&state, &service.spec, request_id.0).await?;
-    secrets::preflight(&state, &service.spec, request_id.0).await?;
+    if controller_credentials {
+        secrets::preflight_reserved(&state, &service.spec, deployment_id, request_id.0).await?;
+    } else {
+        secrets::preflight(&state, &service.spec, request_id.0).await?;
+    }
     domain::preflight(&state, id, &service.spec, request_id.0).await?;
     internal::preflight(&state, id, &service.spec, request_id.0).await?;
     let deployment = MicroServiceDeployment {
-        id: Uuid::new_v4(),
+        started_at: chrono::Utc::now().timestamp(),
+        finished_at: None,
+        update: None,
+        id: deployment_id,
         service_id: id,
         spec: service.spec,
         request,
@@ -72,18 +128,44 @@ pub async fn deploy(
     Ok((StatusCode::ACCEPTED, Json(deployment)))
 }
 
+fn validate_database_bindings(
+    state: &AppState,
+    id: Uuid,
+    request_id: Uuid,
+) -> Result<(), AppError> {
+    for binding in state
+        .store
+        .database_bindings()
+        .map_err(|_| AppError::internal(request_id))?
+        .into_iter()
+        .filter(|b| b.input.service_id == id)
+    {
+        if !binding.ready {
+            return Err(AppError::conflict(
+                "database_binding_not_ready",
+                "Finish database binding setup before deployment",
+                request_id,
+            ));
+        }
+        crate::handlers::pipe_databases::available(state, binding.database_id, request_id)?;
+    }
+    Ok(())
+}
+
 /// Check current placement without queuing a deployment or creating resources.
 pub async fn check(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
-    ValidatedJson(request): ValidatedJson<DeployMicroServiceRequest>,
+    ValidatedJson(mut request): ValidatedJson<DeployMicroServiceRequest>,
 ) -> Result<Json<()>, AppError> {
     let id = vms::parse_id(&id, request_id.0)?;
     let store = state.store.clone();
     let service = database(request_id.0, move || store.micro_service(id))
         .await?
         .ok_or_else(|| AppError::not_found(request_id.0))?;
+    crate::queues::validate_bindings(&state, &service.spec, request_id.0).await?;
+    crate::queues::placement(&state, &service.spec, &mut request, request_id.0)?;
     validate_placement(&state, &service.spec, &request, request_id.0).await?;
     domain::preflight(&state, id, &service.spec, request_id.0).await?;
     internal::preflight(&state, id, &service.spec, request_id.0).await?;
@@ -212,7 +294,19 @@ pub async fn stop(
     Path(id): Path<String>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let id = vms::parse_id(&id, request_id.0)?;
-    let _claim = state.service_mutations.lock().await;
+    stop_from_stack(state, request_id.0, id, None).await
+}
+
+pub(crate) async fn stop_from_stack(
+    state: AppState,
+    request_id: Uuid,
+    id: Uuid,
+    operation: Option<Uuid>,
+) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
+    let request_id = RequestId(request_id);
+    let claim = state.service_mutations.clone().lock_owned().await;
+    crate::handlers::micro_services::ensure_stack_writer(&state, id, operation, request_id.0)
+        .await?;
     let store = state.store.clone();
     let mut deployment = database(request_id.0, move || store.service_deployment(id))
         .await?
@@ -223,6 +317,15 @@ pub async fn stop(
             "wait for the current service operation to finish",
             request_id.0,
         ));
+    }
+    if let Some(update) = &mut deployment.update {
+        update.cancelled = true;
+        update.completed = false;
+        update.transition = None;
+        deployment.phase = ServicePhase::Stopping;
+        deployment.finished_at = None;
+        let deployment = deploy::submit(state.clone(), deployment, claim, request_id.0).await?;
+        return Ok((StatusCode::ACCEPTED, Json(deployment)));
     }
     deployment.phase = ServicePhase::Stopping;
     deployment.error = None;
@@ -256,6 +359,10 @@ pub(crate) async fn ensure_editable(
     let store = state.store.clone();
     if let Some(deployment) = database(request_id, move || store.service_deployment(id)).await? {
         if deployment.phase.is_busy()
+            || deployment
+                .update
+                .as_ref()
+                .is_some_and(|update| !update.completed)
             || !deployment.instances.is_empty()
             || deployment.domain_route_owned
             || deployment.internal_route_owned
@@ -284,20 +391,7 @@ pub(crate) async fn ensure_vm_policy_editable(
     request: Uuid,
 ) -> Result<(), AppError> {
     let store = state.store.clone();
-    let owned = database(request, move || {
-        for service in store.list_micro_services()? {
-            if let Some(deployment) = store.service_deployment(service.id)?
-                && deployment
-                    .instances
-                    .iter()
-                    .any(|instance| instance.vm_id == vm_id)
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    })
-    .await?;
+    let owned = database(request, move || store.vm_has_service_owner(vm_id)).await?;
     if owned {
         return Err(AppError::conflict(
             "service_in_use",
@@ -309,7 +403,7 @@ pub(crate) async fn ensure_vm_policy_editable(
 }
 
 /// Reject invalid direct host-port ranges.
-fn deployment_fields(
+pub(crate) fn deployment_fields(
     spec: &MicroServiceSpec,
     request: &DeployMicroServiceRequest,
     api_port: u16,
@@ -350,11 +444,18 @@ async fn phase(
     message: impl Into<String>,
 ) -> Result<(), String> {
     deployment.phase = phase;
+    if matches!(phase, ServicePhase::Running | ServicePhase::Stopped) {
+        deployment.finished_at = Some(chrono::Utc::now().timestamp());
+    }
     if deployment.log.len() >= 128 {
         deployment.log.remove(0);
     }
     deployment.log.push(message.into());
-    save(state, deployment).await
+    save(state, deployment).await?;
+    if matches!(phase, ServicePhase::Running | ServicePhase::Stopped) {
+        deploy::cache::schedule(state.clone());
+    }
+    Ok(())
 }
 
 /// Run under the deployment permit and clean up owned VMs if deployment fails.
@@ -387,6 +488,7 @@ async fn fail_deployment(
         error.push_str(&format!("; cleanup requires retry: {cleanup_error}"));
     }
     deployment.phase = ServicePhase::Failed;
+    deployment.finished_at = Some(chrono::Utc::now().timestamp());
     deployment.error = Some(error.clone());
     deployment.log.push(error);
     if let Err(error) = save(state, deployment).await {
@@ -424,27 +526,35 @@ async fn execute(
     .await?;
     let original =
         ImageReference::parse(&deployment.spec.image).map_err(|error| error.to_string())?;
-    let resolved = oci::resolve(
-        &original,
-        Architecture::HOST,
-        oci::is_loopback_registry(&original.registry),
-        Some(credential.clone()),
-    )
-    .await
-    .map_err(|error| format!("Image resolution failed: {error}"))?;
-    deployment.digest = Some(resolved.digest.clone());
+    let digest = if let ImageVersion::Digest(digest) = &original.version {
+        digest.to_string()
+    } else {
+        oci::resolve(
+            &original,
+            Architecture::HOST,
+            oci::is_loopback_registry(&original.registry),
+            Some(credential.clone()),
+        )
+        .await
+        .map_err(|error| format!("Image resolution failed: {error}"))?
+        .digest
+    };
+    deployment.digest = Some(digest.clone());
     save(state, deployment).await?;
     let pinned = ImageReference {
         version: ImageVersion::Digest(
-            Sha256Digest::parse(&resolved.digest).map_err(|error| error.to_string())?,
+            Sha256Digest::parse(&digest).map_err(|error| error.to_string())?,
         ),
         ..original
     };
     let alias = oci::template_name_from_reference(&pinned)
         .map_err(|error| error.to_string())?
         .alias;
+    if state.templates.resolve_alias(&alias).is_none() {
+        deploy::cache::restore_cached(state, &alias, &digest).await?;
+    }
     if let Some(template) = state.templates.resolve_alias(&alias) {
-        if template.version != resolved.digest {
+        if template.version != digest {
             return Err("Pinned image alias belongs to a different digest".into());
         }
     } else {
@@ -453,12 +563,13 @@ async fn execute(
             .begin_with(&alias, "service image import started")
         {
             Ok(_) => {
-                oci::run_oci_import(
+                oci::run_deploy_import(
                     state.oci_imports.clone(),
                     (*state.templates).clone(),
                     pinned,
                     alias.clone(),
                     Some(credential),
+                    state.store.clone(),
                 )
                 .await
             }
@@ -523,6 +634,7 @@ async fn execute(
             deployment.request.host_port + index
         };
         let request = CreateVmRequest {
+            block_storages: Vec::new(),
             name: format!(
                 "ms-{}-{}-{index}",
                 deployment.service_id.simple(),
@@ -550,27 +662,36 @@ async fn execute(
         };
         // Serialize publication of the VM and its owner with attachment edits.
         let owner_guard = state.service_mutations.lock().await;
-        let (_, Json(vm)) = vms::create_vm(
-            State(state.clone()),
-            Extension(RequestId(deployment.id)),
-            ValidatedJson(request),
-        )
-        .await
-        .map_err(|_| {
-            "Could not create replica; check capacity, network and host port availability"
-                .to_owned()
-        })?;
+        let vm_id = Uuid::new_v4();
         deployment.instances.push(ServiceInstance {
-            vm_id: vm.id,
-            ipv4: vm.ipv4.unwrap_or_default(),
+            vm_id,
+            ipv4: String::new(),
             host_port,
-            state: vm.state,
+            state: VmState::Created,
             healthy: false,
         });
-        // Ownership is durable before booting anything.
+        // A crash after the VM commit must leave an owner that recovery can clean.
+        save(state, deployment).await?;
+        let (_, Json(vm)) =
+            vms::create_vm_with_id(state.clone(), RequestId(deployment.id), request, vm_id)
+                .await
+                .map_err(|_| {
+                    "Could not create replica; check capacity, network and host port availability"
+                        .to_owned()
+                })?;
+        let instance = deployment
+            .instances
+            .last_mut()
+            .expect("replica identity reserved");
+        instance.ipv4 = vm.ipv4.unwrap_or_default();
+        instance.state = vm.state;
         save(state, deployment).await?;
         drop(owner_guard);
         let vm_id = vm.id;
+        state
+            .store
+            .link_database_service_vm(vm_id, deployment.service_id)
+            .map_err(|_| "Could not persist private database binding ownership".to_owned())?;
         let Json(vm) = vms::start_vm(
             State(state.clone()),
             Extension(RequestId(deployment.id)),
@@ -627,7 +748,7 @@ async fn execute(
 }
 
 /// Reuse the `services` network or create it on a free subnet in `172.30.0.0/16`.
-async fn default_network(state: &AppState, request_id: Uuid) -> Result<Uuid, String> {
+pub(crate) async fn default_network(state: &AppState, request_id: Uuid) -> Result<Uuid, String> {
     let store = state.store.clone();
     let networks = database(request_id, move || store.list_micro_networks())
         .await
@@ -850,10 +971,12 @@ async fn cleanup(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
 /// VM startup reconciliation has already re-adopted live processes. Never invent
 /// success for an operation the previous API process did not finish.
 pub(crate) async fn recover(state: &AppState) {
+    deploy::cache::start(state.clone());
     let store = state.store.clone();
     let Ok(services) = database(Uuid::new_v4(), move || store.list_micro_services()).await else {
         return;
     };
+    let mut resumable = Vec::new();
     for service in services {
         let store = state.store.clone();
         let Ok(Some(mut deployment)) =
@@ -861,6 +984,16 @@ pub(crate) async fn recover(state: &AppState) {
         else {
             continue;
         };
+        if deployment
+            .update
+            .as_ref()
+            .is_some_and(|update| !update.completed)
+        {
+            if deployment.phase.is_busy() {
+                resumable.push(deployment);
+            }
+            continue;
+        }
         if deployment.phase.is_busy() {
             deployment.phase = ServicePhase::Failed;
             deployment.error = Some(
@@ -869,6 +1002,17 @@ pub(crate) async fn recover(state: &AppState) {
             );
             let _ = save(state, &deployment).await;
         }
+    }
+    // Finish an interrupted surge before queued requests inspect host capacity.
+    resumable.sort_by_key(|deployment| {
+        (
+            deployment.phase == ServicePhase::Queued,
+            deployment.started_at,
+            deployment.id,
+        )
+    });
+    for deployment in resumable {
+        deploy::resume_worker(state.clone(), deployment);
     }
 }
 

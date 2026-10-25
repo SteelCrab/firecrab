@@ -26,6 +26,87 @@ CREATE TABLE IF NOT EXISTS stack_bindings (
 ) STRICT;";
 
 impl Store {
+    /// Recover the newest accepted content pin for this exact bound VM UUID.
+    /// This also protects later manual starts and API restart recovery.
+    /// Inventory excludes pending updates so admission itself does not create drift.
+    /// VM starts include them to enforce the accepted pin during a first reconciliation.
+    pub(crate) fn stack_vm_pin(
+        &self,
+        vm: Uuid,
+        accepted_updates: bool,
+    ) -> Result<Option<firecrab_stack::TemplatePin>, PersistenceError> {
+        let conn = self.lock();
+        let owner: Option<(String, String)> = conn.query_row(
+            "SELECT stack_id,logical_key FROM stack_bindings WHERE kind='vm' AND resource_id=?1",
+            [vm.to_string()], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional()?;
+        let Some((owner, key)) = owner else {
+            return Ok(None);
+        };
+        let mut statement =
+            conn.prepare("SELECT status FROM stack_applies WHERE stack_id=?1 ORDER BY rowid DESC")?;
+        let rows = statement.query_map([owner], |r| r.get::<_, String>(0))?;
+        for raw in rows {
+            let status: firecrab_stack::ApplyStatus =
+                serde_json::from_str(&raw?).map_err(|_| PersistenceError::StackApplyIdentity)?;
+            if status.changes.iter().any(|step| {
+                step.change.kind == ResourceKind::Vm
+                    && step.change.key == key
+                    && step.change.resource_id == Some(vm)
+                    && (accepted_updates
+                        || step.change.action == firecrab_stack::Action::Create
+                        || step.state == firecrab_stack::StepState::Succeeded)
+            }) && let Some(pin) = status.inputs.templates.get(&key)
+            {
+                return Ok(Some(pin.clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// A Git-managed service has one writer. Internal stack execution must prove
+    /// that its accepted operation is currently running this exact service step.
+    pub(crate) fn stack_service_mutation_allowed(
+        &self,
+        service: Uuid,
+        operation: Option<Uuid>,
+    ) -> Result<bool, PersistenceError> {
+        let conn = self.lock();
+        let owner: Option<String> = conn
+            .query_row(
+                "SELECT stack_id FROM stack_bindings WHERE kind='service' AND resource_id=?1",
+                [service.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(owner) = owner else {
+            return Ok(true);
+        };
+        let git: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM stack_git_sources WHERE stack_id=?1)",
+            [&owner],
+            |r| r.get(0),
+        )?;
+        let active: Option<String> = conn.query_row(
+            "SELECT status FROM stack_applies WHERE stack_id=?1 AND state IN ('queued','running')",
+            [&owner], |r| r.get(0),
+        ).optional()?;
+        if !git && active.is_none() {
+            return Ok(true);
+        }
+        let Some(active) = active else {
+            return Ok(false);
+        };
+        let status: firecrab_stack::ApplyStatus =
+            serde_json::from_str(&active).map_err(|_| PersistenceError::StackApplyIdentity)?;
+        Ok(operation == Some(status.operation_id)
+            && status.changes.iter().any(|step| {
+                step.change.kind == ResourceKind::Service
+                    && step.change.resource_id == Some(service)
+                    && step.state == firecrab_stack::StepState::Running
+            }))
+    }
+
     /// Delete empty metadata atomically. Never release bindings or delete host resources.
     pub fn delete_empty_stack(&self, name: &str, id: Uuid) -> Result<(), PersistenceError> {
         if !logical_name(name) || id.is_nil() {
@@ -37,9 +118,23 @@ impl Store {
         if stack.id != id {
             return Err(PersistenceError::StackConflict);
         }
+        super::stack_applies::ensure_idle(&tx, stack.id)?;
+        super::stack_sources::ensure_idle(&tx, stack.id)?;
         if !stack.bindings.is_empty() {
             return Err(PersistenceError::StackNotEmpty);
         }
+        tx.execute(
+            "DELETE FROM stack_git_checks WHERE stack_id = ?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM stack_git_sources WHERE stack_id = ?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM stack_applies WHERE stack_id = ?1",
+            [id.to_string()],
+        )?;
         tx.execute("DELETE FROM stacks WHERE id = ?1", [id.to_string()])?;
         tx.commit()?;
         Ok(())
@@ -110,6 +205,7 @@ impl Store {
             tx.commit()?;
             return Ok(stack);
         }
+        super::stack_applies::ensure_idle(&tx, stack.id)?;
         if stack.bindings.len() >= firecrab_stack::MAX_RESOURCES {
             return Err(PersistenceError::StackBindingLimit);
         }
@@ -155,6 +251,7 @@ impl Store {
         if current != binding {
             return Err(PersistenceError::StackConflict);
         }
+        super::stack_applies::ensure_idle(&tx, stack.id)?;
         tx.execute("DELETE FROM stack_bindings WHERE stack_id = ?1 AND kind = ?2 AND logical_key = ?3 AND resource_id = ?4", params![stack.id.to_string(), binding.kind.as_str(), binding.key, binding.resource_id.to_string()])?;
         tx.execute(
             "UPDATE stacks SET revision = revision + 1 WHERE id = ?1",
@@ -166,7 +263,10 @@ impl Store {
     }
 }
 
-fn read_stack(conn: &Connection, name: &str) -> Result<Option<StackRecord>, PersistenceError> {
+pub(super) fn read_stack(
+    conn: &Connection,
+    name: &str,
+) -> Result<Option<StackRecord>, PersistenceError> {
     let row: Option<(String, i64)> = conn
         .query_row(
             "SELECT id, revision FROM stacks WHERE name = ?1",
@@ -227,7 +327,8 @@ fn validate_resource(conn: &Connection, binding: &Binding) -> Result<(), Persist
     let query = match binding.kind {
         ResourceKind::Network => "SELECT EXISTS(SELECT 1 FROM micro_networks WHERE id = ?1)",
         ResourceKind::Vm => {
-            "SELECT EXISTS(SELECT 1 FROM vms WHERE id = ?1 AND purpose = 'instance')"
+            "SELECT EXISTS(SELECT 1 FROM vms WHERE id = ?1 AND purpose = 'instance'
+                AND NOT EXISTS(SELECT 1 FROM cluster_worker_receipts WHERE id = ?1))"
         }
         ResourceKind::Service => "SELECT EXISTS(SELECT 1 FROM micro_services WHERE id = ?1)",
     };

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { VmResponse } from "../../firecrab-frontend/src/bindings";
+import type { VmResponse } from "../types/bindings";
 import { openDashboard, vm } from "./support/mockApi";
 
 const now = Date.now();
@@ -27,7 +27,10 @@ const RECONCILED = vm("vm-network", "a1b2c3d4-0000-4000-8000-000000000001", "err
 });
 
 const panel = (page: Page) => page.getByRole("complementary", { name: "MicroVM detail" });
-const section = (page: Page, name: string) => panel(page).getByRole("region", { name, exact: true });
+const section = (page: Page, name: string) => name === "Environment"
+  ? panel(page).getByRole("tabpanel")
+  : panel(page).getByRole("region", { name, exact: true });
+const environment = (page: Page) => panel(page).getByLabel("Environment (NAME=value)", { exact: true });
 
 interface Put { path: string; body: Record<string, unknown> }
 
@@ -61,7 +64,9 @@ test.describe("MicroVM detail panel", () => {
     await expect(properties).toContainText(STOPPED.id);
     await expect(properties).toContainText("alpine-3.20");
     await expect(properties).toContainText("2026.09.0");
-    await expect(properties).toContainText("1 vCPU · 1 GiB · 8 GiB");
+    await expect(properties).toContainText("CPU1");
+    await expect(properties).toContainText("Memory (MiB)1024");
+    await expect(properties).toContainText("Disk (GB)8");
     await expect(properties).toContainText("MicroNetwork");
     await expect(properties).toContainText("MicroStorage");
     const startup = section(page, "Startup");
@@ -72,9 +77,10 @@ test.describe("MicroVM detail panel", () => {
 
   test("edits only the spec section", async ({ page }) => {
     const puts = await open(page, [STOPPED], "redis-cache");
-    await section(page, "Properties").getByRole("button", { name: "Edit spec" }).click();
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
+    await panel(page).getByRole("button", { name: "Resources", exact: true }).click();
     await expect(panel(page).getByRole("button", { name: "Save" })).toHaveCount(1);
-    await panel(page).getByLabel("vCPU", { exact: true }).fill("4");
+    await panel(page).getByLabel("CPU", { exact: true }).fill("4");
     await panel(page).getByRole("button", { name: "Save" }).click();
     await expect.poll(() => puts.length).toBe(1);
     expect(puts[0].body).toEqual({ cpu: 4, ram: 1024, diskGb: 8, egressPolicy: "internet" });
@@ -84,21 +90,23 @@ test.describe("MicroVM detail panel", () => {
   test("locks the spec while running", async ({ page }) => {
     await open(page, [RUNNING], "postgres-main");
     const properties = section(page, "Properties");
-    await expect(properties.getByRole("button", { name: "Edit spec" })).toHaveCount(0);
-    await expect(properties).toContainText("Stop to change");
+    await expect(panel(page).getByRole("button", { name: "Resources", exact: true })).toHaveCount(0);
+    await expect(panel(page).getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     await panel(page).getByRole("tab", { name: /Network/ }).click();
-    await expect(section(page, "Port forwarding").getByRole("button", { name: "Edit port forwarding" })).toBeVisible();
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
+    await expect(panel(page).getByRole("button", { name: "Port forwarding", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
     await panel(page).getByRole("tab", { name: /Environment/ }).click();
-    await expect(section(page, "Environment").getByRole("button", { name: "Edit environment" })).toBeVisible();
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
+    await expect(panel(page).getByRole("button", { name: "Environment", exact: true })).toBeVisible();
   });
 
   test("saves env with the current resources", async ({ page }) => {
     const puts = await open(page, [RUNNING], "postgres-main");
     await panel(page).getByRole("tab", { name: /Environment/ }).click();
-    await section(page, "Environment").getByRole("button", { name: "Edit environment" }).click();
-    await panel(page).getByRole("button", { name: "Add variable" }).click();
-    await panel(page).getByLabel("Key 3").fill("PGPORT");
-    await panel(page).getByLabel("Value 3").fill("5432");
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
+    await panel(page).getByRole("button", { name: "Environment", exact: true }).click();
+    await environment(page).fill("POSTGRES_DB=app\nPOSTGRES_PASSWORD=pg-very-secret\nPGPORT=5432");
     await panel(page).getByRole("button", { name: "Save" }).click();
     await expect.poll(() => puts.length).toBe(1);
     expect(puts[0].body).toEqual({
@@ -115,22 +123,24 @@ test.describe("MicroVM detail panel", () => {
     // Every poll answers a fresh object for the same VM.
     await open(page, () => [{ ...RUNNING, cpuUsagePercent: ++tick }], "postgres-main");
     await panel(page).getByRole("tab", { name: /Environment/ }).click();
-    await section(page, "Environment").getByRole("button", { name: "Edit environment" }).click();
-    const value = panel(page).getByLabel("Value 1");
-    await value.fill("draft-value");
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
+    await panel(page).getByRole("button", { name: "Environment", exact: true }).click();
+    const value = environment(page);
+    await value.fill("POSTGRES_DB=draft-value");
     const seen = tick;
     await expect.poll(() => tick, { timeout: 10_000 }).toBeGreaterThan(seen + 1);
-    await expect(value).toHaveValue("draft-value");
+    await expect(value).toHaveValue("POSTGRES_DB=draft-value");
   });
 
   test("Esc while a section is being edited keeps the draft", async ({ page }) => {
     await open(page, [RUNNING], "postgres-main");
     await panel(page).getByRole("tab", { name: /Environment/ }).click();
-    await section(page, "Environment").getByRole("button", { name: "Edit environment" }).click();
-    await panel(page).getByLabel("Value 1").fill("draft-value");
-    await panel(page).getByRole("button", { name: "Add variable" }).focus();
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
+    await panel(page).getByRole("button", { name: "Environment", exact: true }).click();
+    await environment(page).fill("POSTGRES_DB=draft-value");
+    await environment(page).focus();
     await page.keyboard.press("Escape");
-    await expect(panel(page).getByLabel("Value 1")).toHaveValue("draft-value");
+    await expect(environment(page)).toHaveValue("POSTGRES_DB=draft-value");
   });
 
   test("reads the console log only while the Log tab is open", async ({ page }) => {
@@ -164,10 +174,9 @@ test.describe("MicroVM detail panel", () => {
   test("shows API status and a failed start", async ({ page }) => {
     await open(page, [RECONCILED], "vm-network");
     await expect(panel(page).getByRole("heading", { name: "API-STATUS", exact: true })).toBeVisible();
-    await expect(panel(page).locator(".reconciliation-detail .reconciliation-diagnostic")).toHaveText("bridge is missing");
-    const failure = panel(page).getByRole("alert");
-    await expect(failure).toContainText("guest DHCP did not answer");
-    await failure.getByRole("button", { name: "View log" }).click();
+    await expect(section(page, "API-STATUS").locator(".wasm-diagnostic")).toHaveText("bridge is missing");
+    await expect(section(page, "Startup")).toContainText("guest DHCP did not answer");
+    await panel(page).getByRole("tab", { name: "Log", exact: true }).click();
     await expect(panel(page).getByRole("tab", { name: "Log" })).toHaveAttribute("aria-selected", "true");
     await expect(panel(page).locator("pre.detail-log")).toContainText("firecrab-init: ready");
   });
@@ -175,10 +184,11 @@ test.describe("MicroVM detail panel", () => {
   test("shows the duplicate env key error", async ({ page }) => {
     await open(page, [RUNNING], "postgres-main");
     await panel(page).getByRole("tab", { name: /Environment/ }).click();
-    await section(page, "Environment").getByRole("button", { name: "Edit environment" }).click();
-    await panel(page).getByLabel("Key 2").fill("POSTGRES_DB");
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
+    await panel(page).getByRole("button", { name: "Environment", exact: true }).click();
+    await environment(page).fill("POSTGRES_DB=first\nPOSTGRES_DB=second");
     await panel(page).getByRole("button", { name: "Save" }).click();
-    await expect(section(page, "Environment")).toContainText("Environment keys must be unique.");
+    await expect(panel(page)).toContainText("Duplicate variable: POSTGRES_DB");
   });
 
   test("truncates long property values", async ({ page }) => {
@@ -248,6 +258,7 @@ test.describe("MicroVM pause and resume", () => {
     const pending = { ...RUNNING, state: "pausing" as const };
     await open(page, [pending], pending.name);
     await expect(panel(page).getByRole("button", { name: "Retry pause", exact: true })).toBeVisible();
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
     await expect(panel(page).getByRole("button", { name: "Retry resume", exact: true })).toBeVisible();
     await expect(panel(page).getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     await expect(panel(page).getByRole("button", { name: "Start", exact: true })).toHaveCount(0);

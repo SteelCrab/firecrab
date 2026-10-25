@@ -14,6 +14,15 @@ use super::runtime::Runtime;
 
 pub const FILE_NAME: &str = "micromanager.toml";
 const BUNDLED: &str = include_str!("../../../packaging/micromanager.toml");
+#[cfg(any(target_os = "macos", test))]
+const DEVELOPMENT: &str = include_str!("../../../packaging/micromanager-dev.toml");
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevelopmentRelease {
+    firecrab: Firecrab,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -114,6 +123,16 @@ impl Manifest {
         if let Some(installed) = Self::installed(home)? {
             manifest.runtime = Some(installed.runtime.unwrap_or_default());
         }
+        Ok(manifest)
+    }
+
+    /// Explicit private installs use their own verified release pins.
+    #[cfg(any(target_os = "macos", test))]
+    pub fn for_development_install(home: &Path) -> Result<Self, Error> {
+        let mut manifest = Self::for_install(home)?;
+        let release: DevelopmentRelease = toml::from_str(DEVELOPMENT)?;
+        manifest.firecrab = release.firecrab;
+        manifest.validate()?;
         Ok(manifest)
     }
 
@@ -404,6 +423,62 @@ mod tests {
         assert_eq!(
             next_install.macos.kernel_version,
             Manifest::bundled().unwrap().macos.kernel_version
+        );
+    }
+
+    #[test]
+    fn development_installs_keep_primary_pins_and_preserve_installed_policies() {
+        let home = tempfile::tempdir().unwrap();
+        let primary = Manifest::for_install(home.path()).unwrap();
+        assert_eq!(primary.firecrab.version, "v0.2.2");
+        assert_eq!(Manifest::bundled().unwrap().firecrab.version, "v0.2.2");
+
+        let mut development = Manifest::for_development_install(home.path()).unwrap();
+        assert_eq!(development.firecrab.version, "v0.3.1");
+        assert_eq!(
+            development.firecrab.installer.filename,
+            "install-firecrab-v0.3.1.sh"
+        );
+        for artifact in [
+            &development.firecrab.installer,
+            &development.firecrab.aarch64,
+            &development.firecrab.x86_64,
+        ] {
+            assert!(artifact.url.contains("/releases/download/v0.3.1/"));
+        }
+        development.firecrab = primary.firecrab.clone();
+        assert_eq!(
+            toml::to_string(&development).unwrap(),
+            toml::to_string(&primary).unwrap(),
+            "development pins must preserve all other release inputs and runtime settings"
+        );
+        assert!(!home.path().join(FILE_NAME).exists());
+
+        let mut installed = primary;
+        let settings = installed.runtime.as_mut().unwrap();
+        settings.auto_restart = false;
+        settings.ssh.reconnect_delay_secs = 17;
+        settings.ssh.restart_vm_on_failure = false;
+        installed.save(home.path()).unwrap();
+        let next = Manifest::for_development_install(home.path()).unwrap();
+        assert_eq!(next.runtime, installed.runtime);
+        assert_eq!(next.firecrab.version, "v0.3.1");
+        assert_eq!(
+            Manifest::installed(home.path())
+                .unwrap()
+                .unwrap()
+                .firecrab
+                .version,
+            "v0.2.2",
+            "selecting explicit install inputs must not migrate the installed manifest"
+        );
+        next.save(home.path()).unwrap();
+        let reinstalled = Manifest::for_development_install(home.path()).unwrap();
+        assert_eq!(reinstalled.firecrab.version, "v0.3.1");
+        assert_eq!(reinstalled.runtime, installed.runtime);
+        assert_eq!(
+            Manifest::for_install(home.path()).unwrap().firecrab.version,
+            "v0.2.2"
         );
     }
 

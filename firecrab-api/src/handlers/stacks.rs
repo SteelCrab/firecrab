@@ -81,7 +81,8 @@ pub async fn bind(
     Path(name): Path<String>,
     ValidatedJson(binding): ValidatedJson<Binding>,
 ) -> Result<Json<StackRecord>, AppError> {
-    change_binding(state.store, request_id.0, name, binding, false)
+    let _claim = state.service_mutations.lock().await;
+    change_binding(state.store.clone(), request_id.0, name, binding, false)
         .await
         .map(Json)
 }
@@ -93,7 +94,8 @@ pub async fn unbind(
     Path(name): Path<String>,
     ValidatedJson(binding): ValidatedJson<Binding>,
 ) -> Result<Json<StackRecord>, AppError> {
-    change_binding(state.store, request_id.0, name, binding, true)
+    let _claim = state.service_mutations.lock().await;
+    change_binding(state.store.clone(), request_id.0, name, binding, true)
         .await
         .map(Json)
 }
@@ -148,7 +150,7 @@ pub async fn plan(
             .store
             .stack(&name)?
             .ok_or(PersistenceError::MissingStack)?;
-        let inventory = inventory(&state.store)?;
+        let inventory = inventory(&state.store, &state.templates)?;
         Ok((record, inventory))
     })
     .await?;
@@ -157,7 +159,10 @@ pub async fn plan(
         .map_err(|errors| validation_errors(errors, request_id.0))
 }
 
-fn inventory(store: &Store) -> Result<Inventory, PersistenceError> {
+pub(crate) fn inventory(
+    store: &Store,
+    templates: &crate::templates::TemplateRegistry,
+) -> Result<Inventory, PersistenceError> {
     let mut services = Vec::new();
     let mut service_vms = BTreeSet::new();
     for service in store.list_micro_services()? {
@@ -174,27 +179,35 @@ fn inventory(store: &Store) -> Result<Inventory, PersistenceError> {
         .load_all()?
         .into_values()
         .filter(|vm| vm.purpose == VmPurpose::Instance && !service_vms.contains(&vm.id))
-        .map(|vm| VmSnapshot {
-            id: vm.id,
-            name: vm.name,
-            template: vm.template,
-            cpu: vm.cpu,
-            ram: vm.ram,
-            disk_gb: vm.disk_gb,
-            egress_policy: vm.egress_policy,
-            micro_network_id: vm.micro_network_id,
-            storage_root: vm.storage_root,
-            env: vm.env,
+        .map(|vm| {
+            Ok(VmSnapshot {
+                id: vm.id,
+                name: vm.name,
+                template: vm.template,
+                template_version: vm.template_version,
+                template_kernel_sha256: vm.template_kernel_sha256,
+                template_rootfs_sha256: vm.template_rootfs_sha256,
+                template_boot_args_sha256: vm.template_boot_args_sha256,
+                template_pin: store.stack_vm_pin(vm.id, false)?,
+                cpu: vm.cpu,
+                ram: vm.ram,
+                disk_gb: vm.disk_gb,
+                egress_policy: vm.egress_policy,
+                micro_network_id: vm.micro_network_id,
+                storage_root: vm.storage_root,
+                env: vm.env,
+            })
         })
-        .collect();
+        .collect::<Result<_, PersistenceError>>()?;
     Ok(Inventory {
+        templates: templates.stack_snapshot(),
         networks: store.list_micro_networks()?,
         vms,
         services,
     })
 }
 
-fn validate_name(name: &str, request_id: Uuid) -> Result<(), AppError> {
+pub(super) fn validate_name(name: &str, request_id: Uuid) -> Result<(), AppError> {
     if logical_name(name) {
         return Ok(());
     }
@@ -207,7 +220,10 @@ fn validate_name(name: &str, request_id: Uuid) -> Result<(), AppError> {
     ))
 }
 
-fn validation_errors(errors: Vec<firecrab_stack::Diagnostic>, request_id: Uuid) -> AppError {
+pub(super) fn validation_errors(
+    errors: Vec<firecrab_stack::Diagnostic>,
+    request_id: Uuid,
+) -> AppError {
     AppError::validation(
         errors
             .into_iter()
@@ -218,12 +234,21 @@ fn validation_errors(errors: Vec<firecrab_stack::Diagnostic>, request_id: Uuid) 
 }
 
 /// Keep SQLite off the async executor and never log submitted configuration values.
-async fn database<T: Send + 'static>(
+pub(crate) async fn database<T: Send + 'static>(
     request_id: Uuid,
     operation: impl FnOnce() -> Result<T, PersistenceError> + Send + 'static,
 ) -> Result<T, AppError> {
     tokio::task::spawn_blocking(operation).await.map_err(|_| AppError::internal(request_id))?.map_err(|error| match error {
-        PersistenceError::MissingStack => AppError::not_found(request_id),
+        PersistenceError::MissingStack | PersistenceError::MissingStackSource => AppError::not_found(request_id),
+        PersistenceError::StaleStackSource => AppError::conflict("stale_stack_source", "read the current source generation before updating or checking it", request_id),
+        PersistenceError::StackSourceBusy => AppError::conflict("stack_source_busy", "wait for the active Git check before changing or deleting its configuration", request_id),
+        PersistenceError::StackSyncRecoveryRequired => AppError::conflict("stack_sync_recovery_required", "inspect the failed apply and acknowledge its operation ID before requesting a fresh sync", request_id),
+        PersistenceError::InvalidStackSource => AppError::new(StatusCode::BAD_REQUEST, "invalid_stack_source", "provide a valid Git source configuration", request_id),
+        PersistenceError::MissingStackApply => AppError::not_found(request_id),
+        PersistenceError::StackApplyBusy => AppError::conflict("stack_apply_busy", "wait for the active stack apply to finish", request_id),
+        PersistenceError::StaleStackPlan => AppError::conflict("stale_stack_plan", "host configuration or ownership changed; review a fresh plan", request_id),
+        PersistenceError::StackApplyIdentity => AppError::conflict("stack_apply_identity_conflict", "operation ID belongs to a different registration, declaration or stop permission", request_id),
+        PersistenceError::StackSourceManaged => AppError::conflict("stack_source_managed", "use source sync for a Git-managed stack; explicitly remove the source to return to manual apply", request_id),
         PersistenceError::StackNotEmpty => AppError::new(StatusCode::CONFLICT, "stack_not_empty", "unbind every exact resource UUID before deleting stack registration", request_id),
         PersistenceError::StackConflict => AppError::new(StatusCode::CONFLICT, "stack_ownership_conflict", "binding conflicts with existing ownership; unbind the exact UUID explicitly before changing it", request_id),
         PersistenceError::InvalidStackResource => AppError::new(StatusCode::BAD_REQUEST, "invalid_stack_resource", "resource is missing, is a protected VM, or a service operation is in progress", request_id),

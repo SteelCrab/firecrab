@@ -1,7 +1,7 @@
 //! The browser's Host screen controls the outer VM through this native service.
 //! Bind only loopback and reject foreign Host/Origin headers, including DNS rebinding.
 use std::fs::{self, OpenOptions};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
@@ -22,7 +22,6 @@ struct Controller {
     platform: resource::Platform,
 }
 
-const PORT: u16 = 5524;
 const ORIGINS: [&str; 4] = [
     "http://localhost:5523",
     "http://127.0.0.1:5523",
@@ -41,12 +40,29 @@ impl IntoResponse for Error {
     }
 }
 
-fn allowed(headers: &HeaderMap) -> bool {
+fn allowed(headers: &HeaderMap, home: &Path) -> bool {
+    let Ok(instance) = super::dev::instance::load(home) else {
+        return false;
+    };
+    let port = instance.as_ref().map_or(5524, |state| state.resource_port);
     let host = headers.get("host").and_then(|value| value.to_str().ok());
-    let good_host = host.is_some_and(|host| host == "127.0.0.1:5524" || host == "localhost:5524");
-    let good_origin = headers
-        .get("origin")
-        .is_none_or(|value| value.to_str().is_ok_and(|origin| ORIGINS.contains(&origin)));
+    let good_host = host.is_some_and(|host| {
+        host == format!("127.0.0.1:{port}") || host == format!("localhost:{port}")
+    });
+    let good_origin = headers.get("origin").is_none_or(|value| {
+        value.to_str().is_ok_and(|origin| {
+            (instance.is_none() && ORIGINS.contains(&origin))
+                || instance.as_ref().is_some_and(|state| {
+                    origin == format!("http://localhost:{}", state.api_port)
+                        || origin == format!("http://127.0.0.1:{}", state.api_port)
+                })
+                || (home.join("runtime/dev-dashboard.json").is_file()
+                    && super::dev::dashboard::port(home).is_ok_and(|port| {
+                        origin == format!("http://localhost:{port}")
+                            || origin == format!("http://127.0.0.1:{port}")
+                    }))
+        })
+    });
     good_host && good_origin
 }
 
@@ -55,8 +71,17 @@ async fn guard(
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    if !allowed(request.headers()) {
+    if !allowed(request.headers(), &controller.home) {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    // WSL settings affect every distribution, so Docker instances expose no native VM mutations.
+    #[cfg(not(target_os = "macos"))]
+    if super::dev::instance::load(&controller.home)
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return (StatusCode::NOT_IMPLEMENTED, Json(serde_json::json!({"error":"this isolated container has no native management VM resource controller"}))).into_response();
     }
     let origin = request.headers().get("origin").cloned();
     let mutation =
@@ -228,6 +253,7 @@ pub fn run(home: Option<PathBuf>) -> Result<i32, Error> {
             "resource server requires an existing absolute managed home".into(),
         ));
     }
+    let port = super::dev::instance::resource_port(&home)?;
     // Only one controller may own a managed home. The TCP bind also prevents
     // a second managed home from silently controlling the first one's port.
     fs::create_dir_all(home.join("runtime"))?;
@@ -252,7 +278,7 @@ pub fn run(home: Option<PathBuf>) -> Result<i32, Error> {
         .enable_all()
         .build()?;
     let result = runtime.block_on(async {
-        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, PORT)).await?;
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
         axum::serve(listener, router(home)).await
     });
     #[cfg(target_os = "windows")]

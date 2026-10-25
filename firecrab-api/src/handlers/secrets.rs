@@ -525,6 +525,7 @@ pub(crate) async fn preview(
     }
     values.sort_by(|a, b| a.summary.name.cmp(&b.summary.name));
     let plan = Plan {
+        account: None,
         id: Uuid::new_v4(),
         connection_id: id,
         connection_version: connection.summary.version,
@@ -583,11 +584,15 @@ fn selected_plan(
     if now_ms().saturating_sub(plan.created_at) >= 600_000 {
         return Err(SecretError::Expired);
     }
-    let connection = contents
-        .connections
-        .iter()
-        .find(|item| item.summary.id == plan.connection_id)
-        .ok_or(SecretError::NotFound)?;
+    let account_connection = plan.account.as_ref().map(account_connection);
+    let connection = match account_connection.as_ref() {
+        Some(connection) => connection,
+        None => contents
+            .connections
+            .iter()
+            .find(|item| item.summary.id == plan.connection_id)
+            .ok_or(SecretError::NotFound)?,
+    };
     if connection.summary.version != plan.connection_version {
         return Err(SecretError::Conflict);
     }
@@ -628,13 +633,45 @@ pub(crate) async fn apply(
     Path(id): Path<String>,
     ValidatedJson(input): ValidatedJson<ApplyInput>,
 ) -> Result<Json<Value>, AppError> {
-    let id = parse_id(&id, request.0)?;
+    apply_with_account_endpoint(
+        state,
+        request,
+        &id,
+        input,
+        "https://console.firecrab.dev/api/account/secrets",
+    )
+    .await
+}
+
+/// Keep the production endpoint fixed; tests pass an isolated HTTP fixture here.
+async fn apply_with_account_endpoint(
+    state: AppState,
+    request: RequestId,
+    id: &str,
+    input: ApplyInput,
+    endpoint: &str,
+) -> Result<Json<Value>, AppError> {
+    let id = parse_id(id, request.0)?;
     let names = input.names;
     let selected = names.clone();
     let (plan, connection) = vault(&state, request.0, move |store| {
         store.read(|contents| selected_plan(contents, id, &selected))
     })
     .await?;
+    let _account_claim = if plan.account.is_some() {
+        Some(state.service_mutations.lock().await)
+    } else {
+        None
+    };
+    if let Some(binding) = &plan.account {
+        let (current, token) = account_credential(&state, request).await?;
+        if current.account_id != binding.account_id || current.token_hash != binding.token_hash {
+            return Err(api_error(SecretError::Conflict, request.0));
+        }
+        secrets::providers::account_snapshot(endpoint, &token, binding.account_id)
+            .await
+            .map_err(|error| api_error(error, request.0))?;
+    }
     if plan.direction == Direction::Import {
         let result = vault(&state, request.0, move |store| {
             store.write(|contents| {
@@ -718,6 +755,129 @@ pub(crate) async fn apply(
         }
     }
     Ok(Json(json!({"applied":applied,"failed":failed})))
+}
+
+/// Read the linked credential without returning it to the browser.
+async fn account_credential(
+    state: &AppState,
+    request: RequestId,
+) -> Result<(secrets::AccountImport, String), AppError> {
+    use sha2::{Digest, Sha256};
+    for auth in super::pipe_auth::saved(state, request).await? {
+        if let crate::pipe_auth::SavedAuth::Firecrab {
+            account_id,
+            token,
+            expires_at,
+            ..
+        } = auth
+        {
+            if expires_at <= now_ms() {
+                break;
+            }
+            let account_id = Uuid::parse_str(&account_id)
+                .map_err(|_| api_error(SecretError::Provider, request.0))?;
+            return Ok((
+                secrets::AccountImport {
+                    account_id,
+                    token_hash: format!("{:x}", Sha256::digest(token.as_bytes())),
+                },
+                token,
+            ));
+        }
+    }
+    Err(api_error(
+        SecretError::Invalid(
+            "Connect a Firecrab account in Auth with a secrets-read account token from console.firecrab.dev",
+        ),
+        request.0,
+    ))
+}
+
+/// Account provenance uses the existing import history without a separately saved external connection.
+fn account_connection(binding: &secrets::AccountImport) -> Connection {
+    Connection {
+        summary: ConnectionSummary {
+            id: binding.account_id,
+            name: "Firecrab Console".into(),
+            provider: Provider::Firecrab,
+            settings: Settings {
+                base_url: "https://console.firecrab.dev".into(),
+                ..Settings::default()
+            },
+            version: 1,
+            updated_at: 0,
+        },
+        credentials: BTreeMap::new(),
+    }
+}
+
+/// Capture account secrets using Auth's credential. The browser receives only names and changes.
+pub(crate) async fn account_preview(
+    State(state): State<AppState>,
+    Extension(request): Extension<RequestId>,
+) -> Result<Json<Preview>, AppError> {
+    account_preview_from(
+        state,
+        request,
+        "https://console.firecrab.dev/api/account/secrets",
+    )
+    .await
+}
+
+async fn account_preview_from(
+    state: AppState,
+    request: RequestId,
+    endpoint: &str,
+) -> Result<Json<Preview>, AppError> {
+    let (binding, token) = account_credential(&state, request).await?;
+    let remote = secrets::providers::account_snapshot(endpoint, &token, binding.account_id)
+        .await
+        .map_err(|error| api_error(error, request.0))?;
+    vault(&state, request.0, move |store| {
+        store.write(|contents| {
+            let values = remote
+                .into_iter()
+                .map(|(name, value)| {
+                    let local = contents
+                        .secrets
+                        .iter()
+                        .find(|secret| secret.summary.name == name);
+                    PlannedValue {
+                        summary: change(&name, &local.map(|secret| secret.value.clone()), &value),
+                        value,
+                        local_id: local.map(|secret| secret.summary.id),
+                        local_version: local.map(|secret| secret.summary.version),
+                        remote_value: None,
+                    }
+                })
+                .collect::<Vec<_>>();
+            let plan = Plan {
+                id: Uuid::new_v4(),
+                connection_id: binding.account_id,
+                connection_version: 1,
+                direction: Direction::Import,
+                created_at: now_ms(),
+                values,
+                account: Some(binding),
+            };
+            let result = Preview {
+                id: plan.id,
+                connection_id: plan.connection_id,
+                direction: plan.direction,
+                expires_at: plan.created_at + 600_000,
+                changes: plan
+                    .values
+                    .iter()
+                    .map(|value| value.summary.clone())
+                    .collect(),
+            };
+            contents.plans.retain(|existing| existing.account.is_none());
+            contents.plans.push(plan);
+            Ok(result)
+        })
+    })
+    .await
+    .map(Json)
 }
 
 #[cfg(test)]

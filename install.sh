@@ -251,12 +251,24 @@ pkg_name() {
         apk:e2fsprogs) echo "e2fsprogs-extra" ;;
         *:e2fsprogs)  echo "e2fsprogs" ;;
         *:curl)       echo "curl" ;;
+        apt-get:openssh-client) echo "openssh-client" ;;
+        dnf:openssh-client) echo "openssh-clients" ;;
+        apk:openssh-client) echo "openssh-client-default" ;;
+        *:openssh-client) echo "openssh" ;;
         # scripts/install-firecracker.sh needs find and tar; a minimal
         # openSUSE or Debian install has neither.
         *:findutils)  echo "findutils" ;;
         *:tar)        echo "tar" ;;
         apt-get:xz)   echo "xz-utils" ;;
         *:xz)         echo "xz" ;;
+        # Native logical backups use client tools, never database servers.
+        apt-get:mysql-client) echo "mariadb-client" ;;
+        dnf:postgresql-client) echo "postgresql" ;;
+        dnf:mysql-client) echo "mariadb" ;;
+        pacman:postgresql-client) echo "postgresql-libs" ;;
+        pacman:mysql-client) echo "mariadb-clients" ;;
+        zypper:postgresql-client) echo "postgresql" ;;
+        zypper:mysql-client) echo "mariadb-client" ;;
         # Dashboard M2Image install decompresses `{alias}.tar.zst` packages.
         *:zstd)       echo "zstd" ;;
         # semanage lives in a python tooling package on the SELinux distros.
@@ -394,11 +406,21 @@ ensure_runtime_deps() {
             || warn "SELinux is on but semanage is missing; the services will be confined to init_t"
     fi
     ensure mkfs.ext4 e2fsprogs || failed=1
+    ensure fakeroot fakeroot || failed=1
     ensure curl curl     || failed=1
+    ensure git git       || failed=1
+    ensure ssh openssh-client || failed=1
     ensure find findutils || failed=1
     ensure tar tar       || failed=1
     ensure zstd zstd     || failed=1
     ensure sha256sum coreutils || failed=1
+    # Missing backup clients do not prevent VM or read-only DB operation.
+    # Install them by default; --no-deps and --check never change the host.
+    ensure pg_dump postgresql-client || warn "pg_dump unavailable; PostgreSQL backups need a compatible client"
+    ensure pg_restore postgresql-client || warn "pg_restore unavailable; PostgreSQL restore is unavailable"
+    ensure psql postgresql-client || warn "psql unavailable; PostgreSQL restore is unavailable"
+    ensure mysqldump mysql-client || warn "mysqldump unavailable; MySQL backups are unavailable"
+    ensure mysql mysql-client || warn "mysql unavailable; MySQL restore is unavailable"
     return $failed
 }
 
@@ -648,7 +670,7 @@ install_compliance() {
 
 # Puts the payload binaries, and the dashboard, where the units expect them.
 install_binaries() {
-    local name src ingress_notices
+    local name src ingress_notices guest_notices
     # Validate the new required component before replacing any installed binary.
     src=$(firecrab_resolve_binary firecrab-ingress "$PAYLOAD_BIN" "$LIBDIR") \
         || die "missing firecrab-ingress; build with scripts/build-ingress.sh or install a host release"
@@ -668,6 +690,19 @@ install_binaries() {
             $SUDO install -o root -g root -m 0755 "$src" "$LIBDIR/$name"
         fi
     done
+    # Old custom payloads retain a usable serial console without resize support.
+    if src=$(firecrab_resolve_binary firecrab-guest-console "$PAYLOAD_BIN" "$LIBDIR"); then
+        guest_notices="$PAYLOAD_BIN/guest-console/LICENSE.musl"
+        if [ "$src" -ef "$LIBDIR/firecrab-guest-console" ]; then guest_notices="$LIBDIR/guest-console/LICENSE.musl"; fi
+        [ -f "$guest_notices" ] || die "missing guest-console/LICENSE.musl in install payload"
+        if [ ! "$src" -ef "$LIBDIR/firecrab-guest-console" ]; then
+            $SUDO install -o root -g root -m 0755 "$src" "$LIBDIR/firecrab-guest-console"
+        fi
+        if [ ! "$guest_notices" -ef "$LIBDIR/guest-console/LICENSE.musl" ]; then
+            $SUDO install -d -o root -g root -m 0755 "$LIBDIR/guest-console"
+            $SUDO install -o root -g root -m 0644 "$guest_notices" "$LIBDIR/guest-console/LICENSE.musl"
+        fi
+    fi
     # Keep the historical executable path usable by old units and clients.
     $SUDO ln -sfn firecrab-helper "$LIBDIR/firecrab-net-helper"
     # extract-vmlinux and extract-arm64-image are shell scripts used at
@@ -1090,7 +1125,8 @@ do_uninstall() {
 
     $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-helper" "$LIBDIR/firecrab-net-helper" \
         "$LIBDIR/extract-vmlinux" "$LIBDIR/extract-arm64-image"
-    $SUDO rm -f "$PREFIX/bin/firecrab" "$LIBDIR/firecrab-ingress"
+    $SUDO rm -f "$PREFIX/bin/firecrab" "$LIBDIR/firecrab-ingress" "$LIBDIR/firecrab-guest-console"
+    $SUDO rm -rf "$LIBDIR/guest-console"
     $SUDO rm -rf "$LIBDIR/ingress"
     $SUDO rm -rf "$SHAREDIR/dashboard"
     $SUDO rm -f "$SHAREDIR/LICENSE" "$SHAREDIR/THIRD_PARTY_NOTICES.txt" \

@@ -16,6 +16,15 @@ async fn pipe_auth_routes_protect_mutations_redact_secrets_and_disconnect_one_pr
         .unwrap();
     state
         .store
+        .put_pipe_auth(&SavedAuth::Firecrab {
+            account_id: "11111111-1111-4111-8111-111111111111".into(),
+            email: "owner@example.com".into(),
+            expires_at: 4102444800000,
+            token: format!("fca_{}", "a".repeat(64)),
+        })
+        .unwrap();
+    state
+        .store
         .put_pipe_auth(&SavedAuth::Github {
             username: "octocat".into(),
             token: "github-private-secret".into(),
@@ -33,8 +42,7 @@ async fn pipe_auth_routes_protect_mutations_redact_secrets_and_disconnect_one_pr
             },
         })
         .unwrap();
-    let config =
-        HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false).unwrap();
+    let config = HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080").unwrap();
     let app = build_router(state.clone(), &config);
     for uri in ["/api/pipe/auth", "/api/pipe/registries"] {
         let response = app
@@ -47,16 +55,32 @@ async fn pipe_auth_routes_protect_mutations_redact_secrets_and_disconnect_one_pr
         let body = String::from_utf8_lossy(&body);
         assert!(body.contains("octocat"));
         assert!(body.contains("123456789012"));
+        assert_eq!(body.contains("owner@example.com"), uri == "/api/pipe/auth");
         for secret in [
             "github-private-secret",
             "aws-private-secret",
             "private-session-token",
             "AKIAIOSFODNN7EXAMPLE",
+            &"a".repeat(64),
         ] {
             assert!(!body.contains(secret));
         }
     }
     for (method, uri, origin, body, status) in [
+        (
+            "PUT",
+            "/api/pipe/auth/firecrab",
+            "http://localhost:8080",
+            r#"{"provider":"firecrab","token":"invalid-token"}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "PUT",
+            "/api/pipe/auth/firecrab",
+            "https://untrusted.invalid",
+            r#"{"provider":"firecrab","token":"invalid-token"}"#,
+            StatusCode::FORBIDDEN,
+        ),
         (
             "PUT",
             "/api/pipe/auth/github",
@@ -114,7 +138,7 @@ async fn pipe_auth_routes_protect_mutations_redact_secrets_and_disconnect_one_pr
             .await
             .unwrap();
         assert_eq!(response.status(), status, "{method} {uri}");
-        assert_eq!(state.store.pipe_auths().unwrap().len(), 2);
+        assert_eq!(state.store.pipe_auths().unwrap().len(), 3);
         let body = to_bytes(response.into_body(), 65536).await.unwrap();
         assert!(!String::from_utf8_lossy(&body).contains("private-token"));
     }
@@ -134,7 +158,7 @@ async fn pipe_auth_routes_protect_mutations_redact_secrets_and_disconnect_one_pr
         assert_eq!(response.status(), StatusCode::OK);
     }
     let connections = state.store.pipe_auths().unwrap();
-    assert_eq!(connections.len(), 1);
+    assert_eq!(connections.len(), 2);
     assert_eq!(
         connections[0].connection().provider,
         crate::pipe_auth::Provider::Aws

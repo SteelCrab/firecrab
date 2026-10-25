@@ -879,21 +879,13 @@ pub enum ResolveError {
         /// What every configured source had to say.
         reason: String,
     },
-    /// The published kernel package could not be downloaded.
+    /// Kernel release metadata or a source archive could not be downloaded.
     #[error("OCI kernel download from {url} failed: {message}")]
     KernelDownloadFailed {
         /// Object URL that was requested.
         url: String,
         /// Transport or filesystem diagnostic.
         message: String,
-    },
-    /// The verified package does not carry the kernel it is pinned for.
-    #[error("OCI kernel package {package} has no member {member}")]
-    KernelPackageMemberMissing {
-        /// Registry object key of the package.
-        package: String,
-        /// Archive member the pin named.
-        member: String,
     },
     /// A filesystem operation failed while inspecting the paired kernel.
     #[error("OCI kernel pairing {operation} failed at {path}: {source}")]
@@ -2129,9 +2121,10 @@ mod boot;
 mod boot_tests;
 
 pub(crate) mod kernel;
+pub(crate) mod kernel_legacy;
 
 #[cfg(test)]
-mod kernel_tests;
+pub(crate) mod kernel_tests;
 
 mod name;
 
@@ -3210,10 +3203,9 @@ pub async fn write_provisioned_ext4(
 /// boot args.
 ///
 /// `TemplateSpec` requires both; an OCI image supplies neither. The kernel is
-/// the digest-pinned artifact Firecrab publishes for this architecture,
-/// fetched once and cached under `image_root`; a host that cannot reach the
-/// registry falls back to an installed catalog kernel. The ext4 is left in
-/// place. This stage does not register a template.
+/// built from kernel.org's current stable source and cached under `image_root`.
+/// A host that cannot fetch or build it reuses a verified installed kernel or
+/// an installed catalog kernel. The ext4 stays in place; nothing is registered.
 pub async fn pair_ext4_with_host_kernel(
     image: OciExt4Image,
     image_root: &Path,
@@ -3285,12 +3277,43 @@ pub async fn run_oci_import(
     alias: String,
     credential: Option<RegistryCredential>,
 ) {
+    run_import(tracker, templates, reference, alias, credential, None).await;
+}
+
+pub(crate) async fn run_deploy_import(
+    tracker: ImageInstallTracker,
+    templates: TemplateRegistry,
+    reference: ImageReference,
+    alias: String,
+    credential: Option<RegistryCredential>,
+    store: crate::persistence::Store,
+) {
+    run_import(
+        tracker,
+        templates,
+        reference,
+        alias,
+        credential,
+        Some(store),
+    )
+    .await;
+}
+
+async fn run_import(
+    tracker: ImageInstallTracker,
+    templates: TemplateRegistry,
+    reference: ImageReference,
+    alias: String,
+    credential: Option<RegistryCredential>,
+    cache_owner: Option<crate::persistence::Store>,
+) {
     if let Err(error) = import_oci_image(
         &tracker,
         &templates,
         &reference,
         &alias,
         credential.as_ref(),
+        cache_owner.as_ref(),
     )
     .await
     {
@@ -3306,13 +3329,20 @@ async fn import_oci_image(
     reference: &ImageReference,
     alias: &str,
     credential: Option<&RegistryCredential>,
+    cache_owner: Option<&crate::persistence::Store>,
 ) -> Result<(), ResolveError> {
     let image_root = templates.image_root_path();
     let scratch = image_root.join(".oci/import").join(alias);
     reset_import_scratch(&scratch).await?;
 
     let result = import_oci_image_in_scratch(
-        tracker, templates, reference, alias, image_root, &scratch, credential,
+        tracker,
+        templates,
+        reference,
+        alias,
+        &scratch,
+        credential,
+        cache_owner,
     )
     .await;
     if let Err(error) = remove_import_scratch(&scratch).await
@@ -3389,10 +3419,11 @@ async fn import_oci_image_in_scratch(
     templates: &TemplateRegistry,
     reference: &ImageReference,
     alias: &str,
-    image_root: &Path,
     scratch: &Path,
     credential: Option<&RegistryCredential>,
+    cache_owner: Option<&crate::persistence::Store>,
 ) -> Result<(), ResolveError> {
+    let image_root = templates.image_root_path();
     let insecure = is_loopback_registry(&reference.registry);
     let blobs = BlobCache::new(image_root);
     let layers = LayerCache::new(image_root);
@@ -3504,7 +3535,11 @@ async fn import_oci_image_in_scratch(
     };
 
     tracker.append_log(alias, "registering template");
-    if let Err(error) = register_named_oci_image(named, templates) {
+    let registered = match cache_owner {
+        Some(store) => register::register_named_image(named, templates, Some(store)),
+        None => register_named_oci_image(named, templates),
+    };
+    if let Err(error) = registered {
         if compliance_path.is_some() {
             compliance::remove_bundle(image_root, alias, cached.resolved.architecture);
         }

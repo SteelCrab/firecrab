@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 
 import { expect, test, type Page } from "@playwright/test";
 
+import { createNetwork, importOci } from "./support/wasmDashboard";
 import { ApiCleanup } from "../src/api.js";
 import { openVmTab, vmPanel } from "./support/vmPanel";
 import {
@@ -22,7 +23,10 @@ import {
   NETWORK_READY,
   SKIP_GUEST_BOOT,
 } from "../src/constants.js";
-import { startLocalOciRegistry, type LocalOciRegistry } from "../src/registry.js";
+import {
+  startLocalOciRegistry,
+  type LocalOciRegistry,
+} from "../src/registry.js";
 import { managerProxyArgs } from "../src/manager.js";
 
 /**
@@ -79,7 +83,10 @@ async function cleanupOwned(): Promise<void> {
   createdNetworkId = null;
 }
 
-async function authenticateWithDownloadedKey(vmId: string, ipv6: string): Promise<void> {
+async function authenticateWithDownloadedKey(
+  vmId: string,
+  ipv6: string,
+): Promise<void> {
   const response = await fetch(`${apiUrl()}/api/vms/${vmId}/ssh-key`);
   expect(response.status, "download operator SSH key").toBe(200);
   const privateKey = await response.text();
@@ -92,12 +99,22 @@ async function authenticateWithDownloadedKey(vmId: string, ipv6: string): Promis
     // DHCP readiness precedes sshd startup (including additional host-key
     // generation). Prove that the guest presents its injected host key before
     // starting the separate port-forward and IPv6 authentication assertions.
-    await expect.poll(async () => {
-      const response = await fetch(`${apiUrl()}/api/vms/${vmId}/ssh-host-key/check`);
-      if (!response.ok) return `HTTP ${response.status}`;
-      return ((await response.json()) as { status: string }).status;
-    }, { timeout: 180_000, intervals: [1_000] }).toBe("match");
-    const authenticate = async (label: string, targetArgs: string[]): Promise<void> => {
+    await expect
+      .poll(
+        async () => {
+          const response = await fetch(
+            `${apiUrl()}/api/vms/${vmId}/ssh-host-key/check`,
+          );
+          if (!response.ok) return `HTTP ${response.status}`;
+          return ((await response.json()) as { status: string }).status;
+        },
+        { timeout: 180_000, intervals: [1_000] },
+      )
+      .toBe("match");
+    const authenticate = async (
+      label: string,
+      targetArgs: string[],
+    ): Promise<void> => {
       let lastError = "ssh did not run";
       let authenticatedOutput: string | null = null;
       const deadline = Date.now() + 60_000;
@@ -170,28 +187,11 @@ test.afterAll(async () => {
   }
 });
 
-test("inspects the DHCP-boot fixture and imports it as a registered image", async ({ page }) => {
+test("inspects the DHCP-boot fixture and imports it as a registered image", async ({
+  page,
+}) => {
   await openEnglish(page, "/#/images");
-  await expect(page.locator("#oci-reference")).toBeVisible();
-  await expect(page.locator("#oci-import")).toBeDisabled();
-
-  await page.locator("#oci-reference").fill(reference());
-  await page.locator("#oci-inspect").click();
-
-  const oci = page.locator("section.panel", { has: page.getByRole("heading", { name: "OCI" }) });
-  await expect(oci.getByText("Compatible with this host.")).toBeVisible({ timeout: 30_000 });
-  await expect(oci.locator("dd", { hasText: alias() }).first()).toBeVisible();
-  await expect(page.locator("#oci-import")).toBeEnabled();
-
-  await page.locator("#oci-import").click();
-  const status = oci.locator(".state-badge");
-  await expect(status).toHaveText(/Imported|Import failed/, { timeout: 180_000 });
-  if ((await status.textContent())?.includes("failed")) {
-    const log = (await oci.locator(".image-install-log").textContent()) ?? "";
-    throw new Error(`OCI import failed for ${reference()}:\n${log}`);
-  }
-
-  await expect(page.locator("table.image-table")).toContainText(alias());
+  await importOci(page, reference(), alias());
 });
 
 test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IPv6", async ({
@@ -203,65 +203,55 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   );
 
   await openEnglish(page, "/#/networks");
-  const networkPanel = page.locator("section.panel", {
-    has: page.getByRole("heading", { name: "MicroNetwork" }),
-  });
-  const pendingNetwork = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" && response.url().includes("/api/micro-networks"),
-  );
-  await page.locator("#mn-name").fill(DHCP_NETWORK_NAME);
-  await page.locator("#mn-subnet").fill(DHCP_NETWORK_CIDR);
-  await networkPanel.locator("#mn-ipv6-enable").selectOption("on");
-  await networkPanel.locator('button[type="submit"]').click();
-  const networkResponse = await pendingNetwork;
-  if (!networkResponse.ok()) {
-    throw new Error(
-      `POST /api/micro-networks ${networkResponse.status()}: ${await networkResponse.text()}`,
-    );
-  }
-  const created = networkPanel
-    .locator("table.vm-table tbody tr")
-    .filter({ hasText: DHCP_NETWORK_NAME });
-  await expect(created).toBeVisible({ timeout: 30_000 });
+  await createNetwork(page, DHCP_NETWORK_NAME, DHCP_NETWORK_CIDR, true);
   const networks = await api.listNetworks();
-  createdNetworkId = networks.find((network) => network.name === DHCP_NETWORK_NAME)?.id ?? null;
+  createdNetworkId =
+    networks.find((network) => network.name === DHCP_NETWORK_NAME)?.id ?? null;
   expect(createdNetworkId, `API missing ${DHCP_NETWORK_NAME}`).toBeTruthy();
-  expect(networks.find((network) => network.id === createdNetworkId)?.ipv6Cidr ?? "").toMatch(
-    /^fd[0-9a-f:]+\/64$/i,
-  );
+  expect(
+    networks.find((network) => network.id === createdNetworkId)?.ipv6Cidr ?? "",
+  ).toMatch(/^fd[0-9a-f:]+\/64$/i);
 
   await openEnglish(page, "/#/vms");
   await page.locator("#vm-list-add").click();
   await expect(page).toHaveURL(/#\/vms\/new$/);
-  await expect(page.locator("#vm-image")).toBeEnabled({ timeout: 15_000 });
-  await expect(page.locator(`#vm-image option[value="${alias()}"]`)).toHaveCount(1, {
+  await expect(page.locator("#field-template")).toBeEnabled({
     timeout: 15_000,
   });
-  await page.locator("#vm-name").fill(DHCP_VM_NAME);
-  await page.locator("#vm-image").selectOption(alias());
-  await page
-    .locator("#vm-micro-network")
-    .selectOption({ label: `${DHCP_NETWORK_NAME} (${DHCP_NETWORK_CIDR})` });
-  await page.getByRole("button", { name: /Add Port Forward Rule/ }).click();
-  const hostPort = page.locator(".port-forwards-list input[placeholder='8080']");
-  await expect(hostPort).toHaveValue("8080");
-  await hostPort.fill(String(DHCP_HOST_PORT));
+  await expect(
+    page.locator(`#field-template option[value="${alias()}"]`),
+  ).toHaveCount(1, {
+    timeout: 15_000,
+  });
+  await page.locator("#field-name").fill(DHCP_VM_NAME);
+  await page.locator("#field-template").selectOption(alias());
+  await page.locator("#field-microNetworkId").selectOption(createdNetworkId!);
+  await page.locator("#field-portForwards").fill(`${DHCP_HOST_PORT}:80/tcp`);
 
-  await page.locator("#vm-create-submit").click();
-  await expect(page).toHaveURL(/#\/vms$/);
-  await expect(page.getByText(`Created: ${DHCP_VM_NAME}`)).toBeVisible({ timeout: 30_000 });
+  await page.locator("#editor button[type=submit]").click();
+  await expect(page).toHaveURL(/#\/vms(?:\?vm=.+)?$/);
 
   const row = page.locator("table.vm-list tbody tr", { hasText: DHCP_VM_NAME });
   await expect(row).toBeVisible();
   // Row actions live behind the Actions toggle now.
   await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
-  await row.getByRole("menuitem", { name: "start" }).click();
-  await expect(row.locator(".vm-status-label")).toHaveAttribute("data-state", /running|error/, { timeout: 240_000 });
-  if ((await row.locator(".vm-status-label").getAttribute("data-state")) !== "running") {
+  await page.getByRole("menuitem", { name: "start", exact: true }).click();
+  await expect(row.locator(".vm-status-label")).toHaveAttribute(
+    "data-state",
+    /running|error/,
+    { timeout: 240_000 },
+  );
+  if (
+    (await row.locator(".vm-status-label").getAttribute("data-state")) !==
+    "running"
+  ) {
     await openVmTab(page, row, "Log");
     const logText = (await page.locator("pre.detail-log").textContent()) ?? "";
-    const banner = (await page.locator(".banner").textContent().catch(() => "")) ?? "";
+    const banner =
+      (await page
+        .locator(".banner")
+        .textContent()
+        .catch(() => "")) ?? "";
     throw new Error(
       `VM ${DHCP_VM_NAME} entered error instead of running.\nbanner: ${banner}\nlog:\n${logText}`,
     );
@@ -272,13 +262,19 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   await expect(log).toContainText(NETWORK_READY, { timeout: 30_000 });
   await expect(log).not.toContainText(NETWORK_FAILED);
   await expect(log).toContainText(sentinel(), { timeout: 60_000 });
-  await vmPanel(page).getByRole("tab", { name: /^Network/ }).click();
-  await expect(vmPanel(page).locator(".props dt").filter({ hasText: /^IPv4$/ }).locator("+ dd")).toContainText(
-    /172\.30\.94\./,
-  );
+  await vmPanel(page)
+    .getByRole("tab", { name: /^Network/ })
+    .click();
+  await expect(
+    vmPanel(page)
+      .locator(".wasm-property dt")
+      .filter({ hasText: /^IPv4$/ })
+      .locator("+ dd"),
+  ).toContainText(/172\.30\.94\./);
   const ports = vmPanel(page).getByRole("region", { name: "Port forwarding" });
-  await expect(ports.locator(".kv-row").filter({ hasText: String(DHCP_HOST_PORT) })).toContainText("80");
-  await expect(ports.locator(".kv-row").filter({ hasText: String(DHCP_HOST_PORT) })).toContainText("tcp");
+  await expect(ports).toContainText(String(DHCP_HOST_PORT));
+  await expect(ports).toContainText("80");
+  await expect(ports).toContainText("tcp");
 
   const vms = await api.listVms();
   const vm = vms.find((row) => row.name === DHCP_VM_NAME);
@@ -300,40 +296,64 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   // The detail is a side panel, not a modal: nothing covers the list.
   await expect(page.locator(".ssh-overlay")).toHaveCount(0);
   // Its SSH button opens the same dialog as the row menu below.
-  await vmPanel(page).getByRole("button", { name: "SSH", exact: true }).click();
-  const panelSsh = page.getByRole("dialog", { name: new RegExp(`SSH — ${DHCP_VM_NAME}`) });
-  await expect(panelSsh.getByRole("button", { name: /Download |다운로드/ })).toBeVisible();
-  await expect(panelSsh.getByRole("button", { name: /Copy key|키 복사/ })).toBeVisible();
+  await vmPanel(page)
+    .getByRole("button", { name: "SSH connection", exact: true })
+    .click();
+  const panelSsh = page.getByRole("dialog", {
+    name: "SSH connection",
+    exact: true,
+  });
+  await expect(
+    panelSsh.getByRole("button", { name: /Download |다운로드/ }),
+  ).toBeVisible();
+  await expect(
+    panelSsh.getByRole("button", { name: /Copy key|키 복사/ }),
+  ).toBeVisible();
   await panelSsh.getByRole("button", { name: /^(Close|닫기)$/ }).click();
   await expect(panelSsh).toHaveCount(0);
 
   // SSH from the VM list: Actions → SSH connect opens a dialog with the panel.
   await openEnglish(page, "/#/vms");
-  const sshRow = page.locator("table.vm-list tbody tr", { hasText: DHCP_VM_NAME });
+  const sshRow = page.locator("table.vm-list tbody tr", {
+    hasText: DHCP_VM_NAME,
+  });
   await sshRow.getByRole("button", { name: /^Actions$|^작업$/ }).click();
-  await sshRow.getByRole("menuitem", { name: /SSH connect|SSH 연결/ }).click();
-  const sshDialog = page.getByRole("dialog", { name: new RegExp(`SSH — ${DHCP_VM_NAME}`) });
-  await expect(sshDialog.locator(".console-ssh-block-label", { hasText: /^fingerprint$/i })).toBeVisible();
+  await page.getByRole("menuitem", { name: /SSH connect|SSH 연결/ }).click();
+  const sshDialog = page.getByRole("dialog", {
+    name: "SSH connection",
+    exact: true,
+  });
+  await expect(sshDialog).toContainText(detail!.sshHostFingerprint!);
   await sshDialog.getByRole("button", { name: "Close", exact: true }).click();
   await expect(sshDialog).toHaveCount(0);
 
   await openEnglish(page, `/#/console/${detail!.id}`);
   await page.getByRole("tab", { name: "SSH" }).click();
-  await expect(page.locator(".console-ssh-block-label", { hasText: /^fingerprint$/i })).toBeVisible();
+  await expect(page.locator(".console-ssh")).toContainText(
+    detail!.sshHostFingerprint!,
+  );
   // `check` is a copyable one-liner that decides instead of printing a fingerprint.
-  await expect(page.locator(".console-ssh-block-label", { hasText: /^check ipv4$/ })).toBeVisible();
-  await expect(page.locator(".console-ssh-block-label", { hasText: /^check ipv6$/ })).toBeVisible();
+  await expect(
+    page.locator(".console-ssh-block-label", { hasText: /^check ipv4$/ }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".console-ssh-block-label", { hasText: /^check ipv6$/ }),
+  ).toBeVisible();
   await expect(
     page.locator(".console-ssh-code").filter({ hasText: "echo MATCH" }).first(),
   ).toContainText("ssh-keyscan -t ed25519");
-  await expect(page.locator(".console-ssh-code").filter({ hasText: "ssh -i" }).first()).toContainText(
-    `ssh -i firecrab-${DHCP_VM_NAME}.pem root@`,
-  );
+  await expect(
+    page.locator(".console-ssh-code").filter({ hasText: "ssh -i" }).first(),
+  ).toContainText(`ssh -i firecrab-${DHCP_VM_NAME}.pem root@`);
   await expect(
     page.locator(".console-ssh-code").filter({ hasText: "ssh -6 -i" }).first(),
   ).toContainText(`root@${detail!.ipv6}`);
-  await expect(page.getByRole("button", { name: /Download |다운로드/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Copy key|키 복사/ })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Download |다운로드/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Copy key|키 복사/ }),
+  ).toBeVisible();
 
   // The key sits behind the eye until asked for.
   await expect(page.locator(".console-ssh-code.is-masked")).toHaveCount(1);
@@ -350,10 +370,17 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
 
   // SSH port forward: the panel writes host:PORT → guest 22 through the same
   // endpoint the detail modal uses, and then prints the `ssh -p` command.
-  await page.locator("#ssh-forward-host-port").fill(String(DHCP_SSH_HOST_PORT));
-  await page.getByRole("button", { name: /Create SSH port forward|SSH 포트 포워드 만들기/ }).click();
+  await page.locator("#ssh-host-port").fill(String(DHCP_SSH_HOST_PORT));
+  await page
+    .getByRole("button", {
+      name: /Create SSH port forward|SSH 포트 포워드 만들기/,
+    })
+    .click();
   await expect(
-    page.locator(".console-ssh-code").filter({ hasText: `ssh -p ${DHCP_SSH_HOST_PORT}` }).first(),
+    page
+      .locator(".console-ssh-code")
+      .filter({ hasText: `ssh -p ${DHCP_SSH_HOST_PORT}` })
+      .first(),
   ).toContainText(`-i firecrab-${DHCP_VM_NAME}.pem root@`);
   const forwarded = await api.getVm(detail!.id);
   expect(forwarded?.portForwards).toEqual(
@@ -371,9 +398,17 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   await authenticateWithDownloadedKey(detail!.id, detail!.ipv6!);
 
   // Removing takes back only the SSH rule; the guest-80 forward stays.
-  await page.getByRole("button", { name: /Remove SSH port forward|SSH 포트 포워드 제거/ }).click();
-  await expect(page.locator("#ssh-forward-host-port")).toBeVisible();
+  await page
+    .getByRole("button", {
+      name: /Remove SSH port forward|SSH 포트 포워드 제거/,
+    })
+    .click();
+  await expect(page.locator("#ssh-host-port")).toBeVisible();
   const afterRemove = await api.getVm(detail!.id);
-  expect(afterRemove?.portForwards?.some((pf) => pf.guestPort === 22)).toBe(false);
-  expect(afterRemove?.portForwards?.some((pf) => pf.guestPort === 80)).toBe(true);
+  expect(afterRemove?.portForwards?.some((pf) => pf.guestPort === 22)).toBe(
+    false,
+  );
+  expect(afterRemove?.portForwards?.some((pf) => pf.guestPort === 80)).toBe(
+    true,
+  );
 });

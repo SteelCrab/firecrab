@@ -30,6 +30,83 @@ Entries land here as work merges, and move under the next version heading when t
   destination security-group rules, and stay outside public tunnel configuration.
   The bundled ingress gains HTTP/2 and the port-binding capability.
 
+- Replicated controller services declare stateless or shared external application
+  state and distribute version-pinned PipeSecrets through encrypted deployment
+  snapshots. Invalid state, credential references and exclusive work fail before
+  dispatch. Tracked in [#457](https://github.com/SteelCrab/firecrab/issues/457).
+
+- Changed PipeSecret values automatically rotate running domain services through
+  Deploy. Rotation keeps the current image and encrypted per-attempt values,
+  shares queue/capacity limits, and retains bounded retries across API restarts.
+  Tracked in [#503](https://github.com/SteelCrab/firecrab/issues/503).
+
+- One controller registers authenticated workload hosts and places VMs using
+  deterministic image/resource filtering and durable capacity reservations.
+  Idempotent operations reconcile with the recorded owner after timeouts and
+  restarts. REST, `firecrab cluster`, and the dashboard expose inventory, VM
+  lifecycle, and host drain. Tracked in [#455](https://github.com/SteelCrab/firecrab/issues/455).
+
+- AI Sandbox reuses Pipe AI accounts for verified model selection, persistent
+  conversations, isolated project edits, and bounded commands in a selected
+  MicroVM. Dashboard, CLI, and local stdio MCP share durable attempts, cancellation,
+  recovery, actual tool results, and selected-file apply with source conflict checks.
+  Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
+- AI Sandbox persists caller and runtime references, authorizes project and
+  resource operations, and checks current grants before model/file/guest actions.
+  Operators manage delegated host policies through REST, CLI, and stdio MCP.
+  Scoped hosts cannot bypass grants through other controller APIs.
+  Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
+- Named MicroBlockStorage data volumes persist after VM deletion. REST, CLI, and
+  Dashboard support creation and exclusive attachment to inactive user VMs.
+  Guest mounts use filesystem UUIDs and gate managed application startup.
+  Data disks honor guest flush requests, and API restarts retain reservations.
+  Tracked in [#247](https://github.com/SteelCrab/firecrab/issues/247).
+
+- `firecrab service dev --port PORT` selects the development dashboard port on
+  macOS and Windows. Development controls retain the selected port, and older
+  dashboard sessions default to 8080. Tracked in [#488](https://github.com/SteelCrab/firecrab/issues/488).
+
+- Git-linked worktrees have independent `service dev --port PORT` environments.
+  macOS uses a separate management VM; Windows and Linux use a private Docker
+  runtime with separate data, caches, ownership, and network state. Backend
+  API/resource ports are assigned and saved; dashboard ports remain manual.
+  Primary macOS/Windows development remains separate, and Linux primary-checkout
+  development uses Docker without changing production systemd services.
+  Tracked in [#495](https://github.com/SteelCrab/firecrab/issues/495).
+
+- Secrets imports selected values from the Firecrab account linked in Auth.
+  The Rust/WASM dashboard previews names without values, requires explicit
+  selection for replacements, and records Firecrab Console as the source (#411).
+
+- Pipe Auth links a Firecrab account with an account integration token issued
+  by `console.firecrab.dev`. It displays the verified account ID, email, and
+  token expiry. Address-scoped Tunnel tokens remain separate. Existing Tunnel
+  connection requests also declare the service's required client protocol (#440).
+
+- GitHub stack sources resolve exact commits and verified regular-file blobs, then
+  detect configuration drift without changing resources. Periodic and manual
+  checks share durable admission, generation guards, pause/resume, bounded
+  backoff and fifty redacted observations. `stack source` and REST expose the
+  configuration and history. Private sources use the existing GitHub Auth
+  connection. Opt-in automatic synchronization and `stack source sync` reuse
+  native apply, retain desired/attempted/successful revisions, and stop after
+  failed or interrupted applies until explicit operation-ID recovery (#437).
+
+- Stack plan approval includes exact VM template versions and boot artifact hashes.
+  Git VM manifests require `templatePin`; apply journals retain template and OCI
+  digest identities. Changed content blocks apply and later owned VM starts.
+  Git sources reject independent apply and service mutation requests, including
+  while polling is paused, to prevent competing image controllers (#437).
+
+- Browser console dimensions reach the guest serial terminal through a private
+  vsock resize helper. Connected viewers share the smallest available grid.
+  The console reports whether the guest applied the size and keeps working
+  when guest resize support is unavailable. The default OCI kernel is
+  `7.2.2-vsock1`, with built-in vsock on x86_64 and ARM64, versioned packages,
+  and matching source archives. Tracked in [#471](https://github.com/SteelCrab/firecrab/issues/471).
+
 - The browser console uses Ghostty WebAssembly for VT parsing, Unicode cells,
   terminal modes and history. It supports mobile editing, composition,
   bracketed paste, application mouse/focus reports and native grapheme export.
@@ -41,6 +118,12 @@ Entries land here as work merges, and move under the next version heading when t
   references fail before VM creation. Values stay out of public VM/deployment
   records and SQLite; guest environment files are root-only. Stop and failed
   deployment cleanup remove snapshots after deleting owned replicas.
+
+- Remote API listeners require mutual TLS with a private CA and UUID host
+  identities. `firecrab ca` generates the CA and host certificates offline.
+  HTTPS API and WSS console clients share certificate configuration, and Linux
+  `doctor` checks validity and upcoming expiration. Boolean TLS/authentication
+  flags cannot enable plaintext remote access. Tracked in [#157](https://github.com/SteelCrab/firecrab/issues/157).
 
 - MicroService domains connect healthy replicas to PipeIngress automatically,
   without host ports or manual routes. The dashboard shows the domain and DNS
@@ -58,15 +141,20 @@ Entries land here as work merges, and move under the next version heading when t
 - `firecrab stack validate --file YAML [--json]` validates an experimental
   declarative stack offline. The shared schema checks local network references,
   resource limits, overlapping subnets and service ports, and pinned service
-  image syntax. Validation reports omit configuration values. Applying resources
-  and continuous Git synchronization remain follow-up work for #437.
+  image syntax. Validation reports omit configuration values and remain offline.
+
+- Native `stack apply` creates and updates owned resources, deploys services and
+  records redacted progress by retry UUID. Plan fingerprints reject stale input;
+  running VM changes and service replica replacement require explicit stop
+  permission. Interrupted work keeps its exact ownership for explicit recovery.
+  Automatic replacement and pruning remain follow-up work for #437.
 
 - Host-local stack registration and UUID ownership bindings survive API restarts.
   `firecrab stack register/list/status/bind/unbind` manages metadata without
   changing resources. `firecrab stack plan --file YAML [--json]` reports a
   read-only configuration diff, blocks implicit adoption and conflicting ownership,
-  and retains removed declarations. Field values stay out of plans. Actual apply
-  and Git polling remain follow-up work for #437.
+  and retains removed declarations. Plans expose immutable input identities
+  without environment values.
   Empty registrations can be removed with `stack delete NAME --id STACK_UUID`;
   bound resources and newer registrations with the same name are protected.
 
@@ -138,7 +226,19 @@ Entries land here as work merges, and move under the next version heading when t
   an M2Image. Logins are write-only in API responses. See
   [Pipe Registry](public-docs/guides/pipe-registry.md).
 
+- Deploy updates running domain services through the existing Nginx ingress.
+  Rolling and blue-green updates, immutable release history, selected rollback,
+  verified worker drain, and restart/retry recovery share one REST/CLI/YAML
+  executor. The Rust/WASM dashboard exposes update and rollback actions (#335).
+  Deploy-owned rootfs caches are pruned after VM, pool, operation, and retained-release references are released.
+
 ### Changed
+
+- Guest kernel installation and OCI import build kernel.org's current stable
+  source on the Linux host instead of downloading MicroRegistry kernel packages.
+  Source and image digests are verified, and existing image kernel assignments
+  remain explicit. `FIRECRAB_KERNEL_RELEASES_URL` and `FIRECRAB_KERNEL_BUILD_JOBS`
+  control source discovery and compiler parallelism.
 
 - The dashboard's Pipe page lists its services as five cards: Route, Pipe
   Registry, Firecrab Tunnel, Cloudflare Quick Tunnel, and Cloudflare Named
@@ -158,6 +258,20 @@ Entries land here as work merges, and move under the next version heading when t
 - Gateway MAC addresses remain stable when MicroVM TAP ports join or leave.
   Stopping a service no longer strands surviving guests' cached gateway
   neighbors or delays their internal DNS requests.
+
+- PipeSecrets rejects AWS name prefixes containing filter operators or other
+  non-name characters, preventing a negated prefix from listing secrets outside
+  the configured scope. Tracked in [#411](https://github.com/SteelCrab/firecrab/issues/411).
+
+- Dashboard WASM builds reuse a version-checked `wasm-bindgen` Cargo installation
+  from the wasm-pack cache. The matching tool is exposed only to the build child,
+  avoiding an unnecessary installer pass while preserving normal discovery when
+  the cache is missing or stale.
+
+- The development API proxy preserves the dashboard's Host header so browser
+  requests from custom ports such as 8098 pass the API's same-origin checks.
+  Vite's default host checks and the API's origin checks reject untrusted requests.
+  This fixes the `--port` behavior from [#488](https://github.com/SteelCrab/firecrab/issues/488).
 
 - OCI guests recreate image-declared `/run` directories with `systemd-tmpfiles`
   before app services on every boot. MariaDB can restart after tmpfs clears

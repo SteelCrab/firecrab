@@ -23,7 +23,7 @@ pub fn control(command: DevCommand) -> Result<(), Error> {
             "--",
             command.as_str(),
         ],
-        session::Input::File(guest_script()?),
+        session::Input::File(guest_script(false)?),
     )?;
     Ok(())
 }
@@ -80,7 +80,7 @@ pub fn deploy(checkout: Option<&Checkout>, release: bool) -> Result<(), Error> {
             channel,
             &archive_name,
         ],
-        session::Input::Session(guest_script()?),
+        session::Input::Session(guest_script(false)?),
     )?;
     Ok(())
 }

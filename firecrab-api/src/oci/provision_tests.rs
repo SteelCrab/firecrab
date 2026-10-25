@@ -110,7 +110,9 @@ fn program_header(p_type: u32, p_offset: u64, p_filesz: u64) -> [u8; 56] {
 /// A static program for this host, carrying the applet names the guest calls.
 fn static_program() -> Vec<u8> {
     let mut applets = vec![0_u8];
-    for applet in ["sh", "ip", "udhcpc", "awk", "mount", "sleep", "cut"] {
+    for applet in [
+        "sh", "ip", "udhcpc", "awk", "mount", "sleep", "cut", "blkid",
+    ] {
         applets.extend_from_slice(applet.as_bytes());
         applets.push(0);
     }
@@ -614,6 +616,82 @@ fn the_boot_script_exposes_dev_fd_for_process_substitution() {
     assert!(
         proc_mount < fd && fd < services,
         "/proc must exist before /dev/fd, and services must start after"
+    );
+}
+
+#[test]
+fn image_services_start_while_optional_package_install_waits() {
+    let directory = tempdir().unwrap();
+    let root = directory.path();
+    let services = root.join("services");
+    std::fs::create_dir(&services).unwrap();
+    let app = services.join("app");
+    std::fs::write(&app, "#!/bin/sh\n: > \"$QA_APP_READY\"\n").unwrap();
+    std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let ssh = services.join("sshd");
+    std::fs::write(
+        &ssh,
+        r#"#!/bin/sh
+[ -f "$QA_PACKAGES_DONE" ] || exit 92
+: > "$QA_SSH_READY"
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let toolbox = root.join("bb");
+    std::fs::write(&toolbox, "#!/bin/sh\nexec \"$@\"\n").unwrap();
+    std::fs::set_permissions(&toolbox, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let fastfetch = root.join("fastfetch");
+    std::fs::write(&fastfetch, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&fastfetch, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let boot = provision::boot_script();
+    let worker = &boot[boot.find("# The image carries").unwrap()..];
+    let script = worker
+        .replace(provision::PREPARE_RUNTIME, ":")
+        .replace(
+            provision::BASE_PACKAGE_INSTALL,
+            r#"
+[ ! -f "$QA_SSH_READY" ] || exit 91
+attempt=0
+while [ "$attempt" -lt 200 ]; do
+  if [ -f "$QA_APP_READY" ]; then
+    : > "$QA_PACKAGE_SAW_APP"
+    break
+  fi
+  sleep 0.01
+  attempt=$((attempt + 1))
+done
+: > "$QA_PACKAGES_DONE"
+"#,
+        )
+        .replace("/etc/firecrab/services.d", services.to_str().unwrap())
+        .replace("/run/firecrab", root.join("run").to_str().unwrap())
+        .replace("/usr/bin/fastfetch", fastfetch.to_str().unwrap())
+        .replace("/dev/console", root.join("console").to_str().unwrap());
+    let ready = root.join("app-ready");
+    let observed = root.join("package-saw-app");
+    let ssh_ready = root.join("ssh-ready");
+    let output = std::process::Command::new("sh")
+        .args(["-c", &script])
+        .env("BB", &toolbox)
+        .env("QA_APP_READY", &ready)
+        .env("QA_PACKAGE_SAW_APP", &observed)
+        .env("QA_PACKAGES_DONE", root.join("packages-done"))
+        .env("QA_SSH_READY", &ssh_ready)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while (!observed.exists() || !ssh_ready.exists()) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        observed.exists(),
+        "Application startup waited for optional packages"
+    );
+    assert!(
+        ssh_ready.exists(),
+        "SSH must start after its package dependencies are installed"
     );
 }
 
@@ -1234,7 +1312,7 @@ fn base_package_install_pulls_in_udev_where_systemd_ships_without_it() {
         );
     }
     assert!(
-        !block_with("apk add").contains("udev"),
+        !block_with("add --no-cache iputils").contains("udev"),
         "Alpine is not systemd"
     );
     assert!(
@@ -1418,6 +1496,86 @@ esac
         }
         if matches!(failure, "first" | "always") {
             assert!(log.contains("--setopt=zchunk=False"), "{log}");
+        }
+    }
+}
+
+#[test]
+fn apk_retries_transient_failures_without_stamping_permanent_failures() {
+    for location in ["sbin/apk", "usr/bin/apk"] {
+        for failure in ["none", "first", "always"] {
+            let directory = tempdir().unwrap();
+            let root = directory.path();
+            for (name, body) in [
+                ("bb", "[ \"$1\" != sleep ] || exit 0; exec \"$@\""),
+                (
+                    location,
+                    r#"
+n=$(cat "$TEST_COUNT" 2>/dev/null || echo 0)
+n=$((n+1)); echo "$n" > "$TEST_COUNT"
+if [ "$FAILURE" = always ] || { [ "$FAILURE" = first ] && [ "$n" -eq 1 ]; }; then
+  exit 7
+fi
+"#,
+                ),
+            ] {
+                let path = root.join(name);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let stamp = root.join("stamp");
+            let count = root.join("count");
+            let console = root.join("console");
+            let mut script = provision::BASE_PACKAGE_INSTALL.to_owned();
+            for name in ["apt-get", "dnf", "microdnf", "yum"] {
+                script = script.replace(
+                    &format!("/usr/bin/{name}"),
+                    root.join(format!("missing-{name}")).to_str().unwrap(),
+                );
+            }
+            script = script
+                .replace("/sbin/apk", root.join("sbin/apk").to_str().unwrap())
+                .replace("/usr/bin/apk", root.join("usr/bin/apk").to_str().unwrap())
+                .replace("/etc/firecrab/base-packages.ok", stamp.to_str().unwrap())
+                .replace(">/dev/console", &format!(">>{}", console.display()));
+            let run = || {
+                std::process::Command::new("sh")
+                    .args(["-c", &script])
+                    .env("BB", root.join("bb"))
+                    .env("TEST_COUNT", &count)
+                    .env("FAILURE", failure)
+                    .output()
+                    .unwrap()
+            };
+            let output = run();
+            assert!(output.status.success(), "{output:?}");
+            let attempts = std::fs::read_to_string(&count).unwrap();
+            assert_eq!(
+                attempts.trim(),
+                match failure {
+                    "none" => "1",
+                    "first" => "2",
+                    _ => "3",
+                },
+                "{location}: {failure}"
+            );
+            assert_eq!(stamp.exists(), failure != "always", "{location}: {failure}");
+            if failure != "none" {
+                let log = std::fs::read_to_string(&console).unwrap();
+                assert!(
+                    log.contains("FIRECRAB_APK_FAILED attempt=1 exit=7"),
+                    "{log}"
+                );
+                assert_eq!(
+                    log.contains("FIRECRAB_PACKAGES_FAILED"),
+                    failure == "always"
+                );
+            }
+            if failure != "always" {
+                assert!(run().status.success());
+                assert_eq!(std::fs::read_to_string(&count).unwrap(), attempts);
+            }
         }
     }
 }

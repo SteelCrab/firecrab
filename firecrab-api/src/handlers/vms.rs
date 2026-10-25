@@ -289,7 +289,29 @@ pub async fn create_vm(
     Extension(request_id): Extension<RequestId>,
     ValidatedJson(req): ValidatedJson<CreateVmRequest>,
 ) -> Result<(StatusCode, Json<VmResponse>), AppError> {
-    let fields = validate_create(&req, &state);
+    create_vm_with_id(state, request_id, req, Uuid::new_v4()).await
+}
+
+/// Use a journal-reserved UUID while retaining normal validation and provisioning.
+pub(crate) async fn create_vm_with_id(
+    state: AppState,
+    request_id: RequestId,
+    req: CreateVmRequest,
+    id: Uuid,
+) -> Result<(StatusCode, Json<VmResponse>), AppError> {
+    let template = state.templates.resolve_alias(&req.template);
+    create_vm_from_template(state, request_id, req, id, template).await
+}
+
+/// Keep stack approval and pool-style creation bound to one resolved version.
+pub(crate) async fn create_vm_from_template(
+    state: AppState,
+    request_id: RequestId,
+    req: CreateVmRequest,
+    id: Uuid,
+    template: Option<std::sync::Arc<crate::templates::TemplateVersion>>,
+) -> Result<(StatusCode, Json<VmResponse>), AppError> {
+    let fields = validate_create_for(&req, template.as_deref(), &state);
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
     }
@@ -304,14 +326,11 @@ pub async fn create_vm(
     // and run_start already re-verifies right before the template is
     // actually used, which is the point that matters for catching a
     // tampered/corrupted artifact.
-    let template = state
-        .templates
-        .resolve_alias(&req.template)
-        .ok_or_else(|| AppError::internal(request_id.0))?;
+    let template = template.ok_or_else(|| AppError::internal(request_id.0))?;
     let response = insert_vm(
         &state,
         request_id,
-        Uuid::new_v4(),
+        id,
         req,
         &template,
         crate::model::VmPurpose::Instance,
@@ -332,11 +351,21 @@ pub(crate) async fn insert_vm(
     template: &crate::templates::TemplateVersion,
     purpose: crate::model::VmPurpose,
 ) -> Result<VmResponse, AppError> {
+    let _cluster_admission = if state.cluster.worker.is_some() {
+        Some(state.cluster.admission.lock().await)
+    } else {
+        None
+    };
     let storage_root = req
         .storage_root
         .clone()
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| state.storage.default_id().to_owned());
+    if state.cluster.worker.is_some() {
+        crate::cluster::check_capacity(state, id, req.cpu, req.ram, req.disk_gb, &storage_root)
+            .await
+            .map_err(|e| crate::cluster::handlers::error(e, request_id))?;
+    }
     let vm = VmRecord {
         id,
         name: req.name,
@@ -367,6 +396,9 @@ pub(crate) async fn insert_vm(
     let port_forwards = req.port_forwards.clone();
     let insert_result = tokio::task::spawn_blocking(move || {
         store.insert(&record)?;
+        if !req.block_storages.is_empty() {
+            store.attach_block_storages(record.id, &req.block_storages)?;
+        }
         if !shell_ids.is_empty() {
             let pins = store.resolve_latest_shell_revisions(&shell_ids)?;
             store.set_vm_shells(record.id, &pins)?;
@@ -395,6 +427,9 @@ pub(crate) async fn insert_vm(
         })
         .await;
         return Err(match error {
+            crate::persistence::PersistenceError::BlockStorageConflict { message } => {
+                AppError::conflict("volume_conflict", message, request_id.0)
+            }
             crate::persistence::PersistenceError::MissingShell { .. } => {
                 let mut fields = BTreeMap::new();
                 fields.insert(
@@ -510,6 +545,73 @@ pub(crate) async fn insert_vm(
         .insert(vm.id, vm);
 
     Ok(response)
+}
+
+/// Finish idempotent create side effects after a worker crash between VM/receipt commits.
+pub(crate) async fn resume_cluster_create(
+    state: &AppState,
+    id: Uuid,
+    request: RequestId,
+) -> Result<(), AppError> {
+    let _guard = state.network_mutations.lock().await;
+    let vm = state
+        .vms
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found(request.0))?;
+    let paths = crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&vm.storage_root), id);
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        paths.ensure_directories().map_err(|e| e.to_string())?;
+        crate::guest_ssh::ensure_operator_key(&paths).map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| AppError::internal(request.0))?
+    .map_err(|_| AppError::internal(request.0))?;
+    let subnet = resolve_subnet(state, vm.micro_network_id, request.0).await?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.allocate_lease(id, subnet))
+        .await
+        .map_err(|_| AppError::internal(request.0))?
+        .map_err(|_| AppError::internal(request.0))?;
+    let _ = sync_dhcp_leases(state).await;
+    Ok(())
+}
+
+/// Finish cleanup after a crash between deleting the VM row and releasing its lease.
+pub(crate) async fn resume_cluster_delete(
+    state: &AppState,
+    id: Uuid,
+    storage: &str,
+    request: RequestId,
+) -> Result<(), AppError> {
+    if !state.storage_root_known(storage) {
+        return Err(AppError::conflict(
+            "storage_missing",
+            "restore the owned storage root before completing deletion",
+            request.0,
+        ));
+    }
+    let paths = crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(storage), id);
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        crate::artifacts::remove_vm_artifacts(&paths).map_err(|e| e.to_string())?;
+        store.clear_vm_shells(id).map_err(|e| e.to_string())?;
+        store
+            .clear_vm_port_forwards(id)
+            .map_err(|e| e.to_string())?;
+        match store.release_lease(id) {
+            Ok(()) | Err(IpamError::NotLeased { .. }) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .map_err(|_| AppError::internal(request.0))?
+    .map_err(|_| AppError::internal(request.0))?;
+    let _ = sync_dhcp_leases(state).await;
+    Ok(())
 }
 
 /// Replaces pinned shell revisions for a VM that has no live process.
@@ -766,6 +868,24 @@ pub async fn update_vm(
         None
     };
     let _guard = state.lock_vm(id).await;
+    if req.env.is_some()
+        && (state
+            .store
+            .database_vm_service(id)
+            .map_err(|_| AppError::internal(request_id.0))?
+            .is_some()
+            || state
+                .store
+                .managed_database_rabbitmq()
+                .map_err(|_| AppError::internal(request_id.0))?
+                .is_some_and(|c| c.brokers.iter().any(|b| b.id == id)))
+    {
+        return Err(AppError::conflict(
+            "service_environment_managed",
+            "Edit this service's configuration and redeploy to update its environment",
+            request_id.0,
+        ));
+    }
     if req.env.is_some() {
         let store = state.store.clone();
         let owner = tokio::task::spawn_blocking(move || store.service_deployment_for_vm(id))
@@ -782,7 +902,9 @@ pub async fn update_vm(
                 request_id.0,
             ));
         }
-        if owner.is_some_and(|deployment| !deployment.spec.secrets.is_empty()) {
+        if owner.is_some_and(|deployment| {
+            !deployment.spec.secrets.is_empty() || !deployment.spec.queues.is_empty()
+        }) {
             return Err(AppError::conflict(
                 "vm_service_owned",
                 "Edit the MicroService configuration instead of its replica environment",
@@ -816,7 +938,27 @@ pub async fn update_vm(
             request_id.0,
         )?;
     }
+    let _cluster_admission = if state.cluster.worker.is_some() {
+        Some(state.cluster.admission.lock().await)
+    } else {
+        None
+    };
     let (updated, previous) = claim_resource_update(&state, id, &req, request_id.0)?;
+    if state.cluster.worker.is_some()
+        && (updated.cpu > previous.0 || updated.ram > previous.1 || updated.disk_gb > previous.2)
+        && let Err(error) = crate::cluster::check_capacity(
+            &state,
+            id,
+            updated.cpu,
+            updated.ram,
+            updated.disk_gb,
+            &updated.storage_root,
+        )
+        .await
+    {
+        restore_resources(&state, id, previous);
+        return Err(crate::cluster::handlers::error(error, request_id));
+    }
     if let Err(error) = persist_update(&state, &updated, request_id.0).await {
         restore_resources(&state, id, previous);
         return Err(error);
@@ -941,7 +1083,7 @@ fn restore_resources(state: &AppState, id: Uuid, previous: PreviousResources) {
     }
 }
 
-fn validate_update(
+pub(crate) fn validate_update(
     req: &UpdateVmResourcesRequest,
     current_disk_gb: u16,
 ) -> BTreeMap<String, String> {
@@ -995,6 +1137,21 @@ async fn claim_start(
         .get(&id)
         .cloned()
         .ok_or_else(|| AppError::not_found(request_id.0))?;
+    if !state
+        .store
+        .vm_block_storages(id)
+        .map_err(|error| crate::handlers::block_storage::persistence_error(error, request_id.0))?
+        .is_empty()
+        && vm.state.can_edit_resources()
+        && crate::network_policy::vm_is_active(&state, &vm)
+            .map_err(|_| AppError::internal(request_id.0))?
+    {
+        return Err(AppError::conflict(
+            "volume_vm_active",
+            "the previous VM runtime still owns its data volumes",
+            request_id.0,
+        ));
+    }
     crate::network_policy::validate_selection(
         &state,
         vm.security_group_id,
@@ -1195,6 +1352,18 @@ pub async fn delete_vm(
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
     let _guard = state.lock_vm(id).await;
+    if state
+        .store
+        .managed_database_rabbitmq()
+        .map_err(|_| AppError::internal(request_id.0))?
+        .is_some_and(|c| c.brokers.iter().any(|b| b.id == id))
+    {
+        return Err(AppError::conflict(
+            "database_broker_in_use",
+            "This VM stores managed RabbitMQ data and cannot be deleted through the VM API",
+            request_id.0,
+        ));
+    }
     let vm = state
         .vms
         .lock()
@@ -1202,12 +1371,21 @@ pub async fn delete_vm(
         .get(&id)
         .cloned()
         .ok_or_else(|| AppError::not_found(request_id.0))?;
-    if vm.security_group_id.is_some()
+    let has_volumes = !state
+        .store
+        .vm_block_storages(id)
+        .map_err(|error| crate::handlers::block_storage::persistence_error(error, request_id.0))?
+        .is_empty();
+    if (vm.security_group_id.is_some() || has_volumes)
         && crate::network_policy::vm_is_active(&state, &vm)
             .map_err(|_| AppError::internal(request_id.0))?
     {
         return Err(AppError::conflict(
-            "security_group_in_use",
+            if has_volumes {
+                "volume_vm_active"
+            } else {
+                "security_group_in_use"
+            },
             "stop the VM host runtime before deleting it",
             request_id.0,
         ));
@@ -1390,6 +1568,28 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
         })?;
 
     set_startup_step(state, vm.id, StartupStep::PreparingDisk);
+    let store = state.store.clone();
+    let vm_id = vm.id;
+    let approved_template = template.clone();
+    let templates = state.templates.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let pin = store.stack_vm_pin(vm_id, true)
+            .map_err(|_| "Could not read approved stack template".to_owned())?;
+        let Some(pin) = pin else { return Ok(()); };
+        if pin != approved_template.stack_pin() {
+            return Err("Approved stack template content changed; restore its exact artifacts before starting the VM".into());
+        }
+        for artifact in std::iter::once(&approved_template.kernel)
+            .chain(std::iter::once(&approved_template.rootfs))
+            .chain(approved_template.initrd.iter())
+        {
+            templates.open_verified(artifact)
+                .map_err(|_| "Approved stack template artifact changed; restore its exact bytes before starting the VM".to_owned())?;
+        }
+        Ok(())
+    })
+        .await
+        .map_err(|_| "Could not read approved stack template".to_owned())??;
 
     // Set up before the disk copy so a network failure fails fast, without
     // paying for a multi-GB copy first. Any failure *after* this succeeds
@@ -1462,13 +1662,36 @@ async fn finish_run_start(
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
         let storage_env = crate::pipe_storage::environment_for_vm(&store_for_shells, record.id)
             .map_err(|error| error.message.to_owned())?;
-        let has_storage_secrets = !storage_env.is_empty();
+        let queue_env = crate::queues::environment_for_vm(&store_for_shells, record.id)?;
+        let has_storage_secrets = !storage_env.is_empty() || !queue_env.is_empty();
         guest_env.extend(storage_env);
+        guest_env.extend(queue_env);
         rootfs::specialize_guest(&rootfs, record.id, &guest_env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
+        let (private_env, private_files) =
+            crate::pipe_databases::bindings::guest_inputs(&store_for_shells, record.id)
+                .map_err(|_| "Could not load private database bindings".to_owned())?;
+        rootfs::apply_private_service_inputs(&rootfs, &guest_env, &private_env, &private_files)
+            .map_err(|_| "Could not install private database bindings".to_owned())?;
+        let volumes = store_for_shells
+            .vm_block_storages(record.id)
+            .map_err(|error| format!("volume attachment load failed: {error}"))?;
+        let data_drives = volumes
+            .iter()
+            .map(|volume| {
+                crate::block_storage::verify_disk(&state_for_blocking, volume)
+                    .map(|path| (volume.id, path))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        crate::block_storage::install_guest(&rootfs, &volumes)
+            .map_err(|error| format!("volume mount installation failed: {error}"))?;
+
         if has_storage_secrets {
             rootfs::protect_vm_credentials(&rootfs)
-                .map_err(|_| "Could not protect the service's S3 credential file".to_owned())?;
+                .map_err(|_| "Could not protect the service credential file".to_owned())?;
+        }
+        if record.purpose == crate::model::VmPurpose::Queue {
+            crate::queues::prepare_engine_disk(&store_for_shells, record.id, &rootfs)?;
         }
         crate::guest_ssh::install_on_guest(&rootfs, &paths)
             .map_err(|error| format!("guest SSH install failed: {error}"))?;
@@ -1494,16 +1717,20 @@ async fn finish_run_start(
             .initrd
             .as_ref()
             .map(|artifact| templates.artifact_path(artifact));
-        firecracker::write_config(
-            &runtime,
-            &rootfs,
+        let mut config = firecracker::FirecrackerConfig::for_vm(
             &record,
             &kernel,
             initrd.as_deref(),
             &runtime_boot_args,
+            &rootfs,
             Some(&network),
-        )
-        .map_err(|error| format!("config generation failed: {error}"))?;
+        );
+        for (id, path) in data_drives {
+            config.add_data_drive(id, &path);
+        }
+        config
+            .write(&runtime)
+            .map_err(|error| format!("config generation failed: {error}"))?;
         Ok((generation, runtime_id))
     })
     .await
@@ -1647,6 +1874,25 @@ fn network_timeout_result(console: &crate::console::ConsoleBroker) -> Result<(),
 /// line can straddle two separate console reads.
 fn find_network_sentinel(buffer: &[u8]) -> Option<Result<(), String>> {
     let text = String::from_utf8_lossy(buffer);
+    // Kernel printk can interrupt a userspace serial write in the middle of
+    // the token. Remove complete timestamped kernel messages before scanning.
+    let text: String = text
+        .split_inclusive('\n')
+        .map(|line| {
+            if line.ends_with('\n')
+                && let Some((prefix, kernel)) = line.split_once('[')
+                && let Some((timestamp, _)) = kernel.split_once(']')
+                && let Some((seconds, fraction)) = timestamp.trim().split_once('.')
+                && !seconds.is_empty()
+                && !fraction.is_empty()
+                && seconds.bytes().all(|b| b.is_ascii_digit())
+                && fraction.bytes().all(|b| b.is_ascii_digit())
+            {
+                return prefix;
+            }
+            line
+        })
+        .collect();
     for line in text.lines() {
         if line.contains("FIRECRAB_NETWORK_READY") {
             return Some(Ok(()));
@@ -2221,7 +2467,9 @@ fn sorted_responses(
         .filter(|vm| {
             matches!(
                 vm.purpose,
-                crate::model::VmPurpose::Instance | crate::model::VmPurpose::Pool
+                crate::model::VmPurpose::Instance
+                    | crate::model::VmPurpose::Pool
+                    | crate::model::VmPurpose::Queue
             )
         })
         .collect();
@@ -2261,6 +2509,7 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
             crate::model::VmPurpose::Instance => VmPurpose::Instance,
             crate::model::VmPurpose::Builder => VmPurpose::Builder,
             crate::model::VmPurpose::Pool => VmPurpose::Pool,
+            crate::model::VmPurpose::Queue => VmPurpose::Queue,
         },
         state: vm.state,
         reconciliation: state
@@ -2332,7 +2581,7 @@ const MAX_RAM_MIB: u32 = 32_768;
 /// RAM is restricted to powers of two (128, 256, 512, ... 32768 MiB),
 /// matching how cloud instance sizes are usually picked rather than an
 /// arbitrary MiB value.
-fn is_valid_ram_mib(ram: u32) -> bool {
+pub(crate) fn is_valid_ram_mib(ram: u32) -> bool {
     (MIN_RAM_MIB..=MAX_RAM_MIB).contains(&ram) && ram.is_power_of_two()
 }
 
@@ -2349,6 +2598,24 @@ pub(crate) fn validate_create_for(
     state: &AppState,
 ) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
+    let mounts = &req.block_storages;
+    let mut seen_volumes = std::collections::HashSet::new();
+    if mounts.len() > crate::block_storage::MAX_VOLUMES_PER_VM
+        || mounts.iter().any(|mount| {
+            !crate::block_storage::valid_mount_path(&mount.mount_path)
+                || !seen_volumes.insert(mount.volume_id)
+        })
+        || mounts.iter().enumerate().any(|(index, mount)| {
+            mounts[..index].iter().any(|other| {
+                crate::block_storage::paths_overlap(&mount.mount_path, &other.mount_path)
+            })
+        })
+    {
+        fields.insert(
+            "blockStorages".into(),
+            "at most 8 distinct volumes with safe, non-overlapping absolute mount paths".into(),
+        );
+    }
     if req.shell_ids.len() > crate::shells::MAX_SHELLS_PER_VM {
         fields.insert(
             "shellIds".to_owned(),
@@ -2549,6 +2816,11 @@ pub async fn assign_vm_storage(
     ValidatedJson(req): ValidatedJson<firecrab_api_types::AssignVmStorageRequest>,
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let _cluster_admission = if state.cluster.worker.is_some() {
+        Some(state.cluster.admission.lock().await)
+    } else {
+        None
+    };
     let target = req.storage_root.trim();
     if target.is_empty() {
         let mut fields = BTreeMap::new();
@@ -2598,6 +2870,19 @@ pub async fn assign_vm_storage(
             .cloned()
             .ok_or_else(|| AppError::not_found(request_id.0))?;
         return Ok(Json(vm_response(&state, &vm, lease.as_ref())));
+    }
+
+    if state.cluster.worker.is_some() {
+        let (cpu, ram) = {
+            let vms = state.vms.lock().unwrap_or_else(|e| e.into_inner());
+            let vm = vms
+                .get(&id)
+                .ok_or_else(|| AppError::not_found(request_id.0))?;
+            (vm.cpu, vm.ram)
+        };
+        crate::cluster::check_capacity(&state, id, cpu, ram, disk_gb, target)
+            .await
+            .map_err(|e| crate::cluster::handlers::error(e, request_id))?;
     }
 
     // Refuse if a disk already exists at the old location — moving multi-GB
@@ -2932,6 +3217,7 @@ mod tests {
         // The fixture template's rootfs is 6 bytes (`test_state_with_binary`),
         // so `min_disk_gb_for` rounds it up to 1 GiB.
         let base = CreateVmRequest {
+            block_storages: Vec::new(),
             security_group_id: None,
             name: "test-vm".to_owned(),
             template: "ubuntu-rootfs-26.04".to_owned(),
@@ -4495,6 +4781,7 @@ while True:
 
     fn create_request_on(name: &str, micro_network_id: Uuid) -> CreateVmRequest {
         CreateVmRequest {
+            block_storages: Vec::new(),
             security_group_id: None,
             name: name.to_owned(),
             template: "ubuntu-rootfs-26.04".to_owned(),
@@ -5435,6 +5722,21 @@ while True:
         assert_matches!(find_network_sentinel(b"FIRECRAB_NETWORK_FAILED dns unreachable\n"),
             Some(Err(reason)) if reason.contains("dns unreachable"));
         assert_eq!(find_network_sentinel(b"just a normal boot line\n"), None);
+    }
+
+    #[test]
+    fn network_sentinel_survives_kernel_output_inside_the_token() {
+        let interrupted = b"FIRECRAB_NETWORK[    0.783028] busybox (61) used greatest stack depth: 12992 bytes left\r\n_READY 172.28.250.2\r\n";
+        assert_eq!(find_network_sentinel(interrupted), Some(Ok(())));
+        assert_matches!(
+            find_network_sentinel(b"FIRECRAB_NET[    1.000000] boot log\nWORK_FAILED dns-unreachable\n"),
+            Some(Err(reason)) if reason.contains("dns-unreachable")
+        );
+        assert_eq!(
+            find_network_sentinel(b"FIRECRAB_NETWORK[    0.783028] incomplete"),
+            None
+        );
+        assert_eq!(find_network_sentinel(b"FIRECRAB_NETWORK\n_READY"), None);
     }
 
     #[test]

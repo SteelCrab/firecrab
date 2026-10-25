@@ -1,16 +1,58 @@
 use super::*;
 #[test]
 fn only_loopback_hosts_and_trusted_browser_origins_are_accepted() {
+    let home = tempfile::tempdir().unwrap();
     let mut headers = HeaderMap::new();
     headers.insert("host", HeaderValue::from_static("127.0.0.1:5524"));
-    assert!(allowed(&headers));
+    assert!(allowed(&headers, home.path()));
     headers.insert("origin", HeaderValue::from_static("http://localhost:5523"));
-    assert!(allowed(&headers));
+    assert!(allowed(&headers, home.path()));
     headers.insert("origin", HeaderValue::from_static("https://evil.example"));
-    assert!(!allowed(&headers));
+    assert!(!allowed(&headers, home.path()));
     headers.remove("origin");
     headers.insert("host", HeaderValue::from_static("evil.example:5524"));
-    assert!(!allowed(&headers));
+    assert!(!allowed(&headers, home.path()));
+}
+
+#[test]
+fn private_resource_control_accepts_only_its_own_host_and_browser_ports() {
+    let directory = tempfile::tempdir().unwrap();
+    let instance = super::super::dev::instance::test_instance(
+        directory.path(),
+        "0123456789abcdef",
+        45121,
+        45122,
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert("host", "127.0.0.1:45122".parse().unwrap());
+    for origin in ["http://localhost:45121", "http://127.0.0.1:45121"] {
+        headers.insert("origin", origin.parse().unwrap());
+        assert!(allowed(&headers, &instance.managed_home));
+    }
+    for origin in [
+        "http://localhost:8080",
+        "http://localhost:5523",
+        "http://localhost:8098",
+        "http://localhost:45123",
+    ] {
+        headers.insert("origin", origin.parse().unwrap());
+        assert!(!allowed(&headers, &instance.managed_home));
+    }
+    fs::create_dir_all(instance.managed_home.join("runtime")).unwrap();
+    fs::write(
+        instance.managed_home.join("runtime/dev-dashboard.json"),
+        json!({
+            "source": instance.source, "session": uuid::Uuid::new_v4(), "port": 8098,
+            "api_port": instance.api_port, "resource_port": instance.resource_port,
+            "isolated": true
+        })
+        .to_string(),
+    )
+    .unwrap();
+    headers.insert("origin", "http://localhost:8098".parse().unwrap());
+    assert!(allowed(&headers, &instance.managed_home));
+    headers.insert("host", "127.0.0.1:5524".parse().unwrap());
+    assert!(!allowed(&headers, &instance.managed_home));
 }
 use axum::body::{Body, to_bytes};
 use axum::http::Request;
@@ -131,6 +173,50 @@ async fn untrusted_hosts_origins_and_controller_ids_cannot_mutate_settings() {
             .0,
         StatusCode::CONFLICT
     );
+}
+
+#[tokio::test]
+async fn saved_dashboard_port_allows_only_its_loopback_browser_origins() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = router_for(dir.path().to_owned(), resource::tests::platform());
+    let path = "/api/service/resources";
+    let runtime = dir.path().join("runtime");
+    fs::create_dir_all(&runtime).unwrap();
+    let state = runtime.join("dev-dashboard.json");
+    fs::write(
+        &state,
+        json!({
+            "source": dir.path(), "session": uuid::Uuid::new_v4(),
+            "dependencies": "fixture", "port": 8098
+        })
+        .to_string(),
+    )
+    .unwrap();
+    for (origin, expected) in [
+        ("http://localhost:8098", StatusCode::NO_CONTENT),
+        ("http://127.0.0.1:8098", StatusCode::NO_CONTENT),
+        ("http://localhost:8099", StatusCode::FORBIDDEN),
+        ("http://evil.example:8098", StatusCode::FORBIDDEN),
+        ("https://localhost:8098", StatusCode::FORBIDDEN),
+    ] {
+        let mut req = request("OPTIONS", path, None, "");
+        req.headers_mut().insert("origin", origin.parse().unwrap());
+        let (status, headers, _) = response(app.clone(), req).await;
+        assert_eq!(status, expected, "{origin}");
+        if expected == StatusCode::NO_CONTENT {
+            assert_eq!(headers["access-control-allow-origin"], origin);
+        }
+    }
+    for invalid in [Some("invalid session"), None] {
+        match invalid {
+            Some(value) => fs::write(&state, value).unwrap(),
+            None => fs::remove_file(&state).unwrap(),
+        }
+        let mut req = request("OPTIONS", path, None, "");
+        req.headers_mut()
+            .insert("origin", "http://localhost:8098".parse().unwrap());
+        assert_eq!(response(app.clone(), req).await.0, StatusCode::FORBIDDEN);
+    }
 }
 
 #[tokio::test]

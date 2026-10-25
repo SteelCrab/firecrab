@@ -50,6 +50,7 @@ Commands: [CI local checks](ci.md#local-checks) and [installer/platform checks](
 - [ ] **A18 — Development deployment contract:** run shared guest build/deploy/rollback regression checks; record live `service dev` validation separately.
 - [ ] **A19 — QA runner contracts:** verify guest failure/cleanup, native Windows phase aggregation, and browser mode/API guards without a VM.
 - [ ] **A20 — microManager settings and Sleepy:** validate settings save/discard and terminal restoration in a PTY; separately run `scripts/test-micromanager-sleepy.ps1 -CliPath ./firecrab.exe` on native Windows/WSL2 for actual idle shutdown, automatic wake, workload inhibition, and manual stop. See [settings and Sleepy](../guides/micromanager-settings.md). macOS runtime validation requires a native Mac.
+- [ ] **A21 — Worktree development isolation:** run two [worktree environments](worktree-dev.md) with distinct dashboard ports on macOS, Windows, and Linux. Verify private API/data routing and that stop, clean, and restore preserve the other worktree and primary VM. Record the Linux Docker marker-runtime check separately from real source deployment and MicroVM checks.
 
 ## Platform and host
 
@@ -112,6 +113,30 @@ Requests and placement limits: [Storage](../guides/storage.md).
 - [ ] **S1 — Roots:** root list includes the default pool.
 - [ ] **S2 — Devices:** host device list loads.
 - [ ] **S3 — Pool lifecycle:** register an absolute host path (201), delete it (204), and confirm detail returns 404. On macOS/Windows, use a path inside the Debian management guest.
+
+## MicroBlockStorage volumes
+
+Use a dedicated Linux/KVM API and local storage. Run `scripts/ci-qa-volumes.py`
+inside the API host's network namespace. The script restarts only the specified
+API unit and injects faults only into its own volumes. The template needs SSH
+and the Firecrab OCI runtime; prepare its packages before an offline run.
+
+```sh
+python3 scripts/ci-qa-volumes.py --api http://127.0.0.1:55247 \
+  --api-unit firecrab-qa-api --template IMAGE_ALIAS \
+  --storage-root /var/tmp/qa/data --database /var/tmp/qa/data/firecrab.db \
+  --cli /path/to/firecrab --output /var/tmp/qa/results
+```
+
+- [ ] **BV1 — Persistence:** write in VM A, delete A, attach to B, and compare SHA-256.
+- [ ] **BV2 — Ownership:** reject attached-volume deletion, competing owners, and running/paused attachment changes.
+- [ ] **BV3 — Restarts:** retain mounts across stop/start, API restart, and API SIGKILL without replacing the live shim. Verify synced data after VMM SIGKILL, external unit stop, and interruption during VM start.
+- [ ] **BV4 — Missing disk:** fail VM start without creating a replacement file.
+- [ ] **BV5 — Mount failure:** reject a damaged filesystem in the guest before the application starts; restore the disk and verify its original data.
+- [ ] **BV6 — Recovery:** reconcile partial creation, completed formatting, and interrupted deletion after API restart.
+
+Results are written to `results.json`. The mount-failure console is retained as
+separate evidence. Back up real workloads using [Storage](../guides/storage.md#backup-and-retention).
 
 ## Shells
 

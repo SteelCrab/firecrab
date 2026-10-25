@@ -6,16 +6,22 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output};
 
-fn service(root: &Path, arguments: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_firecrab"))
+fn service_command(root: &Path, arguments: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_firecrab"));
+    command
         .arg("service")
         .args(arguments)
+        .current_dir(root)
+        .env_remove("FIRECRAB_DEV_INSTANCE_ID")
         .env("HOME", root)
         .env("FIRECRAB_INSTALL_DIR", root.join("bin"))
         .env("FIRECRAB_MICROMANAGER_HOME", root.join("micromanager"))
-        .env_remove("FIRECRAB_MICROMANAGER_HELPER")
-        .output()
-        .unwrap()
+        .env_remove("FIRECRAB_MICROMANAGER_HELPER");
+    command
+}
+
+fn service(root: &Path, arguments: &[&str]) -> Output {
+    service_command(root, arguments).output().unwrap()
 }
 
 fn completed_install(root: &Path) {
@@ -39,7 +45,7 @@ fn completed_install(root: &Path) {
     }
     fs::write(
         managed.join("runtime/provisioned"),
-        "schema=5\nkvm=usable\nfirecrab_api=active\nfirecrab_net_helper=active\nnested_firecracker=passed\n",
+        "schema=7\nkvm=usable\nfirecrab_api=active\nfirecrab_net_helper=active\nnested_firecracker=passed\n",
     ).unwrap();
     let mut image = [0_u8; 64];
     image[56..60].copy_from_slice(b"ARMd");
@@ -120,6 +126,133 @@ fn dev_stop_succeeds_after_the_management_vm_is_stopped() {
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(error.starts_with("dashboard:"), "{error}");
+}
+
+#[test]
+fn private_dev_failures_never_recommend_primary_service_commands() {
+    use sha2::{Digest, Sha256};
+    use std::net::TcpListener;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(directory.path()).unwrap();
+    let repository = root.join("repository");
+    fs::create_dir(&repository).unwrap();
+    let git = |arguments: &[&std::ffi::OsStr], cwd: &Path| {
+        let output = Command::new("git")
+            .args(["-c", "core.fsmonitor=false", "-c", "commit.gpgsign=false"])
+            .args(arguments)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init".as_ref()], &repository);
+    fs::write(repository.join("README.md"), "fixture\n").unwrap();
+    git(&["add".as_ref(), "README.md".as_ref()], &repository);
+    git(
+        &[
+            "-c".as_ref(),
+            "user.name=fixture".as_ref(),
+            "-c".as_ref(),
+            "user.email=fixture@example.invalid".as_ref(),
+            "commit".as_ref(),
+            "-m".as_ref(),
+            "fixture".as_ref(),
+        ],
+        &repository,
+    );
+    let checkout = root.join("linked checkout");
+    git(
+        &[
+            "worktree".as_ref(),
+            "add".as_ref(),
+            "-b".as_ref(),
+            "linked".as_ref(),
+            checkout.as_os_str(),
+        ],
+        &repository,
+    );
+    let git_dir = fs::canonicalize(git(
+        &["rev-parse".as_ref(), "--absolute-git-dir".as_ref()],
+        &checkout,
+    ))
+    .unwrap();
+    let id = format!(
+        "{:x}",
+        Sha256::digest(git_dir.as_os_str().as_encoded_bytes())
+    )[..16]
+        .to_owned();
+    let primary_home = root.join("micromanager");
+    let instance_root = root.join("dev-instances").join(&id);
+    let private_home = instance_root.join("micromanager");
+    let runtime = private_home.join("runtime");
+    fs::create_dir_all(&runtime).unwrap();
+    let listeners: Vec<_> = (0..3)
+        .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
+        .collect();
+    let ports: Vec<_> = listeners
+        .iter()
+        .map(|listener| listener.local_addr().unwrap().port())
+        .collect();
+    drop(listeners);
+    let instance = serde_json::json!({
+        "id": id, "source": checkout, "git_dir": git_dir,
+        "primary_home": primary_home, "managed_home": private_home,
+        "install_dir": instance_root.join("bin"), "api_port": ports[0], "resource_port": ports[1],
+    });
+    let ownership = private_home.join("dev-instance.json");
+    fs::write(&ownership, serde_json::to_vec(&instance).unwrap()).unwrap();
+    fs::write(
+        runtime.join("dev-dashboard.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "source": checkout, "session": uuid::Uuid::new_v4(), "port": ports[2],
+            "api_port": ports[0], "resource_port": ports[1], "isolated": true,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for action in ["start", "restart", "clean"] {
+        let output = service_command(&root, &["dev", action])
+            .current_dir(&checkout)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let message = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            message.contains("management VM is not running"),
+            "{message}"
+        );
+        assert!(message.contains(runtime.to_str().unwrap()), "{message}");
+        for primary_action in ["start", "repair", "reinstall", "install", "debug"] {
+            assert!(
+                !message.contains(&format!("firecrab service {primary_action}")),
+                "{message}"
+            );
+        }
+        assert!(!primary_home.exists());
+        assert!(!runtime.join("daemon.sh").exists());
+        assert!(!root.join("Library/LaunchAgents").exists());
+    }
+    fs::write(&ownership, b"invalid").unwrap();
+    let output = service_command(&root, &["dev", "start"])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let message = String::from_utf8(output.stderr).unwrap();
+    for primary_action in ["start", "repair", "reinstall", "install", "debug"] {
+        assert!(
+            !message.contains(&format!("firecrab service {primary_action}")),
+            "{message}"
+        );
+    }
+    assert!(!primary_home.exists());
+    assert!(!runtime.join("daemon.sh").exists());
 }
 
 #[test]

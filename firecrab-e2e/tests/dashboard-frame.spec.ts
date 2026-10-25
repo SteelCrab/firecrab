@@ -31,25 +31,26 @@ test.describe("dashboard frame", () => {
     await expect(page.locator("#vm-list-add")).toHaveCSS("background-color", "rgb(24, 24, 27)");
   });
 
-  test("leaves controls nested in a composite control to their own rules", async ({ page }) => {
-    await openDashboard(page, { hash: "#/vms/new" });
-    // The RAM stepper draws one border around its input and buttons.
-    await expect(page.locator(".ram-stepper .ram-stepper-value")).toHaveCSS("border-top-width", "0px");
+  test("RAM values remain editable in the create form", async ({ page }) => {
+    await openDashboard(page, { hash: "#/vms/new", routes: { "/api/images": [], "/api/micro-networks": [], "/api/storage": [], "/api/shells": [] } });
+    const memory = page.getByLabel("Memory (MiB)", { exact: true });
+    await memory.selectOption("4096");
+    await expect(memory).toHaveValue("4096");
   });
 
   test("groups the navigation", async ({ page }) => {
     await openDashboard(page, { vms: VMS });
-    for (const group of ["Compute", "Network", "Data", "System"]) {
+    for (const group of ["Compute", "Network", "Data", "System", "AI"]) {
       await expect(nav(page).getByText(group, { exact: true })).toBeVisible();
     }
-    for (const name of ["MicroVM", "MicroService", "Networks", "Pipe", "Secrets", "Storage", "Images", "Kernels", "Shells", "Host"]) {
-      await expect(nav(page).getByRole("button", { name, exact: true })).toBeVisible();
+    for (const name of ["MicroVM", "Pools", "MicroService", "Schedules", "Networks", "Security groups", "Pipe", "Secrets", "Storage", "Images", "Kernels", "Shells", "Host"]) {
+      await expect(nav(page).getByRole("link", { name, exact: true })).toBeVisible();
     }
   });
 
   test("shows the MicroVM count and error badge", async ({ page }) => {
     await openDashboard(page, { vms: VMS });
-    const item = nav(page).getByRole("button", { name: "MicroVM", exact: true });
+    const item = nav(page).getByRole("link", { name: "MicroVM", exact: true });
     await expect(item.locator(".sidebar-count")).toHaveText("3");
     await expect(item.locator(".sidebar-alert")).toHaveText("1");
   });
@@ -74,8 +75,8 @@ test.describe("dashboard frame", () => {
     const header = page.locator(".screen-header");
     const banner = page.getByRole("alert").filter({ hasText: "VM list unavailable" });
     await expect(banner).toBeVisible();
-    await expect(page.locator(".screen-header + [role=alert]")).toHaveCount(1);
-    await expect(header).toContainText("API unavailable — retrying every 15s", { timeout: 20_000 });
+    await expect(page.locator(".screen-header + #messages [role=alert]")).toHaveCount(1);
+    await expect(header).toContainText("API unavailable — retrying every 3s", { timeout: 20_000 });
   });
 
   test("keeps the language select", async ({ page }) => {
@@ -90,7 +91,7 @@ test.describe("dashboard frame", () => {
     await expect(nav(page)).toBeHidden();
     await page.getByRole("button", { name: "Open menu", exact: true }).click();
     await expect(nav(page)).toBeVisible();
-    await nav(page).getByRole("button", { name: "Networks", exact: true }).click();
+    await nav(page).getByRole("link", { name: "Networks", exact: true }).click();
     await expect(page).toHaveURL(/#\/networks$/);
     await expect(nav(page)).toBeHidden();
   });

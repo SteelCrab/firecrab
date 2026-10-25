@@ -863,7 +863,7 @@ pub(crate) fn boot_script() -> String {
 }
 
 /// Native init has already mounted the virtual filesystems and owns metrics.
-fn boot_script_for(fallback: bool) -> String {
+pub(crate) fn boot_script_for(fallback: bool) -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
 # Firecrab guest runtime for an imported OCI image (public-docs/guides/oci.md).
@@ -887,6 +887,13 @@ fi
 [ -e /dev/stderr ] || $BB ln -sf /proc/self/fd/2 /dev/stderr
 
 # specialize_guest writes /etc/hostname; systemd would apply it, busybox init does not.
+if [ -s /etc/firecrab/volumes ]; then
+  if ! $BB sh /etc/firecrab/mount-volumes; then
+    echo "FIRECRAB_NETWORK_FAILED volume-mount-failed" >/dev/console
+    exit 1
+  fi
+fi
+
 if [ -s /etc/hostname ]; then
   $BB hostname -F /etc/hostname 2>/dev/null
   $BB cat /etc/hostname > /proc/sys/kernel/hostname 2>/dev/null
@@ -947,10 +954,35 @@ fi
 
 echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
 
-# Package configuration can take minutes on a small guest. Let init start
-# the console while this worker installs packages, then starts services.
+{prepare_runtime}
+
+# The image carries its application dependencies. Start it before optional
+# operational tools, which may be unavailable on an isolated network.
+$BB mkdir -p /run/firecrab
+for service in {services}/*; do
+  [ -x "$service" ] || continue
+  name=${{service##*/}}
+  [ "$name" = app ] || continue
+  $BB setsid "$service" >/dev/console 2>&1 &
+  echo $! > /run/firecrab/$name.pid
+  [ "$name" = app ] && echo $! > /run/firecrab-app.pid
+done
+
+# Package configuration can take minutes on a small guest. Keep it separate
+# from application startup and the interactive console.
 (
 {base_packages}
+
+{prepare_runtime}
+
+# SSH and other operational services need the packages installed above.
+for service in {services}/*; do
+  [ -x "$service" ] || continue
+  name=${{service##*/}}
+  [ "$name" != app ] || continue
+  $BB setsid "$service" >/dev/console 2>&1 &
+  echo $! > /run/firecrab/$name.pid
+done
 
 # Fallback only: glibc guests already received a pinned /usr/bin/fastfetch at
 # import. Alpine and other musl trees still try the guest package manager.
@@ -965,17 +997,6 @@ if [ ! -x /usr/bin/fastfetch ]; then
   fi
 fi
 
-{prepare_runtime}
-
-# A later import stage translates the image entrypoint into a program here.
-$BB mkdir -p /run/firecrab
-for service in {services}/*; do
-  [ -x "$service" ] || continue
-  name=${{service##*/}}
-  $BB setsid "$service" >/dev/console 2>&1 &
-  echo $! > /run/firecrab/$name.pid
-  [ "$name" = app ] && echo $! > /run/firecrab-app.pid
-done
 ) </dev/null >/dev/console 2>&1 &
 exit 0
 "#,

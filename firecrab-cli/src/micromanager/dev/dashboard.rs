@@ -11,12 +11,11 @@ use std::time::{Duration, Instant};
 use fs2::FileExt;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::micromanager::report;
 
-/// Fixed browser address; Vite must fail rather than silently select another port.
-const URL: &str = "http://127.0.0.1:8080";
 /// Session-protected ownership and shutdown endpoint installed before Vite listens.
 const CONTROL: &str = "/__firecrab_dev/";
 /// The server entry point is embedded so source snapshots need no helper script.
@@ -43,6 +42,51 @@ struct Session {
     source: PathBuf,
     /// Unpredictable credential for ownership checks and graceful shutdown.
     session: Uuid,
+    /// Installation identity; older dashboard sessions have no dependency stamp.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    dependencies: String,
+    /// Older sessions used the fixed dashboard port and did not record it.
+    #[serde(default = "default_port")]
+    port: u16,
+    #[serde(default = "default_api_port")]
+    api_port: u16,
+    #[serde(default = "default_resource_port")]
+    resource_port: u16,
+    #[serde(default)]
+    isolated: bool,
+}
+
+fn default_port() -> u16 {
+    8080
+}
+
+fn default_api_port() -> u16 {
+    5523
+}
+
+fn default_resource_port() -> u16 {
+    5524
+}
+
+impl Session {
+    fn url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+}
+
+/// Resume the selected port for control commands and trust only its browser origin.
+pub fn port(home: &Path) -> Result<u16, Error> {
+    Ok(read_session(home)?.map_or_else(default_port, |state| state.port))
+}
+
+/// Track both manifests so branch changes cannot reuse stale installed packages.
+fn dependency_revision(frontend: &Path) -> Result<String, Error> {
+    let mut revision = Sha256::new();
+    for name in ["package.json", "package-lock.json"] {
+        revision.update(fs::read(frontend.join(name))?);
+        revision.update([0]);
+    }
+    Ok(format!("{:x}", revision.finalize()))
 }
 
 /// Prepare Node and locked frontend dependencies before changing the guest deployment.
@@ -64,7 +108,12 @@ pub fn prepare(source: &Path) -> Result<PathBuf, Error> {
     {
         return Err(Error::Failed("Node.js is required for the development dashboard; install Node.js and npm, then retry service dev".into()));
     }
-    if !frontend.join("node_modules/vite/package.json").is_file() {
+    let revision = dependency_revision(&frontend)?;
+    let stamp = frontend.join("node_modules/.firecrab-dev-dependencies");
+    let installed = fs::read_to_string(&stamp).unwrap_or_default();
+    if !frontend.join("node_modules/vite/package.json").is_file()
+        || installed.lines().next() != Some(revision.as_str())
+    {
         report!("[BUILD] dashboard dependencies: npm ci");
         #[cfg(windows)]
         let mut npm = {
@@ -76,11 +125,25 @@ pub fn prepare(source: &Path) -> Result<PathBuf, Error> {
         let mut npm = Command::new("npm");
         let status = npm
             .args(["ci", "--no-audit", "--no-fund"])
-            .current_dir(frontend)
+            .current_dir(&frontend)
             .status()?;
         if !status.success() {
             return Err(Error::Failed(
                 "dashboard dependency installation failed; see npm output above".into(),
+            ));
+        }
+        // Even reinstalling the same lock must invalidate Vite's module cache.
+        fs::write(stamp, format!("{revision}\n{}", Uuid::new_v4()))?;
+    }
+    if frontend.join("Cargo.toml").is_file() {
+        report!("[BUILD] dashboard: Rust/WASM");
+        let status = Command::new("node")
+            .arg(frontend.join("scripts/wasm.mjs"))
+            .current_dir(&frontend)
+            .status()?;
+        if !status.success() {
+            return Err(Error::Failed(
+                "dashboard WASM build failed; see build output above".into(),
             ));
         }
     }
@@ -105,11 +168,29 @@ fn client() -> Result<Client, Error> {
 
 /// Load remembered checkout information; a stopped server deliberately retains it.
 fn read_session(home: &Path) -> Result<Option<Session>, Error> {
-    match fs::read(home.join("runtime/dev-dashboard.json")) {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
+    let instance = super::instance::load(home)?;
+    let state: Session = match fs::read(home.join("runtime/dev-dashboard.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let (api_port, resource_port) = instance
+        .as_ref()
+        .map_or((default_api_port(), default_resource_port()), |instance| {
+            (instance.api_port, instance.resource_port)
+        });
+    if state.api_port != api_port
+        || state.resource_port != resource_port
+        || state.isolated != instance.is_some()
+        || instance
+            .as_ref()
+            .is_some_and(|instance| state.source != instance.source)
+    {
+        return Err(Error::Failed(
+            "dashboard ownership does not match the selected development instance".into(),
+        ));
     }
+    Ok(Some(state))
 }
 
 /// Check both session and source so another server cannot be mistaken for our dashboard.
@@ -159,6 +240,24 @@ fn listening(url: &str) -> bool {
     TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok()
 }
 
+fn check_listening_port(client: &Client, state: Option<&Session>, port: u16) -> Result<(), Error> {
+    let url = format!("http://127.0.0.1:{port}");
+    if listening(&url)
+        && !state.is_some_and(|state| state.port == port && running(client, state, &url))
+    {
+        return Err(Error::Failed(format!(
+            "dashboard port {port} is already in use by another server; choose --port PORT or stop that server and retry service dev"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate ownership and reject foreign listeners without changing dashboard state.
+pub fn check_port(home: &Path, port: u16) -> Result<(), Error> {
+    let state = read_session(home)?;
+    check_listening_port(&client()?, state.as_ref(), port)
+}
+
 /// Stop only a server that proves ownership; stale state never authorizes killing a PID.
 fn stop_session(client: &Client, state: &Session, url: &str) -> Result<(), Error> {
     if !running(client, state, url) {
@@ -181,30 +280,21 @@ fn stop_session(client: &Client, state: &Session, url: &str) -> Result<(), Error
 
 /// Shut down the owned dashboard and preserve its checkout for service dev start.
 pub fn stop(home: &Path) -> Result<(), Error> {
-    stop_at(home, URL)
-}
-
-/// Stop with the same endpoint used at startup; tests use isolated loopback ports.
-fn stop_at(home: &Path, url: &str) -> Result<(), Error> {
     if read_session(home)?.is_none() {
         return Ok(());
     }
     let _lock = lock(home)?;
     if let Some(state) = read_session(home)? {
-        stop_session(&client()?, &state, url)?;
+        stop_session(&client()?, &state, &state.url())?;
     }
     Ok(())
 }
 
 /// Stop the owned server and forget its checkout, generated script, and log.
 pub fn clean(home: &Path) -> Result<(), Error> {
-    clean_at(home, URL)
-}
-
-fn clean_at(home: &Path, url: &str) -> Result<(), Error> {
     let _lock = lock(home)?;
     if let Some(state) = read_session(home)? {
-        stop_session(&client()?, &state, url)?;
+        stop_session(&client()?, &state, &state.url())?;
     }
     for name in [
         "dev-dashboard.json",
@@ -222,25 +312,42 @@ fn clean_at(home: &Path, url: &str) -> Result<(), Error> {
 }
 
 /// Launch one detached Node process, or reuse the matching healthy dashboard.
-pub fn start(source: &Path, home: &Path) -> Result<(), Error> {
-    start_at(source, home, 8080)
-}
-
-/// Execute the complete startup transaction on one strict loopback port.
-fn start_at(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
+pub fn start(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
+    let instance = super::instance::load(home)?;
+    if instance
+        .as_ref()
+        .is_some_and(|instance| instance.source != source)
+    {
+        return Err(Error::Failed(
+            "dashboard source does not match the selected development instance".into(),
+        ));
+    }
     let url = format!("http://127.0.0.1:{port}");
     let _lock = lock(home)?;
     let client = client()?;
-    if let Some(previous) = read_session(home)? {
-        if previous.source == source && running(&client, &previous, &url) {
+    let dependencies = fs::read_to_string(
+        source.join("firecrab-frontend/node_modules/.firecrab-dev-dependencies"),
+    )?;
+    let (api_port, resource_port) = instance
+        .as_ref()
+        .map_or((default_api_port(), default_resource_port()), |instance| {
+            (instance.api_port, instance.resource_port)
+        });
+    let isolated = instance.is_some();
+    let previous = read_session(home)?;
+    check_listening_port(&client, previous.as_ref(), port)?;
+    if let Some(previous) = previous {
+        if previous.source == source
+            && previous.port == port
+            && previous.dependencies == dependencies
+            && previous.api_port == api_port
+            && previous.resource_port == resource_port
+            && previous.isolated == isolated
+            && running(&client, &previous, &url)
+        {
             return report_ready(&client, home, &url);
         }
-        stop_session(&client, &previous, &url)?;
-    }
-    if listening(&url) {
-        return Err(Error::Failed(format!(
-            "dashboard port {port} is already in use by another server; stop that server and retry service dev"
-        )));
+        stop_session(&client, &previous, &previous.url())?;
     }
     let runtime = home.join("runtime");
     let script = runtime.join("dev-dashboard.mjs");
@@ -249,14 +356,32 @@ fn start_at(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
     let state = Session {
         source: source.to_owned(),
         session: Uuid::new_v4(),
+        dependencies,
+        port,
+        api_port,
+        resource_port,
+        isolated,
     };
     let log = fs::File::create(&log_path)?;
     let mut command = Command::new("node");
     command
-        .arg(script)
+        // Resolve the entry inside runtime instead of passing a Windows verbatim
+        // path to Node's ESM CLI. Ownership metadata remains canonical.
+        .current_dir(&runtime)
+        .arg("dev-dashboard.mjs")
         .arg(source)
         .arg(port.to_string())
         .env("FIRECRAB_DEV_SESSION", state.session.to_string())
+        .env("FIRECRAB_DEV_DEPENDENCIES", &state.dependencies)
+        .env("FIRECRAB_DEV_API_PORT", state.api_port.to_string())
+        .env(
+            "FIRECRAB_DEV_RESOURCE_PORT",
+            state.resource_port.to_string(),
+        )
+        .env(
+            "FIRECRAB_DEV_ISOLATED",
+            if state.isolated { "1" } else { "0" },
+        )
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
@@ -273,7 +398,7 @@ fn start_at(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
     let mut child = command.spawn()?;
     let started = Instant::now();
     while !running(&client, &state, &url) {
-        if child.try_wait()?.is_some() || started.elapsed() > Duration::from_secs(30) {
+        if child.try_wait()?.is_some() || started.elapsed() > Duration::from_secs(180) {
             let _ = child.kill();
             let _ = child.wait();
             return Err(Error::Failed(format!(
@@ -294,7 +419,7 @@ fn start_at(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
     report_ready(&client, home, &url)
 }
 
-/// Report success only after both the HTML and API proxy answer through port 8080.
+/// Report success only after both the HTML and API proxy answer through the selected port.
 fn report_ready(client: &Client, home: &Path, url: &str) -> Result<(), Error> {
     for path in ["/", "/api/host"] {
         client

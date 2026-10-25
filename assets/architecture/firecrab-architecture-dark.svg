@@ -29,7 +29,7 @@
         <!-- ============ layer 1 · external ============ -->
         <rect fill="#2F2620" stroke="#3F342C" stroke-width="1.5" x="200" y="40" width="180" height="72" rx="2"/>
         <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="600" text-anchor="middle" x="290" y="74">firecrab-frontend</text>
-        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" x="290" y="94">React dashboard</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" x="290" y="94">Rust/WASM dashboard</text>
 
         <rect fill="#2F2620" stroke="#3F342C" stroke-width="1.5" x="400" y="40" width="180" height="72" rx="2"/>
         <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="600" text-anchor="middle" x="490" y="74">firecrab-cli</text>

@@ -1,12 +1,17 @@
+mod ai_sandbox;
 mod artifacts;
+mod block_storage;
 mod bootstrap;
+mod cluster;
 mod console;
 mod console_replay;
+mod console_resize;
 mod console_session;
 mod error;
 mod extract;
 mod firecracker;
 mod guest_agent;
+mod guest_console;
 mod guest_ssh;
 mod handlers;
 mod host_platform;
@@ -27,6 +32,7 @@ mod pipe_databases;
 mod pipe_storage;
 mod pool;
 mod process_metrics;
+mod queues;
 mod reconcile;
 mod resource_limits;
 mod rootfs;
@@ -35,9 +41,11 @@ mod secrets;
 mod server;
 mod service_runtime;
 mod shells;
+mod stack_source;
 mod state;
 mod storage;
 mod templates;
+mod tls;
 mod vm_execution;
 mod vm_shim;
 
@@ -54,8 +62,12 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 enum StartupError {
+    #[error("failed to recover data volumes: {0}")]
+    VolumeRecovery(String),
     #[error("failed to load HTTP configuration")]
     Config(#[source] ConfigError),
+    #[error("failed to configure API TLS")]
+    Tls(#[source] firecrab_pki::Error),
     #[error("failed to initialize template registry")]
     Template(#[source] TemplateError),
     #[error("failed to load persisted VM state")]
@@ -120,15 +132,29 @@ fn init_tracing() {
 async fn run() -> Result<(), StartupError> {
     init_tracing();
     let config = HttpConfig::load().map_err(StartupError::Config)?;
+    let paths = firecrab_pki::TlsPaths::from_env().map_err(StartupError::Tls)?;
+    let transport =
+        tls::configuration(config.bind_addr, paths.clone()).map_err(StartupError::Tls)?;
+    let cluster = cluster::Runtime::from_env(paths).map_err(StartupError::Tls)?;
     let templates = TemplateRegistry::load_default().map_err(StartupError::Template)?;
     let mut state = AppState::new(templates)
         .await
         .map_err(StartupError::Persistence)?;
+    state.cluster = std::sync::Arc::new(cluster);
     // Reject a second owner before recovering any host or scheduled work.
     let scheduler_ownership = state
         .store
         .scheduler_lock()
         .map_err(StartupError::Persistence)?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || {
+        store.interrupt_sandbox_tasks()?;
+        store.interrupt_stack_applies()?;
+        store.interrupt_stack_checks(stack_source::now())
+    })
+    .await
+    .expect("Controller task recovery panicked")
+    .map_err(StartupError::Persistence)?;
     // Bridges, nftables rules and dnsmasq's config are all host state a
     // reboot wipes, so they are re-applied here rather than assumed. Doing it
     // at startup (not only on VM start) is what brings back a MicroNetwork
@@ -138,8 +164,15 @@ async fn run() -> Result<(), StartupError> {
     // networking. Best-effort: if the net-helper isn't up yet, the host side
     // lags until the next per-VM start, which re-applies the same thing (see
     // setup_vm_network) — not worth failing API startup over.
+    let volume_state = state.clone();
+    tokio::task::spawn_blocking(move || block_storage::recover(&volume_state))
+        .await
+        .map_err(|error| StartupError::VolumeRecovery(error.to_string()))?
+        .map_err(StartupError::VolumeRecovery)?;
     reconcile::reconcile(&state).await;
     service_runtime::recover(&state).await;
+    queues::recover(&state).await;
+    service_runtime::deploy::rotation::start(state.clone());
     // Fetch the shared bootstrap builder source now, in the background, so
     // the request that needs it doesn't have to — see spawn_warmup.
     microboot::spawn_warmup(state.clone());
@@ -155,12 +188,18 @@ async fn run() -> Result<(), StartupError> {
 
     let local_address = listener.local_addr().map_err(StartupError::LocalAddress)?;
     state.api_port = local_address.port();
+    pipe_databases::events::spawn(state.clone());
+    pipe_databases::managed_rabbitmq::recover(state.clone());
+    pipe_databases::maintenance::spawn(state.clone());
+    cluster::spawn(state.clone());
     scheduler::spawn(state.clone(), scheduler_ownership)
         .await
         .map_err(StartupError::Persistence)?;
+    let _git_sources = stack_source::spawn_reconciler(state.clone());
     let app = build_router(state, &config);
-    tracing::info!(address = %local_address, "listening on http://{local_address}");
-    axum::serve(listener, app)
+    let scheme = if transport.is_some() { "https" } else { "http" };
+    tracing::info!(address = %local_address, %scheme, "listening on {scheme}://{local_address}");
+    tls::serve(listener, app, transport)
         .await
         .map_err(StartupError::Serve)?;
     Ok(())

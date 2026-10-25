@@ -18,15 +18,15 @@ use std::time::Duration;
 use firecrab_api_types::{PortForward, PortProtocol, VmState};
 use serde::Deserialize;
 
+use crate::micromanager::dev::instance;
 use crate::micromanager::runtime::Ssh;
 
-const VMS_URL: &str = "http://127.0.0.1:5523/api/vms";
-/// The API tunnel already owns this loopback port.
-const API_PORT: u16 = 5523;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("could not read development instance: {0}")]
+    Instance(#[from] std::io::Error),
     #[error(transparent)]
     Manifest(#[from] crate::micromanager::manifest::Error),
     #[error("management SSH key must be inside its runtime directory")]
@@ -58,6 +58,10 @@ pub fn run(manager: Manager) -> Result<i32, Error> {
         .and_then(|path| path.parent())
         .ok_or(Error::CredentialsPath)?;
     let settings = super::ssh::load(home)?;
+    let api_port = instance::api_port(home)?;
+    let resource_port = instance::resource_port(home)?;
+    let vms_url = format!("{}/api/vms", instance::api_url(home)?.trim_end_matches('/'));
+    let reserved = BTreeSet::from([api_port, resource_port]);
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
@@ -65,7 +69,7 @@ pub fn run(manager: Manager) -> Result<i32, Error> {
     let mut relays = Relays::new(PathBuf::from("/usr/bin/ssh"), manager, settings);
     let mut last_error = None;
     loop {
-        match wanted_ports(&client) {
+        match wanted_ports(&client, &vms_url, &reserved) {
             Ok(wanted) => {
                 last_error = None;
                 relays.sync(&wanted);
@@ -74,7 +78,7 @@ pub fn run(manager: Manager) -> Result<i32, Error> {
             Err(error) => {
                 let error = error.to_string();
                 if last_error.as_ref() != Some(&error) {
-                    eprintln!("port-forward: GET {VMS_URL}: {error}");
+                    eprintln!("port-forward: GET {vms_url}: {error}");
                 }
                 last_error = Some(error);
             }
@@ -83,17 +87,23 @@ pub fn run(manager: Manager) -> Result<i32, Error> {
     }
 }
 
-fn wanted_ports(client: &reqwest::blocking::Client) -> Result<BTreeSet<u16>, reqwest::Error> {
-    let vms: Vec<Vm> = client.get(VMS_URL).send()?.error_for_status()?.json()?;
-    Ok(loopback_ports(&vms))
+fn wanted_ports(
+    client: &reqwest::blocking::Client,
+    vms_url: &str,
+    reserved: &BTreeSet<u16>,
+) -> Result<BTreeSet<u16>, reqwest::Error> {
+    let vms: Vec<Vm> = client.get(vms_url).send()?.error_for_status()?.json()?;
+    Ok(loopback_ports(&vms, reserved))
 }
 
 /// The DNAT rules exist only while a VM runs, and `ssh -L` carries TCP only.
-fn loopback_ports(vms: &[Vm]) -> BTreeSet<u16> {
+fn loopback_ports(vms: &[Vm], reserved: &BTreeSet<u16>) -> BTreeSet<u16> {
     vms.iter()
         .filter(|vm| vm.state == VmState::Running)
         .flat_map(|vm| &vm.port_forwards)
-        .filter(|forward| forward.protocol == PortProtocol::Tcp && forward.host_port != API_PORT)
+        .filter(|forward| {
+            forward.protocol == PortProtocol::Tcp && !reserved.contains(&forward.host_port)
+        })
         .map(|forward| forward.host_port)
         .collect()
 }
@@ -249,7 +259,76 @@ mod tests {
             ]"#,
         )
         .unwrap();
-        assert_eq!(loopback_ports(&vms), BTreeSet::from([2222, 8080]));
+        assert_eq!(
+            loopback_ports(&vms, &BTreeSet::from([5523, 5524])),
+            BTreeSet::from([2222, 8080])
+        );
+    }
+
+    #[test]
+    fn selected_api_and_resource_ports_are_reserved_for_each_instance() {
+        let vms: Vec<Vm> = serde_json::from_str(
+            r#"[{"state":"running","portForwards":[
+                {"hostPort":60230,"guestPort":80},
+                {"hostPort":60231,"guestPort":80},
+                {"hostPort":5523,"guestPort":80},
+                {"hostPort":5524,"guestPort":80},
+                {"hostPort":8080,"guestPort":80}
+            ]}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            loopback_ports(&vms, &BTreeSet::from([60230, 60231])),
+            BTreeSet::from([5523, 5524, 8080])
+        );
+        assert_eq!(
+            loopback_ports(&vms, &BTreeSet::from([5523, 5524])),
+            BTreeSet::from([8080, 60230, 60231])
+        );
+    }
+
+    #[test]
+    fn port_inventory_uses_the_selected_api_endpoint() {
+        use std::io::{Read, Write};
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let url = format!("http://{}/api/vms", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let server = thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(start.elapsed() < Duration::from_secs(5));
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("temporary API listener failed: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") && request.len() < 8192 {
+                let mut chunk = [0; 512];
+                let read = stream.read(&mut chunk).unwrap();
+                assert_ne!(read, 0, "request ended before its HTTP headers");
+                request.extend_from_slice(&chunk[..read]);
+            }
+            let body = r#"[{"state":"running","portForwards":[{"hostPort":60230,"guestPort":80},{"hostPort":60231,"guestPort":80},{"hostPort":8080,"guestPort":80}]}]"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            String::from_utf8_lossy(&request).into_owned()
+        });
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap();
+        let result = wanted_ports(&client, &url, &BTreeSet::from([60230, 60231]));
+        let request = server.join().unwrap();
+        assert!(request.starts_with("GET /api/vms HTTP/1.1\r\n"));
+        assert_eq!(result.unwrap(), BTreeSet::from([8080]));
     }
 
     #[test]

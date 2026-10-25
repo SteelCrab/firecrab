@@ -57,6 +57,9 @@ pub struct MicroServiceSpec {
     /// PipeStorage connection for the application's AWS SDK. Credentials stay on the host.
     #[serde(default)]
     pub storage_connection_id: Option<Uuid>,
+    /// Binding alias -> Queue reference and least-privilege application access.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub queues: BTreeMap<String, crate::QueueBinding>,
     /// Policy copied to every replica and captured in deployment snapshots.
     #[serde(default)]
     pub security_group_id: Option<Uuid>,
@@ -90,6 +93,12 @@ pub struct DeployMicroServiceRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServicePhase {
+    /// Applying a verified Nginx upstream generation.
+    SwitchingTraffic,
+    /// Keeping retired VMs alive until old Nginx workers finish.
+    Draining,
+    /// Restoring the previous healthy release after a failed update.
+    RollingBack,
     /// Accepted and waiting for the deployment worker.
     Queued,
     /// Resolving the OCI digest and preparing the VM image.
@@ -118,6 +127,9 @@ impl ServicePhase {
         matches!(
             self,
             Self::Queued
+                | Self::SwitchingTraffic
+                | Self::Draining
+                | Self::RollingBack
                 | Self::Importing
                 | Self::Starting
                 | Self::CheckingHealth
@@ -147,6 +159,15 @@ pub struct ServiceInstance {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MicroServiceDeployment {
+    /// Unix time when the attempt was accepted; zero for older records.
+    #[serde(default)]
+    pub started_at: i64,
+    /// Unix time when the attempt reached a terminal outcome.
+    #[serde(default)]
+    pub finished_at: Option<i64>,
+    /// Durable update/recovery journal. Older initial deployments omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<Box<ServiceUpdate>>,
     /// Identifier for this deployment attempt.
     pub id: Uuid,
     /// Service whose configuration was deployed.
@@ -173,6 +194,105 @@ pub struct MicroServiceDeployment {
     pub internal_route_owned: bool,
     /// Failure description, if deployment or cleanup failed.
     pub error: Option<String>,
+}
+
+/// How Deploy replaces the current healthy instances.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeployStrategy {
+    /// Replace one old instance at a time with at most one additional VM.
+    #[default]
+    Rolling,
+    /// Prepare all replacements before switching traffic.
+    BlueGreen,
+}
+
+/// Update a running Nginx-backed HTTP service without stopping it first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct UpdateServiceRequest {
+    /// Reject a stale editor/plan when another release has become active.
+    #[serde(default)]
+    pub expected_release_id: Option<Uuid>,
+    /// Client-generated idempotency identity; reuse it after a lost response.
+    pub operation_id: Uuid,
+    /// Complete configuration of the desired release.
+    pub spec: MicroServiceSpec,
+    /// Rolling by default; blue-green needs capacity for every new replica.
+    #[serde(default)]
+    pub strategy: DeployStrategy,
+}
+
+/// Redeploy one successful, digest-pinned release through the same executor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RollbackServiceRequest {
+    /// Active release reviewed by the caller.
+    #[serde(default)]
+    pub expected_release_id: Option<Uuid>,
+    /// Client-generated idempotency identity.
+    pub operation_id: Uuid,
+    /// A successful release belonging to this exact service.
+    pub release_id: Uuid,
+    /// Replacement strategy.
+    #[serde(default)]
+    pub strategy: DeployStrategy,
+}
+
+/// Resume only the exact interrupted operation that the caller inspected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RetryServiceRequest {
+    /// Current interrupted Deploy operation.
+    pub operation_id: Uuid,
+}
+
+/// Public journal holds references and VM ownership, never resolved credentials.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceUpdate {
+    /// Original failure is retained independently of later recovery errors.
+    #[serde(default)]
+    pub failure: Option<String>,
+    /// Explicit Stop withdraws traffic and cleans both generations.
+    #[serde(default)]
+    pub cancelled: bool,
+    /// Previous release, without a recursively nested update journal.
+    pub previous: Box<MicroServiceDeployment>,
+    /// Original accepted configuration used to detect conflicting retries.
+    pub requested_spec: MicroServiceSpec,
+    /// Requested replacement strategy.
+    pub strategy: DeployStrategy,
+    /// Source release for an explicit rollback.
+    pub rollback_of: Option<Uuid>,
+    /// Recovery must restore the previous release before retiring candidates.
+    pub restoring: bool,
+    /// New deployment owns the current route after its first transition.
+    pub routed_new: bool,
+    /// Exact transition saved before calling the privileged helper.
+    pub transition: Option<ServiceRouteTransition>,
+    /// VM identities waiting for verified drain and cleanup.
+    pub retiring: Vec<Uuid>,
+    /// Terminal attempts retain metadata but no extra live resources.
+    pub completed: bool,
+}
+
+/// A compare-and-swap route change that can be retried after a lost response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceRouteTransition {
+    /// Expected deployment owner before the change.
+    pub expected_deployment_id: Uuid,
+    /// Exact previously observed upstreams.
+    pub expected_upstreams: Vec<String>,
+    /// New deployment owner.
+    pub next_deployment_id: Uuid,
+    /// Exact healthy upstreams to publish.
+    pub next_upstreams: Vec<String>,
+    /// Worker boot/PID/start identities observed before reload.
+    pub workers: Vec<String>,
+    /// Helper confirmed the effective Nginx generation.
+    pub confirmed: bool,
 }
 
 /// Default application health endpoint.

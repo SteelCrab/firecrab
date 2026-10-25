@@ -21,14 +21,20 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | --- | --- |
 | Create VMs, use the console, and connect with SSH | [Dashboard](guides/dashboard.md) |
 | Configure and manage an app | [MicroService](guides/microservices.md) |
+| Register hosts and place VMs through one controller | [Multi-host placement](guides/multihost.md) |
+| Update or roll back a running app through Nginx | [Deploy](guides/deploy.md) |
+| Connect apps with internal RabbitMQ message queues | [Queue](guides/queues.md) |
 | Validate a declarative YAML stack offline | [Stack validation](guides/stacks.md) |
 | Register stack ownership and preview configuration changes | [Stack planning](guides/stack-planning.md) |
+| Apply YAML stacks and inspect durable execution status | [Stack apply](guides/stack-apply.md) |
+| Connect a GitHub manifest and detect configuration drift | [Git source checks](guides/stack-git-source.md) |
 | Try Terraform against the public REST API | [Experimental Terraform example](../examples/terraform/basic/README.md) |
 | Schedule MicroVM start and stop operations | [Schedules](guides/schedules.md) |
 | Store secrets and transfer them to external stores | [Secrets and PipeSecrets](guides/secrets.md) |
 | Configure subnets, internet access, and IPv6 | [Networking](guides/networking.md) |
 | Restrict VM connections and inherit replica policies | [Security groups](guides/security-groups.md) |
 | Choose a disk location and back up VM data | [Storage](guides/storage.md) |
+| Keep application data when replacing a VM | [Persistent volumes](guides/volumes.md) |
 | Set management VM CPU, RAM, disk, and networking | [microManager resources](guides/micromanager-resources.md) |
 | Edit microManager settings and automatic idle shutdown | [Settings and Sleepy](guides/micromanager-settings.md) |
 | Install and register VM templates | [Images](guides/images.md) |
@@ -37,6 +43,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Configure services, upgrade, or uninstall | [Operations](guides/operations.md) |
 | Route domains and paths across apps | [Pipe ingress and tunnel](guides/pipe.md) |
 | Connect AWS and GitHub accounts to Pipe services | [Auth](guides/pipe-auth.md) |
+| Select models, converse, and run isolated project tasks in a MicroVM | [AI Sandbox](guides/ai-sandbox.md) |
 | Manage AI account connections and use shared CLI/MCP integration APIs | [Pipe AI](guides/pipe-ai.md) |
 | Connect and browse an existing database | [Pipe databases](guides/pipe-databases.md) |
 | Connect an existing Amazon S3 bucket and manage files | [PipeStorage](guides/pipe-storage.md) |
@@ -66,6 +73,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Run checks and runtime E2E | [CI](development/ci.md) |
 | Choose QA scripts and report results | [QA](development/qa.md) |
 | Run the complete checklist | [English](development/testing.md) · [Korean](development/testing.ko.md) |
+| Validate AI models, isolated tasks, guest execution, and recovery | [AI Sandbox QA](development/ai-sandbox-qa.md) |
 | Test macOS repair | [Repair QA](development/macos-repair.md) |
 | Review past platform results | [Validation history](development/validation-history.md) |
 

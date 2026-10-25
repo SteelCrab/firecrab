@@ -143,10 +143,17 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | --- | --- |
 | MicroService | `GET, POST /api/micro-services`, `GET, PUT, DELETE /api/micro-services/{id}` |
 | Stack ownership and planning | `GET, POST /api/stacks`, `GET, DELETE /api/stacks/{name}`, `POST /api/stacks/{name}/bindings`, `/unbind`, `/plan`; empty-registration deletion requires `?id=STACK_UUID`; see [Stack planning](../guides/stack-planning.md#rest) |
+| Native stack apply | `POST /api/stacks/{name}/apply`, `GET /api/stacks/{name}/applies/{id}`; durable, redacted execution with exact retry IDs; see [Stack apply](../guides/stack-apply.md#rest-and-limits) |
+| Git source synchronization | `GET, PUT /api/stacks/{name}/source`, `POST /api/stacks/{name}/source/check`, `POST /api/stacks/{name}/source/sync`, `GET /api/stacks/{name}/source/history`; detect-only by default, opt-in automatic apply and explicit recovery; see [Git source synchronization](../guides/stack-git-source.md#rest) |
+
+Stack plans and apply status expose redacted `inputs.templates` and `inputs.serviceDigests` identities.
+Git VM declarations require `templatePin`; direct apply and service mutations return `409 stack_source_managed` while Git owns synchronization.
+See [immutable inputs and controller ownership](../guides/stack-git-source.md#immutable-inputs-and-controller-ownership).
 | MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/deployment/check`, `POST /api/micro-services/{id}/stop` |
 | MicroNetwork | `/api/micro-networks`, `/{id}` |
 | Security group | `GET, POST /api/security-groups`, `GET, PUT, DELETE /api/security-groups/{id}`, `PUT /api/security-groups/{id}/rules` |
 | Storage | `/api/storage`, `/api/storage/devices`, `/api/micro-storages` |
+| Persistent data volumes | `/api/microblockstorage`, `/api/microblockstorage/{id}`, `/{id}/attach`, `/{id}/detach`; see [Volumes](../guides/volumes.md#api) |
 | Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}` |
 | Images | `/api/images`, `/{alias}`, `/{alias}/package`, `/{alias}/install`, `/{alias}/kernel`, `/{alias}/bootstrap` |
 | Kernels | `/api/kernels`, `/{version}/install`, `/{version}` |
@@ -156,8 +163,14 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | Update | GET / POST `/api/update`, GET `/api/update/progress` |
 
 See [MicroService](../guides/microservices.md) for configuration fields, validation, and deployment behavior.
+See [Deploy](../guides/deploy.md#rest) for running updates, release history, rollback, retry, and exact operation status.
 
 ## Host
+
+Authenticated host registration, drain, and durable cross-host VM placement use
+`/api/cluster/hosts`, `/api/cluster/placements` and `/api/cluster/services`. See
+[multi-host placement](../guides/multihost.md#rest) for the endpoint and recovery
+contract. Existing `/api/host` and `/api/vms` remain host-local.
 
 `GET /api/host` reports load, memory, disk, uptime, and `platform`:
 
@@ -244,13 +257,14 @@ CLI `firecrab info --json` retains only the original six installation fields.
 ## Images and kernels
 
 Image list/detail records include installed state, kernel filename, artifact digests, and managed `kernelVersion` when present.
-The kernel catalog is architecture-specific; inspect `GET /api/kernels` for available versions.
+The kernel catalog lists upstream stable and local versions for the host architecture.
+Inspect `GET /api/kernels`; `POST /api/kernels/stable/install` builds the current stable source on the host.
 
 | Method | Path | Effect |
 | --- | --- | --- |
-| GET, POST | `/api/kernels/{version}/install` | Read / start verified download |
+| GET, POST | `/api/kernels/{version}/install` | Read / start a verified native source build |
 | DELETE | `/api/kernels/{version}` | Delete an unused cache entry |
-| PUT | `/api/images/{alias}/kernel` | Pair using `{"kernelVersion":"7.2.2"}` |
+| PUT | `/api/images/{alias}/kernel` | Pair using `{"kernelVersion":"7.2.2-vsock1"}` |
 
 Pairing preserves rootfs/initrd and requires an installed, verified kernel.
 Missing/invalid cache returns `409 kernel_required`; referenced images return `409 in_use`.
@@ -386,6 +400,33 @@ An explicit response selection is a task/request override and leaves the project
 Calls never fall back to another model or connection.
 See [Pipe AI](../guides/pipe-ai.md) for capabilities, limits, CLI/MCP setup, and recovery.
 Anthropic model verification, defaults, and responses return `409 ai_connection_only`. API key disconnect removes the local saved key; it does not revoke the key at the provider.
+
+## AI Sandbox
+
+The same origin, body-size and concurrency policy applies. Synchronous model verification and explicit guest reconciliation have a 180-second HTTP deadline. Task admission returns before background execution.
+Credentials are referenced only through existing Pipe AI connection UUIDs.
+Every operation checks [Sandbox caller/resource permissions](../guides/sandbox-access.md). Policy management requires the controller operator.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET / PUT / DELETE | `/api/ai-sandbox/access/{principal}` | Operator-only host policy inspection/replacement/revocation; `{grants:[{resource,permissions}]}` |
+| GET | `/api/ai-sandbox/projects` | Saved `SandboxProject[]` |
+| GET / PUT / DELETE | `/api/ai-sandbox/projects/{id}` | Read/save `{name,sourcePath?,vmId?,selection?,instructions}` or delete only owned project metadata/copies |
+| GET | `/api/ai-sandbox/connections/{id}/models?discover=false` | `{models:[{id,name,verified,toolsVerified}],discoveryAvailable}`; `discover=true` explicitly contacts the provider |
+| POST | `/api/ai-sandbox/connections/{id}/verify` | `{model,tools}`; complete text probe and optional harmless native tool round trip |
+| GET | `/api/ai-sandbox/projects/{id}/tasks` | Last 50 `SandboxTaskSummary` records without file contents/tool logs; `before=TASK_UUID` pages older records; `since=MILLISECONDS` returns updated records |
+| PUT | `/api/ai-sandbox/projects/{project}/tasks/{id}` | `{kind:"chat"\|"code",input,selection?,retryOf?}`; durable, idempotent task admission; same id with different request conflicts |
+| GET | `/api/ai-sandbox/tasks/{id}` | Complete `SandboxTask`: effective selection, immutable attempt, durable state, actual events, reviewable changes and apply flags |
+| POST | `/api/ai-sandbox/tasks/{id}/cancel` | Request cancellation; poll until confirmed terminal state |
+| POST | `/api/ai-sandbox/tasks/{id}/reconcile` | Explicitly recover an interrupted attempt without replaying commands |
+| POST | `/api/ai-sandbox/tasks/{id}/apply` | `{paths:string[]}`; apply selected reviewed text files only if every selected source content/mode still matches |
+
+State values are `waiting`, `accepted`, `in_progress`, `result`, `merged`, `failed`, `cancelled`, and `interrupted`.
+Task summaries include `eventCount`, `changeCount`, and `lastTool`. Use task detail for full events and file contents.
+Projects expose a server-derived `owner`. Tasks and summaries include the original `{vmId,runtimeId}` as `runtime`, or `null` for conversations and legacy attempts without a captured runtime.
+Project settings and model overrides use `{connectionId,model}`. Tool-capable code tasks require the separate native-tool proof.
+Source paths refer to the API host. Borrowed VMs require a current boot/network binding and authenticated operator SSH.
+See [AI Sandbox](../guides/ai-sandbox.md) for provider contracts, limits, source isolation, and recovery.
 
 ## Errors
 

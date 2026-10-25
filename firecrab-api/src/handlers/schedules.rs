@@ -88,7 +88,24 @@ fn validate(
                 "pool members are managed automatically".to_owned(),
             );
         }
+        Some(crate::model::VmPurpose::Queue) => {
+            fields.insert(
+                "vmId".to_owned(),
+                "Queue engines are managed through Queue controls".to_owned(),
+            );
+        }
         Some(_) => {}
+    }
+    if state
+        .store
+        .cluster_worker(spec.vm_id)
+        .map_err(|_| AppError::internal(request))?
+        .is_some()
+    {
+        fields.insert(
+            "vmId".to_owned(),
+            "cluster VMs must be operated through their owning controller".to_owned(),
+        );
     }
     let next = match crate::scheduler::next_run(&spec.timing, now) {
         Ok(Some(at)) => Some(at),

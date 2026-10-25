@@ -429,6 +429,8 @@ pub(crate) mod test_support {
             let response = NetworkResponseEnvelope {
                 pipe: matches!(envelope.request, NetworkRequest::Pipe { .. }).then(|| {
                     firecrab_helper_protocol::pipe::Snapshot {
+                        ingress_workers: None,
+                        ingress_graceful_drain: false,
                         config: None,
                         units: vec![],
                         nginx_available: true,
@@ -472,6 +474,8 @@ pub(crate) mod test_support {
             let response = NetworkResponseEnvelope {
                 pipe: matches!(envelope.request, NetworkRequest::Pipe { .. }).then(|| {
                     firecrab_helper_protocol::pipe::Snapshot {
+                        ingress_workers: None,
+                        ingress_graceful_drain: false,
                         config: None,
                         units: vec![],
                         nginx_available: true,

@@ -668,12 +668,28 @@ fn render_apply_ruleset(
     // One dispatch pair per bridge: the per-VM verdict maps below are keyed
     // by leased IP (globally unique across networks, since their subnets
     // cannot overlap), so only the entry rules need to know about bridges.
-    let forward_dispatch: String = micro_networks.iter().map(|network| {
-        let bridge = network.bridge_name();
-        let mask = u32::MAX.checked_shl(u32::from(32 - network.prefix)).unwrap_or(0);
-        let subnet = format!("{}/{}", Ipv4Addr::from(u32::from(network.gateway) & mask), network.prefix);
-        format!("\t\tiifname \"{bridge}\" oifname \"{bridge}\" ip saddr {subnet} ip daddr {subnet} return\n\t\tiifname \"{bridge}\" jump firecrab_egress\n\t\toifname \"{bridge}\" jump firecrab_ingress\n")
-    }).collect();
+    let forward_dispatch: String = micro_networks
+        .iter()
+        .map(|network| {
+            let bridge = network.bridge_name();
+            let subnet = network.subnet_cidr();
+            // br_netfilter also sends switched frames through this hook.
+            // Keep the same-network path before routed-network isolation.
+            let local6 = network.ipv6.as_ref().map(|ipv6| {
+                let subnet = ipv6.subnet_cidr();
+                format!(
+                    "\t\tiifname \"{bridge}\" oifname \"{bridge}\" ip6 saddr {subnet} ip6 daddr {subnet} return\n\
+                     \t\tiifname \"{bridge}\" oifname \"{bridge}\" icmpv6 type {{ nd-neighbor-solicit, nd-neighbor-advert }} return\n"
+                )
+            }).unwrap_or_default();
+            format!(
+                "\t\tiifname \"{bridge}\" oifname \"{bridge}\" ip saddr {subnet} ip daddr {subnet} return\n\
+                 {local6}\
+                 \t\tiifname \"{bridge}\" jump firecrab_egress\n\
+                 \t\toifname \"{bridge}\" jump firecrab_ingress\n"
+            )
+        })
+        .collect();
     // Routed traffic aimed at any Firecrab subnet is denied before the
     // per-VM egress map is consulted: that is what keeps two MicroNetworks
     // from reaching each other now that the host routes all of them. Traffic
@@ -1393,6 +1409,31 @@ mod tests {
     }
 
     #[test]
+    fn neighbor_discovery_stays_on_its_bridge_before_egress_dispatch() {
+        let mut network = dual_stack_network(
+            0x1234,
+            "172.31.0.1",
+            24,
+            "fd00:1::1",
+            Ipv6AddressMode::Slaac,
+        );
+        network.internet_enabled = false;
+        let bridge = network.bridge_name();
+        let ruleset = render_apply_ruleset("eth0", &[network]).unwrap();
+        let neighbor = format!(
+            "iifname \"{bridge}\" oifname \"{bridge}\" icmpv6 type {{ nd-neighbor-solicit, nd-neighbor-advert }} return"
+        );
+        let dispatch = format!("iifname \"{bridge}\" jump firecrab_egress");
+        assert!(ruleset.find(&neighbor).unwrap() < ruleset.find(&dispatch).unwrap());
+        assert!(!ruleset.contains("nd-router-advert"));
+        assert!(ruleset.contains("ip6 saddr { fd00:1::/64 } drop"));
+        assert!(ruleset.contains("ip6 saddr vmap @vm_egress6"));
+        let ipv4_only =
+            render_apply_ruleset("eth0", &[sample_network(0x5678, "172.32.0.1", 24)]).unwrap();
+        assert!(!ipv4_only.contains("nd-neighbor"));
+    }
+
+    #[test]
     fn two_internet_networks_render_distinct_oifname_rules() {
         let eth0_net = MicroNetworkSpec {
             uplink: Some("eth0".to_owned()),
@@ -1517,13 +1558,21 @@ mod tests {
 
     #[test]
     fn global_ruleset_allows_east_west_within_a_micro_network() {
-        let ruleset = render_apply_ruleset("eth0", &[]).unwrap();
-        // TAPs in the same MicroNetwork share one Linux bridge, so leaving
-        // bridge forwarding at its accept default permits their L2 traffic.
-        // Different MicroNetworks use different bridges and their routed
-        // traffic is denied by firecrab_egress above.
-        assert!(!ruleset.contains("iifname \"fct*\" oifname \"fct*\" drop"));
-        assert!(!ruleset.contains("type filter hook forward priority -200"));
+        let first = sample_network(0x1234, "172.31.0.1", 24);
+        let second = sample_network(0x5678, "172.32.0.1", 24);
+        let bridge = first.bridge_name();
+        let ruleset = render_apply_ruleset("eth0", &[first, second]).unwrap();
+        let local = format!(
+            "iifname \"{bridge}\" oifname \"{bridge}\" ip saddr 172.31.0.0/24 ip daddr 172.31.0.0/24 return"
+        );
+        assert!(
+            ruleset.find(&local).unwrap()
+                < ruleset
+                    .find(&format!("iifname \"{bridge}\" jump firecrab_egress"))
+                    .unwrap()
+        );
+        assert!(ruleset.contains("172.31.0.0/24, 172.32.0.0/24 } drop"));
+        assert!(!ruleset.contains("ip saddr 172.31.0.0/24 ip daddr 172.32.0.0/24 accept"));
     }
 
     #[test]

@@ -60,6 +60,12 @@ pub enum Error {
 }
 
 pub fn run(command: Command) -> Result<i32, Error> {
+    #[cfg(target_os = "windows")]
+    if let Some(code) = super::dev::instance::dispatch(&command)
+        .map_err(|source| super::dev::io_error("select worktree development instance", source))?
+    {
+        return Ok(code);
+    }
     match command {
         Command::Resource { options } => Ok(super::resource::run(options)?),
         Command::ResourceServer { home } => Ok(super::resource_server::run(home)?),
@@ -108,12 +114,13 @@ pub fn run(command: Command) -> Result<i32, Error> {
         Command::Dev {
             command,
             source,
+            port,
             release,
             restore,
             yes,
         } => match command {
             Some(command) => run_dev_control(&lifecycle::Layout::from_process_env()?, command),
-            None => run_dev(source.as_deref(), release, restore, yes),
+            None => run_dev(source.as_deref(), port, release, restore, yes),
         },
     }
 }
@@ -217,6 +224,7 @@ fn run_start() -> Result<i32, Error> {
 
 fn run_dev(
     source: Option<&std::path::Path>,
+    port: u16,
     release: bool,
     restore: bool,
     yes: bool,
@@ -261,7 +269,7 @@ fn run_dev(
     }
     super::report!("[PASS] API: http://127.0.0.1:5523/");
     if let Some(source) = frontend {
-        dashboard::start(&source, &layout.managed_home).map_err(super::dev::Error::from)?;
+        dashboard::start(&source, &layout.managed_home, port).map_err(super::dev::Error::from)?;
     } else {
         dashboard::stop(&layout.managed_home).map_err(super::dev::Error::from)?;
     }
@@ -284,7 +292,8 @@ fn run_dev_control(layout: &lifecycle::Layout, command: DevCommand) -> Result<i3
     }
     if command != DevCommand::Stop {
         let source = dashboard::source(&layout.managed_home).map_err(super::dev::Error::from)?;
-        dashboard::start(&source, &layout.managed_home).map_err(super::dev::Error::from)?;
+        let port = dashboard::port(&layout.managed_home).map_err(super::dev::Error::from)?;
+        dashboard::start(&source, &layout.managed_home, port).map_err(super::dev::Error::from)?;
     }
     Ok(0)
 }
@@ -672,7 +681,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let wsl = fake::answer(|line| panic!("invalid checkout touched the host: {line}"));
         assert!(matches!(
-            run_dev(Some(directory.path()), false, false, false),
+            run_dev(Some(directory.path()), 8080, false, false, false),
             Err(Error::Dev(super::super::dev::Error::Checkout { .. }))
         ));
         assert!(wsl.calls().is_empty());

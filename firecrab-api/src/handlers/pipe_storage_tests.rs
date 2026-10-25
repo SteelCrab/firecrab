@@ -146,6 +146,9 @@ async fn services_block_disconnect_and_credential_values_stay_out_of_persisted_s
     );
     let vm_id = Uuid::new_v4();
     let deployment = MicroServiceDeployment {
+        started_at: 0,
+        finished_at: None,
+        update: None,
         id: Uuid::new_v4(),
         service_id: service.id,
         phase: ServicePhase::Running,
@@ -362,6 +365,9 @@ async fn guest_credentials_fail_closed_when_bindings_are_lost_and_resolve_rotate
     state
         .store
         .save_service_deployment(&MicroServiceDeployment {
+            started_at: 0,
+            finished_at: None,
+            update: None,
             id: Uuid::new_v4(),
             service_id: service.id,
             phase: ServicePhase::Running,

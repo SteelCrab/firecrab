@@ -47,7 +47,8 @@ async function typeInTerminal(page: Page, line: string): Promise<void> {
 }
 
 /** Serves one running VM's REST reads so the console page renders. */
-async function mockVm(page: Page): Promise<void> {
+async function mockVm(page: Page): Promise<() => number> {
+  let reads = 0;
   const vm = {
     id: MOCK_VM_ID,
     name: "console-mock",
@@ -72,16 +73,20 @@ async function mockVm(page: Page): Promise<void> {
     memoryUsedPercent: null,
     usageHistory: [],
   };
-  await page.route(`**/api/vms/${MOCK_VM_ID}`, (route) => route.fulfill({ json: vm }));
+  await page.route(`**/api/vms/${MOCK_VM_ID}`, (route) => {
+    reads += 1;
+    return route.fulfill({ json: vm });
+  });
   await page.route(`**/api/vms/${MOCK_VM_ID}/log`, (route) =>
     route.fulfill({ json: { consoleLog: "", truncated: false } }),
   );
+  return () => reads;
 }
 
 test.describe("terminal session end @dashboard", () => {
   for (const command of ["exit", "logout"]) {
     test(`a guest ${command} stops at Session ended and New session attaches again`, async ({ page }) => {
-      await mockVm(page);
+      const vmReads = await mockVm(page);
       let connections = 0;
       await page.routeWebSocket(`**/ws/vms/${MOCK_VM_ID}/console`, (ws) => {
         connections += 1;
@@ -110,7 +115,15 @@ test.describe("terminal session end @dashboard", () => {
       await page.waitForTimeout(2500);
       expect(connections).toBe(1);
 
-      await page.getByRole("button", { name: "New session" }).click();
+      // Hold a real click across a VM refresh. Replacing this button during
+      // polling used to swallow pointer-up, especially in WebKit.
+      const newSession = page.getByRole("button", { name: "New session" });
+      await newSession.hover();
+      await page.mouse.down();
+      const readsBefore = vmReads();
+      await expect.poll(vmReads).toBeGreaterThan(readsBefore);
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+      await page.mouse.up();
       await expect(consoleStatus(page)).toHaveText(/Connected/);
       expect(connections).toBe(2);
       await expect(page.locator(".console-page .terminal-output")).toContainText(
@@ -169,6 +182,13 @@ test.describe("terminal session end in a booted guest", () => {
   test("exit ends both viewers, keeps the VM running, and a new session executes commands", async ({ page }) => {
     const { reference, alias } = registry!.announcement;
     const vmId = await bootFixtureGuest(reference, alias);
+    const guestFrames: Buffer[] = [];
+    page.on("websocket", socket => {
+      if (new URL(socket.url()).pathname !== `/ws/vms/${vmId}/console`) return;
+      socket.on("framereceived", ({ payload }) => {
+        if (typeof payload !== "string") guestFrames.push(payload);
+      });
+    });
 
     await openEnglish(page, `/#/console/${vmId}`);
     await expect(consoleStatus(page)).toHaveText(/Connected/);
@@ -180,6 +200,67 @@ test.describe("terminal session end in a booted guest", () => {
     await expect(page.locator(".console-page .terminal-output")).toContainText(/~ #/, {
       timeout: 30_000,
     });
+    if (process.env.FIRECRAB_E2E_REQUIRE_GUEST_RESIZE === "1") {
+      const geometry = page.locator(".console-geometry");
+      await expect(geometry).toHaveAttribute("data-status", "applied", { timeout: 30_000 });
+      const initialSize = await geometry.textContent();
+      await page.setViewportSize({ width: 1400, height: 950 });
+      await secondViewer.setViewportSize({ width: 1000, height: 750 });
+      await expect(geometry).not.toHaveText(initialSize!);
+      await expect(geometry).toHaveAttribute("data-status", "applied", { timeout: 30_000 });
+      await expect(secondViewer.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
+      const checkSize = async () => {
+        await expect.poll(async () => (await page.locator(".console-geometry").textContent()) === (await secondViewer.locator(".console-geometry").textContent())).toBe(true);
+        const dimensions = (await page.locator(".console-geometry").textContent())!.match(/(\d+) × (\d+)/)!;
+        const expected = `${dimensions[2]} ${dimensions[1]}`;
+        await typeInTerminal(page, "printf '\\nFCR_SIZE_'; /etc/firecrab/busybox stty size");
+        await expect(page.locator(".terminal-output")).toContainText(`FCR_SIZE_${expected}`);
+        return expected;
+      };
+      await checkSize();
+      // ash's interactive editor owns WINCH; observe a foreground reader instead.
+      await typeInTerminal(page, "/etc/firecrab/busybox sh -c 'trap \"printf FCR_WINCH_; /etc/firecrab/busybox stty size\" WINCH; printf \"FCR_TRAP_%s\\n\" READY; read -r ignored'");
+      await expect(page.locator(".terminal-output")).toContainText("FCR_TRAP_READY");
+      const previousSize = await page.locator(".console-geometry").textContent();
+      await page.setViewportSize({ width: 800, height: 600 });
+      await expect(page.locator(".console-geometry")).not.toHaveText(previousSize!);
+      await expect(page.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
+      const size = (await geometry.textContent())!.match(/(\d+) × (\d+)/)!;
+      const expected = `${size[2]} ${size[1]}`;
+      await expect(page.locator(".terminal-output")).toContainText(`FCR_WINCH_${expected}`);
+      await page.keyboard.press("Enter");
+      await typeInTerminal(page, "printf 'FCR_MONITOR_%s\\n' DONE");
+      await expect(page.locator(".terminal-output")).toContainText("FCR_MONITOR_DONE");
+      await checkSize();
+      // The fixture app keeps writing to ttyS0 and can overwrite vi's visible rows.
+      const viStart = guestFrames.length;
+      await typeInTerminal(page, "printf 'FCR_VI_%s\\n' READY > /tmp/fcr-size; /etc/firecrab/busybox vi /tmp/fcr-size");
+      await expect.poll(() => Buffer.concat(guestFrames.slice(viStart)).toString("utf8")).toContain("FCR_VI_READY");
+      const viSize = await page.locator(".console-geometry").textContent();
+      const viFrameStart = guestFrames.length;
+      await page.setViewportSize({ width: 1400, height: 950 });
+      await expect(page.locator(".console-geometry")).not.toHaveText(viSize!);
+      await expect(page.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
+      const viRows = (await geometry.textContent())!.match(/(\d+) × (\d+)/)![2];
+      await expect.poll(() => Buffer.concat(guestFrames.slice(viFrameStart)).toString("utf8")).toContain(`\x1b[${viRows};1H\x1b[K`);
+      await expect.poll(() => Buffer.concat(guestFrames.slice(viFrameStart)).toString("utf8")).toContain("FCR_VI_READY");
+      await page.keyboard.type(":q!");
+      await page.keyboard.press("Enter");
+      await expect(page.locator(".terminal-output")).toContainText(/~ #/);
+      await checkSize();
+      const topStart = guestFrames.length;
+      await typeInTerminal(page, "/etc/firecrab/busybox top -d 1");
+      await expect.poll(() => Buffer.concat(guestFrames.slice(topStart)).toString("utf8")).toContain("PID");
+      const topSize = await page.locator(".console-geometry").textContent();
+      await page.setViewportSize({ width: 900, height: 650 });
+      await expect(page.locator(".console-geometry")).not.toHaveText(topSize!);
+      await expect(page.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
+      const topFrameStart = guestFrames.length;
+      await expect.poll(() => Buffer.concat(guestFrames.slice(topFrameStart)).toString("utf8")).toContain("PID");
+      await page.keyboard.press("q");
+      await expect(page.locator(".terminal-output")).toContainText(/~ #/);
+      await checkSize();
+    }
     await typeInTerminal(page, "printf ';1R;145R;1R;145R\\n'");
     await expect(page.locator(".console-page .terminal-output")).toContainText(";1R;145R;1R;145R");
     await typeInTerminal(page, "exit");
@@ -188,7 +269,7 @@ test.describe("terminal session end in a booted guest", () => {
     await expect(consoleStatus(secondViewer)).toHaveText(/Session ended/, { timeout: 30_000 });
     expect((await api.getVm(vmId))?.state).toBe("running");
 
-    // xterm renders only the visible rows. The guest MOTD and live app output
+    // The terminal renders only the visible rows. The guest MOTD and live app output
     // can scroll the respawn banner away before the first DOM assertion.
     // Check the actual new socket's replay, including bytes outside the viewport.
     const newSessionFrames: Buffer[] = [];

@@ -1,22 +1,38 @@
-//! Offline validation plus host-local ownership and read-only plan commands.
+//! Offline validation, host-local ownership, planning and explicit native apply.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use firecrab_stack::{
-    Binding, DeleteStackRequest, Plan, RegisterStackRequest, ResourceKind, StackRecord,
-    logical_name,
+    ApplyRequest, ApplyState, ApplyStatus, Binding, DeleteStackRequest, Plan, RegisterStackRequest,
+    ResourceKind, StackRecord, logical_name,
 };
 use firecrab_stack::{Diagnostic, MAX_MANIFEST_BYTES, ResourceCounts};
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::api_client::{ApiClient, ApiError};
+mod source;
 
-/// Stack validation, ownership metadata and read-only planning. No apply is implemented.
+/// Stack validation, ownership metadata, planning and explicit native execution.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Configure a Git source and detect drift without applying resources.
+    Source {
+        #[command(subcommand)]
+        command: source::Command,
+    },
+    /// Apply a fresh or explicitly reviewed plan with durable retry identity.
+    Apply(ApplyArgs),
+    /// Read durable, redacted execution status after a disconnect or API restart.
+    ApplyStatus {
+        /// Registered stack name.
+        name: String,
+        /// Exact operation UUID printed by stack apply.
+        #[arg(long)]
+        id: Uuid,
+    },
     /// Register host-local stack ownership metadata without applying resources.
     Register {
         /// Stable name matching the manifest's name.
@@ -59,6 +75,32 @@ pub enum Command {
     },
 }
 
+/// Native apply controls. Creating resources never requires an interruption flag.
+#[derive(Debug, clap::Args)]
+pub struct ApplyArgs {
+    /// Desired YAML declaration.
+    #[arg(long)]
+    file: PathBuf,
+    /// Retry the exact same declaration and stop permission with this UUID.
+    #[arg(long)]
+    operation_id: Option<Uuid>,
+    /// JSON output from stack plan; fail if its configuration/ownership is stale.
+    #[arg(long)]
+    expected_plan: Option<PathBuf>,
+    /// Permit stopping owned running VMs and replacing owned service replicas.
+    #[arg(long)]
+    allow_stop: bool,
+    /// Return after durable acceptance without waiting for completion.
+    #[arg(long)]
+    no_wait: bool,
+    /// Maximum polling time in seconds; timeout does not cancel accepted work.
+    #[arg(long, default_value_t = 3600, value_parser = clap::value_parser!(u64).range(1..=86400))]
+    timeout: u64,
+    /// Print the final or accepted redacted status as JSON.
+    #[arg(long)]
+    json: bool,
+}
+
 /// Exact ownership identity shared by bind and unbind.
 #[derive(Debug, clap::Args)]
 pub struct BindingArgs {
@@ -85,6 +127,12 @@ pub enum Error {
     Validation(String),
     #[error("plan is blocked; resolve explicit ownership and network dependencies")]
     Blocked,
+    #[error("apply {id} ended in {state}; inspect stack apply-status before explicit recovery")]
+    ApplyFailed { id: Uuid, state: String },
+    #[error(
+        "apply {0} is still running; use stack apply-status or retry with the same operation ID"
+    )]
+    ApplyTimeout(Uuid),
 }
 
 #[derive(Serialize)]
@@ -138,9 +186,21 @@ pub fn validate_file(file: PathBuf, json: bool) -> i32 {
     i32::from(!report.valid)
 }
 
-/// Use the selected API for ownership metadata and read-only plans.
+/// Use the selected API for ownership metadata, plans and durable apply operations.
 pub fn run_remote(client: &ApiClient, command: Command) -> Result<(), Error> {
     match command {
+        Command::Source { command } => source::run(client, command)?,
+        Command::Apply(args) => apply_file(client, args)?,
+        Command::ApplyStatus { name, id } => {
+            name_valid(&name)?;
+            if id.is_nil() {
+                return Err(Error::Validation(
+                    "a non-nil operation UUID is required".into(),
+                ));
+            }
+            let status: ApplyStatus = client.get(&format!("/api/stacks/{name}/applies/{id}"))?;
+            print_json(&status);
+        }
         Command::Register { name } => {
             name_valid(&name)?;
             let stack: StackRecord = client.post("/api/stacks", &RegisterStackRequest { name })?;
@@ -177,6 +237,7 @@ pub fn run_remote(client: &ApiClient, command: Command) -> Result<(), Error> {
                     "Stack {} (ownership revision {}): read-only plan",
                     plan.name, plan.revision
                 );
+                println!("Plan fingerprint: {}", plan.fingerprint);
                 println!("KIND\tKEY\tACTION\tFIELDS / REASON");
                 for change in &plan.changes {
                     println!(
@@ -203,6 +264,102 @@ pub fn run_remote(client: &ApiClient, command: Command) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+fn apply_file(client: &ApiClient, args: ApplyArgs) -> Result<(), Error> {
+    let source = read_manifest(&args.file).map_err(diagnostics)?;
+    let stack = firecrab_stack::parse(&source).map_err(diagnostics)?;
+    let operation_id = args.operation_id.unwrap_or_else(Uuid::new_v4);
+    if operation_id.is_nil() {
+        return Err(Error::Validation(
+            "a non-nil operation UUID is required".into(),
+        ));
+    }
+    let plan: Plan = if let Some(file) = args.expected_plan {
+        let source = read_manifest(&file).map_err(diagnostics)?;
+        serde_json::from_str(&source).map_err(|_| {
+            Error::Validation("expected-plan must contain the JSON output of stack plan".into())
+        })?
+    } else {
+        client.post(&format!("/api/stacks/{}/plan", stack.name), &stack)?
+    };
+    if plan.name != stack.name || plan.fingerprint.len() != 64 {
+        return Err(Error::Validation(
+            "expected plan must match the manifest name and include its fingerprint".into(),
+        ));
+    }
+    let name = stack.name.clone();
+    eprintln!("Apply operation: {operation_id}");
+    let request = ApplyRequest {
+        stack,
+        expected_fingerprint: plan.fingerprint,
+        operation_id,
+        allow_stop: args.allow_stop,
+    };
+    let mut status: ApplyStatus = client.post(&format!("/api/stacks/{name}/apply"), &request)?;
+    let started = std::time::Instant::now();
+    let mut progress = None;
+    while !args.no_wait && !status.state.is_terminal() {
+        let completed = status
+            .changes
+            .iter()
+            .filter(|s| s.state == firecrab_stack::StepState::Succeeded)
+            .count();
+        let current = (status.state, completed);
+        if progress != Some(current) {
+            eprintln!(
+                "Apply {}: {}, {completed}/{} steps complete",
+                operation_id,
+                status.state.as_str(),
+                status.changes.len()
+            );
+            progress = Some(current);
+        }
+        if started.elapsed() >= std::time::Duration::from_secs(args.timeout) {
+            print_apply_status(&status, args.json);
+            return Err(Error::ApplyTimeout(operation_id));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        status = client.get(&format!("/api/stacks/{name}/applies/{operation_id}"))?;
+    }
+    print_apply_status(&status, args.json);
+    if status.state.is_terminal() && status.state != ApplyState::Succeeded {
+        return Err(Error::ApplyFailed {
+            id: operation_id,
+            state: status.state.as_str().into(),
+        });
+    }
+    Ok(())
+}
+
+fn print_apply_status(status: &ApplyStatus, json: bool) {
+    if json {
+        print_json(status);
+        return;
+    }
+    println!("Apply {}: {}", status.operation_id, status.state.as_str());
+    println!("KIND\tKEY\tACTION\tRESOURCE UUID\tSTATE");
+    for step in &status.changes {
+        println!(
+            "{}\t{}\t{}\t{}\t{}",
+            step.change.kind,
+            step.change.key,
+            step.change.action,
+            step.change
+                .resource_id
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+            step.state.as_str()
+        );
+    }
+    if let Some(error) = &status.error {
+        eprintln!(
+            "{}: {} ({})",
+            error.code,
+            error.message,
+            error.fields.join(", ")
+        );
+    }
 }
 
 fn write_binding(client: &ApiClient, args: BindingArgs, remove: bool) -> Result<(), Error> {
