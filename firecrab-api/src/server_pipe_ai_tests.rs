@@ -684,6 +684,67 @@ async fn pipe_ai_rejects_untrusted_origins_unknown_fields_and_concurrent_rotatio
 }
 
 #[tokio::test]
+async fn pipe_ai_login_uses_forwarded_ports_only_from_the_trusted_loopback_listener() {
+    let f = fixture().await;
+    for (host, local, allowed) in [
+        ("127.0.0.1:51819", true, true),
+        ("localhost:5562", true, true),
+        ("127.0.0.1:51819", false, false),
+        ("localhost:5562", false, false),
+        ("remote.example:5562", true, false),
+        ("user@127.0.0.1:5562", true, false),
+        ("127.0.0.1", true, false),
+        ("127.0.0.1:0", true, false),
+        ("127.0.0.1:65536", true, false),
+    ] {
+        let app = if local {
+            f.app
+                .clone()
+                .layer(Extension(crate::ai_sandbox::access::LocalOperator))
+        } else {
+            f.app.clone()
+        };
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("{}/login", connection_path(Uuid::new_v4())))
+                    .header("host", host)
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"name":"Forwarded QA"}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if allowed {
+                StatusCode::OK
+            } else {
+                StatusCode::BAD_REQUEST
+            },
+            "{host}, local={local}"
+        );
+        if allowed {
+            let value: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 2_000_000).await.unwrap())
+                    .unwrap();
+            let url = reqwest::Url::parse(value["authorizationUrl"].as_str().unwrap()).unwrap();
+            let redirect = url
+                .query_pairs()
+                .find(|(k, _)| k == "redirect_uri")
+                .unwrap()
+                .1
+                .into_owned();
+            let port = host.rsplit(':').next().unwrap();
+            assert_eq!(redirect, format!("http://127.0.0.1:{port}/auth/callback"));
+        }
+    }
+    assert!(f.provider.requests.lock().unwrap().is_empty());
+    assert!(f.state.store.ai_connections().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn pipe_ai_login_is_one_time_loopback_only_and_preserves_prior_connection_on_denial() {
     let f = fixture().await;
     let id = Uuid::new_v4();

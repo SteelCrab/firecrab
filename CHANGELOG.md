@@ -46,6 +46,10 @@ Entries land here as work merges, and move under the next version heading when t
   Scoped hosts cannot bypass grants through other controller APIs.
   Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
 
+- An opt-in Sandbox QA command connects real model calls to MicroVM commands,
+  validates project defaults and task overrides, rejects denied/disconnected
+  selections, and retains private attempt and guest-result evidence (#414).
+
 - Named MicroBlockStorage data volumes persist after VM deletion. REST, CLI, and
   Dashboard support creation and exclusive attachment to inactive user VMs.
   Guest mounts use filesystem UUIDs and gate managed application startup.
@@ -242,6 +246,11 @@ Entries land here as work merges, and move under the next version heading when t
 - None.
 
 ### Fixed
+
+- ChatGPT login callbacks follow trusted loopback development ports. Dashboard
+  proxies keep callbacks on their selected API, including private worktrees.
+- Source development bundles preserve the embedded host-kernel build script,
+  allowing current API sources to compile in the management VM.
 
 - PipeSecrets rejects AWS name prefixes containing filter operators or other
   non-name characters, preventing a negated prefix from listing secrets outside

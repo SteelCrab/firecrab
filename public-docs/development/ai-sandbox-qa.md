@@ -39,6 +39,8 @@ Anthropic live inference requires a connected official API key. Do not use Claud
 
 ## Real MicroVM check
 
+Use the [combined live foundation gate](ai-sandbox-foundation-qa.md) for a single real-model/real-MicroVM run with project defaults, task overrides, denied models, disconnected-call rejection and exported attempt evidence.
+
 The ignored `real_guest_operator_transport_runs_exports_cancels_and_cleans_owned_data` test uses the actual executor without a provider.
 Set `FIRECRAB_LIVE_GUEST_TARGET` to a private JSON file with `{vmId, runtimeId, ipv4, vmsDir}` for an explicitly selected disposable user VM.
 Run the Linux test binary on the API host that owns that VM's existing operator keys. The target file contains no key material.
@@ -122,3 +124,30 @@ Source filtering happens before task pagination. Provider history is confined to
 Full suites ran as an unprivileged user with zstd, fakeroot, dnsmasq, sudo and Node.js 22/npm.
 Earlier runs lacked tools or used root/read-only source mounts; those environment failures were corrected without weakening tests.
 This slice uses temporary databases and local provider fixtures. It does not rerun live provider inference or the combined real-model-to-MicroVM foundation gate.
+
+## Combined foundation QA attempt, 2026-10-26
+
+The opt-in [foundation harness](ai-sandbox-foundation-qa.md) requires one live provider-to-MicroVM run.
+Its regression suite passes **11 tests** without credentials. Fixtures cannot satisfy the live gate.
+The suite rejects fabricated, incomplete or misattributed guest results and protects borrowed accounts and VMs.
+
+The implementation fixes two development blockers found during setup:
+
+- Source archives now include the host-kernel build script used at API compile time. The archive/extraction regression passes.
+- ChatGPT login accepts forwarded ports only from the trusted loopback listener. Both embedded and source Vite proxies retain the selected API for callbacks. **16 Pipe AI API tests** and **4 real Vite tests** pass.
+
+Live preparation uses main `accb9bbe` plus these branch changes. Later main integration is covered by the follow-up PR's CI.
+A dedicated macOS management VM runs the Linux API/helper with schema 7 and usable nested KVM.
+Ubuntu `ubuntu-26.04-v5` boots on a disposable user VM with one CPU, 512 MiB RAM and a 2 GiB disk.
+The VM uses a dedicated MicroNetwork with internet disabled and isolated egress. Its pinned SSH host key matches.
+The development API/helper build and deployment pass after the source-archive fix.
+
+Live model validation is **blocked before inference**. Two fresh ChatGPT OAuth flows reach the official OpenAI consent page, then return `Operation timed out`.
+Neither callback completes. The dedicated API stores zero connections and sends no inference request. Pending local login attempts are cancelled.
+No local OAuth session is available to confirm retirement of a possible provider-side grant.
+The user's pre-existing connection database is not changed or copied.
+
+The combined execution, default/override, denied-model and post-disconnect checks remain **unverified**.
+The corresponding #414 checkbox and Canvas handoff stay open. Separate VM preparation and fixture checks do not pass them.
+Private preflight, authentication-attempt and cleanup records retain the disposable resource IDs and observed failures.
+The owned workload VM, MicroNetwork, installed Ubuntu image/package and temporary management VM are removed after evidence export.

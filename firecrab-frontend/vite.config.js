@@ -4,6 +4,9 @@ import { ghosttyOptimizations } from './build/ghosttyOptimizations.js';
 import { buildWasm } from './scripts/wasm.mjs';
 
 export default defineConfig(({ command }) => {
+  const apiPort = Number(process.env.FIRECRAB_DEV_API_PORT || 5523);
+  if (!Number.isInteger(apiPort) || apiPort < 1 || apiPort > 65535) throw new Error('Invalid development API port');
+  const apiTarget = `http://127.0.0.1:${apiPort}`;
   if (command === 'serve') buildWasm();
   return {
   plugins: [ghosttyOptimizations(), {
@@ -22,8 +25,9 @@ export default defineConfig(({ command }) => {
   // Vite's default host checks keep the forwarded authority trustworthy.
   server: { port: 8080, host: true, strictPort: true, proxy: {
     // Preserve the dashboard authority for the API's same-origin checks on any dev port.
-    '/api': { target: 'http://127.0.0.1:5523', changeOrigin: false },
-    '/ws': { target: 'ws://127.0.0.1:5523', ws: true },
+    '/api': { target: apiTarget, changeOrigin: false },
+    '/auth/callback': { target: apiTarget, changeOrigin: false },
+    '/ws': { target: `ws://127.0.0.1:${apiPort}`, ws: true },
   } },
   build: { target: 'es2022', assetsInlineLimit: 0 },
   };
