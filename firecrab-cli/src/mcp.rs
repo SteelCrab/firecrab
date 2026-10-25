@@ -264,6 +264,7 @@ impl Session {
                     disk_gb: a.disk_gb,
                     egress_policy: EgressPolicy::Internet,
                     storage_root: None,
+                    block_storages: vec![],
                     shell_ids: vec![],
                     port_forwards: vec![],
                     env: Default::default(),

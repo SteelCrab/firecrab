@@ -2,6 +2,7 @@ import './styles/tokens.css';
 import './styles/base.css';
 import './styles/frame.css';
 import './styles/vm.css';
+import './styles/detail.css';
 import './wasm.css';
 import './styles/pipe-ai.css';
 import './styles/ai-sandbox.css';

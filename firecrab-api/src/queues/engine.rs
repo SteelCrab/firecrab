@@ -21,6 +21,7 @@ fn vm_request(spec: &CreateQueueEngineRequest) -> CreateVmRequest {
         micro_network_id: spec.micro_network_id,
         security_group_id: None,
         storage_root: spec.storage_root.clone(),
+        block_storages: vec![],
         shell_ids: vec![],
         port_forwards: vec![],
         env: BTreeMap::new(),
