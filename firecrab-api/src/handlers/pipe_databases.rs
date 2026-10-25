@@ -113,8 +113,8 @@ pub async fn update(
     Path(id): Path<String>,
     ValidatedJson(mut input): ValidatedJson<DatabaseInput>,
 ) -> Result<Json<DatabaseSummary>, AppError> {
-    let record = load(state.clone(), rid.0, id).await?;
     let _claim = state.service_mutations.lock().await;
+    let record = load(state.clone(), rid.0, id).await?;
     if input
         .ca_certificate
         .as_ref()
@@ -332,8 +332,8 @@ pub async fn access(
     Path(id): Path<String>,
     ValidatedJson(input): ValidatedJson<AccessInput>,
 ) -> Result<Json<DatabaseSummary>, AppError> {
-    let mut record = load(state.clone(), request_id.0, id).await?;
     let _claim = state.service_mutations.lock().await;
+    let mut record = load(state.clone(), request_id.0, id).await?;
     available(&state, record.id, request_id.0)?;
     if !input.write_enabled
         && (state

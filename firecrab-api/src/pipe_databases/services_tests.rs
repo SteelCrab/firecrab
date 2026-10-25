@@ -79,6 +79,55 @@ async fn database_services_real_engines() {
             ));
             execute(&mut c, &format!("DROP TABLE {qualified}")).await;
         }
+        let limits = if engine == Engine::Postgres {
+            let table = TableRequest {
+                schema: "public".into(),
+                table: format!("limits_{}", Uuid::new_v4().simple()),
+            };
+            let qualified = table.qualified(engine);
+            let sequence = format!("public.seq_{}", Uuid::new_v4().simple());
+            execute(&mut c, &format!("CREATE SEQUENCE {sequence}; CREATE TABLE {qualified}(id bigint PRIMARY KEY, v varchar(2), c char(2), b bit varying(2), f bit(2), external_default bigint DEFAULT nextval('{sequence}'))")).await;
+            for (column, value) in [("v", "abc"), ("c", "abc"), ("b", "101"), ("f", "101")] {
+                let mutation = Mutation {
+                    request_id: Uuid::new_v4(),
+                    table: table.clone(),
+                    operation: Operation::Insert,
+                    values: BTreeMap::from([
+                        ("id".into(), json!(1)),
+                        (column.into(), json!(value)),
+                    ]),
+                    key: BTreeMap::new(),
+                    version: None,
+                };
+                let result = mutate(&mut c, record.id, &mutation).await;
+                assert!(
+                    matches!(result, Err(Error::Database(sqlx::Error::Database(ref e))) if matches!(e.code().as_deref(),Some("22001"|"22026"))),
+                    "over-length {column} must fail before committing: {result:?}"
+                );
+            }
+            assert_eq!(
+                count(&mut c, &format!("SELECT COUNT(*) FROM {qualified}")).await,
+                0
+            );
+            let valid = Mutation {
+                request_id: Uuid::new_v4(),
+                table,
+                operation: Operation::Insert,
+                values: BTreeMap::from([
+                    ("id".into(), json!(1)),
+                    ("v".into(), json!("ab")),
+                    ("c".into(), json!("xy")),
+                    ("b".into(), json!("10")),
+                    ("f".into(), json!("01")),
+                ]),
+                key: BTreeMap::new(),
+                version: None,
+            };
+            mutate(&mut c, record.id, &valid).await.unwrap();
+            Some((qualified, sequence))
+        } else {
+            None
+        };
         let schema = if engine == Engine::Postgres {
             "public".to_owned()
         } else {
@@ -360,6 +409,13 @@ async fn database_services_real_engines() {
             table: "missing".into(),
         });
         bindings::revoke(&record, &stale_binding).await.unwrap();
+        if let Some((table, sequence)) = limits {
+            execute(
+                &mut c,
+                &format!("DROP TABLE {table}; DROP SEQUENCE {sequence}"),
+            )
+            .await;
+        }
         let namespace = quote(engine, &internal_schema(record.id));
         if engine == Engine::Postgres {
             execute(&mut c, &format!("DROP SCHEMA {namespace} CASCADE")).await;

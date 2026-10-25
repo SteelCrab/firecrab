@@ -387,8 +387,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/pipe/database-rabbitmq",
-            get(handlers::pipe_database_events::rabbitmq_get)
-                .put(handlers::pipe_database_events::rabbitmq_save),
+            get(handlers::pipe_database_events::rabbitmq_get),
         )
         .route(
             "/api/pipe/database-rabbitmq/managed",
@@ -397,12 +396,11 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/pipe/databases/{id}/triggers",
-            get(handlers::pipe_database_events::list).post(handlers::pipe_database_events::create),
+            get(handlers::pipe_database_events::list),
         )
         .route(
             "/api/pipe/database-triggers/{id}",
-            axum::routing::put(handlers::pipe_database_events::pause)
-                .delete(handlers::pipe_database_events::delete),
+            axum::routing::put(handlers::pipe_database_events::pause),
         )
         .route(
             "/api/pipe/database-triggers/{id}/detach",
@@ -722,6 +720,18 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // Allow their bounded connection retries to finish while retaining the
     // same concurrency pool, body limit, CORS and origin checks as other REST.
     let inspection = Router::new()
+        .route(
+            "/api/pipe/database-rabbitmq",
+            axum::routing::put(handlers::pipe_database_events::rabbitmq_save),
+        )
+        .route(
+            "/api/pipe/databases/{id}/triggers",
+            post(handlers::pipe_database_events::create),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}",
+            delete(handlers::pipe_database_events::delete),
+        )
         .route(
             "/api/pipe/ai/connections/{id}/login",
             post(handlers::pipe_ai::login_start),

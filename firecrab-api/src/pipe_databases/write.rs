@@ -71,8 +71,11 @@ impl TableRequest {
 pub struct ColumnInfo {
     /// Exact column name returned by server metadata.
     pub name: String,
-    /// Server-rendered SQL type used for display and bound casts.
+    /// Server-rendered SQL type used for display.
     pub data_type: String,
+    /// Base type without modifiers; the target column enforces length limits.
+    #[serde(skip)]
+    cast_type: String,
     /// Whether SQL NULL is accepted by this column.
     pub nullable: bool,
     /// Server default expression; omitted input keeps that default.
@@ -205,13 +208,14 @@ impl DatabaseConnection {
         let transactional;
         match self {
             Self::Postgres(connection) => {
-                let rows = sqlx::query("SELECT a.attname::text AS name, format_type(a.atttypid, a.atttypmod)::text AS kind, NOT a.attnotnull AS nullable, pg_get_expr(d.adbin,d.adrelid)::text AS default_value, (a.attgenerated <> '' OR a.attidentity <> '') AS generated, EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid=c.oid AND i.indisprimary AND a.attnum=ANY(i.indkey)) AS primary_key FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum LIMIT 129")
+                let rows = sqlx::query("SELECT a.attname::text AS name, format_type(a.atttypid, a.atttypmod)::text AS kind, format('%I.%I',tn.nspname,t.typname)::text AS cast_kind, NOT a.attnotnull AS nullable, pg_get_expr(d.adbin,d.adrelid)::text AS default_value, (a.attgenerated <> '' OR a.attidentity <> '') AS generated, EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid=c.oid AND i.indisprimary AND a.attnum=ANY(i.indkey)) AS primary_key FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_type t ON t.oid=a.atttypid JOIN pg_namespace tn ON tn.oid=t.typnamespace LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum LIMIT 129")
                     .bind(&table.schema).bind(&table.table).persistent(false).fetch_all(connection).await?;
                 for row in rows {
                     let data_type: String = row.try_get("kind")?;
                     columns.push(ColumnInfo {
                         name: row.try_get("name")?,
                         binary: data_type == "bytea",
+                        cast_type: row.try_get("cast_kind")?,
                         data_type,
                         nullable: row.try_get("nullable")?,
                         default_value: row.try_get("default_value")?,
@@ -235,6 +239,7 @@ impl DatabaseConnection {
                     columns.push(ColumnInfo {
                         name: row.try_get("name")?,
                         binary: mysql_binary(&data_type),
+                        cast_type: data_type.clone(),
                         data_type,
                         nullable: row.try_get::<String, _>("nullable")? == "YES",
                         default_value: row.try_get("default_value")?,
@@ -818,8 +823,8 @@ fn mysql_key(definition: &TableInfo) -> String {
 
 /// Cast a text parameter using PostgreSQL-rendered type metadata.
 fn postgres_cast(column: &ColumnInfo, position: usize) -> String {
-    // format_type comes from PostgreSQL, including quoted domain/enum names.
-    format!("CAST(${position}::text AS {})", column.data_type)
+    // Qualified catalog names preserve domains without silently truncating fields.
+    format!("CAST(${position}::text AS {})", column.cast_type)
 }
 
 /// Build parameterized predicates in physical primary-key order.

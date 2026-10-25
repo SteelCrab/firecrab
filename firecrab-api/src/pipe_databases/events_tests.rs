@@ -466,6 +466,11 @@ async fn durable_events_real_rabbitmq() {
             (0, 0, 5, 1)
         );
         assert_eq!(number(&mut c, &format!("SELECT COUNT(*) FROM {outbox} WHERE id=5 AND OCTET_LENGTH(payload)=524289 AND last_error='operator_acknowledged' AND delivered_at IS NULL")).await, 1);
+        execute(
+            &mut c,
+            &format!("INSERT INTO {qualified}(name) VALUES ('retained at detach')"),
+        )
+        .await;
         let axum::Json(detached) = crate::handlers::pipe_database_events::detach(
             axum::extract::State(state.clone()),
             axum::Extension(crate::server::RequestId(Uuid::new_v4())),
@@ -480,9 +485,35 @@ async fn durable_events_real_rabbitmq() {
         .await;
         assert_eq!(
             number(&mut c, &format!("SELECT COUNT(*) FROM {outbox}")).await,
-            6
+            7
         );
         assert!(detached.detached);
+        for paused in [true, false] {
+            let axum::Json(updated) = crate::handlers::pipe_database_events::pause(
+                axum::extract::State(state.clone()),
+                axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+                axum::extract::Path(trigger.id.to_string()),
+                crate::extract::ValidatedJson(
+                    serde_json::from_value(serde_json::json!({"paused":paused})).unwrap(),
+                ),
+            )
+            .await
+            .unwrap();
+            assert!(updated.detached);
+            assert_eq!(updated.paused, paused);
+        }
+        assert!(
+            relay(&state, &record, &trigger, &client, false)
+                .await
+                .unwrap()
+        );
+        assert_eq!(receiver.effects.lock().unwrap().len(), 6);
+        assert!(
+            !relay(&state, &record, &trigger, &client, false)
+                .await
+                .unwrap(),
+            "drained triggers must enter idle polling"
+        );
         server.abort();
         super::super::bindings::revoke(&record, &binding)
             .await
@@ -525,4 +556,154 @@ async fn durable_events_real_rabbitmq() {
         )
         .await;
     }
+}
+
+#[tokio::test]
+async fn event_mutations_retain_protections_without_the_short_rest_deadline() {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::with_db_file(
+        crate::templates::TemplateRegistry::from_specs(dir.path(), std::iter::empty()).unwrap(),
+        dir.path().join("state.db"),
+    )
+    .await
+    .unwrap();
+    let id = Uuid::new_v4();
+    let input: DatabaseInput = serde_json::from_value(serde_json::json!({"name":"QA","provider":"local","uri":format!("postgresql://qa:{}@127.0.0.1:9/db",Uuid::new_v4()),"tlsMode":"disable"})).unwrap();
+    state.store.save_pipe_database(id, &input).unwrap();
+    let trigger = Trigger {
+        id: Uuid::new_v4(),
+        database_id: id,
+        input: TriggerInput {
+            request_id: Uuid::new_v4(),
+            schema: "public".into(),
+            table: "orders".into(),
+            service_id: Uuid::new_v4(),
+            path: "/events/database".into(),
+        },
+        paused: true,
+        installed: false,
+        detached: false,
+    };
+    state.store.save_database_trigger(&trigger).unwrap();
+    let mut config = crate::server::HttpConfig::load().unwrap();
+    config.allowed_origins = vec!["http://localhost:3000".parse().unwrap()];
+    config.request_timeout = Duration::from_millis(1);
+    let app = crate::server::build_router(state.clone(), &config);
+    let cases = [
+        (
+            "POST",
+            format!("/api/pipe/databases/{id}/triggers"),
+            serde_json::to_value(&trigger.input).unwrap(),
+        ),
+        (
+            "DELETE",
+            format!("/api/pipe/database-triggers/{}", trigger.id),
+            serde_json::Value::Null,
+        ),
+        (
+            "PUT",
+            "/api/pipe/database-rabbitmq".into(),
+            serde_json::json!({"brokers":["127.0.0.1:9"],"tls":false,"username":"qa","password":Uuid::new_v4().to_string(),"development":true}),
+        ),
+    ];
+    for (method, path, body) in cases {
+        let guard = state.service_mutations.clone().lock_owned().await;
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            drop(guard);
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(&path)
+                    .header("host", "localhost:3000")
+                    .header("origin", "http://localhost:3000")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "{method} {path} must reach its ownership validation after waiting"
+        );
+    }
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/pipe/database-triggers/{}", trigger.id))
+                .header("origin", "https://untrusted.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn connection_updates_validate_the_target_saved_while_waiting() {
+    use axum::response::IntoResponse;
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::with_db_file(
+        crate::templates::TemplateRegistry::from_specs(dir.path(), std::iter::empty()).unwrap(),
+        dir.path().join("state.db"),
+    )
+    .await
+    .unwrap();
+    let id = Uuid::new_v4();
+    let input:DatabaseInput=serde_json::from_value(serde_json::json!({"name":"QA","provider":"local","uri":format!("postgresql://qa:{}@127.0.0.1:9/db",Uuid::new_v4()),"tlsMode":"disable"})).unwrap();
+    state.store.save_pipe_database(id, &input).unwrap();
+    let guard = state.service_mutations.clone().lock_owned().await;
+    let task_state = state.clone();
+    let update = tokio::spawn(async move {
+        crate::handlers::pipe_databases::update(
+            axum::extract::State(task_state),
+            axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+            axum::extract::Path(id.to_string()),
+            crate::extract::ValidatedJson(input),
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    let mut current = state.store.pipe_database(id).unwrap().unwrap().input;
+    current.uri = current.uri.replace("127.0.0.1", "127.0.0.2");
+    state.store.update_pipe_database(id, &current).unwrap();
+    state
+        .store
+        .save_database_trigger(&Trigger {
+            id: Uuid::new_v4(),
+            database_id: id,
+            input: TriggerInput {
+                request_id: Uuid::new_v4(),
+                schema: "public".into(),
+                table: "orders".into(),
+                service_id: Uuid::new_v4(),
+                path: "/events/database".into(),
+            },
+            paused: true,
+            installed: false,
+            detached: false,
+        })
+        .unwrap();
+    drop(guard);
+    let response = update.await.unwrap().err().unwrap().into_response();
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&body)
+            .contains("Remove service bindings and triggers before changing the database target")
+    );
+    assert_eq!(
+        state.store.pipe_database(id).unwrap().unwrap().input.uri,
+        current.uri
+    );
 }

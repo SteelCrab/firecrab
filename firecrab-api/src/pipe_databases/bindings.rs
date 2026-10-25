@@ -279,8 +279,8 @@ pub async fn provision(admin: &DatabaseRecord, binding: &BindingRecord) -> Resul
                 .await?;
                 if binding.input.access == Access::Write {
                     // Only sequences owned by columns of a granted table are included.
-                    let sequences:Vec<String>=sqlx::query_scalar("SELECT pg_get_serial_sequence(format('%I.%I',table_schema,table_name),column_name) FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 AND (column_default LIKE 'nextval(%' OR is_identity='YES')").bind(&table.schema).bind(&table.table).fetch_all(&mut *tx).await?;
-                    for sequence in sequences {
+                    let sequences:Vec<Option<String>>=sqlx::query_scalar("SELECT pg_get_serial_sequence(format('%I.%I',table_schema,table_name),column_name) FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 AND (column_default LIKE 'nextval(%' OR is_identity='YES')").bind(&table.schema).bind(&table.table).fetch_all(&mut *tx).await?;
+                    for sequence in sequences.into_iter().flatten() {
                         sqlx::query(&format!(
                             "GRANT USAGE, SELECT ON SEQUENCE {sequence} TO {role}"
                         ))

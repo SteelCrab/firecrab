@@ -198,7 +198,6 @@ pub async fn create(
     Path(id): Path<String>,
     ValidatedJson(input): ValidatedJson<TriggerInput>,
 ) -> Result<Json<Trigger>, AppError> {
-    let record = load(state.clone(), rid.0, id).await?;
     if input.request_id.is_nil() {
         return Err(crate::pipe_databases::validation(
             "A request ID is required",
@@ -206,6 +205,7 @@ pub async fn create(
         ));
     }
     let _claim = state.service_mutations.lock().await;
+    let record = load(state.clone(), rid.0, id).await?;
     super::pipe_databases::available(&state, record.id, rid.0)?;
     if !record.input.write_enabled {
         return Err(crate::pipe_databases::validation(
@@ -336,7 +336,7 @@ pub async fn pause(
         .map_err(|_| AppError::internal(rid.0))?
         .ok_or_else(|| AppError::not_found(rid.0))?;
     super::pipe_databases::available(&state, trigger.database_id, rid.0)?;
-    if (!trigger.installed || trigger.detached) && !input.paused {
+    if !trigger.installed && !input.paused {
         return Err(crate::pipe_databases::validation(
             "Complete trigger setup before resuming delivery",
             rid.0,

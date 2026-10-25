@@ -38,8 +38,8 @@ pub async fn create(
     Path(id): Path<String>,
     ValidatedJson(input): ValidatedJson<BindingInput>,
 ) -> Result<Json<BindingSummary>, AppError> {
-    let record = load(state.clone(), rid.0, id).await?;
     let _claim = state.service_mutations.lock().await;
+    let record = load(state.clone(), rid.0, id).await?;
     super::pipe_databases::available(&state, record.id, rid.0)?;
     crate::service_runtime::ensure_editable(&state, input.service_id, rid.0).await?;
     let service = state
@@ -105,6 +105,7 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = super::vms::parse_id(&id, rid.0)?;
+    let _claim = state.service_mutations.lock().await;
     let binding = state
         .store
         .database_bindings()
@@ -112,7 +113,6 @@ pub async fn delete(
         .into_iter()
         .find(|b| b.id == id)
         .ok_or_else(|| AppError::not_found(rid.0))?;
-    let _claim = state.service_mutations.lock().await;
     crate::service_runtime::ensure_editable(&state, binding.input.service_id, rid.0).await?;
     super::pipe_databases::available(&state, binding.database_id, rid.0)?;
     let record = load(state.clone(), rid.0, binding.database_id.to_string()).await?;

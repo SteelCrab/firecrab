@@ -531,12 +531,12 @@ async fn relay(
     trigger: &Trigger,
     client: &Connection,
     development: bool,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     let settings = record.input.settings(record.id).map_err(Error::Invalid)?;
     let mut connection = DatabaseConnection::connect_write(&record.input, &settings).await?;
     write::verify_owner(&mut connection, record.id).await?;
     if !claim(&mut connection, trigger).await? {
-        return Ok(());
+        return Ok(false);
     }
     if state
         .store
@@ -544,7 +544,7 @@ async fn relay(
         .map_err(|_| Error::Invalid("Cannot inspect trigger ownership"))?
         .is_none_or(|current| current.paused || !current.installed)
     {
-        return Ok(());
+        return Ok(false);
     }
     let channel = rabbitmq::channel(client, &trigger.queue(), development).await?;
     let guard = RelayChannel(channel.clone());
@@ -561,7 +561,8 @@ async fn drain(
     trigger: &Trigger,
     connection: &mut DatabaseConnection,
     channel: &lapin::Channel,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
+    let mut progressed = false;
     let engine = connection.engine();
     let outbox = trigger.outbox(engine);
     let queue = trigger.queue();
@@ -644,6 +645,7 @@ async fn drain(
                     .map_err(|_| {
                         Error::Invalid("Cannot acknowledge a retained broker duplicate")
                     })?;
+                progressed = true;
                 continue;
             }
         }
@@ -665,6 +667,7 @@ async fn drain(
             break;
         }
         let event_id = format!("{}:{id}", trigger.id);
+        progressed = true;
         if payload_bytes > 512 * 1024 {
             update_delivery(
                 connection,
@@ -781,7 +784,7 @@ async fn drain(
             break;
         }
     }
-    Ok(())
+    Ok(progressed)
 }
 
 /// Persist retry scheduling and completion before changing broker delivery state.
@@ -823,12 +826,18 @@ pub fn spawn(state: AppState) {
         use futures_util::{StreamExt, stream};
         use sha2::Digest;
         let mut cached: Option<(String, Arc<Connection>)> = None;
+        let mut next_poll = std::collections::HashMap::<Uuid, tokio::time::Instant>::new();
         loop {
             let configs = (
                 state.store.database_rabbitmq(),
                 state.store.database_triggers(),
             );
             if let (Ok(Some(rabbitmq)), Ok(triggers)) = configs {
+                next_poll.retain(|id, _| {
+                    triggers
+                        .iter()
+                        .any(|t| t.id == *id && t.installed && !t.paused)
+                });
                 let hash = format!(
                     "{:x}",
                     Sha256::digest(serde_json::to_vec(&rabbitmq).unwrap_or_default())
@@ -846,37 +855,47 @@ pub fn spawn(state: AppState) {
                 }
                 if let Some((_, client)) = &cached {
                     let development = rabbitmq.development;
-                    let results =
-                        stream::iter(triggers.into_iter().filter(|t| t.installed && !t.paused))
-                            .map(|trigger| {
-                                let state = &state;
-                                let client = Arc::clone(client);
-                                async move {
-                                    let Ok(Some(record)) =
-                                        state.store.pipe_database(trigger.database_id)
-                                    else {
-                                        return (trigger.id, Some("source_unavailable"));
-                                    };
-                                    let result = tokio::time::timeout(
-                                        Duration::from_secs(45),
-                                        relay(state, &record, &trigger, &client, development),
-                                    )
-                                    .await;
-                                    (
-                                        trigger.id,
-                                        match result {
-                                            Ok(Ok(())) => None,
-                                            Ok(Err(_)) => Some("delivery_unavailable"),
-                                            Err(_) => Some("delivery_timeout"),
-                                        },
-                                    )
-                                }
-                            })
-                            .buffer_unordered(4)
-                            .collect::<Vec<_>>()
+                    let results = stream::iter(triggers.into_iter().filter(|t| {
+                        t.installed
+                            && !t.paused
+                            && next_poll
+                                .get(&t.id)
+                                .is_none_or(|at| *at <= tokio::time::Instant::now())
+                    }))
+                    .map(|trigger| {
+                        let state = &state;
+                        let client = Arc::clone(client);
+                        async move {
+                            let Ok(Some(record)) = state.store.pipe_database(trigger.database_id)
+                            else {
+                                return (trigger.id, Some("source_unavailable"), false);
+                            };
+                            let result = tokio::time::timeout(
+                                Duration::from_secs(45),
+                                relay(state, &record, &trigger, &client, development),
+                            )
                             .await;
-                    for (id, error) in results {
+                            let (error, progressed) = match result {
+                                Ok(Ok(progressed)) => (None, progressed),
+                                Ok(Err(_)) => (Some("delivery_unavailable"), false),
+                                Err(_) => (Some("delivery_timeout"), false),
+                            };
+                            (trigger.id, error, progressed)
+                        }
+                    })
+                    .buffer_unordered(4)
+                    .collect::<Vec<_>>()
+                    .await;
+                    for (id, error, progressed) in results {
                         let _ = state.store.set_database_trigger_health(id, error);
+                        // Active batches continue on the next tick. Idle, delayed
+                        // or unavailable sources avoid repeated TLS handshakes.
+                        if progressed {
+                            next_poll.remove(&id);
+                        } else {
+                            next_poll
+                                .insert(id, tokio::time::Instant::now() + Duration::from_secs(5));
+                        }
                     }
                 } else {
                     for trigger in triggers.into_iter().filter(|t| t.installed && !t.paused) {
