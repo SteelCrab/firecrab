@@ -16,8 +16,6 @@ use uuid::Uuid;
 
 use crate::micromanager::report;
 
-/// Fixed browser address; Vite must fail rather than silently select another port.
-const URL: &str = "http://127.0.0.1:8080";
 /// Session-protected ownership and shutdown endpoint installed before Vite listens.
 const CONTROL: &str = "/__firecrab_dev/";
 /// The server entry point is embedded so source snapshots need no helper script.
@@ -47,6 +45,24 @@ struct Session {
     /// Installation identity; older dashboard sessions have no dependency stamp.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     dependencies: String,
+    /// Older sessions used the fixed dashboard port and did not record it.
+    #[serde(default = "default_port")]
+    port: u16,
+}
+
+fn default_port() -> u16 {
+    8080
+}
+
+impl Session {
+    fn url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+}
+
+/// Resume the selected port for control commands and trust only its browser origin.
+pub fn port(home: &Path) -> Result<u16, Error> {
+    Ok(read_session(home)?.map_or_else(default_port, |state| state.port))
 }
 
 /// Track both manifests so branch changes cannot reuse stale installed packages.
@@ -214,30 +230,21 @@ fn stop_session(client: &Client, state: &Session, url: &str) -> Result<(), Error
 
 /// Shut down the owned dashboard and preserve its checkout for service dev start.
 pub fn stop(home: &Path) -> Result<(), Error> {
-    stop_at(home, URL)
-}
-
-/// Stop with the same endpoint used at startup; tests use isolated loopback ports.
-fn stop_at(home: &Path, url: &str) -> Result<(), Error> {
     if read_session(home)?.is_none() {
         return Ok(());
     }
     let _lock = lock(home)?;
     if let Some(state) = read_session(home)? {
-        stop_session(&client()?, &state, url)?;
+        stop_session(&client()?, &state, &state.url())?;
     }
     Ok(())
 }
 
 /// Stop the owned server and forget its checkout, generated script, and log.
 pub fn clean(home: &Path) -> Result<(), Error> {
-    clean_at(home, URL)
-}
-
-fn clean_at(home: &Path, url: &str) -> Result<(), Error> {
     let _lock = lock(home)?;
     if let Some(state) = read_session(home)? {
-        stop_session(&client()?, &state, url)?;
+        stop_session(&client()?, &state, &state.url())?;
     }
     for name in [
         "dev-dashboard.json",
@@ -255,31 +262,32 @@ fn clean_at(home: &Path, url: &str) -> Result<(), Error> {
 }
 
 /// Launch one detached Node process, or reuse the matching healthy dashboard.
-pub fn start(source: &Path, home: &Path) -> Result<(), Error> {
-    start_at(source, home, 8080)
-}
-
-/// Execute the complete startup transaction on one strict loopback port.
-fn start_at(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
+pub fn start(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
     let url = format!("http://127.0.0.1:{port}");
     let _lock = lock(home)?;
     let client = client()?;
     let dependencies = fs::read_to_string(
         source.join("firecrab-frontend/node_modules/.firecrab-dev-dependencies"),
     )?;
-    if let Some(previous) = read_session(home)? {
+    let previous = read_session(home)?;
+    if listening(&url)
+        && !previous
+            .as_ref()
+            .is_some_and(|state| state.port == port && running(&client, state, &url))
+    {
+        return Err(Error::Failed(format!(
+            "dashboard port {port} is already in use by another server; choose --port PORT or stop that server and retry service dev"
+        )));
+    }
+    if let Some(previous) = previous {
         if previous.source == source
+            && previous.port == port
             && previous.dependencies == dependencies
             && running(&client, &previous, &url)
         {
             return report_ready(&client, home, &url);
         }
-        stop_session(&client, &previous, &url)?;
-    }
-    if listening(&url) {
-        return Err(Error::Failed(format!(
-            "dashboard port {port} is already in use by another server; stop that server and retry service dev"
-        )));
+        stop_session(&client, &previous, &previous.url())?;
     }
     let runtime = home.join("runtime");
     let script = runtime.join("dev-dashboard.mjs");
@@ -289,6 +297,7 @@ fn start_at(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
         source: source.to_owned(),
         session: Uuid::new_v4(),
         dependencies,
+        port,
     };
     let log = fs::File::create(&log_path)?;
     let mut command = Command::new("node");
@@ -335,7 +344,7 @@ fn start_at(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
     report_ready(&client, home, &url)
 }
 
-/// Report success only after both the HTML and API proxy answer through port 8080.
+/// Report success only after both the HTML and API proxy answer through the selected port.
 fn report_ready(client: &Client, home: &Path, url: &str) -> Result<(), Error> {
     for path in ["/", "/api/host"] {
         client

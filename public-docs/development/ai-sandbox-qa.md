@@ -81,7 +81,8 @@ Screenshots under `assets/dashboard/ai-sandbox/` use labelled fixture account/mo
 
 ## Rust/WASM integration, 2026-10-25
 
-PR #490 ports the UI from main at `ec06ac64` and integrates the subsequent Git-source/mTLS main at `5f913d87` and replaces its React slice with Rust-owned state, rendering and delegated events.
+PR #490 ports the UI from main at `ec06ac64` and replaces its React slice with Rust-owned state, rendering and delegated events.
+It integrates subsequent main changes through `e608a152`, including Git sources, mTLS and the development dashboard port option.
 The same conversation, project dialog, task board, diff/activity review, selected apply, icons and final AI sidebar group are preserved.
 The browser binding remains thin; the Sandbox application logic is in `firecrab-frontend/src/sandbox.rs` and its modules.
 The old React components, navigation files and browser API helper are removed.
