@@ -20,8 +20,9 @@ mod pipe_storage;
 mod schedules;
 mod security_groups;
 pub use micro_services::{
-    DeployMicroServiceRequest, MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec,
-    ServiceInstance, ServicePhase, ServiceRuntime,
+    DeployMicroServiceRequest, DeployStrategy, MicroServiceDeployment, MicroServiceResponse,
+    MicroServiceSpec, RetryServiceRequest, RollbackServiceRequest, ServiceInstance, ServicePhase,
+    ServiceRouteTransition, ServiceRuntime, ServiceUpdate, UpdateServiceRequest,
 };
 pub use pipe_ai::*;
 pub use pipe_storage::{

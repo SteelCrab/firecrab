@@ -222,13 +222,34 @@ See [#216](https://github.com/SteelCrab/firecrab/pull/216) for an example.
 Write issue bodies in English. Follow the [issue template](.github/ISSUE_TEMPLATE/task.md) and use only these four sections, in this order:
 
 - `## Summary`: describe the change or problem in 1–3 short sentences.
-- `## Scope`: list the work and essential constraints as a short checklist. For bugs and installation failures, include reproduction steps, environment details, and relevant logs here.
+- `## Scope`: group the work by feature. Use a short checklist with one action per item. Put related steps under their feature.
 - `## Architecture`: include a compact Mermaid diagram of the affected components and data flow. Keep supporting text short.
-- `## Notes`: add brief caveats, dependencies, or related issue links.
+- `## Notes`: keep only brief caveats, dependencies, evidence references, or consolidation history. Do not repeat Scope items, implementation status, or PR references already listed there.
+
+Use plain GitHub references such as `#449`, `#490`, and `#496` for issues and PRs in this repository. Do not use Markdown links or full GitHub URLs for these references. Keep normal links for files, QA records, and external sources.
+
+Put each implementation PR once on the relevant feature's top-level Scope item. Group its work below that item instead of repeating the same PR on every step. Distinguish a merged implementation from a Draft or partial implementation. Leave unfinished work unchecked.
+
+For example:
+
+```markdown
+## Scope
+
+- [x] **Pipe AI:** connect and manage provider accounts. #449 · merged
+- [ ] **AI Sandbox** — #490 · Draft, initial implementation
+  - [ ] Select verified models and save conversations.
+  - [ ] Prepare projects and run isolated tasks.
+  - [ ] Review results and apply selected changes.
+  - [ ] Share validated execution contracts with Canvas #496.
+- [ ] **Firecrab Tunnel:** publish ready applications.
+```
+
+For bugs and installation failures, put reproduction steps, environment details, and relevant logs in Scope.
+Keep detailed requirements and verification checks under Scope, and detailed component diagrams under Architecture. Collapse long material with `<details>` or link a separate design or QA record.
 
 Do not add `Motivation` or `Acceptance` sections, or other top-level sections.
-Keep issues concise. Put detailed implementation designs in separate documents when needed.
-Prefer one problem per issue. Report sensitive security problems privately to the maintainers.
+Keep issues concise. Prefer one problem per issue.
+Report sensitive security problems privately to the maintainers.
 
 ## CI
 

@@ -172,6 +172,12 @@ Entries land here as work merges, and move under the next version heading when t
   an M2Image. Logins are write-only in API responses. See
   [Pipe Registry](public-docs/guides/pipe-registry.md).
 
+- Deploy updates running domain services through the existing Nginx ingress.
+  Rolling and blue-green updates, immutable release history, selected rollback,
+  verified worker drain, and restart/retry recovery share one REST/CLI/YAML
+  executor. The Rust/WASM dashboard exposes update and rollback actions (#335).
+  Deploy-owned rootfs caches are pruned after VM, pool, operation, and retained-release references are released.
+
 ### Changed
 
 - The dashboard's Pipe page lists its services as five cards: Route, Pipe
@@ -188,6 +194,11 @@ Entries land here as work merges, and move under the next version heading when t
 - None.
 
 ### Fixed
+
+- The development API proxy preserves the dashboard's Host header so browser
+  requests from custom ports such as 8098 pass the API's same-origin checks.
+  Vite's default host checks and the API's origin checks reject untrusted requests.
+  This fixes the `--port` behavior from [#488](https://github.com/SteelCrab/firecrab/issues/488).
 
 - OCI guests recreate image-declared `/run` directories with `systemd-tmpfiles`
   before app services on every boot. MariaDB can restart after tmpfs clears

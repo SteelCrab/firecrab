@@ -14,7 +14,7 @@ pub struct Field {
     pub translate_options: bool,
 }
 impl Field {
-    fn new(
+    pub(crate) fn new(
         key: &'static str,
         label: &'static str,
         kind: &'static str,
@@ -34,7 +34,7 @@ impl Field {
         self.required = false;
         self
     }
-    fn choices(mut self, options: &[(&str, &str)]) -> Self {
+    pub(crate) fn choices(mut self, options: &[(&str, &str)]) -> Self {
         self.options = options
             .iter()
             .map(|(key, label)| (key.to_string(), label.to_string()))
@@ -271,7 +271,7 @@ impl Form {
             _ => String::new(),
         };
         html.push_str(&extra);
-        html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\">{}</button><button class=\"btn\" type=\"button\" data-action=\"cancel\">{}</button></div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>",crate::i18n::t(match self.title.as_str() { "Create volume"=>"Create volume", "Deploy MicroService"=>"Deploy and run", "New MicroService"|"Edit MicroService"=>"Save configuration", "New schedule"=>"Create schedule", "Edit schedule"=>"Save changes", "Create a pool"=>"Create pool", "Pool settings"=>"Save settings", "New security group"=>"Create security group", "Security group rules"=>"Save rules", "New secret"|"Edit secret"=>"Save secret", "New connection"|"Edit connection"=>"Save connection", _=>"Save" }),crate::i18n::t("Cancel")));
+        html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\">{}</button><button class=\"btn\" type=\"button\" data-action=\"cancel\">{}</button></div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>",crate::i18n::t(match self.title.as_str() { "Create volume"=>"Create volume", "Deploy MicroService"=>"Deploy and run", "Deploy update"=>"Deploy update", "New MicroService"|"Edit MicroService"=>"Save configuration", "New schedule"=>"Create schedule", "Edit schedule"=>"Save changes", "Create a pool"=>"Create pool", "Pool settings"=>"Save settings", "New security group"=>"Create security group", "Security group rules"=>"Save rules", "New secret"|"Edit secret"=>"Save secret", "New connection"|"Edit connection"=>"Save connection", _=>"Save" }),crate::i18n::t("Cancel")));
         if self.base["policyError"] == true {
             html = html.replace("type=\"submit\"", "type=\"submit\" disabled");
             html.push_str(&crate::render::button(
@@ -280,6 +280,15 @@ impl Form {
                 "",
             ));
         }
+        if self.title == "Deploy update" {
+            for key in ["name", "domain"] {
+                html = html.replace(
+                    &format!("id=\"field-{key}\""),
+                    &format!("id=\"field-{key}\" readonly"),
+                );
+            }
+        }
+
         html
     }
     pub fn choose(&mut self, key: &str, items: &Value, id: &str, label: &str) {
@@ -434,7 +443,7 @@ impl Form {
                 }
                 Ok(body)
             }
-            "New MicroService" | "Edit MicroService" => {
+            "New MicroService" | "Edit MicroService" | "Deploy update" => {
                 if body["queues"].as_object().is_some_and(|q| q.is_empty()) {
                     body.as_object_mut().unwrap().remove("queues");
                 }
@@ -443,6 +452,15 @@ impl Form {
                 }
                 if let Some(domain) = body["domain"].as_str() {
                     body["domain"] = json!(normalize_domain(domain));
+                }
+                if self.title == "Deploy update" {
+                    let object = body.as_object_mut().expect("service configuration");
+                    let operation = object.remove("operationId").unwrap_or(Value::Null);
+                    let expected = object.remove("expectedReleaseId").unwrap_or(Value::Null);
+                    let strategy = object.remove("strategy").unwrap_or(json!("rolling"));
+                    return Ok(
+                        json!({"operationId":operation,"expectedReleaseId":expected,"spec":body,"strategy":strategy}),
+                    );
                 }
                 Ok(body)
             }
@@ -1248,6 +1266,36 @@ mod tests {
         let deploy = resource_form("service-deploy", &Value::Null, "service-1").unwrap();
         let _: DeployMicroServiceRequest =
             serde_json::from_value(deploy.payload(&values(&deploy)).unwrap()).unwrap();
+    }
+    #[test]
+    fn running_update_payload_keeps_release_fencing_outside_the_service_spec() {
+        let data = json!({"name":"web","image":"ghcr.io/team/web:v2","port":8080,"healthPath":"/health","ram":256,"cpu":1,"domain":"web.example.com","env":{"MODE":"prod"},"secrets":{},"queues":{"JOBS":{"queueId":"33333333-3333-4333-8333-333333333333","access":"consume"}}});
+        let mut form = resource_form("services", &data, "service").unwrap();
+        form.title = "Deploy update".into();
+        form.base["operationId"] = json!("11111111-1111-4111-8111-111111111111");
+        form.base["expectedReleaseId"] = json!("22222222-2222-4222-8222-222222222222");
+        form.fields.push(Field::new(
+            "strategy",
+            "Deployment strategy",
+            "select",
+            "blue_green",
+        ));
+        let body = form.payload(&values(&form)).unwrap();
+        let request: firecrab_api_types::UpdateServiceRequest =
+            serde_json::from_value(body.clone()).unwrap();
+        assert!(request.expected_release_id.is_some());
+        assert_eq!(
+            request.strategy,
+            firecrab_api_types::DeployStrategy::BlueGreen
+        );
+        assert_eq!(request.spec.env["MODE"], "prod");
+        assert_eq!(
+            request.spec.queues["JOBS"].access,
+            firecrab_api_types::QueueAccess::Consume
+        );
+        assert!(body["spec"].get("operationId").is_none());
+        assert!(body["spec"].get("expectedReleaseId").is_none());
+        assert!(body["spec"].get("strategy").is_none());
     }
     #[test]
     fn unicode_ids_are_encoded_as_one_path_component() {

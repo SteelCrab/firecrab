@@ -113,6 +113,7 @@ The dashboard stays running across management VM stops and restarts; its API pro
 Dashboard logs are stored at `runtime/dev-dashboard.log` in the managed home.
 The installed release dashboard remains available through the API's port 5523.
 Vite proxies `/api` and `/ws` to `127.0.0.1:5523` through the macOS SSH tunnel or WSL localhost forwarding.
+The API proxy preserves the dashboard's Host and Origin headers so same-origin requests work on the selected port.
 Use `localhost` or `127.0.0.1` on the selected port for the browser origin.
 
 ## macOS disk I/O

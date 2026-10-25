@@ -285,6 +285,26 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(crate::service_runtime::get).post(crate::service_runtime::deploy),
         )
         .route(
+            "/api/micro-services/{id}/updates",
+            post(crate::service_runtime::deploy::update),
+        )
+        .route(
+            "/api/micro-services/{id}/releases",
+            get(crate::service_runtime::deploy::releases),
+        )
+        .route(
+            "/api/micro-services/{id}/rollback",
+            post(crate::service_runtime::deploy::rollback),
+        )
+        .route(
+            "/api/micro-services/{id}/deployment/retry",
+            post(crate::service_runtime::deploy::retry),
+        )
+        .route(
+            "/api/micro-services/{id}/deployments/{operation_id}",
+            get(crate::service_runtime::deploy::operation),
+        )
+        .route(
             "/api/micro-services/{id}/deployment/check",
             post(crate::service_runtime::check),
         )
@@ -1194,6 +1214,8 @@ mod tests {
         .unwrap();
         let expected_request = request.clone();
         let snapshot = Snapshot {
+            ingress_graceful_drain: false,
+            ingress_workers: None,
             firecrab_tunnels: Vec::new(),
             config: Some(request.config.clone()),
             units: Vec::new(),
@@ -1338,6 +1360,8 @@ mod tests {
             .collect::<Vec<_>>();
         let expected_requests = requests.clone();
         let snapshot = Snapshot {
+            ingress_graceful_drain: false,
+            ingress_workers: None,
             firecrab_tunnels: Vec::new(),
             config: None,
             units: Vec::new(),
