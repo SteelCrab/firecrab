@@ -258,6 +258,9 @@ jobs:
           python3 -m unittest scripts/test_write_release_notes.py
           python3 scripts/check-changelog.py
 
+      - name: Native kernel builder
+        run: python3 -m unittest scripts/test_build_host_kernel.py
+
       - name: microManager PR report
         run: python3 -m unittest scripts/test_micromanager_pr_report.py
 
@@ -524,7 +527,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck install.sh scripts/ci-qa-helper-upgrade.sh scripts/ci-qa-pipe-databases.sh scripts/firecrab-release.sh scripts/package-host-release.sh \
-            scripts/build-guest-console.sh scripts/build-guest-kernel.sh \
+            scripts/build-guest-console.sh scripts/build-guest-kernel.sh scripts/build-host-kernel.sh \
             scripts/firecracker-menual/install-linux-kernel.sh \
             scripts/build-micromanager-macos.sh \
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \

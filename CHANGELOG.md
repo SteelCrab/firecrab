@@ -178,6 +178,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Changed
 
+- Guest kernel installation and OCI import build kernel.org's current stable
+  source on the Linux host instead of downloading MicroRegistry kernel packages.
+  Source and image digests are verified, and existing image kernel assignments
+  remain explicit. `FIRECRAB_KERNEL_RELEASES_URL` and `FIRECRAB_KERNEL_BUILD_JOBS`
+  control source discovery and compiler parallelism.
+
 - The dashboard's Pipe page lists its services as five cards: Route, Pipe
   Registry, Firecrab Tunnel, Cloudflare Quick Tunnel, and Cloudflare Named
   Tunnel. Each card shows the service state and opens that service's page

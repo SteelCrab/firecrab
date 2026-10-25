@@ -18,7 +18,8 @@ flowchart TB
     Provision["Guest activation"]
     Ext4["ext4 image"]
     Kernel[("Kernel cache<br/>.oci/kernel")]
-    MicroRegistry["MicroRegistry"]
+    KernelOrg["kernel.org stable source"]
+    Build["Native kernel build"]
     Template["Registered template"]
     Ref -->|resolve, select platform| Registry
     Registry -->|verified bytes| Blobs
@@ -28,7 +29,8 @@ flowchart TB
     Toolbox --> Provision
     Merge --> Provision
     Provision -->|mkfs.ext4 -d| Ext4
-    MicroRegistry -->|digest-pinned kernel| Kernel
+    KernelOrg -->|SHA256-verified source| Build
+    Build -->|verified image| Kernel
     Ext4 --> Template
     Kernel --> Template
 ```
@@ -135,11 +137,12 @@ Failed activation restores every modified path.
 
 ## Kernel and registration
 
-The image is paired with a digest-pinned kernel for the host architecture.
+The image is paired with a host-built kernel from kernel.org's current stable source.
 Its `virtio_blk`, `virtio_net`, `virtio_mmio`, and `ext4` drivers are built in, so no initrd is required.
 The verified cache is shared with [kernel management](../guides/kernels.md).
-`FIRECRAB_OCI_KERNEL_PATH` can select a host copy that matches the pinned digest.
-An unreachable registry can fall back to an installed catalog kernel.
+`FIRECRAB_OCI_KERNEL_PATH` can select an architecture-compatible host kernel.
+Source and image SHA256 values are recorded with the build.
+An upstream outage or failed build can fall back to a verified installed kernel or an installed catalog kernel.
 
 The ext4 result is stored as `rootfs/<alias>.ext4` and registered as a local template.
 This does not create a MicroRegistry catalog row.
