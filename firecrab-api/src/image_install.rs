@@ -283,6 +283,17 @@ impl ImageInstallTracker {
         jobs.remove(alias);
     }
 
+    /// Cache collection must not erase an import that started after inspection.
+    pub(crate) fn clear_finished(&self, alias: &str) {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|p| p.into_inner());
+        if jobs
+            .get(alias)
+            .is_some_and(|job| job.status != ImageInstallStatus::Running)
+        {
+            jobs.remove(alias);
+        }
+    }
+
     /// `true` when an install for this alias is still running.
     pub fn is_running(&self, alias: &str) -> bool {
         let jobs = self.jobs.lock().unwrap_or_else(|p| p.into_inner());

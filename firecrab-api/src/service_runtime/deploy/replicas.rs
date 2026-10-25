@@ -57,21 +57,28 @@ pub(super) async fn prepare_template(
             "Resolving Deploy image to an immutable digest",
         )
         .await?;
-        let auth = require_image_auth(state, &current.spec.image, deployment.id)
-            .await
-            .map_err(|_| "Image account is no longer connected in Auth")?;
-        let credential = auth.registry_credential().await.map_err(str::to_owned)?;
         let reference =
             ImageReference::parse(&current.spec.image).map_err(|_| "Invalid Deploy image")?;
-        let image = oci::resolve(
-            &reference,
-            Architecture::HOST,
-            oci::is_loopback_registry(&reference.registry),
-            Some(credential),
-        )
-        .await
-        .map_err(|_| "Could not resolve Deploy image; check Auth and registry access")?;
-        target_mut(deployment, restoring).digest = Some(image.digest);
+        let digest = if let ImageVersion::Digest(digest) = &reference.version {
+            // A verified local pin can be reused while the registry is offline.
+            // Admission still requires Auth; a cache miss uses authenticated import.
+            digest.to_string()
+        } else {
+            let auth = require_image_auth(state, &current.spec.image, deployment.id)
+                .await
+                .map_err(|_| "Image account is no longer connected in Auth")?;
+            let credential = auth.registry_credential().await.map_err(str::to_owned)?;
+            oci::resolve(
+                &reference,
+                Architecture::HOST,
+                oci::is_loopback_registry(&reference.registry),
+                Some(credential),
+            )
+            .await
+            .map_err(|_| "Could not resolve Deploy image; check Auth and registry access")?
+            .digest
+        };
+        target_mut(deployment, restoring).digest = Some(digest);
         save(state, deployment).await?;
     }
     let current = target(deployment, restoring);
@@ -80,6 +87,15 @@ pub(super) async fn prepare_template(
         if Some(&template.version) != current.digest.as_ref() {
             return Err("Release image cache has a different digest".into());
         }
+        return Ok(());
+    }
+    if cache::restore_cached(
+        state,
+        &alias,
+        current.digest.as_deref().ok_or("Release digest missing")?,
+    )
+    .await?
+    {
         return Ok(());
     }
     let reference =
@@ -93,12 +109,13 @@ pub(super) async fn prepare_template(
         .begin_with(&alias, "Deploy image import started")
     {
         Ok(_) => {
-            oci::run_oci_import(
+            oci::run_deploy_import(
                 state.oci_imports.clone(),
                 (*state.templates).clone(),
                 reference,
                 alias.clone(),
                 Some(credential),
+                state.store.clone(),
             )
             .await
         }

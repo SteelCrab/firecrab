@@ -10,6 +10,7 @@ use firecrab_helper_protocol::pipe::{
 };
 use std::net::SocketAddr;
 
+pub(crate) mod cache;
 mod replicas;
 mod routes;
 use replicas::*;
@@ -646,6 +647,7 @@ async fn restore(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
     .await
     .map_err(|_| "Could not commit the restored Deploy release")?;
     *deployment = previous;
+    cache::schedule(state.clone());
     Ok(())
 }
 

@@ -12,7 +12,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-fn journal() -> MicroServiceDeployment {
+pub(super) fn journal() -> MicroServiceDeployment {
     let service = Uuid::new_v4();
     let mut previous = deployment(service);
     previous.phase = ServicePhase::Running;

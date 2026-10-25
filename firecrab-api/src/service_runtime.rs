@@ -354,7 +354,11 @@ async fn phase(
         deployment.log.remove(0);
     }
     deployment.log.push(message.into());
-    save(state, deployment).await
+    save(state, deployment).await?;
+    if matches!(phase, ServicePhase::Running | ServicePhase::Stopped) {
+        deploy::cache::schedule(state.clone());
+    }
+    Ok(())
 }
 
 /// Run under the deployment permit and clean up owned VMs if deployment fails.
@@ -424,19 +428,24 @@ async fn execute(
     .await?;
     let original =
         ImageReference::parse(&deployment.spec.image).map_err(|error| error.to_string())?;
-    let resolved = oci::resolve(
-        &original,
-        Architecture::HOST,
-        oci::is_loopback_registry(&original.registry),
-        Some(credential.clone()),
-    )
-    .await
-    .map_err(|error| format!("Image resolution failed: {error}"))?;
-    deployment.digest = Some(resolved.digest.clone());
+    let digest = if let ImageVersion::Digest(digest) = &original.version {
+        digest.to_string()
+    } else {
+        oci::resolve(
+            &original,
+            Architecture::HOST,
+            oci::is_loopback_registry(&original.registry),
+            Some(credential.clone()),
+        )
+        .await
+        .map_err(|error| format!("Image resolution failed: {error}"))?
+        .digest
+    };
+    deployment.digest = Some(digest.clone());
     save(state, deployment).await?;
     let pinned = ImageReference {
         version: ImageVersion::Digest(
-            Sha256Digest::parse(&resolved.digest).map_err(|error| error.to_string())?,
+            Sha256Digest::parse(&digest).map_err(|error| error.to_string())?,
         ),
         ..original
     };
@@ -444,7 +453,7 @@ async fn execute(
         .map_err(|error| error.to_string())?
         .alias;
     if let Some(template) = state.templates.resolve_alias(&alias) {
-        if template.version != resolved.digest {
+        if template.version != digest {
             return Err("Pinned image alias belongs to a different digest".into());
         }
     } else {
@@ -847,6 +856,7 @@ async fn cleanup(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
 /// VM startup reconciliation has already re-adopted live processes. Never invent
 /// success for an operation the previous API process did not finish.
 pub(crate) async fn recover(state: &AppState) {
+    deploy::cache::start(state.clone());
     let store = state.store.clone();
     let Ok(services) = database(Uuid::new_v4(), move || store.list_micro_services()).await else {
         return;
