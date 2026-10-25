@@ -105,6 +105,8 @@ async fn multiple_quick_tunnels_forward_only_the_requested_intent_and_preserve_o
         ),
     ];
     let snapshot = Snapshot {
+        ingress_graceful_drain: false,
+        ingress_workers: None,
         firecrab_tunnels: Vec::new(),
         config: None,
         units: Vec::new(),

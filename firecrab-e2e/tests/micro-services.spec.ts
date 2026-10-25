@@ -69,6 +69,7 @@ async function openServices(
           cloudflaredAvailable: false,
         },
       });
+    if (path === "/api/queues") return route.fulfill({ json: [{ id: STORAGE, name: "notifications", phase: "ready" }] });
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/micro-networks") return route.fulfill({ json: [] });
     if (path === "/api/pipe/storage")
@@ -160,6 +161,27 @@ async function openServices(
 }
 
 test.describe("MicroService configuration @dashboard", () => {
+  test("saves and removes a Queue binding without exposing credentials", async ({ page }) => {
+    const writes = await openServices(page);
+    await page.getByRole("button", { name: "New MicroService", exact: true }).click();
+    await page.getByLabel("Name", { exact: true }).fill("orders");
+    await selectServiceApp(page);
+    await serviceStep(page, 2);
+    await page.getByRole("button", { name: "Add Queue connection", exact: true }).click();
+    await page.locator(".queue-binding-row").getByLabel("Alias", { exact: true }).fill("NOTIFICATIONS");
+    await page.locator(".queue-binding-row").getByRole("combobox", { name: "Access", exact: true }).selectOption("consume");
+    await saveService(page);
+    await expect.poll(() => writes.length).toBe(1);
+    expect(writes[0].body.queues).toEqual({ NOTIFICATIONS: { queueId: STORAGE, access: "consume" } });
+    expect(JSON.stringify(writes[0].body)).not.toContain("amqp://");
+    await page.getByRole("button", { name: "Edit orders", exact: true }).click();
+    await serviceStep(page, 2);
+    await page.locator(".queue-binding-row").getByRole("button", { name: "Remove", exact: true }).click();
+    await saveService(page);
+    await expect.poll(() => writes.length).toBe(2);
+    expect(writes[1].body.queues).toBeUndefined();
+  });
+
   test("binds and clears an S3 connection while preserving its security group", async ({
     page,
   }) => {
@@ -939,4 +961,104 @@ test("placement ignores an older port result and checks the final request again"
     .click();
   await expect.poll(() => posts).toBe(1);
   expect(checks).toBeGreaterThan(before);
+});
+
+const RELEASE_A = "11111111-1111-4111-8111-111111111111";
+const RELEASE_B = "22222222-2222-4222-8222-222222222222";
+const DEPLOY_SPEC = { ...INITIAL, cpu: 1, ram: 128, replicas: 1, secrets: {} };
+function release(id: string, image = "ghcr.io/team/orders:1.0") {
+  return { id, serviceId: ID, phase: "running", spec: { ...DEPLOY_SPEC, image }, request: { microNetworkId: ID, hostPort: 0 },
+    digest: `sha256:${(id === RELEASE_A ? "a" : "b").repeat(64)}`, instances: [{ vmId: SECRET, ipv4: "172.30.0.2", hostPort: 0, state: "running", healthy: true }],
+    domainRouteOwned: true, log: ["All replicas answered the app health check"], error: null, startedAt: 1792886400, finishedAt: 1792886410 };
+}
+
+test.describe("Deploy release management @dashboard", () => {
+  test("uses Deploy for a running update and preserves the reviewed release identity", async ({ page }) => {
+    const writes = await openServices(page, [DEPLOY_SPEC]);
+    let current: object = release(RELEASE_A);
+    const updates: Record<string, any>[] = [];
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: current }));
+    await page.route(`**/api/micro-services/${ID}/updates`, async route => {
+      const body = route.request().postDataJSON(); updates.push(body);
+      current = { ...release(body.operationId, body.spec.image), spec: body.spec, phase: "switching_traffic", update: {
+        previous: release(RELEASE_A), requestedSpec: body.spec, strategy: body.strategy, rollbackOf: null,
+        cancelled: false, restoring: false, routedNew: false, transition: null, retiring: [], completed: false,
+      } };
+      return route.fulfill({ status: 202, json: current });
+    });
+    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Deploy update", exact: true }).click();
+    await expect(page.getByLabel("Name", { exact: true })).toHaveAttribute("readonly", "");
+    await selectServiceApp(page, "ghcr.io/team/orders:2.0");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByLabel("Domain (optional)", { exact: true })).toHaveAttribute("readonly", "");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByLabel("Memory (MiB)", { exact: true }).fill("256");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByLabel("Deployment strategy", { exact: true }).selectOption("blue_green");
+    await page.getByRole("button", { name: "Deploy update", exact: true }).click();
+    await expect(page.getByText("Switching Nginx traffic", { exact: true })).toBeVisible();
+    expect(updates).toHaveLength(1);
+    expect(updates[0].expectedReleaseId).toBe(RELEASE_A);
+    expect(updates[0].operationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(updates[0].strategy).toBe("blue_green");
+    expect(updates[0].spec.image).toBe("ghcr.io/team/orders:2.0");
+    expect(updates[0].spec.ram).toBe(256);
+    expect(updates[0].spec.env).toEqual(DEPLOY_SPEC.env);
+    expect(updates[0].spec).not.toHaveProperty("id");
+    expect(writes).toHaveLength(0);
+  });
+
+  test("selects a previous release and reuses the rollback identity after a network failure", async ({ page }, testInfo) => {
+    const active = release(RELEASE_B, "ghcr.io/team/orders:2.0");
+    await openServices(page, [{ id: ID, ...active.spec }]);
+    const rollbacks: Record<string, any>[] = [];
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: active }));
+    await page.route(`**/api/micro-services/${ID}/releases`, route => route.fulfill({ json: [active, release(RELEASE_A)] }));
+    await page.route(`**/api/micro-services/${ID}/rollback`, async route => {
+      const body = route.request().postDataJSON(); rollbacks.push(body);
+      if (rollbacks.length === 1) return route.abort("failed");
+      return route.fulfill({ status: 202, json: { ...release(body.operationId), phase: "queued", instances: [], update: {
+        previous: active, requestedSpec: DEPLOY_SPEC, strategy: body.strategy, rollbackOf: RELEASE_A,
+        cancelled: false, restoring: false, routedNew: false, transition: null, retiring: [], completed: false,
+      } } });
+    });
+    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Release history", exact: true }).click();
+    await page.getByLabel("Rollback release", { exact: true }).selectOption(RELEASE_A);
+    await page.getByRole("button", { name: "Roll back", exact: true }).click();
+    await expect(page.getByText(/Unable to connect to the API/)).toBeVisible();
+    await page.getByRole("button", { name: "Roll back", exact: true }).click();
+    await expect.poll(() => rollbacks.length).toBe(2);
+    expect(rollbacks[1]).toEqual(rollbacks[0]);
+    expect(rollbacks[0].releaseId).toBe(RELEASE_A);
+    expect(rollbacks[0].expectedReleaseId).toBe(RELEASE_B);
+    await expect(page.getByText("Queued", { exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("deploy-rollback-mobile.png"), fullPage: true });
+  });
+
+  test("reports history errors and retries only the inspected interrupted operation", async ({ page }) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    const current = { ...release(RELEASE_B), phase: "failed", error: "Drain timed out; VMs retained", update: {
+      previous: release(RELEASE_A), requestedSpec: DEPLOY_SPEC, strategy: "rolling", rollbackOf: null,
+      cancelled: false, restoring: false, routedNew: true, transition: null, retiring: [SECRET], completed: false,
+    } };
+    const retries: object[] = [];
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: current }));
+    await page.route(`**/api/micro-services/${ID}/releases`, route => route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Release storage unavailable" } } }));
+    await page.route(`**/api/micro-services/${ID}/deployment/retry`, route => {
+      retries.push(route.request().postDataJSON());
+      return route.fulfill({ status: 202, json: { ...current, phase: "draining", error: null } });
+    });
+    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Release history", exact: true }).click();
+    await expect(page.getByText("HTTP 503: Release storage unavailable", { exact: true })).toBeVisible();
+    await expect(page.getByText("No successful releases are retained yet.", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Retry Deploy", exact: true }).click();
+    expect(retries).toEqual([{ operationId: RELEASE_B }]);
+    await expect(page.getByText("Draining previous requests", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeDisabled();
+  });
 });

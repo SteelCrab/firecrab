@@ -144,10 +144,12 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | MicroService | `GET, POST /api/micro-services`, `GET, PUT, DELETE /api/micro-services/{id}` |
 | Stack ownership and planning | `GET, POST /api/stacks`, `GET, DELETE /api/stacks/{name}`, `POST /api/stacks/{name}/bindings`, `/unbind`, `/plan`; empty-registration deletion requires `?id=STACK_UUID`; see [Stack planning](../guides/stack-planning.md#rest) |
 | Native stack apply | `POST /api/stacks/{name}/apply`, `GET /api/stacks/{name}/applies/{id}`; durable, redacted execution with exact retry IDs; see [Stack apply](../guides/stack-apply.md#rest-and-limits) |
+| Git source checks | `GET, PUT /api/stacks/{name}/source`, `POST /api/stacks/{name}/source/check`, `GET /api/stacks/{name}/source/history`; detect-only polling and exact-commit observations; see [Git source checks](../guides/stack-git-source.md#rest) |
 | MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/deployment/check`, `POST /api/micro-services/{id}/stop` |
 | MicroNetwork | `/api/micro-networks`, `/{id}` |
 | Security group | `GET, POST /api/security-groups`, `GET, PUT, DELETE /api/security-groups/{id}`, `PUT /api/security-groups/{id}/rules` |
 | Storage | `/api/storage`, `/api/storage/devices`, `/api/micro-storages` |
+| Persistent data volumes | `/api/microblockstorage`, `/api/microblockstorage/{id}`, `/{id}/attach`, `/{id}/detach`; see [Volumes](../guides/volumes.md#api) |
 | Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}` |
 | Images | `/api/images`, `/{alias}`, `/{alias}/package`, `/{alias}/install`, `/{alias}/kernel`, `/{alias}/bootstrap` |
 | Kernels | `/api/kernels`, `/{version}/install`, `/{version}` |
@@ -157,6 +159,7 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | Update | GET / POST `/api/update`, GET `/api/update/progress` |
 
 See [MicroService](../guides/microservices.md) for configuration fields, validation, and deployment behavior.
+See [Deploy](../guides/deploy.md#rest) for running updates, release history, rollback, retry, and exact operation status.
 
 ## Host
 

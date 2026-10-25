@@ -38,9 +38,18 @@ impl Store {
             return Err(PersistenceError::StackConflict);
         }
         super::stack_applies::ensure_idle(&tx, stack.id)?;
+        super::stack_sources::ensure_idle(&tx, stack.id)?;
         if !stack.bindings.is_empty() {
             return Err(PersistenceError::StackNotEmpty);
         }
+        tx.execute(
+            "DELETE FROM stack_git_checks WHERE stack_id = ?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM stack_git_sources WHERE stack_id = ?1",
+            [id.to_string()],
+        )?;
         tx.execute(
             "DELETE FROM stack_applies WHERE stack_id = ?1",
             [id.to_string()],

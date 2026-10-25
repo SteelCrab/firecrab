@@ -22,15 +22,19 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Create VMs, use the console, and connect with SSH | [Dashboard](guides/dashboard.md) |
 | Configure and manage an app | [MicroService](guides/microservices.md) |
 | Register hosts and place VMs through one controller | [Multi-host placement](guides/multihost.md) |
+| Update or roll back a running app through Nginx | [Deploy](guides/deploy.md) |
+| Connect apps with internal RabbitMQ message queues | [Queue](guides/queues.md) |
 | Validate a declarative YAML stack offline | [Stack validation](guides/stacks.md) |
 | Register stack ownership and preview configuration changes | [Stack planning](guides/stack-planning.md) |
 | Apply YAML stacks and inspect durable execution status | [Stack apply](guides/stack-apply.md) |
+| Connect a GitHub manifest and detect configuration drift | [Git source checks](guides/stack-git-source.md) |
 | Try Terraform against the public REST API | [Experimental Terraform example](../examples/terraform/basic/README.md) |
 | Schedule MicroVM start and stop operations | [Schedules](guides/schedules.md) |
 | Store secrets and transfer them to external stores | [Secrets and PipeSecrets](guides/secrets.md) |
 | Configure subnets, internet access, and IPv6 | [Networking](guides/networking.md) |
 | Restrict VM connections and inherit replica policies | [Security groups](guides/security-groups.md) |
 | Choose a disk location and back up VM data | [Storage](guides/storage.md) |
+| Keep application data when replacing a VM | [Persistent volumes](guides/volumes.md) |
 | Set management VM CPU, RAM, disk, and networking | [microManager resources](guides/micromanager-resources.md) |
 | Edit microManager settings and automatic idle shutdown | [Settings and Sleepy](guides/micromanager-settings.md) |
 | Install and register VM templates | [Images](guides/images.md) |

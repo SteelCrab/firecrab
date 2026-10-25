@@ -1,5 +1,6 @@
 mod advanced;
 mod api;
+mod deploy;
 mod details;
 mod forms;
 mod i18n;
@@ -10,6 +11,7 @@ mod render;
 mod terminal;
 mod updates;
 mod vm_list;
+mod volumes;
 mod workflows;
 
 use forms::Form;
@@ -56,9 +58,11 @@ struct App {
     detail_generation: u64,
     detail_polling: Option<u64>,
     service_deployment: Option<Value>,
+    deploy: deploy::State,
     job: Option<(String, Value)>,
     workflows: workflows::State,
     advanced: advanced::State,
+    volumes: volumes::State,
     console: Option<terminal::State>,
     console_retry: Option<Closure<dyn FnMut()>>,
     panel_open: bool,
@@ -159,6 +163,7 @@ fn render_editor(app: &Shared) {
     }
 }
 fn render_detail(app: &Shared) {
+    let more_open = element("vm-more-actions").is_some_and(|el| el.has_attribute("open"));
     let focused = document()
         .active_element()
         .filter(|el| el.closest("#detail-panel").ok().flatten().is_some())
@@ -185,8 +190,7 @@ fn render_detail(app: &Shared) {
         let open =
             (state.route != "security-groups" || state.detail.is_some() || state.form.is_some())
                 && state.panel_open
-                && state.route != "vms/new"
-                && state.route != "cluster"
+                && !["vms/new", "queues", "cluster"].contains(&state.route.as_str())
                 && (!narrow || state.detail.is_some() || state.form.is_some());
         let html = if open {
             details::panel(&state)
@@ -216,9 +220,13 @@ fn render_detail(app: &Shared) {
         element("detail-panel").and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
     {
         panel.set_hidden(!open);
+        let _ = panel.set_attribute("data-view", &app.borrow().route);
         let _ = panel.set_attribute("style", &format!("width:{width}px"));
         if open {
             panel.set_inner_html(&html);
+            if more_open && let Some(menu) = element("vm-more-actions") {
+                let _ = menu.set_attribute("open", "");
+            }
         }
     }
     app.borrow_mut().rendering = false;
@@ -384,6 +392,7 @@ pub fn start() -> Result<(), JsValue> {
         }
         drop(state);
         details::tick(&poll);
+        volumes::tick(&poll);
         refresh(poll.clone());
         poll_job(poll.clone());
     });
@@ -432,6 +441,7 @@ fn endpoint(route: &str) -> &'static str {
         "services" => "/api/micro-services",
         "networks" => "/api/micro-networks",
         "storages" => "/api/micro-storages",
+        "volumes" => "/api/microblockstorage",
         "images" => "/api/images",
         "kernels" => "/api/kernels",
         "shells" => "/api/shells",
@@ -477,6 +487,9 @@ fn load_route(app: Shared) {
     if route == "vms" {
         aux.extend(["/api/micro-networks", "/api/shells", "/api/storage"]);
     }
+    if route == "volumes" {
+        aux.push("/api/storage");
+    }
     if ["services", "pools", "security-groups"].contains(&route.as_str()) {
         aux.extend(["/api/micro-networks", "/api/security-groups"]);
     }
@@ -493,7 +506,7 @@ fn load_route(app: Shared) {
         advanced::security::load(&app);
     }
     if route == "services" {
-        aux.extend(["/api/pipe", "/api/pipe/storage"]);
+        aux.extend(["/api/pipe", "/api/pipe/storage", "/api/queues"]);
     }
     if route != "vms" {
         aux.push("/api/vms");
@@ -513,8 +526,8 @@ fn load_route(app: Shared) {
                     state.vms = vms;
                 }
                 state.cache.insert(path.into(), value);
-                let visible =
-                    matches!(state.route.as_str(), "host" | "images") && state.form.is_none();
+                let visible = matches!(state.route.as_str(), "host" | "images" | "volumes")
+                    && state.form.is_none();
                 drop(state);
                 if visible {
                     render_content(&app);
@@ -546,6 +559,10 @@ fn load_route(app: Shared) {
     }
 }
 fn refresh(app: Shared) {
+    if app.borrow().route == "queues" {
+        advanced::queues::refresh(app);
+        return;
+    }
     let mut state = app.borrow_mut();
     if state.refreshing || state.route == "vms/new" {
         return;
@@ -658,6 +675,7 @@ fn load_create_vm(app: Shared) {
             "/api/micro-networks",
             "/api/storage",
             "/api/shells",
+            "/api/microblockstorage",
         ] {
             let result = api::request("GET", path, None).await;
             let mut state = app.borrow_mut();
@@ -750,8 +768,10 @@ fn navigate(app: &Shared) {
         .unwrap_or(state.history_index + 1);
     save_history_index(state.history_index, None);
     state.advanced.reveals.clear();
+    state.advanced.queues = advanced::queues::State::default();
     state.advanced.ai = advanced::ai::State::default();
     state.advanced.storage = advanced::storage::State::default();
+    state.volumes = volumes::State::default();
     state.route = next;
     state.generation += 1;
     state.detail_generation += 1;
@@ -783,6 +803,16 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         else {
             return;
         };
+        if (target.closest("#vm-more-actions").ok().flatten().is_none()
+            || target
+                .closest("[data-action], a[href]")
+                .ok()
+                .flatten()
+                .is_some())
+            && let Some(menu) = element("vm-more-actions")
+        {
+            let _ = menu.remove_attribute("open");
+        }
         if target.closest("[role=menu]").ok().flatten().is_none() {
             set_html("menu-root", "");
         }
@@ -843,6 +873,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 if advanced::ai::input(&changed, &target) {
                     return;
                 }
+                if volumes::input(&changed, &target) {
+                    return;
+                }
                 if target.closest("#editor").ok().flatten().is_some() {
                     changed.borrow_mut().dirty = true;
                     workflows::form_input(&changed, &target);
@@ -864,7 +897,10 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         if !target.is_connected() || language.borrow().rendering {
             return;
         }
-        if advanced::change(&language, &target) {
+        if volumes::input(&language, &target) {
+            return;
+        }
+        if deploy::change(&language, &target) || advanced::change(&language, &target) {
             return;
         }
         if terminal::change(&language, &target) {
@@ -914,6 +950,10 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         else {
             return;
         };
+        if advanced::queues::submit(&submitted, &form) {
+            event.prevent_default();
+            return;
+        }
         if form.id() == "ai-editor" {
             event.prevent_default();
             advanced::ai::submit(&submitted);
@@ -949,6 +989,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         {
             return;
         }
+        if details::tab_key(&keyboard, &event) {
+            return;
+        }
         if details::resize_key(&keyboard, &event) {
             return;
         }
@@ -961,6 +1004,16 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             return;
         }
         if event.key() == "Escape" {
+            if let Some(menu) = element("vm-more-actions").filter(|el| el.has_attribute("open")) {
+                let _ = menu.remove_attribute("open");
+                if let Some(summary) = element("vm-more-summary")
+                    .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+                {
+                    let _ = summary.focus();
+                }
+                event.prevent_default();
+                return;
+            }
             if element("menu-root").is_some_and(|el| !el.inner_html().is_empty()) {
                 set_html("menu-root", "");
                 event.prevent_default();
@@ -1051,10 +1104,13 @@ fn open_palette(app: &Shared) {
     }
 }
 fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
+    if deploy::dispatch(&app, action) {
+        return;
+    }
     if action != "vm-menu" {
         set_html("menu-root", "");
     }
-    if advanced::dispatch(&app, action, id, button) {
+    if volumes::dispatch(&app, action, id) || advanced::dispatch(&app, action, id, button) {
         return;
     }
     if updates::dispatch(&app, action) || workflows::ssh_dispatch(&app, action, id) {
@@ -1117,7 +1173,10 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
                 .max(8.0)
             );
             menu.push_str(&render::button("SSH connect", "ssh", id));
-            if vm.extra.get("purpose").and_then(Value::as_str) != Some("pool") {
+            if !matches!(
+                vm.extra.get("purpose").and_then(Value::as_str),
+                Some("pool" | "queue")
+            ) {
                 menu.push_str(&render::button(
                     if vm.state == "running" {
                         "stop"
@@ -1176,7 +1235,11 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
         }
         "vm-start" | "vm-stop" | "vm-pause" | "vm-resume" => {
             if app.borrow().vms.iter().any(|vm| {
-                vm.id == id && vm.extra.get("purpose").and_then(Value::as_str) == Some("pool")
+                vm.id == id
+                    && matches!(
+                        vm.extra.get("purpose").and_then(Value::as_str),
+                        Some("pool" | "queue")
+                    )
             }) {
                 return;
             }
@@ -1313,7 +1376,7 @@ fn open_form(app: Shared, kind: &str, id: &str) {
     } else {
         id.into()
     };
-    if kind.starts_with("vm-") && text(&data, "purpose") == "pool" {
+    if kind.starts_with("vm-") && ["pool", "queue"].contains(&text(&data, "purpose")) {
         return;
     }
     if kind == "secret-connection" {
@@ -1398,6 +1461,13 @@ fn save_form(app: Shared, form_element: HtmlFormElement) {
             return;
         }
     };
+    if form.title == "Deploy update"
+        && let Err(error) = deploy::prepare_update(&app, &mut payload)
+    {
+        app.borrow_mut().error = error;
+        render_messages(&app);
+        return;
+    }
     let path = if form.title == "Connect registry" {
         if let Some(object) = payload.as_object_mut() {
             object.remove("registry");
@@ -1487,11 +1557,15 @@ fn mutate(
                 if submits_form {
                     state.form = None;
                     state.dirty = false;
+                    if path == volumes::ENDPOINT {
+                        state.panel_open = false;
+                    }
                 }
                 if path == "/api/micro-services"
                     || (submits_form
                         && path.starts_with("/api/micro-services/")
-                        && !path.ends_with("/deployment"))
+                        && !path.ends_with("/deployment")
+                        && !path.ends_with("/updates"))
                 {
                     state.detail = Some(value.clone());
                     let mut rows = model::list(&state.resource).to_vec();
@@ -1542,7 +1616,12 @@ fn mutate(
                         {
                             base.extend(updated.clone());
                         }
-                    } else if path.ends_with("/deployment") || path.ends_with("/stop") {
+                    } else if path.ends_with("/deployment")
+                        || path.ends_with("/stop")
+                        || path.ends_with("/updates")
+                        || path.ends_with("/rollback")
+                        || path.ends_with("/deployment/retry")
+                    {
                         state.service_deployment = Some(value.clone());
                         state.detail_result.clear();
                     } else if text(&value, "id") == id
@@ -1608,11 +1687,18 @@ fn mutate(
                 state.error = if path.ends_with("/rules") && error.message.starts_with("HTTP 409:")
                 {
                     "Stop affected VMs and service deployments before changing rules.".into()
+                } else if path.starts_with("/api/micro-services/")
+                    && (path.ends_with("/updates")
+                        || path.ends_with("/rollback")
+                        || path.ends_with("/deployment/retry"))
+                {
+                    deploy::failure(error.message)
                 } else {
                     error.message
                 };
             }
         }
+        volumes::mutation_finished(&mut state, &path, succeeded);
         let registry_done = path == "/api/pipe/registry-transfers"
             && state
                 .job
@@ -1625,6 +1711,7 @@ fn mutate(
         render_content(&app);
         if succeeded {
             advanced::after_mutation(&app, &path);
+            volumes::after_mutation(&app, &path);
         }
         refresh(app);
     });
@@ -1647,6 +1734,7 @@ fn show_detail(app: Shared, id: String) {
     state.service_deployment = None;
     state.detail_log_loaded = false;
     state.show_env = false;
+    state.volumes.reset_editor();
     state.detail_generation += 1;
     let detail_generation = state.detail_generation;
     let generation = state.generation;

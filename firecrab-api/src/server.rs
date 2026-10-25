@@ -213,6 +213,18 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/stacks/{name}/plan", post(handlers::stacks::plan))
         .route(
+            "/api/stacks/{name}/source",
+            get(handlers::stack_sources::get).put(handlers::stack_sources::configure),
+        )
+        .route(
+            "/api/stacks/{name}/source/check",
+            post(handlers::stack_sources::check),
+        )
+        .route(
+            "/api/stacks/{name}/source/history",
+            get(handlers::stack_sources::history),
+        )
+        .route(
             "/api/stacks/{name}/apply",
             post(handlers::stack_applies::apply),
         )
@@ -271,6 +283,26 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/micro-services/{id}/deployment",
             get(crate::service_runtime::get).post(crate::service_runtime::deploy),
+        )
+        .route(
+            "/api/micro-services/{id}/updates",
+            post(crate::service_runtime::deploy::update),
+        )
+        .route(
+            "/api/micro-services/{id}/releases",
+            get(crate::service_runtime::deploy::releases),
+        )
+        .route(
+            "/api/micro-services/{id}/rollback",
+            post(crate::service_runtime::deploy::rollback),
+        )
+        .route(
+            "/api/micro-services/{id}/deployment/retry",
+            post(crate::service_runtime::deploy::retry),
+        )
+        .route(
+            "/api/micro-services/{id}/deployments/{operation_id}",
+            get(crate::service_runtime::deploy::operation),
         )
         .route(
             "/api/micro-services/{id}/deployment/check",
@@ -456,6 +488,22 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/storage", get(handlers::storage::list_storage))
         .route(
+            "/api/microblockstorage",
+            get(handlers::block_storage::list).post(handlers::block_storage::create),
+        )
+        .route(
+            "/api/microblockstorage/{id}",
+            get(handlers::block_storage::get).delete(handlers::block_storage::delete),
+        )
+        .route(
+            "/api/microblockstorage/{id}/attach",
+            post(handlers::block_storage::attach),
+        )
+        .route(
+            "/api/microblockstorage/{id}/detach",
+            post(handlers::block_storage::detach),
+        )
+        .route(
             "/api/storage/devices",
             get(handlers::storage::list_storage_devices),
         )
@@ -468,6 +516,29 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/micro-storages/{id}",
             get(handlers::micro_storages::get_micro_storage)
                 .delete(handlers::micro_storages::delete_micro_storage),
+        )
+        .route(
+            "/api/queue/engine",
+            get(handlers::queues::engine).post(handlers::queues::create_engine),
+        )
+        .route(
+            "/api/queue/engine/start",
+            post(handlers::queues::start_engine),
+        )
+        .route(
+            "/api/queue/engine/stop",
+            post(handlers::queues::stop_engine),
+        )
+        .route(
+            "/api/queues",
+            get(handlers::queues::list).post(handlers::queues::create),
+        )
+        .route("/api/queues/{id}", delete(handlers::queues::delete))
+        .route("/api/queues/{id}/retry", post(handlers::queues::retry))
+        .route("/api/queues/{id}/metrics", get(handlers::queues::metrics))
+        .route(
+            "/api/queues/{id}/connection/{access}",
+            post(handlers::queues::reveal),
         )
         .route(
             "/api/pools",
@@ -587,6 +658,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/secrets/{id}",
             axum::routing::put(handlers::secrets::update).delete(handlers::secrets::delete),
+        )
+        .route(
+            "/api/secrets/account/preview",
+            post(handlers::secrets::account_preview),
         )
         .route("/api/secrets/{id}/reveal", post(handlers::secrets::reveal))
         .route(
@@ -1155,6 +1230,8 @@ mod tests {
         .unwrap();
         let expected_request = request.clone();
         let snapshot = Snapshot {
+            ingress_graceful_drain: false,
+            ingress_workers: None,
             firecrab_tunnels: Vec::new(),
             config: Some(request.config.clone()),
             units: Vec::new(),
@@ -1299,6 +1376,8 @@ mod tests {
             .collect::<Vec<_>>();
         let expected_requests = requests.clone();
         let snapshot = Snapshot {
+            ingress_graceful_drain: false,
+            ingress_workers: None,
             firecrab_tunnels: Vec::new(),
             config: None,
             units: Vec::new(),

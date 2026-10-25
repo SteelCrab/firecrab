@@ -29,10 +29,31 @@ Entries land here as work merges, and move under the next version heading when t
   restarts. REST, `firecrab cluster`, and the dashboard expose inventory, VM
   lifecycle, and host drain. Tracked in [#455](https://github.com/SteelCrab/firecrab/issues/455).
 
+- Named MicroBlockStorage data volumes persist after VM deletion. REST, CLI, and
+  Dashboard support creation and exclusive attachment to inactive user VMs.
+  Guest mounts use filesystem UUIDs and gate managed application startup.
+  Data disks honor guest flush requests, and API restarts retain reservations.
+  Tracked in [#247](https://github.com/SteelCrab/firecrab/issues/247).
+
+- `firecrab service dev --port PORT` selects the development dashboard port on
+  macOS and Windows. Development controls retain the selected port, and older
+  dashboard sessions default to 8080. Tracked in [#488](https://github.com/SteelCrab/firecrab/issues/488).
+
+- Secrets imports selected values from the Firecrab account linked in Auth.
+  The Rust/WASM dashboard previews names without values, requires explicit
+  selection for replacements, and records Firecrab Console as the source (#411).
+
 - Pipe Auth links a Firecrab account with an account integration token issued
   by `console.firecrab.dev`. It displays the verified account ID, email, and
   token expiry. Address-scoped Tunnel tokens remain separate. Existing Tunnel
   connection requests also declare the service's required client protocol (#440).
+
+- GitHub stack sources resolve exact commits and verified regular-file blobs, then
+  detect configuration drift without changing resources. Periodic and manual
+  checks share durable admission, generation guards, pause/resume, bounded
+  backoff and fifty redacted observations. `stack source` and REST expose the
+  configuration and history. Private sources use the existing GitHub Auth
+  connection. Automatic Git apply remains follow-up work for #437.
 
 - Browser console dimensions reach the guest serial terminal through a private
   vsock resize helper. Connected viewers share the smallest available grid.
@@ -161,6 +182,12 @@ Entries land here as work merges, and move under the next version heading when t
   an M2Image. Logins are write-only in API responses. See
   [Pipe Registry](public-docs/guides/pipe-registry.md).
 
+- Deploy updates running domain services through the existing Nginx ingress.
+  Rolling and blue-green updates, immutable release history, selected rollback,
+  verified worker drain, and restart/retry recovery share one REST/CLI/YAML
+  executor. The Rust/WASM dashboard exposes update and rollback actions (#335).
+  Deploy-owned rootfs caches are pruned after VM, pool, operation, and retained-release references are released.
+
 ### Changed
 
 - The dashboard's Pipe page lists its services as five cards: Route, Pipe
@@ -177,6 +204,16 @@ Entries land here as work merges, and move under the next version heading when t
 - None.
 
 ### Fixed
+
+- Dashboard WASM builds reuse a version-checked `wasm-bindgen` Cargo installation
+  from the wasm-pack cache. The matching tool is exposed only to the build child,
+  avoiding an unnecessary installer pass while preserving normal discovery when
+  the cache is missing or stale.
+
+- The development API proxy preserves the dashboard's Host header so browser
+  requests from custom ports such as 8098 pass the API's same-origin checks.
+  Vite's default host checks and the API's origin checks reject untrusted requests.
+  This fixes the `--port` behavior from [#488](https://github.com/SteelCrab/firecrab/issues/488).
 
 - OCI guests recreate image-declared `/run` directories with `systemd-tmpfiles`
   before app services on every boot. MariaDB can restart after tmpfs clears

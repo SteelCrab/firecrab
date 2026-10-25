@@ -473,3 +473,220 @@ async fn a_partial_upload_reports_the_successful_and_failed_names_separately() {
     }
     task.abort();
 }
+
+async fn linked_state(root: &std::path::Path) -> AppState {
+    let templates = TemplateRegistry::from_specs(root, std::iter::empty()).unwrap();
+    let state = AppState::with_db_file(templates, root.join("state.db"))
+        .await
+        .unwrap();
+    state
+        .store
+        .put_pipe_auth(&crate::pipe_auth::SavedAuth::Firecrab {
+            account_id: "11111111-1111-4111-8111-111111111111".into(),
+            email: "owner@example.com".into(),
+            expires_at: 4102444800000,
+            token: format!("fca_{}", "a".repeat(64)),
+        })
+        .unwrap();
+    state
+}
+
+async fn console_fixture(
+    account_id: &str,
+) -> (
+    String,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    tokio::task::JoinHandle<()>,
+) {
+    use axum::routing::get;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let allowed = Arc::new(AtomicBool::new(true));
+    let flag = allowed.clone();
+    let account_id = account_id.to_owned();
+    let router = Router::new().route("/api/account/secrets", get(move |headers: axum::http::HeaderMap| {
+        let flag = flag.clone(); let account_id = account_id.clone(); async move {
+            assert_eq!(headers["authorization"], format!("Bearer fca_{}", "a".repeat(64)));
+            if !flag.load(Ordering::SeqCst) { return (StatusCode::FORBIDDEN, Json(json!({"error":"private upstream body"}))); }
+            (StatusCode::OK, Json(json!({"accountId":account_id,"secrets":[{"name":"DB_PASSWORD","value":"console-private-value"},{"name":"EMPTY","value":""}]})))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!(
+        "http://{}/api/account/secrets",
+        listener.local_addr().unwrap()
+    );
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    (endpoint, allowed, task)
+}
+
+#[tokio::test]
+async fn linked_account_import_reuses_auth_encrypts_snapshot_and_preserves_local_ids() {
+    let root = tempfile::tempdir().unwrap();
+    let state = linked_state(root.path()).await;
+    let router = build_router(
+        state.clone(),
+        &HttpConfig {
+            bind_addr: "127.0.0.1:5523".parse().unwrap(),
+            allowed_origins: vec![],
+            max_concurrent_requests: 128,
+            request_timeout: std::time::Duration::from_secs(10),
+            static_root: None,
+        },
+    );
+    let existing = create_secret(&router, "DB_PASSWORD", "old-value").await;
+    let (endpoint, _, task) = console_fixture("11111111-1111-4111-8111-111111111111").await;
+    let request = RequestId(Uuid::new_v4());
+    let preview = account_preview_from(state.clone(), request, &endpoint)
+        .await
+        .unwrap()
+        .0;
+    let serialized = serde_json::to_string(&preview).unwrap();
+    assert!(!serialized.contains("console-private-value"));
+    assert_eq!(
+        preview
+            .changes
+            .iter()
+            .find(|change| change.name == "DB_PASSWORD")
+            .unwrap()
+            .change,
+        Change::Update
+    );
+    let encrypted = std::fs::read(root.path().join("state.secrets/vault.bin")).unwrap();
+    assert!(
+        !encrypted
+            .windows(b"console-private-value".len())
+            .any(|chunk| chunk == b"console-private-value")
+    );
+    let applied = apply_with_account_endpoint(
+        state.clone(),
+        request,
+        &preview.id.to_string(),
+        ApplyInput {
+            names: vec!["DB_PASSWORD".into(), "EMPTY".into()],
+        },
+        &endpoint,
+    )
+    .await
+    .unwrap()
+    .0;
+    assert_eq!(applied["applied"].as_array().unwrap().len(), 2);
+    let saved = state
+        .secrets
+        .read(|contents| {
+            Ok(contents
+                .secrets
+                .iter()
+                .find(|secret| secret.summary.name == "DB_PASSWORD")
+                .unwrap()
+                .clone())
+        })
+        .unwrap();
+    assert_eq!(saved.summary.id.to_string(), existing["id"]);
+    assert_eq!(saved.value, "console-private-value");
+    assert_eq!(
+        saved.summary.source.unwrap().connection_name,
+        "Firecrab Console"
+    );
+    assert!(
+        apply_with_account_endpoint(
+            state,
+            request,
+            &preview.id.to_string(),
+            ApplyInput {
+                names: vec!["EMPTY".into()]
+            },
+            &endpoint
+        )
+        .await
+        .is_err()
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn linked_account_import_rejects_revocation_changed_credentials_and_other_owner() {
+    use std::sync::atomic::Ordering;
+    let root = tempfile::tempdir().unwrap();
+    let state = linked_state(root.path()).await;
+    let request = RequestId(Uuid::new_v4());
+    let (endpoint, allowed, task) = console_fixture("11111111-1111-4111-8111-111111111111").await;
+    let preview = account_preview_from(state.clone(), request, &endpoint)
+        .await
+        .unwrap()
+        .0;
+    allowed.store(false, Ordering::SeqCst);
+    assert!(
+        apply_with_account_endpoint(
+            state.clone(),
+            request,
+            &preview.id.to_string(),
+            ApplyInput {
+                names: vec!["DB_PASSWORD".into()]
+            },
+            &endpoint
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        state
+            .secrets
+            .read(|contents| Ok(contents.secrets.is_empty()))
+            .unwrap()
+    );
+    allowed.store(true, Ordering::SeqCst);
+    state
+        .store
+        .delete_pipe_auth(crate::pipe_auth::Provider::Firecrab)
+        .unwrap();
+    assert!(
+        apply_with_account_endpoint(
+            state.clone(),
+            request,
+            &preview.id.to_string(),
+            ApplyInput {
+                names: vec!["DB_PASSWORD".into()]
+            },
+            &endpoint
+        )
+        .await
+        .is_err()
+    );
+    state
+        .store
+        .put_pipe_auth(&crate::pipe_auth::SavedAuth::Firecrab {
+            account_id: "22222222-2222-4222-8222-222222222222".into(),
+            email: "other@example.com".into(),
+            expires_at: 4102444800000,
+            token: format!("fca_{}", "b".repeat(64)),
+        })
+        .unwrap();
+    assert!(
+        apply_with_account_endpoint(
+            state,
+            request,
+            &preview.id.to_string(),
+            ApplyInput {
+                names: vec!["DB_PASSWORD".into()]
+            },
+            &endpoint
+        )
+        .await
+        .is_err()
+    );
+    task.abort();
+    let other_root = tempfile::tempdir().unwrap();
+    let other_state = linked_state(other_root.path()).await;
+    let (endpoint, _, task) = console_fixture("33333333-3333-4333-8333-333333333333").await;
+    assert!(
+        account_preview_from(other_state, request, &endpoint)
+            .await
+            .is_err()
+    );
+    task.abort();
+}

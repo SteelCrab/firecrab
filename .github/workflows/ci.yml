@@ -71,8 +71,14 @@ jobs:
       - name: Guest QA failure and cleanup contract
         run: python3 scripts/test-ci-qa-guest.py
 
+      - name: Deploy QA guards and OCI fixture contract
+        run: python3 scripts/test-ci-qa-deploy.py
+
       - name: Database QA guards and cleanup contract
         run: python3 scripts/test-pipe-databases-qa.py
+
+      - name: Queue QA target and failure contracts
+        run: python3 scripts/test-queue-runtime-qa.py
 
       - name: macOS repair QA guard and restoration contract
         run: python3 -m unittest scripts/test_macos_repair_qa.py scripts/test_macos_os_repair_qa.py scripts/test_macos_os_files.py
@@ -84,7 +90,10 @@ jobs:
         run: |
           source <(cargo llvm-cov show-env --sh)
           cargo llvm-cov clean --workspace
-          cargo test --workspace --locked
+          cargo test --workspace --exclude firecrab-helper --locked
+          # Fork/exec tests can temporarily inherit another test's TCP listener.
+          # Keep helper port-release assertions isolated from those processes.
+          cargo test -p firecrab-helper --locked -- --test-threads=1
           # The terminal test is ignored by cargo test because it needs a PTY.
           # Run its instrumented binary before exporting the coverage report.
           test_binary=$(cargo test -p firecrab-cli --no-run --message-format=json | python3 -c 'import json,sys; entries=[json.loads(line) for line in sys.stdin]; print(next(item["executable"] for item in entries if item.get("reason") == "compiler-artifact" and item.get("profile", {}).get("test") and item.get("target", {}).get("name") == "firecrab" and item.get("executable")))')
@@ -104,6 +113,7 @@ jobs:
           sudo --preserve-env=LLVM_PROFILE_FILE env FIRECRAB_LIBDIR=/var/lib/firecrab-pipe-qa "$bin/firecrab" pipe install
           cloudflared=/var/lib/firecrab-pipe-qa/pipe/cloudflared
           python3 scripts/test-pipe-runtime.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress
+          python3 scripts/test-deploy-nginx.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress
           sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-cli.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress --cloudflared "$cloudflared"
           sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-firecrab-address.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress
           sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-api.py --api "$bin/firecrab-api" --helper "$bin/firecrab-helper" --ingress target/ingress/firecrab-ingress
@@ -489,6 +499,8 @@ jobs:
     # the guest-boot step instead of skipping it. Full E2E still belongs on a
     # self-hosted runner when flake rate matters.
     runs-on: ubuntu-24.04
+    env:
+      CARGO_INCREMENTAL: "0"
     defaults:
       run:
         shell: bash
@@ -576,12 +588,15 @@ jobs:
 
       - uses: ./.github/actions/setup-wasm
 
+      - name: Install cargo-llvm-cov for runtime QA
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - name: Build install payload
         # CI installs from local binaries, not GitHub Releases (PRs have none).
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
-          ./scripts/ci-prepare-install-payload.sh
+          FIRECRAB_QA_COVERAGE=1 ./scripts/ci-prepare-install-payload.sh
 
       - name: Install
         id: install-service
@@ -591,6 +606,18 @@ jobs:
           sudo -E env "PATH=$PATH" ./install.sh \
             --bin-dir target/release \
             --dashboard-dir firecrab-frontend/dist
+
+      - name: Collect continuous runtime QA profiles
+        run: |
+          sudo install -d -m 1777 /var/lib/firecrab-qa-coverage
+          for unit in firecrab-api firecrab-helper; do
+            sudo mkdir -p "/run/systemd/system/$unit.service.d"
+            printf '%s\n' '[Service]' \
+              'Environment=LLVM_PROFILE_FILE=/var/lib/firecrab-qa-coverage/firecrab-%%p-%%m%%c.profraw' \
+              | sudo tee "/run/systemd/system/$unit.service.d/85-ci-coverage.conf"
+          done
+          sudo systemctl daemon-reload
+          sudo systemctl restart firecrab-helper firecrab-api
 
       - name: Both daemons are up
         run: |
@@ -689,6 +716,11 @@ jobs:
             --busybox /usr/bin/busybox --expected-release 7.2.2-firecrab-vsock1 \
             --report target/qa/guest-console-vm.json
 
+      - name: Deploy with real MicroVMs and Nginx
+        if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
+        timeout-minutes: 15
+        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host 2>&1 | tee target/qa/deploy.log
+
       - name: Chromium E2E with real guest boot and dual-stack SSH
         if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
         timeout-minutes: 30
@@ -778,6 +810,47 @@ jobs:
           sudo ss -lun | grep -q ':67'
           ! sudo journalctl -u firecrab-helper --no-pager | grep -i 'operation not permitted'
 
+      - name: Queue MicroVM persistence and app disconnects
+        id: queue-qa
+        if: ${{ !cancelled() && steps.install-service.outcome == 'success' && steps.enable-kvm.outcome == 'success' }}
+        timeout-minutes: 30
+        run: |
+          # PrivateTmp hides /var/tmp from the installed API. Its data directory
+          # is writable under the real service sandbox and survives API restart.
+          sudo install -d -o firecrab -g firecrab -m 0700 /var/lib/firecrab/coverage
+          sudo mkdir -p /run/systemd/system/firecrab-api.service.d
+          # Double percent signs escape systemd specifiers; LLVM expands them.
+          printf '%s\n' '[Service]' 'Environment=LLVM_PROFILE_FILE=/var/lib/firecrab/coverage/queue-%%p-%%m%%c.profraw' \
+            | sudo tee /run/systemd/system/firecrab-api.service.d/91-queue-coverage.conf
+          sudo systemctl daemon-reload
+          sudo systemctl restart firecrab-api
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:5523/api/host >/dev/null && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5523/api/host >/dev/null
+          npm ci --prefix examples/queue
+          python3 scripts/ci-qa-queue.py --disposable-host --restart-api
+
+      - name: Export real Queue runtime coverage
+        id: queue-coverage
+        if: ${{ !cancelled() && steps.queue-qa.outcome == 'success' }}
+        run: |
+          sudo systemctl stop firecrab-api
+          sudo tar -C /var/lib/firecrab/coverage -cf - . | tar -C target -xf -
+          sudo systemctl start firecrab-api
+          source <(cargo llvm-cov show-env --sh)
+          cargo llvm-cov report --release --lcov --output-path queue-runtime.lcov.info
+
+      - name: Upload Queue runtime coverage to Codecov
+        if: ${{ !cancelled() && steps.queue-coverage.outcome == 'success' }}
+        uses: codecov/codecov-action@v7
+        with:
+          files: queue-runtime.lcov.info
+          flags: queue-runtime
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
       - name: Re-running is safe
         run: |
           sudo -E env "PATH=$PATH" ./install.sh \
@@ -825,6 +898,29 @@ jobs:
           sudo ./install.sh --uninstall --purge
           test ! -e /var/lib/firecrab
 
+      - name: Export runtime QA coverage
+        if: ${{ !cancelled() && steps.install-service.outcome == 'success' }}
+        run: |
+          source <(cargo llvm-cov show-env --sh)
+          sudo cp /var/lib/firecrab-qa-coverage/*.profraw "$CARGO_LLVM_COV_TARGET_DIR/"
+          sudo chown "$(id -u):$(id -g)" "$CARGO_LLVM_COV_TARGET_DIR/"*.profraw
+          cargo llvm-cov report --release --lcov --output-path target/qa/installer-lcov.info
+          python3 - <<'PY'
+          from pathlib import Path
+          report = Path("target/qa/installer-lcov.info").read_text().split("end_of_record")
+          for name in ["service_runtime/deploy.rs", "service_runtime/deploy/replicas.rs"]:
+              blocks = [block for block in report if any(line.startswith("SF:") and line.endswith(name) for line in block.splitlines())]
+              assert blocks and any(int(line.split(",")[1]) > 0 for block in blocks for line in block.splitlines() if line.startswith("DA:")), f"No real Deploy runtime coverage: {name}"
+          PY
+
+      - name: Upload runtime QA coverage to Codecov
+        if: ${{ !cancelled() && hashFiles('target/qa/installer-lcov.info') != '' }}
+        uses: codecov/codecov-action@v7
+        with:
+          files: target/qa/installer-lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
       - name: Daemon logs (on failure)
         if: failure()
         run: |
@@ -840,6 +936,7 @@ jobs:
           name: linux-runtime-qa-${{ github.run_attempt }}
           path: |
             target/qa/
+            queue-runtime.lcov.info
             firecrab-e2e/test-results/
           if-no-files-found: warn
           retention-days: 14

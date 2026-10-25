@@ -81,6 +81,9 @@ See [Stack validation](../guides/stacks.md) for the experimental schema and its 
 `stack plan --file YAML [--json]` compares a manifest to explicitly bound resource UUIDs without applying it.
 `stack apply --file YAML [--expected-plan PLAN_JSON] [--operation-id UUID] [--allow-stop] [--no-wait] [--timeout SECONDS] [--json]` executes supported changes with durable status.
 `stack apply-status NAME --id OPERATION_UUID` reads redacted progress as JSON.
+`stack source configure NAME --file SOURCE_JSON --expected-generation N` configures a GitHub source separately from its resource manifest.
+`stack source status NAME`, `history NAME`, and `check NAME --generation N` expose read-only exact-commit comparisons.
+`stack source pause|resume NAME --generation N` controls periodic checks. See [Git source checks](../guides/stack-git-source.md).
 See [Native YAML stack apply](../guides/stack-apply.md) for stop permissions, retry identity and explicit failure recovery.
 These commands use normal host selection; see [Stack ownership and planning](../guides/stack-planning.md) for the full workflow.
 
@@ -88,6 +91,7 @@ These commands use normal host selection; see [Stack ownership and planning](../
 | --- | --- |
 | VM | `vm list`, `create`, `start ID`, `stop ID`, `delete ID` |
 | MicroService | `microservice list`, `get ID`, `create --file JSON`, `update ID --file JSON`, `delete ID`, `deploy ID [--host-port PORT]`, `status ID`, `stop ID`; `--host-port` may be omitted only for services with a domain; see [MicroService](../guides/microservices.md) |
+| Deploy | `microservice rollout ID --file JSON`, `releases ID`, `rollback ID --release UUID`, `retry ID`; rollout and rollback accept `--strategy rolling\|blue_green`, `--operation-id UUID`, `--expected-release UUID`, `--no-wait`, and `--timeout SECONDS`; see [Deploy](../guides/deploy.md) |
 | Console | `vm console ID` (`terminal` alias) |
 | Network | `network list`, `create`, `delete ID` |
 | Image | `image list`, `inspect REFERENCE`, `import REFERENCE`, `import-status ALIAS` |
@@ -118,6 +122,9 @@ Replace IDs with values returned by the previous commands.
 Defaults are one vCPU, 512 MiB RAM, and 2 GiB disk.
 Override with `--cpu`, `--ram`, and `--disk-gb`.
 Use `--egress internet|isolated` and `--storage-root ID` for policy and disk placement.
+Use repeated `--volume NAME_OR_UUID:/guest/path` options for independent data disks.
+Manage them with `firecrab volume list|create|inspect|attach|detach|delete`.
+See [Persistent volumes](../guides/volumes.md) for the full workflow.
 
 ### Console
 
@@ -149,6 +156,8 @@ See [OCI images](../guides/oci.md) for registry access and import limits.
 `firecrab service` controls native systemd on Linux and managed Debian on macOS/Windows.
 Use the [macOS](../getting-started/macos.md#service-commands) or [Windows](../getting-started/windows.md#service-commands) command table for managed services.
 Use [service dev](../development/micromanager.md) to deploy source-built API/helper binaries.
+`firecrab service dev --port 8098` selects the development dashboard port (default 8080).
+Development start/restart controls reuse the saved port; the API port stays unchanged.
 
 On macOS and Windows, lifecycle controls have separate scopes:
 

@@ -128,7 +128,8 @@ Heartbeat refreshes preserve the form's values, cursor, and focus.
 
 Drain prevents new placement without stopping or migrating existing VMs. Later
 operations still use their recorded host. Direct worker VM mutations, stack
-adoption, and host-local schedules cannot override controller ownership.
+adoption, data-volume attachment, and host-local schedules cannot override
+controller ownership.
 
 ## REST
 

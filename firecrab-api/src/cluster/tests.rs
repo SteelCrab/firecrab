@@ -450,6 +450,7 @@ async fn local_vm_resource_growth_cannot_consume_controller_reservations() {
         micro_network_id: host.report.networks[0].id,
         storage_root: Some("default".into()),
         security_group_id: None,
+        block_storages: Vec::new(),
         shell_ids: vec![],
         port_forwards: vec![],
         env: BTreeMap::new(),
@@ -828,6 +829,24 @@ async fn two_and_three_tls_hosts_place_retry_drain_and_delete_through_the_record
             .await
             .unwrap();
         assert_eq!(direct.status(), 409);
+        let attachment = owner
+            .state
+            .cluster
+            .client(owner.report.id)
+            .unwrap()
+            .post(format!(
+                "{}/api/microblockstorage/{}/attach",
+                owner.report.endpoint,
+                Uuid::new_v4()
+            ))
+            .json(&AttachMicroBlockStorageRequest {
+                vm_id: original.id,
+                mount_path: "/data".into(),
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(attachment.status(), 409);
         let stack = owner.state.store.register_stack("foreign-stack").unwrap();
         assert!(matches!(
             owner.state.store.bind_stack_resource(

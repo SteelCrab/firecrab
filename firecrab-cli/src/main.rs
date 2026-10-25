@@ -20,6 +20,7 @@ mod pipe;
 mod pipe_ai;
 mod pipe_storage;
 mod pool;
+mod queue;
 mod schedule;
 #[cfg(target_os = "linux")]
 mod service;
@@ -33,6 +34,7 @@ mod tls;
 mod update;
 mod vm;
 mod vm_console;
+mod volume;
 
 /// `clap`-derived top-level CLI, replacing `scripts/firecrab-doctor.sh`.
 #[derive(Parser)]
@@ -54,6 +56,19 @@ enum Command {
     Cluster {
         #[command(subcommand)]
         command: cluster::Command,
+    },
+
+    /// Manage persistent MicroBlockStorage data volumes.
+    #[command(visible_alias = "microblockstorage")]
+    Volume {
+        #[command(subcommand)]
+        command: volume::Command,
+    },
+
+    /// Manage the internal RabbitMQ engine and application queues.
+    Queue {
+        #[command(subcommand)]
+        command: queue::Command,
     },
     /// Bootstrap the private CA and issue authenticated host certificates offline.
     Ca {
@@ -179,6 +194,11 @@ fn run(cli: Cli) -> i32 {
                 cluster::run(client, command)
             })
         }
+        Command::Queue { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                queue::run(client, command)
+            })
+        }
         Command::Ca { command } => finish_api_command(ca::run(command)),
         Command::Ai { command } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
             pipe_ai::run(client, command)
@@ -231,6 +251,11 @@ fn run(cli: Cli) -> i32 {
             json,
             progress_file,
         } => run_update(check, apply, json, progress_file),
+        Command::Volume { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                volume::run(client, command)
+            })
+        }
         Command::Vm { command } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
             vm::run(client, command)
         }),

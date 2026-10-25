@@ -383,6 +383,7 @@ async fn apply(state: &AppState, r: &WorkerReceipt, request: RequestId) -> Resul
                 micro_network_id: network,
                 storage_root: Some(r.intent.target.storage.resource_id.clone()),
                 security_group_id: None,
+                block_storages: Vec::new(),
                 shell_ids: Vec::new(),
                 port_forwards: Vec::new(),
             };

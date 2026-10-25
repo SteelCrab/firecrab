@@ -25,6 +25,7 @@ use thiserror::Error;
 
 use crate::image_install::Architecture;
 use crate::m2image_manifest;
+pub(crate) mod deploy_cache;
 
 /// Manifest of every template registered at runtime (image install or web
 /// build), relative to the image root. Rebuilt into the registry on the next
@@ -246,6 +247,8 @@ pub struct TemplateRegistry {
     /// concurrent registrations would otherwise interleave into a manifest
     /// missing one of them.
     manifest_lock: Arc<Mutex<()>>,
+    /// Serializes registration and cache collection through file deletion.
+    mutations: Arc<Mutex<()>>,
 }
 
 impl Clone for TemplateRegistry {
@@ -257,6 +260,7 @@ impl Clone for TemplateRegistry {
             versions: self.versions.clone(),
             verify_cache: self.verify_cache.clone(),
             manifest_lock: self.manifest_lock.clone(),
+            mutations: self.mutations.clone(),
         }
     }
 }
@@ -394,6 +398,7 @@ impl TemplateRegistry {
             versions: Arc::new(Mutex::new(versions)),
             verify_cache: Arc::new(Mutex::new(HashMap::new())),
             manifest_lock: Arc::new(Mutex::new(())),
+            mutations: Arc::new(Mutex::new(())),
         })
     }
 
@@ -474,6 +479,7 @@ impl TemplateRegistry {
     /// Returns `None` when the alias was not installed. Does not touch the
     /// filesystem itself — the caller deletes the returned paths.
     pub fn unregister_alias(&self, alias: &str) -> Option<(Arc<TemplateVersion>, Vec<PathBuf>)> {
+        let _mutation = self.mutations.lock().unwrap_or_else(|p| p.into_inner());
         let mut aliases = self
             .aliases
             .lock()
@@ -515,6 +521,7 @@ impl TemplateRegistry {
         &self,
         spec: TemplateSpec,
     ) -> Result<(Arc<TemplateVersion>, Vec<PathBuf>), TemplateError> {
+        let _mutation = self.mutations.lock().unwrap_or_else(|p| p.into_inner());
         let version = self.build_version(&spec)?;
         let version_key = (spec.alias.clone(), version.version.clone());
 
@@ -522,12 +529,12 @@ impl TemplateRegistry {
         // restart-safety guarantee.
         self.persist_registration(&spec)?;
 
-        let mut versions = self
-            .versions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut aliases = self
             .aliases
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut versions = self
+            .versions
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let old_key = aliases.insert(spec.alias, version_key.clone());
@@ -550,6 +557,7 @@ impl TemplateRegistry {
         spec: TemplateSpec,
         persist: bool,
     ) -> Result<Arc<TemplateVersion>, TemplateError> {
+        let _mutation = self.mutations.lock().unwrap_or_else(|p| p.into_inner());
         let version = self.build_version(&spec)?;
         let version_key = (spec.alias.clone(), version.version.clone());
 
@@ -560,12 +568,12 @@ impl TemplateRegistry {
             self.persist_registration(&spec)?;
         }
 
-        let mut versions = self
-            .versions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut aliases = self
             .aliases
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut versions = self
+            .versions
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 

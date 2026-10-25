@@ -127,15 +127,17 @@ pub fn page(app: &App) -> String {
         "schedules" => button("New schedule", "create", "schedules"),
         "security-groups" => button("New security group", "create", "security-groups"),
         "secrets" => button("New secret", "create", "secrets"),
+        "volumes" => button("Create volume", "create", "volumes"),
         _ => String::new(),
     };
     let panel = crate::details::panel(app);
     let panel_width = app.panel_width;
-    let panel_hidden = if app.panel_open && app.route != "vms/new" && app.route != "cluster" {
-        ""
-    } else {
-        "hidden"
-    };
+    let panel_hidden =
+        if app.panel_open && !["vms/new", "queues", "cluster"].contains(&app.route.as_str()) {
+            ""
+        } else {
+            "hidden"
+        };
     let panel_toggle = if app.route == "cluster" {
         String::new()
     } else {
@@ -151,7 +153,9 @@ pub fn page(app: &App) -> String {
     let category = match section {
         "vms" | "services" | "pools" | "schedules" | "cluster" => tr(app, "Compute", "컴퓨팅"),
         "networks" | "pipe" | "security-groups" => tr(app, "Network", "네트워크"),
-        "storages" | "images" | "kernels" | "secrets" => tr(app, "Data", "데이터"),
+        "storages" | "volumes" | "images" | "kernels" | "secrets" | "queues" => {
+            tr(app, "Data", "데이터")
+        }
         _ => tr(app, "System", "시스템"),
     };
     let meters = host_meters(app);
@@ -254,7 +258,7 @@ pub fn content(app: &App) -> String {
                 "조건에 맞는 MicroVM이 없습니다."
             )
         ),
-        "pools" | "schedules" | "security-groups" | "secrets" | "cluster" => {
+        "pools" | "schedules" | "security-groups" | "secrets" | "queues" | "cluster" => {
             crate::advanced::content(app)
         }
         "services" => resource_table(
@@ -282,6 +286,7 @@ pub fn content(app: &App) -> String {
             &app.resource,
             &[("name", "Name"), ("path", "Directory")],
         ),
+        "volumes" => crate::volumes::content(app),
         "images" => resource_table(
             app,
             &app.resource,
@@ -482,7 +487,10 @@ pub fn vm_row(app: &App, vm: &Vm) -> String {
     } else {
         "—".into()
     };
-    let action = if vm.extra.get("purpose").and_then(Value::as_str) == Some("pool") {
+    let action = if matches!(
+        vm.extra.get("purpose").and_then(Value::as_str),
+        Some("pool" | "queue")
+    ) {
         String::new()
     } else if vm.state == "paused" {
         vm_icon_button("Resume", "vm-resume", &vm.id)
@@ -686,6 +694,10 @@ pub fn deployment(value: Option<&Value>) -> String {
         "running" => "Running",
         "stopped" => "Stopped",
         "failed" => "Deployment failed",
+        "queued" => "Queued",
+        "switching_traffic" => "Switching Nginx traffic",
+        "draining" => "Draining previous requests",
+        "rolling_back" => "Restoring previous release",
         _ => phase,
     };
     let mut out = format!("<p role=\"status\">{}</p>", escape(crate::i18n::t(label)));
@@ -785,7 +797,93 @@ fn friendly(key: &str) -> String {
     result
 }
 
+fn vm_detail_actions(app: &App, data: &Value) -> String {
+    let id = text(data, "id");
+    let encoded = encode(id);
+    let state = text(data, "state");
+    let queue = text(data, "purpose") == "queue";
+    let pool = queue || text(data, "purpose") == "pool";
+    let editable = !pool && matches!(state, "created" | "stopped" | "error");
+    let mut primary = String::new();
+    if editable {
+        primary.push_str(&button("Start", "vm-start", id));
+    } else if state == "running" {
+        primary.push_str(&button("SSH connection", "ssh", id));
+    }
+    if !pool {
+        match state {
+            "running" => primary.push_str(&button("Pause", "vm-pause", id)),
+            "paused" => primary.push_str(&button("Resume", "vm-resume", id)),
+            "pausing" => primary.push_str(&button("Retry pause", "vm-pause", id)),
+            "resuming" => primary.push_str(&button("Retry resume", "vm-resume", id)),
+            _ => {}
+        }
+        if matches!(state, "running" | "paused" | "pausing" | "resuming") {
+            primary.push_str(&button("Stop", "vm-stop", id));
+        }
+    }
+    if queue {
+        primary.push_str("<a class=\"btn\" href=\"#/queues\">Queue</a>");
+    }
+    let mut menu = String::new();
+    if !pool && state == "pausing" {
+        menu.push_str(&button("Retry resume", "vm-resume", id));
+    } else if !pool && state == "resuming" {
+        menu.push_str(&button("Retry pause", "vm-pause", id));
+    }
+    if editable {
+        menu.push_str(&button("Resources", "edit", "vm-resources"));
+        menu.push_str(&button("Storage", "edit", "vm-storage"));
+    }
+    if !pool && (editable || state == "running") {
+        for (kind, label) in [
+            ("vm-egress", "Egress"),
+            ("vm-env", "Environment"),
+            ("vm-ports", "Port forwarding"),
+            ("vm-shells", "Shells"),
+        ] {
+            menu.push_str(&button(label, "edit", kind));
+        }
+    }
+    if !pool {
+        menu.push_str(&format!(
+            "<a class=\"btn\" href=\"#/schedules?vm={encoded}&new=1\" aria-label=\"{} {}\">{}</a>",
+            crate::i18n::t("Add schedule"),
+            escape(text(data, "name")),
+            crate::i18n::t("Add schedule")
+        ));
+    }
+    if state != "running" {
+        menu.push_str(&button("SSH connection", "ssh", id));
+    }
+    menu.push_str(&button("Download SSH key", "ssh-download-key", id));
+    if editable {
+        menu.push_str("<div class=\"vm-action-divider\"></div>");
+        menu.push_str(&request(
+            "Delete",
+            "DELETE",
+            &format!("/api/vms/{encoded}"),
+            Value::Null,
+        ));
+    }
+    format!(
+        "<fieldset class=\"detail-actions vm-detail-actions\" {}><legend class=\"sr-only\">{}</legend>{primary}<details id=\"vm-more-actions\" class=\"vm-more-actions\"><summary id=\"vm-more-summary\" class=\"btn\" aria-label=\"{}\">{}<svg viewBox=\"0 0 16 16\" width=\"12\" height=\"12\" aria-hidden=\"true\"><path d=\"m4 6 4 4 4-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"/></svg></summary><div class=\"vm-action-menu\" role=\"group\" aria-label=\"{}\">{menu}</div></details></fieldset>",
+        if app.detail_loading || app.busy {
+            "disabled"
+        } else {
+            ""
+        },
+        crate::i18n::t("Actions"),
+        crate::i18n::t("More VM actions"),
+        crate::i18n::t("More"),
+        crate::i18n::t("VM settings")
+    )
+}
+
 pub fn detail_actions(app: &App, data: &Value) -> String {
+    if app.route == "vms" {
+        return vm_detail_actions(app, data);
+    }
     let id = text(data, "id");
     let encoded = encode(id);
     let section = app.route.as_str();
@@ -794,55 +892,6 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
         if app.detail_loading { "disabled" } else { "" }
     );
     match section {
-        "vms" => {
-            let state = text(data, "state");
-            let pool = text(data, "purpose") == "pool";
-            let editable = !pool && matches!(state, "created" | "stopped" | "error");
-            if editable {
-                out.push_str(&button("Start", "vm-start", id));
-                out.push_str(&button("Resources", "edit", "vm-resources"));
-                out.push_str(&button("Storage", "edit", "vm-storage"));
-                out.push_str(&request(
-                    "Delete",
-                    "DELETE",
-                    &format!("/api/vms/{encoded}"),
-                    Value::Null,
-                ));
-            }
-            if !pool && state == "running" {
-                out.push_str(&button("Pause", "vm-pause", id));
-                out.push_str(&button("Stop", "vm-stop", id));
-            }
-            if !pool && (editable || state == "running") {
-                for (kind, label) in [
-                    ("vm-egress", "Egress"),
-                    ("vm-env", "Environment"),
-                    ("vm-ports", "Port forwarding"),
-                    ("vm-shells", "Shells"),
-                ] {
-                    out.push_str(&button(label, "edit", kind));
-                }
-            }
-            if !pool && ["pausing", "resuming"].contains(&state) {
-                out.push_str(&button("Retry pause", "vm-pause", id));
-                out.push_str(&button("Retry resume", "vm-resume", id));
-            }
-            if !pool && ["paused", "pausing", "resuming"].contains(&state) {
-                if state == "paused" {
-                    out.push_str(&button("Resume", "vm-resume", id));
-                }
-                out.push_str(&button("Stop", "vm-stop", id));
-            }
-            if !pool {
-                out.push_str(&format!("<a class=\"btn\" href=\"#/schedules?vm={encoded}&new=1\" aria-label=\"Add schedule for {}\">Add schedule</a>",escape(text(data,"name"))));
-            }
-            if pool {
-                out.push_str("<span class=\"badge\">Pool</span>");
-            }
-            out.push_str(&button("Logs", "logs", id));
-            out.push_str(&button("Download SSH key", "ssh-download-key", id));
-            out.push_str(&button("SSH connection", "ssh", id));
-        }
         "pools" | "schedules" | "security-groups" | "secrets" => {
             out.push_str(&crate::advanced::actions(app, data))
         }

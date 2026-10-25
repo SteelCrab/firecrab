@@ -1020,3 +1020,65 @@ fn an_exhausted_pool_fails_the_acquire_with_the_api_error() {
         .expect("an omitted key is generated even on failure");
     assert!(uuid::Uuid::parse_str(&key).is_ok());
 }
+
+#[test]
+fn queue_commands_manage_the_internal_engine_and_role_connections() {
+    let engine = json!({"vmId":VM_ID,"microNetworkId":NETWORK_ID,"phase":"installing","image":"rabbitmq:4.3.7-management","error":null,"log":""});
+    let (code, request) = run_once(
+        &["queue", "engine", "create", "--network", NETWORK_ID],
+        "202 Accepted",
+        &engine.to_string(),
+    );
+    assert_eq!(code, 0);
+    assert_eq!(request.path, "/api/queue/engine");
+    assert_eq!(request.method, "POST");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&request.body).unwrap(),
+        json!({"microNetworkId":NETWORK_ID,"cpu":4,"ram":4096,"diskGb":8,"storageRoot":null})
+    );
+    for action in ["start", "stop"] {
+        let (code, request) = run_once(
+            &["queue", "engine", action],
+            "202 Accepted",
+            &engine.to_string(),
+        );
+        assert_eq!(code, 0);
+        assert_eq!(request.path, format!("/api/queue/engine/{action}"));
+        assert_eq!(request.method, "POST");
+        assert!(request.body.is_empty());
+    }
+    let queue = json!({"id":VM_ID,"name":"notifications","phase":"ready","deliveryLimit":5,"maxBytes":67108864,"error":null,"services":[]});
+    let (code, request) = run_once(
+        &["queue", "create", "--name", "notifications"],
+        "202 Accepted",
+        &queue.to_string(),
+    );
+    assert_eq!(code, 0);
+    assert_eq!(request.path, "/api/queues");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&request.body).unwrap(),
+        json!({"name":"notifications","deliveryLimit":5,"maxBytes":67108864})
+    );
+    for access in ["publish", "consume"] {
+        let response =
+            json!({"url":"amqp://test:test-only@127.0.0.1:5672/test","queue":"notifications"});
+        let (code, request) = run_once(
+            &["queue", "connection", VM_ID, "--access", access],
+            "200 OK",
+            &response.to_string(),
+        );
+        assert_eq!(code, 0);
+        assert_eq!(
+            request.path,
+            format!("/api/queues/{VM_ID}/connection/{access}")
+        );
+        assert_eq!(request.method, "POST");
+    }
+    let (code, request) = run_once(
+        &["queue", "delete", VM_ID],
+        "409 Conflict",
+        r#"{"error":{"code":"queue_in_use"}}"#,
+    );
+    assert_eq!(code, 1);
+    assert_eq!(request.method, "DELETE");
+}

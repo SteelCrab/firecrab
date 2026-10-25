@@ -10,8 +10,10 @@ pub const VIEWS: &[(&str, &str, &str, &str)] = &[
     ("networks", "network", "Networks", "네트워크"),
     ("security-groups", "network", "Security groups", "보안그룹"),
     ("pipe", "network", "Pipe", "Pipe"),
+    ("queues", "data", "Queue", "Queue"),
     ("secrets", "data", "Secrets", "Secrets"),
     ("storages", "data", "Storage", "스토리지"),
+    ("volumes", "data", "MicroBlockStorage", "MicroBlockStorage"),
     ("images", "data", "Images", "이미지"),
     ("kernels", "data", "Kernels", "커널"),
     ("shells", "system", "Shells", "Shell"),
@@ -81,8 +83,10 @@ impl Vm {
             .any(|text| lowercase(text).contains(&needle))
     }
     pub fn editable(&self) -> bool {
-        self.extra.get("purpose").and_then(Value::as_str) != Some("pool")
-            && matches!(self.state.as_str(), "created" | "stopped" | "error")
+        !matches!(
+            self.extra.get("purpose").and_then(Value::as_str),
+            Some("pool" | "queue")
+        ) && matches!(self.state.as_str(), "created" | "stopped" | "error")
     }
 }
 

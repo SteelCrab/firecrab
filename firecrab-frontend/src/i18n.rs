@@ -8,6 +8,74 @@ pub fn t(value: &str) -> &str {
         return value;
     }
     match value {
+        "More" => "더 보기",
+        "More VM actions" => "VM 추가 작업",
+        "VM settings" => "VM 설정",
+        "Data volumes can only be attached to instance VMs." => {
+            "데이터 볼륨은 일반 VM에만 연결합니다."
+        }
+        "Attached volumes" => "연결된 볼륨",
+        "Data stays after VM deletion." => "VM을 삭제해도 볼륨 데이터는 유지됩니다.",
+        "Attach a volume to keep application data separate from the VM disk." => {
+            "볼륨을 연결하면 앱 데이터를 VM 디스크와 별도로 보관합니다."
+        }
+        "Stop this VM to attach or detach a volume." => "볼륨 연결·해제 전 VM을 중지합니다.",
+        "Detach this volume? Its data will be kept." => {
+            "볼륨 연결을 해제합니까? 데이터는 유지됩니다."
+        }
+        "Detach volume" => "볼륨 연결 해제",
+        "Directory inside the VM. Existing files at this path are hidden." => {
+            "VM 내부의 폴더 경로입니다. 연결 중에는 이 경로의 기존 파일이 가려집니다."
+        }
+        "No available volumes." => "연결 가능한 볼륨이 없습니다.",
+        "Volume attached." => "볼륨을 연결했습니다.",
+        "Volume detached." => "볼륨 연결을 해제했습니다.",
+        "Volumes" => "볼륨",
+        "Volume" => "볼륨",
+        "Create volume" => "볼륨 생성",
+        "Size (GiB)" => "크기 (GiB)",
+        "Data volumes" => "데이터 볼륨",
+        "Available volume" => "연결 가능한 볼륨",
+        "Select a volume" => "볼륨 선택",
+        "Mount path" => "마운트 경로",
+        "Attach volume" => "볼륨 연결",
+        "Detach" => "연결 해제",
+        "Add volume" => "볼륨 추가",
+        "Remove" => "선택 해제",
+        "Manage data volumes" => "데이터 볼륨 관리",
+        "No data volumes yet." => "데이터 볼륨이 없습니다.",
+        "No attached volumes." => "연결된 볼륨이 없습니다.",
+        "Loading volumes…" => "볼륨을 불러오는 중…",
+        "available" => "연결 가능",
+        "attached" => "연결됨",
+        "creating" => "생성 중",
+        "deleting" => "삭제 중",
+        "Permanently delete this volume and all its data" => {
+            "이 볼륨과 모든 데이터를 영구 삭제한다"
+        }
+        "Data volumes survive VM deletion. Attach them in the Volumes tab of a stopped MicroVM." => {
+            "VM을 삭제해도 데이터 볼륨은 유지됩니다. 중지한 MicroVM 상세의 볼륨 탭에서 연결합니다."
+        }
+        "Stop this VM to attach or detach a volume. Data stays after VM deletion." => {
+            "볼륨 연결·해제 전 VM을 중지합니다. VM을 삭제해도 볼륨 데이터는 유지됩니다."
+        }
+        "New volumes start empty. Existing files at the mount path are hidden." => {
+            "새 볼륨은 빈 상태입니다. 마운트 경로의 기존 파일은 연결 중에 가려집니다."
+        }
+        "A VM can have at most eight volumes." => "한 VM에는 최대 8개 볼륨을 연결합니다.",
+        "Select a volume and an absolute mount path." => "볼륨과 절대 마운트 경로를 지정합니다.",
+        "A volume can be selected only once." => "한 볼륨은 한 번만 선택합니다.",
+        "Firecrab account secrets" => "Firecrab 계정 비밀키",
+        "Preview account secrets" => "계정 비밀키 가져오기 미리보기",
+        "Loading account connection…" => "계정 연결을 확인한다…",
+        "Preview secrets from the Firecrab account connected in Auth. Only selected secrets are copied locally." => {
+            "Auth에 연결된 Firecrab 계정의 비밀키를 미리 확인한다. 선택한 비밀키만 로컬에 복사한다."
+        }
+        "Connect a Firecrab account in Auth to import account secrets." => {
+            "계정 비밀키를 가져오려면 Auth에서 Firecrab 계정을 연결한다."
+        }
+        "Open Auth" => "Auth 열기",
+        "Imported from" => "가져온 위치",
         "Connect bucket" => "버킷 연결",
         "Connect S3 bucket" => "S3 버킷 연결",
         "Edit S3 connection" => "S3 연결 수정",

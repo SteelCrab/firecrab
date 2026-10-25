@@ -126,6 +126,10 @@ pub struct AppState {
     pub(crate) service_mutations: Arc<AsyncMutex<()>>,
     /// Serializes durable apply admission and identical retry lookup, never worker execution.
     pub(crate) stack_apply_admission: Arc<AsyncMutex<()>>,
+    /// Serializes RabbitMQ engine lifecycle and queue declarations.
+    pub(crate) queue_mutations: Arc<AsyncMutex<()>>,
+    /// Bound Git network work across all sources; checks never mutate host resources.
+    pub(crate) stack_source_permits: Arc<Semaphore>,
     /// One image/VM deployment at a time bounds replica surge on one host.
     pub(crate) service_deploy_permits: Arc<Semaphore>,
     /// Live VM id -> its running Firecracker process handle.
@@ -206,6 +210,7 @@ impl AppState {
             templates: Arc::new(templates),
             store,
             stack_apply_admission: Arc::new(AsyncMutex::new(())),
+            stack_source_permits: Arc::new(Semaphore::new(4)),
             pipe_ai: crate::pipe_ai::OpenAi::new(),
             pipe_ai_anthropic: crate::pipe_ai::anthropic::Anthropic::new(),
             pipe_ai_logins: Arc::new(crate::pipe_ai::LoginRegistry::default()),
@@ -213,6 +218,7 @@ impl AppState {
             vm_mutations: Arc::new(Mutex::new(HashMap::new())),
             secrets,
             service_mutations: Arc::new(AsyncMutex::new(())),
+            queue_mutations: Arc::new(AsyncMutex::new(())),
             service_deploy_permits: Arc::new(Semaphore::new(1)),
             processes: Arc::new(Mutex::new(HashMap::new())),
             reconciliation: Arc::new(Mutex::new(HashMap::new())),

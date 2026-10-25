@@ -21,6 +21,11 @@
 @media(max-width:600px) { .cluster-fields > .field, .cluster-fields > .field:nth-child(-n+2) { grid-column: 1 / -1; } .cluster-target { grid-template-columns: 1fr; } }
 .wasm-form textarea { min-height: 120px; font-family: var(--mono); }
 .wasm-wide { grid-column: 1 / -1; }
+.volume-table-scroll { max-width:100%; overflow-x:auto; }
+.volume-table .mono { font-size:11px; overflow-wrap:anywhere; }
+.volume-mount-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; align-items:end; gap:12px; margin-bottom:12px; }
+@media(max-width:767px) { .volume-mount-row { grid-template-columns:minmax(0,1fr); } }
+@media(max-width:767px) { .screen-head:has([data-action="create"][data-id="volumes"]) { height:auto; } }
 .wasm-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .wasm-details { border-top: 1px solid var(--border); margin-top: 20px; padding-top: 20px; }
 .wasm-details dl { display: grid; grid-template-columns: 150px 1fr; gap: 10px; }
@@ -113,4 +118,63 @@
   .screen-head { flex-wrap:wrap; }
   .screen-heading { min-width:0; }
   .screen-head>.wasm-actions { max-width:100%; }
+}
+
+/* VM details use the same controls, spacing and tabs as the dashboard. */
+.wasm-panel-body .vm-detail-head { padding:0 0 16px; }
+.detail-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.detail-heading .detail-title { flex:1; margin:0; }
+.detail-heading .detail-close { position:static; flex:none; }
+.detail-close { position:absolute; top:14px; right:14px; z-index:1; }
+.wasm-panel-body:has(#editor) { padding-top:20px; }
+.wasm-panel-body:has(#editor) h2 { padding-right:30px; }
+.vm-detail-head .detail-meta { margin-top:8px; }
+.vm-detail-actions { border:0; padding:0; margin:16px 0 0; align-items:center; }
+.vm-detail-actions>.btn:first-of-type { background:var(--text); color:var(--bg); border-color:var(--text); }
+.vm-more-actions { position:relative; margin-left:auto; }
+.vm-more-actions summary { list-style:none; gap:6px; }
+.vm-more-actions summary::-webkit-details-marker { display:none; }
+.vm-action-menu { position:absolute; right:0; top:calc(100% + 6px); z-index:5; width:200px; display:grid; gap:2px; padding:5px; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-pop); }
+.vm-action-menu .btn { justify-content:flex-start; border:0; box-shadow:none; background:transparent; width:100%; }
+.vm-action-menu .btn:hover { background:var(--bg-hover); }
+.vm-action-divider { height:1px; background:var(--border); margin:4px; }
+.vm-detail-tabs { gap:16px; overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; }
+.vm-detail-tabs .tab { flex:none; font-size:12px; }
+.volume-section .detail-sec-head { margin-bottom:6px; }
+.volume-count { color:var(--text-3); margin-left:5px; font-weight:400; }
+.volume-item { border:1px solid var(--border); border-radius:var(--radius); margin-top:12px; padding:12px; }
+.volume-item-head { display:flex; align-items:center; gap:10px; }
+.volume-icon { display:flex; flex:none; padding:7px; border-radius:var(--radius-sm); background:var(--bg-subtle); color:var(--text-2); }
+.volume-icon svg,.volume-empty>svg { width:20px; height:20px; }
+.volume-item-name { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.volume-item-name strong { font-size:13px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.volume-item-name>span { font-size:11px; color:var(--text-3); }
+.volume-path { display:grid; gap:4px; margin-top:12px; padding-top:10px; border-top:1px solid var(--border); }
+.volume-path>span { font-size:11px; color:var(--text-3); }
+.volume-path code { font-size:12px; overflow-wrap:anywhere; }
+.volume-empty { display:flex; flex-direction:column; align-items:center; gap:8px; padding:28px 16px; margin-top:12px; border:1px dashed var(--border-strong); border-radius:var(--radius); text-align:center; }
+.volume-empty>svg { color:var(--text-3); }
+.volume-empty strong { font-weight:500; font-size:13px; }
+.volume-empty p { margin:0; color:var(--text-3); font-size:12px; max-width:280px; }
+.volume-notice { font-size:12px; line-height:1.5; padding:10px 12px; border-radius:var(--radius-sm); margin:12px 0; background:var(--bg-subtle); color:var(--text-2); overflow-wrap:anywhere; }
+.volume-notice.error { background:var(--red-soft); color:var(--red-ink); }
+.volume-notice.success { background:var(--green-soft); color:var(--green-ink); }
+.volume-notice .btn { margin-left:8px; }
+.volume-editor { margin-top:16px; padding:14px; border:1px solid var(--border); border-radius:var(--radius); background:var(--bg-subtle); display:grid; gap:14px; }
+.volume-editor h4 { margin:0; font-size:13px; font-weight:600; }
+.volume-editor .field { display:flex; flex-direction:column; gap:6px; min-width:0; }
+.volume-editor .detail-note { margin:0; line-height:1.5; }
+.volume-editor-actions { display:flex; justify-content:flex-end; gap:6px; }
+.volume-confirm { margin-top:12px; border-top:1px solid var(--border); padding-top:10px; }
+.volume-confirm p { font-size:12px; margin:0 0 10px; }
+.volume-availability { color:var(--text-3); font-size:12px; margin:14px 0 0; }
+.volume-availability a { color:var(--text-2); margin-left:4px; }
+.volume-manage { display:inline-flex; align-items:center; gap:5px; margin-top:18px; color:var(--text-2); font-size:12px; }
+.volume-table .volume-id { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:var(--text-3); margin-top:4px; }
+
+.wasm-panel .props { display:block; margin:0; }
+
+@media(max-width:767px) {
+  .wasm-panel[data-view="vms"] { inset:0; }
+  .app-frame:has(#detail-panel[data-view="vms"]:not([hidden])) .nav-toggle { display:none; }
 }

@@ -269,7 +269,7 @@ async fn secret_snapshots_are_removed_after_cleanup_and_replica_env_edits_are_re
     secrets::remove(&state, &record).await.unwrap();
 }
 
-async fn state(root: &std::path::Path) -> AppState {
+pub(super) async fn state(root: &std::path::Path) -> AppState {
     let state = AppState::with_db_file(
         TemplateRegistry::from_specs(root, std::iter::empty()).unwrap(),
         root.join("state.db"),
@@ -286,8 +286,11 @@ async fn state(root: &std::path::Path) -> AppState {
     state
 }
 
-fn deployment(id: Uuid) -> MicroServiceDeployment {
+pub(super) fn deployment(id: Uuid) -> MicroServiceDeployment {
     MicroServiceDeployment {
+        started_at: 0,
+        finished_at: None,
+        update: None,
         id: Uuid::new_v4(),
         service_id: id,
         phase: ServicePhase::Queued,
@@ -667,6 +670,7 @@ async fn s3_and_service_secrets_reach_the_guest_together_after_vm_restart() {
             security_group_id: None,
             micro_network_id: network_id,
             storage_root: None,
+            block_storages: vec![],
             shell_ids: vec![],
             env: spec.env.clone(),
             port_forwards: vec![],
@@ -754,13 +758,20 @@ async fn s3_and_service_secrets_reach_the_guest_together_after_vm_restart() {
     assert!(state.store.load_all().unwrap().is_empty());
 }
 
-/// A free host port for a replica's forward.
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("0.0.0.0:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+/// Check every replica port outside the range used by ephemeral HTTP clients.
+fn free_port_range(count: u16) -> u16 {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(20000);
+    loop {
+        let first = NEXT.fetch_add(count, Ordering::Relaxed);
+        assert!(first + count < 30000, "test port range exhausted");
+        let listeners: Result<Vec<_>, _> = (first..first + count)
+            .map(|port| std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port)))
+            .collect();
+        if listeners.is_ok() {
+            return first;
+        }
+    }
 }
 
 #[tokio::test]
@@ -817,7 +828,7 @@ async fn replicas_inherit_the_group_before_boot_and_redeploy_with_the_same_selec
         snapshot.spec = spec.clone();
         snapshot.request = DeployMicroServiceRequest {
             micro_network_id: Some(network.id),
-            host_port: free_port().min(65000),
+            host_port: free_port_range(spec.replicas),
         };
         validate_placement(&state, &spec, &snapshot.request, snapshot.id)
             .await
@@ -889,7 +900,7 @@ async fn failed_app_health_deletes_the_booted_replica_and_records_the_reason() {
     // boundary. Separate API tests reject loopback images and revoked accounts.
     let mut queued = deployment(id);
     queued.spec = spec;
-    queued.request.host_port = free_port();
+    queued.request.host_port = free_port_range(queued.spec.replicas);
     save(&state, &queued).await.unwrap();
     let task_state = state.clone();
     tokio::spawn(async move {
@@ -942,7 +953,7 @@ async fn stop_withdraws_ports_drains_and_deletes_a_running_replica() {
     let (state, id, mut spec, alias) = bootable_service(directory.path()).await;
     spec.drain_timeout = 1;
     let network_id = default_network(&state, Uuid::new_v4()).await.unwrap();
-    let host_port = free_port();
+    let host_port = free_port_range(1);
     let (_, Json(vm)) = vms::create_vm(
         State(state.clone()),
         Extension(RequestId(Uuid::new_v4())),
@@ -956,6 +967,7 @@ async fn stop_withdraws_ports_drains_and_deletes_a_running_replica() {
             egress_policy: EgressPolicy::Internet,
             micro_network_id: network_id,
             storage_root: None,
+            block_storages: vec![],
             shell_ids: vec![],
             env: BTreeMap::new(),
             port_forwards: vec![PortForward {
@@ -1199,7 +1211,7 @@ async fn service_runtime_auth_rechecks_revoked_and_replaced_accounts_after_queue
 }
 
 /// A framed helper with an isolated Pipe manifest. No host services or networking are changed.
-async fn domain_helper(
+pub(super) async fn domain_helper(
     root: &std::path::Path,
     fail_after_publish: bool,
 ) -> (
@@ -1256,6 +1268,8 @@ async fn domain_helper(
                         }
                     }
                     Snapshot {
+                        ingress_graceful_drain: false,
+                        ingress_workers: Some(vec![]),
                         config: Some(config.clone()),
                         units: vec![],
                         nginx_available: true,
@@ -1422,6 +1436,8 @@ async fn publication_helper(
                     request_id: envelope.request_id,
                     result: failures.next().map_or(Ok(()), Err),
                     pipe: Some(Snapshot {
+                        ingress_graceful_drain: false,
+                        ingress_workers: Some(vec![]),
                         config: None,
                         units: vec![],
                         nginx_available: true,
@@ -1532,7 +1548,7 @@ async fn placement_checks_reserved_vm_tcp_ports_across_all_replicas_but_allows_u
     let directory = tempfile::tempdir().unwrap();
     let state = state(directory.path()).await;
     let owner = Uuid::new_v4();
-    let port = free_port().min(65534);
+    let port = free_port_range(2);
     let request = DeployMicroServiceRequest {
         micro_network_id: None,
         host_port: port,

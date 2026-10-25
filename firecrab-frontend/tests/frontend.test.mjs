@@ -289,12 +289,14 @@ test('API failures preserve the entered form and allow retry', async () => {
 test('VM resource edits preserve isolation and environment edits use the real PUT contract', async () => {
   fixture.state.vms[1].egressPolicy = 'isolated';
   await detail(1);
+  await page.getByLabel('More VM actions', { exact: true }).click();
   await page.getByRole('button', { name: 'Resources', exact: true }).click();
   await page.getByLabel('CPU', { exact: true }).fill('4');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.locator('#editor')).toHaveCount(0);
   assert.equal(mutation(`/api/vms/${fixture.state.vms[1].id}`, 'PUT').body.egressPolicy, 'isolated');
   await page.locator('.vm-row-name').nth(1).click();
+  await page.getByLabel('More VM actions', { exact: true }).click();
   await page.getByRole('button', { name: 'Environment', exact: true }).click();
   await page.getByLabel('Environment (NAME=value)', { exact: true }).fill('HELLO=world');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
@@ -310,9 +312,11 @@ test('VM lifecycle actions refresh server state and deletion requires confirmati
   await expect(page.locator('.vm-list tbody tr[data-id]:visible').nth(1)).toContainText('Stopped');
   await page.locator('.vm-row-name').nth(1).click();
   page.once('dialog', dialog => dialog.dismiss());
+  await page.getByLabel('More VM actions', { exact: true }).click();
   await page.getByRole('button', { name: 'Delete', exact: true }).click();
   assert.equal(fixture.state.vms.length, 12);
   page.once('dialog', dialog => dialog.accept());
+  await page.getByLabel('More VM actions', { exact: true }).click();
   await page.getByRole('button', { name: 'Delete', exact: true }).click();
   await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(11);
 });
@@ -388,6 +392,29 @@ test('Pipe credentials are sent to the API and never persisted locally', async (
   assert.equal(mutation('/api/pipe/auth/github', 'PUT').body.token, 'test-only-token');
   assert.equal(await page.evaluate(() => JSON.stringify(localStorage).includes('test-only-token')), false);
   await expect(page.locator('#content')).not.toContainText('test-only-token');
+});
+
+test('account secrets require linked Auth and import only explicitly selected names', async () => {
+  await open('secrets');
+  await expect(page.getByRole('link', { name: 'Open Auth', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Preview account secrets', exact: true })).toHaveCount(0);
+  fixture.state.auth.push({ provider: 'firecrab', accountId: 'account-1', services: [] });
+  fixture.handlers.set('POST /api/secrets/account/preview', ({ send }) => send(200, {
+    id: 'account-plan', direction: 'import', expiresAt: Date.now() + 600000,
+    changes: [{ name: 'NEW_KEY', change: 'add' }, { name: 'EXISTING_KEY', change: 'update' }, { name: 'SAME_KEY', change: 'unchanged' }],
+  }));
+  fixture.handlers.set('POST /api/secrets/plans/account-plan/apply', ({ body, send }) => send(200, { applied: body.names, failed: [] }));
+  await page.reload();
+  await page.getByRole('button', { name: 'Preview account secrets', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Import preview', exact: true })).toBeVisible();
+  assert.deepEqual(mutation('/api/secrets/account/preview').body, {});
+  await expect(page.getByRole('checkbox', { name: 'Apply NEW_KEY', exact: true })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: 'Apply EXISTING_KEY', exact: true })).not.toBeChecked();
+  await expect(page.getByRole('checkbox', { name: 'Apply SAME_KEY', exact: true })).toBeDisabled();
+  assert.equal(mutation('/api/secrets/plans/account-plan/apply'), undefined);
+  await page.getByRole('button', { name: 'Import selected (1)', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Import preview', exact: true })).toHaveCount(0);
+  assert.deepEqual(mutation('/api/secrets/plans/account-plan/apply').body, { names: ['NEW_KEY'] });
 });
 
 test('routing preserves saved tunnel configuration', async () => {
@@ -553,11 +580,13 @@ test('VM detail tabs expose timeline, reconciliation, masked environment and laz
 
 test('live egress edits preserve running VM resources and human-readable Shell selection', async () => {
   await detail(0);
+  await page.getByLabel('More VM actions', { exact: true }).click();
   await page.getByRole('button', { name: 'Egress', exact: true }).click();
   await page.getByLabel('Internet access', { exact: true }).selectOption('isolated');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.locator('#editor')).toHaveCount(0);
   assert.equal(mutation(`/api/vms/${fixture.state.vms[0].id}`, 'PUT').body.egressPolicy, 'isolated');
+  await page.getByLabel('More VM actions', { exact: true }).click();
   await page.getByRole('button', { name: 'Shells', exact: true }).click();
   await expect(page.locator('#editor').getByLabel('Shells', { exact: true })).toContainText('bootstrap');
   await page.locator('#editor').getByLabel('Shells', { exact: true }).selectOption('shell-1');

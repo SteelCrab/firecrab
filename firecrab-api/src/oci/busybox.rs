@@ -38,7 +38,9 @@ const TOOLBOX_MAX_BYTES: u64 = 32 * 1024 * 1024;
 /// their absence is detectable without running anything. A trimmed build is
 /// reported and still used: refusing on a false positive would break every
 /// boot, while a genuinely missing applet surfaces as a readiness failure.
-const REQUIRED_APPLETS: &[&str] = &["sh", "ip", "udhcpc", "awk", "mount", "sleep", "cut"];
+const REQUIRED_APPLETS: &[&str] = &[
+    "sh", "ip", "udhcpc", "awk", "mount", "sleep", "cut", "blkid",
+];
 
 /// ELF magic every candidate program must start with.
 const ELF_MAGIC: &[u8; 4] = b"\x7fELF";
