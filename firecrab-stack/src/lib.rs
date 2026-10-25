@@ -11,12 +11,17 @@ use serde::{Deserialize, Serialize};
 
 mod apply;
 mod planning;
+mod source;
 pub use apply::{
     ApplyFailure, ApplyRequest, ApplyState, ApplyStatus, ApplyStep, StepState, desired_hash,
 };
 pub use planning::{
     Action, Binding, Change, DeleteStackRequest, Inventory, Plan, RegisterStackRequest,
     ResourceKind, ServiceSnapshot, StackRecord, VmSnapshot, fingerprint, plan,
+};
+pub use source::{
+    ConfigureGitSource, GitCheck, GitCheckState, GitCredential, GitSource, GitSourceGeneration,
+    GitSourceStatus,
 };
 
 /// Maximum UTF-8 manifest size, including comments.
