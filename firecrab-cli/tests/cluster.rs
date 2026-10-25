@@ -495,6 +495,24 @@ fn service_status_and_operation_history_are_available_from_the_selected_controll
             .unwrap()
             .starts_with("GET /api/cluster/services HTTP/1.1")
     );
+    for action in ["show", "reconcile"] {
+        let (url, request) = server(serde_json::to_value(&s).unwrap());
+        let output = cli(&url)
+            .args(["cluster", "service", action, &s.id.to_string(), "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            serde_json::from_slice::<ClusterService>(&output.stdout).unwrap(),
+            s
+        );
+        let expected = if action == "show" {
+            format!("GET /api/cluster/services/{} HTTP/1.1", s.id)
+        } else {
+            format!("POST /api/cluster/services/{}/reconcile HTTP/1.1", s.id)
+        };
+        assert!(request.join().unwrap().starts_with(&expected));
+    }
     let (url, request) = server(serde_json::json!([]));
     let output = cli(&url)
         .args(["cluster", "service", "operations", &s.id.to_string()])

@@ -520,6 +520,85 @@ async fn public_service_routes_validate_and_expose_operations_with_authenticatio
         .await
         .unwrap();
     assert_eq!(stop.status(), 409);
+    let detail = format!("{url}/{}", service.id);
+    let listed: Vec<ClusterService> = client.get(&url).send().await.unwrap().json().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    let fetched: ClusterService = client
+        .get(&detail)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(fetched.id, service.id);
+    let mut next = spec;
+    next.service.image = format!("ghcr.io/team/web@sha256:{}", "b".repeat(64));
+    let body = UpdateClusterServiceRequest {
+        expected_generation: 1,
+        spec: next,
+    };
+    let response = client
+        .put(&detail)
+        .header("Idempotency-Key", "public-update")
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 202);
+    let updated: ClusterService = response.json().await.unwrap();
+    assert_eq!(updated.release_generation, 2);
+    let retry: ClusterService = client
+        .post(format!("{detail}/update"))
+        .header("Idempotency-Key", "public-update")
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(retry.generation, 2);
+    let response = client
+        .post(format!("{detail}/stop"))
+        .header("Idempotency-Key", "public-stop")
+        .json(&StopClusterServiceRequest {
+            expected_generation: 2,
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 202);
+    let stopped: ClusterService = response.json().await.unwrap();
+    assert_eq!(stopped.desired, ClusterServiceDesired::Stopped);
+    assert_eq!(stopped.generation, 3);
+    assert_eq!(
+        client
+            .post(format!("{detail}/reconcile"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        202
+    );
+    let history: Vec<ClusterServiceOperation> = client
+        .get(format!("{detail}/operations"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 3);
+    assert_eq!(
+        client
+            .get(format!("{url}/{}", Uuid::new_v4()))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
