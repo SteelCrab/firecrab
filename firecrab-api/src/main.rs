@@ -37,6 +37,7 @@ mod secrets;
 mod server;
 mod service_runtime;
 mod shells;
+mod stack_source;
 mod state;
 mod storage;
 mod templates;
@@ -131,6 +132,11 @@ async fn run() -> Result<(), StartupError> {
         .store
         .scheduler_lock()
         .map_err(StartupError::Persistence)?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.interrupt_stack_checks(stack_source::now()))
+        .await
+        .expect("Git source recovery task panicked")
+        .map_err(StartupError::Persistence)?;
     // Bridges, nftables rules and dnsmasq's config are all host state a
     // reboot wipes, so they are re-applied here rather than assumed. Doing it
     // at startup (not only on VM start) is what brings back a MicroNetwork
@@ -160,6 +166,7 @@ async fn run() -> Result<(), StartupError> {
     scheduler::spawn(state.clone(), scheduler_ownership)
         .await
         .map_err(StartupError::Persistence)?;
+    let _git_sources = stack_source::spawn_reconciler(state.clone());
     let app = build_router(state, &config);
     tracing::info!(address = %local_address, "listening on http://{local_address}");
     axum::serve(listener, app)

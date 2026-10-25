@@ -62,6 +62,9 @@ See [Stack validation](../guides/stacks.md) for the experimental schema and its 
 `stack plan --file YAML [--json]` compares a manifest to explicitly bound resource UUIDs without applying it.
 `stack apply --file YAML [--expected-plan PLAN_JSON] [--operation-id UUID] [--allow-stop] [--no-wait] [--timeout SECONDS] [--json]` executes supported changes with durable status.
 `stack apply-status NAME --id OPERATION_UUID` reads redacted progress as JSON.
+`stack source configure NAME --file SOURCE_JSON --expected-generation N` configures a GitHub source separately from its resource manifest.
+`stack source status NAME`, `history NAME`, and `check NAME --generation N` expose read-only exact-commit comparisons.
+`stack source pause|resume NAME --generation N` controls periodic checks. See [Git source checks](../guides/stack-git-source.md).
 See [Native YAML stack apply](../guides/stack-apply.md) for stop permissions, retry identity and explicit failure recovery.
 These commands use normal host selection; see [Stack ownership and planning](../guides/stack-planning.md) for the full workflow.
 
