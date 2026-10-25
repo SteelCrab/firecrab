@@ -213,6 +213,13 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
+- Worktree development cleanup retains the selected dashboard checkout and port.
+  Private start/restart requires that saved selection before changing the backend.
+  macOS VM port relays protect primary and all registered backend ports, including
+  instances registered after relay startup. New backend ports use 20000–32767,
+  excluding the host's current IPv4 TCP ephemeral range; existing saved ports
+  remain valid. Tracked in #495.
+
 - PipeSecrets rejects AWS name prefixes containing filter operators or other
   non-name characters, preventing a negated prefix from listing secrets outside
   the configured scope. Tracked in [#411](https://github.com/SteelCrab/firecrab/issues/411).
