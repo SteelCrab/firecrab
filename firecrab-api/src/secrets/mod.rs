@@ -252,9 +252,19 @@ pub(crate) struct Contents {
     /// Immutable Secret environments for deployments, never returned by the API.
     #[serde(default)]
     pub service_environments: BTreeMap<Uuid, BTreeMap<String, String>>,
+    /// Version-pinned controller credentials, retained for durable cross-host retries.
+    #[serde(default)]
+    pub cluster_credentials: BTreeMap<String, ClusterCredentials>,
     /// Durable rotation admission/retry state; never exposed through Secrets APIs.
     #[serde(default)]
     pub service_rotations: BTreeMap<Uuid, ServiceRotation>,
+}
+
+/// Private credential snapshot; values and fingerprints never enter public journals.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct ClusterCredentials {
+    pub references: BTreeMap<String, firecrab_api_types::ClusterServiceCredential>,
+    pub values: BTreeMap<String, String>,
 }
 
 /// Private reconciliation state. The value fingerprint remains encrypted in the vault.

@@ -1,4 +1,5 @@
 //! Controller-owned services: one release identity, durable fan-out and fenced observations.
+mod credentials;
 mod handlers;
 mod worker;
 pub(crate) use handlers::router;
@@ -27,6 +28,47 @@ pub(crate) fn validate_spec(spec: &mut ClusterServiceSpec) -> Result<(), Cluster
     {
         return Err(ClusterError::Invalid("host-local bindings and cross-host domain routing are not supported; use explicit networks and host ports".into()));
     }
+    if spec
+        .credentials
+        .values()
+        .any(|r| r.secret_id.is_nil() || r.version == 0)
+    {
+        return Err(ClusterError::Invalid(
+            "credentials require a controller PipeSecret UUID and a positive version".into(),
+        ));
+    }
+    let mut local = spec.service.clone();
+    local.secrets = spec
+        .credentials
+        .iter()
+        .map(|(key, r)| (key.clone(), r.secret_id))
+        .collect();
+    crate::handlers::micro_services::validate(&local, Uuid::nil()).map_err(|_| {
+        ClusterError::Invalid("invalid or conflicting credential environment names".into())
+    })?;
+    if !spec.state.requests_duplicate_safe
+        || spec.state.background_work == ClusterServiceBackgroundWork::Exclusive
+    {
+        return Err(ClusterError::Invalid("replicated requests and background work must be duplicate-safe; exclusive work requires ownership and fencing (#462)".into()));
+    }
+    let external = [
+        &spec.state.sessions,
+        &spec.state.uploads,
+        &spec.state.database,
+    ];
+    let has_external = external.iter().any(|key| key.is_some());
+    if (spec.state.mode == ClusterServiceStateMode::ExternalState) != has_external {
+        return Err(ClusterError::Invalid("external_state requires sessions, uploads or database; stateless_http cannot declare durable application state".into()));
+    }
+    for key in external.into_iter().flatten() {
+        if !spec.service.env.contains_key(key) && !spec.credentials.contains_key(key) {
+            return Err(ClusterError::Invalid(
+                "external state must reference a configured environment name or scoped credential"
+                    .into(),
+            ));
+        }
+    }
+    credentials::validate_external(&spec.state, &spec.service.env)?;
     if spec.targets.is_empty() || spec.targets.len() > 100 {
         return Err(ClusterError::Invalid("select 1-100 workload hosts".into()));
     }
@@ -155,10 +197,18 @@ async fn observe_host(
             return Ok(());
         }
     }
+    let credential_values = if host.intent.desired == ClusterServiceDesired::Running {
+        credentials::values(state, &host.intent.credentials).await?
+    } else {
+        Default::default()
+    };
     let receipt = read_receipt(
         client
             .put(&url)
-            .json(&host.intent)
+            .json(&credentials::WorkerRequest {
+                intent: host.intent.clone(),
+                credential_values,
+            })
             .send()
             .await
             .map_err(|_| ClusterError::Task)?,

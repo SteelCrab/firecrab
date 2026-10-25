@@ -23,7 +23,7 @@ async function open(page: Page, loseFirstResponse = false) {
       if (route.request().method() === "GET") return route.fulfill({ json: service ? [service] : [] });
       const body = route.request().postDataJSON();
       writes.push({ path: "/api/cluster/services", key: route.request().headers()["idempotency-key"], body });
-      service ??= { id: SERVICE, spec: { ...body, service: { ...body.service, env: { KEEP: "same" } } }, generation: 1, releaseGeneration: 1,
+      service ??= { id: SERVICE, spec: { ...body, service: { ...body.service, env: { ...body.service.env, KEEP: "same" } } }, generation: 1, releaseGeneration: 1,
         operationId: "create-operation", desired: "running", observed: "pending", pending: true, degraded: false,
         hosts: body.targets.map((target: any, index: number) => ({ hostId: target.hostId, intent: { deploymentId: `deployment-${index}`, spec: { replicas: target.replicas } }, deployment: null, error: null })) };
       if (loseFirstResponse && writes.length === 1) return route.abort("failed");
@@ -45,28 +45,37 @@ async function open(page: Page, loseFirstResponse = false) {
   return writes;
 }
 
-async function fill(page: Page) {
+async function fill(page: Page, configuration?: { state: any; credentials: any; env: any }) {
   const form = page.getByRole("region", { name: "Controller service form" });
   await form.getByLabel("Service name", { exact: true }).fill("web");
   await form.getByLabel("Pinned OCI image", { exact: true }).fill(IMAGE);
   await form.getByRole("checkbox", { name: "Worker A", exact: true }).check();
   await form.getByRole("checkbox", { name: "Worker B", exact: true }).check();
+  if (configuration) {
+    await form.getByText("Application state and configuration", { exact: true }).click();
+    await form.getByLabel("Application state contract (JSON)", { exact: true }).fill(JSON.stringify(configuration.state));
+    await form.getByLabel("Environment variables (JSON)", { exact: true }).fill(JSON.stringify(configuration.env));
+    await form.getByLabel("Versioned controller credentials (JSON)", { exact: true }).fill(JSON.stringify(configuration.credentials));
+  }
   await form.getByRole("button", { name: "Create service", exact: true }).click();
 }
 
-test("creates a shared release, preserves environment on edit, and exposes fenced stop and history", async ({ page }) => {
+test("creates a shared release, preserves state and credential versions on edit, and exposes fenced stop and history", async ({ page }) => {
   const writes = await open(page);
-  await fill(page);
+  const state = { mode: "external_state", sessions: "SESSION_URL", requestsDuplicateSafe: true, backgroundWork: "duplicate_safe" };
+  const credentials = { TOKEN: { secretId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", version: 3 } };
+  await fill(page, { state, credentials, env: { SESSION_URL: "rediss://sessions.example" } });
   const card = page.locator(`[data-cluster-service="${SERVICE}"]`);
   await expect(card).toBeVisible();
   expect(writes[0].key).toBeTruthy();
   expect(writes[0].body.service).toMatchObject({ name: "web", image: IMAGE, replicas: 2 });
   expect(writes[0].body.targets.map((target: any) => target.request.microNetworkId)).toEqual(NETWORKS);
+  expect(writes[0].body).toMatchObject({ state, credentials });
   await card.getByRole("button", { name: "Edit release", exact: true }).click();
   await page.getByLabel("Pinned OCI image", { exact: true }).fill(IMAGE.replace(/a{64}$/, "b".repeat(64)));
   await page.getByRole("button", { name: "Deploy release", exact: true }).click();
   await expect.poll(() => writes.length).toBe(2);
-  expect(writes[1].body).toMatchObject({ expectedGeneration: 1, spec: { service: { env: { KEEP: "same" } } } });
+  expect(writes[1].body).toMatchObject({ expectedGeneration: 1, spec: { state, credentials, service: { env: { KEEP: "same", SESSION_URL: "rediss://sessions.example" } } } });
   await expect(card).toContainText("Generation: 2");
   await card.getByRole("button", { name: "Operations", exact: true }).click();
   await expect(card).toContainText("history-key");

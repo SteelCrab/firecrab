@@ -46,7 +46,16 @@ pub(crate) async fn deploy_from_stack(
     request: DeployMicroServiceRequest,
     operation: Option<Uuid>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
-    deploy_with_id(state, request_id, id, request, operation, Uuid::new_v4()).await
+    deploy_with_id(
+        state,
+        request_id,
+        id,
+        request,
+        operation,
+        Uuid::new_v4(),
+        false,
+    )
+    .await
 }
 
 /// The controller reserves this deployment UUID before a remote dispatch.
@@ -57,7 +66,7 @@ pub(crate) async fn deploy_reserved(
     request: DeployMicroServiceRequest,
     deployment_id: Uuid,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
-    deploy_with_id(state, request_id, id, request, None, deployment_id).await
+    deploy_with_id(state, request_id, id, request, None, deployment_id, true).await
 }
 
 async fn deploy_with_id(
@@ -67,6 +76,7 @@ async fn deploy_with_id(
     mut request: DeployMicroServiceRequest,
     operation: Option<Uuid>,
     deployment_id: Uuid,
+    controller_credentials: bool,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let request_id = RequestId(request_id);
     let _claim = state.service_mutations.lock().await;
@@ -83,7 +93,11 @@ async fn deploy_with_id(
     crate::queues::placement(&state, &service.spec, &mut request, request_id.0)?;
     validate_placement(&state, &service.spec, &request, request_id.0).await?;
     crate::handlers::pipe_storage::validate_binding(&state, &service.spec, request_id.0).await?;
-    secrets::preflight(&state, &service.spec, request_id.0).await?;
+    if controller_credentials {
+        secrets::preflight_reserved(&state, &service.spec, deployment_id, request_id.0).await?;
+    } else {
+        secrets::preflight(&state, &service.spec, request_id.0).await?;
+    }
     domain::preflight(&state, id, &service.spec, request_id.0).await?;
     let deployment = MicroServiceDeployment {
         started_at: chrono::Utc::now().timestamp(),

@@ -32,15 +32,32 @@ pub(crate) async fn put(
     Extension(request): Extension<RequestId>,
     peer: Peer,
     Path(id): Path<Uuid>,
-    ValidatedJson(intent): ValidatedJson<ServiceWorkerIntent>,
+    ValidatedJson(input): ValidatedJson<credentials::WorkerRequest>,
 ) -> Result<Json<ServiceWorkerReceipt>, AppError> {
     let owner = controller(&state, peer, request)?;
     let host = state
         .cluster
         .identity
         .ok_or_else(|| AppError::internal(request.0))?;
+    let intent = &input.intent;
+    let mut local = intent.spec.clone();
+    let scoped = intent
+        .credentials
+        .iter()
+        .map(|(key, r)| (key.clone(), r.secret_id))
+        .collect();
+    if local.secrets != scoped {
+        return Err(AppError::conflict(
+            "invalid_credential_scope",
+            "worker credential references do not match the scoped environment",
+            request.0,
+        ));
+    }
+    local.secrets.clear();
     let mut spec = ClusterServiceSpec {
-        service: intent.spec.clone(),
+        service: local,
+        state: intent.state.clone(),
+        credentials: intent.credentials.clone(),
         mode: ClusterServiceMode::Replicated,
         targets: vec![ClusterServiceTarget {
             host_id: host,
@@ -49,6 +66,16 @@ pub(crate) async fn put(
         }],
     };
     validate_spec(&mut spec).map_err(|e| super::super::handlers::error(e, request))?;
+    if intent.desired == ClusterServiceDesired::Running {
+        credentials::validate_values(&input)
+            .map_err(|e| super::super::handlers::error(e, request))?;
+    } else if !input.credential_values.is_empty() {
+        return Err(AppError::conflict(
+            "invalid_credential_scope",
+            "Stop must not include credential values",
+            request.0,
+        ));
+    }
     if id.is_nil()
         || intent.deployment_id.is_nil()
         || intent.generation == 0
@@ -74,9 +101,18 @@ pub(crate) async fn put(
         let _permit = permit;
         let _lock = state.cluster.lock_worker(id).await;
         let store = state.store.clone();
+        let intent = input.intent.clone();
         let mut receipt = stored(move || store.cluster_service_worker_admit(id, owner, intent))
             .await
             .map_err(|e| super::super::handlers::error(e, request))?;
+        if receipt.intent.desired == ClusterServiceDesired::Running {
+            credentials::install(&state, &input).await.map_err(|_| {
+                AppError::unavailable(
+                    "Pinned service credentials are unavailable; ownership is retained.",
+                    request.0,
+                )
+            })?;
+        }
         receipt.error = apply(&state, &receipt, request).await.err().map(|error| {
             format!(
                 "host-local service operation failed ({}); ownership is retained",
@@ -117,6 +153,13 @@ async fn observe(state: &AppState, receipt: &mut ServiceWorkerReceipt) -> Result
         receipt.deployment = live;
     } else {
         receipt.deployment = None;
+    }
+    if receipt.intent.desired == ClusterServiceDesired::Stopped
+        && receipt.deployment.as_ref().is_none_or(|d| {
+            d.phase == ServicePhase::Stopped && d.instances.is_empty() && !d.domain_route_owned
+        })
+    {
+        credentials::remove_stopped(state, receipt).await?;
     }
     if receipt
         .deployment

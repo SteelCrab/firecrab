@@ -229,6 +229,12 @@ impl Store {
         for target in &s.spec.targets {
             let mut local = s.spec.service.clone();
             local.replicas = target.replicas;
+            local.secrets = s
+                .spec
+                .credentials
+                .iter()
+                .map(|(key, reference)| (key.clone(), reference.secret_id))
+                .collect();
             let previous = s
                 .hosts
                 .iter()
@@ -248,6 +254,8 @@ impl Store {
                     Uuid::new_v4()
                 },
                 spec: local,
+                state: s.spec.state.clone(),
+                credentials: s.spec.credentials.clone(),
                 request: target.request.clone(),
             };
             let host = ClusterServiceHost {
@@ -410,6 +418,12 @@ impl Store {
                 || intent.generation < old.intent.generation
                 || (intent.generation == old.intent.generation && intent != old.intent)
                 || intent.release_generation < old.intent.release_generation
+                || (intent.release_generation == old.intent.release_generation
+                    && (intent.spec != old.intent.spec
+                        || intent.state != old.intent.state
+                        || intent.credentials != old.intent.credentials
+                        || intent.request != old.intent.request
+                        || intent.deployment_id != old.intent.deployment_id))
             {
                 return Err(ClusterError::Conflict(
                     "stale service intent or foreign owner".into(),
