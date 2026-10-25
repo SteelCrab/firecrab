@@ -113,7 +113,15 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let (socket, _) = tokio_tungstenite::connect_async(url)
+    let connector = if url.starts_with("wss://") {
+        let config = crate::tls::client_config().map_err(|e| Error::Connection(e.to_string()))?;
+        Some(tokio_tungstenite::Connector::Rustls(std::sync::Arc::new(
+            config,
+        )))
+    } else {
+        None
+    };
+    let (socket, _) = tokio_tungstenite::connect_async_tls_with_config(url, None, false, connector)
         .await
         .map_err(map_websocket_error)?;
     let (mut sink, mut source) = socket.split();

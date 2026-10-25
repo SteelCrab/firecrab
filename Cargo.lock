@@ -1073,6 +1073,7 @@ dependencies = [
  "filetime",
  "firecrab-api-types",
  "firecrab-helper-protocol",
+ "firecrab-pki",
  "firecrab-stack",
  "futures-util",
  "hmac",
@@ -1095,7 +1096,9 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror 2.0.21",
+ "time",
  "tokio",
+ "tokio-rustls",
  "tower",
  "tower-http 0.7.1",
  "tracing",
@@ -1125,6 +1128,7 @@ dependencies = [
  "crossterm",
  "firecrab-api-types",
  "firecrab-helper-protocol",
+ "firecrab-pki",
  "firecrab-stack",
  "fs2",
  "futures-util",
@@ -1176,6 +1180,21 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "firecrab-pki"
+version = "0.3.1"
+dependencies = [
+ "libc",
+ "rcgen",
+ "rustls",
+ "rustls-pemfile",
+ "tempfile",
+ "thiserror 2.0.21",
+ "time",
+ "uuid",
+ "x509-parser",
 ]
 
 [[package]]

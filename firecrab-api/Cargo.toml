@@ -6,6 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
+firecrab-pki = { path = "../firecrab-pki" }
 async-compression = { version = "0.4.43", features = ["gzip", "tokio", "zstd"] }
 axum = { version = "0.8.9", features = ["ws"] }
 base64 = { workspace = true }
@@ -44,6 +46,8 @@ uuid = { workspace = true, features = ["v4"] }
 zstd = "0.13"
 
 [dev-dependencies]
+rcgen = { version = "0.14.10", features = ["x509-parser"] }
+time = "0.3"
 http-body-util = "0.1.3"
 tempfile = "3.27.0"
 # `test-util` (tokio's paused-clock support) is dev-only on purpose: it lets

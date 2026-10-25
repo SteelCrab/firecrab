@@ -85,6 +85,9 @@ pub struct SelectedHost {
 /// Configuration and host-selection failures.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// Invalid TLS files or HTTPS client configuration.
+    #[error("API TLS configuration: {0}")]
+    Tls(String),
     /// An activated local microManager has an invalid endpoint marker.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[error("invalid local microManager configuration: {0}")]
@@ -443,7 +446,9 @@ fn format_list(config: &HostsConfig) -> String {
 
 /// Probes and prints one fully resolved host.
 fn show_host(selected: SelectedHost, json: bool) -> Result<(), Error> {
-    let status = ApiClient::new(selected.url.clone()).get_host_status();
+    let status = ApiClient::try_new(selected.url.clone())
+        .map_err(|error| Error::Tls(error.to_string()))?
+        .get_host_status();
     let name = selected.name.unwrap_or_else(|| "default".to_owned());
     let host = status.map_err(|source| Error::Connection {
         name: name.clone(),
