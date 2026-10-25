@@ -103,10 +103,18 @@ Successful release metadata is immutable and limited to the newest 20 entries pe
 Attempt records remain available until the service is deleted.
 Release records contain Secret references, not plaintext Secret values.
 Deploy removes retired VM disks and private environment snapshots after verified drain.
-Shared image templates stay in the [Images inventory](images.md); release pruning does not delete shared templates.
+New Deploy imports journal their own files under `rootfs/deploy/` before publication.
+Cleanup removes a file only after VM, pool, current-operation, and retained-release references are gone.
+It also protects active template readers and other registered aliases that share the file.
+Manual images, existing imports, shared kernels, and OCI blob/layer caches stay in the [Images inventory](images.md).
+Collection runs after completed deployments, at startup, and every minute.
+Failed cleanup keeps its ownership journal for retry.
 
 ## Validate from source
 
 Run `scripts/test-deploy-nginx.py --firecrab PATH --nginx PATH` for real Nginx HTTP and WebSocket reload tests.
 The test uses disposable local application servers and does not boot MicroVMs.
 Full acceptance also requires a Linux/KVM host with real MicroVMs, image pulls, restart recovery, and resource measurements.
+The Installer CI job runs `sudo python3 scripts/ci-qa-deploy.py --disposable-host` for real MicroVM/Nginx updates, held requests, API restart, rollback, and injected failures.
+The script refuses hosts with existing VMs, services, pools, Auth connections, or ingress configuration.
+It uses local OCI images and a private Auth fixture; it does not validate an external registry or public TLS.

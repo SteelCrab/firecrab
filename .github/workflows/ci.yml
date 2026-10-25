@@ -71,6 +71,9 @@ jobs:
       - name: Guest QA failure and cleanup contract
         run: python3 scripts/test-ci-qa-guest.py
 
+      - name: Deploy QA guards and OCI fixture contract
+        run: python3 scripts/test-ci-qa-deploy.py
+
       - name: Database QA guards and cleanup contract
         run: python3 scripts/test-pipe-databases-qa.py
 
@@ -689,6 +692,11 @@ jobs:
             --helper /usr/local/lib/firecrab/firecrab-guest-console \
             --busybox /usr/bin/busybox --expected-release 7.2.2-firecrab-vsock1 \
             --report target/qa/guest-console-vm.json
+
+      - name: Deploy with real MicroVMs and Nginx
+        if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
+        timeout-minutes: 15
+        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host 2>&1 | tee target/qa/deploy.log
 
       - name: Chromium E2E with real guest boot and dual-stack SSH
         if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
