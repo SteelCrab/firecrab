@@ -724,6 +724,112 @@ async fn sandbox_scoped_apply_and_reconciliation_check_the_original_resources() 
 }
 
 #[tokio::test]
+async fn sandbox_revocation_while_waiting_for_provider_lock_prevents_the_call() {
+    let f = fixture().await;
+    let connection = connect(&f, "openai").await;
+    verify(&f, connection, false).await;
+    let project = project(&f, connection, false).await;
+    let host = Uuid::new_v4();
+    policy(&f, host, project_grants(&f, project, connection)).await;
+    let guard = f.state.pipe_ai_mutations.lock().await;
+    let before = f.provider.requests.lock().unwrap().len();
+    let id = Uuid::new_v4();
+    assert_eq!(
+        as_host(
+            &f,
+            host,
+            "PUT",
+            &format!("/api/ai-sandbox/projects/{project}/tasks/{id}"),
+            json!({"kind":"chat","input":"wait for the provider"})
+        )
+        .await
+        .0,
+        StatusCode::ACCEPTED
+    );
+    for _ in 0..100 {
+        if f.state.store.sandbox_task(id).unwrap().unwrap().task.state
+            == SandboxTaskState::InProgress
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        f.state.store.sandbox_task(id).unwrap().unwrap().task.state,
+        SandboxTaskState::InProgress
+    );
+    // Let the worker reach the held provider lock before changing its grants.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(
+        call(
+            &f.app,
+            "DELETE",
+            &format!("/api/ai-sandbox/access/{host}"),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    drop(guard);
+    let task = finish(&f, id).await;
+    assert_eq!(task["state"], "failed", "{task}");
+    assert_eq!(f.provider.requests.lock().unwrap().len(), before);
+}
+
+#[tokio::test]
+async fn sandbox_revocation_during_model_verification_prevents_the_followup_call() {
+    let f = fixture().await;
+    let connection = connect(&f, "openai").await;
+    let host = Uuid::new_v4();
+    policy(
+        &f,
+        host,
+        vec![grant("connection", connection, &["execute"])],
+    )
+    .await;
+    f.provider
+        .replies
+        .lock()
+        .unwrap()
+        .extend([tool("probe", "sandbox_ready", json!({})), text("OK")]);
+    let before = f.provider.requests.lock().unwrap().len();
+    let path = format!("/api/ai-sandbox/connections/{connection}/verify");
+    let (response, ()) = tokio::join!(
+        as_host(
+            &f,
+            host,
+            "POST",
+            &path,
+            json!({"model":"hold-request","tools":true})
+        ),
+        async {
+            for _ in 0..100 {
+                if f.provider.requests.lock().unwrap().len() > before {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert_eq!(f.provider.requests.lock().unwrap().len(), before + 1);
+            assert_eq!(
+                call(
+                    &f.app,
+                    "DELETE",
+                    &format!("/api/ai-sandbox/access/{host}"),
+                    Value::Null
+                )
+                .await
+                .0,
+                StatusCode::OK
+            );
+        }
+    );
+    assert_eq!(response.0, StatusCode::FORBIDDEN, "{}", response.1);
+    assert_eq!(f.provider.requests.lock().unwrap().len(), before + 1);
+    assert!(f.state.store.sandbox_models(connection).unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn sandbox_revocation_during_a_provider_turn_prevents_file_tool_execution() {
     let f = fixture().await;
     let connection = connect(&f, "openai").await;

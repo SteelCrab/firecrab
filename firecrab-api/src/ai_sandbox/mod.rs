@@ -397,7 +397,6 @@ async fn execute(
     saved.task.state = SandboxTaskState::InProgress;
     save(state, saved).await.map_err(execution_error)?;
     for _ in 0..maximum {
-        access::attempt(state, saved).map_err(execution_error)?;
         // Recheck after every tool action. Disconnect or key replacement never falls back silently.
         let guard = interruptible(
             async { Ok(state.pipe_ai_mutations.lock().await) },
@@ -405,6 +404,7 @@ async fn execute(
             deadline,
         )
         .await?;
+        access::attempt(state, saved).map_err(execution_error)?;
         let mut account = proof(state, &saved.task.selection, code).map_err(execution_error)?;
         if account.connection.provider == AiProvider::Openai
             && state
@@ -431,6 +431,8 @@ async fn execute(
         if serde_json::to_vec(&history).map_err(execution_error)?.len() > 192 * 1024 {
             return Err(("sandbox_context_limit".into(), "Task reached the provider-context limit. Review retained changes and start a new task.".into()));
         }
+        // A credential refresh can also outlive a grant change.
+        access::attempt(state, saved).map_err(execution_error)?;
         let turn = interruptible(
             async {
                 model::turn(

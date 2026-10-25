@@ -113,6 +113,7 @@ Source filtering happens before task pagination. Provider history is confined to
 - Linux API unit suite: **1,296 passed, 6 ignored**. API integration suites: **1 + 6 passed**.
 - Linux CLI unit suite: **746 passed, 3 ignored**; applicable CLI integration suites passed.
 - Eight REST authorization scenarios cover real mTLS sessions, forged identity headers, cross-host route denial, exact source/VM/connection rights, policy replacement/revocation, an in-flight provider response, historical-source filtering, selected apply and explicit runtime reconciliation.
+- Follow-up regressions reproduce revocation during a provider-lock wait and during the model tool probe. Both block the subsequent provider request and avoid saving a revoked verification proof. Discovery and inference also recheck grants after credential refresh.
 - Persistence regressions reject reference/owner mutation and duplicate attempt IDs, backfill legacy local records, retain grants/revocation after reopening, and clean derived references with owned project deletion.
 - CLI/MCP fixtures verify typed access-policy routes and reject caller-role injection before HTTP.
 - Linux API/CLI/types Clippy passes with warnings denied. Formatting, changelog and documentation checks pass.

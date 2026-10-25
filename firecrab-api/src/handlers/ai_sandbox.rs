@@ -483,6 +483,9 @@ pub async fn models(
     };
     let discovery_available = true;
     let catalogue = if discovery_available && query.discover {
+        caller
+            .require_all(&state, &rights)
+            .map_err(|e| denied(id, e))?;
         ai_sandbox::model::catalogue(&state, &saved)
             .await
             .map_err(|e| provider(id, e))?
@@ -536,12 +539,9 @@ pub async fn verify_model(
     Path(key): Path<Uuid>,
     ValidatedJson(input): ValidatedJson<SandboxVerifyModel>,
 ) -> Result<Json<SandboxModel>, AppError> {
+    let resource = SandboxResource::Connection { id: key };
     caller
-        .require(
-            &state,
-            &SandboxResource::Connection { id: key },
-            SandboxPermission::Execute,
-        )
+        .require(&state, &resource, SandboxPermission::Execute)
         .map_err(|e| denied(id, e))?;
     pipe_ai::validate_model(&input.model).map_err(|e| provider(id, e))?;
     let _guard = state
@@ -560,6 +560,9 @@ pub async fn verify_model(
     } else {
         vec![]
     };
+    caller
+        .require(&state, &resource, SandboxPermission::Execute)
+        .map_err(|e| denied(id, e))?;
     let turn = ai_sandbox::model::turn(&state, &saved, &input.model, &history, &tools, input.tools)
         .await
         .map_err(|e| provider(id, e))?;
@@ -580,6 +583,9 @@ pub async fn verify_model(
             saved.connection.provider,
             &[(turn.calls[0].clone(), "OK".into(), false)],
         );
+        caller
+            .require(&state, &resource, SandboxPermission::Execute)
+            .map_err(|e| denied(id, e))?;
         let final_turn =
             ai_sandbox::model::turn(&state, &saved, &input.model, &history, &tools, false)
                 .await
@@ -594,6 +600,9 @@ pub async fn verify_model(
     } else if turn.text.trim().is_empty() || !turn.calls.is_empty() {
         return Err(provider(id, Failure::NoText));
     }
+    caller
+        .require(&state, &resource, SandboxPermission::Execute)
+        .map_err(|e| denied(id, e))?;
     let old_proofs = state
         .store
         .sandbox_models(key)
