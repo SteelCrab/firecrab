@@ -206,7 +206,14 @@ fn render_detail(app: &Shared) {
         let open =
             (state.route != "security-groups" || state.detail.is_some() || state.form.is_some())
                 && state.panel_open
-                && !["vms/new", "queues", "cluster", "pipe/database", "ai-sandbox"].contains(&state.route.as_str())
+                && ![
+                    "vms/new",
+                    "queues",
+                    "cluster",
+                    "pipe/database",
+                    "ai-sandbox",
+                ]
+                .contains(&state.route.as_str())
                 && (!narrow || state.detail.is_some() || state.form.is_some());
         let html = if open {
             details::panel(&state)
