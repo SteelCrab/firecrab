@@ -33,14 +33,12 @@ Settings and credentials are saved on the Firecrab API host.
 
 | Provider | Settings | Credentials |
 | --- | --- | --- |
-| Infisical | Base URL, project ID, environment slug, secret path | Access token with secret read and write permissions |
 | AWS Secrets Manager | Region, optional name prefix | Access key ID, secret access key, optional session token |
 | Firecrab · PipeSecrets | Another instance's base URL | Optional bearer token for its authenticating reverse proxy |
 
-Infisical supports cloud and self-hosted endpoints.
-Its default cloud endpoint is `https://us.infisical.com`.
-The adapter uses the v4 API and keeps secret references as stored strings.
-Hidden values require additional read permission; they are never treated as empty values.
+The Infisical connector has been removed. Existing imported values and their source history remain available.
+Saved Infisical connections and their pending previews are ignored when loading an older vault.
+The next successful vault write removes those connections, credentials, and previews from the encrypted file.
 AWS requires `secretsmanager:ListSecrets` and `secretsmanager:GetSecretValue` for previews.
 Uploads also need `secretsmanager:CreateSecret` for new names and `secretsmanager:PutSecretValue` for replacements.
 Customer-managed AWS KMS keys may require additional KMS permissions.

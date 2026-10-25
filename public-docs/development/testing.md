@@ -157,7 +157,7 @@ Real external accounts are separate manual evidence. Use synthetic values and `q
 - [ ] **SEC2 — Explicit reveal:** reveal only on request; hide manually and on window blur.
 - [ ] **SEC3 — Import selection:** preview additions/replacements/unchanged rows; select replacements explicitly.
 - [ ] **SEC4 — Partial upload:** upload selected local IDs and display individual failures without claiming success.
-- [ ] **SEC5 — Provider forms:** configure Infisical/AWS/Firecrab; never repopulate saved credentials into forms.
+- [ ] **SEC5 — Provider forms:** configure AWS/Firecrab; never repopulate saved credentials into forms.
 - [ ] **SEC6 — Failed edits:** keep failed saves editable and block unwanted navigation from an unsaved form.
 - [ ] **SEC7 — Responsive console:** check Korean labels, desktop/mobile layout, overflow, and browser errors.
 - [ ] **SEC8 — Time limits:** hide revealed values after 30 seconds or visibility change; disable an expired transfer preview.
@@ -165,9 +165,8 @@ Real external accounts are separate manual evidence. Use synthetic values and `q
 - [ ] **SEC10 — Import copies:** import a captured remote snapshot; preserve IDs and source metadata; replay fails; local values survive remote deletion/disconnection and local API restart.
 - [ ] **SEC11 — Actual upload:** reject a changed remote value; re-preview and upload only selected values; verify the remote after restart and reject preview replay.
 - [ ] **SEC12 — Concurrent edits:** stale form versions and stale local transfer previews fail without overwriting newer local values.
-- [ ] **SEC13 — Infisical protocol:** retain encrypted credentials through edits/restart; validate scope and raw references; mask provider failures and recover on retry using a local fixture.
+- [ ] **SEC13 — Firecrab proxy credentials:** retain encrypted bearer credentials through edits/restart; authenticate metadata and reveal requests; mask provider failures and recover on retry using a local fixture.
 - [ ] **SEC14 — Damaged storage:** missing key and corrupted ciphertext return unavailable; preserve files and refuse automatic vault replacement.
-- [ ] **SEC15 — Real Infisical account (manual):** dedicated QA scope, import, selected upload, stale remote, denied/expired credential, and complete cleanup. Record WARNING if unavailable.
 - [ ] **SEC16 — Real AWS account (manual):** dedicated QA region/prefix, SecretString import, selected upload, stale remote, denied/expired credentials, and complete cleanup. Record WARNING if unavailable.
 
 ## Images, kernels, OCI, and registry

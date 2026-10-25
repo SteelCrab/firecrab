@@ -11,10 +11,8 @@ its database were not changed.
 | --- | --- | --- |
 | AWS Secrets Manager, `ap-northeast-2` | Passed | Actual AWS account, browser actions, API checks, and AWS CLI verification |
 | Another Firecrab instance | Passed | Actual HTTP import and selected upload between two Linux API processes |
-| Infisical account | Pending | No real-account connection details were available; protocol fixture tests passed |
 
-The combined provider-connection item in issue #411 remains unchecked until
-the real Infisical account check passes.
+Infisical support was subsequently removed from issue #411. Its account QA is no longer required.
 
 ## AWS checks
 
@@ -39,8 +37,7 @@ All nine checks passed. The three AWS QA secrets were scheduled for deletion
 with a seven-day recovery window. The saved AWS connection was removed.
 
 The eight provider regression tests, strict API Clippy (all targets), formatting,
-and the WASM production build passed. The Infisical fixtures are not a substitute
-for real-account verification.
+and the WASM production build passed.
 
 ## Screenshots
 
