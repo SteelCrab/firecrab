@@ -213,6 +213,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
+- PipeSecrets rejects AWS name prefixes containing filter operators or other
+  non-name characters, preventing a negated prefix from listing secrets outside
+  the configured scope. Tracked in [#411](https://github.com/SteelCrab/firecrab/issues/411).
+
 - Dashboard WASM builds reuse a version-checked `wasm-bindgen` Cargo installation
   from the wasm-pack cache. The matching tool is exposed only to the build child,
   avoiding an unnecessary installer pass while preserving normal discovery when

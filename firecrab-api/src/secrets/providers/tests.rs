@@ -175,6 +175,25 @@ async fn redirects_and_provider_errors_do_not_leak_tokens_or_follow_redirects() 
 }
 
 #[test]
+fn aws_prefix_accepts_only_literal_secret_name_characters() {
+    let mut target = connection("");
+    target.summary.provider = Provider::AwsSecretsManager;
+    target.summary.settings.region = "ap-northeast-2".into();
+    target.credentials = BTreeMap::from([
+        ("accessKeyId".into(), "fixture-access".into()),
+        ("secretAccessKey".into(), "fixture-secret".into()),
+    ]);
+    for prefix in ["!prod/", "prod*", "prod dev", "prod\n", &"a".repeat(513)] {
+        target.summary.settings.prefix = prefix.into();
+        assert!(validate(&target).is_err(), "accepted unsafe AWS prefix");
+    }
+    for prefix in ["", "prod/", "DEV_DB", "_./+=@-", &"a".repeat(512)] {
+        target.summary.settings.prefix = prefix.into();
+        assert!(validate(&target).is_ok(), "rejected literal AWS prefix");
+    }
+}
+
+#[test]
 fn aws_signing_is_stable_for_json_payloads_and_session_credentials() {
     let headers = BTreeMap::from([
         ("content-type", "application/x-amz-json-1.1".into()),
