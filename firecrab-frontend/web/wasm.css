@@ -33,6 +33,16 @@
 .wasm-details dd { margin: 0; overflow-wrap: anywhere; }
 .wasm-cards { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: 16px; }
 .wasm-card { padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel); }
+.secrets-page, .secret-list { display: grid; gap: 16px; }
+.secrets-page > .btn { justify-self: start; }
+.secret-tabs, .secret-actions, .secret-export { display: flex; align-items: center; gap: 8px; }
+.secret-export { flex-wrap: wrap; }
+.secret-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.secret-heading h2 { margin: 0; }
+.secret-heading h2, .secret-heading label { min-width: 0; overflow-wrap: anywhere; }
+.secret-actions { flex-shrink: 0; gap: 4px; }
+.secret-card code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.secret-card .icon-btn.danger { color: var(--red-ink); }
 .wasm-table { width: 100%; border-collapse: collapse; }
 .wasm-table th,.wasm-table td { text-align: left; padding: 12px; border-bottom: 1px solid var(--border); }
 .wasm-message { padding: 12px 20px; border-bottom: 1px solid var(--border); }

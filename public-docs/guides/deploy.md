@@ -1,5 +1,9 @@
 # Deploy
 
+Changing a referenced [PipeSecret](secrets.md#automatic-value-rotation) automatically
+enters this Deploy flow for running domain services. Rotation keeps the current
+image digest and configuration, uses the shared queue, and reports progress here.
+
 Deploy updates a running MicroService through its existing Nginx domain.
 The service UUID and domain stay the same.
 New replicas must pass their HTTP health check before they receive traffic.

@@ -271,7 +271,21 @@ impl Form {
             _ => String::new(),
         };
         html.push_str(&extra);
-        html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\">{}</button><button class=\"btn\" type=\"button\" data-action=\"cancel\">{}</button></div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>",crate::i18n::t(match self.title.as_str() { "Create volume"=>"Create volume", "Deploy MicroService"=>"Deploy and run", "Deploy update"=>"Deploy update", "New MicroService"|"Edit MicroService"=>"Save configuration", "New schedule"=>"Create schedule", "Edit schedule"=>"Save changes", "Create a pool"=>"Create pool", "Pool settings"=>"Save settings", "New security group"=>"Create security group", "Security group rules"=>"Save rules", "New secret"|"Edit secret"=>"Save secret", "New connection"|"Edit connection"=>"Save connection", _=>"Save" }),crate::i18n::t("Cancel")));
+        if matches!(
+            self.title.as_str(),
+            "New secret" | "Edit secret" | "New connection" | "Edit connection"
+        ) {
+            let label = crate::i18n::t(
+                if matches!(self.title.as_str(), "New secret" | "Edit secret") {
+                    "Save secret"
+                } else {
+                    "Save connection"
+                },
+            );
+            html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\" aria-label=\"{label}\">{}</button>{}</div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>", crate::i18n::t("Save"), crate::render::icon_button("Cancel", "cancel", "", crate::render::Icon::Close)));
+        } else {
+            html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\">{}</button><button class=\"btn\" type=\"button\" data-action=\"cancel\">{}</button></div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>",crate::i18n::t(match self.title.as_str() { "Create volume"=>"Create volume", "Deploy MicroService"=>"Deploy and run", "Deploy update"=>"Deploy update", "New MicroService"|"Edit MicroService"=>"Save configuration", "New schedule"=>"Create schedule", "Edit schedule"=>"Save changes", "Create a pool"=>"Create pool", "Pool settings"=>"Save settings", "New security group"=>"Create security group", "Security group rules"=>"Save rules", "New secret"|"Edit secret"=>"Save secret", "New connection"|"Edit connection"=>"Save connection", _=>"Save" }),crate::i18n::t("Cancel")));
+        }
         if self.base["policyError"] == true {
             html = html.replace("type=\"submit\"", "type=\"submit\" disabled");
             html.push_str(&crate::render::button(

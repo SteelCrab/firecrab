@@ -20,6 +20,22 @@ module.loader.exec_module(qa)
 
 
 class DeployQaTests(unittest.TestCase):
+    def test_rotation_fixture_reports_labels_and_rejects_unhealthy_private_inputs(self):
+        fixture = qa.image_fixture(b"static-toolbox-fixture", "A")
+        manifest = json.loads(fixture[1])
+        raw = gzip.decompress(fixture[2][manifest["layers"][0]["digest"]])
+        with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+            application = archive.extractfile("www/cgi-bin/rotation").read().decode()
+            health = archive.extractfile("www/cgi-bin/rotation-health").read().decode()
+        for value, label in [("qa-secret-v0", "old"), ("qa-secret-v1", "next"), ("qa-secret-v2", "latest")]:
+            env = {"PASSWORD": value}
+            response = subprocess.check_output(["/bin/sh", "-c", application], env=env)
+            self.assertTrue(response.endswith((label + "\n").encode()))
+            self.assertNotIn(value.encode(), response)
+            self.assertTrue(subprocess.check_output(["/bin/sh", "-c", health], env=env).endswith(b"healthy\n"))
+        self.assertTrue(subprocess.check_output(["/bin/sh", "-c", health], env={"PASSWORD": "qa-secret-bad"}).startswith(b"Status: 503"))
+        self.assertTrue(subprocess.check_output(["/bin/sh", "-c", application], env={"UNRELATED": "1"}).endswith(b"unrelated\n"))
+
     def test_fleet_refuses_cpu_oversubscription_before_reading_host_files(self):
         with patch.object(fleet.subprocess, "check_output", return_value="4\n"), patch.object(Path, "read_text") as read:
             with self.assertRaisesRegex(AssertionError, "at least 16 CPUs"):

@@ -23,11 +23,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
-- AI Sandbox persists caller and runtime references, authorizes project and
-  resource operations, and checks current grants before model/file/guest actions.
-  Operators manage delegated host policies through REST, CLI, and stdio MCP.
-  Scoped hosts cannot bypass grants through other controller APIs.
-  Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
+- Changed PipeSecret values automatically rotate running domain services through
+  Deploy. Rotation keeps the current image and encrypted per-attempt values,
+  shares queue/capacity limits, and retains bounded retries across API restarts.
+  Tracked in [#503](https://github.com/SteelCrab/firecrab/issues/503).
 
 - One controller registers authenticated workload hosts and places VMs using
   deterministic image/resource filtering and durable capacity reservations.
@@ -39,6 +38,12 @@ Entries land here as work merges, and move under the next version heading when t
   conversations, isolated project edits, and bounded commands in a selected
   MicroVM. Dashboard, CLI, and local stdio MCP share durable attempts, cancellation,
   recovery, actual tool results, and selected-file apply with source conflict checks.
+  Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
+- AI Sandbox persists caller and runtime references, authorizes project and
+  resource operations, and checks current grants before model/file/guest actions.
+  Operators manage delegated host policies through REST, CLI, and stdio MCP.
+  Scoped hosts cannot bypass grants through other controller APIs.
   Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
 
 - Named MicroBlockStorage data volumes persist after VM deletion. REST, CLI, and
