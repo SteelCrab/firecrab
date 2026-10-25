@@ -433,6 +433,7 @@ async fn failed_completed_attempts_get_a_new_identity_and_reverted_values_clear_
     failed.spec = active.spec.clone();
     failed.instances.clear();
     failed.phase = ServicePhase::Failed;
+    failed.finished_at = Some(6);
     let update = failed.update.as_mut().unwrap();
     *update.previous = active.clone();
     update.completed = true;
@@ -443,11 +444,13 @@ async fn failed_completed_attempts_get_a_new_identity_and_reverted_values_clear_
         .restore_service_release(&failed, &active)
         .unwrap();
     reconcile(&state, 5_000).await.unwrap();
+    assert_eq!(tracking(&state, active.service_id).attempts, 1);
+    reconcile(&state, 11_000).await.unwrap();
     let second = tracking(&state, active.service_id);
     assert_ne!(second.operation_id, first.operation_id);
     assert_eq!(second.attempts, 2);
     edit(&state, secret, Some(OLD));
-    reconcile(&state, 5_001).await.unwrap();
+    reconcile(&state, 11_001).await.unwrap();
     state
         .secrets
         .read(|contents| {

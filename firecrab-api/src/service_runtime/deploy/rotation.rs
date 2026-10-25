@@ -216,8 +216,17 @@ async fn reserve(
         {
             return Ok(None);
         }
-        if rotation.attempts < MAX_ATTEMPTS && now < rotation.retry_after {
-            return Ok(None);
+        if rotation.attempts < MAX_ATTEMPTS {
+            let completed = attempt
+                .as_ref()
+                .and_then(|record| record.finished_at)
+                .and_then(|time| u64::try_from(time).ok())
+                .unwrap_or(0)
+                .saturating_mul(1_000);
+            let delay = 5_000_u64.saturating_mul(1 << rotation.attempts.saturating_sub(1));
+            if now < rotation.retry_after.max(completed.saturating_add(delay)) {
+                return Ok(None);
+            }
         }
         if attempt.is_some() {
             rotation.operation_id = Uuid::new_v4();
