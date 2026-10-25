@@ -207,6 +207,8 @@ pub async fn delete_micro_storage(
         .map_err(|_| AppError::internal(request_id.0))?
         .map_err(|error| match error {
             PersistenceError::MissingMicroStorage { .. } => AppError::not_found(request_id.0),
+            PersistenceError::BlockStorageConflict { message } =>
+                AppError::conflict("storage_in_use", message, request_id.0),
             other => {
                 tracing::error!(request_id = %request_id.0, %other, "failed to delete micro storage");
                 AppError::internal(request_id.0)

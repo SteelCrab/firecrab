@@ -82,3 +82,4 @@ export * from "./PoolResponse";
 export * from "./UpdatePoolRequest";
 export * from "./ManagerResourceStatus";
 export * from "./Schedule";
+export * from "./BlockStorage";

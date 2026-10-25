@@ -118,6 +118,9 @@ Replace IDs with values returned by the previous commands.
 Defaults are one vCPU, 512 MiB RAM, and 2 GiB disk.
 Override with `--cpu`, `--ram`, and `--disk-gb`.
 Use `--egress internet|isolated` and `--storage-root ID` for policy and disk placement.
+Use repeated `--volume NAME_OR_UUID:/guest/path` options for independent data disks.
+Manage them with `firecrab volume list|create|inspect|attach|detach|delete`.
+See [Persistent volumes](../guides/volumes.md) for the full workflow.
 
 ### Console
 

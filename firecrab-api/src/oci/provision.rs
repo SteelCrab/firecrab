@@ -863,7 +863,7 @@ pub(crate) fn boot_script() -> String {
 }
 
 /// Native init has already mounted the virtual filesystems and owns metrics.
-fn boot_script_for(fallback: bool) -> String {
+pub(crate) fn boot_script_for(fallback: bool) -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
 # Firecrab guest runtime for an imported OCI image (public-docs/guides/oci.md).
@@ -887,6 +887,13 @@ fi
 [ -e /dev/stderr ] || $BB ln -sf /proc/self/fd/2 /dev/stderr
 
 # specialize_guest writes /etc/hostname; systemd would apply it, busybox init does not.
+if [ -s /etc/firecrab/volumes ]; then
+  if ! $BB sh /etc/firecrab/mount-volumes; then
+    echo "FIRECRAB_NETWORK_FAILED volume-mount-failed" >/dev/console
+    exit 1
+  fi
+fi
+
 if [ -s /etc/hostname ]; then
   $BB hostname -F /etc/hostname 2>/dev/null
   $BB cat /etc/hostname > /proc/sys/kernel/hostname 2>/dev/null

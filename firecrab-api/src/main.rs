@@ -1,4 +1,5 @@
 mod artifacts;
+mod block_storage;
 mod bootstrap;
 mod console;
 mod console_replay;
@@ -59,6 +60,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 enum StartupError {
+    #[error("failed to recover data volumes: {0}")]
+    VolumeRecovery(String),
     #[error("failed to load HTTP configuration")]
     Config(#[source] ConfigError),
     #[error("failed to configure API TLS")]
@@ -155,6 +158,11 @@ async fn run() -> Result<(), StartupError> {
     // networking. Best-effort: if the net-helper isn't up yet, the host side
     // lags until the next per-VM start, which re-applies the same thing (see
     // setup_vm_network) — not worth failing API startup over.
+    let volume_state = state.clone();
+    tokio::task::spawn_blocking(move || block_storage::recover(&volume_state))
+        .await
+        .map_err(|error| StartupError::VolumeRecovery(error.to_string()))?
+        .map_err(StartupError::VolumeRecovery)?;
     reconcile::reconcile(&state).await;
     service_runtime::recover(&state).await;
     queues::recover(&state).await;

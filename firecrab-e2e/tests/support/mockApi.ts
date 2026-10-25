@@ -61,7 +61,7 @@ export async function openDashboard(page: Page, options: DashboardOptions = {}):
     if (typeof custom === "function") return custom(route);
     if (custom) return route.fulfill({ json: custom });
     if (path === "/api/vms") return route.fulfill({ json: typeof vms === "function" ? vms() : vms });
-    if (["/api/security-groups", "/api/schedules", "/api/pipe/storage"].includes(path)) return route.fulfill({ json: [] });
+    if (["/api/microblockstorage", "/api/security-groups", "/api/schedules", "/api/pipe/storage"].includes(path)) return route.fulfill({ json: [] });
     if (path === "/api/update") return route.fulfill({ json: { current: "0.3.1", latest: "0.3.1", updateAvailable: false } });
     return route.fulfill({ status: 404, json: { error: { message: "not mocked" } } });
   });

@@ -228,6 +228,7 @@ pub(super) async fn start_replica(
             .map_err(|_| "Not enough disk capacity for Deploy surge")?;
         check_surge(state, &current.spec, 1).await?;
         let request = CreateVmRequest {
+            block_storages: vec![],
             name: format!(
                 "ms-{}-{}-{}",
                 deployment.service_id.simple(),

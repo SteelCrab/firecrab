@@ -11,6 +11,7 @@ mod render;
 mod terminal;
 mod updates;
 mod vm_list;
+mod volumes;
 mod workflows;
 
 use forms::Form;
@@ -61,6 +62,7 @@ struct App {
     job: Option<(String, Value)>,
     workflows: workflows::State,
     advanced: advanced::State,
+    volumes: volumes::State,
     console: Option<terminal::State>,
     console_retry: Option<Closure<dyn FnMut()>>,
     panel_open: bool,
@@ -159,6 +161,7 @@ fn render_editor(app: &Shared) {
     }
 }
 fn render_detail(app: &Shared) {
+    let more_open = element("vm-more-actions").is_some_and(|el| el.has_attribute("open"));
     let focused = document()
         .active_element()
         .filter(|el| el.closest("#detail-panel").ok().flatten().is_some())
@@ -215,9 +218,13 @@ fn render_detail(app: &Shared) {
         element("detail-panel").and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
     {
         panel.set_hidden(!open);
+        let _ = panel.set_attribute("data-view", &app.borrow().route);
         let _ = panel.set_attribute("style", &format!("width:{width}px"));
         if open {
             panel.set_inner_html(&html);
+            if more_open && let Some(menu) = element("vm-more-actions") {
+                let _ = menu.set_attribute("open", "");
+            }
         }
     }
     app.borrow_mut().rendering = false;
@@ -383,6 +390,7 @@ pub fn start() -> Result<(), JsValue> {
         }
         drop(state);
         details::tick(&poll);
+        volumes::tick(&poll);
         refresh(poll.clone());
         poll_job(poll.clone());
     });
@@ -430,6 +438,7 @@ fn endpoint(route: &str) -> &'static str {
         "services" => "/api/micro-services",
         "networks" => "/api/micro-networks",
         "storages" => "/api/micro-storages",
+        "volumes" => "/api/microblockstorage",
         "images" => "/api/images",
         "kernels" => "/api/kernels",
         "shells" => "/api/shells",
@@ -472,6 +481,9 @@ fn load_route(app: Shared) {
     if route == "vms" {
         aux.extend(["/api/micro-networks", "/api/shells", "/api/storage"]);
     }
+    if route == "volumes" {
+        aux.push("/api/storage");
+    }
     if ["services", "pools", "security-groups"].contains(&route.as_str()) {
         aux.extend(["/api/micro-networks", "/api/security-groups"]);
     }
@@ -508,8 +520,8 @@ fn load_route(app: Shared) {
                     state.vms = vms;
                 }
                 state.cache.insert(path.into(), value);
-                let visible =
-                    matches!(state.route.as_str(), "host" | "images") && state.form.is_none();
+                let visible = matches!(state.route.as_str(), "host" | "images" | "volumes")
+                    && state.form.is_none();
                 drop(state);
                 if visible {
                     render_content(&app);
@@ -642,6 +654,7 @@ fn load_create_vm(app: Shared) {
             "/api/micro-networks",
             "/api/storage",
             "/api/shells",
+            "/api/microblockstorage",
         ] {
             let result = api::request("GET", path, None).await;
             let mut state = app.borrow_mut();
@@ -737,6 +750,7 @@ fn navigate(app: &Shared) {
     state.advanced.queues = advanced::queues::State::default();
     state.advanced.ai = advanced::ai::State::default();
     state.advanced.storage = advanced::storage::State::default();
+    state.volumes = volumes::State::default();
     state.route = next;
     state.generation += 1;
     state.detail_generation += 1;
@@ -768,6 +782,16 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         else {
             return;
         };
+        if (target.closest("#vm-more-actions").ok().flatten().is_none()
+            || target
+                .closest("[data-action], a[href]")
+                .ok()
+                .flatten()
+                .is_some())
+            && let Some(menu) = element("vm-more-actions")
+        {
+            let _ = menu.remove_attribute("open");
+        }
         if target.closest("[role=menu]").ok().flatten().is_none() {
             set_html("menu-root", "");
         }
@@ -825,6 +849,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 if advanced::ai::input(&changed, &target) {
                     return;
                 }
+                if volumes::input(&changed, &target) {
+                    return;
+                }
                 if target.closest("#editor").ok().flatten().is_some() {
                     changed.borrow_mut().dirty = true;
                     workflows::form_input(&changed, &target);
@@ -844,6 +871,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             return;
         };
         if !target.is_connected() || language.borrow().rendering {
+            return;
+        }
+        if volumes::input(&language, &target) {
             return;
         }
         if deploy::change(&language, &target) || advanced::change(&language, &target) {
@@ -935,6 +965,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         {
             return;
         }
+        if details::tab_key(&keyboard, &event) {
+            return;
+        }
         if details::resize_key(&keyboard, &event) {
             return;
         }
@@ -947,6 +980,16 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             return;
         }
         if event.key() == "Escape" {
+            if let Some(menu) = element("vm-more-actions").filter(|el| el.has_attribute("open")) {
+                let _ = menu.remove_attribute("open");
+                if let Some(summary) = element("vm-more-summary")
+                    .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+                {
+                    let _ = summary.focus();
+                }
+                event.prevent_default();
+                return;
+            }
             if element("menu-root").is_some_and(|el| !el.inner_html().is_empty()) {
                 set_html("menu-root", "");
                 event.prevent_default();
@@ -1043,7 +1086,7 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
     if action != "vm-menu" {
         set_html("menu-root", "");
     }
-    if advanced::dispatch(&app, action, id, button) {
+    if volumes::dispatch(&app, action, id) || advanced::dispatch(&app, action, id, button) {
         return;
     }
     if updates::dispatch(&app, action) || workflows::ssh_dispatch(&app, action, id) {
@@ -1490,6 +1533,9 @@ fn mutate(
                 if submits_form {
                     state.form = None;
                     state.dirty = false;
+                    if path == volumes::ENDPOINT {
+                        state.panel_open = false;
+                    }
                 }
                 if path == "/api/micro-services"
                     || (submits_form
@@ -1628,6 +1674,7 @@ fn mutate(
                 };
             }
         }
+        volumes::mutation_finished(&mut state, &path, succeeded);
         let registry_done = path == "/api/pipe/registry-transfers"
             && state
                 .job
@@ -1640,6 +1687,7 @@ fn mutate(
         render_content(&app);
         if succeeded {
             advanced::after_mutation(&app, &path);
+            volumes::after_mutation(&app, &path);
         }
         refresh(app);
     });
@@ -1662,6 +1710,7 @@ fn show_detail(app: Shared, id: String) {
     state.service_deployment = None;
     state.detail_log_loaded = false;
     state.show_env = false;
+    state.volumes.reset_editor();
     state.detail_generation += 1;
     let detail_generation = state.detail_generation;
     let generation = state.generation;

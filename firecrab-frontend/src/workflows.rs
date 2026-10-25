@@ -92,7 +92,11 @@ pub fn prepare_form(app: &Shared) {
     let storage = state.cache.get("/api/storage").unwrap_or(&empty);
     form.choose("shellIds", shells, "id", "name");
     form.choose("microNetworkId", networks, "id", "name");
-    form.choose("storageRoot", storage, "path", "path");
+    if form.path == crate::volumes::ENDPOINT {
+        form.choose("storageRoot", storage, "id", "name");
+    } else {
+        form.choose("storageRoot", storage, "path", "path");
+    }
     if let Some(kernels) = state.cache.get("/api/kernels") {
         let kernels = if kernels.is_array() {
             kernels
