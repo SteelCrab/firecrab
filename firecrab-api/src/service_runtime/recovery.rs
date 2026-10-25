@@ -149,7 +149,7 @@ fn observe(record: &mut MicroServiceDeployment, states: &[VmState], probes: &[bo
         record.instances.push(ServiceInstance {
             vm_id,
             ipv4: String::new(),
-            host_port: if record.spec.domain.is_some() {
+            host_port: if record.spec.domain.is_some() || record.request.host_port == 0 {
                 0
             } else {
                 record.request.host_port + index

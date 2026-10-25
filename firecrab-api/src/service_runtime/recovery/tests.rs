@@ -85,6 +85,24 @@ fn missing_slots_are_reserved_without_losing_healthy_replica_identity() {
 }
 
 #[test]
+fn internal_only_missing_replicas_do_not_gain_host_ports() {
+    let mut record = running();
+    record.spec.domain = None;
+    record.spec.replicas = 3;
+    record.request.host_port = 0;
+    record.instances[0].host_port = 0;
+    observe(&mut record, &[VmState::Running], &[true], 1);
+    assert_eq!(record.instances.len(), 3);
+    assert!(
+        record
+            .instances
+            .iter()
+            .all(|instance| instance.host_port == 0)
+    );
+    assert!(admit(&mut record, 1));
+}
+
+#[test]
 fn missing_pin_cannot_turn_recovery_into_a_mutable_tag_pull() {
     let mut record = running();
     record.digest = None;
