@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+mod ai_sandbox;
 mod api_client;
 mod ca;
 #[cfg(target_os = "linux")]
@@ -51,6 +52,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Select models, converse and run isolated project tasks inside a MicroVM.
+    Sandbox {
+        #[command(subcommand)]
+        command: ai_sandbox::Command,
+    },
     /// Manage persistent MicroBlockStorage data volumes.
     #[command(visible_alias = "microblockstorage")]
     Volume {
@@ -191,6 +197,11 @@ fn run(cli: Cli) -> i32 {
         Command::Ai { command } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
             pipe_ai::run(client, command)
         }),
+        Command::Sandbox { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                ai_sandbox::run(client, command)
+            })
+        }
         Command::Mcp => run_with_api_client(api.as_deref(), host.as_deref(), mcp::run),
         Command::Stack {
             command: stack::Command::Validate { file, json },

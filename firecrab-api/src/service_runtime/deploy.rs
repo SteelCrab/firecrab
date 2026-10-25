@@ -311,15 +311,32 @@ async fn accept(
 }
 
 pub(super) fn resume_worker(state: AppState, deployment: MicroServiceDeployment) {
+    let cancelled = deployment
+        .update
+        .as_ref()
+        .is_some_and(|update| update.cancelled);
+    // Reserve before spawning: task scheduling must not reorder recovery.
+    let reserved = if cancelled {
+        None
+    } else {
+        state
+            .service_deploy_permits
+            .clone()
+            .try_acquire_owned()
+            .ok()
+    };
     tokio::spawn(async move {
-        let cancelled = deployment
-            .update
-            .as_ref()
-            .is_some_and(|update| update.cancelled);
         let _permit = if cancelled {
             None
+        } else if reserved.is_some() {
+            reserved
         } else {
-            state.service_deploy_permits.acquire().await.ok()
+            state
+                .service_deploy_permits
+                .clone()
+                .acquire_owned()
+                .await
+                .ok()
         };
         if !cancelled && _permit.is_none() {
             return;

@@ -1,6 +1,7 @@
 use super::*;
 use crate::service_runtime::tests::{deployment, state};
 use axum::response::IntoResponse;
+use firecrab_api_types::MicroServiceResponse;
 use firecrab_helper_protocol::{
     PROTOCOL_VERSION,
     framing::{read_frame, write_frame},
@@ -155,6 +156,66 @@ async fn helper(root: &std::path::Path, deployment: &MicroServiceDeployment) -> 
         auto_drain,
         task,
     }
+}
+
+#[tokio::test]
+async fn restart_finishes_the_interrupted_surge_before_alphabetically_earlier_queued_work() {
+    let root = crate::firecracker::test_support::short_tempdir();
+    let mut state = state(root.path()).await;
+    let mut active = journal();
+    active.spec.name = "z-started".into();
+    active.spec.drain_timeout = 10;
+    let helper = helper(root.path(), &active).await;
+    state.network = helper.client.clone();
+    state
+        .store
+        .insert_micro_service(&MicroServiceResponse {
+            id: active.service_id,
+            spec: active.spec.clone(),
+        })
+        .unwrap();
+    let next = endpoints(&active).unwrap();
+    begin_transition(&state, &mut active, next, vec![], false)
+        .await
+        .unwrap();
+    let mut queued = journal();
+    queued.spec.name = "a-queued".into();
+    queued.instances.clear();
+    state
+        .store
+        .insert_micro_service(&MicroServiceResponse {
+            id: queued.service_id,
+            spec: queued.spec.clone(),
+        })
+        .unwrap();
+    state.store.save_service_deployment(&queued).unwrap();
+    // A wrongly scheduled queued worker must fail locally, without registry I/O.
+    state
+        .store
+        .delete_pipe_auth(crate::pipe_auth::Provider::Github)
+        .unwrap();
+    recover(&state).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        state
+            .store
+            .service_deployment(active.service_id)
+            .unwrap()
+            .unwrap()
+            .phase,
+        ServicePhase::Draining
+    );
+    assert_eq!(
+        state
+            .store
+            .service_deployment(queued.service_id)
+            .unwrap()
+            .unwrap()
+            .phase,
+        ServicePhase::Queued,
+        "queued work must not consume capacity reserved by the interrupted surge"
+    );
+    assert_eq!(helper.changes.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

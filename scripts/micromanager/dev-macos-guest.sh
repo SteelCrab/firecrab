@@ -176,10 +176,11 @@ if [ "$profile" != restore ] && [ "$profile" != clean ]; then
   echo '[BUILD] preparing Debian compiler and pinned Rust toolchain'
   if ! command -v cc >/dev/null || ! command -v pkg-config >/dev/null || ! command -v cmake >/dev/null \
     || ! command -v objcopy >/dev/null || ! command -v musl-gcc >/dev/null \
-    || ! command -v python3 >/dev/null; then
+    || ! command -v python3 >/dev/null || ! command -v git >/dev/null \
+    || ! command -v ssh >/dev/null; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y build-essential pkg-config cmake ca-certificates curl musl-tools python3
+    apt-get install -y build-essential pkg-config cmake ca-certificates curl musl-tools python3 git openssh-client
   fi
   export CARGO_HOME="$root/cargo"
   export RUSTUP_HOME="$root/rustup"

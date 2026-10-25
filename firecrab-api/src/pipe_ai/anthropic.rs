@@ -12,8 +12,10 @@ pub const API_VERSION: &str = "2026-10-21";
 /// Connection-only Anthropic client with fixed endpoints and bounded responses.
 #[derive(Debug, Clone)]
 pub struct Anthropic {
-    client: Client,
-    credential_endpoint: String,
+    /// Fixed-policy client shared with Sandbox Messages requests.
+    pub(crate) client: Client,
+    /// Official Models endpoint, also anchors the fixed Messages endpoint.
+    pub(crate) credential_endpoint: String,
 }
 
 impl Anthropic {
