@@ -45,6 +45,7 @@ Uploads also need `secretsmanager:CreateSecret` for new names and `secretsmanage
 Customer-managed AWS KMS keys may require additional KMS permissions.
 Only AWS `SecretString` is supported; a JSON string stays one secret value.
 An AWS name prefix limits both the preview scope and permitted upload names.
+The prefix is literal and uses the secret-name character set; characters such as `!` and `*` are rejected.
 The remote Firecrab instance must support these Secrets endpoints.
 Use HTTPS for external connections.
 HTTP is accepted only for loopback addresses.

@@ -2061,6 +2061,17 @@ fn poll_host(app: &Shared) {
     });
 }
 fn manager_endpoint() -> String {
+    if let Ok(Some(meta)) = document().query_selector("meta[name='firecrab-resource-endpoint']")
+        && let Some(endpoint) = meta.get_attribute("content")
+        && endpoint.starts_with('/')
+        && !endpoint.starts_with("//")
+    {
+        return format!(
+            "{}{}",
+            window().location().origin().unwrap_or_default(),
+            endpoint
+        );
+    }
     format!(
         "http://{}:5524/api/service/resources",
         window().location().hostname().unwrap_or("localhost".into())

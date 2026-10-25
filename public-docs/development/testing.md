@@ -50,6 +50,7 @@ Commands: [CI local checks](ci.md#local-checks) and [installer/platform checks](
 - [ ] **A18 — Development deployment contract:** run shared guest build/deploy/rollback regression checks; record live `service dev` validation separately.
 - [ ] **A19 — QA runner contracts:** verify guest failure/cleanup, native Windows phase aggregation, and browser mode/API guards without a VM.
 - [ ] **A20 — microManager settings and Sleepy:** validate settings save/discard and terminal restoration in a PTY; separately run `scripts/test-micromanager-sleepy.ps1 -CliPath ./firecrab.exe` on native Windows/WSL2 for actual idle shutdown, automatic wake, workload inhibition, and manual stop. See [settings and Sleepy](../guides/micromanager-settings.md). macOS runtime validation requires a native Mac.
+- [ ] **A21 — Worktree development isolation:** run two [worktree environments](worktree-dev.md) with distinct dashboard ports on macOS, Windows, and Linux. Verify private API/data routing and that stop, clean, and restore preserve the other worktree and primary VM. Record the Linux Docker marker-runtime check separately from real source deployment and MicroVM checks.
 
 ## Platform and host
 

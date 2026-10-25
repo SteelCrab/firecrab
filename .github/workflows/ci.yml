@@ -139,6 +139,84 @@ jobs:
           path: lcov.info
           retention-days: 7
 
+  dev-container-runtime:
+    name: Worktree dev (private Docker runtime, real KVM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Private release bootstrap contracts
+        run: python3 scripts/test-dev-container-bootstrap.py
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Require local Docker and KVM devices
+        run: |
+          test -c /dev/kvm
+          test -c /dev/net/tun
+          sudo chmod a+rw /dev/kvm
+          docker version
+
+      - name: Verify two private systemd runtimes and stop isolation
+        # This test uses the production Dockerfile, entrypoint, and API relay.
+        # It checks marker isolation, then installs and restores the verified
+        # release API/helper in one runtime while preserving the other runtime.
+        # It does not build source services or create MicroVMs.
+        run: >-
+          cargo test -p firecrab-cli --locked
+          micromanager::dev::container::runtime_tests::private_docker_runtimes_keep_namespaces_data_and_stop_independent
+          -- --ignored --exact --nocapture --test-threads=1
+
+  dev-container-source:
+    name: Worktree dev (source build, MicroVM isolation and restore, real KVM)
+    # The fresh guest compiler/cache makes this a longer explicit acceptance run.
+    if: github.event_name == 'workflow_dispatch'
+    needs: dev-container-runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Require local Docker and KVM devices
+        run: |
+          test -c /dev/kvm
+          test -c /dev/net/tun
+          sudo chmod a+rw /dev/kvm
+          docker version
+
+      - name: Build source and restore the release while preserving the other MicroVM
+        run: >-
+          cargo test -p firecrab-cli --locked
+          micromanager::dev::container::runtime_tests::private_docker_source_build_and_restore_preserve_the_other_runtime
+          -- --ignored --exact --nocapture --test-threads=1
+
   micromanager-macos-build:
     name: microManager (GitHub-hosted macOS build)
     # GitHub-hosted ARM64 macOS does not expose nested virtualization. Keep
