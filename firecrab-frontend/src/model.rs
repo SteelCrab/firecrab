@@ -12,10 +12,12 @@ pub const VIEWS: &[(&str, &str, &str, &str)] = &[
     ("queues", "data", "Queue", "Queue"),
     ("secrets", "data", "Secrets", "Secrets"),
     ("storages", "data", "Storage", "스토리지"),
+    ("volumes", "data", "MicroBlockStorage", "MicroBlockStorage"),
     ("images", "data", "Images", "이미지"),
     ("kernels", "data", "Kernels", "커널"),
     ("shells", "system", "Shells", "Shell"),
     ("host", "system", "Host", "호스트"),
+    ("ai-sandbox", "ai", "AI Sandbox", "AI Sandbox"),
 ];
 
 #[derive(Clone, Default, Deserialize, Serialize, PartialEq)]

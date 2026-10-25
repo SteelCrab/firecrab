@@ -12,6 +12,19 @@ Secret lists and save responses contain metadata, never values.
 Edits require the current version, so a stale editor cannot overwrite a newer value.
 A service reference prevents deletion of its secret.
 
+## Linked Firecrab account
+
+Store account secrets at `https://console.firecrab.dev/#secrets`.
+Connect that account under **Auth** with an integration token that has secrets-read permission.
+In the local **Secrets** screen, select **Preview account secrets**.
+Review the changes, then select **Import selected** to copy selected names into PipeSecrets.
+Existing values require explicit selection before replacement.
+The API uses the saved Auth credential; the browser does not receive the credential or preview values.
+Imports record **Firecrab Console** as the source.
+Later console edits do not change local copies until another import.
+Applying a preview checks that the same account is still connected and the token is still authorized.
+A disconnected, replaced, expired, or revoked token blocks the import.
+
 ## External connections
 
 Use **External connections** to register a store.
@@ -32,6 +45,7 @@ Uploads also need `secretsmanager:CreateSecret` for new names and `secretsmanage
 Customer-managed AWS KMS keys may require additional KMS permissions.
 Only AWS `SecretString` is supported; a JSON string stays one secret value.
 An AWS name prefix limits both the preview scope and permitted upload names.
+The prefix is literal and uses the secret-name character set; characters such as `!` and `*` are rejected.
 The remote Firecrab instance must support these Secrets endpoints.
 Use HTTPS for external connections.
 HTTP is accepted only for loopback addresses.
@@ -89,6 +103,7 @@ Secrets requests have a 60-second deadline.
 | GET / POST | `/api/secrets` | List metadata / create a secret |
 | PUT / DELETE | `/api/secrets/{id}` | Edit / delete a local secret |
 | POST | `/api/secrets/{id}/reveal` | Explicitly read a value |
+| POST | `/api/secrets/account/preview` | Preview linked account secrets using saved Auth |
 | GET / POST | `/api/secrets/connections` | List connection metadata / create a connection |
 | PUT / DELETE | `/api/secrets/connections/{id}` | Edit / remove a connection |
 | POST | `/api/secrets/connections/{id}/preview` | Preview an import or upload |

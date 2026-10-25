@@ -6,8 +6,9 @@ use std::time::Duration;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use firecrab_api_types::{
-    CreateMicroNetworkRequest, CreateVmRequest, DeployMicroServiceRequest, ServicePhase,
-    UpdateMicroNetworkRequest, UpdateVmResourcesRequest, VmState,
+    CreateMicroNetworkRequest, CreateVmRequest, DeployMicroServiceRequest, DeployStrategy,
+    MicroServiceSpec, ServicePhase, UpdateMicroNetworkRequest, UpdateServiceRequest,
+    UpdateVmResourcesRequest, VmState,
 };
 use firecrab_stack::{
     Action, ApplyFailure, ApplyState, ApplyStatus, Change, Inventory, Plan, ResourceKind, Stack,
@@ -90,7 +91,18 @@ pub(super) async fn preflight(
                     id,
                 )?;
                 if change.action != Action::Create {
-                    service_stop_needed(state, exact_id(change, id)?, allow_stop, id).await?;
+                    let service = exact_id(change, id)?;
+                    if !supports_live_update(
+                        state,
+                        service,
+                        &desired.config,
+                        networks[desired.network.as_str()],
+                        id,
+                    )
+                    .await?
+                    {
+                        service_stop_needed(state, service, allow_stop, id).await?;
+                    }
                 }
             }
             _ => {}
@@ -277,6 +289,52 @@ async fn execute(
                     resource_id,
                 )
                 .await?;
+            } else if supports_live_update(
+                state,
+                resource_id,
+                &desired.config,
+                networks[desired.network.as_str()],
+                id,
+            )
+            .await?
+            {
+                let store = state.store.clone();
+                let expected = database(id, move || store.service_deployment(resource_id))
+                    .await?
+                    .ok_or_else(|| {
+                        conflict(
+                            "stack_deployment_missing",
+                            "active release disappeared before Deploy",
+                            id,
+                        )
+                    })?
+                    .id;
+                let (_, Json(deployment)) = crate::service_runtime::deploy::update(
+                    State(state.clone()),
+                    Extension(request_id),
+                    Path(resource_id.to_string()),
+                    ValidatedJson(UpdateServiceRequest {
+                        expected_release_id: Some(expected),
+                        operation_id: deploy_operation_id(id, resource_id),
+                        spec: desired.config.clone(),
+                        strategy: DeployStrategy::Rolling,
+                    }),
+                )
+                .await?;
+                wait_service(
+                    state,
+                    resource_id,
+                    deployment.id,
+                    true,
+                    Duration::from_secs(
+                        u64::from(desired.config.startup_timeout)
+                            * u64::from(desired.config.replicas)
+                            + 1800,
+                    ),
+                    id,
+                )
+                .await?;
+                return Ok(());
             } else if service_stop_needed(state, resource_id, allow_stop, id).await? {
                 let (_, Json(stopping)) = crate::service_runtime::stop(
                     State(state.clone()),
@@ -358,6 +416,7 @@ async fn execute(
 
 fn vm_create(desired: &firecrab_stack::Vm, network: Uuid) -> CreateVmRequest {
     CreateVmRequest {
+        block_storages: vec![],
         name: desired.name.clone(),
         template: desired.template.clone(),
         ram: desired.ram,
@@ -439,7 +498,12 @@ async fn service_stop_needed(
             id,
         ));
     }
-    let needed = !deployment.instances.is_empty() || deployment.domain_route_owned;
+    let needed = !deployment.instances.is_empty()
+        || deployment.domain_route_owned
+        || deployment
+            .update
+            .as_ref()
+            .is_some_and(|update| !update.completed);
     if needed && !allow_stop {
         return Err(conflict(
             "stack_stop_permission_required",
@@ -448,6 +512,44 @@ async fn service_stop_needed(
         ));
     }
     Ok(needed)
+}
+
+async fn supports_live_update(
+    state: &AppState,
+    service: Uuid,
+    desired: &MicroServiceSpec,
+    network: Uuid,
+    id: Uuid,
+) -> Result<bool, AppError> {
+    let store = state.store.clone();
+    let current = database(id, move || store.service_deployment(service)).await?;
+    Ok(current.is_some_and(|current| {
+        matches!(
+            current.phase,
+            ServicePhase::Running | ServicePhase::Degraded
+        ) && current.domain_route_owned
+            && current.spec.domain.is_some()
+            && current.spec.domain == desired.domain
+            && current.spec.name == desired.name
+            && current.request.micro_network_id == Some(network)
+            && current
+                .update
+                .as_ref()
+                .is_none_or(|update| update.completed)
+    }))
+}
+
+fn deploy_operation_id(apply: Uuid, service: Uuid) -> Uuid {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(b"firecrab.stack.deploy.v1");
+    hash.update(apply.as_bytes());
+    hash.update(service.as_bytes());
+    let digest = hash.finalize();
+    let mut bytes: [u8; 16] = digest[..16].try_into().expect("SHA256 prefix");
+    bytes[6] = (bytes[6] & 15) | 128;
+    bytes[8] = (bytes[8] & 63) | 128;
+    Uuid::from_bytes(bytes)
 }
 
 async fn wait_service(
@@ -474,6 +576,19 @@ async fn wait_service(
                 )
             })?;
             if current.id != deployment_id {
+                let store = state.store.clone();
+                if database(id, move || store.service_attempt(deployment_id))
+                    .await?
+                    .is_some_and(|attempt| {
+                        attempt.service_id == service && attempt.phase == ServicePhase::Failed
+                    })
+                {
+                    return Err(conflict(
+                        "stack_deployment_failed",
+                        "Deploy failed and restored the previous release; inspect the exact operation",
+                        id,
+                    ));
+                }
                 return Err(conflict(
                     "stack_deployment_changed",
                     "service deployment identity changed during apply",

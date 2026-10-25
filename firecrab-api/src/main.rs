@@ -1,4 +1,6 @@
+mod ai_sandbox;
 mod artifacts;
+mod block_storage;
 mod bootstrap;
 mod console;
 mod console_replay;
@@ -59,6 +61,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 enum StartupError {
+    #[error("failed to recover data volumes: {0}")]
+    VolumeRecovery(String),
     #[error("failed to load HTTP configuration")]
     Config(#[source] ConfigError),
     #[error("failed to configure API TLS")]
@@ -142,10 +146,13 @@ async fn run() -> Result<(), StartupError> {
         .scheduler_lock()
         .map_err(StartupError::Persistence)?;
     let store = state.store.clone();
-    tokio::task::spawn_blocking(move || store.interrupt_stack_checks(stack_source::now()))
-        .await
-        .expect("Git source recovery task panicked")
-        .map_err(StartupError::Persistence)?;
+    tokio::task::spawn_blocking(move || {
+        store.interrupt_sandbox_tasks()?;
+        store.interrupt_stack_checks(stack_source::now())
+    })
+    .await
+    .expect("Controller task recovery panicked")
+    .map_err(StartupError::Persistence)?;
     // Bridges, nftables rules and dnsmasq's config are all host state a
     // reboot wipes, so they are re-applied here rather than assumed. Doing it
     // at startup (not only on VM start) is what brings back a MicroNetwork
@@ -155,6 +162,11 @@ async fn run() -> Result<(), StartupError> {
     // networking. Best-effort: if the net-helper isn't up yet, the host side
     // lags until the next per-VM start, which re-applies the same thing (see
     // setup_vm_network) — not worth failing API startup over.
+    let volume_state = state.clone();
+    tokio::task::spawn_blocking(move || block_storage::recover(&volume_state))
+        .await
+        .map_err(|error| StartupError::VolumeRecovery(error.to_string()))?
+        .map_err(StartupError::VolumeRecovery)?;
     reconcile::reconcile(&state).await;
     service_runtime::recover(&state).await;
     queues::recover(&state).await;

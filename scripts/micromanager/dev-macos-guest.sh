@@ -31,7 +31,11 @@ check_filesystems() {
   local tool
   for tool in bash chmod rm install; do
     if ! "$tool" --version >/dev/null; then
-      echo "[FAIL] guest OS cannot execute $tool; check filesystem errors with firecrab service debug --logs" >&2
+      if [ "${FIRECRAB_DEV_ISOLATED:-0}" = 1 ]; then
+        echo "[FAIL] selected private guest OS cannot execute $tool; inspect its filesystem and development logs" >&2
+      else
+        echo "[FAIL] guest OS cannot execute $tool; check filesystem errors with firecrab service debug --logs" >&2
+      fi
       return 74
     fi
   done
@@ -117,7 +121,11 @@ finish() {
   trap '' INT TERM HUP PIPE
   set +e
   if [ "$rc" -ne 0 ] && ! check_filesystems; then
-    echo '[FAIL] guest OS filesystem is unhealthy; stop retrying the build and run firecrab service repair' >&2
+    if [ "${FIRECRAB_DEV_ISOLATED:-0}" = 1 ]; then
+      echo "[FAIL] selected private guest OS filesystem is unhealthy; stop retrying the build and inspect its logs and disks" >&2
+    else
+      echo '[FAIL] guest OS filesystem is unhealthy; stop retrying the build and run firecrab service repair' >&2
+    fi
     echo "[PRESERVE] deployment backup: $backup; development cache: $root" >&2
     exit 74
   fi
@@ -145,7 +153,11 @@ finish() {
   cleanup=("$bin_root/bin.next")
   if [ -n "${archive_name:-}" ]; then cleanup+=("$root/$archive_name"); fi
   if ! rm -f "${cleanup[@]}" || ! rm -rf "$backup"; then
-    echo '[WARN] guest deployment cleanup failed; inspect filesystem errors with firecrab service debug --logs' >&2
+    if [ "${FIRECRAB_DEV_ISOLATED:-0}" = 1 ]; then
+      echo '[WARN] selected private guest deployment cleanup failed; inspect its filesystem and development logs' >&2
+    else
+      echo '[WARN] guest deployment cleanup failed; inspect filesystem errors with firecrab service debug --logs' >&2
+    fi
   fi
   if [ "$rc" -ne 0 ] && [ -n "$binaries" ]; then rm -rf "$binaries"; fi
   exit "$rc"
@@ -164,10 +176,11 @@ if [ "$profile" != restore ] && [ "$profile" != clean ]; then
   echo '[BUILD] preparing Debian compiler and pinned Rust toolchain'
   if ! command -v cc >/dev/null || ! command -v pkg-config >/dev/null || ! command -v cmake >/dev/null \
     || ! command -v objcopy >/dev/null || ! command -v musl-gcc >/dev/null \
-    || ! command -v python3 >/dev/null; then
+    || ! command -v python3 >/dev/null || ! command -v git >/dev/null \
+    || ! command -v ssh >/dev/null; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y build-essential pkg-config cmake ca-certificates curl musl-tools python3
+    apt-get install -y build-essential pkg-config cmake ca-certificates curl musl-tools python3 git openssh-client
   fi
   export CARGO_HOME="$root/cargo"
   export RUSTUP_HOME="$root/rustup"
@@ -248,7 +261,11 @@ if [ "$profile" != restore ] && [ "$profile" != clean ]; then
   reserve_kib=$((64 * 1024))
   if [ $((need_kib + reserve_kib)) -gt "$free_kib" ]; then
     echo "[FAIL] guest OS disk has $((free_kib / 1024)) MiB free; staging needs $((need_kib / 1024)) MiB plus $((reserve_kib / 1024)) MiB reserve" >&2
-    echo '[HINT] free space: firecrab service shell -- sh -c "journalctl --vacuum-size=64M; apt-get clean; apt-get autoremove --purge -y"' >&2
+    if [ "${FIRECRAB_DEV_ISOLATED:-0}" = 1 ]; then
+      echo '[HINT] inspect disk usage and logs in the selected private guest; free space only in that guest before retrying' >&2
+    else
+      echo '[HINT] free space: firecrab service shell -- sh -c "journalctl --vacuum-size=64M; apt-get clean; apt-get autoremove --purge -y"' >&2
+    fi
     exit 1
   fi
   binaries=$(mktemp -d "$bin_root/build.XXXXXX")

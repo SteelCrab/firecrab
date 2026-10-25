@@ -73,6 +73,9 @@ jobs:
           python3 scripts/test-ci-qa-guest.py
           python3 scripts/test-ci-qa-ssh.py
 
+      - name: Deploy QA guards and OCI fixture contract
+        run: python3 scripts/test-ci-qa-deploy.py
+
       - name: Database QA guards and cleanup contract
         run: python3 scripts/test-pipe-databases-qa.py
 
@@ -89,7 +92,14 @@ jobs:
         run: |
           source <(cargo llvm-cov show-env --sh)
           cargo llvm-cov clean --workspace
-          cargo test --workspace --locked
+          cargo test --workspace --exclude firecrab-helper --locked
+          # Fork/exec tests can temporarily inherit another test's TCP listener.
+          # Keep helper port-release assertions isolated from those processes.
+          cargo test -p firecrab-helper --locked -- --test-threads=1
+          # The guest contract creates real users. Run only this test binary in
+          # an isolated disposable root container; retain its instrumented profile.
+          api_test_binary=$(cargo test -p firecrab-api --bin firecrab-api --no-run --message-format=json | python3 -c 'import json,sys; entries=[json.loads(line) for line in sys.stdin]; print(next(item["executable"] for item in entries if item.get("reason") == "compiler-artifact" and item.get("profile", {}).get("test") and item.get("target", {}).get("name") == "firecrab-api" and item.get("executable")))')
+          bash scripts/test-ai-sandbox-guest.sh "$api_test_binary" "$CARGO_LLVM_COV_TARGET_DIR"
           # The terminal test is ignored by cargo test because it needs a PTY.
           # Run its instrumented binary before exporting the coverage report.
           test_binary=$(cargo test -p firecrab-cli --no-run --message-format=json | python3 -c 'import json,sys; entries=[json.loads(line) for line in sys.stdin]; print(next(item["executable"] for item in entries if item.get("reason") == "compiler-artifact" and item.get("profile", {}).get("test") and item.get("target", {}).get("name") == "firecrab" and item.get("executable")))')
@@ -109,6 +119,7 @@ jobs:
           sudo --preserve-env=LLVM_PROFILE_FILE env FIRECRAB_LIBDIR=/var/lib/firecrab-pipe-qa "$bin/firecrab" pipe install
           cloudflared=/var/lib/firecrab-pipe-qa/pipe/cloudflared
           python3 scripts/test-pipe-runtime.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress
+          python3 scripts/test-deploy-nginx.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress
           sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-cli.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress --cloudflared "$cloudflared"
           sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-firecrab-address.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress
           sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-api.py --api "$bin/firecrab-api" --helper "$bin/firecrab-helper" --ingress target/ingress/firecrab-ingress
@@ -121,6 +132,92 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Retain native coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-coverage
+          path: lcov.info
+          retention-days: 7
+
+  dev-container-runtime:
+    name: Worktree dev (private Docker runtime, real KVM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Private release bootstrap contracts
+        run: python3 scripts/test-dev-container-bootstrap.py
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Require local Docker and KVM devices
+        run: |
+          test -c /dev/kvm
+          test -c /dev/net/tun
+          sudo chmod a+rw /dev/kvm
+          docker version
+
+      - name: Verify two private systemd runtimes and stop isolation
+        # This test uses the production Dockerfile, entrypoint, and API relay.
+        # It checks marker isolation, then installs and restores the verified
+        # release API/helper in one runtime while preserving the other runtime.
+        # It does not build source services or create MicroVMs.
+        run: >-
+          cargo test -p firecrab-cli --locked
+          micromanager::dev::container::runtime_tests::private_docker_runtimes_keep_namespaces_data_and_stop_independent
+          -- --ignored --exact --nocapture --test-threads=1
+
+  dev-container-source:
+    name: Worktree dev (source build, MicroVM isolation and restore, real KVM)
+    # The fresh guest compiler/cache makes this a longer explicit acceptance run.
+    if: github.event_name == 'workflow_dispatch'
+    needs: dev-container-runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Require local Docker and KVM devices
+        run: |
+          test -c /dev/kvm
+          test -c /dev/net/tun
+          sudo chmod a+rw /dev/kvm
+          docker version
+
+      - name: Build source and restore the release while preserving the other MicroVM
+        run: >-
+          cargo test -p firecrab-cli --locked
+          micromanager::dev::container::runtime_tests::private_docker_source_build_and_restore_preserve_the_other_runtime
+          -- --ignored --exact --nocapture --test-threads=1
 
   micromanager-macos-build:
     name: microManager (GitHub-hosted macOS build)
@@ -500,8 +597,6 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       CARGO_INCREMENTAL: "0"
-      # Retain real Queue API coverage across systemd restart and SIGTERM.
-      RUSTFLAGS: "-C llvm-args=-runtime-counter-relocation"
     defaults:
       run:
         shell: bash
@@ -589,16 +684,15 @@ jobs:
 
       - uses: ./.github/actions/setup-wasm
 
-      - name: Install cargo-llvm-cov
+      - name: Install cargo-llvm-cov for runtime QA
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Build install payload
         # CI installs from local binaries, not GitHub Releases (PRs have none).
         run: |
-          source <(cargo llvm-cov show-env --sh)
           sudo apt-get update
           sudo apt-get install -y musl-tools
-          ./scripts/ci-prepare-install-payload.sh
+          FIRECRAB_QA_COVERAGE=1 ./scripts/ci-prepare-install-payload.sh
 
       - name: Install
         id: install-service
@@ -608,6 +702,18 @@ jobs:
           sudo -E env "PATH=$PATH" ./install.sh \
             --bin-dir target/release \
             --dashboard-dir firecrab-frontend/dist
+
+      - name: Collect continuous runtime QA profiles
+        run: |
+          sudo install -d -m 1777 /var/lib/firecrab-qa-coverage
+          for unit in firecrab-api firecrab-helper; do
+            sudo mkdir -p "/run/systemd/system/$unit.service.d"
+            printf '%s\n' '[Service]' \
+              'Environment=LLVM_PROFILE_FILE=/var/lib/firecrab-qa-coverage/firecrab-%%p-%%m%%c.profraw' \
+              | sudo tee "/run/systemd/system/$unit.service.d/85-ci-coverage.conf"
+          done
+          sudo systemctl daemon-reload
+          sudo systemctl restart firecrab-helper firecrab-api
 
       - name: Both daemons are up
         run: |
@@ -705,6 +811,11 @@ jobs:
             --helper /usr/local/lib/firecrab/firecrab-guest-console \
             --busybox /usr/bin/busybox --expected-release 7.2.2-firecrab-vsock1 \
             --report target/qa/guest-console-vm.json
+
+      - name: Deploy with real MicroVMs and Nginx
+        if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
+        timeout-minutes: 15
+        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host 2>&1 | tee target/qa/deploy.log
 
       - name: Chromium E2E with real guest boot and dual-stack SSH
         if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
@@ -882,6 +993,29 @@ jobs:
           test -d /var/lib/firecrab
           sudo ./install.sh --uninstall --purge
           test ! -e /var/lib/firecrab
+
+      - name: Export runtime QA coverage
+        if: ${{ !cancelled() && steps.install-service.outcome == 'success' }}
+        run: |
+          source <(cargo llvm-cov show-env --sh)
+          sudo cp /var/lib/firecrab-qa-coverage/*.profraw "$CARGO_LLVM_COV_TARGET_DIR/"
+          sudo chown "$(id -u):$(id -g)" "$CARGO_LLVM_COV_TARGET_DIR/"*.profraw
+          cargo llvm-cov report --release --lcov --output-path target/qa/installer-lcov.info
+          python3 - <<'PY'
+          from pathlib import Path
+          report = Path("target/qa/installer-lcov.info").read_text().split("end_of_record")
+          for name in ["service_runtime/deploy.rs", "service_runtime/deploy/replicas.rs"]:
+              blocks = [block for block in report if any(line.startswith("SF:") and line.endswith(name) for line in block.splitlines())]
+              assert blocks and any(int(line.split(",")[1]) > 0 for block in blocks for line in block.splitlines() if line.startswith("DA:")), f"No real Deploy runtime coverage: {name}"
+          PY
+
+      - name: Upload runtime QA coverage to Codecov
+        if: ${{ !cancelled() && hashFiles('target/qa/installer-lcov.info') != '' }}
+        uses: codecov/codecov-action@v7
+        with:
+          files: target/qa/installer-lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Daemon logs (on failure)
         if: failure()

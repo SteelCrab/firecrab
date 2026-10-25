@@ -87,6 +87,7 @@ These commands use normal host selection; see [Stack ownership and planning](../
 | --- | --- |
 | VM | `vm list`, `create`, `start ID`, `stop ID`, `delete ID` |
 | MicroService | `microservice list`, `get ID`, `create --file JSON`, `update ID --file JSON`, `delete ID`, `deploy ID [--host-port PORT]`, `status ID`, `stop ID`; `--host-port` may be omitted only for services with a domain; see [MicroService](../guides/microservices.md) |
+| Deploy | `microservice rollout ID --file JSON`, `releases ID`, `rollback ID --release UUID`, `retry ID`; rollout and rollback accept `--strategy rolling\|blue_green`, `--operation-id UUID`, `--expected-release UUID`, `--no-wait`, and `--timeout SECONDS`; see [Deploy](../guides/deploy.md) |
 | Console | `vm console ID` (`terminal` alias) |
 | Network | `network list`, `create`, `delete ID` |
 | Image | `image list`, `inspect REFERENCE`, `import REFERENCE`, `import-status ALIAS` |
@@ -117,6 +118,9 @@ Replace IDs with values returned by the previous commands.
 Defaults are one vCPU, 512 MiB RAM, and 2 GiB disk.
 Override with `--cpu`, `--ram`, and `--disk-gb`.
 Use `--egress internet|isolated` and `--storage-root ID` for policy and disk placement.
+Use repeated `--volume NAME_OR_UUID:/guest/path` options for independent data disks.
+Manage them with `firecrab volume list|create|inspect|attach|detach|delete`.
+See [Persistent volumes](../guides/volumes.md) for the full workflow.
 
 ### Console
 
@@ -150,14 +154,22 @@ Use the [macOS](../getting-started/macos.md#service-commands) or [Windows](../ge
 Use [service dev](../development/micromanager.md) to deploy source-built API/helper binaries.
 `firecrab service dev --port 8098` selects the development dashboard port (default 8080).
 Development start/restart controls reuse the saved port; the API port stays unchanged.
+Git-linked worktrees use [independent development instances](../development/worktree-dev.md).
+Backend API/resource ports are allocated and saved separately from the manual dashboard port.
+Linux `service dev` uses a private Docker runtime from both primary and linked checkouts.
 
 On macOS and Windows, lifecycle controls have separate scopes:
 
 | Commands | Scope |
 | --- | --- |
 | `firecrab service start` / `stop` / `restart` | The management VM and its resident host service |
-| `firecrab service dev start` / `stop` / `restart` | Guest API/helper and the host development dashboard |
-| `firecrab service dev clean` | Restore installed release services, remove guest development files, and clear host dashboard state |
+| `firecrab service dev start` / `stop` / `restart` | The selected checkout's development backend and dashboard |
+| `firecrab service dev clean` | Restore that environment's release, remove development files, and clear its dashboard state |
+
+Non-development service controls retain their primary scope, even inside a linked worktree.
+General VM/API commands do not automatically select the worktree API.
+Pass the development command's printed API URL with `--api URL`.
+Docker `dev clean` and `--restore` preserve its named data volume and runtime resources.
 
 ## Pipe ingress and tunnel
 
@@ -271,3 +283,7 @@ See [API: Pools](api.md#pools) for sizing, TTL, and release rules.
 
 Pool acquire always sends an idempotency key. If `--idempotency-key` is omitted, the CLI generates
 one. On failure it prints a retry command with that key; use it to recover the same lease.
+
+## AI Sandbox
+
+`firecrab sandbox` uses the shared durable Sandbox REST lifecycle. See the [AI Sandbox guide](../guides/ai-sandbox.md#cli-and-local-stdio-mcp) for model verification, project/task JSON, cancellation, review and selected-file apply. `firecrab mcp` exposes the corresponding `sandbox_*` tools.

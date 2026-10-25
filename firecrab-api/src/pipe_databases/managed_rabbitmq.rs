@@ -318,6 +318,7 @@ async fn start(state: &AppState, cluster: &mut Cluster) -> Result<(), Error> {
             State(state.clone()),
             Extension(RequestId(cluster.id)),
             ValidatedJson(CreateVmRequest {
+                block_storages: Vec::new(),
                 name: format!(
                     "rabbitmq-{}-{}",
                     &cluster.id.simple().to_string()[..8],

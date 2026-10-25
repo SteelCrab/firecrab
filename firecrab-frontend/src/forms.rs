@@ -127,6 +127,16 @@ impl Form {
                 ));
             }
 
+            if field.kind == "mounts" {
+                html.push_str(&crate::volumes::mount_editor(&field.value, &field.options));
+                if let Some(error) = errors.get(field.key) {
+                    html.push_str(&format!(
+                        "<p class=\"field-error wasm-wide\" role=\"alert\">{}</p>",
+                        escape(crate::i18n::t(error))
+                    ));
+                }
+                continue;
+            }
             if self.title == "Create a pool" && index == 2 {
                 html.push_str("<details class=\"wasm-wide\"><summary>Advanced settings</summary><div class=\"wasm-form\">");
             }
@@ -297,7 +307,7 @@ impl Form {
             _ => String::new(),
         };
         html.push_str(&extra);
-        html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\">{}</button><button class=\"btn\" type=\"button\" data-action=\"cancel\">{}</button></div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>",crate::i18n::t(match self.title.as_str() { "Connect database"|"Update connection credentials"=>"Save connection", "Deploy MicroService"=>"Deploy and run", "New MicroService"|"Edit MicroService"=>"Save configuration", "New schedule"=>"Create schedule", "Edit schedule"=>"Save changes", "Create a pool"=>"Create pool", "Pool settings"=>"Save settings", "New security group"=>"Create security group", "Security group rules"=>"Save rules", "New secret"|"Edit secret"=>"Save secret", "New connection"|"Edit connection"=>"Save connection", _=>"Save" }),crate::i18n::t("Cancel")));
+        html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\">{}</button><button class=\"btn\" type=\"button\" data-action=\"cancel\">{}</button></div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>",crate::i18n::t(match self.title.as_str() { "Connect database"|"Update connection credentials"=>"Save connection", "Create volume"=>"Create volume", "Deploy MicroService"=>"Deploy and run", "Deploy update"=>"Deploy update", "New MicroService"|"Edit MicroService"=>"Save configuration", "New schedule"=>"Create schedule", "Edit schedule"=>"Save changes", "Create a pool"=>"Create pool", "Pool settings"=>"Save settings", "New security group"=>"Create security group", "Security group rules"=>"Save rules", "New secret"|"Edit secret"=>"Save secret", "New connection"|"Edit connection"=>"Save connection", _=>"Save" }),crate::i18n::t("Cancel")));
         if database_form
             && (busy
                 || self
@@ -320,6 +330,15 @@ impl Form {
                 "",
             ));
         }
+        if self.title == "Deploy update" {
+            for key in ["name", "domain"] {
+                html = html.replace(
+                    &format!("id=\"field-{key}\""),
+                    &format!("id=\"field-{key}\" readonly"),
+                );
+            }
+        }
+
         html
     }
     pub fn choose(&mut self, key: &str, items: &Value, id: &str, label: &str) {
@@ -351,6 +370,7 @@ impl Form {
                                     .contains(&number),
                                 "hostPort" | "port" => (1..=65535).contains(&number),
                                 "replicas" => (1..=100).contains(&number),
+                                "sizeGib" => (1..=65535).contains(&number),
                                 "minReady" => true,
                                 "startupTimeout" => (1..=3600).contains(&number),
                                 "drainTimeout" => number <= 3600,
@@ -362,6 +382,7 @@ impl Form {
                     },
                     "pairs" => pairs(value).err(),
                     "ports" => ports(value).err(),
+                    "mounts" => crate::volumes::parse_mounts(value).err(),
                     _ => None,
                 }
             };
@@ -423,6 +444,7 @@ impl Form {
                 "queue-bindings" => crate::advanced::queues::binding_payload(value)?,
                 "pairs" => pairs(value)?,
                 "ports" => ports(value)?,
+                "mounts" => crate::volumes::parse_mounts(value)?,
                 "lines" | "multi" => json!(
                     value
                         .lines()
@@ -452,6 +474,10 @@ impl Form {
             return result;
         }
         match self.title.as_str() {
+            "Create volume" => {
+                body["name"] = json!(text(&body, "name").trim());
+                Ok(body)
+            }
             "New network" if body["ipv6AddressMode"].is_null() => {
                 body.as_object_mut().unwrap().remove("ipv6AddressMode");
                 body.as_object_mut().unwrap().remove("ipv6Cidr");
@@ -470,7 +496,7 @@ impl Form {
                 }
                 Ok(body)
             }
-            "New MicroService" | "Edit MicroService" => {
+            "New MicroService" | "Edit MicroService" | "Deploy update" => {
                 if body["queues"].as_object().is_some_and(|q| q.is_empty()) {
                     body.as_object_mut().unwrap().remove("queues");
                 }
@@ -479,6 +505,15 @@ impl Form {
                 }
                 if let Some(domain) = body["domain"].as_str() {
                     body["domain"] = json!(normalize_domain(domain));
+                }
+                if self.title == "Deploy update" {
+                    let object = body.as_object_mut().expect("service configuration");
+                    let operation = object.remove("operationId").unwrap_or(Value::Null);
+                    let expected = object.remove("expectedReleaseId").unwrap_or(Value::Null);
+                    let strategy = object.remove("strategy").unwrap_or(json!("rolling"));
+                    return Ok(
+                        json!({"operationId":operation,"expectedReleaseId":expected,"spec":body,"strategy":strategy}),
+                    );
                 }
                 Ok(body)
             }
@@ -555,6 +590,20 @@ pub fn vm_create(cache: &BTreeMap<String, Value>) -> Form {
                 "",
             )
             .optional(),
+            Field::new("blockStorages", "Data volumes", "mounts", "[]")
+                .optional()
+                .resources(
+                    &json!(
+                        list(get(crate::volumes::ENDPOINT))
+                            .iter()
+                            .filter(|volume| volume["state"] == "available"
+                                && volume["attachedVmId"].is_null())
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    ),
+                    "id",
+                    "name",
+                ),
         ],
         "vms",
     )
@@ -571,6 +620,17 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
         String::new()
     };
     let form = match kind {
+        "volumes" => Form::new(
+            "Create volume",
+            crate::volumes::ENDPOINT.into(),
+            "POST",
+            vec![
+                Field::new("name", "Name", "text", ""),
+                Field::new("sizeGib", "Size (GiB)", "number", 10),
+                Field::new("storageRoot", "Storage", "nullable-select", "").optional(),
+            ],
+            "volumes",
+        ),
         "networks" => Form::new(
             if editing {
                 "Network settings"
@@ -1268,6 +1328,36 @@ mod tests {
         let deploy = resource_form("service-deploy", &Value::Null, "service-1").unwrap();
         let _: DeployMicroServiceRequest =
             serde_json::from_value(deploy.payload(&values(&deploy)).unwrap()).unwrap();
+    }
+    #[test]
+    fn running_update_payload_keeps_release_fencing_outside_the_service_spec() {
+        let data = json!({"name":"web","image":"ghcr.io/team/web:v2","port":8080,"healthPath":"/health","ram":256,"cpu":1,"domain":"web.example.com","env":{"MODE":"prod"},"secrets":{},"queues":{"JOBS":{"queueId":"33333333-3333-4333-8333-333333333333","access":"consume"}}});
+        let mut form = resource_form("services", &data, "service").unwrap();
+        form.title = "Deploy update".into();
+        form.base["operationId"] = json!("11111111-1111-4111-8111-111111111111");
+        form.base["expectedReleaseId"] = json!("22222222-2222-4222-8222-222222222222");
+        form.fields.push(Field::new(
+            "strategy",
+            "Deployment strategy",
+            "select",
+            "blue_green",
+        ));
+        let body = form.payload(&values(&form)).unwrap();
+        let request: firecrab_api_types::UpdateServiceRequest =
+            serde_json::from_value(body.clone()).unwrap();
+        assert!(request.expected_release_id.is_some());
+        assert_eq!(
+            request.strategy,
+            firecrab_api_types::DeployStrategy::BlueGreen
+        );
+        assert_eq!(request.spec.env["MODE"], "prod");
+        assert_eq!(
+            request.spec.queues["JOBS"].access,
+            firecrab_api_types::QueueAccess::Consume
+        );
+        assert!(body["spec"].get("operationId").is_none());
+        assert!(body["spec"].get("expectedReleaseId").is_none());
+        assert!(body["spec"].get("strategy").is_none());
     }
     #[test]
     fn unicode_ids_are_encoded_as_one_path_component() {

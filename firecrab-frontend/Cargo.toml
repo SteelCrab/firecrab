@@ -23,7 +23,7 @@ js-sys = "=0.3.103"
 web-sys = { version = "=0.3.103", features = [
   "File", "FileList", "Crypto", "Window", "Document", "Element", "Node", "NodeList", "Event", "EventTarget",
   "HtmlElement", "HtmlButtonElement", "HtmlInputElement", "HtmlSelectElement", "HtmlTextAreaElement",
-  "HtmlFormElement", "FocusOptions", "FormData", "Location", "History", "Storage", "KeyboardEvent",
+  "HtmlFormElement", "HtmlDialogElement", "FocusOptions", "FormData", "Location", "History", "Storage", "KeyboardEvent",
   "Request", "RequestInit", "Headers", "Response", "AbortController", "AbortSignal",
   "Performance", "console", "HashChangeEvent", "Navigator", "Clipboard", "PointerEvent", "DomRect", "WebSocket", "BinaryType", "CloseEvent", "MessageEvent", "CustomEvent", "Blob", "BlobPropertyBag", "Url", "HtmlAnchorElement"
 ] }

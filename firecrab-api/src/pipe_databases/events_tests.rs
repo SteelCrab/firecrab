@@ -251,6 +251,9 @@ async fn durable_events_real_rabbitmq() {
         state
             .store
             .save_service_deployment(&MicroServiceDeployment {
+                started_at: 0,
+                finished_at: None,
+                update: None,
                 id: Uuid::new_v4(),
                 service_id,
                 phase: ServicePhase::Running,

@@ -2,23 +2,33 @@
 //!
 //! Each host has its own backend module; everything they share lives beside them.
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod artifact;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod controller;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod debug;
-mod dev;
+pub(crate) mod dev;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod host_platform;
 #[cfg(target_os = "macos")]
 mod macos;
 mod managed_home;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod manifest;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod os_repair;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod resource;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod resource_server;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod runtime;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod settings;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod settings_tui;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod sleepy;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod snapshot;
@@ -98,6 +108,7 @@ fn write_retrying_transient_errors(writer: &mut impl Write, mut bytes: &[u8]) {
 /// `firecrab service` on every host that runs Firecrab inside a managed Debian
 /// VM. Common lifecycle verbs share one definition; platform tools are gated.
 #[derive(Subcommand)]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub enum Command {
     /// Show or change management VM CPU, RAM, disk, and networking.
     #[command(name = "resorce", visible_alias = "resource")]
@@ -223,6 +234,7 @@ pub enum Command {
     },
 }
 
+/// Lifecycle operations shared by native and container development backends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Subcommand)]
 pub enum DevCommand {
     /// Start the deployed API/helper and dashboard without rebuilding or booting the VM.
@@ -236,6 +248,7 @@ pub enum DevCommand {
 }
 
 impl DevCommand {
+    /// Verb accepted by the shared in-guest development transaction script.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Start => "start",

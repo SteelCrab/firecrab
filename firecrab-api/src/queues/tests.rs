@@ -187,6 +187,9 @@ async fn binding_credentials_are_private_role_scoped_and_references_cannot_be_de
     state
         .store
         .save_service_deployment(&MicroServiceDeployment {
+            started_at: 0,
+            finished_at: None,
+            update: None,
             id: Uuid::new_v4(),
             service_id: service.id,
             spec: service.spec.clone(),
@@ -222,6 +225,58 @@ async fn binding_credentials_are_private_role_scoped_and_references_cannot_be_de
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(json["error"]["code"], "queue_in_use");
     assert!(state.store.queue(queue.id).unwrap().is_some());
+    let mut unbound = service.clone();
+    unbound.spec.queues.clear();
+    state.store.update_micro_service(&unbound).unwrap();
+    let mut reserved = state.store.service_deployment(service.id).unwrap().unwrap();
+    for phase in [ServicePhase::Running, ServicePhase::Queued] {
+        reserved.phase = phase;
+        if phase == ServicePhase::Queued {
+            reserved.instances.clear();
+        }
+        state.store.save_service_deployment(&reserved).unwrap();
+        let (status, _, json) = request(
+            router(state.clone()),
+            "DELETE",
+            &format!("/api/queues/{}", queue.id),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(json["error"]["code"], "queue_in_use");
+    }
+    let mut pending = reserved.clone();
+    pending.id = Uuid::new_v4();
+    pending.spec.queues.clear();
+    pending.update = Some(Box::new(ServiceUpdate {
+        previous: Box::new(reserved),
+        requested_spec: pending.spec.clone(),
+        strategy: DeployStrategy::Rolling,
+        rollback_of: None,
+        failure: None,
+        cancelled: false,
+        restoring: true,
+        routed_new: false,
+        transition: None,
+        retiring: vec![],
+        completed: false,
+    }));
+    state.store.save_service_deployment(&pending).unwrap();
+    assert!(
+        state
+            .store
+            .queue_has_deployment_reference(queue.id)
+            .unwrap()
+    );
+    pending.phase = ServicePhase::Failed;
+    pending.update.as_mut().unwrap().previous.phase = ServicePhase::Running;
+    pending.update.as_mut().unwrap().completed = true;
+    state.store.save_service_deployment(&pending).unwrap();
+    assert!(
+        !state
+            .store
+            .queue_has_deployment_reference(queue.id)
+            .unwrap()
+    );
     let (status, headers, json) = request(
         router(state.clone()),
         "POST",

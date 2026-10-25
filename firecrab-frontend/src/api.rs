@@ -99,6 +99,8 @@ async fn send(
                 5000
             } else if path.starts_with("/api/pipe/database") && method != "GET" {
                 65000
+            } else if path.starts_with("/api/ai-sandbox/") {
+                185000
             } else if path.ends_with("/acquire") {
                 120000
             } else {

@@ -44,7 +44,7 @@ fn tr<'a>(en: &'a str, ko: &'a str) -> &'a str {
 fn setup(form: &Form) -> bool {
     matches!(
         form.title.as_str(),
-        "New MicroService" | "Edit MicroService"
+        "New MicroService" | "Edit MicroService" | "Deploy update"
     )
 }
 fn set_value(app: &Shared, key: &str, value: &str) {
@@ -291,6 +291,7 @@ pub fn sync(app: &Shared) {
                 "name" => 0,
                 "image" => 4,
                 "port" | "healthPath" | "domain" | "securityGroupId" => 1,
+                "strategy" => 3,
                 _ => 2,
             };
             if let Some(el) = element(&format!("field-{}", field.key))
@@ -372,6 +373,8 @@ pub fn sync(app: &Shared) {
         set_html("service-placement", &errors);
         let owns = s.service_deployment.as_ref().is_some_and(|d| {
             !list(&d["instances"]).is_empty()
+                || !list(&d["update"]["previous"]["instances"]).is_empty()
+                || crate::deploy::busy(d)
                 || matches!(
                     text(d, "phase"),
                     "queued"
@@ -395,6 +398,14 @@ pub fn sync(app: &Shared) {
                 String::new()
             },
         );
+        if (s.busy
+            || s.service_deployment
+                .as_ref()
+                .is_some_and(crate::deploy::busy))
+            && let Ok(Some(stop)) = crate::document().query_selector("#service-controls button")
+        {
+            let _ = stop.set_attribute("disabled", "");
+        }
         if let Ok(Some(save)) = crate::document().query_selector("#editor button[type=submit]") {
             save.unchecked_into::<web_sys::HtmlButtonElement>()
                 .set_disabled(

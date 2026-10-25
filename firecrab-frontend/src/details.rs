@@ -40,11 +40,15 @@ pub fn panel(app: &App) -> String {
     if app.route == "vms/new" {
         return String::new();
     }
-    out.push_str(&button("Close detail", "panel-toggle", ""));
+    let close = format!(
+        "<button type=\"button\" class=\"icon-btn detail-close\" data-action=\"panel-toggle\" aria-label=\"{}\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"m6 6 12 12M18 6 6 18\"/></svg></button>",
+        t("Close detail")
+    );
     if let Some(form) = &app.form {
+        out.push_str(&close);
         out.push_str(&format!(
             "<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\">{}</section>",
-            if form.return_route == "services" { crate::advanced::services::html(app, form) } else { form.html(app.busy, &app.field_errors) } + &if form.title == "Deploy MicroService" { format!("<div id=\"service-status\">{}</div>", render::deployment(app.service_deployment.as_ref())) } else { String::new() }
+            if form.return_route == "services" { crate::advanced::services::html(app, form) } else { form.html(app.busy, &app.field_errors) } + &if form.title == "Deploy MicroService" { format!("<div id=\"service-status\">{}</div><div id=\"deploy-panel\">{}</div>", render::deployment(app.service_deployment.as_ref()), crate::deploy::html(app)) } else { String::new() }
         ));
         if form.title == "Deploy MicroService" && !text(&form.base, "domain").is_empty() {
             if let Some(pipe) = app.cache.get("/api/pipe")
@@ -58,6 +62,7 @@ pub fn panel(app: &App) -> String {
         return out;
     }
     let Some(data) = &app.detail else {
+        out.push_str(&close);
         out.push_str(&format!(
             "<div class=\"empty-state\">{}</div>",
             t("Select an item to see its details.")
@@ -68,23 +73,47 @@ pub fn panel(app: &App) -> String {
         .iter()
         .find_map(|key| data[key].as_str())
         .unwrap_or(t("Details"));
-    out.push_str(&format!("<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\"><header class=\"wasm-actions detail-head\"><h2 class=\"detail-title\">{}{}</h2>{}</header>{}",escape(title),match text(data,"purpose") { "pool" => " · Pool", "queue" => " · Queue", _ => "" },button("Close","close-detail",""),render::detail_actions(app,data)));
+    out.push_str(&format!("<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\"><header class=\"detail-head vm-detail-head\"><div class=\"detail-heading\"><h2 class=\"detail-title\">{}{}</h2>{close}</div>", escape(title), match text(data,"purpose") { "pool" => " · Pool", "queue" => " · Queue", _ => "" }));
+    if app.route == "vms" {
+        let state = text(data, "state");
+        let label = match state {
+            "running" => "Running",
+            "stopped" => "Stopped",
+            "paused" => "Paused",
+            "created" => "Created",
+            "error" => "Error",
+            "starting" => "Starting",
+            "pausing" => "Pausing",
+            "resuming" => "Resuming",
+            _ => state,
+        };
+        out.push_str(&format!(
+            "<div class=\"detail-meta\"><span class=\"badge {}\">{}</span><span>{}</span></div>",
+            escape(state),
+            escape(t(label)),
+            escape(text(data, "template"))
+        ));
+    }
+    out.push_str(&render::detail_actions(app, data));
+    out.push_str("</header>");
     if app.route == "vms" {
         out.push_str(
-            "<div role=\"tablist\" class=\"tabs\" aria-label=\"MicroVM detail sections\">",
+            "<div role=\"tablist\" class=\"tabs vm-detail-tabs\" aria-label=\"MicroVM detail sections\">",
         );
         for (id, label) in [
             ("overview", "Overview"),
             ("network", "Network"),
+            ("volumes", "Volumes"),
             ("env", "Environment"),
             ("logs", "Log"),
         ] {
-            out.push_str(&format!("<button role=\"tab\" type=\"button\" aria-selected=\"{}\" aria-controls=\"vm-tab-panel\" id=\"vm-tab-{id}\" data-action=\"detail-tab\" data-id=\"{id}\">{}</button>",app.detail_tab==id,t(label)));
+            out.push_str(&format!("<button class=\"tab\" role=\"tab\" type=\"button\" aria-selected=\"{}\" aria-controls=\"vm-tab-panel\" id=\"vm-tab-{id}\" tabindex=\"{}\" data-action=\"detail-tab\" data-id=\"{id}\">{}</button>",app.detail_tab==id,if app.detail_tab==id {0} else {-1},t(label)));
         }
         out.push_str("</div>");
         let body = match app.detail_tab.as_str() {
             "env" => environment(app, data),
             "network" => network(data),
+            "volumes" => crate::volumes::panel(app, data),
             "logs" => logs(app, data),
             _ => overview(data) + &crate::advanced::schedules::vm_schedules(app, data),
         };
@@ -123,8 +152,9 @@ pub fn panel(app: &App) -> String {
         }
         if app.route == "services" {
             out.push_str(&format!(
-                "<div id=\"service-status\">{}</div>",
-                render::deployment(app.service_deployment.as_ref())
+                "<div id=\"service-status\">{}</div><div id=\"deploy-panel\">{}</div>",
+                render::deployment(app.service_deployment.as_ref()),
+                crate::deploy::html(app)
             ));
         }
         let related: Vec<_> = app
@@ -515,7 +545,8 @@ pub fn tick(app: &Shared) {
         .form
         .as_ref()
         .is_some_and(|form| form.title == "Deploy MicroService");
-    if state.form.is_some() && !deploy_form
+    if state.busy
+        || state.form.is_some() && !deploy_form
         || !state.panel_open
         || !["vms", "services"].contains(&state.route.as_str())
         || state.detail_polling == Some(state.detail_generation)
@@ -567,6 +598,7 @@ pub fn tick(app: &Shared) {
         drop(state);
         if deploy_form {
             set_html("service-status", &status);
+            set_html("deploy-panel", &crate::deploy::html(&app.borrow()));
             crate::advanced::services::sync(&app);
         } else {
             crate::render_detail(&app);
@@ -576,6 +608,39 @@ pub fn tick(app: &Shared) {
         }
     });
 }
+pub fn tab_key(app: &Shared, event: &KeyboardEvent) -> bool {
+    let Some(target) = event
+        .target()
+        .and_then(|target| target.dyn_into::<Element>().ok())
+    else {
+        return false;
+    };
+    if !target.id().starts_with("vm-tab-") || target.get_attribute("role").as_deref() != Some("tab")
+    {
+        return false;
+    }
+    let tabs = ["overview", "network", "volumes", "env", "logs"];
+    let index = tabs
+        .iter()
+        .position(|id| target.id() == format!("vm-tab-{id}"))
+        .unwrap_or(0);
+    let next = match event.key().as_str() {
+        "ArrowRight" => (index + 1) % tabs.len(),
+        "ArrowLeft" => (index + tabs.len() - 1) % tabs.len(),
+        "Home" => 0,
+        "End" => tabs.len() - 1,
+        _ => return false,
+    };
+    event.prevent_default();
+    dispatch(app, "detail-tab", tabs[next]);
+    if let Some(control) = element(&format!("vm-tab-{}", tabs[next]))
+        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        let _ = control.focus();
+    }
+    true
+}
+
 pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
     match action {
         "detail-tab" => {
@@ -588,6 +653,9 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
             crate::render_detail(app);
             if id == "logs" {
                 load_log(app.clone());
+            }
+            if id == "volumes" {
+                crate::volumes::load(app);
             }
         }
         "logs" => {

@@ -19,8 +19,10 @@ export default defineConfig(({ command }) => {
       });
     },
   }],
-  server: { port: 8080, host: true, strictPort: true, allowedHosts: true, proxy: {
-    '/api': 'http://127.0.0.1:5523',
+  // Vite's default host checks keep the forwarded authority trustworthy.
+  server: { port: 8080, host: true, strictPort: true, proxy: {
+    // Preserve the dashboard authority for the API's same-origin checks on any dev port.
+    '/api': { target: 'http://127.0.0.1:5523', changeOrigin: false },
     '/ws': { target: 'ws://127.0.0.1:5523', ws: true },
   } },
   build: { target: 'es2022', assetsInlineLimit: 0 },

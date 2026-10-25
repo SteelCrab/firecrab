@@ -23,9 +23,33 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- AI Sandbox reuses Pipe AI accounts for verified model selection, persistent
+  conversations, isolated project edits, and bounded commands in a selected
+  MicroVM. Dashboard, CLI, and local stdio MCP share durable attempts, cancellation,
+  recovery, actual tool results, and selected-file apply with source conflict checks.
+  Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
+- Named MicroBlockStorage data volumes persist after VM deletion. REST, CLI, and
+  Dashboard support creation and exclusive attachment to inactive user VMs.
+  Guest mounts use filesystem UUIDs and gate managed application startup.
+  Data disks honor guest flush requests, and API restarts retain reservations.
+  Tracked in [#247](https://github.com/SteelCrab/firecrab/issues/247).
+
 - `firecrab service dev --port PORT` selects the development dashboard port on
   macOS and Windows. Development controls retain the selected port, and older
   dashboard sessions default to 8080. Tracked in [#488](https://github.com/SteelCrab/firecrab/issues/488).
+
+- Git-linked worktrees have independent `service dev --port PORT` environments.
+  macOS uses a separate management VM; Windows and Linux use a private Docker
+  runtime with separate data, caches, ownership, and network state. Backend
+  API/resource ports are assigned and saved; dashboard ports remain manual.
+  Primary macOS/Windows development remains separate, and Linux primary-checkout
+  development uses Docker without changing production systemd services.
+  Tracked in [#495](https://github.com/SteelCrab/firecrab/issues/495).
+
+- Secrets imports selected values from the Firecrab account linked in Auth.
+  The Rust/WASM dashboard previews names without values, requires explicit
+  selection for replacements, and records Firecrab Console as the source (#411).
 
 - Pipe Auth links a Firecrab account with an account integration token issued
   by `console.firecrab.dev`. It displays the verified account ID, email, and
@@ -166,6 +190,12 @@ Entries land here as work merges, and move under the next version heading when t
   an M2Image. Logins are write-only in API responses. See
   [Pipe Registry](public-docs/guides/pipe-registry.md).
 
+- Deploy updates running domain services through the existing Nginx ingress.
+  Rolling and blue-green updates, immutable release history, selected rollback,
+  verified worker drain, and restart/retry recovery share one REST/CLI/YAML
+  executor. The Rust/WASM dashboard exposes update and rollback actions (#335).
+  Deploy-owned rootfs caches are pruned after VM, pool, operation, and retained-release references are released.
+
 ### Changed
 
 - The dashboard's Pipe page lists its services as five cards: Route, Pipe
@@ -182,6 +212,20 @@ Entries land here as work merges, and move under the next version heading when t
 - None.
 
 ### Fixed
+
+- PipeSecrets rejects AWS name prefixes containing filter operators or other
+  non-name characters, preventing a negated prefix from listing secrets outside
+  the configured scope. Tracked in [#411](https://github.com/SteelCrab/firecrab/issues/411).
+
+- Dashboard WASM builds reuse a version-checked `wasm-bindgen` Cargo installation
+  from the wasm-pack cache. The matching tool is exposed only to the build child,
+  avoiding an unnecessary installer pass while preserving normal discovery when
+  the cache is missing or stale.
+
+- The development API proxy preserves the dashboard's Host header so browser
+  requests from custom ports such as 8098 pass the API's same-origin checks.
+  Vite's default host checks and the API's origin checks reject untrusted requests.
+  This fixes the `--port` behavior from [#488](https://github.com/SteelCrab/firecrab/issues/488).
 
 - OCI guests recreate image-declared `/run` directories with `systemd-tmpfiles`
   before app services on every boot. MariaDB can restart after tmpfs clears

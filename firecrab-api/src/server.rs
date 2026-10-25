@@ -285,6 +285,26 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(crate::service_runtime::get).post(crate::service_runtime::deploy),
         )
         .route(
+            "/api/micro-services/{id}/updates",
+            post(crate::service_runtime::deploy::update),
+        )
+        .route(
+            "/api/micro-services/{id}/releases",
+            get(crate::service_runtime::deploy::releases),
+        )
+        .route(
+            "/api/micro-services/{id}/rollback",
+            post(crate::service_runtime::deploy::rollback),
+        )
+        .route(
+            "/api/micro-services/{id}/deployment/retry",
+            post(crate::service_runtime::deploy::retry),
+        )
+        .route(
+            "/api/micro-services/{id}/deployments/{operation_id}",
+            get(crate::service_runtime::deploy::operation),
+        )
+        .route(
             "/api/micro-services/{id}/deployment/check",
             post(crate::service_runtime::check),
         )
@@ -547,6 +567,22 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/storage", get(handlers::storage::list_storage))
         .route(
+            "/api/microblockstorage",
+            get(handlers::block_storage::list).post(handlers::block_storage::create),
+        )
+        .route(
+            "/api/microblockstorage/{id}",
+            get(handlers::block_storage::get).delete(handlers::block_storage::delete),
+        )
+        .route(
+            "/api/microblockstorage/{id}/attach",
+            post(handlers::block_storage::attach),
+        )
+        .route(
+            "/api/microblockstorage/{id}/detach",
+            post(handlers::block_storage::detach),
+        )
+        .route(
             "/api/storage/devices",
             get(handlers::storage::list_storage_devices),
         )
@@ -702,6 +738,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/secrets/{id}",
             axum::routing::put(handlers::secrets::update).delete(handlers::secrets::delete),
         )
+        .route(
+            "/api/secrets/account/preview",
+            post(handlers::secrets::account_preview),
+        )
         .route("/api/secrets/{id}/reveal", post(handlers::secrets::reveal))
         .route(
             "/api/secrets/connections",
@@ -731,9 +771,62 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         ))
         .layer(middleware::from_fn(handlers::secrets::no_store));
 
-    // Inspection performs registry authentication and multiple manifest GETs.
-    // Allow their bounded connection retries to finish while retaining the
-    // same concurrency pool, body limit, CORS and origin checks as other REST.
+    // Model verification and explicit guest recovery need longer bounded HTTP waits.
+    let sandbox = Router::new()
+        .route(
+            "/api/ai-sandbox/projects",
+            get(handlers::ai_sandbox::projects),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{id}",
+            get(handlers::ai_sandbox::get_project)
+                .put(handlers::ai_sandbox::save_project)
+                .delete(handlers::ai_sandbox::delete_project),
+        )
+        .route(
+            "/api/ai-sandbox/connections/{id}/models",
+            get(handlers::ai_sandbox::models),
+        )
+        .route(
+            "/api/ai-sandbox/connections/{id}/verify",
+            post(handlers::ai_sandbox::verify_model),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{project}/tasks",
+            get(handlers::ai_sandbox::tasks),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{project}/tasks/{id}",
+            axum::routing::put(handlers::ai_sandbox::create_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}",
+            get(handlers::ai_sandbox::get_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}/cancel",
+            post(handlers::ai_sandbox::cancel_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}/reconcile",
+            post(handlers::ai_sandbox::reconcile_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}/apply",
+            post(handlers::ai_sandbox::apply_task),
+        )
+        .layer(cors.clone())
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn_with_state(
+            RequestLimits {
+                permits: limits.permits.clone(),
+                timeout: Some(Duration::from_secs(180)),
+            },
+            enforce_limits,
+        ))
+        .layer(middleware::from_fn(handlers::secrets::no_store));
+
+    // Registry authentication and manifest GETs retain their bounded inspection deadline.
     let inspection = Router::new()
         .route(
             "/api/pipe/database-rabbitmq",
@@ -808,6 +901,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         ));
 
     let app = rest
+        .merge(sandbox)
         .merge(recovery)
         .merge(inspection)
         .merge(secrets)
@@ -1269,6 +1363,8 @@ mod tests {
         .unwrap();
         let expected_request = request.clone();
         let snapshot = Snapshot {
+            ingress_graceful_drain: false,
+            ingress_workers: None,
             firecrab_tunnels: Vec::new(),
             config: Some(request.config.clone()),
             units: Vec::new(),
@@ -1413,6 +1509,8 @@ mod tests {
             .collect::<Vec<_>>();
         let expected_requests = requests.clone();
         let snapshot = Snapshot {
+            ingress_graceful_drain: false,
+            ingress_workers: None,
             firecrab_tunnels: Vec::new(),
             config: None,
             units: Vec::new(),
@@ -1820,3 +1918,15 @@ mod pipe_auth_tests;
 #[cfg(test)]
 #[path = "server_pipe_ai_tests.rs"]
 mod pipe_ai_tests;
+
+#[cfg(test)]
+#[path = "server_ai_sandbox_tests.rs"]
+mod ai_sandbox_tests;
+
+#[cfg(test)]
+#[path = "server_ai_sandbox_live_tests.rs"]
+mod live_provider_tests;
+
+#[cfg(test)]
+#[path = "server_live_guest_tests.rs"]
+mod live_guest_tests;

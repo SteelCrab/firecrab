@@ -198,6 +198,9 @@ fn stacks_missing_and_protected_resources_cannot_be_adopted() {
     };
     store.insert_micro_service(&service).unwrap();
     let mut deployment = MicroServiceDeployment {
+        started_at: 0,
+        finished_at: None,
+        update: None,
         id: Uuid::new_v4(),
         service_id: service.id,
         phase: ServicePhase::Running,

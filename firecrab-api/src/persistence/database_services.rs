@@ -283,6 +283,9 @@ impl Store {
     }
     /// Resolve a service-owned VM without putting secrets in VM metadata.
     pub fn database_vm_service(&self, vm_id: Uuid) -> Result<Option<Uuid>, PersistenceError> {
+        if let Some(deployment) = self.service_deployment_for_vm(vm_id)? {
+            return Ok(Some(deployment.service_id));
+        }
         let id: Option<String> = self
             .lock()
             .query_row(
