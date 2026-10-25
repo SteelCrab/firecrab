@@ -230,4 +230,5 @@ def run_fleet(api, wait_for, traffic, network, spec_a, digest_b, port, evidence)
         metrics["elapsedSeconds"] = round(time.monotonic() - started, 2)
         metrics["cleanupErrors"] = cleanup_errors
         assert not cleanup_errors, cleanup_errors
+    check_monitor()
     print(f"PASS fleet: {sum(metrics['requests'].values())} continuous HTTP requests, zero errors; all 15 services removed", flush=True)
