@@ -165,7 +165,9 @@ cargo test -p firecrab-cli --locked \
 
 This check requires local rootful Docker, KVM, and TUN.
 It verifies the production image, systemd, private kernel namespaces, writable cgroups, API relay, separate data, and independent stop/cleanup.
-Its marker API does not exercise the real API, source deployment, or MicroVM lifecycle.
+It then installs the checksum-verified release and runs the restore transaction in one runtime.
+The real API/helper must become healthy while that runtime retains its data and the other runtime keeps serving its marker API.
+This check does not build source services or exercise MicroVM lifecycle.
 Cleanup validates ownership labels before removing only the randomly named test resources.
 Native live validation with multiple management VMs has not yet been completed.
 Unit, proxy, and command-fixture tests do not replace that runtime check.

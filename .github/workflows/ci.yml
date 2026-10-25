@@ -157,7 +157,9 @@ jobs:
 
       - name: Verify two private systemd runtimes and stop isolation
         # This test uses the production Dockerfile, entrypoint, and API relay.
-        # Its marker API does not deploy the real API or create MicroVMs.
+        # It checks marker isolation, then installs and restores the verified
+        # release API/helper in one runtime while preserving the other runtime.
+        # It does not build source services or create MicroVMs.
         run: >-
           cargo test -p firecrab-cli --locked
           micromanager::dev::container::runtime_tests::private_docker_runtimes_keep_namespaces_data_and_stop_independent

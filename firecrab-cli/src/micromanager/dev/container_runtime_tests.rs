@@ -1,4 +1,4 @@
-//! Opt-in Linux coverage for the real private Docker runtime, without guest deployment.
+//! Opt-in Linux coverage for private Docker runtimes and verified-release restoration.
 
 use super::*;
 use std::net::{Ipv4Addr, TcpListener};
@@ -200,6 +200,28 @@ impl Runtime {
         Ok(())
     }
 
+    fn require_release_api(&self) -> io::Result<()> {
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .map_err(failed)?;
+        let url = format!("http://127.0.0.1:{}/api/host", self.instance.api_port);
+        let host: Value = client
+            .get(url)
+            .send()
+            .and_then(reqwest::blocking::Response::error_for_status)
+            .and_then(reqwest::blocking::Response::json)
+            .map_err(failed)?;
+        assert!(
+            host.is_object(),
+            "{} release host response: {host}",
+            self.name
+        );
+        assert_eq!(self.exec(&["cat", MARKER_PATH])?, self.instance.id);
+        Ok(())
+    }
+
     fn cleanup(&mut self) -> io::Result<()> {
         let mut errors = Vec::new();
         for (kind, name) in [
@@ -310,6 +332,19 @@ fn private_docker_runtimes_keep_namespaces_data_and_stop_independent() -> io::Re
         true,
     )?;
     second.require_marker()?;
+    // Restart A without its detached marker process. Exercise the actual verified
+    // release installer and shared restore transaction, including API/helper health.
+    run_with(&first.docker, &first.instance, None, false, true, true)?;
+    first.require_release_api()?;
+    second.require_marker()?;
+    run_with(
+        &first.docker,
+        &first.instance,
+        Some(DevCommand::Stop),
+        false,
+        false,
+        true,
+    )?;
     first.cleanup()?;
     second.require_marker()?;
     assert!(!first.instance.primary_home.exists());
