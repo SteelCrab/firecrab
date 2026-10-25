@@ -70,7 +70,7 @@ pub fn content(app: &App) -> String {
             ));
         }
     } else {
-        out.push_str("<section aria-label=\"Internal secrets\">");
+        out.push_str("<section aria-label=\"Internal secrets\"><p>Value changes automatically redeploy running services with a domain that use the secret. Follow progress under Deploy.</p>");
         if list(&app.resource).is_empty() {
             out.push_str("<p>No secrets yet.</p>");
         }

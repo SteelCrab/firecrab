@@ -140,7 +140,8 @@ For an existing configuration, select **Run** to open the same panel.
 The panel shows image preparation, app startup, health checks, and an **Open app**
 link once the app responds successfully. Failed deployments show a log and next
 steps. Services with a domain connect through PipeIngress. PipeSecrets values
-are injected into every replica. Secret edits apply to the next deployment.
+are injected into every replica. Value changes automatically rotate running
+domain services through Deploy.
 The panel checks Pipe Auth when opened, every three seconds, when returning to
 this browser tab, and immediately before deployment. Deploy stays disabled during
 the initial and pre-deployment checks, when the image's account is disconnected
@@ -254,8 +255,17 @@ Deploy exits nonzero when deployment or health fails.
 ## Inject Secrets
 
 Create values in **Secrets**. Reference their UUIDs in **Resources → Advanced settings**.
-Every replica receives one encrypted deployment snapshot. Secret edits apply at the next deployment.
+Every replica receives one encrypted deployment snapshot. Changed values rotate
+running domain services through the shared Deploy queue and keep the current image.
 See [Secret injection](secrets.md#microservice-injection) for limits, storage and restart behavior.
+
+For shared-Secret rotation, restart recovery, failure rollback, and cleanup, use
+an empty disposable Linux/KVM host with at least four CPUs:
+
+```sh
+sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation \
+  --report target/qa/secret-rotation.json
+```
 
 ## Verification
 

@@ -23,6 +23,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Changed PipeSecret values automatically rotate running domain services through
+  Deploy. Rotation keeps the current image and encrypted per-attempt values,
+  shares queue/capacity limits, and retains bounded retries across API restarts.
+  Tracked in [#503](https://github.com/SteelCrab/firecrab/issues/503).
+
 - Named MicroBlockStorage data volumes persist after VM deletion. REST, CLI, and
   Dashboard support creation and exclusive attachment to inactive user VMs.
   Guest mounts use filesystem UUIDs and gate managed application startup.

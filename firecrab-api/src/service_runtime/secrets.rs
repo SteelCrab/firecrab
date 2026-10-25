@@ -132,7 +132,7 @@ pub(crate) async fn guest_env(
 }
 
 /// Resolve all references under one vault lock and validate the combined guest environment.
-fn resolve(
+pub(super) fn resolve(
     contents: &Contents,
     spec: &MicroServiceSpec,
 ) -> Result<BTreeMap<String, String>, SecretError> {
@@ -163,7 +163,7 @@ fn resolve(
 }
 
 /// Keep locked file I/O and encryption off the async executor.
-async fn vault<T: Send + 'static>(
+pub(super) async fn vault<T: Send + 'static>(
     state: &AppState,
     operation: impl FnOnce(&Vault) -> Result<T, SecretError> + Send + 'static,
 ) -> Result<T, SecretError> {
