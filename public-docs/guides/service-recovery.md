@@ -17,6 +17,9 @@ Named and Quick Tunnel routing remains configured. Only ready endpoints rejoin N
 Private listener security-group restrictions remain active while the service is unready.
 Old Nginx workers must finish before a failed VM is stopped or deleted.
 A drain timeout retains the VM and its recovery journal.
+An unexpected VM exit can interrupt a response already in progress.
+[Nginx retries eligible requests](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_next_upstream)
+before response bytes reach the client. Applications must handle interrupted responses.
 
 The deployment response includes `recovery.replicas` and `recovery.repair`.
 They show probe counts, retry times, attempt counts, VM IDs, and the next repair step.
