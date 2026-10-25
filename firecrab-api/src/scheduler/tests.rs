@@ -327,39 +327,45 @@ fn backwards_clock_and_idempotent_enable_do_not_repeat_consumed_instants() {
 }
 
 #[tokio::test]
-async fn persisted_schedules_cannot_mutate_pool_members() {
-    let root = tempfile::tempdir().unwrap();
-    let templates =
-        crate::templates::TemplateRegistry::from_specs(root.path(), std::iter::empty()).unwrap();
-    let mut state = AppState::with_db_file(templates, root.path().join("test.db"))
-        .await
-        .unwrap();
-    state.network =
-        crate::network::NetworkClient::with_socket_path(root.path().join("unused-helper.sock"));
-    let now = Utc::now().timestamp_millis();
-    let vm_id = Uuid::new_v4();
-    let mut vm = crate::handlers::vms::test_support::record("pool-scheduled", vm_id);
-    vm.purpose = crate::model::VmPurpose::Pool;
-    vm.state = crate::model::VmState::Running;
-    state.store.insert(&vm).unwrap();
-    state.vms.lock().unwrap().insert(vm_id, vm);
-    for action in [ScheduleAction::Start, ScheduleAction::Stop] {
-        let mut schedule = record(recurring(), now);
-        schedule.spec.vm_id = vm_id;
-        schedule.spec.action = action;
-        schedule.next_run_at_ms = Some(now);
-        state.store.insert_schedule(&schedule).unwrap();
-        let (claimed, run) = state.store.claim_schedules(now, 1).unwrap().remove(0);
-        execute(state.clone(), claimed, run).await;
-        let saved = state.store.schedule(schedule.id).unwrap().unwrap();
-        assert!(!saved.spec.enabled);
-        let last = saved.last_run.unwrap();
-        assert_eq!(last.status, ScheduleRunStatus::Failed);
-        assert!(last.error.unwrap().contains("pool members"));
-        assert_eq!(
-            state.vms.lock().unwrap()[&vm_id].state,
-            crate::model::VmState::Running
-        );
+async fn persisted_schedules_cannot_mutate_managed_vms() {
+    for (purpose, expected) in [
+        (crate::model::VmPurpose::Pool, "pool"),
+        (crate::model::VmPurpose::Queue, "Queue"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let templates =
+            crate::templates::TemplateRegistry::from_specs(root.path(), std::iter::empty())
+                .unwrap();
+        let mut state = AppState::with_db_file(templates, root.path().join("test.db"))
+            .await
+            .unwrap();
+        state.network =
+            crate::network::NetworkClient::with_socket_path(root.path().join("unused-helper.sock"));
+        let now = Utc::now().timestamp_millis();
+        let vm_id = Uuid::new_v4();
+        let mut vm = crate::handlers::vms::test_support::record("pool-scheduled", vm_id);
+        vm.purpose = purpose;
+        vm.state = crate::model::VmState::Running;
+        state.store.insert(&vm).unwrap();
+        state.vms.lock().unwrap().insert(vm_id, vm);
+        for action in [ScheduleAction::Start, ScheduleAction::Stop] {
+            let mut schedule = record(recurring(), now);
+            schedule.spec.vm_id = vm_id;
+            schedule.spec.action = action;
+            schedule.next_run_at_ms = Some(now);
+            state.store.insert_schedule(&schedule).unwrap();
+            let (claimed, run) = state.store.claim_schedules(now, 1).unwrap().remove(0);
+            execute(state.clone(), claimed, run).await;
+            let saved = state.store.schedule(schedule.id).unwrap().unwrap();
+            assert!(!saved.spec.enabled);
+            let last = saved.last_run.unwrap();
+            assert_eq!(last.status, ScheduleRunStatus::Failed);
+            assert!(last.error.unwrap().contains(expected));
+            assert_eq!(
+                state.vms.lock().unwrap()[&vm_id].state,
+                crate::model::VmState::Running
+            );
+        }
     }
 }
 

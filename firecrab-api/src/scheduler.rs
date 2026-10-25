@@ -124,6 +124,8 @@ async fn execute(state: AppState, schedule: ScheduleResponse, run: ScheduleRun) 
         Some("target VM no longer exists; schedule disabled".to_owned())
     } else if purpose == Some(crate::model::VmPurpose::Pool) {
         Some("pool members are managed automatically; schedule disabled".to_owned())
+    } else if purpose == Some(crate::model::VmPurpose::Queue) {
+        Some("Queue engines are managed through Queue controls; schedule disabled".to_owned())
     } else {
         let args = (
             State(state.clone()),
@@ -145,7 +147,12 @@ async fn execute(state: AppState, schedule: ScheduleResponse, run: ScheduleRun) 
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .get(&schedule.spec.vm_id)
-            .is_none_or(|vm| vm.purpose == crate::model::VmPurpose::Pool);
+            .is_none_or(|vm| {
+                matches!(
+                    vm.purpose,
+                    crate::model::VmPurpose::Pool | crate::model::VmPurpose::Queue
+                )
+            });
         let store = state.store.clone();
         let run = run.clone();
         let error = error.clone();

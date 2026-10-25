@@ -316,6 +316,17 @@ async fn provision(state: &AppState, record: &mut EngineRecord, id: Uuid) -> Res
         .store
         .save_queue_engine(record)
         .map_err(|_| AppError::internal(id))?;
+    if let Some(vm) = &existing
+        && let Some(generation) = vm.disk_generation
+        && !crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&vm.storage_root), vm.id)
+            .rootfs(generation)
+            .is_file()
+    {
+        return Err(AppError::unavailable(
+            "Queue disk is missing; restore its original disk instead of creating an empty replacement",
+            id,
+        ));
+    }
     let vm_state = state
         .vms
         .lock()

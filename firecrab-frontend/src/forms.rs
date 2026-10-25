@@ -370,8 +370,7 @@ impl Form {
                         .parse::<u32>()
                         .map_err(|_| format!("{} must be a non-negative integer.", field.label))?
                 ),
-                "queue-bindings" => serde_json::from_str(value)
-                    .map_err(|_| "Invalid Queue connections.".to_string())?,
+                "queue-bindings" => crate::advanced::queues::binding_payload(value)?,
                 "pairs" => pairs(value)?,
                 "ports" => ports(value)?,
                 "lines" | "multi" => json!(
@@ -638,11 +637,7 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
                         "queues",
                         "Queue connections",
                         "queue-bindings",
-                        if data["queues"].is_object() {
-                            data["queues"].to_string()
-                        } else {
-                            "{}".into()
-                        },
+                        crate::advanced::queues::binding_draft(&data["queues"]),
                     )
                     .optional(),
                     Field::new(

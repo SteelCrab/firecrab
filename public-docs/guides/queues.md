@@ -58,7 +58,7 @@ Firecrab does not offer a destructive purge operation.
 
 ## Bind a MicroService
 
-In the MicroService form, open **Resources → Advanced settings → Queue connections**.
+In the MicroService form, open **Resources → Queue connections**.
 Choose an alias such as `NOTIFICATIONS`, select the queue and choose **Send** or **Receive**.
 A service supports up to eight bindings.
 Aliases use 1–24 uppercase letters, digits or underscores and start with a letter.

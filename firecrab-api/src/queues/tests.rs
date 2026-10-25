@@ -286,6 +286,29 @@ async fn retry_checkpoints_existing_vm_before_boot_and_never_replaces_it_if_miss
 }
 
 #[tokio::test]
+async fn missing_stateful_disk_is_never_rebuilt_from_the_template() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path()).await;
+    let (engine, _) = fixtures(&state);
+    let vm = {
+        let mut vms = state.vms.lock().unwrap();
+        let vm = vms.get_mut(&engine.vm_id).unwrap();
+        vm.disk_generation = Some(Uuid::new_v4());
+        vm.clone()
+    };
+    state.store.update(&vm).unwrap();
+    start_engine(state.clone(), Uuid::new_v4()).await.unwrap();
+    let saved = wait_for_engine_failure(&state).await;
+    assert!(saved.error.unwrap().contains("Queue disk is missing"));
+    assert_eq!(saved.vm_id, engine.vm_id);
+    assert_eq!(saved.password, engine.password);
+    assert_eq!(
+        state.vms.lock().unwrap()[&engine.vm_id].disk_generation,
+        vm.disk_generation
+    );
+}
+
+#[tokio::test]
 async fn deletion_of_inflight_work_never_sends_a_destructive_request() {
     use std::sync::{Arc, Mutex};
     let dir = tempfile::tempdir().unwrap();

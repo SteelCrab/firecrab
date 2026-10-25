@@ -353,12 +353,13 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
 }
 
 pub fn bindings(field: &Field) -> String {
-    let rows: Value = serde_json::from_str(&field.value).unwrap_or(json!({}));
+    let rows: Value = serde_json::from_str(&field.value).unwrap_or(json!([]));
     let mut out = format!(
         "<input type=\"hidden\" id=\"field-queues\" name=\"queues\" value=\"{}\"><div class=\"queue-bindings\">",
         escape(&field.value)
     );
-    for (index, (alias, binding)) in rows.as_object().into_iter().flatten().enumerate() {
+    for (index, binding) in list(&rows).iter().enumerate() {
+        let alias = text(binding, "alias");
         out.push_str(&format!("<div class=\"queue-binding-row\"><label>Alias<input id=\"queue-alias-{index}\" data-queue-binding=\"alias\" value=\"{}\" pattern=\"[A-Z][A-Z0-9_]{{0,23}}\" required maxlength=\"24\"></label><label>Queue<select id=\"queue-id-{index}\" data-queue-binding=\"id\" required>",escape(alias)));
         if !field
             .options
@@ -385,7 +386,7 @@ pub fn bindings(field: &Field) -> String {
         }
         out.push_str(&format!("</select></label><label>Access<select id=\"queue-access-{index}\" data-queue-binding=\"access\"><option value=\"publish\" {}>Send</option><option value=\"consume\" {}>Receive</option></select></label>{}</div>",if binding["access"] == "publish" { "selected" } else { "" },if binding["access"] == "consume" { "selected" } else { "" },button("Remove","queue-binding-remove",&index.to_string())));
     }
-    out.push_str(&format!("<button type=\"button\" class=\"btn\" data-action=\"queue-binding-add\" {}>Add Queue connection</button></div>",if field.options.is_empty() || rows.as_object().is_some_and(|o| o.len() >= 8) { "disabled" } else { "" }));
+    out.push_str(&format!("<button type=\"button\" class=\"btn\" data-action=\"queue-binding-add\" {}>Add Queue connection</button></div>",if field.options.is_empty() || list(&rows).len() >= 8 { "disabled" } else { "" }));
     out
 }
 pub fn binding_input(app: &Shared, target: &Element) {
@@ -395,7 +396,8 @@ pub fn binding_input(app: &Shared, target: &Element) {
     let Ok(rows) = crate::document().query_selector_all(".queue-binding-row") else {
         return;
     };
-    let mut bindings = json!({});
+    let mut bindings = Vec::new();
+    let mut aliases = std::collections::BTreeSet::new();
     for index in 0..rows.length() {
         let Some(alias) = element(&format!("queue-alias-{index}"))
             .and_then(|e| e.dyn_into::<HtmlInputElement>().ok())
@@ -403,7 +405,7 @@ pub fn binding_input(app: &Shared, target: &Element) {
             continue;
         };
         let name = alias.value();
-        alias.set_custom_validity(if bindings.get(&name).is_some() {
+        alias.set_custom_validity(if !aliases.insert(name.clone()) {
             "Aliases must be unique."
         } else {
             ""
@@ -414,11 +416,11 @@ pub fn binding_input(app: &Shared, target: &Element) {
                 .map(|e| e.value())
                 .unwrap_or_default()
         };
-        bindings[&name] = json!({"queueId":value("id"),"access":value("access")});
+        bindings.push(json!({"alias":name,"queueId":value("id"),"access":value("access")}));
     }
     if let Some(input) = element("field-queues").and_then(|e| e.dyn_into::<HtmlInputElement>().ok())
     {
-        input.set_value(&bindings.to_string());
+        input.set_value(&json!(bindings).to_string());
     }
     if let Some(field) = app
         .borrow_mut()
@@ -426,14 +428,41 @@ pub fn binding_input(app: &Shared, target: &Element) {
         .as_mut()
         .and_then(|f| f.fields.iter_mut().find(|f| f.key == "queues"))
     {
-        field.value = bindings.to_string();
+        field.value = json!(bindings).to_string();
     }
 }
+pub fn binding_draft(bindings: &Value) -> String {
+    json!(
+        bindings
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(alias, binding)| {
+                json!({"alias":alias,"queueId":binding["queueId"],"access":binding["access"]})
+            })
+            .collect::<Vec<_>>()
+    )
+    .to_string()
+}
+pub fn binding_payload(draft: &str) -> Result<Value, String> {
+    let rows: Vec<Value> = serde_json::from_str(draft).map_err(|_| "Invalid Queue connections.")?;
+    if rows.len() > 8 {
+        return Err("A service supports up to eight Queue connections.".into());
+    }
+    let mut bindings = json!({});
+    for row in rows {
+        let alias = text(&row, "alias");
+        if bindings.get(alias).is_some() {
+            return Err("Queue aliases must be unique.".into());
+        }
+        if alias.is_empty() || !["publish", "consume"].contains(&text(&row, "access")) {
+            return Err("Choose an alias and access for each Queue connection.".into());
+        }
+        bindings[alias] = json!({"queueId":row["queueId"],"access":row["access"]});
+    }
+    Ok(bindings)
+}
 fn binding_edit(app: &Shared, action: &str, index: &str) {
-    let alias = element(&format!("queue-alias-{index}"))
-        .and_then(|e| e.dyn_into::<HtmlInputElement>().ok())
-        .map(|e| e.value())
-        .unwrap_or_default();
     super::capture_form(app);
     let mut state = app.borrow_mut();
     let Some(field) = state
@@ -443,23 +472,50 @@ fn binding_edit(app: &Shared, action: &str, index: &str) {
     else {
         return;
     };
-    let mut bindings: Value = serde_json::from_str(&field.value).unwrap_or(json!({}));
-    let Some(rows) = bindings.as_object_mut() else {
-        return;
-    };
+    let mut rows: Vec<Value> = serde_json::from_str(&field.value).unwrap_or_default();
     if action == "queue-binding-remove" {
-        rows.remove(&alias);
+        if let Ok(index) = index.parse::<usize>()
+            && index < rows.len()
+        {
+            rows.remove(index);
+        }
     } else if rows.len() < 8
         && let Some((id, _)) = field.options.first()
     {
-        let key = (1..=9)
+        if let Some(alias) = (1..=9)
             .map(|n| format!("QUEUE_{n}"))
-            .find(|key| !rows.contains_key(key))
-            .unwrap();
-        rows.insert(key, json!({"queueId":id,"access":"publish"}));
+            .find(|key| !rows.iter().any(|r| text(r, "alias") == key))
+        {
+            rows.push(json!({"alias":alias,"queueId":id,"access":"publish"}));
+        }
     }
-    field.value = bindings.to_string();
+    field.value = json!(rows).to_string();
     state.dirty = true;
     drop(state);
     render_editor(app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn duplicate_aliases_cannot_silently_replace_a_connection() {
+        let draft = json!([
+            {"alias":"TASKS","queueId":"one","access":"publish"},
+            {"alias":"TASKS","queueId":"two","access":"consume"}
+        ]);
+        assert_eq!(
+            binding_payload(&draft.to_string()).unwrap_err(),
+            "Queue aliases must be unique."
+        );
+    }
+    #[test]
+    fn editing_bindings_retains_queue_identity_and_role() {
+        let original = json!({"TASKS":{"queueId":"one","access":"consume"}});
+        assert_eq!(
+            binding_payload(&binding_draft(&original)).unwrap(),
+            original
+        );
+        assert_eq!(binding_payload("[]").unwrap(), json!({}));
+    }
 }
