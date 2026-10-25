@@ -194,11 +194,12 @@ fn render_detail(app: &Shared) {
                 .panel_width
                 .min(viewport.saturating_sub(716).clamp(320, 720));
         }
-        let open =
-            (state.route != "security-groups" || state.detail.is_some() || state.form.is_some())
-                && state.panel_open
-                && !["vms/new", "queues", "ai-sandbox"].contains(&state.route.as_str())
-                && (!narrow || state.detail.is_some() || state.form.is_some());
+        let open = (!["security-groups", "services"].contains(&state.route.as_str())
+            || state.detail.is_some()
+            || state.form.is_some())
+            && state.panel_open
+            && !["vms/new", "queues", "ai-sandbox"].contains(&state.route.as_str())
+            && (!narrow || state.detail.is_some() || state.form.is_some());
         let html = if open {
             details::panel(&state)
         } else {
@@ -230,7 +231,11 @@ fn render_detail(app: &Shared) {
         let _ = panel.set_attribute("data-view", &app.borrow().route);
         let _ = panel.set_attribute("style", &format!("width:{width}px"));
         if open {
-            panel.set_inner_html(&html);
+            if app.borrow().route == "services" {
+                details::set_service_html("detail-panel", &html);
+            } else {
+                panel.set_inner_html(&html);
+            }
             if more_open && let Some(menu) = element("vm-more-actions") {
                 let _ = menu.set_attribute("open", "");
             }
@@ -817,10 +822,24 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         if target.closest("[role=menu]").ok().flatten().is_none() {
             set_html("menu-root", "");
         }
+        if let Ok(menus) = document().query_selector_all(".service-row-menu[open]") {
+            for index in 0..menus.length() {
+                if let Some(menu) = menus
+                    .item(index)
+                    .and_then(|node| node.dyn_into::<Element>().ok())
+                    && !menu.contains(Some(&target))
+                {
+                    let _ = menu.remove_attribute("open");
+                }
+            }
+        }
         if target.closest("a[href]").ok().flatten().is_some() {
             set_html("palette-root", "");
         }
         let Some(button) = target.closest("[data-action]").ok().flatten() else {
+            if target.closest(".service-row-menu").ok().flatten().is_some() {
+                return;
+            }
             if let Some(row) = target.closest("tr[data-id]").ok().flatten() {
                 show_detail(
                     clicked.clone(),
@@ -830,6 +849,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             return;
         };
         event.prevent_default();
+        if let Ok(Some(menu)) = button.closest(".service-row-menu") {
+            let _ = menu.remove_attribute("open");
+        }
         let action = button.get_attribute("data-action").unwrap_or_default();
         let id = button.get_attribute("data-id").unwrap_or_default();
         if clicked.borrow().busy && !matches!(action.as_str(), "palette" | "palette-close" | "menu")
@@ -1005,6 +1027,14 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             return;
         }
         if event.key() == "Escape" {
+            if let Ok(Some(menu)) = document().query_selector(".service-row-menu[open]") {
+                let _ = menu.remove_attribute("open");
+                if let Ok(Some(summary)) = menu.query_selector("summary") {
+                    let _ = summary.unchecked_into::<web_sys::HtmlElement>().focus();
+                }
+                event.prevent_default();
+                return;
+            }
             if let Some(menu) = element("vm-more-actions").filter(|el| el.has_attribute("open")) {
                 let _ = menu.remove_attribute("open");
                 if let Some(summary) = element("vm-more-summary")

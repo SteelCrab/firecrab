@@ -1,0 +1,63 @@
+/* Keep service identity and runtime separate from deployment inputs. */
+.service-list { min-width: 0; }
+.service-table th { color: var(--text-3); font-size: 12px; font-weight: 500; }
+.service-table th:nth-last-child(3) { width: 72px; }
+.service-table th:nth-last-child(2) { width: 80px; }
+.service-table th:last-child { width: 48px; }
+.service-table td { height: 76px; vertical-align: middle; }
+.service-table tr[aria-selected="true"] td { background: var(--bg-subtle); }
+.service-name { display: block; max-width: 100%; padding: 0; border: 0; background: none; color: var(--text); font: 600 14px/1.5 var(--font); cursor: pointer; text-align: left; }
+.service-name, .service-image { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.service-name:hover { text-decoration: underline; text-underline-offset: 3px; }
+.service-name:disabled { color: var(--text-3); cursor: default; text-decoration: none; }
+.service-image { display: block; margin-top: 4px; color: var(--text-3); font-size: 12px; }
+.service-row-menu { position: relative; }
+.service-row-menu summary { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius); color: var(--text-2); cursor: pointer; list-style: none; }
+.service-row-menu summary::-webkit-details-marker { display: none; }
+.service-row-menu summary:hover, .service-row-menu[open] summary { background: var(--bg-hover); }
+.service-row-actions { position: absolute; right: 0; top: 36px; z-index: 10; display: grid; min-width: 170px; max-width: 260px; gap: 4px; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); box-shadow: var(--shadow-pop); }
+.service-row-actions .btn { justify-content: flex-start; border: 0; box-shadow: none; height: auto; min-height: 32px; padding: 8px; text-align: left; }
+.service-panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 24px; border-bottom: 1px solid var(--border); }
+.service-panel-head > div { min-width: 0; }
+.service-eyebrow { color: var(--text-3); font-size: 12px; }
+.service-panel-head h2 { margin: 4px 0 0; font-size: 18px; font-weight: 600; letter-spacing: -0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.service-panel-head > .btn { border: 0; box-shadow: none; color: var(--text-2); }
+.service-panel-body { padding: 24px; }
+.service-runtime { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.service-state { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 600; }
+.service-state::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); flex: none; }
+.service-state[data-phase="running"]::before { background: var(--green); }
+.service-state[data-phase="failed"]::before, .service-state[data-phase="degraded"]::before { background: var(--red); }
+.service-health { color: var(--text-2); font-size: 12px; white-space: nowrap; }
+.service-endpoint { display: block; margin: 0 0 16px; font-size: 13px; overflow-wrap: anywhere; }
+.service-disclosure { border-top: 1px solid var(--border); }
+.service-disclosure summary { display: flex; align-items: center; gap: 8px; padding: 15px 0; font-size: 13px; font-weight: 500; cursor: pointer; list-style: none; }
+.service-disclosure summary::-webkit-details-marker { display: none; }
+.service-disclosure summary::before { content: '›'; width: 12px; color: var(--text-3); font-size: 17px; line-height: 1; }
+.service-disclosure[open] > summary::before { transform: rotate(90deg); }
+.service-disclosure summary span { margin-left: auto; color: var(--text-3); font-size: 12px; font-weight: 400; }
+.service-disclosure .wasm-log { margin: 0 0 16px; padding: 12px; border-radius: var(--radius); background: var(--bg-subtle); font-size: 12px; line-height: 1.6; }
+.service-instances { font-size: 12px; margin-bottom: 16px; }
+.service-instances th, .service-instances td { padding: 10px 4px; }
+.service-instance-id { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+.service-config { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; margin: 4px 0 20px; font-size: 12px; }
+.service-config dt { color: var(--text-3); }
+.service-config dd { margin: 0; overflow-wrap: anywhere; }
+.service-disclosure > .wasm-actions { margin-bottom: 16px; }
+#service-controls:not(:empty) { margin: 16px 0; }
+.service-panel-body > .detail-actions { margin: 16px 0; }
+#service-deploy-form { margin: 24px 0; }
+#service-deploy-form h2 { font-size: 14px; margin: 0 0 16px; }
+#service-deploy-form .wasm-form { gap: 12px; }
+#service-deploy-form p { margin: 0; color: var(--text-2); font-size: 12px; }
+.service-panel #deploy-panel section { margin: 20px 0; }
+.service-panel #deploy-panel h3 { display: none; }
+.service-panel #deploy-panel p { color: var(--text-2); font-size: 12px; }
+@media (max-width: 767px) {
+  .screen:has(#detail-panel[data-view="services"]:not([hidden])) .screen-head > .wasm-actions { display: none; }
+  .service-table th, .service-table td { padding-left: 8px; padding-right: 8px; }
+  .service-table th:nth-last-child(2) { width: 64px; }
+  .service-table th:nth-last-child(3) { width: 56px; }
+  .service-table th:last-child { width: 44px; }
+  .service-panel-head, .service-panel-body { padding: 20px; }
+}

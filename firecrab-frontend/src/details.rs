@@ -40,6 +40,16 @@ pub fn panel(app: &App) -> String {
     if app.route == "vms/new" {
         return String::new();
     }
+    if app.route == "services"
+        && app.detail.is_some()
+        && app
+            .form
+            .as_ref()
+            .is_none_or(|form| form.title == "Deploy MicroService")
+    {
+        out.push_str(&service_panel(app));
+        return out;
+    }
     let close = format!(
         "<button type=\"button\" class=\"icon-btn detail-close\" data-action=\"panel-toggle\" aria-label=\"{}\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"m6 6 12 12M18 6 6 18\"/></svg></button>",
         t("Close detail")
@@ -212,6 +222,97 @@ pub fn panel(app: &App) -> String {
         app.detail_result
     ));
     out
+}
+
+fn service_panel(app: &App) -> String {
+    let data = app.detail.as_ref().unwrap_or(&Value::Null);
+    let mut out = format!(
+        "<section role=\"region\" aria-label=\"Detail\" class=\"service-panel\"><header class=\"service-panel-head\"><div><span class=\"service-eyebrow\">MicroService</span><h2 title=\"{}\">{}</h2></div>{}</header><div class=\"service-panel-body\"><div id=\"service-status\">{}</div><div id=\"deploy-panel\">{}</div>",
+        escape(text(data, "name")),
+        escape(text(data, "name")),
+        button("Close", "close-detail", ""),
+        render::deployment(app.service_deployment.as_ref()),
+        crate::deploy::html(app)
+    );
+    if let Some(form) = &app.form {
+        out.push_str(&crate::advanced::services::html(app, form));
+    } else {
+        out.push_str(&render::detail_actions(app, data));
+    }
+    out.push_str(&format!("<details class=\"service-disclosure\" id=\"service-configuration\"><summary id=\"service-configuration-toggle\">{}</summary><dl class=\"service-config\">", t("Configuration")));
+    for (key, label) in [
+        ("image", "Image"),
+        ("port", "App port"),
+        ("replicas", "Replicas"),
+        ("cpu", "CPU"),
+        ("ram", "Memory (MiB)"),
+        ("healthPath", "Health path"),
+    ] {
+        let value = data[key]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| data[key].to_string());
+        out.push_str(&format!("<dt>{}</dt><dd>{}</dd>", t(label), escape(&value)));
+    }
+    out.push_str(&format!(
+        "<dt>{}</dt><dd>{}</dd></dl><div class=\"wasm-actions\">{}{}</div>",
+        t("Secret references"),
+        data["secrets"]
+            .as_object()
+            .map_or(0, |secrets| secrets.len()),
+        button("Edit configuration", "resource-edit", text(data, "id")),
+        render::request(
+            "Delete",
+            "DELETE",
+            &format!("/api/micro-services/{}", api::encode(text(data, "id"))),
+            Value::Null
+        )
+    ));
+    if !text(data, "domain").is_empty() {
+        if let Some(pipe) = app.cache.get("/api/pipe")
+            && !text(&pipe["config"]["tunnel"], "id").is_empty()
+        {
+            out.push_str(&format!("<p>For public HTTPS, point this domain's DNS CNAME to <code>{}.cfargotunnel.com</code>. Keep Cloudflare proxy enabled.</p>", escape(text(&pipe["config"]["tunnel"], "id"))));
+        } else {
+            out.push_str("<p>For public HTTPS, connect your domain in <a href=\"#/pipe/named-tunnel\">Pipe Tunnel</a>.</p>");
+        }
+    }
+    out.push_str("</details></div></section>");
+    out
+}
+
+// Polling replaces these sections. Keep the user's disclosure choices.
+pub fn set_service_html(id: &str, html: &str) {
+    let Some(root) = element(id) else {
+        return;
+    };
+    let focused = document()
+        .active_element()
+        .filter(|el| root.contains(Some(el)))
+        .map(|el| el.id());
+    let open = root
+        .query_selector_all(".service-disclosure[open]")
+        .ok()
+        .map(|nodes| {
+            (0..nodes.length())
+                .filter_map(|i| nodes.item(i)?.dyn_into::<Element>().ok().map(|el| el.id()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    root.set_inner_html(html);
+    for id in open {
+        if let Some(disclosure) = element(&id) {
+            let _ = disclosure.set_attribute("open", "");
+        }
+    }
+    if let Some(control) = focused
+        .and_then(|id| element(&id))
+        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        let options = web_sys::FocusOptions::new();
+        options.set_prevent_scroll(true);
+        let _ = control.focus_with_options(&options);
+    }
 }
 pub fn overview(data: &Value) -> String {
     let mut props = String::from("<dl class=\"props\">");
@@ -597,7 +698,7 @@ pub fn tick(app: &Shared) {
         let status = render::deployment(state.service_deployment.as_ref());
         drop(state);
         if deploy_form {
-            set_html("service-status", &status);
+            set_service_html("service-status", &status);
             set_html("deploy-panel", &crate::deploy::html(&app.borrow()));
             crate::advanced::services::sync(&app);
         } else {

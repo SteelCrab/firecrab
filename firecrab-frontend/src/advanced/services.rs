@@ -259,7 +259,9 @@ pub fn html(app: &App, form: &Form) -> String {
         out.push_str(&button("Continue", "service-next", ""));
         out.push_str("</div>");
     } else if form.title == "Deploy MicroService" {
-        out.push_str("<div id=\"service-auth-check\"></div><div id=\"service-placement\"></div><div id=\"service-controls\"></div>");
+        out = format!(
+            "<div id=\"service-controls\" class=\"wasm-actions\"></div><div id=\"service-auth-check\"></div><div id=\"service-placement\"></div><div id=\"service-deploy-form\">{out}</div>"
+        );
     }
     out
 }
@@ -275,6 +277,12 @@ fn field_step(key: &str) -> usize {
         _ => 2,
     }
 }
+pub fn owns_resources(deployment: &Value) -> bool {
+    !list(&deployment["instances"]).is_empty()
+        || !list(&deployment["update"]["previous"]["instances"]).is_empty()
+        || crate::deploy::busy(deployment)
+}
+
 pub fn sync(app: &Shared) {
     let invalid = app.borrow().field_errors.keys().next().cloned();
     if let Some(key) = invalid {
@@ -371,20 +379,8 @@ pub fn sync(app: &Shared) {
             errors.push_str(&button("Retry deployment check", "service-check", ""));
         }
         set_html("service-placement", &errors);
-        let owns = s.service_deployment.as_ref().is_some_and(|d| {
-            !list(&d["instances"]).is_empty()
-                || !list(&d["update"]["previous"]["instances"]).is_empty()
-                || crate::deploy::busy(d)
-                || matches!(
-                    text(d, "phase"),
-                    "queued"
-                        | "importing"
-                        | "starting"
-                        | "checking_health"
-                        | "connecting_domain"
-                        | "stopping"
-                )
-        });
+        let owns = s.service_deployment.as_ref().is_some_and(owns_resources);
+        show("service-deploy-form", !owns);
         set_html(
             "service-controls",
             &if owns {

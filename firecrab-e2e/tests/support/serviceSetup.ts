@@ -1,5 +1,10 @@
 import { expect, type Page } from "@playwright/test";
 
+export async function serviceAction(page: Page, name: string, action: "Edit" | "Delete") {
+  await page.getByLabel(`Actions for ${name}`, { exact: true }).click();
+  await page.getByRole("button", { name: `${action} ${name}`, exact: true }).click();
+}
+
 export async function serviceStep(page: Page, target: number) {
   let current = Number(
     await page.locator("#service-steps").getAttribute("data-step"),

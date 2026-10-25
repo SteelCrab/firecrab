@@ -1,4 +1,5 @@
 import {
+  serviceAction,
   serviceStep,
   selectServiceApp,
   saveService,
@@ -161,6 +162,54 @@ async function openServices(
 }
 
 test.describe("MicroService configuration @dashboard", () => {
+  test("keeps long image references compact and exposes row actions by keyboard", async ({ page }) => {
+    const image = `118167167440.dkr.ecr.ap-northeast-2.amazonaws.com/ecr/nginx@sha256:${"a".repeat(64)}`;
+    await openServices(page, [{ ...INITIAL, image }]);
+    await expect(page.getByRole("complementary", { name: "MicroService detail" })).toBeHidden();
+    await expect(page.getByTitle(image, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Edit orders", exact: true })).toBeHidden();
+    const menu = page.getByLabel("Actions for orders", { exact: true });
+    await menu.focus();
+    await page.keyboard.press("Space");
+    await expect(page.getByRole("button", { name: "Edit orders", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeFocused();
+    await expect(page.getByRole("button", { name: "Delete orders", exact: true })).toBeHidden();
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.locator(".service-list").evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  });
+
+  test("keeps expanded runtime sections and keyboard focus through status polling", async ({ page }) => {
+    const spec = { ...INITIAL, domain: null, env: { PRIVATE_VALUE: "configuration-value-not-for-overview" } };
+    await openServices(page, [spec]);
+    let reads = 0;
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => {
+      reads++;
+      return route.fulfill({ json: {
+        id: SECRET, serviceId: ID, spec, phase: "running", request: { hostPort: 30190 },
+        instances: [{ vmId: SECRET, ipv4: "172.30.0.2", hostPort: 30190, healthy: true }],
+        log: ["All replicas answered the app health check"], error: null,
+      } });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await expect(page.locator("#service-status").getByRole("status")).toHaveText("Running");
+    await expect(page.locator("#service-deploy-form")).toBeHidden();
+    for (const id of ["service-instances", "service-log", "service-configuration"]) {
+      await expect(page.locator(`#${id}`)).not.toHaveAttribute("open");
+      await page.locator(`#${id}-toggle`).click();
+    }
+    await page.locator("#service-log-toggle").focus();
+    const before = reads;
+    await expect.poll(() => reads).toBeGreaterThan(before);
+    for (const id of ["service-instances", "service-log", "service-configuration"]) {
+      await expect(page.locator(`#${id}`)).toHaveAttribute("open");
+    }
+    await expect(page.locator("#service-log-toggle")).toBeFocused();
+    await expect(page.getByText("All replicas answered the app health check", { exact: true })).toBeVisible();
+    await expect(page.locator(".service-panel")).not.toContainText("configuration-value-not-for-overview");
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeEnabled();
+  });
+
   test("saves and removes a Queue binding without exposing credentials", async ({ page }) => {
     const writes = await openServices(page);
     await page.getByRole("button", { name: "New MicroService", exact: true }).click();
@@ -174,7 +223,7 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect.poll(() => writes.length).toBe(1);
     expect(writes[0].body.queues).toEqual({ NOTIFICATIONS: { queueId: STORAGE, access: "consume" } });
     expect(JSON.stringify(writes[0].body)).not.toContain("amqp://");
-    await page.getByRole("button", { name: "Edit orders", exact: true }).click();
+    await serviceAction(page, "orders", "Edit");
     await serviceStep(page, 2);
     await page.locator(".queue-binding-row").getByRole("button", { name: "Remove", exact: true }).click();
     await saveService(page);
@@ -205,9 +254,7 @@ test.describe("MicroService configuration @dashboard", () => {
     ).toBeVisible();
     expect(writes[0].body.storageConnectionId).toBe(STORAGE);
     expect(writes[0].body.securityGroupId).toBe(SECRET);
-    await page
-      .getByRole("button", { name: "Edit orders", exact: true })
-      .click();
+    await serviceAction(page, "orders", "Edit");
     await serviceStep(page, 2);
     await page
       .getByLabel("S3 connection (optional)", { exact: true })
@@ -276,7 +323,7 @@ test.describe("MicroService configuration @dashboard", () => {
       };
       return route.fulfill({ status: 202, json: deployment });
     });
-    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
     await expect(
       page.locator("#service-status").getByRole("status"),
     ).toHaveText("Not deployed");
@@ -298,14 +345,20 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect(
       page.locator("#service-status").getByRole("status"),
     ).toHaveText("Running");
+    await expect(page.locator("#service-deploy-form")).toBeHidden();
+    await expect(page.locator("#service-instances")).not.toHaveAttribute("open");
+    await expect(page.locator("#service-log")).not.toHaveAttribute("open");
+    await page.locator("#service-instances-toggle").click();
     await expect(
       page.getByRole("cell", { name: "Healthy", exact: true }),
     ).toBeVisible();
+    await page.locator("#service-instances-toggle").click();
     await page.screenshot({
       path: testInfo.outputPath("service-running-desktop.png"),
       fullPage: true,
     });
     await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByRole("button", { name: "New MicroService", exact: true })).toBeHidden();
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -325,6 +378,8 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect(
       page.getByRole("button", { name: "Deploy", exact: true }),
     ).toBeEnabled();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(page.getByRole("button", { name: "New MicroService", exact: true })).toBeVisible();
   });
 
   test("accepts a status response slower than the polling interval", async ({
@@ -343,7 +398,7 @@ test.describe("MicroService configuration @dashboard", () => {
         activeReads -= 1;
       },
     );
-    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
     await expect(
       page.locator("#service-status").getByRole("status"),
     ).toHaveText("Not deployed");
@@ -375,7 +430,7 @@ test.describe("MicroService configuration @dashboard", () => {
         return route.fulfill({ json: null });
       },
     );
-    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("Not deployed");
     await page
       .getByRole("button", { name: "Deploy and run", exact: true })
@@ -399,13 +454,11 @@ test.describe("MicroService configuration @dashboard", () => {
     await page.route(`**/api/micro-services/${ID}/deployment`, (route) =>
       route.fulfill({ json: null }),
     );
-    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
     await expect(
       page.locator("#service-status").getByRole("status"),
     ).toHaveText("Not deployed");
-    await page
-      .getByRole("button", { name: "Edit orders", exact: true })
-      .click();
+    await serviceAction(page, "orders", "Edit");
     await serviceStep(page, 1);
     await page.getByLabel("Port", { exact: true }).fill("9090");
     await serviceStep(page, 2);
@@ -471,7 +524,7 @@ test.describe("MicroService configuration @dashboard", () => {
         },
       }),
     );
-    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
     await expect(
       page.locator("#service-status").getByRole("status"),
     ).toHaveText("Deployment failed");
@@ -531,9 +584,7 @@ test.describe("MicroService configuration @dashboard", () => {
       },
     });
 
-    await page
-      .getByRole("button", { name: "Edit orders", exact: true })
-      .click();
+    await serviceAction(page, "orders", "Edit");
     await expect(
       page.getByLabel("Secret references (NAME=CrabSecrets ID)", {
         exact: true,
@@ -544,15 +595,13 @@ test.describe("MicroService configuration @dashboard", () => {
     await page.getByLabel("Replicas", { exact: true }).fill("2");
     await saveService(page);
     await expect(
-      page.getByRole("cell", { name: "ghcr.io/team/orders:2.0", exact: true }),
+      page.getByTitle("ghcr.io/team/orders:2.0", { exact: true }),
     ).toBeVisible();
     expect(writes[1].method).toBe("PUT");
     expect(writes[1].body).not.toHaveProperty("id");
     expect(writes[1].body.replicas).toBe(2);
     page.once("dialog", (dialog) => dialog.accept());
-    await page
-      .getByRole("button", { name: "Delete orders", exact: true })
-      .click();
+    await serviceAction(page, "orders", "Delete");
     await expect(
       page.getByText("No service configurations yet."),
     ).toBeVisible();
@@ -562,9 +611,7 @@ test.describe("MicroService configuration @dashboard", () => {
     page,
   }) => {
     const writes = await openServices(page, [INITIAL], true);
-    await page
-      .getByRole("button", { name: "Edit orders", exact: true })
-      .click();
+    await serviceAction(page, "orders", "Edit");
     await expect(page.getByLabel("Health path", { exact: true })).toHaveValue(
       "/actuator/health",
     );
@@ -595,6 +642,7 @@ test.describe("MicroService configuration @dashboard", () => {
       .getByRole("combobox", { name: "Language", exact: true })
       .selectOption("ko");
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByLabel("orders 작업", { exact: true }).click();
     await page
       .getByRole("button", { name: "orders 수정", exact: true })
       .click();
@@ -612,7 +660,7 @@ test.describe("MicroService configuration @dashboard", () => {
     ).toBe(true);
     expect(
       await page
-        .locator(".table-scroll")
+        .locator(".service-list")
         .evaluate((element) => element.scrollWidth <= element.clientWidth),
     ).toBe(true);
     await page.screenshot({
@@ -674,13 +722,14 @@ test("domain deployment inherits the security-group network and shows DNS guidan
       },
     }),
   );
-  await page.getByRole("button", { name: "Run orders", exact: true }).click();
+  await page.getByRole("button", { name: "Open orders", exact: true }).click();
   await expect(page.getByRole("status")).toHaveText("Not deployed");
   await expect(page.getByLabel("First host port")).toHaveCount(0);
   await expect(page.getByLabel("Network", { exact: true })).not.toBeVisible();
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByLabel("Network", { exact: true })).toHaveValue(ID);
   await expect(page.getByLabel("Network", { exact: true })).toBeDisabled();
+  await page.locator("#service-configuration-toggle").click();
   await expect(
     page.getByText(`${SECRET}.cfargotunnel.com`, { exact: true }),
   ).toBeVisible();
@@ -868,7 +917,7 @@ test("AUTH recovery restores deployment choices without automatically deploying"
     accounts.push(account);
     return route.fulfill({ json: account });
   });
-  await page.getByRole("button", { name: "Run orders", exact: true }).click();
+  await page.getByRole("button", { name: "Open orders", exact: true }).click();
   await page.getByLabel("Network", { exact: true }).selectOption(STORAGE);
   await page.getByLabel("First host port", { exact: true }).fill("31234");
   await expect(
@@ -943,7 +992,7 @@ test("placement ignores an older port result and checks the final request again"
     }
     return route.fulfill({ json: null });
   });
-  await page.getByRole("button", { name: "Run orders", exact: true }).click();
+  await page.getByRole("button", { name: "Open orders", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Deploy and run", exact: true }),
   ).toBeEnabled();
@@ -986,7 +1035,7 @@ test.describe("Deploy release management @dashboard", () => {
       } };
       return route.fulfill({ status: 202, json: current });
     });
-    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
     await page.getByRole("button", { name: "Deploy update", exact: true }).click();
     await expect(page.getByLabel("Name", { exact: true })).toHaveAttribute("readonly", "");
     await selectServiceApp(page, "ghcr.io/team/orders:2.0");
@@ -1023,7 +1072,7 @@ test.describe("Deploy release management @dashboard", () => {
         cancelled: false, restoring: false, routedNew: false, transition: null, retiring: [], completed: false,
       } } });
     });
-    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
     await page.getByRole("button", { name: "Release history", exact: true }).click();
     await page.getByLabel("Rollback release", { exact: true }).selectOption(RELEASE_A);
     await page.getByRole("button", { name: "Roll back", exact: true }).click();
@@ -1052,7 +1101,7 @@ test.describe("Deploy release management @dashboard", () => {
       retries.push(route.request().postDataJSON());
       return route.fulfill({ status: 202, json: { ...current, phase: "draining", error: null } });
     });
-    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
     await page.getByRole("button", { name: "Release history", exact: true }).click();
     await expect(page.getByText("HTTP 503: Release storage unavailable", { exact: true })).toBeVisible();
     await expect(page.getByText("No successful releases are retained yet.", { exact: true })).toHaveCount(0);
