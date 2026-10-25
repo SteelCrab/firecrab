@@ -365,7 +365,10 @@ pub fn start(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
     let log = fs::File::create(&log_path)?;
     let mut command = Command::new("node");
     command
-        .arg(script)
+        // Resolve the entry inside runtime instead of passing a Windows verbatim
+        // path to Node's ESM CLI. Ownership metadata remains canonical.
+        .current_dir(&runtime)
+        .arg("dev-dashboard.mjs")
         .arg(source)
         .arg(port.to_string())
         .env("FIRECRAB_DEV_SESSION", state.session.to_string())

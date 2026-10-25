@@ -12,8 +12,11 @@ struct Repository {
 fn git(directory: &Path, args: &[&str]) -> String {
     let output = ProcessCommand::new("git")
         .arg("-C")
-        .arg(directory)
-        .args(args)
+        .arg(git_path(directory).as_ref())
+        .args(
+            args.iter()
+                .map(|argument| git_path(Path::new(argument)).into_owned()),
+        )
         .output()
         .unwrap();
     assert!(
@@ -48,7 +51,7 @@ impl Repository {
                 "-c",
                 "user.email=development@example.invalid",
                 "-c",
-                &format!("core.hooksPath={}", hooks.display()),
+                &format!("core.hooksPath={}", git_path(&hooks).display()),
                 "-c",
                 "commit.gpgsign=false",
                 "commit",
@@ -84,6 +87,26 @@ impl Repository {
             "primary state"
         );
         assert!(load(&self.primary).unwrap().is_none());
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn git_arguments_preserve_unicode_while_removing_only_verbatim_drive_and_unc_prefixes() {
+    for (canonical, expected) in [
+        (
+            r"\\?\C:\worktrees\first worktree 한글",
+            r"C:\worktrees\first worktree 한글",
+        ),
+        (
+            r"\\?\UNC\server\share\worktree 한글",
+            r"\\server\share\worktree 한글",
+        ),
+        (r"C:\worktrees\first", r"C:\worktrees\first"),
+        (r"\\server\share\first", r"\\server\share\first"),
+        (r"relative\first", r"relative\first"),
+    ] {
+        assert_eq!(git_path(Path::new(canonical)).as_ref(), Path::new(expected));
     }
 }
 

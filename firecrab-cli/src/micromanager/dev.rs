@@ -87,6 +87,7 @@ pub enum Error {
     #[cfg(target_os = "macos")]
     #[error("management SSH failed during {0}; inspect `firecrab service debug --logs`")]
     GuestSshInterrupted(&'static str),
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     #[error(
         "guest services are ready but the localhost API is unavailable; inspect `firecrab service debug --logs`"
     )]
@@ -94,6 +95,7 @@ pub enum Error {
 }
 
 pub struct Checkout {
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     pub(super) root: PathBuf,
     pub(super) channel: String,
     pub(super) archive: tempfile::NamedTempFile,
@@ -137,6 +139,7 @@ impl Checkout {
             return Err(Error::Command("source archive"));
         }
         Ok(Self {
+            #[cfg(any(target_os = "macos", target_os = "windows", test))]
             root,
             channel,
             archive,

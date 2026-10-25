@@ -78,6 +78,15 @@ impl Fixture {
     fn start(&self) -> Result<(), Error> {
         start(&self.source(), self.home.path(), self.port)
     }
+    fn start_private(&self, instance: &super::super::instance::Instance) -> Result<(), Error> {
+        start(&self.source(), &instance.managed_home, self.port).inspect_err(|_| {
+            if let Ok(log) =
+                fs::read_to_string(instance.managed_home.join("runtime/dev-dashboard.log"))
+            {
+                eprintln!("private dashboard startup log:\n{log}");
+            }
+        })
+    }
     fn state(&self) -> Session {
         read_session(self.home.path()).unwrap().unwrap()
     }
@@ -167,7 +176,14 @@ fn different_managed_homes_keep_their_dashboards_and_stop_independently() {
 fn a_private_instance_passes_its_backend_ports_to_the_owned_server() {
     let fixture = Fixture::new();
     let instance = fixture.private_instance("0123456789abcdef", 45121, 45122);
-    start(&fixture.source(), &instance.managed_home, fixture.port).unwrap();
+    // Canonical Windows homes use the verbatim prefix that Node must not receive
+    // as its ESM entry argument. This fixture must retain that production shape.
+    #[cfg(windows)]
+    assert!(matches!(
+        instance.managed_home.components().next(),
+        Some(std::path::Component::Prefix(prefix)) if prefix.kind().is_verbatim()
+    ));
+    fixture.start_private(&instance).unwrap();
     let selected = read_session(&instance.managed_home).unwrap().unwrap();
     assert_eq!(selected.api_port, 45121);
     assert_eq!(selected.resource_port, 45122);
@@ -185,9 +201,9 @@ fn copied_sessions_cannot_control_primary_or_other_private_dashboards() {
     let second_instance = second.private_instance("fedcba9876543210", 45123, 45124);
     primary.start().unwrap();
     let primary_server = DashboardGuard(primary.state());
-    start(&first.source(), &first_instance.managed_home, first.port).unwrap();
+    first.start_private(&first_instance).unwrap();
     let first_server = DashboardGuard(read_session(&first_instance.managed_home).unwrap().unwrap());
-    start(&second.source(), &second_instance.managed_home, second.port).unwrap();
+    second.start_private(&second_instance).unwrap();
     let second_server = DashboardGuard(
         read_session(&second_instance.managed_home)
             .unwrap()
@@ -243,7 +259,7 @@ fn a_private_dashboard_rejects_a_different_source_before_stopping_its_server() {
     let fixture = Fixture::new();
     let other = Fixture::new();
     let instance = fixture.private_instance("0123456789abcdef", 45121, 45122);
-    start(&fixture.source(), &instance.managed_home, fixture.port).unwrap();
+    fixture.start_private(&instance).unwrap();
     let server = DashboardGuard(read_session(&instance.managed_home).unwrap().unwrap());
     let record = instance.managed_home.join("runtime/dev-dashboard.json");
     let before = fs::read(&record).unwrap();

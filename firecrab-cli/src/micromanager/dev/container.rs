@@ -15,19 +15,28 @@ use super::instance::Instance;
 use super::{Checkout, guest_script, session};
 use crate::micromanager::{DevCommand, report};
 
+/// Debian/systemd image recipe copied into this instance's temporary build context.
 const DOCKERFILE: &str = include_str!("../../../../scripts/micromanager/dev-container.Dockerfile");
+/// PID 1 setup that verifies KVM, TUN, and writable private kernel namespaces.
 const ENTRYPOINT: &str =
     include_str!("../../../../scripts/micromanager/dev-container-entrypoint.sh");
+/// Install the verified release baseline before applying a source deployment.
 const BOOTSTRAP: &str = include_str!("../../../../scripts/micromanager/dev-container-bootstrap.sh");
+/// Relay the container's published address to the API's internal loopback listener.
 const PUBLISH: &str = include_str!("../../../../scripts/micromanager/dev-container-publish.sh");
+/// Label binding a Docker object to the persistent worktree instance ID.
 const OWNER: &str = "dev.firecrab.instance";
+/// Label binding a Docker object to the canonical source checkout.
 const SOURCE: &str = "dev.firecrab.source";
+/// Label preserving Git-directory identity when the checkout changes branches.
 const GIT_DIR: &str = "dev.firecrab.git-dir";
 
+/// Keep Docker diagnostics available through the common I/O error boundary.
 fn failed(message: impl std::fmt::Display) -> io::Error {
     io::Error::other(message.to_string())
 }
 
+/// Permit only local sockets, named pipes, and loopback TCP Docker endpoints.
 fn local_endpoint(endpoint: &str) -> bool {
     if endpoint.chars().any(char::is_control) {
         return false;
@@ -56,6 +65,7 @@ fn local_endpoint(endpoint: &str) -> bool {
         })
 }
 
+/// Resolve Docker's context-over-host precedence and reject remote engines.
 fn endpoint_from(
     host: Option<&str>,
     context: Option<&str>,
@@ -76,19 +86,27 @@ fn endpoint_from(
     Ok(endpoint)
 }
 
+/// A CLI client pinned to one inspected local engine for the entire operation.
 struct Docker {
+    /// Docker executable; tests substitute a recording fixture program.
     program: PathBuf,
+    /// Explicit `--host` value, independent of later environment changes.
     endpoint: String,
     #[cfg(test)]
+    /// Private directory used only by the fake Docker command.
     fixture: Option<PathBuf>,
 }
 
+/// Engine properties needed to build and create a compatible private runtime.
 struct Engine {
+    /// Docker build/create platform derived from the engine's native architecture.
     platform: &'static str,
+    /// Whether the engine advertises AppArmor and accepts its security option.
     apparmor: bool,
 }
 
 impl Docker {
+    /// Read local client configuration without changing contexts or contacting WSL.
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     fn local() -> io::Result<Self> {
         let host = std::env::var("DOCKER_HOST").ok();
@@ -126,6 +144,7 @@ impl Docker {
         })
     }
 
+    /// Pin each child to the selected engine and remove conflicting Docker globals.
     fn command(&self) -> Command {
         let mut command = Command::new(&self.program);
         command
@@ -140,10 +159,12 @@ impl Docker {
         command
     }
 
+    /// Capture a noninteractive metadata query for validation by its caller.
     fn output(&self, args: &[&str]) -> io::Result<Output> {
         self.command().args(args).stdin(Stdio::null()).output()
     }
 
+    /// Run one owned-resource operation and propagate its nonzero exit status.
     fn checked(&self, args: &[&str]) -> io::Result<()> {
         if self
             .command()
@@ -160,6 +181,7 @@ impl Docker {
         )))
     }
 
+    /// Distinguish an absent named object from failed or malformed inspection.
     fn inspect(&self, kind: &str, name: &str) -> io::Result<Option<Value>> {
         let output = self.output(&[kind, "inspect", "--format", "{{json .}}", name])?;
         if output.status.success() {
@@ -177,6 +199,7 @@ impl Docker {
         )))
     }
 
+    /// Require a rootful Linux engine with cgroup v2 and a supported architecture.
     fn engine(&self) -> io::Result<Engine> {
         let output = self.output(&["info", "--format", "{{json .}}"])?;
         if !output.status.success() {
@@ -215,6 +238,7 @@ impl Docker {
     }
 }
 
+/// Produce the three ownership labels shared by the image, container, and storage.
 fn labels(instance: &Instance) -> io::Result<[(String, String); 3]> {
     let utf8 = |path: &Path| {
         path.to_str()
@@ -228,6 +252,7 @@ fn labels(instance: &Instance) -> io::Result<[(String, String); 3]> {
     ])
 }
 
+/// Refuse an existing Docker object unless all persistent ownership labels match.
 fn owned(metadata: &Value, kind: &str, instance: &Instance) -> io::Result<()> {
     let actual = if matches!(kind, "container" | "image") {
         &metadata["Config"]["Labels"]
@@ -244,6 +269,7 @@ fn owned(metadata: &Value, kind: &str, instance: &Instance) -> io::Result<()> {
     Ok(())
 }
 
+/// Validate local private storage and reject networks containing other containers.
 fn storage_owned(
     docker: &Docker,
     instance: &Instance,
@@ -286,6 +312,7 @@ fn storage_owned(
     Ok(())
 }
 
+/// Verify ownership plus the exact namespace, device, publication, and mount limits.
 fn container_owned(
     metadata: &Value,
     instance: &Instance,
@@ -359,6 +386,7 @@ fn container_owned(
     Ok(())
 }
 
+/// Append ownership flags without shell interpolation of checkout paths.
 fn add_labels(args: &mut Vec<OsString>, instance: &Instance) -> io::Result<()> {
     for (key, value) in labels(instance)? {
         args.extend(["--label".into(), format!("{key}={value}").into()]);
@@ -366,6 +394,10 @@ fn add_labels(args: &mut Vec<OsString>, instance: &Instance) -> io::Result<()> {
     Ok(())
 }
 
+/// Build and create only this instance's labeled image, network, volume, and container.
+///
+/// Existing storage is validated both before creation and immediately before it is
+/// mounted. The runtime receives KVM/TUN and private namespaces, never host paths.
 fn create_runtime(
     docker: &Docker,
     instance: &Instance,
@@ -509,6 +541,7 @@ fn create_runtime(
     Ok(())
 }
 
+/// Wait at most sixty seconds for the API on this instance's assigned host port.
 fn wait_api(instance: &Instance) -> io::Result<()> {
     let client = reqwest::blocking::Client::builder()
         .no_proxy()
@@ -534,6 +567,7 @@ fn wait_api(instance: &Instance) -> io::Result<()> {
     }
 }
 
+/// Run the shared transactional source/release script inside the selected container.
 fn guest(
     docker: &Docker,
     name: &str,
@@ -566,6 +600,7 @@ fn guest(
     ))
 }
 
+/// Serialize lifecycle changes, allowing brief descriptor inheritance during forks.
 fn container_lock(home: &Path) -> io::Result<fs::File> {
     fs::create_dir_all(home.join("runtime"))?;
     let lock = fs::OpenOptions::new()
@@ -590,6 +625,10 @@ fn container_lock(home: &Path) -> io::Result<fs::File> {
     }
 }
 
+/// Validate the selected runtime before source upload or scoped lifecycle changes.
+///
+/// Stop/clean are harmless when no container exists. Start/restart/restore require
+/// an existing owned runtime; none of these controls creates a fallback environment.
 fn run_with(
     docker: &Docker,
     instance: &Instance,
@@ -702,3 +741,7 @@ pub fn run(
 #[cfg(test)]
 #[path = "container_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "container_runtime_tests.rs"]
+mod runtime_tests;

@@ -3,7 +3,7 @@
 Use `firecrab service dev --port PORT` from a Git-linked worktree to keep its development runtime separate from the primary checkout.
 Each worktree has its own backend, data, source snapshot, build caches, dashboard state, and lifecycle lock.
 The primary development environment and its running MicroVMs remain separate.
-Tracked in [#495](https://github.com/SteelCrab/firecrab/issues/495).
+Tracked in #495.
 
 ## Select an environment
 
@@ -155,6 +155,18 @@ Stop only the intended development environment when reclaiming its runtime resou
 
 Use distinct dashboard ports and the printed API URLs when checking two worktrees.
 Confirm that stopping one environment preserves the other environment and the primary VM.
+Linux CI also runs an opt-in check of two real Docker runtimes:
+
+```sh
+cargo test -p firecrab-cli --locked \
+  micromanager::dev::container::runtime_tests::private_docker_runtimes_keep_namespaces_data_and_stop_independent \
+  -- --ignored --exact --nocapture --test-threads=1
+```
+
+This check requires local rootful Docker, KVM, and TUN.
+It verifies the production image, systemd, private kernel namespaces, writable cgroups, API relay, separate data, and independent stop/cleanup.
+Its marker API does not exercise the real API, source deployment, or MicroVM lifecycle.
+Cleanup validates ownership labels before removing only the randomly named test resources.
 Native live validation with multiple management VMs has not yet been completed.
 Unit, proxy, and command-fixture tests do not replace that runtime check.
 

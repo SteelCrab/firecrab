@@ -11,32 +11,46 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// Ownership and backend port record stored in each private managed home.
 const RECORD: &str = "dev-instance.json";
+/// Authenticate the macOS child process selected by the parent dispatcher.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const CHILD: &str = "FIRECRAB_DEV_INSTANCE_ID";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Persist one checkout's backend identity independently of its current branch.
 pub struct Instance {
+    /// Stable lowercase hash prefix of the checkout's canonical Git directory.
     pub id: String,
+    /// Canonical checkout root; retained in records after the worktree is removed.
     pub source: PathBuf,
+    /// Canonical per-worktree Git metadata directory used to derive `id`.
     pub git_dir: PathBuf,
+    /// Protected primary base used only to derive sibling development paths.
     pub primary_home: PathBuf,
+    /// Private runtime, disks, credentials, and ownership record directory.
     pub managed_home: PathBuf,
+    /// Private host binary directory outside the primary VM's shared home.
     pub install_dir: PathBuf,
+    /// Persisted loopback API port, distinct from all registered backend ports.
     pub api_port: u16,
+    /// Persisted native resource port; Docker instances reserve it without exposing controls.
     pub resource_port: u16,
 }
 
+/// Report malformed or foreign state without permitting primary fallback.
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
+/// Reject existing symlink components before using a state path.
 fn safe_path(path: &Path) -> io::Result<()> {
     super::super::managed_home::reject_symlink_components(path)
         .map_err(|error| invalid(error.to_string()))
 }
 
+/// Make a state path absolute and reject unsafe components before filesystem use.
 fn absolute(path: &Path) -> io::Result<PathBuf> {
     let path = std::path::absolute(path)?;
     if path
@@ -49,6 +63,7 @@ fn absolute(path: &Path) -> io::Result<PathBuf> {
     Ok(path)
 }
 
+/// Preserve removed worktree records while requiring every existing ancestor to be canonical.
 fn canonical_or_missing(path: &Path) -> io::Result<()> {
     if !path.is_absolute() {
         return Err(invalid(
@@ -73,6 +88,7 @@ fn canonical_or_missing(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Accept only fixed-width lowercase hexadecimal instance directory names.
 fn valid_id(id: &str) -> bool {
     id.len() == 16
         && id
@@ -80,6 +96,7 @@ fn valid_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
+/// Recognize private layout paths whose missing record must never imply the primary home.
 fn private_path(home: &Path) -> bool {
     home.file_name().is_some_and(|name| name == "micromanager")
         && home
@@ -95,6 +112,7 @@ fn private_path(home: &Path) -> bool {
 }
 
 impl Instance {
+    /// Check private layout, canonical identity paths, and backend port constraints.
     fn validate(&self, home: &Path) -> io::Result<()> {
         let root = self
             .primary_home
@@ -126,6 +144,7 @@ impl Instance {
         Ok(())
     }
 
+    /// Atomically create the ownership record without replacing an existing instance.
     fn save(&self) -> io::Result<()> {
         self.validate(&self.managed_home)?;
         private_directory(&self.managed_home)?;
@@ -139,6 +158,7 @@ impl Instance {
     }
 }
 
+/// Create state directories with user-only Unix permissions after checking their paths.
 fn private_directory(path: &Path) -> io::Result<()> {
     safe_path(path)?;
     fs::create_dir_all(path)?;
@@ -150,6 +170,7 @@ fn private_directory(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Validate one record; only an ordinary primary path may have no ownership file.
 fn load_record(home: &Path) -> io::Result<Option<Instance>> {
     safe_path(home)?;
     let record = home.join(RECORD);
@@ -167,6 +188,7 @@ fn load_record(home: &Path) -> io::Result<Option<Instance>> {
     Ok(Some(instance))
 }
 
+/// Load selected ownership and reject conflicting backend reservations anywhere in its registry.
 pub fn load(home: &Path) -> io::Result<Option<Instance>> {
     let state = load_record(home)?;
     if state.is_some() {
@@ -180,20 +202,25 @@ pub fn load(home: &Path) -> io::Result<Option<Instance>> {
 }
 
 #[cfg(any(target_os = "macos", test))]
+/// Select the private API port, or the existing primary port for an ordinary home.
 pub fn api_port(home: &Path) -> io::Result<u16> {
     Ok(load(home)?.map_or(5523, |instance| instance.api_port))
 }
 
+/// Select the private native resource listener without silently accepting damaged private state.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub fn resource_port(home: &Path) -> io::Result<u16> {
     Ok(load(home)?.map_or(5524, |instance| instance.resource_port))
 }
 
 #[cfg(target_os = "macos")]
+/// Build the selected host API base URL for native VM commands and forwarding.
 pub fn api_url(home: &Path) -> io::Result<String> {
     Ok(format!("http://127.0.0.1:{}", api_port(home)?))
 }
 
 #[cfg(any(target_os = "macos", test))]
+/// Give private launchd services a stable suffix while preserving the primary label.
 pub fn label(home: &Path, base: &str) -> io::Result<String> {
     Ok(load(home)?.map_or_else(
         || base.to_owned(),
@@ -201,17 +228,53 @@ pub fn label(home: &Path, base: &str) -> io::Result<String> {
     ))
 }
 
+/// Canonical Git selection used before any backend command may run.
 struct GitIdentity {
+    /// Checkout root reported by Git and canonicalized by the host filesystem.
     source: PathBuf,
+    /// Per-checkout metadata directory; differs from the common directory for linked worktrees.
     git_dir: PathBuf,
+    /// Whether the checkout is linked to another checkout's common Git directory.
     linked: bool,
 }
 
+/// Keep canonical metadata, but pass Git paths without Windows verbatim prefixes.
+#[cfg(windows)]
+fn git_path(path: &Path) -> std::borrow::Cow<'_, Path> {
+    use std::ffi::OsString;
+    use std::path::Prefix;
+
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return std::borrow::Cow::Borrowed(path);
+    };
+    let mut ordinary = match prefix.kind() {
+        Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:", char::from(drive))),
+        Prefix::VerbatimUNC(server, share) => {
+            let mut prefix = OsString::from(r"\\");
+            prefix.push(server);
+            prefix.push(r"\");
+            prefix.push(share);
+            PathBuf::from(prefix)
+        }
+        _ => return std::borrow::Cow::Borrowed(path),
+    };
+    ordinary.push(components.as_path());
+    std::borrow::Cow::Owned(ordinary)
+}
+
+/// Unix canonical paths are already accepted by Git.
+#[cfg(not(windows))]
+fn git_path(path: &Path) -> std::borrow::Cow<'_, Path> {
+    std::borrow::Cow::Borrowed(path)
+}
+
+/// Resolve canonical checkout ownership and reject broken linked metadata instead of selecting main.
 fn git_identity(source: &Path) -> io::Result<Option<GitIdentity>> {
     let source = fs::canonicalize(source)?;
     let output = ProcessCommand::new("git")
         .arg("-C")
-        .arg(&source)
+        .arg(git_path(&source).as_ref())
         .args([
             "rev-parse",
             "--path-format=absolute",
@@ -244,6 +307,7 @@ fn git_identity(source: &Path) -> io::Result<Option<GitIdentity>> {
     }))
 }
 
+/// Keep primary and registered backend ports reserved, including removed worktrees' records.
 fn reserved_ports(root: &Path) -> io::Result<HashSet<u16>> {
     let mut ports = HashSet::from([5523, 5524, 8080]);
     for entry in fs::read_dir(root)? {
@@ -265,6 +329,7 @@ fn reserved_ports(root: &Path) -> io::Result<HashSet<u16>> {
     Ok(ports)
 }
 
+/// Hold an OS-selected loopback port until the caller persists both backend reservations.
 fn available_port(reserved: &HashSet<u16>) -> io::Result<TcpListener> {
     for _ in 0..128 {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
@@ -279,6 +344,7 @@ fn available_port(reserved: &HashSet<u16>) -> io::Result<TcpListener> {
 }
 
 /// Only a Git-linked checkout selects a private VM on managed desktop hosts.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub fn resolve(
     source: &Path,
     primary_home: &Path,
@@ -288,6 +354,7 @@ pub fn resolve(
     resolve_inner(source, primary_home, create, dashboard_port, false)
 }
 
+/// Prevent a registered source with missing or changed Git metadata from selecting primary services.
 fn reject_registered_fallback(
     source: &Path,
     primary_home: &Path,
@@ -322,6 +389,7 @@ fn reject_registered_fallback(
     Ok(())
 }
 
+/// Resolve or create one locked registry entry; Linux may also isolate its primary checkout.
 fn resolve_inner(
     source: &Path,
     primary_home: &Path,
@@ -420,16 +488,24 @@ fn resolve_inner(
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+/// Shared desktop command inputs needed to select a private backend before native dispatch.
 struct Options<'a> {
+    /// Existing-instance control, or a source build when absent.
     control: Option<super::super::DevCommand>,
+    /// Explicit source root for builds, otherwise the process working directory.
     source: Option<&'a Path>,
+    /// Requested dashboard port, separate from reserved backend ports.
     port: u16,
+    /// Build the uploaded source with the guest release profile.
     release: bool,
+    /// Restore the selected environment's installed release instead of uploading source.
     restore: bool,
+    /// Permit prerequisite provisioning without an interactive prompt.
     yes: bool,
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+/// Extract development-only inputs without intercepting ordinary primary service commands.
 fn command_options(command: &super::super::Command) -> Option<Options<'_>> {
     match command {
         super::super::Command::Dev {
@@ -550,6 +626,7 @@ pub fn dispatch(command: &super::super::Command) -> io::Result<Option<i32>> {
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
+/// Change only the selected container and its owned host dashboard after preflight checks.
 pub fn run_container(
     instance: &Instance,
     command: Option<super::super::DevCommand>,
@@ -596,6 +673,7 @@ pub fn run_container(
 }
 
 #[cfg(target_os = "linux")]
+/// Route Linux source development to a private container before native systemd handling.
 pub fn linux_dev(
     command: Option<super::super::DevCommand>,
     source: Option<&Path>,
@@ -628,6 +706,7 @@ pub fn linux_dev(
 }
 
 #[cfg(test)]
+/// Create validated private fixture state without touching the process's actual managed home.
 pub fn test_instance(directory: &Path, id: &str, api_port: u16, resource_port: u16) -> Instance {
     let directory = fs::canonicalize(directory).unwrap();
     let source = directory.join(format!("source-{id}"));
