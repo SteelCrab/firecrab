@@ -52,13 +52,13 @@ fn safe_path(path: &Path) -> io::Result<()> {
 
 /// Make a state path absolute and reject unsafe components before filesystem use.
 fn absolute(path: &Path) -> io::Result<PathBuf> {
-    let path = std::path::absolute(path)?;
     if path
         .components()
         .any(|part| matches!(part, Component::ParentDir))
     {
         return Err(invalid("development state paths must not contain '..'"));
     }
+    let path = std::path::absolute(path)?;
     safe_path(&path)?;
     Ok(path)
 }

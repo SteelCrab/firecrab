@@ -240,9 +240,24 @@ fn missing_source_paths_still_require_absolute_normal_metadata() {
     let repository = Repository::new();
     let first = repository.instance(&repository.first, 8098);
     let record = first.managed_home.join(RECORD);
+    // PathBuf::push normalizes '..' when a Windows verbatim prefix is present.
+    // Build the malformed metadata as raw text so the invalid component survives.
+    let non_normal = |leaf: &str| {
+        let mut path = repository.root.as_os_str().to_os_string();
+        for component in ["main", "..", leaf] {
+            path.push(std::path::MAIN_SEPARATOR_STR);
+            path.push(component);
+        }
+        let path = PathBuf::from(path);
+        assert!(
+            path.components()
+                .any(|part| matches!(part, Component::ParentDir))
+        );
+        path
+    };
     for source in [
         PathBuf::from("missing-source"),
-        repository.root.join("main/../missing-source"),
+        non_normal("missing-source"),
     ] {
         let mut invalid = first.clone();
         invalid.source = source;
@@ -251,7 +266,7 @@ fn missing_source_paths_still_require_absolute_normal_metadata() {
     }
     for git_dir in [
         PathBuf::from("missing-git-dir"),
-        repository.root.join("main/../missing-git-dir"),
+        non_normal("missing-git-dir"),
     ] {
         let mut invalid = first.clone();
         invalid.git_dir = git_dir;
