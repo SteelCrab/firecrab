@@ -67,6 +67,7 @@ Run `python3 scripts/ci-qa-secrets.py` on Linux or managed Debian.
 This pass does not require a VM, KVM, a network helper, or a running installed API.
 It uses temporary stores and local providers. It never targets the installed host database.
 See the [Secrets suite](../../firecrab-e2e/README.md#pipesecrets) for individual commands and artifact paths.
+See [provider account QA](pipe-secrets-provider-qa.md) for real AWS results and the pending Infisical check.
 
 Record SEC1–SEC14 from the generated report. The report retains each command and exit code.
 Missing or skipped automated cases are `WARNING` and produce a nonzero aggregate exit.
