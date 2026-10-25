@@ -18,6 +18,7 @@ use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
 mod pools;
+mod queues;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod micro_services;
 mod pipe_ai;
@@ -752,6 +753,7 @@ impl Store {
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute_batch(stacks::SCHEMA_SQL)?;
         conn.execute_batch(stack_applies::SCHEMA_SQL)?;
+        conn.execute_batch(queues::SCHEMA)?;
         conn.execute_batch(stack_sources::SCHEMA_SQL)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
@@ -1929,6 +1931,7 @@ fn decode_purpose(id: &str, purpose: &str) -> Result<crate::model::VmPurpose, Pe
         "instance" => Ok(crate::model::VmPurpose::Instance),
         "builder" => Ok(crate::model::VmPurpose::Builder),
         "pool" => Ok(crate::model::VmPurpose::Pool),
+        "queue" => Ok(crate::model::VmPurpose::Queue),
         other => Err(PersistenceError::CorruptRecord {
             id: id.to_owned(),
             reason: format!("unknown purpose {other:?}"),
