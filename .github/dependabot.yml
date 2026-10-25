@@ -20,6 +20,17 @@ updates:
           - "minor"
           - "patch"
 
+  # Browser crate is an independent Cargo workspace.
+  - package-ecosystem: "cargo"
+    directory: "/firecrab-frontend"
+    schedule:
+      interval: "weekly"
+    groups:
+      wasm-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
   # Frontend (firecrab-frontend/package.json)
   - package-ecosystem: "npm"
     directory: "/firecrab-frontend"

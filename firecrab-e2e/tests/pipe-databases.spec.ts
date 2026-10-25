@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { DatabaseInput, DatabasePreview, DatabaseTable, PipeDatabase } from "../../firecrab-frontend/src/api/pipeDatabases";
+import type { DatabaseInput, DatabasePreview, DatabaseTable, PipeDatabase } from "./support/database-types";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const saved: PipeDatabase = { id, name: "Application DB", provider: "local", engine: "postgres", host: "localhost", port: 5432, database: "app", tlsMode: "disable" };
@@ -90,7 +90,7 @@ test.describe("PIPE databases @dashboard", () => {
     await open(page, { saved: true, preview: { columns: [{ name: "long_text", dataType: "text" }], rows: [[value]], hasMore: false, offset: 0 } });
     const panel = page.getByRole("region", { name: "Databases", exact: true });
     await panel.getByRole("button", { name: "Browse Application DB", exact: true }).click();
-    await panel.getByLabel("Table", { exact: true }).selectOption("0");
+    await panel.getByLabel("Table", { exact: true }).selectOption({index:1});
     const cell = panel.locator(".pipe-database-cell");
     await expect(cell).toHaveText(value);
     await expect(cell).toHaveAttribute("tabindex", "0");
@@ -213,12 +213,12 @@ test.describe("PIPE databases @dashboard", () => {
     await panel.getByLabel("Connection name", { exact: true }).fill("Unfinished DB");
     let dialogs = 0;
     page.on("dialog", async dialog => { dialogs++; await dialog.dismiss(); });
-    await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
     await expect(page).toHaveURL(/#\/pipe\/database$/);
     await expect(panel.getByLabel("Connection name", { exact: true })).toHaveValue("Unfinished DB");
     expect(dialogs).toBe(1);
     await panel.getByRole("button", { name: "Cancel", exact: true }).click();
-    await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
     await expect(page).toHaveURL(/#\/vms$/);
     expect(dialogs).toBe(1);
   });
@@ -227,7 +227,7 @@ test.describe("PIPE databases @dashboard", () => {
     const mock = await open(page, { saved: true });
     const panel = page.getByRole("region", { name: "Databases", exact: true });
     await panel.getByRole("button", { name: "Browse Application DB", exact: true }).click();
-    await panel.getByLabel("Table", { exact: true }).selectOption("0");
+    await panel.getByLabel("Table", { exact: true }).selectOption({index:1});
     await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
     mock.failTables();
     await panel.getByRole("button", { name: "Refresh tables", exact: true }).click();
@@ -244,14 +244,16 @@ test.describe("PIPE databases @dashboard", () => {
     const mock = await open(page, { saved: true, deleteFailure: true });
     const panel = page.getByRole("region", { name: "Databases", exact: true });
     await panel.getByRole("button", { name: "Browse Application DB", exact: true }).click();
-    await panel.getByLabel("Table", { exact: true }).selectOption("0");
+    await panel.getByLabel("Table", { exact: true }).selectOption({index:1});
     await panel.getByRole("button", { name: "Application DB actions", exact: true }).click();
+    page.once("dialog",dialog=>dialog.accept());
     await page.getByRole("menuitem", { name: "Remove connection Application DB", exact: true }).click();
     await expect(panel.getByRole("alert")).toContainText("Cannot remove database connection");
     await expect(panel.getByRole("cell", { name: "Application DB", exact: true })).toBeVisible();
     await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
     mock.recoverDelete();
     await panel.getByRole("button", { name: "Application DB actions", exact: true }).click();
+    page.once("dialog",dialog=>dialog.accept());
     await page.getByRole("menuitem", { name: "Remove connection Application DB", exact: true }).click();
     await expect(panel.getByRole("cell", { name: "Application DB", exact: true })).toHaveCount(0);
     expect(mock.removes).toHaveLength(2);
@@ -277,7 +279,7 @@ test.describe("PIPE databases @dashboard", () => {
     const panel = page.getByRole("region", { name: "Databases", exact: true });
     await panel.getByRole("button", { name: "Browse Application DB", exact: true }).click();
     await expect(panel.getByText("Showing the first 500 tables.")).toBeVisible();
-    await panel.getByLabel("Table", { exact: true }).selectOption("0");
+    await panel.getByLabel("Table", { exact: true }).selectOption({index:1});
     await expect(panel.getByRole("cell", { name: html, exact: true })).toBeVisible();
     await expect(panel.locator(".pipe-database-preview tbody tr").nth(1).getByRole("cell")).toHaveText("");
     await expect(panel.getByRole("cell", { name: "NULL", exact: true })).toBeVisible();
@@ -290,7 +292,7 @@ test.describe("PIPE databases @dashboard", () => {
     const mock = await open(page, { saved: true });
     const panel = page.getByRole("region", { name: "Databases", exact: true });
     await panel.getByRole("button", { name: "Browse Application DB", exact: true }).click();
-    await panel.getByLabel("Table", { exact: true }).selectOption("0");
+    await panel.getByLabel("Table", { exact: true }).selectOption({index:1});
     await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
     mock.failPreview();
     await panel.getByRole("button", { name: "Next rows", exact: true }).click();
@@ -336,7 +338,7 @@ test.describe("PIPE databases @dashboard", () => {
     const mock = await open(page, { saved: true });
     const panel = page.getByRole("region", { name: "Databases", exact: true });
     await panel.getByRole("button", { name: "Browse Application DB", exact: true }).click();
-    await panel.getByLabel("Table", { exact: true }).selectOption("0");
+    await panel.getByLabel("Table", { exact: true }).selectOption({index:1});
     await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
     await expect(panel.getByRole("cell", { name: "NULL", exact: true })).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });
@@ -344,12 +346,13 @@ test.describe("PIPE databases @dashboard", () => {
     expect(mock.previews[0]).toEqual({ schema: "public", table: "users", limit: 50, offset: 0 });
     await panel.getByRole("button", { name: "Next rows", exact: true }).click();
     await expect(panel.getByRole("cell", { name: "Next page", exact: true })).toBeVisible();
-    expect(mock.previews[1].offset).toBe(2);
+    expect(mock.previews[1].offset).toBe(50);
     await panel.getByRole("button", { name: "Previous rows", exact: true }).click();
     await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
-    await panel.getByLabel("Table", { exact: true }).selectOption("1");
+    await panel.getByLabel("Table", { exact: true }).selectOption({index:2});
     await expect(panel.getByText("This table has no rows on this page.")).toBeVisible();
     await panel.getByRole("button", { name: "Application DB actions", exact: true }).click();
+    page.once("dialog",dialog=>dialog.accept());
     await page.getByRole("menuitem", { name: "Remove connection Application DB", exact: true }).click();
     await expect(panel.getByText("Connection removed. The source database is unchanged.")).toBeVisible();
     expect(mock.removes).toEqual([id]);
@@ -378,7 +381,7 @@ test.describe("PIPE databases @dashboard", () => {
     mock.recover();
     await panel.getByRole("button", { name: "Retry database list", exact: true }).click();
     await panel.getByRole("button", { name: "Browse Application DB", exact: true }).click();
-    await panel.getByLabel("Table", { exact: true }).selectOption("0");
+    await panel.getByLabel("Table", { exact: true }).selectOption({index:1});
     await expect(panel.getByRole("alert")).toContainText("SELECT permissions");
     mock.recoverPreview();
     await panel.getByRole("button", { name: "Refresh rows", exact: true }).click();
@@ -446,7 +449,7 @@ async function openWritable(page: Page, failure?: "unknown" | "conflict") {
     if (path.includes("/acknowledge/")) { acknowledgements.push(input()); triggers[0].failed = 0; triggers[0].skipped = 1; return route.fulfill({ json: { acknowledged: true } }); }
     if (path === "/api/pipe/database-rabbitmq") {
       if (method === "PUT") { rabbitmq.push(input()); configured = true; }
-      return route.fulfill({ json: { configured, brokers: configured ? ["broker:9092"] : undefined, tls: true, development: false } });
+      return route.fulfill({ json: { configured, brokers: configured ? ["broker:5671"] : undefined, tls: true, development: false } });
     }
     if (path === "/api/pipe/database-rabbitmq/managed") {
       if (method === "POST") { rabbitmq.push(input()); configured = true; }
@@ -464,7 +467,7 @@ async function openWritable(page: Page, failure?: "unknown" | "conflict") {
   await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
   await page.goto("/#/pipe/database");
   await page.getByRole("button", { name: "Browse Application DB", exact: true }).click();
-  await page.getByLabel("Table", { exact: true }).selectOption("0");
+  await page.getByLabel("Table", { exact: true }).selectOption({index:1});
   await expect(page.getByRole("button", { name: "Add row", exact: true })).toBeVisible();
   return { mutations, bindings, triggers, jobs, rabbitmq, acknowledgements, serviceId };
 }
@@ -474,13 +477,13 @@ test("writes JSON text without rounding and keeps unknown-result retries identic
   await page.getByRole("button", { name: "Add row", exact: true }).click();
   const editor = page.getByRole("form", { name: "Row editor" });
   await editor.getByLabel("name value mode", { exact: true }).selectOption("value");
-  await editor.getByLabel("name text", { exact: true }).fill("New user");
+  await editor.getByLabel("name value", { exact: true }).fill("New user");
   await editor.getByLabel("metadata value mode", { exact: true }).selectOption("value");
-  await editor.getByLabel("metadata jsonb", { exact: true }).fill('{"amount":9007199254740993.123456789}');
-  await editor.getByRole("button", { name: "Save change", exact: true }).click();
+  await editor.getByLabel("metadata value", { exact: true }).fill('{"amount":9007199254740993.123456789}');
+  await editor.getByRole("button", { name: "Save row", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("unknown");
   await expect(editor.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
-  await expect(editor.getByLabel("name text", { exact: true })).toBeDisabled();
+  await expect(editor.getByLabel("name value", { exact: true })).toBeDisabled();
   await editor.getByRole("button", { name: "Retry same request", exact: true }).click();
   await expect(editor).toHaveCount(0);
   expect(mock.mutations).toHaveLength(2);
@@ -490,12 +493,12 @@ test("writes JSON text without rounding and keeps unknown-result retries identic
 
 test("keeps original primary keys and releases edits after a definitive conflict @dashboard", async ({ page }) => {
   const mock = await openWritable(page, "conflict");
-  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByRole("button", { name: "Edit row", exact: true }).click();
   const editor = page.getByRole("form", { name: "Row editor" });
-  await editor.getByLabel("name text", { exact: true }).fill("Changed");
-  await editor.getByRole("button", { name: "Save change", exact: true }).click();
+  await editor.getByLabel("name value", { exact: true }).fill("Changed");
+  await editor.getByRole("button", { name: "Save row", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("row changed");
-  await expect(editor.getByLabel("name text", { exact: true })).toBeEnabled();
+  await expect(editor.getByLabel("name value", { exact: true })).toBeEnabled();
   expect(mock.mutations[0]).toMatchObject({ key: { id: "9007199254740993" }, version: "abc123", operation: "update" });
   await editor.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(editor).toHaveCount(0);
@@ -504,26 +507,33 @@ test("keeps original primary keys and releases edits after a definitive conflict
 test("uses minimal service and RabbitMQ defaults and confirms snapshot restore @dashboard", async ({ page }) => {
   const mock = await openWritable(page);
   await page.getByText("Services & reliable events", { exact: true }).click();
-  await page.getByLabel("Service", { exact: true }).selectOption(mock.serviceId);
   await page.getByRole("button", { name: "Connect service", exact: true }).click();
+  await page.getByLabel("Service", { exact: true }).selectOption(mock.serviceId);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => mock.bindings.length).toBe(1);
   expect(mock.bindings[0]).toMatchObject({ serviceId: mock.serviceId, access: "read", envName: "DATABASE_URL" });
   await page.getByRole("button", { name: "Prepare RabbitMQ automatically", exact: true }).click();
   await expect.poll(() => mock.rabbitmq.length).toBe(1);
   expect(mock.rabbitmq[0]).toEqual({ development: false });
-  await page.getByLabel("Source table", { exact: true }).selectOption("0");
-  await page.getByLabel("Handler service", { exact: true }).selectOption(mock.serviceId);
   await page.getByRole("button", { name: "Enable events", exact: true }).click();
+  await page.getByLabel("Source table", { exact: true }).selectOption({label:"public.users"});
+  await page.getByLabel("Handler service", { exact: true }).selectOption(mock.serviceId);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => mock.triggers.length).toBe(1);
   expect(mock.triggers[0]).toMatchObject({ schema: "public", table: "users", serviceId: mock.serviceId, path: "/events/database" });
   await page.getByText("Backups & schema changes", { exact: true }).click();
-  await page.getByRole("button", { name: "Back up now", exact: true }).click();
-  await page.getByRole("button", { name: "Restore…", exact: true }).click();
-  const restore = page.getByRole("button", { name: "Restore database", exact: true });
-  await expect(restore).toBeDisabled();
-  await page.getByLabel("Type database name: app", { exact: true }).fill("app");
+  await page.getByRole("button", { name: "Create backup", exact: true }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(() => mock.jobs.length).toBe(1);
+  await page.getByRole("button", { name: "Restore snapshot", exact: true }).click();
+  await page.getByLabel("Backup", {exact:true}).selectOption(mock.jobs[0].id as string);
+  await page.getByRole("button", {name:"Save",exact:true}).click();
+  expect(mock.jobs).toHaveLength(1);
+  await expect(page.getByLabel("Confirm database name",{exact:true})).toHaveAttribute("required","");
+  await page.getByLabel("Confirm database name", { exact: true }).fill("app");
   await page.getByLabel("I stopped all external database writers.", { exact: true }).check();
-  await restore.click();
+  page.once("dialog",dialog=>dialog.accept());
+  await page.getByRole("button", {name:"Save",exact:true}).click();
   await expect.poll(() => mock.jobs.length).toBe(2);
   expect(mock.jobs[1]).toMatchObject({ backupId: mock.jobs[0].id, confirmDatabase: "app", externalWritersStopped: true });
 });
@@ -532,29 +542,31 @@ test("restores production TLS and requires confirmation to skip a failed deliver
   const mock = await openWritable(page);
   await page.getByText("Services & reliable events", { exact: true }).click();
   await page.getByText("Use existing RabbitMQ", { exact: true }).click();
-  await page.getByLabel("Single-broker development", { exact: true }).check();
+  await page.getByRole("button", {name:"Configure RabbitMQ",exact:true}).click();
+  await page.getByLabel("Single-node development only", { exact: true }).check();
   await page.getByLabel("TLS", { exact: true }).uncheck();
-  await page.getByLabel("Single-broker development", { exact: true }).uncheck();
+  await page.getByLabel("Single-node development only", { exact: true }).uncheck();
   await expect(page.getByLabel("TLS", { exact: true })).toBeChecked();
   await expect(page.getByLabel("TLS", { exact: true })).toBeDisabled();
-  await page.getByLabel("Broker addresses", { exact: true }).fill("broker-1:9093, broker-2:9093, broker-3:9093");
-  await page.getByLabel("RabbitMQ username", { exact: true }).fill("firecrab");
-  await page.getByLabel("RabbitMQ password", { exact: true }).fill("qa-password");
-  await page.getByRole("button", { name: "Save RabbitMQ connection", exact: true }).click();
+  await page.getByLabel("RabbitMQ endpoints", { exact: true }).fill("broker-1:5671, broker-2:5671, broker-3:5671");
+  await page.getByLabel("Username", { exact: true }).fill("firecrab");
+  await page.getByLabel("Password", { exact: true }).fill("qa-password");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => mock.rabbitmq.length).toBe(1);
   expect(mock.rabbitmq[0]).toMatchObject({ development: false, tls: true });
-  await page.getByLabel("Source table", { exact: true }).selectOption("0");
-  await page.getByLabel("Handler service", { exact: true }).selectOption(mock.serviceId);
   await page.getByRole("button", { name: "Enable events", exact: true }).click();
+  await page.getByLabel("Source table", { exact: true }).selectOption({label:"public.users"});
+  await page.getByLabel("Handler service", { exact: true }).selectOption(mock.serviceId);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(() => mock.triggers.length).toBe(1);
   mock.triggers[0].failed = 1;
   await page.getByRole("button", { name: "Failed events", exact: true }).click();
   await expect(page.getByText("payload_too_large", { exact: true })).toBeVisible();
   page.once("dialog", dialog => dialog.dismiss());
-  await page.getByRole("button", { name: "Skip delivery", exact: true }).click();
+  await page.getByRole("button", { name: "Skip failed event", exact: true }).click();
   expect(mock.acknowledgements).toHaveLength(0);
   page.once("dialog", dialog => dialog.accept());
-  await page.getByRole("button", { name: "Skip delivery", exact: true }).click();
+  await page.getByRole("button", { name: "Skip failed event", exact: true }).click();
   await expect.poll(() => mock.acknowledgements.length).toBe(1);
   expect(mock.acknowledgements[0]).toEqual({ confirmEventId: `${mock.triggers[0].id}:1` });
   await expect(page.getByText(/Skipped 1/)).toBeVisible();

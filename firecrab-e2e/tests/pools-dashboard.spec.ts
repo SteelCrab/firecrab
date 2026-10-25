@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { openDashboard, vm } from "./support/mockApi";
-import type { PoolLeaseResponse, PoolResponse } from "../../firecrab-frontend/src/bindings";
+import type { PoolLeaseResponse, PoolResponse } from "../../firecrab-e2e/types/bindings";
 
 const POOL_ID = "11111111-1111-4111-8111-111111111111";
 const VM_ID = "22222222-2222-4222-8222-222222222222";
@@ -97,6 +97,7 @@ test.describe("pool dashboard @dashboard", () => {
         return route.fulfill({ status: 201, json: created });
       },
     } });
+    await page.getByRole("button", { name: "New pool", exact: true }).click();
     const form = page.getByRole("region", { name: "Create a pool", exact: true });
     await expect(form.getByLabel("Image", { exact: true })).toHaveValue("ubuntu");
     await expect(form.getByLabel("Image", { exact: true }).locator("option")).toHaveCount(1);
@@ -144,7 +145,7 @@ test.describe("pool dashboard @dashboard", () => {
     await expect(page.getByRole("button", { name: "사용 종료", exact: true })).toBeVisible();
     if (process.env.FIRECRAB_POOL_SCREENSHOT) await page.screenshot({ path: process.env.FIRECRAB_POOL_SCREENSHOT, fullPage: true });
     await page.getByRole("button", { name: "새 풀", exact: true }).click();
-    await expect(page.locator(".pool-create input:visible, .pool-create select:visible")).toHaveCount(2);
+    await expect(page.locator("#editor input:visible, #editor select:visible")).toHaveCount(2);
     if (process.env.FIRECRAB_POOL_SCREENSHOT) await page.screenshot({ path: process.env.FIRECRAB_POOL_SCREENSHOT.replace(/\.png$/, "-create.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     const content = page.locator(".pools-screen");

@@ -1,7 +1,7 @@
 # microManager development
 
 Build the CLI on the host and the Linux API/helper inside managed Debian.
-Install Node.js and npm on the host for the development dashboard.
+Install Node.js, npm, wasm-pack 0.14.0, and the `wasm32-unknown-unknown` Rust target on the host for the development dashboard.
 Run commands from the checkout root with the pinned Rust toolchain.
 See [Contributing](../../CONTRIBUTING.md#run-from-source) for native Linux development.
 
@@ -96,7 +96,7 @@ Overrides persist across `service stop` and `start` until restored.
 ## Frontend
 
 `service dev` installs locked frontend dependencies with `npm ci` when needed.
-It launches the selected checkout's Vite server on `http://localhost:8080`.
+It compiles the selected checkout's Rust/WASM dashboard and launches its Vite server on `http://localhost:8080`.
 The server continues after the command exits. Repeated commands reuse a healthy server.
 Selecting another checkout replaces only the dashboard started by Firecrab.
 An unrelated server on port 8080 causes an error; Firecrab does not stop it or select another port.
