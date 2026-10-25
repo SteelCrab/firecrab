@@ -269,7 +269,7 @@ async fn secret_snapshots_are_removed_after_cleanup_and_replica_env_edits_are_re
     secrets::remove(&state, &record).await.unwrap();
 }
 
-async fn state(root: &std::path::Path) -> AppState {
+pub(super) async fn state(root: &std::path::Path) -> AppState {
     let state = AppState::with_db_file(
         TemplateRegistry::from_specs(root, std::iter::empty()).unwrap(),
         root.join("state.db"),
@@ -286,8 +286,11 @@ async fn state(root: &std::path::Path) -> AppState {
     state
 }
 
-fn deployment(id: Uuid) -> MicroServiceDeployment {
+pub(super) fn deployment(id: Uuid) -> MicroServiceDeployment {
     MicroServiceDeployment {
+        started_at: 0,
+        finished_at: None,
+        update: None,
         id: Uuid::new_v4(),
         service_id: id,
         phase: ServicePhase::Queued,
@@ -1206,7 +1209,7 @@ async fn service_runtime_auth_rechecks_revoked_and_replaced_accounts_after_queue
 }
 
 /// A framed helper with an isolated Pipe manifest. No host services or networking are changed.
-async fn domain_helper(
+pub(super) async fn domain_helper(
     root: &std::path::Path,
     fail_after_publish: bool,
 ) -> (
@@ -1263,6 +1266,8 @@ async fn domain_helper(
                         }
                     }
                     Snapshot {
+                        ingress_graceful_drain: false,
+                        ingress_workers: Some(vec![]),
                         config: Some(config.clone()),
                         units: vec![],
                         nginx_available: true,
@@ -1429,6 +1434,8 @@ async fn publication_helper(
                     request_id: envelope.request_id,
                     result: failures.next().map_or(Ok(()), Err),
                     pipe: Some(Snapshot {
+                        ingress_graceful_drain: false,
+                        ingress_workers: Some(vec![]),
                         config: None,
                         units: vec![],
                         nginx_available: true,

@@ -19,11 +19,24 @@ pub(super) fn register_named_oci_image(
     named: NamedOciImage,
     templates: &TemplateRegistry,
 ) -> Result<RegisteredOciImage, ResolveError> {
+    register_named_image(named, templates, None)
+}
+
+/// Deploy owns a unique, journaled destination. Manual OCI imports retain their
+/// existing paths and are never adopted by automatic cache collection.
+pub(super) fn register_named_image(
+    named: NamedOciImage,
+    templates: &TemplateRegistry,
+    cache_owner: Option<&crate::persistence::Store>,
+) -> Result<RegisteredOciImage, ResolveError> {
     let image_root = templates.image_root_path();
-    let relative = rootfs_relative(named.alias());
+    let relative = if cache_owner.is_some() {
+        Path::new("rootfs/deploy").join(format!("{}.ext4", Uuid::new_v4()))
+    } else {
+        rootfs_relative(named.alias())
+    };
     let destination = image_root.join(&relative);
     let source = named.image().rootfs().path();
-    let published = publish_rootfs(source, &destination)?;
     let spec = TemplateSpec {
         alias: named.alias().to_owned(),
         version: named.version().to_owned(),
@@ -32,6 +45,15 @@ pub(super) fn register_named_oci_image(
         rootfs: relative.clone(),
         boot_args: named.image().boot_args().to_owned(),
     };
+    if let Some(store) = cache_owner {
+        store
+            .remember_deploy_image(&spec)
+            .map_err(|error| ResolveError::RegisterFailed {
+                alias: named.alias().to_owned(),
+                detail: format!("could not journal Deploy image: {error}"),
+            })?;
+    }
+    let published = publish_rootfs(source, &destination)?;
     if let Err(error) = templates.register_spec(spec) {
         published.revert();
         return Err(ResolveError::RegisterFailed {
