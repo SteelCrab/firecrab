@@ -719,7 +719,7 @@ jobs:
       - name: Deploy with real MicroVMs and Nginx
         if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
         timeout-minutes: 15
-        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host 2>&1 | tee target/qa/deploy.log
+        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation --report target/qa/secret-rotation.json 2>&1 | tee target/qa/deploy.log
 
       - name: Chromium E2E with real guest boot and dual-stack SSH
         if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
