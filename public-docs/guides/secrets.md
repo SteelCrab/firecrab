@@ -2,13 +2,14 @@
 
 Open **Secrets** in the web console, or navigate to `#/secrets`.
 PipeSecrets is Firecrab's internal secret store.
-Use **Internal** to create, edit, reveal, or delete a secret.
+Use the **Secrets** tab to create, edit, reveal, or delete a secret.
+Add, reveal, edit, and delete use plus, eye, pencil, and trash icons with action labels.
 Names support up to 512 ASCII characters: letters, numbers, and `_ . / + = @ -`.
 A secret value may be empty and may contain multiple lines.
 Values are limited to 16384 UTF-8 bytes, with no NUL bytes.
 The store supports up to 1000 secrets and 20 external connections.
 Secret lists and save responses contain metadata, never values.
-**Reveal** shows a value temporarily and hides it after 30 seconds or when the window loses focus.
+The eye icon shows a value temporarily and hides it after 30 seconds or when the window loses focus.
 Edits require the current version, so a stale editor cannot overwrite a newer value.
 A service reference prevents deletion of its secret.
 
@@ -16,8 +17,8 @@ A service reference prevents deletion of its secret.
 
 Store account secrets at `https://console.firecrab.dev/#secrets`.
 Connect that account under **Auth** with an integration token that has secrets-read permission.
-In the local **Secrets** screen, select **Preview account secrets**.
-Review the changes, then select **Import selected** to copy selected names into PipeSecrets.
+In the local **Secrets** screen, select **Preview** in the account card.
+Review the changes, then select **Import** to copy selected names into PipeSecrets.
 Existing values require explicit selection before replacement.
 The API uses the saved Auth credential; the browser does not receive the credential or preview values.
 Imports record **Firecrab Console** as the source.
@@ -27,7 +28,7 @@ A disconnected, replaced, expired, or revoked token blocks the import.
 
 ## External connections
 
-Use **External connections** to register a store.
+Open **Connections** and select **Connection** to register a store.
 Settings and credentials are saved on the Firecrab API host.
 
 | Provider | Settings | Credentials |
@@ -57,9 +58,9 @@ Use the optional token's clear checkbox to remove a saved token.
 
 ## Import and upload
 
-1. Select **Preview import** on an external connection.
+1. Select **Import** on an external connection.
 2. Review the added, changed, and unchanged names.
-3. Select the changes to apply, then choose **Import selected**.
+3. Select the changes to apply, then choose **Import**.
 
 New values are selected initially.
 Existing values require explicit selection before replacement.
@@ -69,8 +70,8 @@ Later external changes appear only after another import.
 Applying an import preserves an existing secret's ID and description.
 Deleting a connection preserves imported secrets and their source history.
 
-For uploads, select local values under **Internal**, choose a connection, then select **Preview upload**.
-Review the changes and select **Upload selected**.
+For uploads, select local values under **Secrets**, choose a connection, then select **Preview**.
+Review the changes and select **Upload**.
 The API checks local versions, connection versions, and the remote values again before uploading.
 Provider writes are separate requests, so an upload is not a transaction across providers or names.
 The response reports completed and failed names separately.
