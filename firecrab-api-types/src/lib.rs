@@ -8,6 +8,8 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod queues;
+pub use queues::*;
 mod pool;
 pub use pool::*;
 mod micro_services;
@@ -433,8 +435,8 @@ pub struct StartupStepRun {
 
 /// What a VM record represents.
 ///
-/// Wire values are `instance`, `builder`, and `pool` — the same three
-/// purposes the API stores. `GET /api/vms` returns `instance` and `pool`.
+/// Wire values are `instance`, `builder`, `pool`, and `queue`.
+/// `GET /api/vms` excludes image builders.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VmPurpose {
@@ -445,6 +447,8 @@ pub enum VmPurpose {
     Builder,
     /// A warm-pool member. `GET /api/vms` lists it.
     Pool,
+    /// Stateful RabbitMQ engine, managed through Queue lifecycle controls.
+    Queue,
 }
 
 /// What the latest API startup or operator network retry learned about a VM.

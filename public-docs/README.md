@@ -21,9 +21,11 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | --- | --- |
 | Create VMs, use the console, and connect with SSH | [Dashboard](guides/dashboard.md) |
 | Configure and manage an app | [MicroService](guides/microservices.md) |
+| Connect apps with internal RabbitMQ message queues | [Queue](guides/queues.md) |
 | Validate a declarative YAML stack offline | [Stack validation](guides/stacks.md) |
 | Register stack ownership and preview configuration changes | [Stack planning](guides/stack-planning.md) |
 | Apply YAML stacks and inspect durable execution status | [Stack apply](guides/stack-apply.md) |
+| Connect a GitHub manifest and detect configuration drift | [Git source checks](guides/stack-git-source.md) |
 | Try Terraform against the public REST API | [Experimental Terraform example](../examples/terraform/basic/README.md) |
 | Schedule MicroVM start and stop operations | [Schedules](guides/schedules.md) |
 | Store secrets and transfer them to external stores | [Secrets and PipeSecrets](guides/secrets.md) |

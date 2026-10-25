@@ -213,6 +213,18 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/stacks/{name}/plan", post(handlers::stacks::plan))
         .route(
+            "/api/stacks/{name}/source",
+            get(handlers::stack_sources::get).put(handlers::stack_sources::configure),
+        )
+        .route(
+            "/api/stacks/{name}/source/check",
+            post(handlers::stack_sources::check),
+        )
+        .route(
+            "/api/stacks/{name}/source/history",
+            get(handlers::stack_sources::history),
+        )
+        .route(
             "/api/stacks/{name}/apply",
             post(handlers::stack_applies::apply),
         )
@@ -547,6 +559,29 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/micro-storages/{id}",
             get(handlers::micro_storages::get_micro_storage)
                 .delete(handlers::micro_storages::delete_micro_storage),
+        )
+        .route(
+            "/api/queue/engine",
+            get(handlers::queues::engine).post(handlers::queues::create_engine),
+        )
+        .route(
+            "/api/queue/engine/start",
+            post(handlers::queues::start_engine),
+        )
+        .route(
+            "/api/queue/engine/stop",
+            post(handlers::queues::stop_engine),
+        )
+        .route(
+            "/api/queues",
+            get(handlers::queues::list).post(handlers::queues::create),
+        )
+        .route("/api/queues/{id}", delete(handlers::queues::delete))
+        .route("/api/queues/{id}/retry", post(handlers::queues::retry))
+        .route("/api/queues/{id}/metrics", get(handlers::queues::metrics))
+        .route(
+            "/api/queues/{id}/connection/{access}",
+            post(handlers::queues::reveal),
         )
         .route(
             "/api/pools",

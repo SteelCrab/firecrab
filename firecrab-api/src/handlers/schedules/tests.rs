@@ -57,20 +57,25 @@ fn spec(vm: Uuid) -> Value {
 }
 
 #[tokio::test]
-async fn pool_members_cannot_be_scheduled() {
-    let root = tempfile::tempdir().unwrap();
-    let (router, state, vm) = app(root.path()).await;
-    state.vms.lock().unwrap().get_mut(&vm).unwrap().purpose = crate::model::VmPurpose::Pool;
-    let (status, body) = request(&router, "POST", "/api/schedules", spec(vm)).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert!(
-        body["error"]["fields"]["vmId"]
-            .as_str()
-            .unwrap()
-            .contains("pool"),
-        "{body}"
-    );
-    assert!(state.store.list_schedules().unwrap().is_empty());
+async fn managed_vms_cannot_be_scheduled() {
+    for (purpose, expected) in [
+        (crate::model::VmPurpose::Pool, "pool"),
+        (crate::model::VmPurpose::Queue, "Queue"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let (router, state, vm) = app(root.path()).await;
+        state.vms.lock().unwrap().get_mut(&vm).unwrap().purpose = purpose;
+        let (status, body) = request(&router, "POST", "/api/schedules", spec(vm)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            body["error"]["fields"]["vmId"]
+                .as_str()
+                .unwrap()
+                .contains(expected),
+            "{body}"
+        );
+        assert!(state.store.list_schedules().unwrap().is_empty());
+    }
 }
 
 #[tokio::test]

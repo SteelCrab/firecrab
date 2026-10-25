@@ -1,0 +1,7 @@
+{
+  "name": "firecrab-queue-example",
+  "private": true,
+  "type": "module",
+  "scripts": { "send": "node sender.mjs", "receive": "node receiver.mjs" },
+  "dependencies": { "amqplib": "2.2.0" }
+}

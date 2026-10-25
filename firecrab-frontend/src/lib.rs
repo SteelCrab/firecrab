@@ -190,8 +190,7 @@ fn render_detail(app: &Shared) {
         let open =
             (state.route != "security-groups" || state.detail.is_some() || state.form.is_some())
                 && state.panel_open
-                && state.route != "vms/new"
-                && state.route != "pipe/database"
+                && !["vms/new", "queues", "pipe/database"].contains(&state.route.as_str())
                 && (!narrow || state.detail.is_some() || state.form.is_some());
         let html = if open {
             details::panel(&state)
@@ -501,7 +500,7 @@ fn load_route(app: Shared) {
         advanced::security::load(&app);
     }
     if route == "services" {
-        aux.extend(["/api/pipe", "/api/pipe/storage"]);
+        aux.extend(["/api/pipe", "/api/pipe/storage", "/api/queues"]);
     }
     if route != "vms" {
         aux.push("/api/vms");
@@ -554,6 +553,10 @@ fn load_route(app: Shared) {
     }
 }
 fn refresh(app: Shared) {
+    if app.borrow().route == "queues" {
+        advanced::queues::refresh(app);
+        return;
+    }
     let mut state = app.borrow_mut();
     if state.refreshing || state.route == "vms/new" {
         return;
@@ -754,6 +757,7 @@ fn navigate(app: &Shared) {
         .unwrap_or(state.history_index + 1);
     save_history_index(state.history_index, None);
     state.advanced.reveals.clear();
+    state.advanced.queues = advanced::queues::State::default();
     state.advanced.ai = advanced::ai::State::default();
     state.advanced.storage = advanced::storage::State::default();
     state.databases = databases::State::default();
@@ -922,7 +926,7 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         else {
             return;
         };
-        if databases::submit(&submitted, &form) {
+        if databases::submit(&submitted, &form) || advanced::queues::submit(&submitted, &form) {
             event.prevent_default();
             return;
         }
@@ -1132,7 +1136,10 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
                 .max(8.0)
             );
             menu.push_str(&render::button("SSH connect", "ssh", id));
-            if vm.extra.get("purpose").and_then(Value::as_str) != Some("pool") {
+            if !matches!(
+                vm.extra.get("purpose").and_then(Value::as_str),
+                Some("pool" | "queue")
+            ) {
                 menu.push_str(&render::button(
                     if vm.state == "running" {
                         "stop"
@@ -1191,7 +1198,11 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
         }
         "vm-start" | "vm-stop" | "vm-pause" | "vm-resume" => {
             if app.borrow().vms.iter().any(|vm| {
-                vm.id == id && vm.extra.get("purpose").and_then(Value::as_str) == Some("pool")
+                vm.id == id
+                    && matches!(
+                        vm.extra.get("purpose").and_then(Value::as_str),
+                        Some("pool" | "queue")
+                    )
             }) {
                 return;
             }
@@ -1328,7 +1339,7 @@ fn open_form(app: Shared, kind: &str, id: &str) {
     } else {
         id.into()
     };
-    if kind.starts_with("vm-") && text(&data, "purpose") == "pool" {
+    if kind.starts_with("vm-") && ["pool", "queue"].contains(&text(&data, "purpose")) {
         return;
     }
     if kind == "secret-connection" {

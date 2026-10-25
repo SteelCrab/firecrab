@@ -27,6 +27,7 @@ Rolling updates, rollback, and automatic instance replacement remain separate wo
 | `drainTimeout` | 0–3600 seconds; default 30 |
 | `env` | Variable name to plain value; default `{}` |
 | `secrets` | Variable name to non-nil PipeSecrets UUID; default `{}`; values are never stored here |
+| `queues` | Optional alias-to-[Queue binding](queues.md#bind-a-microservice) map; up to eight sender/receiver connections |
 | `storageConnectionId` | Optional [S3 connection](pipe-storage.md) UUID for the app AWS SDK; default `null` |
 
 `env` and `secrets` together allow up to 64 entries.
