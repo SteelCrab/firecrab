@@ -542,6 +542,48 @@ async fn database_setup_must_finish_before_deploy_changes_the_active_release() {
 }
 
 #[tokio::test]
+async fn database_maintenance_waits_for_retained_deploy_recovery() {
+    use crate::pipe_databases::{DatabaseRecord, maintenance};
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let mut deployment = journal();
+    deployment.phase = ServicePhase::Failed;
+    deployment.instances.clear();
+    let mut binding = database_binding(deployment.service_id);
+    binding.connection.write_enabled = true;
+    let source = DatabaseRecord {
+        id: binding.database_id,
+        input: binding.connection.clone(),
+    };
+    state
+        .store
+        .save_pipe_database(source.id, &source.input)
+        .unwrap();
+    state.store.save_database_binding(&binding).unwrap();
+    state.store.save_service_deployment(&deployment).unwrap();
+    assert!(
+        !deployment
+            .update
+            .as_ref()
+            .unwrap()
+            .previous
+            .instances
+            .is_empty()
+    );
+    assert!(matches!(
+        maintenance::require_maintenance(&state, &source).await,
+        Err(crate::pipe_databases::write::Error::Invalid(
+            "Stop every bound service before schema changes or restore"
+        ))
+    ));
+    deployment.update.as_mut().unwrap().completed = true;
+    state.store.save_service_deployment(&deployment).unwrap();
+    maintenance::require_maintenance(&state, &source)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn missing_queue_binding_is_rejected_before_mutating_the_active_release() {
     let root = tempfile::tempdir().unwrap();
     let state = state(root.path()).await;

@@ -941,7 +941,11 @@ pub async fn require_maintenance(state: &AppState, record: &DatabaseRecord) -> R
             .store
             .service_deployment(binding.input.service_id)
             .map_err(|_| Error::Invalid("Cannot inspect service deployment"))?
-            .is_some_and(|d| d.phase.is_busy() || !d.instances.is_empty())
+            .is_some_and(|d| {
+                d.phase.is_busy()
+                    || !d.instances.is_empty()
+                    || d.update.as_ref().is_some_and(|update| !update.completed)
+            })
         {
             return Err(Error::Invalid(
                 "Stop every bound service before schema changes or restore",
