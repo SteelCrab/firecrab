@@ -29,6 +29,12 @@ Entries land here as work merges, and move under the next version heading when t
   restarts. REST, `firecrab cluster`, and the dashboard expose inventory, VM
   lifecycle, and host drain. Tracked in [#455](https://github.com/SteelCrab/firecrab/issues/455).
 
+- AI Sandbox reuses Pipe AI accounts for verified model selection, persistent
+  conversations, isolated project edits, and bounded commands in a selected
+  MicroVM. Dashboard, CLI, and local stdio MCP share durable attempts, cancellation,
+  recovery, actual tool results, and selected-file apply with source conflict checks.
+  Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
 - Named MicroBlockStorage data volumes persist after VM deletion. REST, CLI, and
   Dashboard support creation and exclusive attachment to inactive user VMs.
   Guest mounts use filesystem UUIDs and gate managed application startup.

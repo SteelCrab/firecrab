@@ -8,6 +8,7 @@ mod manager;
 mod model;
 mod notes;
 mod render;
+mod sandbox;
 mod terminal;
 mod updates;
 mod vm_list;
@@ -62,6 +63,7 @@ struct App {
     job: Option<(String, Value)>,
     workflows: workflows::State,
     advanced: advanced::State,
+    sandbox: sandbox::State,
     volumes: volumes::State,
     console: Option<terminal::State>,
     console_retry: Option<Closure<dyn FnMut()>>,
@@ -104,6 +106,9 @@ fn render_page(app: &Shared) {
     update_host(app);
     vm_list::cache(app);
     render_detail(app);
+    if app.borrow().route == "ai-sandbox" {
+        sandbox::render(app);
+    }
 }
 fn update_host(app: &Shared) {
     let state = app.borrow();
@@ -129,6 +134,10 @@ fn update_host(app: &Shared) {
 }
 
 fn render_content(app: &Shared) {
+    if app.borrow().route == "ai-sandbox" {
+        sandbox::render(app);
+        return;
+    }
     let cluster_focus = advanced::cluster::focused_input();
     let (html, loaded) = {
         let state = app.borrow();
@@ -190,7 +199,7 @@ fn render_detail(app: &Shared) {
         let open =
             (state.route != "security-groups" || state.detail.is_some() || state.form.is_some())
                 && state.panel_open
-                && !["vms/new", "queues", "cluster"].contains(&state.route.as_str())
+                && !["vms/new", "queues", "cluster", "ai-sandbox"].contains(&state.route.as_str())
                 && (!narrow || state.detail.is_some() || state.form.is_some());
         let html = if open {
             details::panel(&state)
@@ -393,6 +402,10 @@ pub fn start() -> Result<(), JsValue> {
         drop(state);
         details::tick(&poll);
         volumes::tick(&poll);
+        if poll.borrow().route == "ai-sandbox" {
+            sandbox::tick(&poll);
+            return;
+        }
         refresh(poll.clone());
         poll_job(poll.clone());
     });
@@ -464,6 +477,10 @@ fn load_route(app: Shared) {
             .and_then(|id| id.as_string())
             .unwrap_or_else(|| id.into());
         terminal::start(app.clone(), id);
+        return;
+    }
+    if route == "ai-sandbox" {
+        sandbox::load(app);
         return;
     }
     if route == "vms/new" {
@@ -559,6 +576,10 @@ fn load_route(app: Shared) {
     }
 }
 fn refresh(app: Shared) {
+    if app.borrow().route == "ai-sandbox" {
+        sandbox::load(app);
+        return;
+    }
     if app.borrow().route == "queues" {
         advanced::queues::refresh(app);
         return;
@@ -770,6 +791,7 @@ fn navigate(app: &Shared) {
     state.advanced.reveals.clear();
     state.advanced.queues = advanced::queues::State::default();
     state.advanced.ai = advanced::ai::State::default();
+    state.sandbox = sandbox::State::default();
     state.advanced.storage = advanced::storage::State::default();
     state.volumes = volumes::State::default();
     state.route = next;
@@ -870,6 +892,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 {
                     return;
                 }
+                if sandbox::input(&changed, &target) {
+                    return;
+                }
                 if advanced::ai::input(&changed, &target) {
                     return;
                 }
@@ -897,7 +922,7 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         if !target.is_connected() || language.borrow().rendering {
             return;
         }
-        if volumes::input(&language, &target) {
+        if sandbox::change(&language, &target) || volumes::input(&language, &target) {
             return;
         }
         if deploy::change(&language, &target) || advanced::change(&language, &target) {
@@ -950,7 +975,7 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         else {
             return;
         };
-        if advanced::queues::submit(&submitted, &form) {
+        if sandbox::submit(&submitted, &form.id()) || advanced::queues::submit(&submitted, &form) {
             event.prevent_default();
             return;
         }
@@ -989,7 +1014,7 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         {
             return;
         }
-        if details::tab_key(&keyboard, &event) {
+        if sandbox::key(&keyboard, &event) || details::tab_key(&keyboard, &event) {
             return;
         }
         if details::resize_key(&keyboard, &event) {
@@ -1109,6 +1134,9 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
     }
     if action != "vm-menu" {
         set_html("menu-root", "");
+    }
+    if sandbox::action(&app, action, id) {
+        return;
     }
     if volumes::dispatch(&app, action, id) || advanced::dispatch(&app, action, id, button) {
         return;

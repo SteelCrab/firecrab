@@ -1,3 +1,4 @@
+mod ai_sandbox;
 mod artifacts;
 mod block_storage;
 mod bootstrap;
@@ -146,10 +147,13 @@ async fn run() -> Result<(), StartupError> {
         .scheduler_lock()
         .map_err(StartupError::Persistence)?;
     let store = state.store.clone();
-    tokio::task::spawn_blocking(move || store.interrupt_stack_checks(stack_source::now()))
-        .await
-        .expect("Git source recovery task panicked")
-        .map_err(StartupError::Persistence)?;
+    tokio::task::spawn_blocking(move || {
+        store.interrupt_sandbox_tasks()?;
+        store.interrupt_stack_checks(stack_source::now())
+    })
+    .await
+    .expect("Controller task recovery panicked")
+    .map_err(StartupError::Persistence)?;
     // Bridges, nftables rules and dnsmasq's config are all host state a
     // reboot wipes, so they are re-applied here rather than assumed. Doing it
     // at startup (not only on VM start) is what brings back a MicroNetwork

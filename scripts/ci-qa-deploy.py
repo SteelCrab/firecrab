@@ -26,6 +26,8 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
+from deploy_fleet_qa import host_evidence, run_fleet
+
 
 def digest(data):
     return "sha256:" + hashlib.sha256(data).hexdigest()
@@ -62,6 +64,7 @@ printf 'release-{label}\\n'
 """,
             "release": "#!/bin/sh\n/bin/busybox touch /tmp/deploy-release\nprintf 'Content-Type: text/plain\\r\\n\\r\\nreleased\\n'\n",
             "holding": "#!/bin/sh\nprintf 'Content-Type: text/plain\\r\\n\\r\\n'\nif [ -f /tmp/deploy-holding ]; then echo holding; else echo idle; fi\n",
+            "environment": "#!/bin/sh\nprintf 'Content-Type: text/plain\\r\\n\\r\\n%s:%s\\n' \"$FLEET_SERVICE\" \"$FLEET_RELEASE\"\n",
         }
         for name, script in scripts.items():
             data = script.encode()
@@ -172,9 +175,11 @@ def require_empty_host(api):
     assert not api.call("GET", "/api/pipe").get("config"), "refusing existing Pipe configuration"
 
 
-def run(args):
+def run(args, evidence):
     assert args.disposable_host and os.geteuid() == 0 and Path("/dev/kvm").exists()
     assert int(subprocess.check_output(["nproc"], text=True)) >= 3, "three CPUs required for a two-replica rolling surge"
+    if args.fifteen_services:
+        evidence["host"] = host_evidence(args.images)
     assert "httpd" in subprocess.check_output([args.busybox, "--list"], text=True).splitlines()
     api = Api(args.api)
     api.ready()
@@ -254,6 +259,12 @@ def run(args):
             except Exception as error:
                 failures.append(str(error))
             time.sleep(.02)
+
+    def stop_service():
+        wait_for(lambda: api.call("GET", service_path("/deployment"))["phase"] in ["running", "failed", "degraded", "stopped"])
+        api.call("POST", service_path("/stop"))
+        wait_for(lambda: api.call("GET", service_path("/deployment"))["phase"] == "stopped", timeout=180)
+        api.call("DELETE", service_path())
 
     try:
         for digest_value, _, _ in fixtures:
@@ -353,6 +364,13 @@ def run(args):
         assert current["id"] == active["id"] and current["phase"] == "running" and len(current["instances"]) == 2, current
         assert len(samples) > 20 and not failures, {"samples": len(samples), "failures": failures[:10]}
         print(f"PASS unhealthy candidate stays out of traffic; {len(samples)} continuous HTTP requests, zero errors", flush=True)
+        evidence["coreRequests"] = len(samples)
+        if args.fifteen_services:
+            stop.set()
+            loader.join(timeout=10)
+            stop_service()
+            service = None
+            run_fleet(api, wait_for, traffic, network, spec_a, fixtures[1][0], ingress_port, evidence)
     finally:
         stop.set()
         if loader: loader.join(timeout=10)
@@ -367,12 +385,6 @@ def run(args):
                 action()
             except Exception as error:
                 cleanup_errors.append(f"{label}: {error}")
-
-        def stop_service():
-            wait_for(lambda: api.call("GET", service_path("/deployment"))["phase"] in ["running", "failed", "degraded", "stopped"])
-            api.call("POST", service_path("/stop"))
-            wait_for(lambda: api.call("GET", service_path("/deployment"))["phase"] == "stopped", timeout=180)
-            api.call("DELETE", service_path())
 
         if service: cleanup("service VMs and configuration", stop_service)
         if network: cleanup("network", lambda: api.call("DELETE", "/api/micro-networks/" + network))
@@ -389,6 +401,7 @@ def run(args):
         registry.close()
         assert not cleanup_errors, cleanup_errors
     assert not api.call("GET", "/api/vms") and not api.call("GET", "/api/micro-services")
+    evidence["allResourcesRemoved"] = True
     print("PASS all dedicated Deploy QA VMs, services, routes, network, fixture images and credentials removed", flush=True)
 
 
@@ -400,4 +413,19 @@ if __name__ == "__main__":
     parser.add_argument("--images", default="/var/lib/firecrab/images")
     parser.add_argument("--config", default="/etc/firecrab")
     parser.add_argument("--busybox", default="/usr/bin/busybox")
-    run(parser.parse_args())
+    parser.add_argument("--fifteen-services", action="store_true", help="require 16 CPUs and run the live 15-service acceptance")
+    parser.add_argument("--report", type=Path, help="write measured evidence even when acceptance fails")
+    args = parser.parse_args()
+    if args.fifteen_services and not args.report:
+        parser.error("--fifteen-services requires --report")
+    evidence = {"status": "failed", "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}
+    try:
+        run(args, evidence)
+        evidence["status"] = "passed"
+    except BaseException as error:
+        evidence["error"] = str(error)
+        raise
+    finally:
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(evidence, indent=2) + "\n")

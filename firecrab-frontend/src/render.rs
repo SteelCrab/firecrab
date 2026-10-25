@@ -59,6 +59,7 @@ pub fn page(app: &App) -> String {
         ("network", "Network", "네트워크"),
         ("data", "Data", "데이터"),
         ("system", "System", "시스템"),
+        ("ai", "AI", "AI"),
     ] {
         let _ = write!(
             nav,
@@ -70,9 +71,14 @@ pub fn page(app: &App) -> String {
             .filter(|(_, category, _, _)| *category == group)
         {
             let _ = category;
+            let nav_icon = if *id == "ai-sandbox" {
+                crate::sandbox::icon("bot")
+            } else {
+                String::new()
+            };
             let _ = write!(
                 nav,
-                "<li><a class=\"sidebar-item {}\" href=\"#/{id}\" {} aria-label=\"{}\"><span class=\"sidebar-label\">{}</span>{}</a></li>",
+                "<li><a class=\"sidebar-item {}\" href=\"#/{id}\" {} aria-label=\"{}\">{nav_icon}<span class=\"sidebar-label\">{}</span>{}</a></li>",
                 if *id == section { "active" } else { "" },
                 if *id == section {
                     "aria-current=\"page\""
@@ -132,13 +138,14 @@ pub fn page(app: &App) -> String {
     };
     let panel = crate::details::panel(app);
     let panel_width = app.panel_width;
-    let panel_hidden =
-        if app.panel_open && !["vms/new", "queues", "cluster"].contains(&app.route.as_str()) {
-            ""
-        } else {
-            "hidden"
-        };
-    let panel_toggle = if app.route == "cluster" {
+    let panel_hidden = if app.panel_open
+        && !["vms/new", "queues", "cluster", "ai-sandbox"].contains(&app.route.as_str())
+    {
+        ""
+    } else {
+        "hidden"
+    };
+    let panel_toggle = if ["cluster", "ai-sandbox"].contains(&section) {
         String::new()
     } else {
         format!(
@@ -156,6 +163,7 @@ pub fn page(app: &App) -> String {
         "storages" | "volumes" | "images" | "kernels" | "secrets" | "queues" => {
             tr(app, "Data", "데이터")
         }
+        "ai-sandbox" => "AI",
         _ => tr(app, "System", "시스템"),
     };
     let meters = host_meters(app);
@@ -168,7 +176,11 @@ pub fn page(app: &App) -> String {
         tr(app, "Host and updates", "호스트 및 업데이트"),
         if app.locale == "en" { "selected" } else { "" },
         if app.locale == "ko" { "selected" } else { "" },
-        button(tr(app, "Refresh", "새로 고침"), "refresh", ""),
+        if section == "ai-sandbox" {
+            String::new()
+        } else {
+            button(tr(app, "Refresh", "새로 고침"), "refresh", "")
+        },
         messages(app),
         app.loaded,
         content(app)
@@ -316,6 +328,7 @@ pub fn content(app: &App) -> String {
         ),
         "pipe/storage" => crate::advanced::storage::content(app),
         "pipe/ai" => crate::advanced::ai::content(app),
+        "ai-sandbox" => crate::sandbox::content(app),
         "host" => host(app),
         "pipe" => pipe_cards(app),
         route if route.starts_with("pipe/") => pipe(app, route.trim_start_matches("pipe/")),
