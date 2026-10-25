@@ -21,6 +21,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | --- | --- |
 | Create VMs, use the console, and connect with SSH | [Dashboard](guides/dashboard.md) |
 | Configure and manage an app | [MicroService](guides/microservices.md) |
+| Register hosts and place VMs through one controller | [Multi-host placement](guides/multihost.md) |
 | Validate a declarative YAML stack offline | [Stack validation](guides/stacks.md) |
 | Register stack ownership and preview configuration changes | [Stack planning](guides/stack-planning.md) |
 | Apply YAML stacks and inspect durable execution status | [Stack apply](guides/stack-apply.md) |

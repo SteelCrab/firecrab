@@ -201,6 +201,23 @@ impl ApiClient {
         Self::decode_json(resp)
     }
 
+    /// A JSON mutation whose retry identity survives an unknown HTTP result.
+    pub fn post_idempotent<B: Serialize + ?Sized, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        key: &str,
+    ) -> Result<T, ApiError> {
+        let response = self
+            .client
+            .post(self.url(path))
+            .json(body)
+            .header(firecrab_api_types::IDEMPOTENCY_KEY_HEADER, key)
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::decode_json(response)
+    }
+
     /// Sends `body` as JSON with `PATCH` and deserializes any successful 2xx
     /// response body.
     pub fn patch<B, T>(&self, path: &str, body: &B) -> Result<T, ApiError>

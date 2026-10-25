@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 
 mod api_client;
 mod ca;
+mod cluster;
 #[cfg(target_os = "linux")]
 mod doctor;
 #[cfg(test)]
@@ -49,6 +50,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage authenticated cluster hosts and durable VM placement.
+    Cluster {
+        #[command(subcommand)]
+        command: cluster::Command,
+    },
     /// Bootstrap the private CA and issue authenticated host certificates offline.
     Ca {
         #[command(subcommand)]
@@ -168,6 +174,11 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
+        Command::Cluster { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                cluster::run(client, command)
+            })
+        }
         Command::Ca { command } => finish_api_command(ca::run(command)),
         Command::Ai { command } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
             pipe_ai::run(client, command)

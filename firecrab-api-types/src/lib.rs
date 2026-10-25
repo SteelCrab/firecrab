@@ -10,6 +10,8 @@ use uuid::Uuid;
 
 mod pool;
 pub use pool::*;
+mod cluster;
+pub use cluster::*;
 mod micro_services;
 mod pipe_ai;
 mod pipe_storage;

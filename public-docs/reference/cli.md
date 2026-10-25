@@ -1,5 +1,9 @@
 # CLI
 
+For authenticated hosts, drain, and durable VM placement, use
+[`firecrab cluster`](../guides/multihost.md#cli-and-dashboard). Existing
+`firecrab host` commands continue to manage saved API profiles.
+
 `firecrab` manages the same REST API as the dashboard on Linux, macOS, and Windows.
 Install it with the [CLI installer](../getting-started/installation.md#cli-only-installation).
 Use `firecrab --help` or `firecrab COMMAND --help` for flags.

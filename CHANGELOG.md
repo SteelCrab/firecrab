@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- One controller registers authenticated workload hosts and places VMs using
+  deterministic image/resource filtering and durable capacity reservations.
+  Idempotent operations reconcile with the recorded owner after timeouts and
+  restarts. REST, `firecrab cluster`, and the dashboard expose inventory, VM
+  lifecycle, and host drain. Tracked in [#455](https://github.com/SteelCrab/firecrab/issues/455).
+
 - Pipe Auth links a Firecrab account with an account integration token issued
   by `console.firecrab.dev`. It displays the verified account ID, email, and
   token expiry. Address-scoped Tunnel tokens remain separate. Existing Tunnel

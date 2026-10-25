@@ -681,7 +681,15 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             enforce_limits,
         ));
 
+    let cluster = crate::cluster::handlers::router()
+        .layer(cors.clone())
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn_with_state(
+            limits.clone(),
+            enforce_limits,
+        ));
     let app = rest
+        .merge(cluster)
         .merge(recovery)
         .merge(inspection)
         .merge(secrets)
@@ -692,6 +700,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         // a client's URL never comes back as an HTML page.
         .route("/api/{*rest}", any(not_found))
         .route("/ws/{*rest}", any(not_found))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::cluster::protect_vm,
+        ))
         .with_state(state);
 
     let app = match &config.static_root {

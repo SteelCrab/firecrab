@@ -34,6 +34,72 @@ async function detail(index = 1) {
 }
 function mutation(path, method = 'POST') { return fixture.requests.findLast(request => request.path === path && request.method === method); }
 
+test('cluster preserves an unknown placement across reload and routes lifecycle and drain through the controller', async () => {
+  await page.setViewportSize({ width: 1440, height: 1150 });
+  const hostIds = ['00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002'];
+  const networkIds = ['00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000012'];
+  const image = { alias: 'fixture', version: 'v1', kernelSha256: 'a'.repeat(64), rootfsSha256: 'b'.repeat(64), bootArgsSha256: 'c'.repeat(64) };
+  const hosts = hostIds.map((id, i) => ({ report: { id, name: `worker-${i + 1}`, endpoint: `https://worker-${i + 1}.test:5523`, architecture: 'aarch64',
+    capacity: { cpu: 4, ramMib: 4096 }, unmanaged: { cpu: 0, ramMib: 0 }, images: [image], labels: {},
+    networks: [{ id: networkIds[i], name: 'private' }], storages: [{ id: 'default', capacityGib: 40, unmanagedGib: 0 }] },
+    lastSeenMs: 0, draining: false, online: true, reserved: { cpu: 0, ramMib: 0 }, reservedDiskGib: {} }));
+  const calls = []; let placement = null; let attempts = 0;
+  await page.route('**/api/cluster/**', async route => {
+    const request = route.request(); const path = new URL(request.url()).pathname;
+    if (request.method() === 'GET' && path === '/api/cluster/hosts') {
+      hosts.forEach(host => host.lastSeenMs++);
+      return route.fulfill({ json: hosts });
+    }
+    if (request.method() === 'GET' && path === '/api/cluster/placements') return route.fulfill({ json: placement ? [placement] : [] });
+    calls.push({ path, method: request.method(), key: request.headers()['idempotency-key'], body: request.postData() ? request.postDataJSON() : null });
+    if (path === '/api/cluster/placements' && request.method() === 'POST') {
+      if (++attempts === 1) return route.abort('failed');
+      const spec = request.postDataJSON(); const id = '00000000-0000-0000-0000-000000000099';
+      placement = { id, idempotencyKey: request.headers()['idempotency-key'], vm: { hostId: hostIds[0], resourceId: id },
+        target: spec.targets[0], spec, generation: 0, action: 'create', phase: 'confirmed', observed: { id, name: spec.name, state: 'created' }, error: null, createdAtMs: 1 };
+      hosts[0].reserved = { cpu: 1, ramMib: 512 }; hosts[0].reservedDiskGib = { default: 2 };
+      return route.fulfill({ status: 202, json: placement });
+    }
+    if (request.method() === 'PATCH') {
+      const host = hosts.find(host => path.endsWith(host.report.id));
+      host.draining = request.postDataJSON().draining;
+      return route.fulfill({ json: host });
+    }
+    if (path.endsWith('/stop')) { placement.action = 'stop'; placement.generation++; placement.observed.state = 'stopped'; return route.fulfill({ status: 202, json: placement }); }
+    return route.fulfill({ status: 404, json: {} });
+  });
+  await open('cluster');
+  await expect(page.locator('#detail-panel')).toBeHidden();
+  await expect(page.locator('#panel-toggle')).toHaveCount(0);
+  const name = page.getByLabel('VM name', { exact: true });
+  await name.fill('resilient-vm'); await name.focus();
+  const heartbeat = page.waitForResponse(response => new URL(response.url()).pathname === '/api/cluster/hosts');
+  await heartbeat; await expect(name).toBeFocused(); await expect(name).toHaveValue('resilient-vm');
+  await page.getByRole('button', { name: 'Place VM', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Retry saved placement' })).toBeVisible();
+  const saved = await page.evaluate(() => sessionStorage.getItem('firecrab.cluster.placement.v1'));
+  assert.ok(saved); await page.reload();
+  await page.getByRole('button', { name: 'Retry saved placement' }).click();
+  const placed = page.locator('[data-cluster-placement]'); await expect(placed).toContainText('resilient-vm');
+  const submissions = calls.filter(call => call.path === '/api/cluster/placements');
+  assert.equal(submissions.length, 2); assert.equal(submissions[0].key, submissions[1].key); assert.deepEqual(submissions[0].body, submissions[1].body);
+  assert.equal(submissions[0].body.targets.length, 2);
+  assert.deepEqual(submissions[0].body.targets[1], { network: { hostId: hostIds[1], resourceId: networkIds[1] }, storage: { hostId: hostIds[1], resourceId: 'default' } });
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('firecrab.cluster.placement.v1')), null);
+  await page.locator(`[data-cluster-host="${hostIds[0]}"]`).getByRole('button', { name: 'Drain host' }).click();
+  await expect(page.locator(`[data-cluster-host="${hostIds[0]}"]`).getByRole('button', { name: 'Resume placement' })).toBeVisible();
+  const candidate = page.locator(`[data-cluster-input="candidate-${hostIds[0]}"]`); await expect(candidate).toBeDisabled(); await expect(candidate).not.toBeChecked();
+  await placed.getByRole('button', { name: 'Stop', exact: true }).click(); await expect(placed).toContainText('stopped');
+  assert.ok(calls.some(call => call.path === `/api/cluster/placements/${placement.id}/stop`));
+  assert.ok(calls.some(call => call.method === 'PATCH' && call.path === `/api/cluster/hosts/${hostIds[0]}` && call.body.draining));
+  if (process.env.FIRECRAB_CLUSTER_SCREENSHOT) {
+    await page.evaluate(() => { document.querySelector('#content').scrollTop = 0; });
+    await page.screenshot({ path: process.env.FIRECRAB_CLUSTER_SCREENSHOT, fullPage: true });
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Cluster view fits a mobile viewport');
+});
+
 test('WASM owns the app and filters the same names, images, addresses, and state tabs', async () => {
   await open();
   await expect(page.locator('#root')).toHaveAttribute('data-engine', 'wasm');

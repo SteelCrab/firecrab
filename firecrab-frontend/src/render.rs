@@ -131,21 +131,25 @@ pub fn page(app: &App) -> String {
     };
     let panel = crate::details::panel(app);
     let panel_width = app.panel_width;
-    let panel_hidden = if app.panel_open && app.route != "vms/new" {
+    let panel_hidden = if app.panel_open && app.route != "vms/new" && app.route != "cluster" {
         ""
     } else {
         "hidden"
     };
-    let panel_toggle = format!(
-        "<button type=\"button\" class=\"btn\" id=\"panel-toggle\" data-action=\"panel-toggle\">{}</button>",
-        crate::i18n::t(if app.panel_open {
-            "Hide details"
-        } else {
-            "Show details"
-        })
-    );
+    let panel_toggle = if app.route == "cluster" {
+        String::new()
+    } else {
+        format!(
+            "<button type=\"button\" class=\"btn\" id=\"panel-toggle\" data-action=\"panel-toggle\">{}</button>",
+            crate::i18n::t(if app.panel_open {
+                "Hide details"
+            } else {
+                "Show details"
+            })
+        )
+    };
     let category = match section {
-        "vms" | "services" | "pools" | "schedules" => tr(app, "Compute", "컴퓨팅"),
+        "vms" | "services" | "pools" | "schedules" | "cluster" => tr(app, "Compute", "컴퓨팅"),
         "networks" | "pipe" | "security-groups" => tr(app, "Network", "네트워크"),
         "storages" | "images" | "kernels" | "secrets" => tr(app, "Data", "데이터"),
         _ => tr(app, "System", "시스템"),
@@ -250,7 +254,9 @@ pub fn content(app: &App) -> String {
                 "조건에 맞는 MicroVM이 없습니다."
             )
         ),
-        "pools" | "schedules" | "security-groups" | "secrets" => crate::advanced::content(app),
+        "pools" | "schedules" | "security-groups" | "secrets" | "cluster" => {
+            crate::advanced::content(app)
+        }
         "services" => resource_table(
             app,
             &app.resource,

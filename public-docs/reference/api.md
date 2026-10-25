@@ -160,6 +160,11 @@ See [MicroService](../guides/microservices.md) for configuration fields, validat
 
 ## Host
 
+Authenticated host registration, drain, and durable cross-host VM placement use
+`/api/cluster/hosts` and `/api/cluster/placements`. See
+[multi-host placement](../guides/multihost.md#rest) for the endpoint and recovery
+contract. Existing `/api/host` and `/api/vms` remain host-local.
+
 `GET /api/host` reports load, memory, disk, uptime, and `platform`:
 
 ```json

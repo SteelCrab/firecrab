@@ -125,12 +125,14 @@ fn update_host(app: &Shared) {
 }
 
 fn render_content(app: &Shared) {
+    let cluster_focus = advanced::cluster::focused_input();
     let (html, loaded) = {
         let state = app.borrow();
         (render::content(&state), state.loaded)
     };
     app.borrow_mut().rendering = true;
     set_html("content", &html);
+    advanced::cluster::restore_focus(cluster_focus);
     app.borrow_mut().rendering = false;
     if let Some(content) = element("content") {
         let _ = content.set_attribute("data-loaded", if loaded { "true" } else { "false" });
@@ -184,6 +186,7 @@ fn render_detail(app: &Shared) {
             (state.route != "security-groups" || state.detail.is_some() || state.form.is_some())
                 && state.panel_open
                 && state.route != "vms/new"
+                && state.route != "cluster"
                 && (!narrow || state.detail.is_some() || state.form.is_some());
         let html = if open {
             details::panel(&state)
@@ -421,6 +424,7 @@ fn route_from_hash() -> String {
 }
 fn endpoint(route: &str) -> &'static str {
     match route {
+        "cluster" => "/api/cluster/hosts",
         "pools" => "/api/pools",
         "schedules" => "/api/schedules",
         "security-groups" => "/api/security-groups",
@@ -457,6 +461,9 @@ fn load_route(app: Shared) {
         return;
     }
     refresh(app.clone());
+    if route == "cluster" {
+        advanced::cluster::restore(&app);
+    }
     let mut aux = vec!["/api/host", "/api/update"];
     if route == "host" {
         aux.push("/api/info");
@@ -549,12 +556,27 @@ fn refresh(app: Shared) {
     drop(state);
     spawn_local(async move {
         let result = api::request("GET", endpoint(&route), None).await;
+        let placements = if route == "cluster" {
+            Some(api::request("GET", "/api/cluster/placements", None).await)
+        } else {
+            None
+        };
+        let result = match &placements {
+            Some(Err(error)) => Err(error.clone()),
+            _ => result,
+        };
         let mut state = app.borrow_mut();
         if state.generation != generation {
             return;
         }
         state.refreshing = false;
         let mut changed = !state.loaded || !state.connection_error.is_empty();
+        if let Some(Ok(placements)) = placements {
+            changed |= state.cache.get("/api/cluster/placements") != Some(&placements);
+            state
+                .cache
+                .insert("/api/cluster/placements".into(), placements);
+        }
         match result {
             Ok(value) => {
                 if route == "vms" {
@@ -811,6 +833,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 }
             }
             _ => {
+                if advanced::cluster::input(&changed, &target) {
+                    return;
+                }
                 if target.id() == "field-hostPort" && advanced::services::change(&changed, &target)
                 {
                     return;
