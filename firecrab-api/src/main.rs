@@ -30,6 +30,7 @@ mod pipe_databases;
 mod pipe_storage;
 mod pool;
 mod process_metrics;
+mod queues;
 mod reconcile;
 mod resource_limits;
 mod rootfs;
@@ -160,6 +161,7 @@ async fn run() -> Result<(), StartupError> {
     // setup_vm_network) — not worth failing API startup over.
     reconcile::reconcile(&state).await;
     service_runtime::recover(&state).await;
+    queues::recover(&state).await;
     // Fetch the shared bootstrap builder source now, in the background, so
     // the request that needs it doesn't have to — see spawn_warmup.
     microboot::spawn_warmup(state.clone());

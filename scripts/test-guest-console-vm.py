@@ -71,7 +71,7 @@ exec /bin/busybox init
                     if select.select([master], [], [], 0.1)[0]:
                         transcript.extend(os.read(master, 65536))
                 if marker not in transcript[start:]:
-                    raise TimeoutError(f"Guest did not produce {marker!r}")
+                    raise TimeoutError(f"Guest did not produce {marker!r}; serial tail: {bytes(transcript[-2000:])!r}")
 
             def command(line, marker):
                 start = len(transcript)
@@ -114,12 +114,12 @@ exec /bin/busybox init
                 resize(30, 100)
                 command("printf 'FCR_SIZE_'; /bin/busybox stty size", b"FCR_SIZE_30 100")
                 results.append("ttyS0 is 30 rows by 100 columns after acknowledged resize")
-                # Use a foreground reader: ash's interactive editor owns WINCH.
-                command("/bin/busybox sh -c 'trap \"printf FCR_WINCH_; /bin/busybox stty size\" WINCH; printf \"FCR_TRAP_%s\\n\" READY; read -r ignored'", b"FCR_TRAP_READY")
+                # Reap a short-lived child regularly so ash dispatches pending
+                # traps without needing terminal input to release a built-in read.
+                command("/bin/busybox sh -c 'trap \"printf FCR_WINCH_; /bin/busybox stty size; exit\" WINCH; printf \"FCR_TRAP_%s\\n\" READY; while :; do /bin/busybox sleep 1; done'", b"FCR_TRAP_READY")
                 start = len(transcript)
                 resize(40, 120)
                 wait_for(b"FCR_WINCH_40 120", start)
-                os.write(master, b"\n")
                 wait_for(b"FCR_PROMPT>", start)
                 command("printf 'FCR_SIZE_'; /bin/busybox stty size", b"FCR_SIZE_40 120")
                 results.append("foreground process receives SIGWINCH and observes 40 rows by 120 columns")

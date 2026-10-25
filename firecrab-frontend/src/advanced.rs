@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod images;
 pub mod pools;
+pub mod queues;
 pub mod schedules;
 pub mod secrets;
 pub mod security;
@@ -22,6 +23,7 @@ pub struct State {
     pub storage: storage::State,
     pub ai: ai::State,
     pub services: services::State,
+    pub queues: queues::State,
     pub secrets_external: bool,
     pub reveal_generation: u64,
     pub reveals: BTreeMap<String, (String, f64)>,
@@ -33,6 +35,7 @@ pub struct State {
 pub fn content(app: &App) -> String {
     match app.route.as_str() {
         "pools" => pools::content(app),
+        "queues" => queues::content(app),
         "schedules" => schedules::content(app),
         "secrets" => secrets::content(app),
         "security-groups" => security::content(app),
@@ -87,7 +90,8 @@ pub fn dispatch(app: &Shared, action: &str, id: &str, button: &Element) -> bool 
         app.borrow_mut().dirty = true;
         return true;
     }
-    services::dispatch(app, action, id)
+    queues::dispatch(app, action, id)
+        || services::dispatch(app, action, id)
         || ai::dispatch(app, action, id)
         || storage::dispatch(app, action, id)
         || images::dispatch(app, action, id)
@@ -127,7 +131,8 @@ pub fn change(app: &Shared, target: &Element) -> bool {
     }
     false
 }
-pub fn form_input(_app: &Shared, _target: &Element) {
+pub fn form_input(app: &Shared, target: &Element) {
+    queues::binding_input(app, target);
     sync_form();
 }
 pub fn sync_form() {
@@ -210,6 +215,12 @@ pub fn prepare(app: &Shared) {
     };
     if form.return_route == "services" {
         form.choose(
+            "queues",
+            state.cache.get("/api/queues").unwrap_or(&Value::Null),
+            "id",
+            "name",
+        );
+        form.choose(
             "storageConnectionId",
             state.cache.get("/api/pipe/storage").unwrap_or(&Value::Null),
             "id",
@@ -264,7 +275,10 @@ pub fn prepare(app: &Shared) {
             state
                 .vms
                 .iter()
-                .filter(|vm| vm.extra.get("purpose").and_then(Value::as_str) != Some("pool"))
+                .filter(|vm| !matches!(
+                    vm.extra.get("purpose").and_then(Value::as_str),
+                    Some("pool" | "queue")
+                ))
                 .map(|vm| json!({"id":vm.id,"name":vm.name}))
                 .collect::<Vec<_>>()
         );
@@ -443,6 +457,7 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
     ] {
         let a = app.clone();
         let callback = Closure::<dyn FnMut(Event)>::new(move |_| {
+            queues::hide(&a);
             a.borrow_mut().advanced.reveal_generation += 1;
             if !a.borrow().advanced.reveals.is_empty() {
                 a.borrow_mut().advanced.reveals.clear();
@@ -455,7 +470,10 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
         callback.forget();
     }
     let a = app.clone();
-    let tick = Closure::<dyn FnMut()>::new(move || secrets::tick(&a));
+    let tick = Closure::<dyn FnMut()>::new(move || {
+        secrets::tick(&a);
+        queues::tick(&a);
+    });
     window().set_interval_with_callback_and_timeout_and_arguments_0(
         tick.as_ref().unchecked_ref(),
         1000,

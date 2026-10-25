@@ -482,6 +482,29 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
                 .delete(handlers::micro_storages::delete_micro_storage),
         )
         .route(
+            "/api/queue/engine",
+            get(handlers::queues::engine).post(handlers::queues::create_engine),
+        )
+        .route(
+            "/api/queue/engine/start",
+            post(handlers::queues::start_engine),
+        )
+        .route(
+            "/api/queue/engine/stop",
+            post(handlers::queues::stop_engine),
+        )
+        .route(
+            "/api/queues",
+            get(handlers::queues::list).post(handlers::queues::create),
+        )
+        .route("/api/queues/{id}", delete(handlers::queues::delete))
+        .route("/api/queues/{id}/retry", post(handlers::queues::retry))
+        .route("/api/queues/{id}/metrics", get(handlers::queues::metrics))
+        .route(
+            "/api/queues/{id}/connection/{access}",
+            post(handlers::queues::reveal),
+        )
+        .route(
             "/api/pools",
             get(handlers::pools::list_pools).post(handlers::pools::create_pool),
         )

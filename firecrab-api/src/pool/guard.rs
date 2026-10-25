@@ -25,6 +25,22 @@ pub(crate) async fn reject_pool_owned(
     if matches!(*request.method(), Method::GET | Method::HEAD) {
         return next.run(request).await;
     }
+    let queue_owned = Uuid::parse_str(&id).is_ok_and(|id| {
+        state
+            .vms
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&id)
+            .is_some_and(|vm| vm.purpose == VmPurpose::Queue)
+    });
+    if queue_owned {
+        return AppError::conflict(
+            "queue_owned",
+            "this VM hosts RabbitMQ; use Queue engine controls to preserve its data",
+            request_id.0,
+        )
+        .into_response();
+    }
     let pool_owned = Uuid::parse_str(&id).is_ok_and(|id| {
         state
             .vms

@@ -3,6 +3,7 @@
 These Rust/WASM screenshots use the deterministic browser fixture in `firecrab-e2e/tests/ai-sandbox.spec.ts`.
 The account, model, task result, test output, and project path are fixture data.
 They demonstrate UI behavior, not live provider or MicroVM execution evidence.
+The captures include main's Queue navigation entry and retain AI Sandbox below System.
 
 - `conversation-ko.png`: Korean desktop conversation.
 - `tasks-ko.png`: Korean desktop task board.
