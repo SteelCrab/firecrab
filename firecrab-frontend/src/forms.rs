@@ -144,7 +144,9 @@ impl Form {
                 },
                 escape(crate::i18n::t(field.label))
             ));
-            if !field.options.is_empty()
+            if field.kind == "queue-bindings" {
+                html.push_str(&crate::advanced::queues::bindings(field));
+            } else if !field.options.is_empty()
                 || matches!(field.kind, "select" | "multi" | "nullable-select")
             {
                 html.push_str(&format!(
@@ -380,6 +382,7 @@ impl Form {
                         .parse::<u32>()
                         .map_err(|_| format!("{} must be a non-negative integer.", field.label))?
                 ),
+                "queue-bindings" => crate::advanced::queues::binding_payload(value)?,
                 "pairs" => pairs(value)?,
                 "ports" => ports(value)?,
                 "mounts" => crate::volumes::parse_mounts(value)?,
@@ -432,6 +435,9 @@ impl Form {
                 Ok(body)
             }
             "New MicroService" | "Edit MicroService" => {
+                if body["queues"].as_object().is_some_and(|q| q.is_empty()) {
+                    body.as_object_mut().unwrap().remove("queues");
+                }
                 if body["storageConnectionId"].is_null() {
                     body.as_object_mut().unwrap().remove("storageConnectionId");
                 }
@@ -669,6 +675,13 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
                 format!("/api/micro-services{suffix}"),
                 method,
                 vec![
+                    Field::new(
+                        "queues",
+                        "Queue connections",
+                        "queue-bindings",
+                        crate::advanced::queues::binding_draft(&data["queues"]),
+                    )
+                    .optional(),
                     Field::new(
                         "storageConnectionId",
                         "S3 connection (optional)",

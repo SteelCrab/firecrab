@@ -57,6 +57,9 @@ pub struct MicroServiceSpec {
     /// PipeStorage connection for the application's AWS SDK. Credentials stay on the host.
     #[serde(default)]
     pub storage_connection_id: Option<Uuid>,
+    /// Binding alias -> Queue reference and least-privilege application access.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub queues: BTreeMap<String, crate::QueueBinding>,
     /// Policy copied to every replica and captured in deployment snapshots.
     #[serde(default)]
     pub security_group_id: Option<Uuid>,

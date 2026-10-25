@@ -672,6 +672,7 @@ mod tests {
             json!({"state":"running"}),
             json!({"state":"starting"}),
             json!({"state":"stopped","purpose":"pool"}),
+            json!({"state":"stopped","purpose":"queue"}),
             json!({"state":"stopped","purpose":"builder"}),
         ] {
             assert!(!editable(&vm));

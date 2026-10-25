@@ -32,7 +32,7 @@ pub async fn deploy(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
-    ValidatedJson(request): ValidatedJson<DeployMicroServiceRequest>,
+    ValidatedJson(mut request): ValidatedJson<DeployMicroServiceRequest>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let id = vms::parse_id(&id, request_id.0)?;
     let _claim = state.service_mutations.lock().await;
@@ -42,6 +42,8 @@ pub async fn deploy(
         .await?
         .ok_or_else(|| AppError::not_found(request_id.0))?;
     require_image_auth(&state, &service.spec.image, request_id.0).await?;
+    crate::queues::validate_bindings(&state, &service.spec, request_id.0).await?;
+    crate::queues::placement(&state, &service.spec, &mut request, request_id.0)?;
     validate_placement(&state, &service.spec, &request, request_id.0).await?;
     crate::handlers::pipe_storage::validate_binding(&state, &service.spec, request_id.0).await?;
     secrets::preflight(&state, &service.spec, request_id.0).await?;
@@ -74,13 +76,15 @@ pub async fn check(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
-    ValidatedJson(request): ValidatedJson<DeployMicroServiceRequest>,
+    ValidatedJson(mut request): ValidatedJson<DeployMicroServiceRequest>,
 ) -> Result<Json<()>, AppError> {
     let id = vms::parse_id(&id, request_id.0)?;
     let store = state.store.clone();
     let service = database(request_id.0, move || store.micro_service(id))
         .await?
         .ok_or_else(|| AppError::not_found(request_id.0))?;
+    crate::queues::validate_bindings(&state, &service.spec, request_id.0).await?;
+    crate::queues::placement(&state, &service.spec, &mut request, request_id.0)?;
     validate_placement(&state, &service.spec, &request, request_id.0).await?;
     domain::preflight(&state, id, &service.spec, request_id.0).await?;
     Ok(Json(()))

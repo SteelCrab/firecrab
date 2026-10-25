@@ -74,6 +74,9 @@ jobs:
       - name: Database QA guards and cleanup contract
         run: python3 scripts/test-pipe-databases-qa.py
 
+      - name: Queue QA target and failure contracts
+        run: python3 scripts/test-queue-runtime-qa.py
+
       - name: macOS repair QA guard and restoration contract
         run: python3 -m unittest scripts/test_macos_repair_qa.py scripts/test_macos_os_repair_qa.py scripts/test_macos_os_files.py
 
@@ -489,6 +492,10 @@ jobs:
     # the guest-boot step instead of skipping it. Full E2E still belongs on a
     # self-hosted runner when flake rate matters.
     runs-on: ubuntu-24.04
+    env:
+      CARGO_INCREMENTAL: "0"
+      # Retain real Queue API coverage across systemd restart and SIGTERM.
+      RUSTFLAGS: "-C llvm-args=-runtime-counter-relocation"
     defaults:
       run:
         shell: bash
@@ -576,9 +583,13 @@ jobs:
 
       - uses: ./.github/actions/setup-wasm
 
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - name: Build install payload
         # CI installs from local binaries, not GitHub Releases (PRs have none).
         run: |
+          source <(cargo llvm-cov show-env --sh)
           sudo apt-get update
           sudo apt-get install -y musl-tools
           ./scripts/ci-prepare-install-payload.sh
@@ -778,6 +789,47 @@ jobs:
           sudo ss -lun | grep -q ':67'
           ! sudo journalctl -u firecrab-helper --no-pager | grep -i 'operation not permitted'
 
+      - name: Queue MicroVM persistence and app disconnects
+        id: queue-qa
+        if: ${{ !cancelled() && steps.install-service.outcome == 'success' && steps.enable-kvm.outcome == 'success' }}
+        timeout-minutes: 30
+        run: |
+          # PrivateTmp hides /var/tmp from the installed API. Its data directory
+          # is writable under the real service sandbox and survives API restart.
+          sudo install -d -o firecrab -g firecrab -m 0700 /var/lib/firecrab/coverage
+          sudo mkdir -p /run/systemd/system/firecrab-api.service.d
+          # Double percent signs escape systemd specifiers; LLVM expands them.
+          printf '%s\n' '[Service]' 'Environment=LLVM_PROFILE_FILE=/var/lib/firecrab/coverage/queue-%%p-%%m%%c.profraw' \
+            | sudo tee /run/systemd/system/firecrab-api.service.d/91-queue-coverage.conf
+          sudo systemctl daemon-reload
+          sudo systemctl restart firecrab-api
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:5523/api/host >/dev/null && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5523/api/host >/dev/null
+          npm ci --prefix examples/queue
+          python3 scripts/ci-qa-queue.py --disposable-host --restart-api
+
+      - name: Export real Queue runtime coverage
+        id: queue-coverage
+        if: ${{ !cancelled() && steps.queue-qa.outcome == 'success' }}
+        run: |
+          sudo systemctl stop firecrab-api
+          sudo tar -C /var/lib/firecrab/coverage -cf - . | tar -C target -xf -
+          sudo systemctl start firecrab-api
+          source <(cargo llvm-cov show-env --sh)
+          cargo llvm-cov report --release --lcov --output-path queue-runtime.lcov.info
+
+      - name: Upload Queue runtime coverage to Codecov
+        if: ${{ !cancelled() && steps.queue-coverage.outcome == 'success' }}
+        uses: codecov/codecov-action@v7
+        with:
+          files: queue-runtime.lcov.info
+          flags: queue-runtime
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
       - name: Re-running is safe
         run: |
           sudo -E env "PATH=$PATH" ./install.sh \
@@ -840,6 +892,7 @@ jobs:
           name: linux-runtime-qa-${{ github.run_attempt }}
           path: |
             target/qa/
+            queue-runtime.lcov.info
             firecrab-e2e/test-results/
           if-no-files-found: warn
           retention-days: 14

@@ -132,7 +132,7 @@ pub fn page(app: &App) -> String {
     };
     let panel = crate::details::panel(app);
     let panel_width = app.panel_width;
-    let panel_hidden = if app.panel_open && app.route != "vms/new" {
+    let panel_hidden = if app.panel_open && !["vms/new", "queues"].contains(&app.route.as_str()) {
         ""
     } else {
         "hidden"
@@ -148,7 +148,9 @@ pub fn page(app: &App) -> String {
     let category = match section {
         "vms" | "services" | "pools" | "schedules" => tr(app, "Compute", "컴퓨팅"),
         "networks" | "pipe" | "security-groups" => tr(app, "Network", "네트워크"),
-        "storages" | "volumes" | "images" | "kernels" | "secrets" => tr(app, "Data", "데이터"),
+        "storages" | "volumes" | "images" | "kernels" | "secrets" | "queues" => {
+            tr(app, "Data", "데이터")
+        }
         _ => tr(app, "System", "시스템"),
     };
     let meters = host_meters(app);
@@ -251,7 +253,9 @@ pub fn content(app: &App) -> String {
                 "조건에 맞는 MicroVM이 없습니다."
             )
         ),
-        "pools" | "schedules" | "security-groups" | "secrets" => crate::advanced::content(app),
+        "pools" | "schedules" | "security-groups" | "secrets" | "queues" => {
+            crate::advanced::content(app)
+        }
         "services" => resource_table(
             app,
             &app.resource,
@@ -478,7 +482,10 @@ pub fn vm_row(app: &App, vm: &Vm) -> String {
     } else {
         "—".into()
     };
-    let action = if vm.extra.get("purpose").and_then(Value::as_str) == Some("pool") {
+    let action = if matches!(
+        vm.extra.get("purpose").and_then(Value::as_str),
+        Some("pool" | "queue")
+    ) {
         String::new()
     } else if vm.state == "paused" {
         vm_icon_button("Resume", "vm-resume", &vm.id)
@@ -785,7 +792,8 @@ fn vm_detail_actions(app: &App, data: &Value) -> String {
     let id = text(data, "id");
     let encoded = encode(id);
     let state = text(data, "state");
-    let pool = text(data, "purpose") == "pool";
+    let queue = text(data, "purpose") == "queue";
+    let pool = queue || text(data, "purpose") == "pool";
     let editable = !pool && matches!(state, "created" | "stopped" | "error");
     let mut primary = String::new();
     if editable {
@@ -804,6 +812,9 @@ fn vm_detail_actions(app: &App, data: &Value) -> String {
         if matches!(state, "running" | "paused" | "pausing" | "resuming") {
             primary.push_str(&button("Stop", "vm-stop", id));
         }
+    }
+    if queue {
+        primary.push_str("<a class=\"btn\" href=\"#/queues\">Queue</a>");
     }
     let mut menu = String::new();
     if !pool && state == "pausing" {

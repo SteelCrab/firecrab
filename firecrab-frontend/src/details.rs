@@ -73,7 +73,7 @@ pub fn panel(app: &App) -> String {
         .iter()
         .find_map(|key| data[key].as_str())
         .unwrap_or(t("Details"));
-    out.push_str(&format!("<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\"><header class=\"detail-head vm-detail-head\"><div class=\"detail-heading\"><h2 class=\"detail-title\">{}{}</h2>{close}</div>", escape(title), if text(data,"purpose")=="pool" {" · Pool"} else {""}));
+    out.push_str(&format!("<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\"><header class=\"detail-head vm-detail-head\"><div class=\"detail-heading\"><h2 class=\"detail-title\">{}{}</h2>{close}</div>", escape(title), match text(data,"purpose") { "pool" => " · Pool", "queue" => " · Queue", _ => "" }));
     if app.route == "vms" {
         let state = text(data, "state");
         let label = match state {

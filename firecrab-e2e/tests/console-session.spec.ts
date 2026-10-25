@@ -47,7 +47,8 @@ async function typeInTerminal(page: Page, line: string): Promise<void> {
 }
 
 /** Serves one running VM's REST reads so the console page renders. */
-async function mockVm(page: Page): Promise<void> {
+async function mockVm(page: Page): Promise<() => number> {
+  let reads = 0;
   const vm = {
     id: MOCK_VM_ID,
     name: "console-mock",
@@ -72,16 +73,20 @@ async function mockVm(page: Page): Promise<void> {
     memoryUsedPercent: null,
     usageHistory: [],
   };
-  await page.route(`**/api/vms/${MOCK_VM_ID}`, (route) => route.fulfill({ json: vm }));
+  await page.route(`**/api/vms/${MOCK_VM_ID}`, (route) => {
+    reads += 1;
+    return route.fulfill({ json: vm });
+  });
   await page.route(`**/api/vms/${MOCK_VM_ID}/log`, (route) =>
     route.fulfill({ json: { consoleLog: "", truncated: false } }),
   );
+  return () => reads;
 }
 
 test.describe("terminal session end @dashboard", () => {
   for (const command of ["exit", "logout"]) {
     test(`a guest ${command} stops at Session ended and New session attaches again`, async ({ page }) => {
-      await mockVm(page);
+      const vmReads = await mockVm(page);
       let connections = 0;
       await page.routeWebSocket(`**/ws/vms/${MOCK_VM_ID}/console`, (ws) => {
         connections += 1;
@@ -110,7 +115,15 @@ test.describe("terminal session end @dashboard", () => {
       await page.waitForTimeout(2500);
       expect(connections).toBe(1);
 
-      await page.getByRole("button", { name: "New session" }).click();
+      // Hold a real click across a VM refresh. Replacing this button during
+      // polling used to swallow pointer-up, especially in WebKit.
+      const newSession = page.getByRole("button", { name: "New session" });
+      await newSession.hover();
+      await page.mouse.down();
+      const readsBefore = vmReads();
+      await expect.poll(vmReads).toBeGreaterThan(readsBefore);
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+      await page.mouse.up();
       await expect(consoleStatus(page)).toHaveText(/Connected/);
       expect(connections).toBe(2);
       await expect(page.locator(".console-page .terminal-output")).toContainText(

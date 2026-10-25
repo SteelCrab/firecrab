@@ -176,6 +176,25 @@ test.describe("Persistent volumes @dashboard", () => {
     await page.screenshot({ path: testInfo.outputPath("volumes-attached-default.png"), fullPage: true });
   });
 
+  test("keeps managed queue VMs outside instance lifecycle and volume controls", async ({ page }) => {
+    await open(page, { hash: "#/vms?vm=" + VM, routes: {
+      [`/api/vms/${VM}`]: vm("queue-engine", VM, "stopped", { purpose: "queue" }),
+    } });
+    const panel = page.getByRole("complementary", { name: "MicroVM detail", exact: true });
+    await expect(panel.getByRole("heading", { name: "queue-engine · Queue", exact: true })).toBeVisible();
+    await expect(panel.getByRole("link", { name: "Queue", exact: true })).toHaveAttribute("href", "#/queues");
+    for (const name of ["Start", "Stop", "Pause", "Resume"]) {
+      await expect(panel.getByRole("button", { name, exact: true })).toHaveCount(0);
+    }
+    await panel.getByLabel("More VM actions", { exact: true }).click();
+    await expect(panel.getByRole("button", { name: "Resources", exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("link", { name: /Add schedule/ })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await panel.getByRole("tab", { name: "Volumes", exact: true }).click();
+    await expect(panel.getByText("Data volumes can only be attached to instance VMs.")).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Attach volume", exact: true })).toHaveCount(0);
+  });
+
   test("shows create errors in the Korean mobile flow", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 390, height: 844 });
     const state = await open(page, { ko: true, failCreate: true, empty: true });

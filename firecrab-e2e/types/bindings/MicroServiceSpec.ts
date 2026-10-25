@@ -13,6 +13,7 @@ export type MicroServiceSpec = {
   drainTimeout: number;
   env: Record<string, string>;
   secrets: Record<string, string>;
+  queues?: Record<string, { queueId: string; access: "publish" | "consume" }>;
   storageConnectionId?: string | null;
   securityGroupId?: string | null;
 };

@@ -13,7 +13,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{Response, StatusCode, header::CONTENT_TYPE};
 use axum::routing::get;
 use tempfile::tempdir;
-use tokio::task::JoinHandle;
+use tokio::{sync::Notify, task::JoinHandle};
 
 const REPOSITORY: &str = "team/app";
 const LAYER_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
@@ -114,6 +114,7 @@ struct BlobReply {
     bytes: Arc<Vec<u8>>,
     digest_header: Option<String>,
     delay: Duration,
+    gate: Option<Arc<Notify>>,
 }
 
 impl BlobReply {
@@ -122,6 +123,7 @@ impl BlobReply {
             bytes: Arc::new(descriptor.bytes.clone()),
             digest_header: Some(descriptor.digest.to_string()),
             delay: Duration::ZERO,
+            gate: None,
         }
     }
 
@@ -130,6 +132,7 @@ impl BlobReply {
             bytes: Arc::new(bytes.into()),
             digest_header: Some(digest.to_string()),
             delay: Duration::ZERO,
+            gate: None,
         }
     }
 
@@ -138,8 +141,8 @@ impl BlobReply {
         self
     }
 
-    fn with_delay(mut self, delay: Duration) -> Self {
-        self.delay = delay;
+    fn blocked_on(mut self, gate: Arc<Notify>) -> Self {
+        self.gate = Some(gate);
         self
     }
 }
@@ -294,6 +297,9 @@ async fn serve_blob(
         .max_active_blob_requests
         .fetch_max(active, Ordering::SeqCst);
     let _active_request = ActiveBlobRequest(Arc::clone(&state.active_blob_requests));
+    if let Some(gate) = reply.gate {
+        gate.notified().await;
+    }
     if !reply.delay.is_zero() {
         tokio::time::sleep(reply.delay).await;
     }
@@ -634,41 +640,54 @@ async fn parallel_downloads_are_bounded_and_return_manifest_order() {
     let first = FixtureBlob::new(LAYER_MEDIA_TYPE, b"slow first layer".to_vec());
     let second = FixtureBlob::new(LAYER_MEDIA_TYPE, b"quick second layer".to_vec());
     let third = FixtureBlob::new(LAYER_MEDIA_TYPE, b"quickest third layer".to_vec());
+    let config_gate = Arc::new(Notify::new());
+    let first_gate = Arc::new(Notify::new());
     let registry = TestRegistry::start(
         ordinary_manifest(&config, &[first.clone(), second.clone(), third.clone()]),
         [
             (
                 config.digest.clone(),
-                BlobReply::for_descriptor(&config).with_delay(Duration::from_millis(10)),
+                BlobReply::for_descriptor(&config).blocked_on(config_gate.clone()),
             ),
             (
                 first.digest.clone(),
-                BlobReply::for_descriptor(&first).with_delay(Duration::from_millis(200)),
+                BlobReply::for_descriptor(&first).blocked_on(first_gate.clone()),
             ),
-            (
-                second.digest.clone(),
-                BlobReply::for_descriptor(&second).with_delay(Duration::from_millis(25)),
-            ),
-            (
-                third.digest.clone(),
-                BlobReply::for_descriptor(&third).with_delay(Duration::from_millis(5)),
-            ),
+            (second.digest.clone(), BlobReply::for_descriptor(&second)),
+            (third.digest.clone(), BlobReply::for_descriptor(&third)),
         ],
     )
     .await;
     let directory = tempdir().expect("create image root");
     let cache = BlobCache::new(directory.path());
 
-    let cached = cache_image_blobs_with_parallelism(
-        &registry.reference(),
-        Architecture::X86_64,
-        true,
-        &cache,
-        None,
-        2,
-    )
-    .await
-    .expect("cache blobs with bounded parallelism");
+    let reference = registry.reference();
+    // Admit both initial requests before releasing config, then hold the first
+    // layer until later layers finish. CPU load cannot reverse this ordering.
+    let release = async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while registry.blob_requests(&config.digest) == 0
+                || registry.blob_requests(&first.digest) == 0
+            {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            config_gate.notify_one();
+            while !registry
+                .blob_completions()
+                .contains(&third.digest.to_string())
+            {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            first_gate.notify_one();
+        })
+        .await
+        .expect("parallel requests reach both release points");
+    };
+    let (cached, ()) = tokio::join!(
+        cache_image_blobs_with_parallelism(&reference, Architecture::X86_64, true, &cache, None, 2),
+        release,
+    );
+    let cached = cached.expect("cache blobs with bounded parallelism");
 
     assert_eq!(registry.max_active_blob_requests(), 2);
     let completions = registry.blob_completions();

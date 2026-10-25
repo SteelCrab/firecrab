@@ -366,10 +366,22 @@ async fn block_storage_pool_deletion_and_controller_owned_vm_attachment_are_reje
     .await
     .unwrap();
     assert!(state.store.delete_micro_storage(pool_id).is_err());
-    let mut vm = record("pool-vm", Uuid::new_v4());
-    vm.purpose = crate::model::VmPurpose::Pool;
-    seed_vm(&state, &vm);
-    assert!(connect(&state, volume.id, vm.id, "/data").await.is_err());
+    for (index, purpose) in [
+        crate::model::VmPurpose::Pool,
+        crate::model::VmPurpose::Queue,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut vm = record(&format!("managed-vm-{index}"), Uuid::new_v4());
+        vm.purpose = purpose;
+        seed_vm(&state, &vm);
+        assert!(connect(&state, volume.id, vm.id, "/data").await.is_err());
+        assert_eq!(
+            state.store.block_storage(volume.id).unwrap().state,
+            "available"
+        );
+    }
     delete(State(state.clone()), request(), Path(volume.id.to_string()))
         .await
         .unwrap();
