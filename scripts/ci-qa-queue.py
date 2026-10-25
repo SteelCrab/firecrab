@@ -2,6 +2,7 @@
 """Real Queue MicroVM acceptance on a fresh, disposable localhost Linux installation."""
 import argparse
 import json
+import ipaddress
 import os
 from pathlib import Path
 import platform
@@ -40,6 +41,15 @@ def local_origin(value):
     if address.port is None or not 1 <= address.port <= 65535:
         raise ValueError("Queue QA requires an explicit valid API port")
     return f"http://{address.hostname}:{address.port}"
+
+
+def private_subnet(value):
+    network = ipaddress.ip_network(value)
+    if (network.version != 4 or not 24 <= network.prefixlen <= 28
+            or not any(network.subnet_of(ipaddress.ip_network(block))
+                       for block in ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"])):
+        raise ValueError("Queue QA requires a private IPv4 /24 through /28 subnet")
+    return str(network)
 
 
 def disk_identity(database, vm_id):
@@ -125,7 +135,7 @@ def run(args, report):
         raise RuntimeError("Queue runtime QA requires an installation with no existing engine")
     network = api("/api/micro-networks", "POST", {
         "name": "qa-queue-" + uuid.uuid4().hex[:8],
-        "subnetCidr": "172.28.250.0/24", "internetEnabled": True,
+        "subnetCidr": args.subnet, "internetEnabled": True,
     }, status=201)
     engine = api("/api/queue/engine", "POST", {
         "microNetworkId": network["id"], "cpu": 2, "ram": 1024, "diskGb": 4,
@@ -204,6 +214,7 @@ def main():
     parser.add_argument("--disposable-host", action="store_true", required=True,
                         help="acknowledge creation of a persistent engine on this fresh local host")
     parser.add_argument("--api", default=ORIGIN, type=local_origin)
+    parser.add_argument("--subnet", default="172.28.250.0/24", type=private_subnet)
     parser.add_argument("--restart-api", action="store_true")
     parser.add_argument("--restart-api-unit", default="firecrab-api")
     parser.add_argument("--database", type=Path, default=Path("/var/lib/firecrab/data/firecrab.db"))

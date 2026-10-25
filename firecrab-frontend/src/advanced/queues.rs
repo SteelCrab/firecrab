@@ -481,13 +481,11 @@ fn binding_edit(app: &Shared, action: &str, index: &str) {
         }
     } else if rows.len() < 8
         && let Some((id, _)) = field.options.first()
-    {
-        if let Some(alias) = (1..=9)
+        && let Some(alias) = (1..=9)
             .map(|n| format!("QUEUE_{n}"))
             .find(|key| !rows.iter().any(|r| text(r, "alias") == key))
-        {
-            rows.push(json!({"alias":alias,"queueId":id,"access":"publish"}));
-        }
+    {
+        rows.push(json!({"alias":alias,"queueId":id,"access":"publish"}));
     }
     field.value = json!(rows).to_string();
     state.dirty = true;

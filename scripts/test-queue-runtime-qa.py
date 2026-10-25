@@ -23,6 +23,12 @@ class QueueQaContracts(unittest.TestCase):
                 qa.local_origin(value)
         self.assertEqual(qa.local_origin("http://127.0.0.1:15523/"), "http://127.0.0.1:15523")
 
+    def test_subnets_must_be_private_ipv4_with_bounded_capacity(self):
+        for value in ["8.8.8.0/24", "127.0.0.0/24", "10.0.0.0/16", "192.168.1.0/30", "fd00::/64"]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                qa.private_subnet(value)
+        self.assertEqual(qa.private_subnet("172.28.249.0/24"), "172.28.249.0/24")
+
     def test_existing_engine_is_refused_before_any_mutation(self):
         with patch.object(qa, "api", return_value={"vmId": "existing"}) as api:
             with self.assertRaisesRegex(RuntimeError, "no existing engine"):
