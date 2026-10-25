@@ -121,4 +121,5 @@ IPv6, uplink selection, VM shells, and standalone VM port forwards are outside t
 
 Host-local ownership and read-only `stack plan` are documented in [Stack ownership and planning](stack-planning.md).
 Use [Native YAML stack apply](stack-apply.md) for explicit creation, changes, deployment and recovery.
-Continuous drift correction and Git polling remain follow-up work.
+[Git source checks](stack-git-source.md) support GitHub polling and read-only drift detection, including unchanged commits.
+Automatic drift correction remains follow-up work.

@@ -213,6 +213,18 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/stacks/{name}/plan", post(handlers::stacks::plan))
         .route(
+            "/api/stacks/{name}/source",
+            get(handlers::stack_sources::get).put(handlers::stack_sources::configure),
+        )
+        .route(
+            "/api/stacks/{name}/source/check",
+            post(handlers::stack_sources::check),
+        )
+        .route(
+            "/api/stacks/{name}/source/history",
+            get(handlers::stack_sources::history),
+        )
+        .route(
             "/api/stacks/{name}/apply",
             post(handlers::stack_applies::apply),
         )

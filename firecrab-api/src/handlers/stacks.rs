@@ -157,7 +157,7 @@ pub async fn plan(
         .map_err(|errors| validation_errors(errors, request_id.0))
 }
 
-pub(super) fn inventory(store: &Store) -> Result<Inventory, PersistenceError> {
+pub(crate) fn inventory(store: &Store) -> Result<Inventory, PersistenceError> {
     let mut services = Vec::new();
     let mut service_vms = BTreeSet::new();
     for service in store.list_micro_services()? {
@@ -221,12 +221,15 @@ pub(super) fn validation_errors(
 }
 
 /// Keep SQLite off the async executor and never log submitted configuration values.
-pub(super) async fn database<T: Send + 'static>(
+pub(crate) async fn database<T: Send + 'static>(
     request_id: Uuid,
     operation: impl FnOnce() -> Result<T, PersistenceError> + Send + 'static,
 ) -> Result<T, AppError> {
     tokio::task::spawn_blocking(operation).await.map_err(|_| AppError::internal(request_id))?.map_err(|error| match error {
-        PersistenceError::MissingStack => AppError::not_found(request_id),
+        PersistenceError::MissingStack | PersistenceError::MissingStackSource => AppError::not_found(request_id),
+        PersistenceError::StaleStackSource => AppError::conflict("stale_stack_source", "read the current source generation before updating or checking it", request_id),
+        PersistenceError::StackSourceBusy => AppError::conflict("stack_source_busy", "wait for the active Git check before changing or deleting its configuration", request_id),
+        PersistenceError::InvalidStackSource => AppError::new(StatusCode::BAD_REQUEST, "invalid_stack_source", "provide a valid Git source configuration", request_id),
         PersistenceError::MissingStackApply => AppError::not_found(request_id),
         PersistenceError::StackApplyBusy => AppError::conflict("stack_apply_busy", "wait for the active stack apply to finish", request_id),
         PersistenceError::StaleStackPlan => AppError::conflict("stale_stack_plan", "host configuration or ownership changed; review a fresh plan", request_id),

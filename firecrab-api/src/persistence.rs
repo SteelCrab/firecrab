@@ -28,6 +28,7 @@ mod registries;
 mod schedules;
 mod security_groups;
 mod stack_applies;
+mod stack_sources;
 mod stacks;
 pub use registries::RegistryLogin;
 pub(crate) use schedules::ScheduleMutation;
@@ -476,6 +477,18 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    /// A source needs explicit configuration before it can be checked.
+    #[error("stack Git source does not exist")]
+    MissingStackSource,
+    /// A stale client cannot replace or check a newer source generation.
+    #[error("stack Git source generation changed")]
+    StaleStackSource,
+    /// Configuration remains stable while a durable check is active.
+    #[error("stack Git source check is active")]
+    StackSourceBusy,
+    /// Invalid source configuration must not reach the network.
+    #[error("invalid stack Git source")]
+    InvalidStackSource,
     /// Another durable stack operation is queued or running.
     #[error("a stack apply is active")]
     StackApplyBusy,
@@ -741,6 +754,7 @@ impl Store {
         micro_services::migrate_history(&conn)?;
         conn.execute_batch(stacks::SCHEMA_SQL)?;
         conn.execute_batch(stack_applies::SCHEMA_SQL)?;
+        conn.execute_batch(stack_sources::SCHEMA_SQL)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;

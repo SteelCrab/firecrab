@@ -33,6 +33,13 @@ Entries land here as work merges, and move under the next version heading when t
   token expiry. Address-scoped Tunnel tokens remain separate. Existing Tunnel
   connection requests also declare the service's required client protocol (#440).
 
+- GitHub stack sources resolve exact commits and verified regular-file blobs, then
+  detect configuration drift without changing resources. Periodic and manual
+  checks share durable admission, generation guards, pause/resume, bounded
+  backoff and fifty redacted observations. `stack source` and REST expose the
+  configuration and history. Private sources use the existing GitHub Auth
+  connection. Automatic Git apply remains follow-up work for #437.
+
 - Browser console dimensions reach the guest serial terminal through a private
   vsock resize helper. Connected viewers share the smallest available grid.
   The console reports whether the guest applied the size and keeps working
