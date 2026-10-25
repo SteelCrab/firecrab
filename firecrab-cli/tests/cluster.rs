@@ -216,3 +216,187 @@ fn cluster_hosts_are_separate_from_saved_host_profiles_and_placement_requires_a_
     assert!(!missing.status.success());
     assert!(String::from_utf8_lossy(&missing.stderr).contains("--idempotency-key"));
 }
+
+fn registered_host(id: u128, online: bool, draining: bool) -> ClusterHost {
+    ClusterHost {
+        report: HostReport {
+            id: Uuid::from_u128(id),
+            name: format!("worker-{id}"),
+            endpoint: "https://worker.test:5523".into(),
+            architecture: "aarch64".into(),
+            capacity: HostCapacity {
+                cpu: 4,
+                ram_mib: 2048,
+            },
+            unmanaged: HostCapacity::default(),
+            images: vec![],
+            networks: vec![],
+            storages: vec![],
+            labels: BTreeMap::new(),
+        },
+        online,
+        draining,
+        last_seen_ms: 1,
+        reserved: HostCapacity {
+            cpu: 2,
+            ram_mib: 512,
+        },
+        reserved_disk_gib: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn host_list_reports_health_and_reservations_and_show_returns_a_single_json_object() {
+    let hosts = vec![
+        registered_host(1, true, false),
+        registered_host(2, true, true),
+        registered_host(3, false, true),
+    ];
+    let (url, request) = server(serde_json::to_value(&hosts).unwrap());
+    let output = cli(&url)
+        .args(["cluster", "host", "list"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    for (host, status) in hosts.iter().zip(["ready", "draining", "offline"]) {
+        assert!(
+            text.contains(&format!(
+                "{}\t{}\t{}\t2/4\t512/2048",
+                host.report.id, host.report.name, status
+            )),
+            "{text}"
+        );
+    }
+    assert!(
+        request
+            .join()
+            .unwrap()
+            .starts_with("GET /api/cluster/hosts HTTP/1.1")
+    );
+    let (url, request) = server(serde_json::to_value(&hosts).unwrap());
+    let output = cli(&url)
+        .args(["cluster", "host", "list", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Vec<ClusterHost>>(&output.stdout).unwrap(),
+        hosts
+    );
+    request.join().unwrap();
+    let (url, request) = server(serde_json::to_value(&hosts[0]).unwrap());
+    let output = cli(&url)
+        .args([
+            "cluster",
+            "host",
+            "show",
+            &hosts[0].report.id.to_string(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<ClusterHost>(&output.stdout).unwrap(),
+        hosts[0]
+    );
+    assert!(request.join().unwrap().starts_with(&format!(
+        "GET /api/cluster/hosts/{} HTTP/1.1",
+        hosts[0].report.id
+    )));
+}
+
+#[test]
+fn placement_list_and_show_preserve_owner_and_unresolved_error_in_human_and_json_output() {
+    let mut p = placement();
+    p.phase = PlacementPhase::Uncertain;
+    p.error = Some("owner result is unresolved".into());
+    for (command, json) in [
+        ("list", false),
+        ("show", false),
+        ("list", true),
+        ("show", true),
+    ] {
+        let response = if command == "list" {
+            serde_json::json!([p])
+        } else {
+            serde_json::json!(p)
+        };
+        let (url, request) = server(response);
+        let mut process = cli(&url);
+        process.args(["cluster", "vm", command]);
+        if command == "show" {
+            process.arg(p.id.to_string());
+        }
+        if json {
+            process.arg("--json");
+        }
+        let output = process.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if json {
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            if command == "list" {
+                assert_eq!(result, serde_json::json!([p]));
+            } else {
+                assert_eq!(result, serde_json::json!(p));
+            }
+        } else {
+            let text = String::from_utf8(output.stdout).unwrap();
+            for value in [
+                p.id.to_string(),
+                p.vm.host_id.to_string(),
+                p.spec.name.clone(),
+                p.error.clone().unwrap(),
+            ] {
+                assert!(text.contains(&value), "{text}");
+            }
+            assert!(text.to_ascii_lowercase().contains("uncertain"));
+        }
+        let path = if command == "list" {
+            "/api/cluster/placements".into()
+        } else {
+            format!("/api/cluster/placements/{}", p.id)
+        };
+        assert!(
+            request
+                .join()
+                .unwrap()
+                .starts_with(&format!("GET {path} HTTP/1.1"))
+        );
+    }
+}
+
+#[test]
+fn unreadable_or_invalid_placement_files_fail_before_sending_a_request() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("placement.json");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    for contents in [None, Some("{invalid json")] {
+        if let Some(contents) = contents {
+            std::fs::write(&file, contents).unwrap();
+        }
+        let output = cli(&url)
+            .args(["cluster", "vm", "place", "--file"])
+            .arg(&file)
+            .args(["--idempotency-key", "file-check"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(!output.stderr.is_empty());
+        assert!(
+            matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+            "invalid files must not open an API connection"
+        );
+    }
+}

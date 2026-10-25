@@ -1,6 +1,8 @@
 use super::*;
 use crate::persistence::Store;
 
+mod management;
+
 fn report(n: u128) -> HostReport {
     HostReport {
         id: Uuid::from_u128(n),
