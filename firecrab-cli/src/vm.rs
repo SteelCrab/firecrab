@@ -44,6 +44,9 @@ pub enum Command {
         /// Storage root id; omitted uses the API's default root.
         #[arg(long)]
         storage_root: Option<String>,
+        /// Existing data volume, repeated as NAME_OR_UUID:/guest/path.
+        #[arg(long, value_name = "VOLUME:/PATH")]
+        volume: Vec<String>,
         /// Emit the created VM as JSON.
         #[arg(long)]
         json: bool,
@@ -154,9 +157,11 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
             network,
             egress,
             storage_root,
+            volume,
             json,
         } => {
             let request = CreateVmRequest {
+                block_storages: crate::volume::resolve_mounts(client, &volume)?,
                 security_group_id: None,
                 name,
                 template,
@@ -406,6 +411,7 @@ mod tests {
                 network,
                 egress,
                 storage_root,
+                volume,
                 json,
             } => {
                 assert_eq!(name, "web-1");
@@ -414,6 +420,7 @@ mod tests {
                 assert_eq!(network, id("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"));
                 assert_eq!(egress, EgressArg::Internet);
                 assert_eq!(storage_root, None);
+                assert!(volume.is_empty());
                 assert!(!json);
             }
             _ => panic!("expected create command"),

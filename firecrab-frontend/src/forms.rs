@@ -106,6 +106,16 @@ impl Form {
             html.push_str(&format!("<p class=\"wasm-wide\">{} · Healthy replicas will connect to this domain automatically.</p><details class=\"wasm-wide\"><summary>Advanced settings</summary>",escape(text(&self.base,"domain"))));
         }
         for (index, field) in self.fields.iter().enumerate() {
+            if field.kind == "mounts" {
+                html.push_str(&crate::volumes::mount_editor(&field.value, &field.options));
+                if let Some(error) = errors.get(field.key) {
+                    html.push_str(&format!(
+                        "<p class=\"field-error wasm-wide\" role=\"alert\">{}</p>",
+                        escape(crate::i18n::t(error))
+                    ));
+                }
+                continue;
+            }
             if self.title == "Create a pool" && index == 2 {
                 html.push_str("<details class=\"wasm-wide\"><summary>Advanced settings</summary><div class=\"wasm-form\">");
             }
@@ -261,7 +271,7 @@ impl Form {
             _ => String::new(),
         };
         html.push_str(&extra);
-        html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\">{}</button><button class=\"btn\" type=\"button\" data-action=\"cancel\">{}</button></div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>",crate::i18n::t(match self.title.as_str() { "Deploy MicroService"=>"Deploy and run", "Deploy update"=>"Deploy update", "New MicroService"|"Edit MicroService"=>"Save configuration", "New schedule"=>"Create schedule", "Edit schedule"=>"Save changes", "Create a pool"=>"Create pool", "Pool settings"=>"Save settings", "New security group"=>"Create security group", "Security group rules"=>"Save rules", "New secret"|"Edit secret"=>"Save secret", "New connection"|"Edit connection"=>"Save connection", _=>"Save" }),crate::i18n::t("Cancel")));
+        html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\">{}</button><button class=\"btn\" type=\"button\" data-action=\"cancel\">{}</button></div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>",crate::i18n::t(match self.title.as_str() { "Create volume"=>"Create volume", "Deploy MicroService"=>"Deploy and run", "Deploy update"=>"Deploy update", "New MicroService"|"Edit MicroService"=>"Save configuration", "New schedule"=>"Create schedule", "Edit schedule"=>"Save changes", "Create a pool"=>"Create pool", "Pool settings"=>"Save settings", "New security group"=>"Create security group", "Security group rules"=>"Save rules", "New secret"|"Edit secret"=>"Save secret", "New connection"|"Edit connection"=>"Save connection", _=>"Save" }),crate::i18n::t("Cancel")));
         if self.base["policyError"] == true {
             html = html.replace("type=\"submit\"", "type=\"submit\" disabled");
             html.push_str(&crate::render::button(
@@ -310,6 +320,7 @@ impl Form {
                                     .contains(&number),
                                 "hostPort" | "port" => (1..=65535).contains(&number),
                                 "replicas" => (1..=100).contains(&number),
+                                "sizeGib" => (1..=65535).contains(&number),
                                 "minReady" => true,
                                 "startupTimeout" => (1..=3600).contains(&number),
                                 "drainTimeout" => number <= 3600,
@@ -321,6 +332,7 @@ impl Form {
                     },
                     "pairs" => pairs(value).err(),
                     "ports" => ports(value).err(),
+                    "mounts" => crate::volumes::parse_mounts(value).err(),
                     _ => None,
                 }
             };
@@ -382,6 +394,7 @@ impl Form {
                 "queue-bindings" => crate::advanced::queues::binding_payload(value)?,
                 "pairs" => pairs(value)?,
                 "ports" => ports(value)?,
+                "mounts" => crate::volumes::parse_mounts(value)?,
                 "lines" | "multi" => json!(
                     value
                         .lines()
@@ -408,6 +421,10 @@ impl Form {
             };
         }
         match self.title.as_str() {
+            "Create volume" => {
+                body["name"] = json!(text(&body, "name").trim());
+                Ok(body)
+            }
             "New network" if body["ipv6AddressMode"].is_null() => {
                 body.as_object_mut().unwrap().remove("ipv6AddressMode");
                 body.as_object_mut().unwrap().remove("ipv6Cidr");
@@ -520,6 +537,20 @@ pub fn vm_create(cache: &BTreeMap<String, Value>) -> Form {
                 "",
             )
             .optional(),
+            Field::new("blockStorages", "Data volumes", "mounts", "[]")
+                .optional()
+                .resources(
+                    &json!(
+                        list(get(crate::volumes::ENDPOINT))
+                            .iter()
+                            .filter(|volume| volume["state"] == "available"
+                                && volume["attachedVmId"].is_null())
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    ),
+                    "id",
+                    "name",
+                ),
         ],
         "vms",
     )
@@ -536,6 +567,17 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
         String::new()
     };
     let form = match kind {
+        "volumes" => Form::new(
+            "Create volume",
+            crate::volumes::ENDPOINT.into(),
+            "POST",
+            vec![
+                Field::new("name", "Name", "text", ""),
+                Field::new("sizeGib", "Size (GiB)", "number", 10),
+                Field::new("storageRoot", "Storage", "nullable-select", "").optional(),
+            ],
+            "volumes",
+        ),
         "networks" => Form::new(
             if editing {
                 "Network settings"

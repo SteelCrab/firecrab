@@ -488,6 +488,22 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/storage", get(handlers::storage::list_storage))
         .route(
+            "/api/microblockstorage",
+            get(handlers::block_storage::list).post(handlers::block_storage::create),
+        )
+        .route(
+            "/api/microblockstorage/{id}",
+            get(handlers::block_storage::get).delete(handlers::block_storage::delete),
+        )
+        .route(
+            "/api/microblockstorage/{id}/attach",
+            post(handlers::block_storage::attach),
+        )
+        .route(
+            "/api/microblockstorage/{id}/detach",
+            post(handlers::block_storage::detach),
+        )
+        .route(
             "/api/storage/devices",
             get(handlers::storage::list_storage_devices),
         )

@@ -33,6 +33,7 @@ mod tls;
 mod update;
 mod vm;
 mod vm_console;
+mod volume;
 
 /// `clap`-derived top-level CLI, replacing `scripts/firecrab-doctor.sh`.
 #[derive(Parser)]
@@ -50,6 +51,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage persistent MicroBlockStorage data volumes.
+    #[command(visible_alias = "microblockstorage")]
+    Volume {
+        #[command(subcommand)]
+        command: volume::Command,
+    },
+
     /// Manage the internal RabbitMQ engine and application queues.
     Queue {
         #[command(subcommand)]
@@ -231,6 +239,11 @@ fn run(cli: Cli) -> i32 {
             json,
             progress_file,
         } => run_update(check, apply, json, progress_file),
+        Command::Volume { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                volume::run(client, command)
+            })
+        }
         Command::Vm { command } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
             vm::run(client, command)
         }),

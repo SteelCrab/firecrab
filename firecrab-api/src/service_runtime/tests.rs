@@ -670,6 +670,7 @@ async fn s3_and_service_secrets_reach_the_guest_together_after_vm_restart() {
             security_group_id: None,
             micro_network_id: network_id,
             storage_root: None,
+            block_storages: vec![],
             shell_ids: vec![],
             env: spec.env.clone(),
             port_forwards: vec![],
@@ -966,6 +967,7 @@ async fn stop_withdraws_ports_drains_and_deletes_a_running_replica() {
             egress_policy: EgressPolicy::Internet,
             micro_network_id: network_id,
             storage_root: None,
+            block_storages: vec![],
             shell_ids: vec![],
             env: BTreeMap::new(),
             port_forwards: vec![PortForward {

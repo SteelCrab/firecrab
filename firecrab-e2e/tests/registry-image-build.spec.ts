@@ -102,6 +102,7 @@ async function open(
         "/api/micro-networks",
         "/api/storage",
         "/api/shells",
+        "/api/microblockstorage",
       ].includes(path)
     )
       return route.fulfill({ json: [] });

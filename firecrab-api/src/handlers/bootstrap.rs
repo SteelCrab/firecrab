@@ -212,6 +212,7 @@ pub async fn start_bootstrap(
     let micro_network_id = builder_micro_network_id(&state, request_id.0).await?;
 
     let create_request = CreateVmRequest {
+        block_storages: Vec::new(),
         security_group_id: None,
         name: builder_vm_name(&format!("bootstrap-{alias}")),
         template: source_alias.clone(),

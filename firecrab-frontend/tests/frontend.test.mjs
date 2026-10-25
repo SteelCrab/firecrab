@@ -223,12 +223,14 @@ test('API failures preserve the entered form and allow retry', async () => {
 test('VM resource edits preserve isolation and environment edits use the real PUT contract', async () => {
   fixture.state.vms[1].egressPolicy = 'isolated';
   await detail(1);
+  await page.getByLabel('More VM actions', { exact: true }).click();
   await page.getByRole('button', { name: 'Resources', exact: true }).click();
   await page.getByLabel('CPU', { exact: true }).fill('4');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.locator('#editor')).toHaveCount(0);
   assert.equal(mutation(`/api/vms/${fixture.state.vms[1].id}`, 'PUT').body.egressPolicy, 'isolated');
   await page.locator('.vm-row-name').nth(1).click();
+  await page.getByLabel('More VM actions', { exact: true }).click();
   await page.getByRole('button', { name: 'Environment', exact: true }).click();
   await page.getByLabel('Environment (NAME=value)', { exact: true }).fill('HELLO=world');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
@@ -244,9 +246,11 @@ test('VM lifecycle actions refresh server state and deletion requires confirmati
   await expect(page.locator('.vm-list tbody tr[data-id]:visible').nth(1)).toContainText('Stopped');
   await page.locator('.vm-row-name').nth(1).click();
   page.once('dialog', dialog => dialog.dismiss());
+  await page.getByLabel('More VM actions', { exact: true }).click();
   await page.getByRole('button', { name: 'Delete', exact: true }).click();
   assert.equal(fixture.state.vms.length, 12);
   page.once('dialog', dialog => dialog.accept());
+  await page.getByLabel('More VM actions', { exact: true }).click();
   await page.getByRole('button', { name: 'Delete', exact: true }).click();
   await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(11);
 });
@@ -537,11 +541,13 @@ test('VM detail tabs expose timeline, reconciliation, masked environment and laz
 
 test('live egress edits preserve running VM resources and human-readable Shell selection', async () => {
   await detail(0);
+  await page.getByLabel('More VM actions', { exact: true }).click();
   await page.getByRole('button', { name: 'Egress', exact: true }).click();
   await page.getByLabel('Internet access', { exact: true }).selectOption('isolated');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.locator('#editor')).toHaveCount(0);
   assert.equal(mutation(`/api/vms/${fixture.state.vms[0].id}`, 'PUT').body.egressPolicy, 'isolated');
+  await page.getByLabel('More VM actions', { exact: true }).click();
   await page.getByRole('button', { name: 'Shells', exact: true }).click();
   await expect(page.locator('#editor').getByLabel('Shells', { exact: true })).toContainText('bootstrap');
   await page.locator('#editor').getByLabel('Shells', { exact: true }).selectOption('shell-1');

@@ -12,6 +12,7 @@ pub const VIEWS: &[(&str, &str, &str, &str)] = &[
     ("queues", "data", "Queue", "Queue"),
     ("secrets", "data", "Secrets", "Secrets"),
     ("storages", "data", "Storage", "스토리지"),
+    ("volumes", "data", "MicroBlockStorage", "MicroBlockStorage"),
     ("images", "data", "Images", "이미지"),
     ("kernels", "data", "Kernels", "커널"),
     ("shells", "system", "Shells", "Shell"),

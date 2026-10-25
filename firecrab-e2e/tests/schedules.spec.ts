@@ -101,7 +101,8 @@ test.describe("Schedules @dashboard", () => {
     const writes = await open(page, { seed: seeds(), hash: "#/vms?vm=" + DB });
     const vmPanel = page.getByRole("complementary", { name: "MicroVM detail", exact: true });
     await expect(vmPanel.getByRole("heading", { name: "postgres-main", exact: true })).toBeVisible();
-    await vmPanel.getByRole("link", { name: "Add schedule for postgres-main", exact: true }).click();
+    await vmPanel.getByLabel("More VM actions", { exact: true }).click();
+    await vmPanel.getByRole("link", { name: "Add schedule postgres-main", exact: true }).click();
     await expect(detail(page).getByRole("combobox", { name: "MicroVM", exact: true })).toHaveValue(DB);
     await detail(page).getByLabel("Repeat", { exact: true }).selectOption("weekly");
     await detail(page).getByRole("button", { name: "Wed", exact: true }).click();

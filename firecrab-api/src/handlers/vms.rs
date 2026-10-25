@@ -377,6 +377,9 @@ pub(crate) async fn insert_vm(
     let port_forwards = req.port_forwards.clone();
     let insert_result = tokio::task::spawn_blocking(move || {
         store.insert(&record)?;
+        if !req.block_storages.is_empty() {
+            store.attach_block_storages(record.id, &req.block_storages)?;
+        }
         if !shell_ids.is_empty() {
             let pins = store.resolve_latest_shell_revisions(&shell_ids)?;
             store.set_vm_shells(record.id, &pins)?;
@@ -405,6 +408,9 @@ pub(crate) async fn insert_vm(
         })
         .await;
         return Err(match error {
+            crate::persistence::PersistenceError::BlockStorageConflict { message } => {
+                AppError::conflict("volume_conflict", message, request_id.0)
+            }
             crate::persistence::PersistenceError::MissingShell { .. } => {
                 let mut fields = BTreeMap::new();
                 fields.insert(
@@ -1007,6 +1013,21 @@ async fn claim_start(
         .get(&id)
         .cloned()
         .ok_or_else(|| AppError::not_found(request_id.0))?;
+    if !state
+        .store
+        .vm_block_storages(id)
+        .map_err(|error| crate::handlers::block_storage::persistence_error(error, request_id.0))?
+        .is_empty()
+        && vm.state.can_edit_resources()
+        && crate::network_policy::vm_is_active(&state, &vm)
+            .map_err(|_| AppError::internal(request_id.0))?
+    {
+        return Err(AppError::conflict(
+            "volume_vm_active",
+            "the previous VM runtime still owns its data volumes",
+            request_id.0,
+        ));
+    }
     crate::network_policy::validate_selection(
         &state,
         vm.security_group_id,
@@ -1214,12 +1235,21 @@ pub async fn delete_vm(
         .get(&id)
         .cloned()
         .ok_or_else(|| AppError::not_found(request_id.0))?;
-    if vm.security_group_id.is_some()
+    let has_volumes = !state
+        .store
+        .vm_block_storages(id)
+        .map_err(|error| crate::handlers::block_storage::persistence_error(error, request_id.0))?
+        .is_empty();
+    if (vm.security_group_id.is_some() || has_volumes)
         && crate::network_policy::vm_is_active(&state, &vm)
             .map_err(|_| AppError::internal(request_id.0))?
     {
         return Err(AppError::conflict(
-            "security_group_in_use",
+            if has_volumes {
+                "volume_vm_active"
+            } else {
+                "security_group_in_use"
+            },
             "stop the VM host runtime before deleting it",
             request_id.0,
         ));
@@ -1480,6 +1510,19 @@ async fn finish_run_start(
         guest_env.extend(queue_env);
         rootfs::specialize_guest(&rootfs, record.id, &guest_env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
+        let volumes = store_for_shells
+            .vm_block_storages(record.id)
+            .map_err(|error| format!("volume attachment load failed: {error}"))?;
+        let data_drives = volumes
+            .iter()
+            .map(|volume| {
+                crate::block_storage::verify_disk(&state_for_blocking, volume)
+                    .map(|path| (volume.id, path))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        crate::block_storage::install_guest(&rootfs, &volumes)
+            .map_err(|error| format!("volume mount installation failed: {error}"))?;
+
         if has_storage_secrets {
             rootfs::protect_vm_credentials(&rootfs)
                 .map_err(|_| "Could not protect the service credential file".to_owned())?;
@@ -1511,16 +1554,20 @@ async fn finish_run_start(
             .initrd
             .as_ref()
             .map(|artifact| templates.artifact_path(artifact));
-        firecracker::write_config(
-            &runtime,
-            &rootfs,
+        let mut config = firecracker::FirecrackerConfig::for_vm(
             &record,
             &kernel,
             initrd.as_deref(),
             &runtime_boot_args,
+            &rootfs,
             Some(&network),
-        )
-        .map_err(|error| format!("config generation failed: {error}"))?;
+        );
+        for (id, path) in data_drives {
+            config.add_data_drive(id, &path);
+        }
+        config
+            .write(&runtime)
+            .map_err(|error| format!("config generation failed: {error}"))?;
         Ok((generation, runtime_id))
     })
     .await
@@ -2388,6 +2435,24 @@ pub(crate) fn validate_create_for(
     state: &AppState,
 ) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
+    let mounts = &req.block_storages;
+    let mut seen_volumes = std::collections::HashSet::new();
+    if mounts.len() > crate::block_storage::MAX_VOLUMES_PER_VM
+        || mounts.iter().any(|mount| {
+            !crate::block_storage::valid_mount_path(&mount.mount_path)
+                || !seen_volumes.insert(mount.volume_id)
+        })
+        || mounts.iter().enumerate().any(|(index, mount)| {
+            mounts[..index].iter().any(|other| {
+                crate::block_storage::paths_overlap(&mount.mount_path, &other.mount_path)
+            })
+        })
+    {
+        fields.insert(
+            "blockStorages".into(),
+            "at most 8 distinct volumes with safe, non-overlapping absolute mount paths".into(),
+        );
+    }
     if req.shell_ids.len() > crate::shells::MAX_SHELLS_PER_VM {
         fields.insert(
             "shellIds".to_owned(),
@@ -2971,6 +3036,7 @@ mod tests {
         // The fixture template's rootfs is 6 bytes (`test_state_with_binary`),
         // so `min_disk_gb_for` rounds it up to 1 GiB.
         let base = CreateVmRequest {
+            block_storages: Vec::new(),
             security_group_id: None,
             name: "test-vm".to_owned(),
             template: "ubuntu-rootfs-26.04".to_owned(),
@@ -4534,6 +4600,7 @@ while True:
 
     fn create_request_on(name: &str, micro_network_id: Uuid) -> CreateVmRequest {
         CreateVmRequest {
+            block_storages: Vec::new(),
             security_group_id: None,
             name: name.to_owned(),
             template: "ubuntu-rootfs-26.04".to_owned(),

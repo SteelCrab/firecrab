@@ -31,6 +31,12 @@ Entries land here as work merges, and move under the next version heading when t
   development uses Docker without changing production systemd services.
   Tracked in [#495](https://github.com/SteelCrab/firecrab/issues/495).
 
+- Named MicroBlockStorage data volumes persist after VM deletion. REST, CLI, and
+  Dashboard support creation and exclusive attachment to inactive user VMs.
+  Guest mounts use filesystem UUIDs and gate managed application startup.
+  Data disks honor guest flush requests, and API restarts retain reservations.
+  Tracked in [#247](https://github.com/SteelCrab/firecrab/issues/247).
+
 - `firecrab service dev --port PORT` selects the development dashboard port on
   macOS and Windows. Development controls retain the selected port, and older
   dashboard sessions default to 8080. Tracked in [#488](https://github.com/SteelCrab/firecrab/issues/488).

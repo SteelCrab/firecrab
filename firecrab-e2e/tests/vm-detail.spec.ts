@@ -77,6 +77,7 @@ test.describe("MicroVM detail panel", () => {
 
   test("edits only the spec section", async ({ page }) => {
     const puts = await open(page, [STOPPED], "redis-cache");
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
     await panel(page).getByRole("button", { name: "Resources", exact: true }).click();
     await expect(panel(page).getByRole("button", { name: "Save" })).toHaveCount(1);
     await panel(page).getByLabel("CPU", { exact: true }).fill("4");
@@ -92,14 +93,18 @@ test.describe("MicroVM detail panel", () => {
     await expect(panel(page).getByRole("button", { name: "Resources", exact: true })).toHaveCount(0);
     await expect(panel(page).getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     await panel(page).getByRole("tab", { name: /Network/ }).click();
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
     await expect(panel(page).getByRole("button", { name: "Port forwarding", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
     await panel(page).getByRole("tab", { name: /Environment/ }).click();
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
     await expect(panel(page).getByRole("button", { name: "Environment", exact: true })).toBeVisible();
   });
 
   test("saves env with the current resources", async ({ page }) => {
     const puts = await open(page, [RUNNING], "postgres-main");
     await panel(page).getByRole("tab", { name: /Environment/ }).click();
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
     await panel(page).getByRole("button", { name: "Environment", exact: true }).click();
     await environment(page).fill("POSTGRES_DB=app\nPOSTGRES_PASSWORD=pg-very-secret\nPGPORT=5432");
     await panel(page).getByRole("button", { name: "Save" }).click();
@@ -118,6 +123,7 @@ test.describe("MicroVM detail panel", () => {
     // Every poll answers a fresh object for the same VM.
     await open(page, () => [{ ...RUNNING, cpuUsagePercent: ++tick }], "postgres-main");
     await panel(page).getByRole("tab", { name: /Environment/ }).click();
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
     await panel(page).getByRole("button", { name: "Environment", exact: true }).click();
     const value = environment(page);
     await value.fill("POSTGRES_DB=draft-value");
@@ -129,6 +135,7 @@ test.describe("MicroVM detail panel", () => {
   test("Esc while a section is being edited keeps the draft", async ({ page }) => {
     await open(page, [RUNNING], "postgres-main");
     await panel(page).getByRole("tab", { name: /Environment/ }).click();
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
     await panel(page).getByRole("button", { name: "Environment", exact: true }).click();
     await environment(page).fill("POSTGRES_DB=draft-value");
     await environment(page).focus();
@@ -169,7 +176,7 @@ test.describe("MicroVM detail panel", () => {
     await expect(panel(page).getByRole("heading", { name: "API-STATUS", exact: true })).toBeVisible();
     await expect(section(page, "API-STATUS").locator(".wasm-diagnostic")).toHaveText("bridge is missing");
     await expect(section(page, "Startup")).toContainText("guest DHCP did not answer");
-    await panel(page).getByRole("button", { name: "Logs", exact: true }).click();
+    await panel(page).getByRole("tab", { name: "Log", exact: true }).click();
     await expect(panel(page).getByRole("tab", { name: "Log" })).toHaveAttribute("aria-selected", "true");
     await expect(panel(page).locator("pre.detail-log")).toContainText("firecrab-init: ready");
   });
@@ -177,6 +184,7 @@ test.describe("MicroVM detail panel", () => {
   test("shows the duplicate env key error", async ({ page }) => {
     await open(page, [RUNNING], "postgres-main");
     await panel(page).getByRole("tab", { name: /Environment/ }).click();
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
     await panel(page).getByRole("button", { name: "Environment", exact: true }).click();
     await environment(page).fill("POSTGRES_DB=first\nPOSTGRES_DB=second");
     await panel(page).getByRole("button", { name: "Save" }).click();
@@ -250,6 +258,7 @@ test.describe("MicroVM pause and resume", () => {
     const pending = { ...RUNNING, state: "pausing" as const };
     await open(page, [pending], pending.name);
     await expect(panel(page).getByRole("button", { name: "Retry pause", exact: true })).toBeVisible();
+    await panel(page).getByLabel("More VM actions", { exact: true }).click();
     await expect(panel(page).getByRole("button", { name: "Retry resume", exact: true })).toBeVisible();
     await expect(panel(page).getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     await expect(panel(page).getByRole("button", { name: "Start", exact: true })).toHaveCount(0);
