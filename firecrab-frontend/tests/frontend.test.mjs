@@ -354,8 +354,15 @@ test('MicroService deployment collects hostPort instead of sending unsupported r
   await open('services');
   await page.getByRole('button', { name: 'Details', exact: true }).click();
   await page.getByRole('button', { name: 'Deploy', exact: true }).click();
+  const deploy = page.getByRole('button', { name: 'Deploy and run', exact: true });
+  await expect(deploy).toBeEnabled();
+  const checkedPort = page.waitForResponse(response =>
+    new URL(response.url()).pathname === '/api/micro-services/service-1/deployment/check' &&
+    response.request().method() === 'POST' && response.request().postDataJSON()?.hostPort === 30123);
   await page.getByLabel('First host port', { exact: true }).fill('30123');
-  await page.getByRole('button', { name: 'Deploy and run', exact: true }).click();
+  assert.equal((await checkedPort).status(), 200);
+  await expect(deploy).toBeEnabled();
+  await deploy.click();
   await expect(page.locator('#editor')).toHaveCount(0);
   assert.deepEqual(mutation('/api/micro-services/service-1/deployment').body, { hostPort: 30123, microNetworkId: null });
 });
