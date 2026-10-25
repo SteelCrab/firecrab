@@ -1,9 +1,9 @@
-//! Git source configuration and redacted, read-only reconciliation records.
+//! Git source configuration and redacted reconciliation records.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::Plan;
+use crate::{ApplyStatus, Plan};
 
 /// A github.com source. Credentials are selected by reference, never embedded.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -25,6 +25,32 @@ pub struct GitSource {
     /// Disable periodic checks. Explicit checks remain available.
     #[serde(default)]
     pub paused: bool,
+    /// Periodic checks only detect drift unless automatic synchronization is selected.
+    #[serde(default, skip_serializing_if = "is_detect_only")]
+    pub sync_mode: GitSyncMode,
+    /// Explicit permission to stop owned workloads during Git synchronization.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_stop: bool,
+}
+
+/// Git-driven mutation is an explicit opt-in; existing sources remain read-only.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitSyncMode {
+    /// Observe configuration without applying it.
+    #[default]
+    DetectOnly,
+    /// Apply supported changes on each due poll.
+    Automatic,
+}
+
+// Keep default source JSON readable by clients predating synchronization support.
+fn is_detect_only(mode: &GitSyncMode) -> bool {
+    *mode == GitSyncMode::DetectOnly
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// Supported host-local credential references.
@@ -121,12 +147,29 @@ pub struct GitSourceGeneration {
     pub generation: u64,
 }
 
-/// Read-only check states. None of these states means a deployment succeeded.
+/// Explicit synchronization, including acknowledgement of a failed operation before recovery.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SyncGitSource {
+    /// Exact configuration generation.
+    pub generation: u64,
+    /// Failed/interrupted operation inspected before requesting a fresh plan and apply.
+    #[serde(default)]
+    pub recover_operation_id: Option<Uuid>,
+}
+
+/// Observation and synchronization lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GitCheckState {
     /// Durably accepted before starting network access.
     Checking,
+    /// A native apply was atomically linked to this observation.
+    Applying,
+    /// The linked native apply succeeded. A later check still observes current drift.
+    Applied,
+    /// The linked apply failed or was interrupted; explicit recovery is required.
+    RecoveryRequired,
     /// Declared configuration matches observed configuration.
     InSync,
     /// Supported configuration changes were detected.
@@ -137,6 +180,29 @@ pub enum GitCheckState {
     Failed,
     /// The API restarted before the result was saved. Checking may safely repeat.
     Interrupted,
+}
+
+impl GitCheckState {
+    /// Active observations prevent source changes and overlapping runs.
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Checking | Self::Applying)
+    }
+}
+
+/// Provenance for desired, attempted and successful configuration; no manifest values.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRevision {
+    /// Source configuration used to acquire this revision, containing credential references only.
+    pub source: GitSource,
+    /// Source configuration generation.
+    pub generation: u64,
+    /// Resolved immutable Git commit.
+    pub commit: String,
+    /// Verified regular-file blob.
+    pub blob: String,
+    /// Hash of the validated declaration.
+    pub desired_hash: String,
 }
 
 /// A bounded-history check record. Resource values and provider errors are excluded.
@@ -165,6 +231,28 @@ pub struct GitCheck {
     pub plan: Option<Plan>,
     /// Static failure category, without remote response text or submitted values.
     pub error: Option<String>,
+    /// Whether this observation may apply changes. Explicit checks always set false.
+    #[serde(default)]
+    pub sync: bool,
+    /// Acknowledged prior operation, if explicit recovery was requested.
+    #[serde(default)]
+    pub recover_operation_id: Option<Uuid>,
+    /// Durable native apply identity; the apply journal retains exact resource results.
+    #[serde(default)]
+    pub operation_id: Option<Uuid>,
+}
+
+impl GitCheck {
+    /// Only a validated manifest with complete provenance identifies a desired revision.
+    pub fn revision(&self) -> Option<GitRevision> {
+        Some(GitRevision {
+            source: self.source.clone(),
+            generation: self.generation,
+            commit: self.commit.clone()?,
+            blob: self.blob.clone()?,
+            desired_hash: self.desired_hash.clone()?,
+        })
+    }
 }
 
 /// Durable source metadata and latest observation.
@@ -185,4 +273,19 @@ pub struct GitSourceStatus {
     pub failures: u32,
     /// Latest check, including unfinished progress after a lost acknowledgement.
     pub latest: Option<GitCheck>,
+    /// Latest validated desired revision, even when its plan is blocked.
+    #[serde(default)]
+    pub desired_revision: Option<GitRevision>,
+    /// Last revision accepted by the native apply journal.
+    #[serde(default)]
+    pub attempted_revision: Option<GitRevision>,
+    /// Last successful apply or synchronization that observed no changes.
+    #[serde(default)]
+    pub successful_revision: Option<GitRevision>,
+    /// Latest linked native operation, including per-resource redacted results.
+    #[serde(default)]
+    pub last_apply: Option<ApplyStatus>,
+    /// Polling cannot mutate until this failed/interrupted operation is acknowledged.
+    #[serde(default)]
+    pub recovery_operation_id: Option<Uuid>,
 }

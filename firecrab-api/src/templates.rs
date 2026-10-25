@@ -170,6 +170,17 @@ pub struct TemplateVersion {
 }
 
 impl TemplateVersion {
+    /// Redacted content identity for stack plan approval and execution.
+    pub(crate) fn stack_pin(&self) -> firecrab_stack::TemplatePin {
+        firecrab_stack::TemplatePin {
+            version: self.version.clone(),
+            kernel_sha256: self.kernel.sha256().to_owned(),
+            rootfs_sha256: self.rootfs.sha256().to_owned(),
+            initrd_sha256: self.initrd.as_ref().map(|a| a.sha256().to_owned()),
+            boot_args_sha256: self.boot_args_sha256(),
+        }
+    }
+
     /// SHA256 of `boot_args`, so callers can detect a boot-args change
     /// without re-hashing the (potentially multi-GB) rootfs.
     pub fn boot_args_sha256(&self) -> String {
@@ -470,6 +481,20 @@ impl TemplateRegistry {
             .collect();
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         entries
+    }
+
+    /// Read both maps under the same lock order as alias resolution.
+    pub(crate) fn stack_snapshot(&self) -> Vec<firecrab_stack::TemplateSnapshot> {
+        let aliases = self.aliases.lock().unwrap_or_else(|p| p.into_inner());
+        let versions = self.versions.lock().unwrap_or_else(|p| p.into_inner());
+        versions
+            .iter()
+            .map(|(key, template)| firecrab_stack::TemplateSnapshot {
+                name: template.name.clone(),
+                pin: template.stack_pin(),
+                current: aliases.get(&template.name) == Some(key),
+            })
+            .collect()
     }
 
     /// Drop an alias from the live registry and return the unpinned version

@@ -122,10 +122,16 @@ fn fixture() -> (Stack, StackRecord, Inventory) {
         ],
     };
     let desired = &stack.micro_vms["worker"];
+    let pin = template_pin();
     let vm = VmSnapshot {
         id: VM,
         name: desired.name.clone(),
         template: desired.template.clone(),
+        template_version: pin.version.clone(),
+        template_kernel_sha256: pin.kernel_sha256.clone(),
+        template_rootfs_sha256: pin.rootfs_sha256.clone(),
+        template_boot_args_sha256: pin.boot_args_sha256.clone(),
+        template_pin: Some(pin.clone()),
         cpu: desired.cpu,
         ram: desired.ram,
         disk_gb: desired.disk_gb,
@@ -162,6 +168,7 @@ fn fixture() -> (Stack, StackRecord, Inventory) {
         domain_route_owned: false,
     };
     let inventory = Inventory {
+        templates: vec![firecrab_stack::TemplateSnapshot { name: desired.template.clone(), pin, current: true }],
         networks: vec![serde_json::from_value(json!({"id":NETWORK,"name":"demo-app","subnetCidr":"172.31.20.0/24","gateway":"172.31.20.1","internetEnabled":true})).unwrap()],
         vms: vec![vm],
         services: vec![ServiceSnapshot { service: MicroServiceResponse { id: SERVICE, spec: service.config.clone() }, deployment: Some(deployment) }],
@@ -191,9 +198,13 @@ fn matching_owned_configuration_has_a_stable_empty_diff() {
 
 #[test]
 fn an_empty_host_produces_creates_in_dependency_order() {
-    let (stack, mut record, _) = fixture();
+    let (stack, mut record, inventory) = fixture();
     record.bindings.clear();
-    let result = plan(&stack, &record, &Inventory::default()).unwrap();
+    let empty = Inventory {
+        templates: inventory.templates,
+        ..Inventory::default()
+    };
+    let result = plan(&stack, &record, &empty).unwrap();
     assert_eq!(
         result.changes.iter().map(|c| c.kind).collect::<Vec<_>>(),
         [
@@ -349,6 +360,49 @@ fn undeployed_and_busy_services_are_distinguished() {
 }
 
 #[test]
+fn unfinished_deploy_recovery_blocks_noop_sync_and_is_part_of_approval() {
+    let (stack, record, mut inventory) = fixture();
+    let ready = plan(&stack, &record, &inventory).unwrap();
+    let previous = inventory.services[0].deployment.as_ref().unwrap().clone();
+    let deployment = inventory.services[0].deployment.as_mut().unwrap();
+    deployment.phase = ServicePhase::Failed;
+    deployment.update = Some(Box::new(firecrab_api_types::ServiceUpdate {
+        failure: Some("DO-NOT-PRINT-runtime-error".into()),
+        cancelled: false,
+        previous: Box::new(previous),
+        requested_spec: stack.micro_services["web"].config.clone(),
+        strategy: firecrab_api_types::DeployStrategy::Rolling,
+        rollback_of: None,
+        restoring: true,
+        routed_new: false,
+        transition: None,
+        retiring: vec![],
+        completed: false,
+    }));
+    let recovering = plan(&stack, &record, &inventory).unwrap();
+    assert!(recovering.blocked);
+    assert_eq!(recovering.changes[2].action, Action::Blocked);
+    assert_ne!(recovering.fingerprint, ready.fingerprint);
+    assert!(
+        !serde_json::to_string(&recovering)
+            .unwrap()
+            .contains("DO-NOT-PRINT")
+    );
+    inventory.services[0]
+        .deployment
+        .as_mut()
+        .unwrap()
+        .update
+        .as_mut()
+        .unwrap()
+        .completed = true;
+    let recovered = plan(&stack, &record, &inventory).unwrap();
+    assert!(!recovered.blocked);
+    assert_eq!(recovered.changes[2].action, Action::Noop);
+    assert_eq!(recovered.fingerprint, ready.fingerprint);
+}
+
+#[test]
 fn duplicate_ownership_and_mismatched_stack_identity_are_rejected() {
     let (stack, mut record, inventory) = fixture();
     record.bindings.push(record.bindings[0].clone());
@@ -384,4 +438,79 @@ fn explicit_uuid_ownership_remains_unambiguous_when_host_names_are_duplicated() 
     let result = plan(&stack, &record, &inventory).unwrap();
     assert!(!result.blocked);
     assert!(result.changes.iter().all(|c| c.action == Action::Noop));
+}
+
+fn template_pin() -> firecrab_stack::TemplatePin {
+    firecrab_stack::TemplatePin {
+        version: "v1".into(),
+        kernel_sha256: "a".repeat(64),
+        rootfs_sha256: "b".repeat(64),
+        initrd_sha256: None,
+        boot_args_sha256: "c".repeat(64),
+    }
+}
+
+#[test]
+fn approval_tracks_selected_template_content_and_explicit_pins_survive_alias_updates() {
+    let (mut stack, record, mut inventory) = fixture();
+    let original = plan(&stack, &record, &inventory).unwrap();
+    assert_eq!(original.inputs.templates["worker"], template_pin());
+    assert_eq!(original.inputs.service_digests["web"].len(), 71);
+    let mut next = inventory.templates[0].clone();
+    next.pin.version = "v2".into();
+    next.pin.initrd_sha256 = Some("d".repeat(64));
+    inventory.templates[0].current = false;
+    inventory.templates.push(next);
+    let changed = plan(&stack, &record, &inventory).unwrap();
+    assert_ne!(original.fingerprint, changed.fingerprint);
+    assert_eq!(changed.changes[1].action, Action::Replace);
+
+    stack.micro_vms.get_mut("worker").unwrap().template_pin = Some(template_pin());
+    let pinned = plan(&stack, &record, &inventory).unwrap();
+    assert_eq!(pinned.changes[1].action, Action::Noop);
+    inventory.templates[1].pin.kernel_sha256 = "e".repeat(64);
+    assert_eq!(plan(&stack, &record, &inventory).unwrap(), pinned);
+    inventory.templates[0].pin.initrd_sha256 = Some("f".repeat(64));
+    let missing = plan(&stack, &record, &inventory).unwrap();
+    assert!(missing.blocked);
+    assert_eq!(missing.changes[1].action, Action::Blocked);
+    assert!(!missing.inputs.templates.contains_key("worker"));
+}
+
+#[test]
+fn template_provenance_drift_requires_replacement_instead_of_a_resource_update() {
+    let (stack, record, inventory) = fixture();
+    for field in ["version", "kernel", "rootfs", "boot", "initrd"] {
+        let mut inventory = inventory.clone();
+        let vm = &mut inventory.vms[0];
+        match field {
+            "version" => vm.template_version = "other".into(),
+            "kernel" => vm.template_kernel_sha256 = "d".repeat(64),
+            "rootfs" => vm.template_rootfs_sha256 = "d".repeat(64),
+            "boot" => vm.template_boot_args_sha256 = "d".repeat(64),
+            _ => vm.template_pin.as_mut().unwrap().initrd_sha256 = Some("d".repeat(64)),
+        }
+        let plan = plan(&stack, &record, &inventory).unwrap();
+        assert_eq!(plan.changes[1].action, Action::Replace, "{field}");
+        assert_eq!(plan.changes[1].fields, ["template"]);
+    }
+}
+
+#[test]
+fn template_pin_validation_is_bounded_and_never_echoes_submitted_hashes() {
+    let (mut stack, _, _) = fixture();
+    let mut pin = template_pin();
+    pin.kernel_sha256 = "DO-NOT-PRINT-secret".into();
+    stack.micro_vms.get_mut("worker").unwrap().template_pin = Some(pin);
+    let errors = firecrab_stack::validate(&stack).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.path == "microVMs.worker.templatePin")
+    );
+    assert!(
+        !serde_json::to_string(&errors)
+            .unwrap()
+            .contains("DO-NOT-PRINT")
+    );
 }

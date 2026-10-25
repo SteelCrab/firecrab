@@ -43,6 +43,11 @@ pub fn binding(state: &AppState, id: Uuid) -> io::Result<Binding> {
         || vm.purpose != VmPurpose::Instance
         || state
             .store
+            .cluster_worker(id)
+            .map_err(io::Error::other)?
+            .is_some()
+        || state
+            .store
             .vm_has_service_owner(id)
             .map_err(io::Error::other)?
     {

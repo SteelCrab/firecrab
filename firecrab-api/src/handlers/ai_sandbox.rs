@@ -340,6 +340,18 @@ pub async fn save_project(
         ));
     }
     if let Some(vm) = spec.vm_id {
+        if state
+            .store
+            .cluster_worker(vm)
+            .map_err(|_| AppError::internal(id.0))?
+            .is_some()
+        {
+            return Err(invalid(
+                id,
+                "vmId",
+                "Choose a user MicroVM without a controller placement owner",
+            ));
+        }
         let vm = state
             .vms
             .lock()

@@ -1,6 +1,8 @@
 //! Redacted apply journal and atomic prospective ownership reservations.
 
-use firecrab_stack::{Action, ApplyFailure, ApplyState, ApplyStatus, StackRecord, StepState};
+use firecrab_stack::{
+    Action, ApplyFailure, ApplyState, ApplyStatus, GitCheck, StackRecord, StepState,
+};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
@@ -45,6 +47,7 @@ impl Store {
         hash: &str,
         allow_stop: bool,
         status: &ApplyStatus,
+        source: Option<&GitCheck>,
     ) -> Result<(ApplyStatus, bool), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -52,6 +55,7 @@ impl Store {
             if previous.status.stack_id != expected.id
                 || previous.desired_hash != hash
                 || previous.allow_stop != allow_stop
+                || previous.status.git_revision != status.git_revision
             {
                 return Err(PersistenceError::StackApplyIdentity);
             }
@@ -61,6 +65,15 @@ impl Store {
             .ok_or(PersistenceError::MissingStack)?;
         if &current != expected {
             return Err(PersistenceError::StaleStackPlan);
+        }
+        if source.is_none()
+            && tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM stack_git_sources WHERE stack_id=?1)",
+                [current.id.to_string()],
+                |r| r.get::<_, bool>(0),
+            )?
+        {
+            return Err(PersistenceError::StackSourceManaged);
         }
         let active: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM stack_applies WHERE state IN ('queued','running'))",
@@ -96,6 +109,19 @@ impl Store {
                 "UPDATE stacks SET revision = revision + 1 WHERE id = ?1",
                 [current.id.to_string()],
             )?;
+        }
+        if let Some(check) = source {
+            if check.desired_hash.as_deref() != Some(hash)
+                || check.source.allow_stop != allow_stop
+                || status.git_revision != check.revision()
+                || check
+                    .plan
+                    .as_ref()
+                    .is_none_or(|plan| plan.inputs != status.inputs)
+            {
+                return Err(PersistenceError::StackApplyIdentity);
+            }
+            super::stack_sources::admit_apply(&tx, current.id, check, status)?;
         }
         tx.commit()?;
         Ok((status.clone(), true))
@@ -151,7 +177,7 @@ pub(super) fn ensure_idle(conn: &Connection, stack_id: Uuid) -> Result<(), Persi
     }
 }
 
-fn read(conn: &Connection, id: Uuid) -> Result<Option<StoredApply>, PersistenceError> {
+pub(super) fn read(conn: &Connection, id: Uuid) -> Result<Option<StoredApply>, PersistenceError> {
     let row: Option<(String, bool, String)> = conn
         .query_row(
             "SELECT desired_hash,allow_stop,status FROM stack_applies WHERE operation_id=?1",

@@ -85,3 +85,4 @@ An older attempt that never captured a runtime keeps an unknown reference and is
 Migration does not grant remote hosts access. Back up the private database and retained workspaces together.
 
 This policy covers the Sandbox controller API. It does not provide guest filesystem/network isolation, managed Environments, or a completed real-model-to-MicroVM acceptance run.
+Sandbox borrows API-host-local user VMs. Controller-owned cluster placements remain under their owning cluster lifecycle and cannot be bound as Sandbox VMs.

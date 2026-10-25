@@ -66,6 +66,57 @@ fn project_grants(f: &Fixture, project: Uuid, connection: Uuid) -> Vec<Value> {
 }
 
 #[tokio::test]
+async fn sandbox_refuses_controller_owned_vms_even_with_operator_permissions() {
+    let f = fixture().await;
+    let connection = connect(&f, "openai").await;
+    verify(&f, connection, true).await;
+    let project = project(&f, connection, true).await;
+    let spec = f
+        .state
+        .store
+        .sandbox_project(project)
+        .unwrap()
+        .unwrap()
+        .spec;
+    let vm = spec.vm_id.unwrap();
+    let host = Uuid::new_v4();
+    let target = json!({"network":{"hostId":host,"resourceId":Uuid::new_v4().to_string()},"storage":{"hostId":host,"resourceId":"default"}});
+    let receipt:WorkerReceipt=serde_json::from_value(json!({"id":vm,"controllerId":Uuid::new_v4(),"intent":{"generation":1,"action":"create","spec":{"name":"owned","image":{"alias":"fixture","version":"1","kernelSha256":"0".repeat(64),"rootfsSha256":"1".repeat(64),"bootArgsSha256":"2".repeat(64)},"cpu":1,"ram":128,"diskGb":2,"targets":[target]},"target":target},"phase":"confirmed","observed":null,"error":null})).unwrap();
+    rusqlite::Connection::open(f.dir.path().join("state.db"))
+        .unwrap()
+        .execute(
+            "INSERT INTO cluster_worker_receipts(id,data) VALUES(?1,?2)",
+            rusqlite::params![vm.to_string(), serde_json::to_string(&receipt).unwrap()],
+        )
+        .unwrap();
+    assert!(crate::ai_sandbox::guest::binding(&f.state, vm).is_err());
+    assert_eq!(
+        call(
+            &f.app,
+            "PUT",
+            &format!("/api/ai-sandbox/projects/{project}"),
+            serde_json::to_value(&spec).unwrap()
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let task = Uuid::new_v4();
+    assert_eq!(
+        call(
+            &f.app,
+            "PUT",
+            &format!("/api/ai-sandbox/projects/{project}/tasks/{task}"),
+            json!({"kind":"code","input":"do not bypass owner"})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert!(f.state.store.sandbox_task(task).unwrap().is_none());
+}
+
+#[tokio::test]
 async fn sandbox_source_permissions_filter_history_before_pagination() {
     let f = fixture().await;
     let connection = connect(&f, "openai").await;

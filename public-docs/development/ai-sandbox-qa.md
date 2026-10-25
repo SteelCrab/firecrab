@@ -105,6 +105,7 @@ Native CI also runs the ignored root-only guest contract through `scripts/test-a
 ## Caller and resource authorization, 2026-10-25
 
 The follow-up [Sandbox access policy](../guides/sandbox-access.md) uses verified mTLS host identities and the trusted loopback operator.
+The initial local counts below use main at `f9d4f2d3`. Later main integration is validated by the follow-up PR's exact-head CI results.
 It persists project owners, admission callers and immutable project/task/attempt/runtime/source references.
 Delegated hosts cannot bypass resource grants through VM keys, consoles or provider APIs.
 Source filtering happens before task pagination. Provider history is confined to the attempt's original source.

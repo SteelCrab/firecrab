@@ -1897,16 +1897,12 @@ mod tests {
         write_file(&root.join("kernel/old-vmlinux"), b"old kernel");
         write_file(&root.join("rootfs/root.ext4"), b"rootfs-content-here");
         if managed_kernel {
-            // Digest-pinned, so no local placeholder can stand in for it —
-            // fetch the real published 7.2.2 kernel from the MicroRegistry.
-            kernel_cache::ensure_managed_kernel(
+            crate::oci::kernel_tests::install_fixture_kernel(
                 root,
                 crate::image_install::Architecture::HOST,
                 "7.2.2",
-                Some(image_install::DEFAULT_IMAGE_BASE_URL),
             )
-            .await
-            .expect("download and verify the real 7.2.2 kernel from the MicroRegistry");
+            .await;
         }
         let templates = TemplateRegistry::from_specs(
             root,
@@ -1960,7 +1956,7 @@ mod tests {
 
         let directory = tempdir().unwrap();
         let state = installed_demo_state(directory.path(), false).await;
-        for kernel_version in [String::new(), "9.9.9".to_owned()] {
+        for kernel_version in [String::new(), "9.9.9-rc1".to_owned()] {
             let result = update_image_kernel(
                 State(state.clone()),
                 Path("demo".to_owned()),

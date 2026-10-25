@@ -13,3 +13,6 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 serde-saphyr = { version = "2.0", default-features = false, features = ["deserialize"] }
 uuid = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true, features = ["v4"] }
