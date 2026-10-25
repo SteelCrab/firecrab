@@ -7,6 +7,67 @@ use std::sync::Arc;
 
 use crate::{Error, host_id};
 
+/// A CA signature alone cannot distinguish two enrolled hosts at the same name.
+#[derive(Debug)]
+pub(crate) struct ExpectedHostVerifier {
+    verifier: Arc<dyn rustls::client::danger::ServerCertVerifier>,
+    id: uuid::Uuid,
+}
+
+impl ExpectedHostVerifier {
+    pub fn new(roots: RootCertStore, id: uuid::Uuid) -> Result<Self, Error> {
+        let verifier = rustls::client::WebPkiServerVerifier::builder_with_provider(
+            Arc::new(roots),
+            Arc::new(rustls::crypto::ring::default_provider()),
+        )
+        .build()
+        .map_err(|e| Error(e.to_string()))?;
+        Ok(Self { verifier, id })
+    }
+}
+
+impl rustls::client::danger::ServerCertVerifier for ExpectedHostVerifier {
+    fn verify_server_cert(
+        &self,
+        certificate: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        name: &rustls::pki_types::ServerName<'_>,
+        ocsp: &[u8],
+        now: UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        let verified =
+            self.verifier
+                .verify_server_cert(certificate, intermediates, name, ocsp, now)?;
+        if host_id(certificate).map_err(|e| rustls::Error::General(e.to_string()))? != self.id {
+            return Err(rustls::Error::General(
+                "remote host UUID does not match its recorded owner".into(),
+            ));
+        }
+        Ok(verified)
+    }
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        signature: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.verifier
+            .verify_tls12_signature(message, cert, signature)
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        signature: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.verifier
+            .verify_tls13_signature(message, cert, signature)
+    }
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.verifier.supported_verify_schemes()
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct HostVerifier(Arc<dyn ClientCertVerifier>);
 

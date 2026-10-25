@@ -1,7 +1,7 @@
-//! Explicit Git source configuration and read-only observation commands.
+//! Git source configuration, observation and explicit synchronization commands.
 
 use firecrab_stack::{
-    ConfigureGitSource, GitCheck, GitSource, GitSourceGeneration, GitSourceStatus,
+    ConfigureGitSource, GitCheck, GitSource, GitSourceGeneration, GitSourceStatus, SyncGitSource,
 };
 use std::path::PathBuf;
 
@@ -11,7 +11,7 @@ use crate::api_client::ApiClient;
 /// Source metadata is configured separately from the resource manifest.
 #[derive(Debug, clap::Subcommand)]
 pub enum Command {
-    /// Configure a GitHub source from a JSON file. Does not apply resources.
+    /// Configure a GitHub source. Automatic mode permits later polls to apply resources.
     Configure {
         /// Existing registered stack name.
         name: String,
@@ -31,6 +31,15 @@ pub enum Command {
         #[arg(long)]
         generation: u64,
     },
+    /// Resolve Git and apply supported changes, also while polling is paused.
+    Sync {
+        name: String,
+        #[arg(long)]
+        generation: u64,
+        /// Acknowledge an inspected failed/interrupted operation before fresh recovery.
+        #[arg(long)]
+        recover_operation_id: Option<uuid::Uuid>,
+    },
     /// Read the latest fifty observations, newest first.
     History { name: String },
     /// Stop periodic checks. Wait for any active check before changing configuration.
@@ -39,7 +48,7 @@ pub enum Command {
         #[arg(long)]
         generation: u64,
     },
-    /// Resume periodic checks. Does not apply resources.
+    /// Resume periodic checks and automatic synchronization if configured.
     Resume {
         name: String,
         #[arg(long)]
@@ -77,6 +86,21 @@ pub(super) fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
             let status: GitSourceStatus = client.post(
                 &format!("/api/stacks/{name}/source/check"),
                 &GitSourceGeneration { generation },
+            )?;
+            print_json(&status);
+        }
+        Command::Sync {
+            name,
+            generation,
+            recover_operation_id,
+        } => {
+            name_valid(&name)?;
+            let status: GitSourceStatus = client.post(
+                &format!("/api/stacks/{name}/source/sync"),
+                &SyncGitSource {
+                    generation,
+                    recover_operation_id,
+                },
             )?;
             print_json(&status);
         }

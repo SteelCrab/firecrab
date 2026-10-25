@@ -1,623 +1,895 @@
-//! Supplies the kernel an imported container tree boots under.
-//!
-//! A container image carries no kernel, and a container tree has no
-//! `/lib/modules`, so the kernel must have `virtio_blk`, `virtio_net`,
-//! `virtio_mmio`, and `ext4` built in and must need no initrd — an initrd
-//! would take PID 1 away from the injected guest init. Firecrab publishes one
-//! such kernel per architecture on the MicroRegistry, so importing a 50 MB
-//! container no longer means installing a full distro image first.
-//!
-//! The guest toolbox (`busybox.rs`) already establishes the shape: a
-//! digest-pinned artifact, downloaded once, re-verified on every reuse, cached
-//! under the image root, with an operator override for mirrors and air-gapped
-//! hosts. The pin names digests rather than a version tag, so a repointed
-//! object cannot change what a host boots.
-
-use super::*;
-
-use std::fs::OpenOptions;
-use std::os::unix::fs::OpenOptionsExt as _;
+//! Native guest kernels built from kernel.org's stable source releases.
+//! Receipts bind each cached image to its source digest and host architecture.
 
 use super::boot::{KernelBootPair, verify_kernel_architecture};
+use super::kernel_legacy;
+use super::*;
+use std::fs::OpenOptions;
+use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::process::CommandExt as _;
+use std::process::Stdio;
+use std::time::SystemTime;
+use tokio::io::AsyncBufReadExt as _;
 
-/// Operator override naming a kernel image already on this host.
-const KERNEL_PATH_ENV: &str = "FIRECRAB_OCI_KERNEL_PATH";
-/// Ceiling on the published package, so a mirrored base URL cannot stream an
-/// unbounded body onto the image volume before any digest is checked.
-const PACKAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
-/// Ceiling on the kernel lifted out of that package.
+/// Official release catalog used unless the host supplies an override.
+pub(crate) const DEFAULT_RELEASES_URL: &str = "https://www.kernel.org/releases.json";
+/// Shared native build recipe embedded so installed hosts need no checkout.
+const BUILD_SCRIPT: &str = include_str!("../../../scripts/build-host-kernel.sh");
+/// Receipt revision that invalidates cached images when the build recipe changes.
+const BUILD_REVISION: &str = "firecrab-host1";
+/// Maximum image size accepted from either the builder or an operator.
 const KERNEL_MAX_BYTES: u64 = 256 * 1024 * 1024;
-/// Archive directory the packaged kernel lives in.
-const PACKAGE_KERNEL_DIRECTORY: &str = "kernel";
-/// Ceiling on reaching the registry, matching the OCI registry session.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-/// Ceiling on the gap between two body chunks, not on the whole download.
-const READ_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Firecracker command line an imported rootfs boots with on x86_64.
-const X86_64_BOOT_ARGS: &str = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw";
-/// Firecracker command line an imported rootfs boots with on aarch64.
-const AARCH64_BOOT_ARGS: &str =
+/// Maximum compressed source size accepted during download and cache reuse.
+const SOURCE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+/// Maximum release catalog or checksum response size.
+const METADATA_MAX_BYTES: u64 = 4 * 1024 * 1024;
+/// Time before a cached stable release needs an upstream refresh.
+const RELEASE_CACHE_TTL: Duration = Duration::from_secs(3600);
+/// x86_64 console and virtio root disk settings for Firecracker guests.
+pub(super) const X86_64_BOOT_ARGS: &str = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw";
+/// aarch64 console and root disk settings, retaining the early boot console.
+pub(super) const AARCH64_BOOT_ARGS: &str =
     "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw";
 
-/// One published kernel artifact this build trusts.
-///
-/// Borrowed rather than owned so the compiled pins are `'static` constants
-/// while tests can pin a fixture built at runtime.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PinnedKernel<'a> {
-    /// Registry alias, which is also the package filename stem.
-    pub alias: &'a str,
-    /// Upstream kernel version, which is a registry path segment.
-    pub version: &'a str,
-    /// Kernel filename inside the package and under the cache.
-    pub image: &'a str,
-    /// `sha256:…` of the published `.tar.zst`.
-    pub package_digest: &'a str,
-    /// `sha256:…` of the kernel file inside that package.
-    pub image_digest: &'a str,
-    /// Firecracker command line this kernel boots an OCI rootfs with.
-    pub boot_args: &'a str,
+/// Active stable release with a validated official source archive URL.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub(crate) struct StableRelease {
+    /// Final numeric release, excluding release candidates and local suffixes.
+    pub version: String,
+    /// Official kernel.org archive URL derived from the version.
+    pub source_url: String,
 }
 
-/// The kernel this build pins for `architecture`.
-///
-/// Every supported architecture carries the latest stable kernel that was
-/// published when this release was built. `None` remains the signal for a
-/// future architecture that has no dedicated artifact yet.
-pub(crate) fn pinned_kernel(architecture: Architecture) -> Option<PinnedKernel<'static>> {
-    supported_kernels(architecture).into_iter().next()
+/// Cache receipt linking the output image to its source and build recipe.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct BuiltKernel {
+    /// Upstream numeric release used for the build.
+    pub version: String,
+    /// CPU architecture required to reuse the image.
+    pub architecture: String,
+    /// Official archive URL recorded when the source was verified.
+    pub source_url: String,
+    /// Verified source SHA-256 encoded as lowercase hex without a prefix.
+    pub source_sha256: String,
+    /// Built image SHA-256 encoded as lowercase hex without a prefix.
+    pub image_sha256: String,
+    /// Build recipe revision required by the current runtime.
+    pub build_revision: String,
 }
 
-/// Kernels this release can install for one host architecture, newest first.
-///
-/// The first entry is the default used by OCI import. Older entries stay in
-/// the catalog so an operator can keep an image on a known-good kernel while
-/// testing a newer one, or roll an image back without downloading a custom
-/// artifact. Retention policy: keep at most 3 versions per `major.minor`
-/// branch (e.g. `7.1.x`, `7.2.x`); when the MicroRegistry publishes a 4th
-/// patch release on a branch, drop that branch's oldest entry here.
-pub(crate) fn supported_kernels(architecture: Architecture) -> Vec<PinnedKernel<'static>> {
-    match architecture {
-        Architecture::X86_64 => vec![
-            PinnedKernel {
-                alias: "vmlinux-7.2.2-vsock1",
-                version: "7.2.2-vsock1",
-                image: "vmlinux-7.2.2-vsock1-x86_64",
-                package_digest: "sha256:b30660ab97a74c2929689b80cb8f513f68a881e15dd78043c1ccddc81394f614",
-                image_digest: "sha256:540c7de42c0ce8ddb46c58759fff3d83445c4cfe9d38e70e56c3b0cc2001a141",
-                boot_args: X86_64_BOOT_ARGS,
-            },
-            PinnedKernel {
-                alias: "vmlinux-7.2.2",
-                version: "7.2.2",
-                image: "vmlinux-7.2.2-x86_64",
-                package_digest: "sha256:716d7bcfcf9118a76d0c9f0b7ab06ba167f78b77cb16f928612809c75ebeffae",
-                image_digest: "sha256:351b23784e5e53de5af970ff6af7a074a916a55327ff802645f3583b39f3a4f1",
-                boot_args: X86_64_BOOT_ARGS,
-            },
-            PinnedKernel {
-                alias: "vmlinux-7.1.12",
-                version: "7.1.12",
-                image: "vmlinux-7.1.12-x86_64",
-                package_digest: "sha256:b4666cdc2ded25c6e929c9b4a4d4bcad0bff58c6fcae831d9514d17819fac31e",
-                image_digest: "sha256:004c3031dfcc2deec974b55714a2ed1052903662531e8df2a3cb3380bda5674b",
-                boot_args: X86_64_BOOT_ARGS,
-            },
-            PinnedKernel {
-                alias: "vmlinux-7.1.9",
-                version: "7.1.9",
-                image: "vmlinux-7.1.9-x86_64",
-                package_digest: "sha256:fd058e64d2173b3911ad09a15aa6bcf15531941254ce44ba6e935b876662ba65",
-                image_digest: "sha256:079d2149a9378f5705da46232e99886187fecdd5517428d2c294b6bd1e0dca6b",
-                boot_args: X86_64_BOOT_ARGS,
-            },
-            PinnedKernel {
-                alias: "vmlinux-7.1.8",
-                version: "7.1.8",
-                image: "vmlinux-7.1.8-x86_64",
-                package_digest: "sha256:eb2efc87a8b64b9bcf5c4b7365193c578e6cf203c4773060ec157d6f34c11f53",
-                image_digest: "sha256:1d693ebb340ee418127aacf679080671679e455302a8f89ff8d4a45b6d293cdb",
-                boot_args: X86_64_BOOT_ARGS,
-            },
-        ],
-        Architecture::Aarch64 => vec![
-            PinnedKernel {
-                alias: "vmlinux-7.2.2-vsock1",
-                version: "7.2.2-vsock1",
-                image: "Image-7.2.2-vsock1-aarch64",
-                package_digest: "sha256:bb11563f1ec8d47e14c93082f0a0536f7ee567f2930fb5665baee63cf36c012a",
-                image_digest: "sha256:a69c57bde32d811e311f35bf0d7d42e5188be1ed21b2150140796a92385ed863",
-                boot_args: AARCH64_BOOT_ARGS,
-            },
-            PinnedKernel {
-                alias: "vmlinux-7.2.2",
-                version: "7.2.2",
-                image: "Image-7.2.2-aarch64",
-                package_digest: "sha256:885550806de246892df6f08b6d37a3062ac987228729ee50b9421d5caa98621f",
-                image_digest: "sha256:f3acb729ded8213e4b157fd80746f6034cc4994888f73b82b1e34cea5813dbc0",
-                boot_args: AARCH64_BOOT_ARGS,
-            },
-            PinnedKernel {
-                alias: "vmlinux-7.1.12",
-                version: "7.1.12",
-                image: "Image-7.1.12-aarch64",
-                package_digest: "sha256:3cdf98523c4688ba6061cb025394931c696e67988d8367280639941f8a833c48",
-                image_digest: "sha256:6d6205c7dccbadcd74fa0bf84082af2f13bd8492d7a489ee0e2a6891c00c10bd",
-                boot_args: AARCH64_BOOT_ARGS,
-            },
-            PinnedKernel {
-                alias: "vmlinux-7.1.9",
-                version: "7.1.9",
-                image: "Image-7.1.9-aarch64",
-                package_digest: "sha256:3a8576656d45eb051874a4b1cf4b8838d54d96aa268bc53706118e0bbeb727f7",
-                image_digest: "sha256:6d60d06429aa5e244cc5a0eb60383a97fde61f4aa40453d5cc6fecb59a64b58f",
-                boot_args: AARCH64_BOOT_ARGS,
-            },
-            PinnedKernel {
-                alias: "vmlinux-7.1.8",
-                version: "7.1.8",
-                image: "Image-7.1.8-aarch64",
-                package_digest: "sha256:bddbe93f83fc3180a23c1c55a0a40946e5906592ec6331969bd64d68a302a507",
-                image_digest: "sha256:f1ded792a87f2b2d798566d22485fe73367dc8f348670827638f1a6b43375a44",
-                boot_args: AARCH64_BOOT_ARGS,
-            },
-        ],
-    }
-}
-
-/// Finds a digest-pinned kernel by catalog version for this architecture.
-pub(crate) fn kernel_for_version(
-    architecture: Architecture,
-    version: &str,
-) -> Option<PinnedKernel<'static>> {
-    supported_kernels(architecture)
-        .into_iter()
-        .find(|kernel| kernel.version == version)
-}
-
-/// Reads the operator's kernel override, if one is set.
+/// Read the optional operator-supplied kernel path, ignoring empty values.
 pub(super) fn configured_kernel_override() -> Option<PathBuf> {
-    let value = std::env::var(KERNEL_PATH_ENV).ok()?;
+    std::env::var("FIRECRAB_OCI_KERNEL_PATH")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+/// Read the catalog URL; an empty value, `none`, or `-` disables source downloads.
+pub(crate) fn configured_releases_url() -> Option<String> {
+    let value = std::env::var("FIRECRAB_KERNEL_RELEASES_URL")
+        .unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_owned());
     let value = value.trim();
-    (!value.is_empty()).then(|| PathBuf::from(value))
+    (!matches!(value, "" | "none" | "-")).then(|| value.to_owned())
 }
 
-/// The MicroRegistry base the kernel is fetched from.
-///
-/// This is the same `FIRECRAB_IMAGE_BASE_URL` that serves catalog images, so a
-/// private mirror or an air-gapped `none` already covers the kernel too.
-pub(super) fn configured_base_url() -> Option<String> {
-    ImageInstallTracker::from_env()
-        .base_url()
-        .map(str::to_owned)
+/// Only final numeric releases can become source URLs or filesystem names.
+pub(crate) fn is_source_version(version: &str) -> bool {
+    let parts: Vec<_> = version.split('.').collect();
+    (2..=3).contains(&parts.len())
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && part.len() <= 5
+                && part.bytes().all(|byte| byte.is_ascii_digit())
+                && (part.len() == 1 || !part.starts_with('0'))
+        })
+        && parts[0] != "0"
 }
 
-/// Registry object key of a pinned package.
-pub(crate) fn package_key(architecture: Architecture, pinned: &PinnedKernel<'_>) -> String {
-    format!(
-        "{PACKAGE_KERNEL_DIRECTORY}/{}/{}/{}.tar.zst",
-        pinned.version,
-        architecture.as_str(),
-        pinned.alias
+/// Construct an official source URL only for a final numeric version.
+pub(crate) fn source_url(version: &str) -> Option<String> {
+    is_source_version(version).then(|| {
+        format!(
+            "https://cdn.kernel.org/pub/linux/kernel/v{}.x/linux-{version}.tar.xz",
+            version.split('.').next().expect("validated version")
+        )
+    })
+}
+
+/// Name a native image or a recognized legacy cache entry for its architecture.
+pub(crate) fn image_name(architecture: Architecture, version: &str) -> Option<String> {
+    if !is_source_version(version) && kernel_legacy::image_digest(architecture, version).is_none() {
+        return None;
+    }
+    let prefix = match architecture {
+        Architecture::X86_64 => "vmlinux",
+        Architecture::Aarch64 => "Image",
+    };
+    Some(format!("{prefix}-{version}-{}", architecture.as_str()))
+}
+
+/// Return the managed image path relative to the image root.
+pub(crate) fn cache_relative(architecture: Architecture, version: &str) -> Option<PathBuf> {
+    Some(
+        Path::new(".oci/kernel")
+            .join(architecture.as_str())
+            .join(image_name(architecture, version)?),
     )
 }
 
-/// Image-root-relative cache path a registered `TemplateSpec` records.
-pub(crate) fn cache_relative(architecture: Architecture, pinned: &PinnedKernel<'_>) -> PathBuf {
-    Path::new(".oci/kernel")
-        .join(architecture.as_str())
-        .join(pinned.image)
+/// Recover a version only from the exact managed path for this architecture.
+pub(crate) fn version_for_path(architecture: Architecture, path: &Path) -> Option<String> {
+    let filename = path.file_name()?.to_str()?;
+    let prefix = match architecture {
+        Architecture::X86_64 => "vmlinux-",
+        Architecture::Aarch64 => "Image-",
+    };
+    let version = filename
+        .strip_prefix(prefix)?
+        .strip_suffix(&format!("-{}", architecture.as_str()))?;
+    (cache_relative(architecture, version)?.as_path() == path).then(|| version.to_owned())
 }
 
-/// Ensures a catalog kernel is present in the shared OCI kernel cache.
-///
-/// Kernel management intentionally uses the same cache and verification path
-/// as OCI import. That keeps one copy per architecture/version and means a
-/// kernel installed from the dashboard is immediately usable by a later OCI
-/// import without a second download.
-pub(crate) async fn ensure_managed_kernel(
+/// Append the receipt suffix without replacing dots in the kernel version.
+fn receipt_path(image_root: &Path, architecture: Architecture, version: &str) -> Option<PathBuf> {
+    Some(
+        image_root
+            .join(cache_relative(architecture, version)?)
+            .with_added_extension("json"),
+    )
+}
+
+/// Read a receipt whose release, architecture, source URL, and recipe match.
+/// The image digest is checked separately by [`cached_kernel_is_valid`].
+pub(crate) async fn built_kernel(
     image_root: &Path,
     architecture: Architecture,
     version: &str,
-    base_url: Option<&str>,
-) -> Result<PathBuf, ResolveError> {
-    let pinned = kernel_for_version(architecture, version).ok_or_else(|| {
-        ResolveError::KernelUnavailable {
-            architecture,
-            reason: format!("kernel version {version} is not in the release catalog"),
-        }
-    })?;
-    let pair = ensure_pinned_kernel(image_root, architecture, &pinned, None, base_url).await?;
-    Ok(pair.kernel)
+) -> Option<BuiltKernel> {
+    let bytes = tokio::fs::read(receipt_path(image_root, architecture, version)?)
+        .await
+        .ok()?;
+    let receipt: BuiltKernel = serde_json::from_slice(&bytes).ok()?;
+    if receipt.version != version
+        || receipt.architecture != architecture.as_str()
+        || receipt.build_revision != BUILD_REVISION
+        || Some(&receipt.source_url) != source_url(version).as_ref()
+        || Sha256Digest::parse(&format!("sha256:{}", receipt.source_sha256)).is_err()
+        || Sha256Digest::parse(&format!("sha256:{}", receipt.image_sha256)).is_err()
+    {
+        return None;
+    }
+    Some(receipt)
 }
 
-/// Returns whether the cached bytes still match the catalog digest and host
-/// architecture. A corrupt cache is reported as not installed so the next
-/// install can replace it instead of exposing a false-ready state.
+/// Select the active stable entry and reject unexpected source locations.
+pub(crate) fn parse_stable_release(bytes: &[u8]) -> Result<StableRelease, ResolveError> {
+    let document: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
+        ResolveError::Malformed(format!("kernel.org release metadata: {error}"))
+    })?;
+    let release = document["releases"]
+        .as_array()
+        .and_then(|releases| {
+            releases
+                .iter()
+                .find(|release| release["moniker"] == "stable" && release["iseol"] != true)
+        })
+        .ok_or_else(|| {
+            ResolveError::Malformed("kernel.org has no active stable release".to_owned())
+        })?;
+    let version = release["version"].as_str().unwrap_or_default();
+    let expected = source_url(version)
+        .ok_or_else(|| ResolveError::Malformed("invalid kernel.org stable version".to_owned()))?;
+    if release["source"].as_str() != Some(expected.as_str()) {
+        return Err(ResolveError::Malformed(
+            "unexpected kernel.org stable source URL".to_owned(),
+        ));
+    }
+    Ok(StableRelease {
+        version: version.to_owned(),
+        source_url: expected,
+    })
+}
+
+/// A bounded cache avoids reaching upstream on every dashboard poll.
+/// Stale metadata remains useful when a host temporarily loses its network.
+pub(crate) async fn latest_stable(
+    image_root: &Path,
+    releases_url: Option<&str>,
+) -> Result<StableRelease, ResolveError> {
+    let directory = image_root.join(".oci/kernel");
+    tokio::fs::create_dir_all(&directory)
+        .await
+        .map_err(|source| cache_io("create kernel cache", directory.clone(), source))?;
+    let lock = cache_path_lock(&directory, Path::new("releases.json")).await?;
+    let _guard = lock.lock().await;
+    let path = directory.join("releases.json");
+    let cached = tokio::fs::read(&path)
+        .await
+        .ok()
+        .and_then(|bytes| parse_stable_release(&bytes).ok());
+    let fresh = tokio::fs::metadata(&path)
+        .await
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .is_some_and(|age| age < RELEASE_CACHE_TTL);
+    if fresh && let Some(release) = &cached {
+        return Ok(release.clone());
+    }
+    let Some(url) = releases_url else {
+        return cached.ok_or_else(|| {
+            unavailable(Architecture::HOST, "kernel source downloads are disabled")
+        });
+    };
+    let fetched = async {
+        let bytes = fetch_bytes(url, METADATA_MAX_BYTES).await?;
+        let release = parse_stable_release(&bytes)?;
+        write_atomic(&path, &bytes).await?;
+        Ok(release)
+    }
+    .await;
+    match (fetched, cached) {
+        (Ok(release), _) => Ok(release),
+        (Err(error), Some(release)) => {
+            tracing::warn!(%error, "using cached kernel.org stable metadata");
+            Ok(release)
+        }
+        (Err(error), None) => Err(error),
+    }
+}
+
+/// Create a source client with bounded connection and read waits.
+fn http_client() -> Result<reqwest::Client, ResolveError> {
+    reqwest::Client::builder()
+        .user_agent(concat!("firecrab-api/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| download_failed(DEFAULT_RELEASES_URL, error.to_string()))
+}
+
+/// Fetch metadata with both a total timeout and a streamed byte limit.
+async fn fetch_bytes(url: &str, limit: u64) -> Result<Vec<u8>, ResolveError> {
+    let mut response = http_client()?
+        .get(url)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|error| download_failed(url, error.to_string()))?;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| download_failed(url, error.to_string()))?
+    {
+        if bytes.len() as u64 + chunk.len() as u64 > limit {
+            return Err(download_failed(
+                url,
+                format!("response exceeds {limit} bytes"),
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+/// Find the exact source archive in kernel.org's SHA-256 checksum list.
+pub(crate) fn source_checksum(bytes: &[u8], version: &str) -> Result<Sha256Digest, ResolveError> {
+    let filename = format!("linux-{version}.tar.xz");
+    let text =
+        std::str::from_utf8(bytes).map_err(|error| ResolveError::Malformed(error.to_string()))?;
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(digest), Some(name), None) = (fields.next(), fields.next(), fields.next()) else {
+            continue;
+        };
+        if name.trim_start_matches('*') == filename {
+            return Sha256Digest::parse(&format!("sha256:{digest}")).map_err(|error| {
+                ResolveError::Malformed(format!("kernel source checksum: {error}"))
+            });
+        }
+    }
+    Err(ResolveError::Malformed(format!(
+        "kernel.org checksums do not contain {filename}"
+    )))
+}
+
+/// Verify image architecture and content against a receipt or legacy digest.
 pub(crate) async fn cached_kernel_is_valid(
     image_root: &Path,
     architecture: Architecture,
     version: &str,
 ) -> bool {
-    let Some(pinned) = kernel_for_version(architecture, version) else {
+    let Some(relative) = cache_relative(architecture, version) else {
         return false;
     };
-    let relative = cache_relative(architecture, &pinned);
-    let path = image_root.join(&relative);
-    if !path.is_file() {
+    let expected = if let Some(receipt) = built_kernel(image_root, architecture, version).await {
+        format!("sha256:{}", receipt.image_sha256)
+    } else if let Some(legacy) = kernel_legacy::image_digest(architecture, version) {
+        legacy.to_owned()
+    } else {
         return false;
-    }
-    let pair = KernelBootPair {
-        architecture,
-        source_alias: pinned.alias.to_owned(),
-        kernel: relative,
-        initrd: None,
-        boot_args: pinned.boot_args.to_owned(),
     };
-    verify_kernel(&path, &pair, &pinned).await.is_ok()
+    let Ok(actual) = inspect_kernel(&image_root.join(relative), architecture).await else {
+        return false;
+    };
+    actual.as_str() == expected
 }
 
-/// Archive member the kernel is lifted from.
-fn package_member(pinned: &PinnedKernel<'_>) -> String {
-    format!("{PACKAGE_KERNEL_DIRECTORY}/{}", pinned.image)
-}
-
-/// Acquires the pinned kernel, reaching the registry only when the cache
-/// cannot serve it.
-///
-/// The cached file is re-verified against the pinned digest and the ELF or
-/// arm64 header on every call, so a truncated or repointed cache entry is
-/// refetched instead of booted.
-pub(super) async fn ensure_pinned_kernel(
+/// List recognized cache filenames from newest to oldest numeric release.
+/// Callers must validate each image before treating it as installed.
+pub(crate) async fn installed_versions(
     image_root: &Path,
     architecture: Architecture,
-    pinned: &PinnedKernel<'_>,
-    override_path: Option<&Path>,
-    base_url: Option<&str>,
-) -> Result<KernelBootPair, ResolveError> {
-    let relative = cache_relative(architecture, pinned);
-    let cached = image_root.join(&relative);
-    let directory = cached
-        .parent()
-        .expect("kernel cache paths are built with a parent");
-    tokio::fs::create_dir_all(directory)
-        .await
-        .map_err(|source| cache_io("create kernel cache", directory.to_owned(), source))?;
-    let lock = cache_path_lock(directory, Path::new(pinned.image)).await?;
-    let _guard = lock.lock().await;
-
-    let pair = KernelBootPair {
-        architecture,
-        source_alias: pinned.alias.to_owned(),
-        kernel: relative,
-        initrd: None,
-        boot_args: pinned.boot_args.to_owned(),
-    };
-    if verify_kernel(&cached, &pair, pinned).await.is_ok() {
-        return Ok(pair);
+) -> Vec<String> {
+    let mut versions = Vec::new();
+    let directory = image_root.join(".oci/kernel").join(architecture.as_str());
+    if let Ok(mut entries) = tokio::fs::read_dir(directory).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let Ok(relative) = entry.path().strip_prefix(image_root).map(Path::to_owned) else {
+                continue;
+            };
+            if let Some(version) = version_for_path(architecture, &relative) {
+                versions.push(version);
+            }
+        }
     }
-    // A cache entry that fails verification is stale or corrupt, never trusted.
-    let _ = tokio::fs::remove_file(&cached).await;
+    versions.sort_by_key(|version| {
+        version
+            .split(['.', '-'])
+            .map(|part| part.parse::<u32>().unwrap_or_default())
+            .collect::<Vec<_>>()
+    });
+    versions.reverse();
+    versions
+}
 
-    let staged = directory.join(format!(".{}-{}.partial", pinned.image, Uuid::new_v4()));
-    let result = stage_kernel(
-        image_root,
-        architecture,
-        pinned,
-        override_path,
-        base_url,
-        &staged,
+/// Serialize access to the cache entry for one architecture and version.
+pub(crate) async fn cache_lock(
+    image_root: &Path,
+    architecture: Architecture,
+    version: &str,
+) -> Result<Arc<AsyncMutex<()>>, ResolveError> {
+    let relative = cache_relative(architecture, version)
+        .ok_or_else(|| unavailable(architecture, "invalid kernel version"))?;
+    let directory = image_root.join(".oci/kernel").join(architecture.as_str());
+    tokio::fs::create_dir_all(&directory)
+        .await
+        .map_err(|source| cache_io("create kernel cache", directory.clone(), source))?;
+    cache_path_lock(
+        &directory,
+        relative.file_name().expect("cache filename").as_ref(),
     )
-    .await;
-    if let Err(error) = result {
-        let _ = tokio::fs::remove_file(&staged).await;
-        return Err(error);
-    }
-    if let Err(error) = verify_kernel(&staged, &pair, pinned).await {
-        let _ = tokio::fs::remove_file(&staged).await;
-        return Err(error);
-    }
-    tokio::fs::rename(&staged, &cached)
-        .await
-        .map_err(|source| cache_io("publish OCI kernel", cached.clone(), source))?;
-    Ok(pair)
+    .await
 }
 
-/// Writes the kernel to `staged` from whichever source is configured.
-async fn stage_kernel(
+/// Reuse a verified image or build the requested source release on this host.
+/// `stable` resolves through the catalog; legacy entries require a valid cache.
+pub(crate) async fn ensure_managed_kernel(
     image_root: &Path,
     architecture: Architecture,
-    pinned: &PinnedKernel<'_>,
-    override_path: Option<&Path>,
-    base_url: Option<&str>,
-    staged: &Path,
-) -> Result<(), ResolveError> {
-    if let Some(supplied) = override_path {
-        return copy_operator_kernel(supplied, staged).await;
+    requested: &str,
+    releases_url: Option<&str>,
+    tracker: Option<&ImageInstallTracker>,
+) -> Result<PathBuf, ResolveError> {
+    let version = if requested == "stable" {
+        latest_stable(image_root, releases_url).await?.version
+    } else {
+        requested.to_owned()
+    };
+    let relative = cache_relative(architecture, &version)
+        .ok_or_else(|| unavailable(architecture, "invalid kernel version"))?;
+    let destination = image_root.join(&relative);
+    let directory = destination.parent().expect("cache image has parent");
+    let lock = cache_lock(image_root, architecture, &version).await?;
+    let _guard = lock.lock().await;
+    if cached_kernel_is_valid(image_root, architecture, &version).await {
+        return Ok(relative);
     }
-    let Some(base_url) = base_url else {
-        return Err(ResolveError::KernelUnavailable {
+    let url = source_url(&version).ok_or_else(|| {
+        unavailable(
             architecture,
-            reason: format!("no {KERNEL_PATH_ENV} override and remote image install is disabled"),
-        });
-    };
-    let key = package_key(architecture, pinned);
-    let url = format!("{}/{key}", base_url.trim_end_matches('/'));
-    let package = image_root.join(".oci/kernel").join(format!(
-        ".{}-{}.tar.zst",
-        pinned.alias,
-        Uuid::new_v4()
-    ));
-    let result = match download_package(&url, &package, pinned).await {
-        Ok(()) => lift_kernel(&package, &key, pinned, staged).await,
-        Err(error) => Err(error),
-    };
-    let _ = tokio::fs::remove_file(&package).await;
+            "legacy kernels can only be reused from a verified cache",
+        )
+    })?;
+    if releases_url.is_none() {
+        return Err(unavailable(
+            architecture,
+            "kernel source downloads are disabled",
+        ));
+    }
+    if !cfg!(target_os = "linux") || architecture != Architecture::HOST {
+        return Err(unavailable(
+            architecture,
+            "kernel compilation requires a Linux host with a matching CPU architecture",
+        ));
+    }
+    log(
+        tracker,
+        requested,
+        format!("resolving Linux {version} source checksum"),
+    );
+    let checksum_url = format!(
+        "{}/sha256sums.asc",
+        url.rsplit_once('/').expect("source directory").0
+    );
+    let checksum = source_checksum(
+        &fetch_bytes(&checksum_url, METADATA_MAX_BYTES).await?,
+        &version,
+    )?;
+    let sources = image_root.join(".oci/kernel/sources");
+    tokio::fs::create_dir_all(&sources)
+        .await
+        .map_err(|source| cache_io("create source cache", sources.clone(), source))?;
+    let archive = sources.join(format!("linux-{version}.tar.xz"));
+    let source_lock = cache_path_lock(
+        &sources,
+        archive.file_name().expect("source filename").as_ref(),
+    )
+    .await?;
+    {
+        let _source_guard = source_lock.lock().await;
+        log(
+            tracker,
+            requested,
+            format!("downloading and verifying {url}"),
+        );
+        download_source(
+            &url,
+            &archive,
+            &checksum,
+            tracker.map(|tracker| (tracker, requested)),
+        )
+        .await?;
+    }
+    // Different requested versions still share the host's compiler capacity.
+    let build_lock = cache_path_lock(directory, Path::new(".native-build")).await?;
+    log(
+        tracker,
+        requested,
+        "waiting for the host kernel builder".to_owned(),
+    );
+    let _build_guard = build_lock.lock().await;
+    let work = directory.join(format!(".build-{version}-{}", Uuid::new_v4()));
+    tokio::fs::create_dir(&work)
+        .await
+        .map_err(|source| cache_io("create build directory", work.clone(), source))?;
+    let staged = work.join("kernel");
+    let result = async {
+        log(
+            tracker,
+            requested,
+            format!("building Linux {version} for {architecture}"),
+        );
+        tokio::time::timeout(
+            Duration::from_secs(2 * 60 * 60),
+            run_build(
+                architecture,
+                &version,
+                &archive,
+                &work,
+                &staged,
+                tracker.map(|tracker| (tracker, requested)),
+            ),
+        )
+        .await
+        .map_err(|_| unavailable(architecture, "kernel build exceeded two hours"))??;
+        let image_digest = inspect_kernel(&staged, architecture).await?;
+        let receipt = BuiltKernel {
+            version: version.clone(),
+            architecture: architecture.as_str().to_owned(),
+            source_url: url,
+            source_sha256: checksum.encoded().to_owned(),
+            image_sha256: image_digest.encoded().to_owned(),
+            build_revision: BUILD_REVISION.to_owned(),
+        };
+        tokio::fs::rename(
+            staged.with_added_extension("config"),
+            destination.with_added_extension("config"),
+        )
+        .await
+        .map_err(|source| cache_io("publish kernel config", destination.clone(), source))?;
+        tokio::fs::rename(&staged, &destination)
+            .await
+            .map_err(|source| cache_io("publish built kernel", destination.clone(), source))?;
+        write_atomic(
+            &destination.with_added_extension("json"),
+            &serde_json::to_vec_pretty(&receipt).expect("serialize kernel receipt"),
+        )
+        .await?;
+        Ok(relative)
+    }
+    .await;
+    let _ = tokio::fs::remove_dir_all(&work).await;
     result
 }
 
-/// Copies an operator-supplied kernel into the cache staging path.
-///
-/// The bytes still have to match the pinned digest, so an override is a
-/// mirror of the published artifact rather than a way around it.
-async fn copy_operator_kernel(supplied: &Path, staged: &Path) -> Result<(), ResolveError> {
-    let metadata = tokio::fs::symlink_metadata(supplied)
-        .await
-        .map_err(|source| kernel_io("inspect operator kernel", supplied.to_owned(), source))?;
-    if !metadata.file_type().is_file() {
-        return Err(kernel_io(
-            "inspect operator kernel",
-            supplied.to_owned(),
-            io::Error::new(io::ErrorKind::InvalidInput, "not a regular file"),
-        ));
-    }
-    if metadata.len() > KERNEL_MAX_BYTES {
-        return Err(kernel_io(
-            "inspect operator kernel",
-            supplied.to_owned(),
-            io::Error::other(format!(
-                "{} bytes exceeds the {KERNEL_MAX_BYTES}-byte limit",
-                metadata.len()
-            )),
-        ));
-    }
-    tokio::fs::copy(supplied, staged)
-        .await
-        .map_err(|source| kernel_io("copy operator kernel", supplied.to_owned(), source))?;
-    Ok(())
-}
-
-/// Streams the published package to disk, hashing it as it lands.
-///
-/// The digest is calculated from the bytes actually written, and the body is
-/// cut off at [`PACKAGE_MAX_BYTES`], so neither a repointed object nor an
-/// endless response can be unpacked.
-async fn download_package(
+/// Publish a bounded source archive only after its expected SHA-256 matches.
+/// Valid cached archives are reused; failed partial downloads are removed.
+pub(crate) async fn download_source(
     url: &str,
     destination: &Path,
-    pinned: &PinnedKernel<'_>,
+    expected: &Sha256Digest,
+    progress: Option<(&ImageInstallTracker, &str)>,
 ) -> Result<(), ResolveError> {
-    if let Some(parent) = destination.parent() {
-        tokio::fs::create_dir_all(parent)
+    if let Ok(digest) = source_digest(destination).await
+        && digest == *expected
+    {
+        return Ok(());
+    }
+    let partial = destination.with_extension(format!("{}-partial", Uuid::new_v4()));
+    let result = async {
+        let mut response = http_client()?
+            .get(url)
+            .send()
             .await
-            .map_err(|source| cache_io("create kernel cache", parent.to_owned(), source))?;
-    }
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("firecrab-api/", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(CONNECT_TIMEOUT)
-        // Unlike a total request timeout, this resets whenever another chunk
-        // arrives, so a slow link may take as long as the package needs while
-        // a registry that stops answering still fails an import predictably.
-        .read_timeout(READ_TIMEOUT)
-        .build()
-        .map_err(|error| download_failed(url, error.to_string()))?;
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|error| download_failed(url, error.to_string()))?;
-    if !response.status().is_success() {
-        return Err(download_failed(
-            url,
-            format!("HTTP {}", response.status().as_u16()),
-        ));
-    }
-
-    let mut file = tokio::fs::File::create(destination)
-        .await
-        .map_err(|source| cache_io("stage kernel package", destination.to_owned(), source))?;
-    let mut hasher = Sha256::new();
-    let mut written = 0_u64;
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| download_failed(url, error.to_string()))?;
-        written = written.saturating_add(chunk.len() as u64);
-        if written > PACKAGE_MAX_BYTES {
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|error| download_failed(url, error.to_string()))?;
+        let total = response.content_length();
+        if total.is_some_and(|length| length > SOURCE_MAX_BYTES) {
             return Err(download_failed(
                 url,
-                format!("body exceeds the {PACKAGE_MAX_BYTES}-byte limit"),
+                "source archive is too large".to_owned(),
             ));
         }
-        hasher.update(&chunk);
-        file.write_all(&chunk)
+        let mut file = tokio::fs::File::create(&partial)
             .await
-            .map_err(|source| cache_io("write kernel package", destination.to_owned(), source))?;
+            .map_err(|source| cache_io("stage kernel source", partial.clone(), source))?;
+        let mut hasher = Sha256::new();
+        let mut written = 0_u64;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| download_failed(url, error.to_string()))?
+        {
+            written += chunk.len() as u64;
+            if written > SOURCE_MAX_BYTES {
+                return Err(download_failed(
+                    url,
+                    "source archive is too large".to_owned(),
+                ));
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|source| cache_io("write kernel source", partial.clone(), source))?;
+            hasher.update(&chunk);
+            if let Some((tracker, job)) = progress {
+                tracker.set_download_progress(job, written, total);
+            }
+        }
+        file.flush()
+            .await
+            .map_err(|source| cache_io("flush kernel source", partial.clone(), source))?;
+        drop(file);
+        let actual = digest_from(hasher);
+        if actual != *expected {
+            return Err(ResolveError::DigestMismatch {
+                subject: url.to_owned(),
+                expected: expected.clone(),
+                actual,
+            });
+        }
+        tokio::fs::rename(&partial, destination)
+            .await
+            .map_err(|source| cache_io("publish kernel source", destination.to_owned(), source))?;
+        Ok(())
     }
-    file.flush()
-        .await
-        .map_err(|source| cache_io("flush kernel package", destination.to_owned(), source))?;
+    .await;
+    let _ = tokio::fs::remove_file(&partial).await;
+    result
+}
 
-    let actual = digest_from(hasher);
-    let expected = parse_pin(pinned.package_digest)?;
-    if actual != expected {
-        return Err(ResolveError::DigestMismatch {
-            subject: url.to_owned(),
-            expected,
-            actual,
-        });
+/// Hash a bounded regular source archive without following a symlink.
+async fn source_digest(path: &Path) -> Result<Sha256Digest, ResolveError> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&path)
+            .map_err(|source| cache_io("open cached kernel source", path.clone(), source))?;
+        let metadata = file
+            .metadata()
+            .map_err(|source| cache_io("inspect cached kernel source", path.clone(), source))?;
+        if !metadata.is_file() || metadata.len() > SOURCE_MAX_BYTES {
+            return Err(download_failed(
+                &path.display().to_string(),
+                "invalid cached source archive".to_owned(),
+            ));
+        }
+        let mut hasher = Sha256::new();
+        let copied = io::copy(&mut file.take(SOURCE_MAX_BYTES + 1), &mut hasher)
+            .map_err(|source| cache_io("hash cached kernel source", path.clone(), source))?;
+        if copied > SOURCE_MAX_BYTES {
+            return Err(download_failed(
+                &path.display().to_string(),
+                "source archive is too large".to_owned(),
+            ));
+        }
+        Ok(digest_from(hasher))
+    })
+    .await
+    .map_err(|error| ResolveError::Malformed(format!("hash cached kernel source: {error}")))?
+}
+
+/// Kill the complete compiler process group if the task is cancelled.
+struct BuildGroup(u32);
+impl Drop for BuildGroup {
+    fn drop(&mut self) {
+        unsafe {
+            libc::kill(-(self.0 as i32), libc::SIGKILL);
+        }
     }
+}
+
+/// Run the embedded recipe in a process group and stream both output pipes.
+async fn run_build(
+    architecture: Architecture,
+    version: &str,
+    archive: &Path,
+    work: &Path,
+    output: &Path,
+    progress: Option<(&ImageInstallTracker, &str)>,
+) -> Result<(), ResolveError> {
+    let script = work.join("build-kernel.sh");
+    tokio::fs::write(&script, BUILD_SCRIPT)
+        .await
+        .map_err(|source| cache_io("write kernel builder", script.clone(), source))?;
+    let mut command = std::process::Command::new("bash");
+    command.process_group(0);
+    let mut command = tokio::process::Command::from(command);
+    let mut child = command
+        .arg(&script)
+        .arg(architecture.as_str())
+        .arg(version)
+        .arg(archive)
+        .arg(work)
+        .arg(output)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| unavailable(architecture, format!("start kernel builder: {error}")))?;
+    let _group = BuildGroup(child.id().expect("new child has pid"));
+    let stdout = child.stdout.take().expect("piped builder stdout");
+    let stderr = child.stderr.take().expect("piped builder stderr");
+    let (stdout, stderr) = tokio::join!(build_log(stdout, progress), build_log(stderr, progress));
+    let status = child
+        .wait()
+        .await
+        .map_err(|error| unavailable(architecture, format!("wait for kernel builder: {error}")))?;
+    if !status.success() {
+        return Err(unavailable(
+            architecture,
+            format!("kernel build failed ({status}):\n{}\n{}", stdout?, stderr?),
+        ));
+    }
+    stdout?;
+    stderr?;
     Ok(())
 }
 
-/// Lifts the pinned kernel out of a verified package.
-async fn lift_kernel(
-    package: &Path,
-    key: &str,
-    pinned: &PinnedKernel<'_>,
-    staged: &Path,
-) -> Result<(), ResolveError> {
-    let reported = package.to_owned();
-    let package = package.to_owned();
-    let key = key.to_owned();
-    let member = package_member(pinned);
-    let staged = staged.to_owned();
-    tokio::task::spawn_blocking(move || lift_kernel_blocking(&package, &key, &member, &staged))
-        .await
-        .map_err(|error| {
-            cache_io(
-                "join kernel unpack worker",
-                reported,
-                io::Error::other(error),
-            )
-        })?
+/// Forward compiler output to the install job and retain a bounded error tail.
+async fn build_log(
+    reader: impl AsyncRead + Unpin,
+    progress: Option<(&ImageInstallTracker, &str)>,
+) -> Result<String, ResolveError> {
+    let mut lines = BufReader::new(reader).lines();
+    let mut tail = std::collections::VecDeque::new();
+    while let Some(line) = lines.next_line().await.map_err(|error| {
+        unavailable(
+            Architecture::HOST,
+            format!("read kernel builder log: {error}"),
+        )
+    })? {
+        let line: String = line.chars().take(2000).collect();
+        if let Some((tracker, job)) = progress {
+            tracker.append_log(job, &line);
+        }
+        tail.push_back(line);
+        if tail.len() > 10 {
+            tail.pop_front();
+        }
+    }
+    Ok(tail.into_iter().collect::<Vec<_>>().join("\n"))
 }
 
-/// Blocking half of [`lift_kernel`].
-fn lift_kernel_blocking(
-    package: &Path,
-    key: &str,
-    member: &str,
-    staged: &Path,
-) -> Result<(), ResolveError> {
-    let file = std::fs::File::open(package)
-        .map_err(|source| cache_io("open kernel package", package.to_owned(), source))?;
-    let decoder = zstd::stream::read::Decoder::new(file)
-        .map_err(|source| cache_io("decompress kernel package", package.to_owned(), source))?;
-    let mut archive = tar::Archive::new(decoder);
-    let entries = archive
-        .entries()
-        .map_err(|source| cache_io("read kernel package", package.to_owned(), source))?;
-    for entry in entries {
-        let mut entry =
-            entry.map_err(|source| cache_io("read kernel package", package.to_owned(), source))?;
-        let path = entry
-            .path()
-            .map_err(|source| cache_io("read kernel package", package.to_owned(), source))?;
-        if path.to_string_lossy().replace('\\', "/") != member {
-            continue;
-        }
-        let mut target = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o644)
-            .custom_flags(libc::O_CLOEXEC)
-            .open(staged)
-            .map_err(|source| cache_io("stage OCI kernel", staged.to_owned(), source))?;
-        let copied = io::copy(&mut entry.by_ref().take(KERNEL_MAX_BYTES + 1), &mut target)
-            .map_err(|source| cache_io("write OCI kernel", staged.to_owned(), source))?;
-        if copied > KERNEL_MAX_BYTES {
-            return Err(cache_io(
-                "write OCI kernel",
-                staged.to_owned(),
-                io::Error::other(format!(
-                    "member {member} exceeds the {KERNEL_MAX_BYTES}-byte limit"
-                )),
+/// Select an operator image, current stable, or a verified installed fallback.
+pub(super) async fn ensure_host_kernel(
+    image_root: &Path,
+    architecture: Architecture,
+    override_path: Option<&Path>,
+    releases_url: Option<&str>,
+) -> Result<KernelBootPair, ResolveError> {
+    if let Some(path) = override_path {
+        return operator_kernel(image_root, architecture, path).await;
+    }
+    let result = async {
+        let release = latest_stable(image_root, releases_url).await?;
+        let relative = ensure_managed_kernel(
+            image_root,
+            architecture,
+            &release.version,
+            releases_url,
+            None,
+        )
+        .await?;
+        Ok(boot_pair(architecture, relative, &release.version))
+    }
+    .await;
+    let error = match result {
+        Ok(pair) => return Ok(pair),
+        Err(error) => error,
+    };
+    // An upstream outage must not prevent using an already verified kernel.
+    for version in installed_versions(image_root, architecture).await {
+        if cached_kernel_is_valid(image_root, architecture, &version).await {
+            tracing::warn!(%error, %version, "using a previously installed kernel for OCI import");
+            return Ok(boot_pair(
+                architecture,
+                cache_relative(architecture, &version).expect("installed cache path"),
+                &version,
             ));
         }
-        target
-            .sync_all()
-            .map_err(|source| cache_io("write OCI kernel", staged.to_owned(), source))?;
-        return Ok(());
     }
-    Err(ResolveError::KernelPackageMemberMissing {
-        package: key.to_owned(),
-        member: member.to_owned(),
-    })
+    Err(error)
 }
 
-/// Proves a file is the pinned kernel and one this host can boot.
-async fn verify_kernel(
+/// Verify and copy an operator image into a cache entry named by its digest.
+async fn operator_kernel(
+    image_root: &Path,
+    architecture: Architecture,
+    supplied: &Path,
+) -> Result<KernelBootPair, ResolveError> {
+    let directory = image_root.join(".oci/kernel").join(architecture.as_str());
+    tokio::fs::create_dir_all(&directory)
+        .await
+        .map_err(|source| cache_io("create kernel cache", directory.clone(), source))?;
+    let staged = directory.join(format!(".operator-{}", Uuid::new_v4()));
+    let result = async {
+        let source = tokio::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(supplied)
+            .await
+            .map_err(|source| kernel_io("open operator kernel", supplied.to_owned(), source))?;
+        let metadata = source
+            .metadata()
+            .await
+            .map_err(|source| kernel_io("inspect operator kernel", supplied.to_owned(), source))?;
+        if !metadata.is_file() || metadata.len() > KERNEL_MAX_BYTES {
+            return Err(unavailable(
+                architecture,
+                "operator kernel must be a regular file smaller than 256 MiB",
+            ));
+        }
+        let mut destination = tokio::fs::File::create(&staged)
+            .await
+            .map_err(|source| kernel_io("stage operator kernel", staged.clone(), source))?;
+        let copied = tokio::io::copy(&mut source.take(KERNEL_MAX_BYTES + 1), &mut destination)
+            .await
+            .map_err(|source| kernel_io("copy operator kernel", staged.clone(), source))?;
+        if copied > KERNEL_MAX_BYTES {
+            return Err(unavailable(architecture, "operator kernel is too large"));
+        }
+        drop(destination);
+        let digest = inspect_kernel(&staged, architecture).await?;
+        let relative = Path::new(".oci/kernel")
+            .join(architecture.as_str())
+            .join(format!("custom-{}", digest.encoded()));
+        tokio::fs::rename(&staged, image_root.join(&relative))
+            .await
+            .map_err(|source| kernel_io("publish operator kernel", staged.clone(), source))?;
+        Ok(boot_pair(architecture, relative, "operator kernel"))
+    }
+    .await;
+    let _ = tokio::fs::remove_file(staged).await;
+    result
+}
+
+/// Pair a managed image with the boot arguments for its CPU architecture.
+fn boot_pair(architecture: Architecture, kernel: PathBuf, version: &str) -> KernelBootPair {
+    KernelBootPair {
+        architecture,
+        source_alias: format!("Linux {version}"),
+        kernel,
+        initrd: None,
+        boot_args: match architecture {
+            Architecture::X86_64 => X86_64_BOOT_ARGS,
+            Architecture::Aarch64 => AARCH64_BOOT_ARGS,
+        }
+        .to_owned(),
+    }
+}
+
+/// Hash a bounded regular image and check its executable architecture header.
+pub(crate) async fn inspect_kernel(
     path: &Path,
-    pair: &KernelBootPair,
-    pinned: &PinnedKernel<'_>,
-) -> Result<(), ResolveError> {
-    let expected = parse_pin(pinned.image_digest)?;
-    let subject = pair.kernel.clone();
-    let architecture = pair.architecture;
+    architecture: Architecture,
+) -> Result<Sha256Digest, ResolveError> {
     let path = path.to_owned();
     tokio::task::spawn_blocking(move || {
-        verify_kernel_blocking(&path, &subject, architecture, expected)
+        let mut file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&path)
+            .map_err(|source| kernel_io("open kernel", path.clone(), source))?;
+        let metadata = file
+            .metadata()
+            .map_err(|source| kernel_io("inspect kernel", path.clone(), source))?;
+        if !metadata.is_file() || metadata.len() > KERNEL_MAX_BYTES {
+            return Err(unavailable(
+                architecture,
+                "kernel must be a regular file smaller than 256 MiB",
+            ));
+        }
+        let mut hasher = Sha256::new();
+        let mut header = Vec::new();
+        let mut buffer = vec![0_u8; 128 * 1024];
+        let mut total = 0_u64;
+        loop {
+            let read = file
+                .read(&mut buffer)
+                .map_err(|source| kernel_io("read kernel", path.clone(), source))?;
+            if read == 0 {
+                break;
+            }
+            total += read as u64;
+            if total > KERNEL_MAX_BYTES {
+                return Err(unavailable(architecture, "kernel is too large"));
+            }
+            hasher.update(&buffer[..read]);
+            if header.len() < 64 {
+                header.extend_from_slice(&buffer[..read.min(64 - header.len())]);
+            }
+        }
+        verify_kernel_architecture(&path, &header, architecture)?;
+        Ok(digest_from(hasher))
     })
     .await
-    .map_err(|error| {
-        cache_io(
-            "join kernel verification worker",
-            pair.kernel.clone(),
-            io::Error::other(error),
-        )
-    })?
+    .map_err(|error| unavailable(architecture, format!("verify kernel: {error}")))?
 }
 
-/// Blocking half of [`verify_kernel`].
-fn verify_kernel_blocking(
-    path: &Path,
-    subject: &Path,
-    architecture: Architecture,
-    expected: Sha256Digest,
-) -> Result<(), ResolveError> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|source| kernel_io("open kernel", subject.to_owned(), source))?;
-    let mut hasher = Sha256::new();
-    let mut header = Vec::new();
-    let mut buffer = vec![0_u8; 128 * 1024];
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|source| kernel_io("read kernel", subject.to_owned(), source))?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        if header.len() < 64 {
-            let wanted = (64 - header.len()).min(read);
-            header.extend_from_slice(&buffer[..wanted]);
-        }
+/// Replace metadata through a sibling staging file and remove failed staging.
+async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ResolveError> {
+    let partial = path.with_extension(format!("{}-partial", Uuid::new_v4()));
+    let result = async {
+        tokio::fs::write(&partial, bytes)
+            .await
+            .map_err(|source| cache_io("write kernel metadata", partial.clone(), source))?;
+        tokio::fs::rename(&partial, path)
+            .await
+            .map_err(|source| cache_io("publish kernel metadata", path.to_owned(), source))
     }
-    let actual = digest_from(hasher);
-    if actual != expected {
-        return Err(ResolveError::DigestMismatch {
-            subject: subject.display().to_string(),
-            expected,
-            actual,
-        });
+    .await;
+    let _ = tokio::fs::remove_file(partial).await;
+    result
+}
+
+fn log(tracker: Option<&ImageInstallTracker>, job: &str, message: String) {
+    if let Some(tracker) = tracker {
+        tracker.append_log(job, message);
     }
-    verify_kernel_architecture(subject, &header, architecture)
 }
-
-/// Parses a compiled pin, which is a constant and must always be well formed.
-fn parse_pin(value: &str) -> Result<Sha256Digest, ResolveError> {
-    Sha256Digest::parse(value).map_err(|error| {
-        ResolveError::Malformed(format!("pinned OCI kernel digest {value:?}: {error}"))
-    })
-}
-
-/// Wraps a finished hasher as a descriptor digest.
 fn digest_from(hasher: Sha256) -> Sha256Digest {
-    Sha256Digest::parse(&format!("sha256:{:x}", hasher.finalize()))
-        .expect("a hex sha256 digest is a valid descriptor digest")
+    Sha256Digest::parse(&format!("sha256:{:x}", hasher.finalize())).expect("valid sha256")
 }
-
+fn unavailable(architecture: Architecture, reason: impl Into<String>) -> ResolveError {
+    ResolveError::KernelUnavailable {
+        architecture,
+        reason: reason.into(),
+    }
+}
 fn download_failed(url: &str, message: String) -> ResolveError {
     ResolveError::KernelDownloadFailed {
         url: url.to_owned(),
         message,
     }
 }
-
 fn kernel_io(operation: &'static str, path: PathBuf, source: io::Error) -> ResolveError {
     ResolveError::KernelIo {
         operation,

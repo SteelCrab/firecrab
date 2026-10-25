@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- One controller registers authenticated workload hosts and places VMs using
+  deterministic image/resource filtering and durable capacity reservations.
+  Idempotent operations reconcile with the recorded owner after timeouts and
+  restarts. REST, `firecrab cluster`, and the dashboard expose inventory, VM
+  lifecycle, and host drain. Tracked in [#455](https://github.com/SteelCrab/firecrab/issues/455).
+
 - AI Sandbox reuses Pipe AI accounts for verified model selection, persistent
   conversations, isolated project edits, and bounded commands in a selected
   MicroVM. Dashboard, CLI, and local stdio MCP share durable attempts, cancellation,
@@ -61,7 +67,15 @@ Entries land here as work merges, and move under the next version heading when t
   checks share durable admission, generation guards, pause/resume, bounded
   backoff and fifty redacted observations. `stack source` and REST expose the
   configuration and history. Private sources use the existing GitHub Auth
-  connection. Automatic Git apply remains follow-up work for #437.
+  connection. Opt-in automatic synchronization and `stack source sync` reuse
+  native apply, retain desired/attempted/successful revisions, and stop after
+  failed or interrupted applies until explicit operation-ID recovery (#437).
+
+- Stack plan approval includes exact VM template versions and boot artifact hashes.
+  Git VM manifests require `templatePin`; apply journals retain template and OCI
+  digest identities. Changed content blocks apply and later owned VM starts.
+  Git sources reject independent apply and service mutation requests, including
+  while polling is paused, to prevent competing image controllers (#437).
 
 - Browser console dimensions reach the guest serial terminal through a private
   vsock resize helper. Connected viewers share the smallest available grid.
@@ -104,21 +118,20 @@ Entries land here as work merges, and move under the next version heading when t
 - `firecrab stack validate --file YAML [--json]` validates an experimental
   declarative stack offline. The shared schema checks local network references,
   resource limits, overlapping subnets and service ports, and pinned service
-  image syntax. Validation reports omit configuration values. Applying resources
-  and continuous Git synchronization remain follow-up work for #437.
+  image syntax. Validation reports omit configuration values and remain offline.
 
 - Native `stack apply` creates and updates owned resources, deploys services and
   records redacted progress by retry UUID. Plan fingerprints reject stale input;
   running VM changes and service replica replacement require explicit stop
   permission. Interrupted work keeps its exact ownership for explicit recovery.
-  Automatic replacement, pruning and Git polling remain follow-up work for #437.
+  Automatic replacement and pruning remain follow-up work for #437.
 
 - Host-local stack registration and UUID ownership bindings survive API restarts.
   `firecrab stack register/list/status/bind/unbind` manages metadata without
   changing resources. `firecrab stack plan --file YAML [--json]` reports a
   read-only configuration diff, blocks implicit adoption and conflicting ownership,
-  and retains removed declarations. Field values stay out of plans. Actual apply
-  and Git polling remain follow-up work for #437.
+  and retains removed declarations. Plans expose immutable input identities
+  without environment values.
   Empty registrations can be removed with `stack delete NAME --id STACK_UUID`;
   bound resources and newer registrations with the same name are protected.
 
@@ -197,6 +210,12 @@ Entries land here as work merges, and move under the next version heading when t
   Deploy-owned rootfs caches are pruned after VM, pool, operation, and retained-release references are released.
 
 ### Changed
+
+- Guest kernel installation and OCI import build kernel.org's current stable
+  source on the Linux host instead of downloading MicroRegistry kernel packages.
+  Source and image digests are verified, and existing image kernel assignments
+  remain explicit. `FIRECRAB_KERNEL_RELEASES_URL` and `FIRECRAB_KERNEL_BUILD_JOBS`
+  control source discovery and compiler parallelism.
 
 - The dashboard's Pipe page lists its services as five cards: Route, Pipe
   Registry, Firecrab Tunnel, Cloudflare Quick Tunnel, and Cloudflare Named

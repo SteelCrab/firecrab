@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
 use firecrab_stack::{
-    Action, ApplyFailure, ApplyRequest, ApplyState, ApplyStatus, ApplyStep, StepState,
+    Action, ApplyFailure, ApplyRequest, ApplyState, ApplyStatus, ApplyStep, GitCheck, StepState,
 };
 use uuid::Uuid;
 
@@ -35,7 +35,7 @@ pub async fn apply(
     firecrab_stack::validate(&request.stack).map_err(|e| validation_errors(e, request_id.0))?;
     // The independent admission task commits the journal and spawns its worker even
     // when the HTTP deadline drops this JoinHandle before acknowledgement arrives.
-    let status = tokio::spawn(admit(state, request))
+    let status = tokio::spawn(admit(state, request, None))
         .await
         .map_err(|_| AppError::internal(request_id.0))??;
     Ok((StatusCode::ACCEPTED, Json(status)))
@@ -60,21 +60,31 @@ pub async fn get(
     .map(Json)
 }
 
-async fn admit(state: AppState, request: ApplyRequest) -> Result<ApplyStatus, AppError> {
+pub(crate) async fn admit(
+    state: AppState,
+    request: ApplyRequest,
+    source: Option<GitCheck>,
+) -> Result<ApplyStatus, AppError> {
     let _admission = state.stack_apply_admission.lock().await;
     let id = request.operation_id;
     let hash = firecrab_stack::desired_hash(&request.stack);
     let store = state.store.clone();
+    let templates = state.templates.clone();
     let name = request.stack.name.clone();
     let (record, observed, previous) = database(id, move || {
         let record = store.stack(&name)?.ok_or(PersistenceError::MissingStack)?;
-        Ok((record, inventory(&store)?, store.stored_stack_apply(id)?))
+        Ok((
+            record,
+            inventory(&store, &templates)?,
+            store.stored_stack_apply(id)?,
+        ))
     })
     .await?;
     if let Some(previous) = previous {
         if previous.status.stack_id != record.id
             || previous.desired_hash != hash
             || previous.allow_stop != request.allow_stop
+            || previous.status.git_revision != source.as_ref().and_then(GitCheck::revision)
         {
             return Err(AppError::conflict(
                 "stack_apply_identity_conflict",
@@ -119,6 +129,8 @@ async fn admit(state: AppState, request: ApplyRequest) -> Result<ApplyStatus, Ap
         .await
         .map_err(AppError::redacted)?;
     let status = ApplyStatus {
+        inputs: plan.inputs,
+        git_revision: source.as_ref().and_then(GitCheck::revision),
         operation_id: id,
         stack_id: record.id,
         name: record.name.clone(),
@@ -136,10 +148,18 @@ async fn admit(state: AppState, request: ApplyRequest) -> Result<ApplyStatus, Ap
     let store = state.store.clone();
     let expected = record.clone();
     let queued = status.clone();
+    let services = state.service_mutations.lock().await;
     let (status, fresh) = database(id, move || {
-        store.begin_stack_apply(&expected, &hash, request.allow_stop, &queued)
+        store.begin_stack_apply(
+            &expected,
+            &hash,
+            request.allow_stop,
+            &queued,
+            source.as_ref(),
+        )
     })
     .await?;
+    drop(services);
     if fresh {
         let worker_state = state.clone();
         let worker_status = status.clone();

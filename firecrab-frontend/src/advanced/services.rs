@@ -1063,6 +1063,8 @@ fn final_check(app: &Shared) {
             api::request_detailed("POST", &path, Some(&body), None).await
         } else {
             Err(api::Failure {
+                status: None,
+                code: None,
                 message: "Reconnect AUTH to deploy".into(),
                 fields: BTreeMap::new(),
             })

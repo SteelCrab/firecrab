@@ -299,7 +299,19 @@ pub(crate) async fn create_vm_with_id(
     req: CreateVmRequest,
     id: Uuid,
 ) -> Result<(StatusCode, Json<VmResponse>), AppError> {
-    let fields = validate_create(&req, &state);
+    let template = state.templates.resolve_alias(&req.template);
+    create_vm_from_template(state, request_id, req, id, template).await
+}
+
+/// Keep stack approval and pool-style creation bound to one resolved version.
+pub(crate) async fn create_vm_from_template(
+    state: AppState,
+    request_id: RequestId,
+    req: CreateVmRequest,
+    id: Uuid,
+    template: Option<std::sync::Arc<crate::templates::TemplateVersion>>,
+) -> Result<(StatusCode, Json<VmResponse>), AppError> {
+    let fields = validate_create_for(&req, template.as_deref(), &state);
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
     }
@@ -314,10 +326,7 @@ pub(crate) async fn create_vm_with_id(
     // and run_start already re-verifies right before the template is
     // actually used, which is the point that matters for catching a
     // tampered/corrupted artifact.
-    let template = state
-        .templates
-        .resolve_alias(&req.template)
-        .ok_or_else(|| AppError::internal(request_id.0))?;
+    let template = template.ok_or_else(|| AppError::internal(request_id.0))?;
     let response = insert_vm(
         &state,
         request_id,
@@ -342,11 +351,21 @@ pub(crate) async fn insert_vm(
     template: &crate::templates::TemplateVersion,
     purpose: crate::model::VmPurpose,
 ) -> Result<VmResponse, AppError> {
+    let _cluster_admission = if state.cluster.worker.is_some() {
+        Some(state.cluster.admission.lock().await)
+    } else {
+        None
+    };
     let storage_root = req
         .storage_root
         .clone()
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| state.storage.default_id().to_owned());
+    if state.cluster.worker.is_some() {
+        crate::cluster::check_capacity(state, id, req.cpu, req.ram, req.disk_gb, &storage_root)
+            .await
+            .map_err(|e| crate::cluster::handlers::error(e, request_id))?;
+    }
     let vm = VmRecord {
         id,
         name: req.name,
@@ -526,6 +545,73 @@ pub(crate) async fn insert_vm(
         .insert(vm.id, vm);
 
     Ok(response)
+}
+
+/// Finish idempotent create side effects after a worker crash between VM/receipt commits.
+pub(crate) async fn resume_cluster_create(
+    state: &AppState,
+    id: Uuid,
+    request: RequestId,
+) -> Result<(), AppError> {
+    let _guard = state.network_mutations.lock().await;
+    let vm = state
+        .vms
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found(request.0))?;
+    let paths = crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&vm.storage_root), id);
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        paths.ensure_directories().map_err(|e| e.to_string())?;
+        crate::guest_ssh::ensure_operator_key(&paths).map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| AppError::internal(request.0))?
+    .map_err(|_| AppError::internal(request.0))?;
+    let subnet = resolve_subnet(state, vm.micro_network_id, request.0).await?;
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.allocate_lease(id, subnet))
+        .await
+        .map_err(|_| AppError::internal(request.0))?
+        .map_err(|_| AppError::internal(request.0))?;
+    let _ = sync_dhcp_leases(state).await;
+    Ok(())
+}
+
+/// Finish cleanup after a crash between deleting the VM row and releasing its lease.
+pub(crate) async fn resume_cluster_delete(
+    state: &AppState,
+    id: Uuid,
+    storage: &str,
+    request: RequestId,
+) -> Result<(), AppError> {
+    if !state.storage_root_known(storage) {
+        return Err(AppError::conflict(
+            "storage_missing",
+            "restore the owned storage root before completing deletion",
+            request.0,
+        ));
+    }
+    let paths = crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(storage), id);
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        crate::artifacts::remove_vm_artifacts(&paths).map_err(|e| e.to_string())?;
+        store.clear_vm_shells(id).map_err(|e| e.to_string())?;
+        store
+            .clear_vm_port_forwards(id)
+            .map_err(|e| e.to_string())?;
+        match store.release_lease(id) {
+            Ok(()) | Err(IpamError::NotLeased { .. }) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await
+    .map_err(|_| AppError::internal(request.0))?
+    .map_err(|_| AppError::internal(request.0))?;
+    let _ = sync_dhcp_leases(state).await;
+    Ok(())
 }
 
 /// Replaces pinned shell revisions for a VM that has no live process.
@@ -834,7 +920,27 @@ pub async fn update_vm(
             request_id.0,
         )?;
     }
+    let _cluster_admission = if state.cluster.worker.is_some() {
+        Some(state.cluster.admission.lock().await)
+    } else {
+        None
+    };
     let (updated, previous) = claim_resource_update(&state, id, &req, request_id.0)?;
+    if state.cluster.worker.is_some()
+        && (updated.cpu > previous.0 || updated.ram > previous.1 || updated.disk_gb > previous.2)
+        && let Err(error) = crate::cluster::check_capacity(
+            &state,
+            id,
+            updated.cpu,
+            updated.ram,
+            updated.disk_gb,
+            &updated.storage_root,
+        )
+        .await
+    {
+        restore_resources(&state, id, previous);
+        return Err(crate::cluster::handlers::error(error, request_id));
+    }
     if let Err(error) = persist_update(&state, &updated, request_id.0).await {
         restore_resources(&state, id, previous);
         return Err(error);
@@ -1432,6 +1538,28 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
         })?;
 
     set_startup_step(state, vm.id, StartupStep::PreparingDisk);
+    let store = state.store.clone();
+    let vm_id = vm.id;
+    let approved_template = template.clone();
+    let templates = state.templates.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let pin = store.stack_vm_pin(vm_id, true)
+            .map_err(|_| "Could not read approved stack template".to_owned())?;
+        let Some(pin) = pin else { return Ok(()); };
+        if pin != approved_template.stack_pin() {
+            return Err("Approved stack template content changed; restore its exact artifacts before starting the VM".into());
+        }
+        for artifact in std::iter::once(&approved_template.kernel)
+            .chain(std::iter::once(&approved_template.rootfs))
+            .chain(approved_template.initrd.iter())
+        {
+            templates.open_verified(artifact)
+                .map_err(|_| "Approved stack template artifact changed; restore its exact bytes before starting the VM".to_owned())?;
+        }
+        Ok(())
+    })
+        .await
+        .map_err(|_| "Could not read approved stack template".to_owned())??;
 
     // Set up before the disk copy so a network failure fails fast, without
     // paying for a multi-GB copy first. Any failure *after* this succeeds
@@ -2653,6 +2781,11 @@ pub async fn assign_vm_storage(
     ValidatedJson(req): ValidatedJson<firecrab_api_types::AssignVmStorageRequest>,
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let _cluster_admission = if state.cluster.worker.is_some() {
+        Some(state.cluster.admission.lock().await)
+    } else {
+        None
+    };
     let target = req.storage_root.trim();
     if target.is_empty() {
         let mut fields = BTreeMap::new();
@@ -2702,6 +2835,19 @@ pub async fn assign_vm_storage(
             .cloned()
             .ok_or_else(|| AppError::not_found(request_id.0))?;
         return Ok(Json(vm_response(&state, &vm, lease.as_ref())));
+    }
+
+    if state.cluster.worker.is_some() {
+        let (cpu, ram) = {
+            let vms = state.vms.lock().unwrap_or_else(|e| e.into_inner());
+            let vm = vms
+                .get(&id)
+                .ok_or_else(|| AppError::not_found(request_id.0))?;
+            (vm.cpu, vm.ram)
+        };
+        crate::cluster::check_capacity(&state, id, cpu, ram, disk_gb, target)
+            .await
+            .map_err(|e| crate::cluster::handlers::error(e, request_id))?;
     }
 
     // Refuse if a disk already exists at the old location — moving multi-GB
