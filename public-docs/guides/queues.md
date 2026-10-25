@@ -55,7 +55,10 @@ No message expiry is configured by default.
 Operators can inspect the failure queue using the receiver connection and its `.failed` queue name.
 
 Deletion is refused while a MicroService references the queue or either queue contains messages.
-Active consumers also prevent deletion.
+Active consumers also prevent deletion. Stop external publishers and receivers before deleting a queue.
+RabbitMQ 4.3 quorum queues do not support `if-empty`/`if-unused` deletion flags.
+Firecrab removes the private role users to stop new logins and close their connections, then probes both queues with requeue enabled before deletion.
+Work found during this check is retained. A failed or interrupted deletion can be recovered with **Retry**, using the same role passwords.
 Firecrab does not offer a destructive purge operation.
 
 ## Bind a MicroService

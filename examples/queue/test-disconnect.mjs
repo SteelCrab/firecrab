@@ -18,7 +18,8 @@ async function close(connection) {
 }
 async function crash(connection) {
   const closed = new Promise(resolve => connection.once("close", resolve));
-  connection.connection.stream.destroy();
+  // amqplib listens for socket errors/end, not a bare local socket close.
+  connection.connection.stream.destroy(new Error("QA simulated transport failure"));
   await closed;
   connections.delete(connection);
 }

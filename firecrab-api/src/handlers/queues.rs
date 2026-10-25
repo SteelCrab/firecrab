@@ -283,9 +283,26 @@ pub async fn delete(
             request_id.0,
         ));
     }
-    client(&state, request_id.0)?
-        .delete(&record, request_id.0)
-        .await?;
+    let client = client(&state, request_id.0)?;
+    client.check_unused(&record, request_id.0).await?;
+    // Recovery turns an interrupted operation into a retryable declaration.
+    // Its original passwords restore users even after an API crash mid-delete.
+    let mut record = record;
+    record.phase = QueuePhase::Provisioning;
+    record.error = None;
+    state
+        .store
+        .save_queue(&record)
+        .map_err(|_| AppError::internal(request_id.0))?;
+    if let Err(error) = client.delete(&record, request_id.0).await {
+        record.phase = QueuePhase::Failed;
+        record.error = Some(error.description());
+        state
+            .store
+            .save_queue(&record)
+            .map_err(|_| AppError::internal(request_id.0))?;
+        return Err(error);
+    }
     state
         .store
         .delete_queue(id)

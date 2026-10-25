@@ -397,6 +397,109 @@ async fn deletion_of_inflight_work_never_sends_a_destructive_request() {
     server.abort();
 }
 
+/// Exercise the broker boundary: cached metrics can be empty before a late send.
+async fn deletion_probe_fixture(found_work: bool, live_connection: bool) {
+    use axum::response::IntoResponse;
+    use std::sync::{Arc, Mutex};
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path()).await;
+    let (engine, queue) = fixtures(&state);
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let seen = requests.clone();
+    let app = Router::new().fallback(move |request: Request<Body>| {
+        let seen = seen.clone();
+        async move {
+            let method = request.method().clone();
+            let path = request.uri().to_string();
+            let body = to_bytes(request.into_body(), 128 * 1024).await.unwrap();
+            let body: Value = if body.is_empty() { Value::Null } else { serde_json::from_slice(&body).unwrap() };
+            seen.lock().unwrap().push((method.clone(), path.clone(), body));
+            if method == axum::http::Method::GET && path.contains("/connections") {
+                return axum::Json(if live_connection { json!([{"name":"still-closing"}]) } else { json!([]) }).into_response();
+            }
+            if method == axum::http::Method::POST && path.ends_with("/get") {
+                return axum::Json(if found_work { json!([{"message_count":1}]) } else { json!([]) }).into_response();
+            }
+            if method == axum::http::Method::GET {
+                return axum::Json(json!({"messages_ready":0,"messages_unacknowledged":0,"consumers":0,"messages":0})).into_response();
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = RabbitClient::at(format!("http://{address}"), engine).unwrap();
+    let result = client.delete(&queue, Uuid::new_v4()).await;
+    let requests = requests.lock().unwrap();
+    let queue_deletes: Vec<_> = requests
+        .iter()
+        .enumerate()
+        .filter(|(_, (method, path, _))| {
+            method == axum::http::Method::DELETE && path.starts_with("/api/queues/")
+        })
+        .collect();
+    assert!(
+        requests
+            .iter()
+            .all(|(_, path, _)| !path.contains("if-empty") && !path.contains("if-unused"))
+    );
+    let user_deletes: Vec<_> = requests
+        .iter()
+        .enumerate()
+        .filter(|(_, (method, path, _))| {
+            method == axum::http::Method::DELETE && path.starts_with("/api/users/")
+        })
+        .collect();
+    assert_eq!(user_deletes.len(), 2);
+    if found_work || live_connection {
+        assert!(result.is_err());
+        assert!(queue_deletes.is_empty());
+        // Same persisted passwords are restored by the normal declaration path.
+        for access in [QueueAccess::Publish, QueueAccess::Consume] {
+            assert!(
+                requests
+                    .iter()
+                    .any(|(method, path, body)| method == axum::http::Method::PUT
+                        && path.starts_with("/api/users/")
+                        && body["password"] == queue.password(access))
+            );
+        }
+    } else {
+        assert!(result.is_ok());
+        assert_eq!(queue_deletes.len(), 2);
+        let probes: Vec<_> = requests
+            .iter()
+            .enumerate()
+            .filter(|(_, (method, path, _))| {
+                method == axum::http::Method::POST && path.ends_with("/get")
+            })
+            .collect();
+        assert_eq!(probes.len(), 2);
+        for (index, (_, _, body)) in probes {
+            assert!(index > user_deletes[1].0 && index < queue_deletes[0].0);
+            assert_eq!(body["ackmode"], "ack_requeue_true");
+            assert_eq!(body["count"], 1);
+        }
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn deletion_quiesces_roles_and_probes_both_queues_before_removal() {
+    deletion_probe_fixture(false, false).await;
+}
+
+#[tokio::test]
+async fn deletion_retains_late_work_and_restores_original_role_passwords() {
+    deletion_probe_fixture(true, false).await;
+}
+
+#[tokio::test]
+async fn deletion_waits_for_connections_to_close_before_touching_queues() {
+    deletion_probe_fixture(false, true).await;
+}
+
 /// Run only against a disposable broker. This creates and removes a random vhost.
 #[tokio::test]
 #[ignore = "requires a disposable RabbitMQ broker and npm ci --prefix examples/queue"]

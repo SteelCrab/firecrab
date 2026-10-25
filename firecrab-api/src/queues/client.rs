@@ -209,9 +209,8 @@ impl RabbitClient {
             failed: failed["messages"].as_u64().unwrap_or(0),
         })
     }
-    /// Delete only empty, unused resources and tolerate an interrupted prior deletion.
-    pub(crate) async fn delete(&self, q: &QueueRecord, id: Uuid) -> Result<(), AppError> {
-        // Check both queues before any deletion. Conditional deletes still guard races.
+    /// Refuse work or active consumers before changing application access.
+    pub(crate) async fn check_unused(&self, q: &QueueRecord, id: Uuid) -> Result<(), AppError> {
         let metrics = self.read_metrics(q, id, true).await?;
         if metrics.ready != 0
             || metrics.unacknowledged != 0
@@ -224,19 +223,27 @@ impl RabbitClient {
                 id,
             ));
         }
-        let v = segment(&q.vhost());
-        for name in [&q.name, &format!("{}.failed", q.name)] {
-            self.send(
-                Method::DELETE,
-                &format!("queues/{v}/{}?if-empty=true&if-unused=true", segment(name)),
-                None,
+        Ok(())
+    }
+
+    /// Quiesce the private role users before authoritative empty-queue probes.
+    /// RabbitMQ 4.3 quorum queues do not implement conditional deletion flags.
+    pub(crate) async fn delete(&self, q: &QueueRecord, id: Uuid) -> Result<(), AppError> {
+        self.check_unused(q, id).await?;
+        let result = self.delete_quiesced(q, id).await;
+        if result.is_err() && self.declare(q, id).await.is_err() {
+            return Err(AppError::unavailable(
+                "Queue data is retained; retry provisioning to restore application access",
                 id,
-                true,
-            )
-            .await?;
+            ));
         }
-        self.send(Method::DELETE, &format!("vhosts/{v}"), None, id, true)
-            .await?;
+        result
+    }
+
+    /// Removing a user closes its connections and prevents new role logins.
+    /// A non-destructive basic.get probe avoids relying on cached message counts.
+    async fn delete_quiesced(&self, q: &QueueRecord, id: Uuid) -> Result<(), AppError> {
+        let v = segment(&q.vhost());
         for access in [QueueAccess::Publish, QueueAccess::Consume] {
             self.send(
                 Method::DELETE,
@@ -247,6 +254,54 @@ impl RabbitClient {
             )
             .await?;
         }
+        let connections = self
+            .send(
+                Method::GET,
+                &format!("vhosts/{v}/connections?columns=name"),
+                None,
+                id,
+                true,
+            )
+            .await?;
+        if !connections.is_null() && connections.as_array().is_none_or(|rows| !rows.is_empty()) {
+            return Err(AppError::conflict(
+                "queue_in_use",
+                "Wait for application connections to close before deletion",
+                id,
+            ));
+        }
+        self.check_unused(q, id).await?;
+        // User removal and basic.get run against the same private single-node
+        // broker. After its connections close, confirmed work cannot race these
+        // probes. A found message is requeued, never acknowledged or purged.
+        for name in [&q.name, &format!("{}.failed", q.name)] {
+            let work = self.send(
+                Method::POST,
+                &format!("queues/{v}/{}/get", segment(name)),
+                Some(json!({"count":1,"ackmode":"ack_requeue_true","encoding":"base64","truncate":0})),
+                id,
+                true,
+            ).await?;
+            if !work.is_null() && work.as_array().is_none_or(|rows| !rows.is_empty()) {
+                return Err(AppError::conflict(
+                    "queue_in_use",
+                    "Queue deletion requires both queues to be empty",
+                    id,
+                ));
+            }
+        }
+        for name in [&q.name, &format!("{}.failed", q.name)] {
+            self.send(
+                Method::DELETE,
+                &format!("queues/{v}/{}", segment(name)),
+                None,
+                id,
+                true,
+            )
+            .await?;
+        }
+        self.send(Method::DELETE, &format!("vhosts/{v}"), None, id, true)
+            .await?;
         Ok(())
     }
 }
