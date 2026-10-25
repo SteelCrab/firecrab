@@ -432,7 +432,8 @@ fn redraw(app: &Shared) {
     if let Some(address) = element("console-address") {
         address.set_text_content(Some(text(&state.vm, "ipv4")));
     }
-    let retry_html = if ["ended", "failed", "reconnecting", "disconnected"].contains(&state.status.as_str()) {
+    let retry_html =
+        if ["ended", "failed", "reconnecting", "disconnected"].contains(&state.status.as_str()) {
             render::button(
                 if state.status == "ended" {
                     "New session"
