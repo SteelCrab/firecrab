@@ -17,6 +17,7 @@
 .wasm-cards { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: 16px; }
 .wasm-card { padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel); }
 .secrets-page, .secret-list { display: grid; gap: 16px; }
+.secrets-page > .btn { justify-self: start; }
 .secret-tabs, .secret-actions, .secret-export { display: flex; align-items: center; gap: 8px; }
 .secret-export { flex-wrap: wrap; }
 .secret-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
