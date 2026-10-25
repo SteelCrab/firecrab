@@ -19,6 +19,8 @@ export default function MicroServices() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // undefined closes the editor; null creates a new configuration.
+  const [expectedRelease, setExpectedRelease] = useState<string | undefined>();
+  const [deployEditor, setDeployEditor] = useState(false);
   const [editor, setEditor] = useState<MicroServiceResponse | null | undefined>(undefined);
   const [runtime, setRuntime] = useState<{ service: MicroServiceResponse; draft?: ServiceDeploymentDraft } | null>(null);
   const [resumeDraft] = useState(readServiceDeploymentDraft);
@@ -54,10 +56,12 @@ export default function MicroServices() {
     return () => { active = false; };
   }, [applyServices]);
 
-  const edit = async (id: string) => {
+  const edit = async (id: string, deploy = false, release?: string) => {
     if (busy) return;
     setBusy(true);
     try {
+      setDeployEditor(deploy);
+      setExpectedRelease(release);
       setEditor(await getMicroService(id));
       setDetailOpen(true);
     } catch (failure) {
@@ -83,6 +87,7 @@ export default function MicroServices() {
   };
 
   const openNew = () => {
+    setDeployEditor(false);
     setRuntime(null);
     setEditor(null);
     setDetailOpen(true);
@@ -99,13 +104,13 @@ export default function MicroServices() {
   };
 
   if (editor !== undefined) {
-    return <Screen view="services"><ServiceSetup key={editor?.id ?? "new"} service={editor} onCancel={() => setEditor(undefined)} onSaved={saved} /></Screen>;
+    return <Screen view="services"><ServiceSetup key={editor?.id ?? "new"} service={editor} deploy={deployEditor} expectedReleaseId={expectedRelease} onCancel={() => setEditor(undefined)} onSaved={saved} /></Screen>;
   }
 
   return (
     <Screen
       view="services"
-      detail={runtime ? <div className="detail-body detail-embed"><ServiceDeployment key={runtime.service.id} service={runtime.service} draft={runtime.draft} onClose={() => setRuntime(null)} onEdit={() => edit(runtime.service.id)} /></div> : undefined}
+      detail={runtime ? <div className="detail-body detail-embed"><ServiceDeployment key={runtime.service.id} service={runtime.service} draft={runtime.draft} onClose={() => setRuntime(null)} onEdit={() => edit(runtime.service.id)} onUpdate={release => edit(runtime.service.id, true, release)} /></div> : undefined}
       detailLabel={t("MicroService detail", "MicroService 상세")}
       detailKind={<><Rocket aria-hidden="true" />MicroService</>}
       onCloseDetail={() => {

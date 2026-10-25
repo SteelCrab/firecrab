@@ -737,6 +737,8 @@ impl Store {
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
+        conn.execute_batch(micro_services::HISTORY_SQL)?;
+        micro_services::migrate_history(&conn)?;
         conn.execute_batch(stacks::SCHEMA_SQL)?;
         conn.execute_batch(stack_applies::SCHEMA_SQL)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;

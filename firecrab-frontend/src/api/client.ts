@@ -30,6 +30,8 @@ import type {
   MicroServiceResponse,
   MicroServiceDeployment,
   DeployMicroServiceRequest,
+  UpdateServiceRequest,
+  RollbackServiceRequest,
   NetworkInfoResponse,
   ReplaceSecurityGroupRulesRequest,
   SecurityGroupResponse,
@@ -200,6 +202,26 @@ export function deployMicroService(id: string, request: DeployMicroServiceReques
 
 export function stopMicroService(id: string): Promise<MicroServiceDeployment> {
   return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/stop`, { method: "POST" });
+}
+
+export function updateServiceRelease(id: string, request: UpdateServiceRequest): Promise<MicroServiceDeployment> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/updates`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  });
+}
+
+export function listServiceReleases(id: string, signal?: AbortSignal): Promise<MicroServiceDeployment[]> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/releases`, { signal });
+}
+
+export function rollbackServiceRelease(id: string, request: RollbackServiceRequest): Promise<MicroServiceDeployment> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/rollback`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  });
+}
+
+export function retryServiceRelease(id: string, operationId: string): Promise<MicroServiceDeployment> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/deployment/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operationId }) });
 }
 
 export function getMicroService(id: string): Promise<MicroServiceResponse> {

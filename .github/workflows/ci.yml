@@ -104,6 +104,7 @@ jobs:
           sudo --preserve-env=LLVM_PROFILE_FILE env FIRECRAB_LIBDIR=/var/lib/firecrab-pipe-qa "$bin/firecrab" pipe install
           cloudflared=/var/lib/firecrab-pipe-qa/pipe/cloudflared
           python3 scripts/test-pipe-runtime.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress
+          python3 scripts/test-deploy-nginx.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress
           sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-cli.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress --cloudflared "$cloudflared"
           sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-firecrab-address.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress
           sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-api.py --api "$bin/firecrab-api" --helper "$bin/firecrab-helper" --ingress target/ingress/firecrab-ingress

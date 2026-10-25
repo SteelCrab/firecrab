@@ -7,15 +7,16 @@ import { consoleHash, pipeCardHash } from "../navigation";
 import { getPipeAuth, hasImageAuth } from "../api/pipeAuth";
 import { reconnectServiceAuth, type ServiceDeploymentDraft } from "../lib/serviceDeploymentResume";
 import { useI18n } from "../i18n";
+import ServiceReleases from "./ServiceReleases";
 
 type PlacementCheck = { key: string; fields: Record<string, string>; error: string | null };
 
 type AuthState = "checking" | "connected" | "missing" | "unavailable";
 
-const BUSY: ServicePhase[] = ["queued", "importing", "starting", "checking_health", "connecting_domain", "stopping"];
+const BUSY: ServicePhase[] = ["queued", "importing", "starting", "checking_health", "connecting_domain", "switching_traffic", "draining", "rolling_back", "stopping"];
 import { getPipe, type PipeSnapshot } from "../api/pipe";
 
-export default function ServiceDeployment({ service, draft, onClose, onEdit }: { service: MicroServiceResponse; draft?: ServiceDeploymentDraft; onClose: () => void; onEdit: () => void }) {
+export default function ServiceDeployment({ service, draft, onClose, onEdit, onUpdate }: { service: MicroServiceResponse; draft?: ServiceDeploymentDraft; onClose: () => void; onEdit: () => void; onUpdate: (releaseId: string) => void }) {
   const { t } = useI18n();
   const [deployment, setDeployment] = useState<MicroServiceDeployment | null>(null);
   const [pipe, setPipe] = useState<PipeSnapshot | null>(null);
@@ -41,7 +42,7 @@ export default function ServiceDeployment({ service, draft, onClose, onEdit }: {
   const acting = useRef(false);
   const busy = !!deployment && BUSY.includes(deployment.phase);
   const hasInstances = !!deployment?.instances.length;
-  const ownsResources = hasInstances || !!deployment?.domainRouteOwned;
+  const ownsResources = hasInstances || !!deployment?.domainRouteOwned || !!deployment?.update?.previous.instances.length || (!deployment?.update?.completed && !!deployment?.update?.previous.domainRouteOwned);
   const domain = service.domain;
   const routed = !!deployment?.domainRouteOwned && ["running", "degraded"].includes(deployment.phase);
   const groupPending = !!service.securityGroupId && group === null;
@@ -208,6 +209,7 @@ export default function ServiceDeployment({ service, draft, onClose, onEdit }: {
     queued: t("Queued", "대기 중"), importing: t("Importing image", "이미지 가져오는 중"),
     starting: t("Starting MicroVM", "MicroVM 시작 중"), checking_health: t("Checking app health", "앱 상태 확인 중"),
     connecting_domain: t("Connecting domain", "도메인 연결 중"),
+    switching_traffic: t("Switching Nginx traffic", "Nginx 트래픽 전환 중"), draining: t("Draining previous requests", "이전 요청 종료 대기 중"), rolling_back: t("Restoring previous release", "이전 릴리스 복구 중"),
     running: t("Running", "실행 중"), degraded: t("Health check failed", "상태 검사 실패"),
     stopping: t("Stopping", "중지 중"), stopped: t("Stopped", "중지 완료"), failed: t("Deployment failed", "배포 실패"),
   };
@@ -227,7 +229,7 @@ export default function ServiceDeployment({ service, draft, onClose, onEdit }: {
       <p role="status">{statusError ? t("Status unavailable", "상태를 확인할 수 없다") : deployment ? labels[deployment.phase] : loaded ? t("Not deployed", "아직 배포하지 않았다") : t("Checking deployment…", "배포 상태 확인 중…")}</p>
       {activeStep >= 0 && <ol className="service-deploy-steps" aria-label={t("Deployment progress", "배포 진행 단계")}>{[t("Prepare image", "이미지 준비"), t("Start app", "앱 시작"), t("Check app health", "정상 응답 확인"), t("Ready to open", "접속 준비 완료")].map((label, index) => <li key={label} className={index < activeStep || (index === 3 && readyInstance) ? "done" : index === activeStep ? "active" : ""} aria-current={index === activeStep ? "step" : undefined}><span className="service-step-number">{index < activeStep || (index === 3 && readyInstance) ? <Check aria-hidden="true" /> : index + 1}</span>{label}</li>)}</ol>}
       {readyInstance && <div className="service-deploy-success"><div><strong>{t("Your app is ready", "앱을 사용할 수 있다")}</strong><p>{t("The app answered the health check.", "앱이 상태 검사에 정상 응답했다.")}</p></div><a className="btn" href={domain ? `https://${domain}` : endpoint(readyInstance.hostPort)} target="_blank" rel="noreferrer">{t("Open app", "앱 열기")}<ArrowUpRight aria-hidden="true" /></a></div>}
-      {(deployment?.phase === "failed" || deployment?.phase === "degraded") && <div className="service-deploy-next"><strong>{t("What to check next", "다음 항목을 확인한다")}</strong><p>{t("Check the deployment log below. Confirm that the image can run and that the app port and health path match your app. Stop remaining instances before changing settings or retrying.", "아래 배포 로그를 확인한다. 이미지가 실행 가능한지 확인한다. 앱 포트와 상태 검사 경로가 맞는지 확인한다. 설정을 바꾸거나 다시 배포하려면 남은 인스턴스를 먼저 중지한다.")}</p>{!hasInstances && <button className="btn" onClick={onEdit}>{t("Edit configuration", "설정 수정")}</button>}</div>}
+      {(deployment?.phase === "failed" || deployment?.phase === "degraded") && <div className="service-deploy-next"><strong>{t("What to check next", "다음 항목을 확인한다")}</strong><p>{deployment.update && !deployment.update.completed ? t("Existing instances are retained for recovery. Retry Deploy resumes this operation. Stop service removes both generations after drain.", "복구를 위해 기존 인스턴스를 보존하고 있다. Deploy 재시도로 이 작업을 이어간다. 서비스 중지는 요청 종료 후 두 세대를 모두 제거한다.") : t("Check the deployment log below. Confirm that the image can run and that the app port and health path match your app. Stop remaining instances before changing settings or retrying.", "아래 배포 로그를 확인한다. 이미지가 실행 가능한지 확인한다. 앱 포트와 상태 검사 경로가 맞는지 확인한다. 설정을 바꾸거나 다시 배포하려면 남은 인스턴스를 먼저 중지한다.")}</p>{!hasInstances && <button className="btn" onClick={onEdit}>{t("Edit configuration", "설정 수정")}</button>}</div>}
       <div id="service-deploy-auth" aria-live="polite">
         {authState === "checking" && <p className="poll-note">{t("Checking AUTH connection…", "AUTH 연결 확인 중…")}</p>}
         {authState === "missing" && <div className="service-notice service-notice-warning"><Info aria-hidden="true" /><div>
@@ -269,6 +271,7 @@ export default function ServiceDeployment({ service, draft, onClose, onEdit }: {
         <div className="table-scroll"><table className="vm-table service-table"><thead><tr><th id="service-instance-column-0" scope="col">MicroVM</th><th id="service-instance-column-1" scope="col">{t("State", "상태")}</th><th id="service-instance-column-2" scope="col">{t("App health", "앱 상태")}</th><th id="service-instance-column-3" scope="col">{t("Endpoint", "접속 주소")}</th></tr></thead><tbody>{deployment!.instances.map((instance) => <tr key={instance.vmId}><td headers="service-instance-column-0" data-label="MicroVM"><a href={consoleHash(instance.vmId)}>{instance.vmId.slice(0, 8)}</a></td><td headers="service-instance-column-1" data-label={t("State", "상태")}>{instance.state}</td><td headers="service-instance-column-2" data-label={t("App health", "앱 상태")}>{instance.healthy ? t("Healthy", "정상") : t("Not healthy", "정상 응답 없음")}</td><td headers="service-instance-column-3" data-label={t("Endpoint", "접속 주소")}>{instance.hostPort > 0 ? <a href={endpoint(instance.hostPort)} target="_blank" rel="noreferrer">:{instance.hostPort}</a> : <span>{t("Via domain", "도메인으로 접속")}</span>}</td></tr>)}</tbody></table></div>
       </>}
       {ownsResources && <div className="service-actions"><button className="btn danger" disabled={submitting || busy} onClick={() => { if (window.confirm(t("Stop and remove these service instances?", "서비스 인스턴스를 중지하고 삭제할까요?"))) act(true); }}>{t("Stop service", "서비스 중지")}</button></div>}
+      {domain && deployment && <ServiceReleases deployment={deployment} disabled={submitting || busy || !!statusError} onUpdate={onUpdate} onAccepted={result => { generation.current += 1; setDeployment(result); }} onBusy={value => { acting.current = value; setSubmitting(value); }} />}
       {deployment && <details className="service-log-details" open={deployment.phase === "failed" || deployment.phase === "degraded"}><summary>{t("Deployment log and image details", "배포 로그와 이미지 정보")}</summary>{deployment.digest && <p className="service-digest">{deployment.digest}</p>}<pre className="service-deploy-log" aria-label={t("Deployment log", "배포 로그")}>{deployment.log.join("\n")}</pre></details>}
     </section>
   );

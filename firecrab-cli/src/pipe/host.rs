@@ -723,6 +723,16 @@ fn snapshot_with(
         }
     }
     Ok(Snapshot {
+        ingress_graceful_drain: fs::read_to_string(
+            ServiceEnv::from_process_env()
+                .confdir
+                .join("pipe/ingress.conf"),
+        )
+        .is_ok_and(|text| {
+            text.lines()
+                .any(|line| line.trim() == "worker_shutdown_timeout 0;")
+        }),
+        ingress_workers: ingress_workers(ingress.main_pid).ok(),
         firecrab_tunnels: super::firecrab::addresses().unwrap_or_default(),
         config,
         units: vec![ingress, legacy],
@@ -731,6 +741,54 @@ fn snapshot_with(
         nginx_available,
         cloudflared_available,
     })
+}
+
+/// Read the managed master's children; retain worker identity across reloads.
+fn ingress_workers(pid: u32) -> io::Result<Vec<firecrab_helper_protocol::pipe::IngressWorker>> {
+    use firecrab_helper_protocol::pipe::IngressWorker;
+    if pid == 0 {
+        return Ok(vec![]);
+    }
+    let boot_id = fs::read_to_string("/proc/sys/kernel/random/boot_id")?
+        .trim()
+        .to_owned();
+    let children = fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))?;
+    let mut workers = Vec::new();
+    for child in children.split_whitespace() {
+        let pid = child.parse::<u32>().map_err(io::Error::other)?;
+        let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(value) => value,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        let command = match fs::read(format!("/proc/{pid}/cmdline")) {
+            Ok(value) => value,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if !command.starts_with(b"nginx: worker process") {
+            continue;
+        }
+        let fields = stat
+            .rsplit_once(')')
+            .ok_or_else(|| io::Error::other("invalid worker stat"))?
+            .1;
+        let start_time = fields
+            .split_whitespace()
+            .nth(19)
+            .ok_or_else(|| io::Error::other("missing worker start time"))?
+            .parse::<u64>()
+            .map_err(io::Error::other)?;
+        workers.push(IngressWorker {
+            draining: command
+                .windows(b"shutting down".len())
+                .any(|part| part == b"shutting down"),
+            pid,
+            start_time,
+            boot_id: boot_id.clone(),
+        });
+    }
+    Ok(workers)
 }
 
 /// Show all known services without contacting the API; corrupt manifests retain basic status.

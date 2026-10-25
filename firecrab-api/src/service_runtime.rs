@@ -24,6 +24,7 @@ use crate::oci::{self, ImageReference, ImageVersion, Sha256Digest};
 use crate::server::RequestId;
 use crate::state::AppState;
 
+pub(crate) mod deploy;
 mod domain;
 pub(crate) mod secrets;
 
@@ -47,6 +48,9 @@ pub async fn deploy(
     secrets::preflight(&state, &service.spec, request_id.0).await?;
     domain::preflight(&state, id, &service.spec, request_id.0).await?;
     let deployment = MicroServiceDeployment {
+        started_at: chrono::Utc::now().timestamp(),
+        finished_at: None,
+        update: None,
         id: Uuid::new_v4(),
         service_id: id,
         spec: service.spec,
@@ -207,7 +211,7 @@ pub async fn stop(
     Path(id): Path<String>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let id = vms::parse_id(&id, request_id.0)?;
-    let _claim = state.service_mutations.lock().await;
+    let claim = state.service_mutations.clone().lock_owned().await;
     let store = state.store.clone();
     let mut deployment = database(request_id.0, move || store.service_deployment(id))
         .await?
@@ -218,6 +222,15 @@ pub async fn stop(
             "wait for the current service operation to finish",
             request_id.0,
         ));
+    }
+    if let Some(update) = &mut deployment.update {
+        update.cancelled = true;
+        update.completed = false;
+        update.transition = None;
+        deployment.phase = ServicePhase::Stopping;
+        deployment.finished_at = None;
+        let deployment = deploy::submit(state.clone(), deployment, claim, request_id.0).await?;
+        return Ok((StatusCode::ACCEPTED, Json(deployment)));
     }
     deployment.phase = ServicePhase::Stopping;
     deployment.error = None;
@@ -251,6 +264,10 @@ pub(crate) async fn ensure_editable(
     let store = state.store.clone();
     if let Some(deployment) = database(request_id, move || store.service_deployment(id)).await? {
         if deployment.phase.is_busy()
+            || deployment
+                .update
+                .as_ref()
+                .is_some_and(|update| !update.completed)
             || !deployment.instances.is_empty()
             || deployment.domain_route_owned
         {
@@ -278,20 +295,7 @@ pub(crate) async fn ensure_vm_policy_editable(
     request: Uuid,
 ) -> Result<(), AppError> {
     let store = state.store.clone();
-    let owned = database(request, move || {
-        for service in store.list_micro_services()? {
-            if let Some(deployment) = store.service_deployment(service.id)?
-                && deployment
-                    .instances
-                    .iter()
-                    .any(|instance| instance.vm_id == vm_id)
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    })
-    .await?;
+    let owned = database(request, move || store.vm_has_service_owner(vm_id)).await?;
     if owned {
         return Err(AppError::conflict(
             "service_in_use",
@@ -343,6 +347,9 @@ async fn phase(
     message: impl Into<String>,
 ) -> Result<(), String> {
     deployment.phase = phase;
+    if matches!(phase, ServicePhase::Running | ServicePhase::Stopped) {
+        deployment.finished_at = Some(chrono::Utc::now().timestamp());
+    }
     if deployment.log.len() >= 128 {
         deployment.log.remove(0);
     }
@@ -380,6 +387,7 @@ async fn fail_deployment(
         error.push_str(&format!("; cleanup requires retry: {cleanup_error}"));
     }
     deployment.phase = ServicePhase::Failed;
+    deployment.finished_at = Some(chrono::Utc::now().timestamp());
     deployment.error = Some(error.clone());
     deployment.log.push(error);
     if let Err(error) = save(state, deployment).await {
@@ -850,6 +858,16 @@ pub(crate) async fn recover(state: &AppState) {
         else {
             continue;
         };
+        if deployment
+            .update
+            .as_ref()
+            .is_some_and(|update| !update.completed)
+        {
+            if deployment.phase.is_busy() {
+                deploy::resume_worker(state.clone(), deployment);
+            }
+            continue;
+        }
         if deployment.phase.is_busy() {
             deployment.phase = ServicePhase::Failed;
             deployment.error = Some(

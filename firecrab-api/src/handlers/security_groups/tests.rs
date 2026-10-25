@@ -446,6 +446,9 @@ async fn service_ownership_blocks_rules_and_replica_attachment_edits_until_clean
     assert_eq!(status, StatusCode::CREATED);
     let id = Uuid::parse_str(service["id"].as_str().unwrap()).unwrap();
     let mut deployment = MicroServiceDeployment {
+        started_at: 0,
+        finished_at: None,
+        update: None,
         id: Uuid::new_v4(),
         service_id: id,
         phase: ServicePhase::Running,

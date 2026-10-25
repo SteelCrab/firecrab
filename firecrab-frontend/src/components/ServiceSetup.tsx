@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Box, Check, CheckCircle2, Info, SlidersHorizontal } from "lucide-react";
-import type { MicroNetworkResponse, MicroServiceResponse, MicroServiceSpec, SecurityGroupResponse } from "../bindings";
-import { ApiClientError, createMicroService, listMicroNetworks, listSecurityGroups, updateMicroService } from "../api/client";
+import type { DeployStrategy, MicroNetworkResponse, MicroServiceResponse, MicroServiceSpec, SecurityGroupResponse } from "../bindings";
+import { ApiClientError, createMicroService, getMicroService, listMicroNetworks, listSecurityGroups, updateMicroService, updateServiceRelease } from "../api/client";
 import { listStorage, type StorageConnection } from "../api/pipeStorage";
 import { getPipeAuth } from "../api/pipeAuth";
 import ServiceAppPicker, { type ServiceAppSelection } from "./ServiceAppPicker";
 import { useI18n } from "../i18n";
+import { newDeployOperation } from "../lib/deployOperation";
 
 const DEFAULT_SPEC: MicroServiceSpec = {
   name: "", image: "", runtime: "vm", port: 8080, healthPath: "/health", domain: null,
@@ -18,14 +19,18 @@ const FIELD_STEP: Record<string, number> = {
 };
 type Pair = { key: string; value: string };
 
-export default function ServiceSetup({ service, onCancel, onSaved }: {
+export default function ServiceSetup({ service, deploy = false, expectedReleaseId, onCancel, onSaved }: {
   service: MicroServiceResponse | null;
+  deploy?: boolean;
+  expectedReleaseId?: string;
   onCancel: () => void;
   onSaved: (service: MicroServiceResponse) => Promise<void>;
 }) {
   const { t } = useI18n();
   const [app, setApp] = useState<ServiceAppSelection | null>(null);
   const [step, setStep] = useState(0);
+  const [strategy, setStrategy] = useState<DeployStrategy>("rolling");
+  const operation = useRef<{ key: string; id: string } | null>(null);
   const [spec, setSpec] = useState<MicroServiceSpec>(service ?? DEFAULT_SPEC);
   const [env, setEnv] = useState<Pair[]>(Object.entries(spec.env).map(([key, value]) => ({ key, value })));
   const [secrets, setSecrets] = useState<Pair[]>(Object.entries(spec.secrets).map(([key, value]) => ({ key, value })));
@@ -59,7 +64,7 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
     t("Choose an app and version from an account connected in AUTH.", "AUTH에 연결된 계정에서 앱과 버전을 선택한다."),
     t("Use the port and health path that your app actually serves.", "앱이 실제로 사용하는 포트와 상태 검사 경로를 입력한다."),
     t("These defaults are a starting point. Adjust them to your app and host capacity.", "기본값으로 시작할 수 있다. 앱과 호스트 용량에 맞게 조정한다."),
-    t("Saving creates a configuration. You will choose a host port and deploy in the next screen.", "저장하면 설정이 만들어진다. 다음 화면에서 호스트 포트를 정하고 배포한다."),
+    deploy ? t("Deploy prepares healthy replacement instances before switching the existing Nginx route.", "Deploy가 새 인스턴스의 정상 응답을 확인한 뒤 기존 Nginx 경로를 전환한다.") : t("Saving creates a configuration. You will choose a host port and deploy in the next screen.", "저장하면 설정이 만들어진다. 다음 화면에서 호스트 포트를 정하고 배포한다."),
   ];
   useEffect(() => { heading.current?.focus(); }, [step]);
 
@@ -69,7 +74,7 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
   };
   const control = (key: string) => ({
     id: `service-${key}`, "aria-describedby": `service-${key}-hint${fields[key] ? ` service-${key}-error` : ""}`,
-    "aria-invalid": !!fields[key], disabled: saving,
+    "aria-invalid": !!fields[key], disabled: saving || (deploy && ["name", "domain"].includes(key)),
   });
   const showErrors = (errors: Record<string, string>) => {
     setFields(errors);
@@ -149,8 +154,15 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
     const { name, image, runtime, port, healthPath, domain, ram, cpu, replicas, startupTimeout, drainTimeout, securityGroupId, storageConnectionId } = request;
     try {
       const body = { name, image, runtime, port, healthPath, domain, ram, cpu, replicas, startupTimeout, drainTimeout, securityGroupId, ...(storageConnectionId ? { storageConnectionId } : {}), ...maps };
-      const saved = service ? await updateMicroService(service.id, body) : await createMicroService(body);
-      await onSaved(saved);
+      if (deploy && service) {
+        const key = JSON.stringify({ body, strategy });
+        if (operation.current?.key !== key) operation.current = { key, id: newDeployOperation() };
+        await updateServiceRelease(service.id, { operationId: operation.current.id, expectedReleaseId, spec: body, strategy });
+        await onSaved(await getMicroService(service.id));
+      } else {
+        const saved = service ? await updateMicroService(service.id, body) : await createMicroService(body);
+        await onSaved(saved);
+      }
     } catch (failure) {
       setError((failure as Error).message);
       if (failure instanceof ApiClientError) showErrors(failure.apiError?.fields ?? {});
@@ -165,7 +177,7 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
   return (
     <section className="service-setup" aria-labelledby="service-editor-heading" data-editing>
       <button type="button" className="btn ghost service-back" disabled={saving} onClick={onCancel}><ArrowLeft aria-hidden="true" />{t("Back to services", "서비스 목록으로")}</button>
-      <div className="service-setup-heading"><span className="service-eyebrow">{t("GUIDED SETUP", "단계별 설정")}</span><h2 id="service-editor-heading">{service ? t(`Edit: ${service.name}`, `수정: ${service.name}`) : t("New MicroService", "MicroService 추가")}</h2><p>{t("One step at a time. You can go back without losing your settings.", "한 단계씩 설정한다. 이전 단계로 돌아가도 입력값을 유지한다.")}</p></div>
+      <div className="service-setup-heading"><span className="service-eyebrow">{t("GUIDED SETUP", "단계별 설정")}</span><h2 id="service-editor-heading">{deploy && service ? t(`Deploy: ${service.name}`, `Deploy: ${service.name}`) : service ? t(`Edit: ${service.name}`, `수정: ${service.name}`) : t("New MicroService", "MicroService 추가")}</h2><p>{t("One step at a time. You can go back without losing your settings.", "한 단계씩 설정한다. 이전 단계로 돌아가도 입력값을 유지한다.")}</p></div>
       <nav aria-label={t("Setup steps", "설정 단계")}><ol className="service-steps">{steps.map((label, index) => <li key={index} className={index === step ? "current" : index < step ? "complete" : ""}><button type="button" disabled={saving || index > step} aria-current={index === step ? "step" : undefined} onClick={() => setStep(index)}><span className="service-step-number">{index < step ? <Check aria-hidden="true" /> : index + 1}</span><span>{label}</span></button></li>)}</ol></nav>
       <div className="service-setup-layout">
         <form className="service-setup-card" onSubmit={submit} onInvalidCapture={(event) => { const details = (event.target as HTMLElement).closest("details"); if (details) { details.open = true; setAdvanced(true); } }} noValidate>
@@ -181,7 +193,7 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
             {step === 1 && <>
               <Field name="port" label={t("App port", "앱 포트")} hint={t("The port inside your app. nginx uses 80. Many web apps use 8080.", "앱 내부에서 사용하는 포트이다. nginx는 80번을 사용한다. 웹 앱은 보통 8080번을 사용한다.")} error={fields.port}><input {...control("port")} type="number" min={1} max={65535} value={Number.isFinite(spec.port) ? spec.port : ""} onChange={(event) => change("port", event.target.valueAsNumber)} required /></Field>
               <Field name="healthPath" label={t("Health path", "상태 검사 경로")} hint={t("Firecrab requests this path to check your app. It must return HTTP 2xx. Use / for the nginx example.", "Firecrab이 이 경로에 요청을 보낸다. HTTP 2xx 응답이 와야 정상으로 판단한다. nginx 예제는 /를 사용한다.")} error={fields.healthPath}><input {...control("healthPath")} value={spec.healthPath} onChange={(event) => change("healthPath", event.target.value)} placeholder="/health" required maxLength={2048} spellCheck={false} /></Field>
-              <div className="service-notice"><Info aria-hidden="true" /><p>{t("You will choose the external host port after saving. You can start without a domain.", "저장한 뒤 외부 접속용 호스트 포트를 정한다. 도메인 없이 시작할 수 있다.")}</p></div>
+              <div className="service-notice"><Info aria-hidden="true" /><p>{deploy ? t("The existing domain stays the service entry point.", "기존 도메인을 서비스 접속 주소로 유지한다.") : t("You will choose the external host port after saving. You can start without a domain.", "저장한 뒤 외부 접속용 호스트 포트를 정한다. 도메인 없이 시작할 수 있다.")}</p></div>
               <Field name="securityGroupId" label={t("Security group", "보안그룹")} hint={t("New replicas inherit this group's rules and MicroNetwork.", "새 복제 VM은 이 그룹의 규칙과 MicroNetwork를 상속한다.")} error={fields.securityGroupId}>
                 <select {...control("securityGroupId")} value={spec.securityGroupId ?? ""} disabled={saving || groups === null || !!groupError} onChange={(event) => change("securityGroupId", event.target.value || null)}>
                   <option value="">{groups === null ? t("Loading…", "불러오는 중…") : t("None — use network defaults", "없음 — 네트워크 기본 설정 사용")}</option>
@@ -216,11 +228,12 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
               </details>
             </>}
             {step === 3 && <>
+              {deploy && <Field name="strategy" label={t("Deployment strategy", "배포 방식")} hint={t("Rolling needs capacity for one extra VM. Blue-green needs a full extra generation.", "롤링은 추가 VM 1개 용량이 필요하다. 블루그린은 새 세대 전체 용량이 필요하다.")}><select id="service-strategy" value={strategy} disabled={saving} onChange={event => setStrategy(event.target.value as DeployStrategy)}><option value="rolling">{t("Rolling", "롤링")}</option><option value="blue_green">{t("Blue-green", "블루그린")}</option></select></Field>}
               <div className="service-review">{reviewSections.map(({ title, step: index, values }) => <section key={index}><div className="service-review-heading"><h4>{title}</h4><button type="button" className="btn ghost sm" disabled={saving} onClick={() => setStep(index)} aria-label={t(`Edit ${title}`, `${title} 수정`)}>{t("Edit", "수정")}</button></div><dl>{values.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></section>)}</div>
-              <div className="service-notice"><CheckCircle2 aria-hidden="true" /><p>{t("Your app starts only when you select Deploy and run on the next screen.", "다음 화면에서 배포 및 실행을 선택해야 앱이 시작된다.")}</p></div>
+              <div className="service-notice"><CheckCircle2 aria-hidden="true" /><p>{deploy ? t("Deploy starts this update now. The previous release is retained until traffic switches and requests drain.", "Deploy를 누르면 업데이트를 시작한다. 트래픽 전환과 요청 종료가 끝날 때까지 이전 릴리스를 보존한다.") : t("Your app starts only when you select Deploy and run on the next screen.", "다음 화면에서 배포 및 실행을 선택해야 앱이 시작된다.")}</p></div>
             </>}
           </div>
-          <footer className="service-wizard-footer"><button type="button" className="btn ghost" disabled={saving} onClick={onCancel}>{t("Cancel", "취소")}</button><div>{step > 0 && <button type="button" className="btn" disabled={saving} onClick={() => setStep(step - 1)}><ArrowLeft aria-hidden="true" />{t("Previous", "이전")}</button>}<button type="submit" className="btn primary" disabled={saving || (step === 0 && !app)}>{saving ? t("Checking…", "확인 중…") : step === 3 ? t("Save configuration", "설정 저장") : t("Continue", "다음")}<ArrowRight aria-hidden="true" /></button></div></footer>
+          <footer className="service-wizard-footer"><button type="button" className="btn ghost" disabled={saving} onClick={onCancel}>{t("Cancel", "취소")}</button><div>{step > 0 && <button type="button" className="btn" disabled={saving} onClick={() => setStep(step - 1)}><ArrowLeft aria-hidden="true" />{t("Previous", "이전")}</button>}<button type="submit" className="btn primary" disabled={saving || (step === 0 && !app)}>{saving ? t("Checking…", "확인 중…") : step === 3 ? deploy ? t("Deploy update", "업데이트 배포") : t("Save configuration", "설정 저장") : t("Continue", "다음")}<ArrowRight aria-hidden="true" /></button></div></footer>
         </form>
         <aside className="service-setup-summary" aria-label={t("Configuration summary", "설정 요약")}><div className="service-summary-icon"><Box aria-hidden="true" /></div><h3>{spec.name || t("Your new app", "새로운 앱")}</h3><p className="service-summary-image">{spec.image || t("Choose an image to get started.", "이미지를 선택하면 여기에 표시한다.")}</p><dl><div><dt>{t("Runtime", "실행 환경")}</dt><dd>MicroVM</dd></div><div><dt>{t("App port", "앱 포트")}</dt><dd>{Number.isFinite(spec.port) ? spec.port : "—"}</dd></div><div><dt>{t("Memory per instance", "앱 1개당 메모리")}</dt><dd>{spec.ram} MiB</dd></div><div><dt>CPU × {t("replicas", "복제 수")}</dt><dd>{Number.isFinite(spec.cpu) ? spec.cpu : "—"} × {Number.isFinite(spec.replicas) ? spec.replicas : "—"}</dd></div></dl><div className="service-summary-note"><Info aria-hidden="true" /><p>{t("Each replica runs in its own MicroVM and uses host resources until stopped.", "복제본마다 MicroVM 1개를 사용한다. 중지할 때까지 호스트 자원을 사용한다.")}</p></div></aside>
       </div>

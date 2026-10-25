@@ -7,7 +7,8 @@ Services with a domain use PipeIngress to reach guest app ports directly.
 Services without a domain expose one host TCP port per replica.
 The deployment record and owned VM identifiers survive API restarts.
 PipeSecrets values are injected into every replica without appearing in VM or deployment responses.
-Rolling updates, rollback, and automatic instance replacement remain separate work.
+[Deploy](deploy.md) adds running updates, rollback, and interrupted-operation recovery for domain services.
+Automatic replacement of a replica that fails after a completed deployment remains separate work.
 
 ## Fields
 
@@ -56,8 +57,9 @@ Use `domain: null`, `env: {}`, and `secrets: {}` to clear those fields.
 An invalid request or duplicate name returns `400` without changing the saved configuration.
 An unknown UUID returns `404`.
 The existing origin rules, request deadline, JSON errors, and 64 KiB body limit apply.
-Stop the service before editing, deleting, or deploying it again.
+Stop the service before using PUT, deleting, or starting another initial deployment.
 Those requests return `409` while a deployment is active or its instances still exist.
+Use [Deploy](deploy.md) to update a running domain service without stopping it first.
 
 Create, update, and deploy require a matching **Pipe Auth** connection:
 
