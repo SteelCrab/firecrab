@@ -169,6 +169,9 @@ It imports the pinned image, boots the real Queue MicroVM, sends confirmed work,
 restarts the API and engine, then verifies the same message, VM ID and credentials.
 It also exercises sender/receiver disconnects, permissions, failure retention and safe deletion.
 Results are saved to `target/qa/queue.json` in the Linux runtime QA artifact.
+The report includes the tested source revision and disk generation before and after restart.
+Use `--api http://127.0.0.1:PORT`, `--restart-api-unit` and `--database` for a dedicated local QA installation.
+The API target must be a localhost HTTP origin with an explicit port.
 Run this script only on a fresh disposable localhost Linux/KVM installation.
 The stateful engine and its network remain stopped until that installation is purged.
 A fixture test or a Docker broker test does not verify MicroVM persistence.

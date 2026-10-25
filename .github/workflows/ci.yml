@@ -74,6 +74,9 @@ jobs:
       - name: Database QA guards and cleanup contract
         run: python3 scripts/test-pipe-databases-qa.py
 
+      - name: Queue QA target and failure contracts
+        run: python3 scripts/test-queue-runtime-qa.py
+
       - name: macOS repair QA guard and restoration contract
         run: python3 -m unittest scripts/test_macos_repair_qa.py scripts/test_macos_os_repair_qa.py scripts/test_macos_os_files.py
 
