@@ -1,4 +1,4 @@
-# Host registry and VM placement
+# Host registry, VM placement and controller services
 
 One controller can register several workload hosts and place individual VMs on
 them. Each placement records an immutable `{hostId, resourceId}` owner, an image
@@ -6,7 +6,7 @@ fingerprint, an operation generation, and capacity reservations in SQLite before
 making a remote request.
 
 This is the VM placement foundation in [#455](https://github.com/SteelCrab/firecrab/issues/455).
-Shared MicroService identity follows in [#456](https://github.com/SteelCrab/firecrab/issues/456).
+Controller services add shared MicroService identity and release generations in [#456](https://github.com/SteelCrab/firecrab/issues/456).
 Networks, storage, VM processes, and pools remain host-local. Placement does not
 provide service load balancing, application-state replication, or VM migration.
 
@@ -179,3 +179,107 @@ Restore the recorded host's connectivity and certificates, then run
 Preserve both databases while recovering unresolved placements. This milestone
 uses one controller; controller HA and service failover remain separate work in
 the #292 dependency chain.
+
+## Controller services
+
+A controller service persists one UUID, digest-pinned configuration, replica count,
+mode and release generation. Each target uses that UUID as its host-local
+MicroService ID. Deployment IDs are reserved before dispatch. The controller
+records desired and observed states separately, with `pending` and `degraded`
+flags. Host entries include deployment snapshots and their owned VM IDs.
+
+Connect the image's account through Pipe Auth on every workload host. The
+controller never copies registry credentials between hosts. Specify a local
+network and consecutive host ports on each target. The total `service.replicas`
+must equal the sum of target replica counts.
+
+Save this example as `service.json`. Replace the digest and resource UUIDs:
+
+```json
+{
+  "mode": "replicated",
+  "service": {
+    "name": "web",
+    "image": "ghcr.io/team/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "port": 8080,
+    "healthPath": "/health",
+    "cpu": 1,
+    "ram": 512,
+    "replicas": 2
+  },
+  "targets": [
+    {
+      "hostId": "11111111-1111-4111-8111-111111111111",
+      "replicas": 1,
+      "request": {
+        "microNetworkId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "hostPort": 30100
+      }
+    },
+    {
+      "hostId": "22222222-2222-4222-8222-222222222222",
+      "replicas": 1,
+      "request": {
+        "microNetworkId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "hostPort": 30100
+      }
+    }
+  ]
+}
+```
+
+```sh
+firecrab --host controller cluster service create --file service.json --idempotency-key web-create --json
+firecrab --host controller cluster service list --json
+firecrab --host controller cluster service show SERVICE_UUID --json
+firecrab --host controller cluster service update SERVICE_UUID --file service.json --expected-generation 1 --idempotency-key web-release-2
+firecrab --host controller cluster service stop SERVICE_UUID --expected-generation 2 --idempotency-key web-stop
+firecrab --host controller cluster service reconcile SERVICE_UUID
+firecrab --host controller cluster service operations SERVICE_UUID
+```
+
+Reuse the exact request and key after a timeout. A reused key with changed inputs
+returns `409`. Update and Stop require the last inspected `generation`; stale
+requests return `409`. Every accepted lifecycle request increments `generation`.
+Only Create and Update increment `releaseGeneration`. Superseded pending operations
+link to the newer operation through `supersededBy`. Reconcile resumes the
+current intent without creating a new release or operation.
+
+Updates stop and clean the previous deployment on each host before starting the
+replacement. The name, target hosts, networks and host ports remain fixed.
+An update can change the pinned image, application configuration and replica
+distribution. Hosts with unresolved cleanup retain their resource IDs and capacity
+reservations. Stop retries those hosts until every owned deployment is cleaned.
+Controller restart resumes the saved intents. Worker restart marks interrupted
+local operations failed; reconciliation cleans them before retrying the same
+reserved deployment ID. Direct host-local service and replica mutations return
+`409 controller_owned_service`.
+
+The Cluster dashboard creates and edits releases, shows host deployments and
+resource IDs, and offers Stop, Reconcile and operation history. It saves outgoing
+mutation requests in session storage before sending them. An unknown result offers
+the saved request for retry.
+
+| Endpoint | Contract |
+| --- | --- |
+| `GET, POST /api/cluster/services` | List services or create a digest-pinned `ClusterServiceSpec` |
+| `GET /api/cluster/services/{id}` | Identity, generations, desired/observed status and host deployments |
+| `PUT /api/cluster/services/{id}` | Replace a release with `{expectedGeneration,spec}` |
+| `POST /api/cluster/services/{id}/update` | CLI/dashboard update alias |
+| `POST /api/cluster/services/{id}/stop` | Persist `{expectedGeneration}` before host cleanup |
+| `POST /api/cluster/services/{id}/reconcile` | Queue retries of the recorded intents |
+| `GET /api/cluster/services/{id}/operations` | Accepted requests, retry keys and recorded outcomes |
+
+Create, Update and Stop require `Idempotency-Key` and return `202` after committing
+intent. Worker service routes under `/api/cluster/worker/services/{id}` require the
+enrolled controller's mutual-TLS identity. Worker receipts reject stale generations
+and foreign service/deployment ownership before changing local resources.
+
+Only replicated mode is available. Host roles remain unset for #463. Cross-host
+domain routing, host-local Secrets/Queue/storage/security-group bindings, target
+migration and availability-preserving rollouts require separate work. Their
+unsupported inputs are rejected at admission.
+
+Automated service acceptance uses real HTTPS/mTLS, SQLite restart recovery and
+fixture VM records with real HTTP health checks. It does not boot application
+VMs on separate physical hosts. Real two-host acceptance remains tracked in #465.

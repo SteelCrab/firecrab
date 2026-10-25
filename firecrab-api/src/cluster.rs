@@ -1,4 +1,5 @@
 //! Single-controller host registration, durable placement and owner-only reconciliation.
+pub(crate) mod services;
 mod worker;
 pub(crate) use worker::{check_capacity, protect_vm};
 pub(crate) mod handlers;
@@ -390,12 +391,16 @@ async fn fill_unmanaged(state: &AppState, report: &mut HostReport) -> Result<(),
         .into_iter()
         .map(|r| r.id)
         .collect();
+    let store = state.store.clone();
+    let service_vms = stored(move || store.cluster_service_vm_ids()).await?;
     let vms = state.vms.lock().unwrap_or_else(|e| e.into_inner());
     let mut disks = BTreeMap::<&str, u64>::new();
     report.unmanaged = HostCapacity::default();
     for vm in vms.values().filter(|vm| !managed.contains(&vm.id)) {
-        report.unmanaged.cpu = report.unmanaged.cpu.saturating_add(u32::from(vm.cpu));
-        report.unmanaged.ram_mib = report.unmanaged.ram_mib.saturating_add(u64::from(vm.ram));
+        if !service_vms.contains(&vm.id) {
+            report.unmanaged.cpu = report.unmanaged.cpu.saturating_add(u32::from(vm.cpu));
+            report.unmanaged.ram_mib = report.unmanaged.ram_mib.saturating_add(u64::from(vm.ram));
+        }
         *disks.entry(&vm.storage_root).or_default() += u64::from(vm.disk_gb);
     }
     for root in &mut report.storages {
@@ -520,6 +525,7 @@ pub(crate) fn spawn(state: AppState) {
     if state.cluster.paths.is_none() {
         return;
     }
+    services::spawn(state.clone());
     let reconciler = state.clone();
     tokio::spawn(async move {
         let permits = Arc::new(Semaphore::new(8));

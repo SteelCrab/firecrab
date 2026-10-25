@@ -43,8 +43,30 @@ pub(crate) async fn deploy_from_stack(
     state: AppState,
     request_id: Uuid,
     id: Uuid,
+    request: DeployMicroServiceRequest,
+    operation: Option<Uuid>,
+) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
+    deploy_with_id(state, request_id, id, request, operation, Uuid::new_v4()).await
+}
+
+/// The controller reserves this deployment UUID before a remote dispatch.
+pub(crate) async fn deploy_reserved(
+    state: AppState,
+    request_id: Uuid,
+    id: Uuid,
+    request: DeployMicroServiceRequest,
+    deployment_id: Uuid,
+) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
+    deploy_with_id(state, request_id, id, request, None, deployment_id).await
+}
+
+async fn deploy_with_id(
+    state: AppState,
+    request_id: Uuid,
+    id: Uuid,
     mut request: DeployMicroServiceRequest,
     operation: Option<Uuid>,
+    deployment_id: Uuid,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let request_id = RequestId(request_id);
     let _claim = state.service_mutations.lock().await;
@@ -66,7 +88,7 @@ pub(crate) async fn deploy_from_stack(
         started_at: chrono::Utc::now().timestamp(),
         finished_at: None,
         update: None,
-        id: Uuid::new_v4(),
+        id: deployment_id,
         service_id: id,
         spec: service.spec,
         request,
@@ -593,24 +615,29 @@ async fn execute(
         };
         // Serialize publication of the VM and its owner with attachment edits.
         let owner_guard = state.service_mutations.lock().await;
-        let (_, Json(vm)) = vms::create_vm(
-            State(state.clone()),
-            Extension(RequestId(deployment.id)),
-            ValidatedJson(request),
-        )
-        .await
-        .map_err(|_| {
-            "Could not create replica; check capacity, network and host port availability"
-                .to_owned()
-        })?;
+        let vm_id = Uuid::new_v4();
         deployment.instances.push(ServiceInstance {
-            vm_id: vm.id,
-            ipv4: vm.ipv4.unwrap_or_default(),
+            vm_id,
+            ipv4: String::new(),
             host_port,
-            state: vm.state,
+            state: VmState::Created,
             healthy: false,
         });
-        // Ownership is durable before booting anything.
+        // A crash after the VM commit must leave an owner that recovery can clean.
+        save(state, deployment).await?;
+        let (_, Json(vm)) =
+            vms::create_vm_with_id(state.clone(), RequestId(deployment.id), request, vm_id)
+                .await
+                .map_err(|_| {
+                    "Could not create replica; check capacity, network and host port availability"
+                        .to_owned()
+                })?;
+        let instance = deployment
+            .instances
+            .last_mut()
+            .expect("replica identity reserved");
+        instance.ipv4 = vm.ipv4.unwrap_or_default();
+        instance.state = vm.state;
         save(state, deployment).await?;
         drop(owner_guard);
         let vm_id = vm.id;

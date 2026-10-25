@@ -168,7 +168,7 @@ See [Deploy](../guides/deploy.md#rest) for running updates, release history, rol
 ## Host
 
 Authenticated host registration, drain, and durable cross-host VM placement use
-`/api/cluster/hosts` and `/api/cluster/placements`. See
+`/api/cluster/hosts`, `/api/cluster/placements` and `/api/cluster/services`. See
 [multi-host placement](../guides/multihost.md#rest) for the endpoint and recovery
 contract. Existing `/api/host` and `/api/vms` remain host-local.
 

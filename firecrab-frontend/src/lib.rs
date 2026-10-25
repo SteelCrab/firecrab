@@ -607,6 +607,11 @@ fn refresh(app: Shared) {
         } else {
             None
         };
+        let services = if route == "cluster" {
+            Some(api::request("GET", "/api/cluster/services", None).await)
+        } else {
+            None
+        };
         let result = match &placements {
             Some(Err(error)) => Err(error.clone()),
             _ => result,
@@ -617,6 +622,11 @@ fn refresh(app: Shared) {
         }
         state.refreshing = false;
         let mut changed = !state.loaded || !state.connection_error.is_empty();
+        if let Some(services) = services {
+            let services = services.unwrap_or_else(|_| json!({"unavailable":true}));
+            changed |= state.cache.get("/api/cluster/services") != Some(&services);
+            state.cache.insert("/api/cluster/services".into(), services);
+        }
         if let Some(Ok(placements)) = placements {
             changed |= state.cache.get("/api/cluster/placements") != Some(&placements);
             state

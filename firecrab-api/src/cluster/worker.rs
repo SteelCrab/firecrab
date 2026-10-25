@@ -28,7 +28,11 @@ pub(crate) fn peer_id(peer: Peer, request: RequestId) -> Result<Uuid, AppError> 
         })
 }
 
-fn controller(state: &AppState, peer: Peer, request: RequestId) -> Result<Uuid, AppError> {
+pub(super) fn controller(
+    state: &AppState,
+    peer: Peer,
+    request: RequestId,
+) -> Result<Uuid, AppError> {
     let id = peer_id(peer, request)?;
     if state
         .cluster
@@ -52,34 +56,63 @@ pub(crate) async fn protect_vm(
     request: Request,
     next: Next,
 ) -> Response {
-    if !matches!(
+    if matches!(
         *request.method(),
         Method::GET | Method::HEAD | Method::OPTIONS
-    ) && let Some(id) = request
-        .uri()
-        .path()
-        .strip_prefix("/api/vms/")
-        .and_then(|s| s.split('/').next())
-        .and_then(|s| Uuid::parse_str(s).ok())
-    {
-        let store = state.store.clone();
-        match stored(move || store.cluster_worker(id)).await {
-            Ok(Some(_)) => {
-                let id = request
-                    .extensions()
-                    .get::<RequestId>()
-                    .map(|r| r.0)
-                    .unwrap_or_else(Uuid::new_v4);
-                return AppError::conflict(
-                    "controller_owned_vm",
-                    "use the owning controller placement API for this VM",
-                    id,
-                )
-                .into_response();
-            }
-            Err(_) => return AppError::internal(Uuid::new_v4()).into_response(),
-            _ => {}
+    ) {
+        return next.run(request).await;
+    }
+    let (service, vm) = {
+        let path_id = |prefix| {
+            request
+                .uri()
+                .path()
+                .strip_prefix(prefix)
+                .and_then(|s| s.split('/').next())
+                .and_then(|s| Uuid::parse_str(s).ok())
+        };
+        (path_id("/api/micro-services/"), path_id("/api/vms/"))
+    };
+    if service.is_none() && vm.is_none() {
+        return next.run(request).await;
+    }
+    let request_id = request
+        .extensions()
+        .get::<RequestId>()
+        .map(|r| r.0)
+        .unwrap_or_else(Uuid::new_v4);
+    let store = state.store.clone();
+    let owner = stored(move || {
+        if let Some(vm) = vm
+            && store.cluster_worker(vm)?.is_some()
+        {
+            return Ok(Some((
+                "controller_owned_vm",
+                "use the owning controller placement API for this VM",
+            )));
         }
+        let service = match (service, vm) {
+            (Some(id), _) => Some(id),
+            (_, Some(vm)) => store.service_deployment_for_vm(vm)?.map(|d| d.service_id),
+            _ => None,
+        };
+        if let Some(service) = service
+            && store.cluster_service_worker(service)?.is_some()
+        {
+            return Ok(Some((
+                "controller_owned_service",
+                "use the owning controller service API",
+            )));
+        }
+        Ok(None)
+    })
+    .await;
+    match owner {
+        Ok(Some((code, message))) => {
+            return AppError::conflict(code, message, request_id).into_response();
+        }
+        Err(_) => return AppError::internal(request_id).into_response(),
+        _ => {}
     }
     next.run(request).await
 }
@@ -98,6 +131,18 @@ pub(crate) async fn check_capacity(
     let receipts = stored(move || store.cluster_workers()).await?;
     let mut used_cpu = u64::from(report.unmanaged.cpu);
     let mut used_ram = report.unmanaged.ram_mib;
+    let store = state.store.clone();
+    let service_vms = stored(move || store.cluster_service_vm_ids()).await?;
+    {
+        let vms = state.vms.lock().unwrap_or_else(|e| e.into_inner());
+        for vm in vms
+            .values()
+            .filter(|vm| service_vms.contains(&vm.id) && vm.id != id)
+        {
+            used_cpu += u64::from(vm.cpu);
+            used_ram += u64::from(vm.ram);
+        }
+    }
     let root = report
         .storages
         .iter()
@@ -112,8 +157,10 @@ pub(crate) async fn check_capacity(
             .get(&id)
             .cloned();
         if let Some(vm) = current {
-            used_cpu = used_cpu.saturating_sub(u64::from(vm.cpu));
-            used_ram = used_ram.saturating_sub(u64::from(vm.ram));
+            if !service_vms.contains(&id) {
+                used_cpu = used_cpu.saturating_sub(u64::from(vm.cpu));
+                used_ram = used_ram.saturating_sub(u64::from(vm.ram));
+            }
             if vm.storage_root == storage {
                 used_disk = used_disk.saturating_sub(u64::from(vm.disk_gb));
             }

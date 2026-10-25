@@ -291,5 +291,10 @@ one. On failure it prints a retry command with that key; use it to recover the s
 
 ## AI Sandbox
 
-`firecrab sandbox` uses the shared durable Sandbox REST lifecycle. See the [AI Sandbox guide](../guides/ai-sandbox.md#cli-and-local-stdio-mcp) for model verification, project/task JSON, cancellation, review and selected-file apply. `firecrab mcp` exposes the corresponding `sandbox_*` tools.
-Operator-only `sandbox get-access`, `set-access`, and `revoke-access` manage [host resource grants](../guides/sandbox-access.md) through the same API.
+`firecrab sandbox` uses the shared durable Sandbox REST lifecycle. See the [AI Sandbox guide](../guides/ai-sandbox.md#cli-and-local-stdio-mcp) for model verification, project/task JSON, cancellation, review and selected-file apply. `firecrab mcp` exposes the corresponding `sandbox_*` tools. Operator-only `sandbox get-access`, `set-access`, and `revoke-access` manage [host resource grants](../guides/sandbox-access.md) through the same API.
+
+## Controller services
+
+`firecrab cluster service` provides `create`, `update`, `stop`, `list`, `show`, `reconcile` and `operations`.
+Mutations require `--idempotency-key`. Update and Stop also require `--expected-generation`. Create and Update read `--file service.json`.
+See [controller services](../guides/multihost.md#controller-services) for examples.
