@@ -1,4 +1,5 @@
 //! Durable AI execution over saved Pipe AI accounts, confined project copies and borrowed MicroVMs.
+pub mod access;
 pub mod files;
 pub mod guest;
 pub mod model;
@@ -137,6 +138,7 @@ pub async fn admit(
     saved: SavedTask,
     _claim: tokio::sync::OwnedMutexGuard<()>,
 ) -> Result<SandboxTask, String> {
+    access::attempt(&state, &saved)?;
     let (cancel, receiver) = watch::channel(false);
     let key = saved.task.id;
     state
@@ -316,6 +318,7 @@ async fn execute(
     cancel: &mut watch::Receiver<bool>,
     deadline: tokio::time::Instant,
 ) -> Result<(), ExecutionError> {
+    access::attempt(state, saved).map_err(execution_error)?;
     saved.task.state = SandboxTaskState::Accepted;
     saved.task.updated_at = now();
     save(state, saved).await.map_err(execution_error)?;
@@ -332,7 +335,10 @@ async fn execute(
             .project
             .vm_id
             .ok_or_else(|| execution_error("Select a MicroVM for code tasks"))?;
-        saved.guest = Some(guest::binding(state, vm).map_err(execution_error)?);
+        let current = guest::binding(state, vm).map_err(execution_error)?;
+        if saved.task.runtime != Some(current) || saved.guest != Some(current) {
+            return Err(execution_error("MicroVM runtime changed after admission"));
+        }
         let attempt = state
             .sandbox
             .root
@@ -353,6 +359,7 @@ async fn execute(
                 credentials.push(session.refresh_token);
             }
         }
+        access::attempt(state, saved).map_err(execution_error)?;
         tokio::task::spawn_blocking(move || {
             workspace::prepare(&source, &attempt, id, Some(&database), &credentials)
         })
@@ -362,7 +369,7 @@ async fn execute(
     }
     let previous = state
         .store
-        .sandbox_history(saved.task.project_id)
+        .sandbox_history_for_source(saved.task.project_id, saved.project.source_path.as_deref())
         .map_err(|_| execution_error("Cannot read conversation history"))?;
     let mut history = Vec::new();
     if !saved.project.instructions.trim().is_empty() {
@@ -390,6 +397,7 @@ async fn execute(
     saved.task.state = SandboxTaskState::InProgress;
     save(state, saved).await.map_err(execution_error)?;
     for _ in 0..maximum {
+        access::attempt(state, saved).map_err(execution_error)?;
         // Recheck after every tool action. Disconnect or key replacement never falls back silently.
         let guard = interruptible(
             async { Ok(state.pipe_ai_mutations.lock().await) },
@@ -441,6 +449,7 @@ async fn execute(
         )
         .await?;
         drop(guard);
+        access::attempt(state, saved).map_err(execution_error)?;
         let text = redact(&connections, &turn.text);
         if turn.calls.is_empty() {
             if text.trim().is_empty() {
@@ -458,6 +467,7 @@ async fn execute(
         history.extend(turn.continuation);
         let mut results = Vec::new();
         for mut call in turn.calls {
+            access::attempt(state, saved).map_err(execution_error)?;
             proof(state, &saved.task.selection, true).map_err(execution_error)?;
             connections.extend(
                 state

@@ -61,6 +61,7 @@ recovery or scheduled work begins. Supplying these files also enables mTLS on a
 loopback listener, which is useful for local verification.
 
 Authenticated handlers can obtain `ConnectInfo<tls::AuthenticatedHost>`.
+AI Sandbox uses that verified host UUID for [project/resource grants](sandbox-access.md). A delegated host policy also blocks other controller APIs, including after revocation; install the policy before handing out its certificate.
 Its host UUID comes from the verified connection. HTTP headers and request
 bodies cannot replace it. This provides authenticated transport; it does not
 add host registration, placement, or controller high availability.

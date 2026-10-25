@@ -101,3 +101,22 @@ The subsequent linked-account Secret merge also passes **20 Sandbox/Secret brows
 The MicroBlockStorage merge passes **62 Sandbox/Volume/navigation/VM-detail/schedule browser scenarios**.
 
 Native CI also runs the ignored root-only guest contract through `scripts/test-ai-sandbox-guest.sh` in a disposable, network-isolated container. Only its test executable and coverage directory are mounted. Dedicated users and task files stay in the container, and its LLVM profile is included in the native coverage report. CLI/MCP regression tests check wire identities, configured model selection, recovery, explicit review paths, bounded stdin and credential rejection.
+
+## Caller and resource authorization, 2026-10-25
+
+The follow-up [Sandbox access policy](../guides/sandbox-access.md) uses verified mTLS host identities and the trusted loopback operator.
+It persists project owners, admission callers and immutable project/task/attempt/runtime/source references.
+Delegated hosts cannot bypass resource grants through VM keys, consoles or provider APIs.
+Source filtering happens before task pagination. Provider history is confined to the attempt's original source.
+
+- Linux API unit suite: **1,296 passed, 6 ignored**. API integration suites: **1 + 6 passed**.
+- Linux CLI unit suite: **746 passed, 3 ignored**; applicable CLI integration suites passed.
+- Eight REST authorization scenarios cover real mTLS sessions, forged identity headers, cross-host route denial, exact source/VM/connection rights, policy replacement/revocation, an in-flight provider response, historical-source filtering, selected apply and explicit runtime reconciliation.
+- Persistence regressions reject reference/owner mutation and duplicate attempt IDs, backfill legacy local records, retain grants/revocation after reopening, and clean derived references with owned project deletion.
+- CLI/MCP fixtures verify typed access-policy routes and reject caller-role injection before HTTP.
+- Linux API/CLI/types Clippy passes with warnings denied. Formatting, changelog and documentation checks pass.
+- The ignored root guest contract passes in a disposable network-isolated container. This is a guest-shell contract, not a real MicroVM run.
+
+Full suites ran as an unprivileged user with zstd, fakeroot, dnsmasq, sudo and Node.js 22/npm.
+Earlier runs lacked tools or used root/read-only source mounts; those environment failures were corrected without weakening tests.
+This slice uses temporary databases and local provider fixtures. It does not rerun live provider inference or the combined real-model-to-MicroVM foundation gate.

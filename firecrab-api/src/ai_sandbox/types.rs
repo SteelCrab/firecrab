@@ -3,13 +3,7 @@ use firecrab_api_types::*;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 /// Private target identity prevents retries or cancellation from reaching another VM boot.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct GuestBinding {
-    /// Borrowed VM identity.
-    pub vm_id: uuid::Uuid,
-    /// Runtime generation captured before execution.
-    pub runtime_id: uuid::Uuid,
-}
+pub type GuestBinding = SandboxRuntimeRef;
 /// Current model permission proof, invalidated when the authenticated account/key changes.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ModelProof {
@@ -26,6 +20,9 @@ pub struct ModelProof {
 /// Public task plus private filesystem and guest reconciliation state.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct SavedTask {
+    /// Authenticated admission identity; policies are re-read before subsequent effects.
+    #[serde(default)]
+    pub caller: super::access::Caller,
     /// Shared public task, used by conversation, board, CLI and MCP.
     pub task: SandboxTask,
     /// Exact project settings captured at admission.

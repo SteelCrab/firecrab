@@ -794,6 +794,7 @@ impl Store {
             conn: Arc::new(Mutex::new(conn)),
         };
         store.import_legacy(&path.with_file_name(LEGACY_FILE_NAME))?;
+        store.rebuild_sandbox_references()?;
         store.rebuild_sandbox_index()?;
         Ok(store)
     }

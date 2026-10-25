@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- AI Sandbox persists caller and runtime references, authorizes project and
+  resource operations, and checks current grants before model/file/guest actions.
+  Operators manage delegated host policies through REST, CLI, and stdio MCP.
+  Scoped hosts cannot bypass grants through other controller APIs.
+  Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
 - AI Sandbox reuses Pipe AI accounts for verified model selection, persistent
   conversations, isolated project edits, and bounded commands in a selected
   MicroVM. Dashboard, CLI, and local stdio MCP share durable attempts, cancellation,

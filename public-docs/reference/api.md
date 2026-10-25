@@ -395,9 +395,11 @@ Anthropic model verification, defaults, and responses return `409 ai_connection_
 
 The same origin, body-size and concurrency policy applies. Synchronous model verification and explicit guest reconciliation have a 180-second HTTP deadline. Task admission returns before background execution.
 Credentials are referenced only through existing Pipe AI connection UUIDs.
+Every operation checks [Sandbox caller/resource permissions](../guides/sandbox-access.md). Policy management requires the controller operator.
 
 | Method | Path | Contract |
 | --- | --- | --- |
+| GET / PUT / DELETE | `/api/ai-sandbox/access/{principal}` | Operator-only host policy inspection/replacement/revocation; `{grants:[{resource,permissions}]}` |
 | GET | `/api/ai-sandbox/projects` | Saved `SandboxProject[]` |
 | GET / PUT / DELETE | `/api/ai-sandbox/projects/{id}` | Read/save `{name,sourcePath?,vmId?,selection?,instructions}` or delete only owned project metadata/copies |
 | GET | `/api/ai-sandbox/connections/{id}/models?discover=false` | `{models:[{id,name,verified,toolsVerified}],discoveryAvailable}`; `discover=true` explicitly contacts the provider |
@@ -411,6 +413,7 @@ Credentials are referenced only through existing Pipe AI connection UUIDs.
 
 State values are `waiting`, `accepted`, `in_progress`, `result`, `merged`, `failed`, `cancelled`, and `interrupted`.
 Task summaries include `eventCount`, `changeCount`, and `lastTool`. Use task detail for full events and file contents.
+Projects expose a server-derived `owner`. Tasks and summaries include the original `{vmId,runtimeId}` as `runtime`, or `null` for conversations and legacy attempts without a captured runtime.
 Project settings and model overrides use `{connectionId,model}`. Tool-capable code tasks require the separate native-tool proof.
 Source paths refer to the API host. Borrowed VMs require a current boot/network binding and authenticated operator SSH.
 See [AI Sandbox](../guides/ai-sandbox.md) for provider contracts, limits, source isolation, and recovery.

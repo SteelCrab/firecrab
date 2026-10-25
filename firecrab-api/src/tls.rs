@@ -20,12 +20,23 @@ use uuid::Uuid;
 const MAX_HANDSHAKES: usize = 64;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Validated server transport and the operator identity from its host certificate.
+pub struct Configuration {
+    server: Arc<ServerConfig>,
+    controller_id: Uuid,
+}
+
 pub fn configuration(
     bind: SocketAddr,
     paths: Option<TlsPaths>,
-) -> Result<Option<Arc<ServerConfig>>, Error> {
+) -> Result<Option<Configuration>, Error> {
     match paths {
-        Some(paths) => paths.server_config().map(Arc::new).map(Some),
+        Some(paths) => {
+            let server = Arc::new(paths.server_config()?);
+            let certificates = firecrab_pki::certificates(&paths.cert)?;
+            let certificate = certificates.first().ok_or_else(|| Error("missing controller certificate".into()))?;
+            Ok(Some(Configuration { server, controller_id: host_id(certificate)? }))
+        },
         None if bind.ip().is_loopback() => Ok(None),
         None => Err(Error("non-loopback bind requires FIRECRAB_TLS_CERT, FIRECRAB_TLS_KEY, and FIRECRAB_TLS_CA; boolean authentication/TLS flags do not enable security".into())),
     }
@@ -40,7 +51,7 @@ pub struct AuthenticatedHost {
 pub async fn serve(
     listener: TcpListener,
     app: Router,
-    config: Option<Arc<ServerConfig>>,
+    config: Option<Configuration>,
 ) -> io::Result<()> {
     if config.is_none() && !listener.local_addr()?.ip().is_loopback() {
         return Err(io::Error::new(
@@ -49,16 +60,25 @@ pub async fn serve(
         ));
     }
     match config {
-        None => axum::serve(listener, app).await,
+        None => {
+            axum::serve(
+                listener,
+                app.layer(axum::Extension(crate::ai_sandbox::access::LocalOperator)),
+            )
+            .await
+        }
         Some(config) => {
             let listener = TlsListener {
                 listener,
-                acceptor: TlsAcceptor::from(config),
+                acceptor: TlsAcceptor::from(config.server),
                 handshakes: JoinSet::new(),
             };
             axum::serve(
                 listener,
-                app.into_make_service_with_connect_info::<AuthenticatedHost>(),
+                app.layer(axum::Extension(
+                    crate::ai_sandbox::access::ControllerIdentity(config.controller_id),
+                ))
+                .into_make_service_with_connect_info::<AuthenticatedHost>(),
             )
             .await
         }

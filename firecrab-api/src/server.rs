@@ -695,6 +695,12 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // Model verification and explicit guest recovery need longer bounded HTTP waits.
     let sandbox = Router::new()
         .route(
+            "/api/ai-sandbox/access/{principal}",
+            get(handlers::ai_sandbox::get_access)
+                .put(handlers::ai_sandbox::set_access)
+                .delete(handlers::ai_sandbox::revoke_access),
+        )
+        .route(
             "/api/ai-sandbox/projects",
             get(handlers::ai_sandbox::projects),
         )
@@ -821,7 +827,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         // a client's URL never comes back as an HTML page.
         .route("/api/{*rest}", any(not_found))
         .route("/ws/{*rest}", any(not_found))
-        .with_state(state);
+        .with_state(state.clone());
 
     let app = match &config.static_root {
         // Anything else is the dashboard: a real file if it exists, otherwise
@@ -840,8 +846,12 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         None => app.fallback(not_found),
     };
 
-    app.layer(middleware::from_fn_with_state(policy, enforce_origin))
-        .layer(middleware::from_fn(assign_request_id))
+    app.layer(middleware::from_fn_with_state(
+        state,
+        crate::ai_sandbox::access::restrict_delegates,
+    ))
+    .layer(middleware::from_fn_with_state(policy, enforce_origin))
+    .layer(middleware::from_fn(assign_request_id))
 }
 
 async fn assign_request_id(mut request: Request, next: Next) -> Response {

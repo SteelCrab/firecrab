@@ -8,6 +8,12 @@ use uuid::Uuid;
 /// Thin commands over the shared Sandbox REST lifecycle.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Inspect a host's Sandbox resource grants (controller operator only).
+    GetAccess { principal: Uuid },
+    /// Replace grants from SandboxAccessPolicy JSON on stdin (operator only).
+    SetAccess { principal: Uuid },
+    /// Revoke all Sandbox grants for a host (operator only).
+    RevokeAccess { principal: Uuid },
     /// List saved Sandbox projects as JSON.
     Projects,
     /// Save explicit settings from JSON on stdin. Source paths refer to the API host.
@@ -67,6 +73,18 @@ fn request(
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let base = "/api/ai-sandbox";
     let result = match command {
+        Command::GetAccess { principal } => serde_json::to_value(
+            client.get::<SandboxAccessPolicy>(&format!("{base}/access/{principal}"))?,
+        )?,
+        Command::SetAccess { principal } => {
+            serde_json::to_value(client.put::<_, SandboxAccessPolicy>(
+                &format!("{base}/access/{principal}"),
+                &read_input::<SandboxAccessPolicy>(input)?,
+            )?)?
+        }
+        Command::RevokeAccess { principal } => serde_json::to_value(
+            client.delete_json::<SandboxAccessPolicy>(&format!("{base}/access/{principal}"))?,
+        )?,
         Command::Projects => {
             serde_json::to_value(client.get::<Vec<SandboxProject>>(&format!("{base}/projects"))?)?
         }

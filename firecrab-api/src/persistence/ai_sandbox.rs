@@ -1,7 +1,9 @@
 //! Durable Sandbox records share the private controller database.
 use super::{PersistenceError, Store};
 use crate::ai_sandbox::{ModelProof, SavedTask};
-use firecrab_api_types::{SandboxProject, SandboxTaskState, SandboxTaskSummary};
+use firecrab_api_types::{
+    SandboxAccessPolicy, SandboxProject, SandboxTaskState, SandboxTaskSummary,
+};
 use rusqlite::{OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
@@ -18,6 +20,8 @@ CREATE INDEX IF NOT EXISTS ai_sandbox_summary_busy ON ai_sandbox_task_index(busy
 CREATE TRIGGER IF NOT EXISTS ai_sandbox_index_update AFTER UPDATE OF spec ON ai_sandbox_tasks BEGIN DELETE FROM ai_sandbox_task_index WHERE id=NEW.id; END;
 CREATE TRIGGER IF NOT EXISTS ai_sandbox_index_delete AFTER DELETE ON ai_sandbox_tasks BEGIN DELETE FROM ai_sandbox_task_index WHERE id=OLD.id; END;
 CREATE TABLE IF NOT EXISTS ai_sandbox_models (connection_id TEXT NOT NULL, model TEXT NOT NULL, spec TEXT NOT NULL, PRIMARY KEY(connection_id,model)) STRICT;
+CREATE TABLE IF NOT EXISTS ai_sandbox_access (principal TEXT PRIMARY KEY, spec TEXT NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS ai_sandbox_attempts (task_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, attempt_id TEXT NOT NULL UNIQUE, vm_id TEXT, runtime_id TEXT, caller TEXT NOT NULL, source_path TEXT, CHECK ((vm_id IS NULL) = (runtime_id IS NULL))) STRICT;
 ";
 
 /// Serialize a typed private record without logging its contents.
@@ -50,6 +54,55 @@ fn index_task(
 }
 
 impl Store {
+    /// A revoked policy remains a delegation boundary; never restore legacy operator access.
+    pub fn sandbox_delegate(&self, principal: Uuid) -> Result<bool, PersistenceError> {
+        Ok(self.lock().query_row(
+            "SELECT EXISTS(SELECT 1 FROM ai_sandbox_access WHERE principal=?1)",
+            [principal.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+    /// Missing host policies deny every delegated operation.
+    pub fn sandbox_access(&self, principal: Uuid) -> Result<SandboxAccessPolicy, PersistenceError> {
+        self.lock()
+            .query_row(
+                "SELECT spec FROM ai_sandbox_access WHERE principal=?1",
+                [principal.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .map(decode)
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+    /// Atomically replace one host's complete policy, including explicit revocation.
+    pub fn save_sandbox_access(
+        &self,
+        principal: Uuid,
+        policy: &SandboxAccessPolicy,
+    ) -> Result<(), PersistenceError> {
+        self.lock().execute("INSERT INTO ai_sandbox_access(principal,spec) VALUES(?1,?2) ON CONFLICT(principal) DO UPDATE SET spec=excluded.spec", params![principal.to_string(),encode(policy)?])?;
+        Ok(())
+    }
+
+    /// Backfill legacy local-operator records before serving requests; never grant a remote host.
+    pub fn rebuild_sandbox_references(&self) -> Result<(), PersistenceError> {
+        loop {
+            let row: Option<(String,String,String)> = self.lock().query_row("SELECT t.id,t.project_id,t.spec FROM ai_sandbox_tasks t LEFT JOIN ai_sandbox_attempts a ON a.task_id=t.id WHERE a.task_id IS NULL LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+            let Some((id, project, record)) = row else {
+                break;
+            };
+            let mut saved: SavedTask = decode(record)?;
+            if saved.task.id.to_string() != id || saved.task.project_id.to_string() != project {
+                return Err(corrupt());
+            }
+            if saved.task.runtime.is_none() {
+                saved.task.runtime = saved.guest;
+            }
+            self.save_sandbox_task(&saved)?;
+        }
+        Ok(())
+    }
     /// List project settings without accessing provider credentials.
     pub fn sandbox_projects(&self) -> Result<Vec<SandboxProject>, PersistenceError> {
         self.lock()
@@ -72,14 +125,34 @@ impl Store {
     }
     /// Save a project and its exclusive borrowed-VM reference.
     pub fn save_sandbox_project(&self, project: &SandboxProject) -> Result<(), PersistenceError> {
-        self.lock().execute("INSERT INTO ai_sandbox_projects(id,vm_id,spec) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET vm_id=excluded.vm_id,spec=excluded.spec",
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT spec FROM ai_sandbox_projects WHERE id=?1",
+                [project.id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(previous) = previous {
+            let previous: SandboxProject = decode(previous)?;
+            if previous.id != project.id || previous.owner != project.owner {
+                return Err(corrupt());
+            }
+        }
+        tx.execute("INSERT INTO ai_sandbox_projects(id,vm_id,spec) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET vm_id=excluded.vm_id,spec=excluded.spec",
             params![project.id.to_string(), project.spec.vm_id.map(|v|v.to_string()), encode(project)?])?;
+        tx.commit()?;
         Ok(())
     }
     /// Delete metadata only; workspace removal is performed after ownership checks.
     pub fn delete_sandbox_project(&self, id: Uuid) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM ai_sandbox_attempts WHERE project_id=?1",
+            [id.to_string()],
+        )?;
         tx.execute(
             "DELETE FROM ai_sandbox_task_index WHERE project_id=?1",
             [id.to_string()],
@@ -123,20 +196,37 @@ impl Store {
             .optional()?)
     }
     /// Read only bounded summaries for polling; retained tool output and diffs stay in their rows.
+    #[cfg(test)]
     pub fn sandbox_summaries(
         &self,
         project: Uuid,
         since: Option<u64>,
         before: Option<i64>,
     ) -> Result<Vec<SandboxTaskSummary>, PersistenceError> {
+        self.sandbox_visible_summaries(project, since, before, None)
+    }
+    /// Filter resource grants before pagination, without loading private task bodies.
+    pub fn sandbox_visible_summaries(
+        &self,
+        project: Uuid,
+        since: Option<u64>,
+        before: Option<i64>,
+        sources: Option<Vec<String>>,
+    ) -> Result<Vec<SandboxTaskSummary>, PersistenceError> {
+        let sources = sources.map(|paths| encode(&paths)).transpose()?;
         if since.is_some_and(|v| v > i64::MAX as u64) {
             return Ok(vec![]);
         }
         let conn = self.lock();
-        let mut statement=conn.prepare("SELECT summary FROM ai_sandbox_task_index WHERE project_id=?1 AND (?2 IS NULL OR ordinal<?2) AND updated_at>=?3 ORDER BY ordinal DESC LIMIT 50")?;
+        let mut statement=conn.prepare("SELECT i.summary FROM ai_sandbox_task_index i JOIN ai_sandbox_attempts a ON a.task_id=i.id WHERE i.project_id=?1 AND (?2 IS NULL OR i.ordinal<?2) AND i.updated_at>=?3 AND (?4 IS NULL OR a.source_path IS NULL OR a.source_path IN (SELECT value FROM json_each(?4))) ORDER BY i.ordinal DESC LIMIT 50")?;
         let mut rows = statement
             .query_map(
-                params![project.to_string(), before, since.unwrap_or(0) as i64],
+                params![
+                    project.to_string(),
+                    before,
+                    since.unwrap_or(0) as i64,
+                    sources
+                ],
                 |r| r.get(0),
             )?
             .map(|r| decode(r?))
@@ -145,14 +235,23 @@ impl Store {
         Ok(rows)
     }
     /// Read recent completed context without decoding any file changes or tool logs.
+    #[cfg(test)]
     pub fn sandbox_history(
         &self,
         project: Uuid,
     ) -> Result<Vec<SandboxTaskSummary>, PersistenceError> {
+        self.sandbox_history_for_source(project, None)
+    }
+    /// Source changes never pull another source's history into a new provider context.
+    pub fn sandbox_history_for_source(
+        &self,
+        project: Uuid,
+        source: Option<&str>,
+    ) -> Result<Vec<SandboxTaskSummary>, PersistenceError> {
         let conn = self.lock();
-        let mut statement=conn.prepare("SELECT summary FROM ai_sandbox_task_index WHERE project_id=?1 AND json_extract(summary,'$.state') IN ('result','merged') ORDER BY ordinal DESC LIMIT 12")?;
+        let mut statement=conn.prepare("SELECT i.summary FROM ai_sandbox_task_index i JOIN ai_sandbox_attempts a ON a.task_id=i.id WHERE i.project_id=?1 AND a.source_path IS ?2 AND json_extract(i.summary,'$.state') IN ('result','merged') ORDER BY i.ordinal DESC LIMIT 12")?;
         let mut rows = statement
-            .query_map([project.to_string()], |r| r.get(0))?
+            .query_map(params![project.to_string(), source], |r| r.get(0))?
             .map(|r| decode(r?))
             .collect::<Result<Vec<_>, _>>()?;
         rows.reverse();
@@ -186,7 +285,8 @@ impl Store {
     }
     /// Read a task together with its private workspace and guest ownership.
     pub fn sandbox_task(&self, id: Uuid) -> Result<Option<SavedTask>, PersistenceError> {
-        self.lock()
+        let saved: Option<SavedTask> = self
+            .lock()
             .query_row(
                 "SELECT spec FROM ai_sandbox_tasks WHERE id=?1",
                 [id.to_string()],
@@ -194,12 +294,23 @@ impl Store {
             )
             .optional()?
             .map(decode)
-            .transpose()
+            .transpose()?;
+        if let Some(saved) = &saved {
+            if saved.task.id != id {
+                return Err(corrupt());
+            }
+            verify_references(&self.lock(), saved)?;
+        }
+        Ok(saved)
     }
     /// Save a checkpoint before starting provider or guest side effects.
     pub fn save_sandbox_task(&self, task: &SavedTask) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
+        let runtime = task.task.runtime;
+        validate_runtime(task)?;
+        tx.execute("INSERT INTO ai_sandbox_attempts(task_id,project_id,attempt_id,vm_id,runtime_id,caller,source_path) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(task_id) DO NOTHING",params![task.task.id.to_string(),task.task.project_id.to_string(),task.task.attempt_id.to_string(),runtime.map(|r|r.vm_id.to_string()),runtime.map(|r|r.runtime_id.to_string()),encode(&task.caller)?,task.project.source_path])?;
+        verify_references(&tx, task)?;
         tx.execute("INSERT INTO ai_sandbox_tasks(id,project_id,spec) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",params![task.task.id.to_string(),task.task.project_id.to_string(),encode(task)?])?;
         let ordinal = tx.query_row(
             "SELECT rowid FROM ai_sandbox_tasks WHERE id=?1",
@@ -238,6 +349,38 @@ impl Store {
             .map(|r| decode(r?))
             .collect()
     }
+}
+
+/// Canonical identities cannot change during checkpointing, apply, retry or recovery.
+fn verify_references(
+    conn: &rusqlite::Connection,
+    task: &SavedTask,
+) -> Result<(), PersistenceError> {
+    validate_runtime(task)?;
+    let runtime = task.task.runtime;
+    let valid:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM ai_sandbox_attempts WHERE task_id=?1 AND project_id=?2 AND attempt_id=?3 AND vm_id IS ?4 AND runtime_id IS ?5 AND caller=?6 AND source_path IS ?7)",params![task.task.id.to_string(),task.task.project_id.to_string(),task.task.attempt_id.to_string(),runtime.map(|r|r.vm_id.to_string()),runtime.map(|r|r.runtime_id.to_string()),encode(&task.caller)?,task.project.source_path],|row|row.get(0))?;
+    if !valid {
+        return Err(corrupt());
+    }
+    Ok(())
+}
+
+fn validate_runtime(task: &SavedTask) -> Result<(), PersistenceError> {
+    let runtime = task.task.runtime;
+    if let Some(runtime) = runtime
+        && (task.task.request.kind != firecrab_api_types::SandboxTaskKind::Code
+            || task.project.vm_id != Some(runtime.vm_id)
+            || task.guest.is_none())
+    {
+        return Err(corrupt());
+    }
+    if task.guest.is_some_and(|guest| {
+        Some(guest.vm_id) != task.project.vm_id
+            || runtime.is_none_or(|original| original.vm_id != guest.vm_id)
+    }) {
+        return Err(corrupt());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

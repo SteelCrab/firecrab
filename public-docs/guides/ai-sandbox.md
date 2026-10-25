@@ -3,6 +3,7 @@
 AI Sandbox uses accounts connected in [Pipe AI](pipe-ai.md) to select models, converse, edit a project, and run commands inside a MicroVM.
 Pipe AI remains the account-management page.
 Open **AI → AI Sandbox**, or `/#/ai-sandbox`.
+See [Sandbox access](sandbox-access.md) for caller identity, resource grants, and immutable runtime references.
 
 ## Start a project
 

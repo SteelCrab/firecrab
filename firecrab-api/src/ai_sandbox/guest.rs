@@ -253,6 +253,7 @@ pub async fn execute(
     command: &str,
     seconds: u64,
 ) -> io::Result<Output> {
+    super::access::attempt(state, saved).map_err(io::Error::other)?;
     if command.trim().is_empty()
         || command.len() > 8192
         || command.contains('\0')
@@ -262,7 +263,6 @@ pub async fn execute(
     }
     let binding = saved
         .guest
-        .clone()
         .ok_or_else(|| io::Error::other("Select a MicroVM before running commands"))?;
     let attempt = attempt(saved)?;
     let probe = capture(
@@ -282,6 +282,7 @@ pub async fn execute(
         .await
         .map_err(io::Error::other)??;
     let stage_command = ssh(state, &binding, &attempt)?;
+    super::access::attempt(state, saved).map_err(io::Error::other)?;
     saved.guest_pending = true;
     saved.guest_staged = true;
     super::save(state, saved).await.map_err(io::Error::other)?;
@@ -304,6 +305,7 @@ pub async fn execute(
         ));
     }
     let invocation = Uuid::new_v4();
+    super::access::attempt(state, saved).map_err(io::Error::other)?;
     saved.guest_command = Some(invocation);
     super::save(state, saved).await.map_err(io::Error::other)?;
     let output = capture(
