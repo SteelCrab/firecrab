@@ -175,6 +175,20 @@ It then installs the checksum-verified release and runs the restore transaction 
 The real API/helper must become healthy while that runtime retains its data and the other runtime keeps serving its marker API.
 This check does not build source services or exercise MicroVM lifecycle.
 Cleanup validates ownership labels before removing only the randomly named test resources.
+
+Run the separate source-deployment acceptance check on a Linux host with the same prerequisites:
+
+```sh
+cargo test -p firecrab-cli --locked \
+  micromanager::dev::container::runtime_tests::private_docker_source_build_and_restore_preserve_the_other_runtime \
+  -- --ignored --exact --nocapture --test-threads=1
+```
+
+This check uploads and builds the current checkout in one private runtime, verifies the development API and runtime tools, and restores the release.
+The other runtime must retain its API and data.
+It starts with fresh guest compiler caches, so allow more time and disk space than the baseline check.
+A manual run of the CI workflow includes this check with a 45-minute limit.
+It does not prepare the host dashboard or boot MicroVMs.
 Native live validation with multiple management VMs has not yet been completed.
 Unit, proxy, and command-fixture tests do not replace that runtime check.
 

@@ -168,6 +168,43 @@ jobs:
           micromanager::dev::container::runtime_tests::private_docker_runtimes_keep_namespaces_data_and_stop_independent
           -- --ignored --exact --nocapture --test-threads=1
 
+  dev-container-source:
+    name: Worktree dev (source build and release restore, real KVM)
+    # The fresh guest compiler/cache makes this a longer explicit acceptance run.
+    if: github.event_name == 'workflow_dispatch'
+    needs: dev-container-runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Require local Docker and KVM devices
+        run: |
+          test -c /dev/kvm
+          test -c /dev/net/tun
+          sudo chmod a+rw /dev/kvm
+          docker version
+
+      - name: Build worktree source and restore the release while preserving another runtime
+        run: >-
+          cargo test -p firecrab-cli --locked
+          micromanager::dev::container::runtime_tests::private_docker_source_build_and_restore_preserve_the_other_runtime
+          -- --ignored --exact --nocapture --test-threads=1
+
   micromanager-macos-build:
     name: microManager (GitHub-hosted macOS build)
     # GitHub-hosted ARM64 macOS does not expose nested virtualization. Keep

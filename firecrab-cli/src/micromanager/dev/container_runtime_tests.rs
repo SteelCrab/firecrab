@@ -1,4 +1,4 @@
-//! Opt-in Linux coverage for private Docker runtimes and verified-release restoration.
+//! Opt-in Linux coverage for private Docker runtimes, source builds, and release restoration.
 
 use super::*;
 use std::net::{Ipv4Addr, TcpListener};
@@ -98,6 +98,30 @@ impl Runtime {
             ports: Some((api, resource)),
             cleaned: false,
         })
+    }
+
+    /// Select the real source before any Docker labels or storage are created.
+    fn from_checkout(source: &Path) -> io::Result<Self> {
+        let mut runtime = Self::new()?;
+        runtime.instance.source = fs::canonicalize(source)?;
+        let output = Command::new("git")
+            .args(["-c", "core.fsmonitor=false", "-C"])
+            .arg(&runtime.instance.source)
+            .args(["rev-parse", "--absolute-git-dir"])
+            .output()?;
+        if !output.status.success() {
+            return Err(failed(format!(
+                "could not inspect the source checkout: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        let git_dir = String::from_utf8(output.stdout).map_err(failed)?;
+        runtime.instance.git_dir = fs::canonicalize(git_dir.trim())?;
+        fs::write(
+            runtime.instance.managed_home.join("dev-instance.json"),
+            serde_json::to_vec(&runtime.instance).map_err(failed)?,
+        )?;
+        Ok(runtime)
     }
 
     fn create(&self) -> io::Result<()> {
@@ -207,7 +231,8 @@ impl Runtime {
         Ok(())
     }
 
-    fn require_release_api(&self) -> io::Result<()> {
+    /// Require a real Firecrab host response and the original private data marker.
+    fn require_service_api(&self) -> io::Result<()> {
         let client = reqwest::blocking::Client::builder()
             .no_proxy()
             .timeout(Duration::from_secs(2))
@@ -220,13 +245,81 @@ impl Runtime {
             .and_then(reqwest::blocking::Response::error_for_status)
             .and_then(reqwest::blocking::Response::json)
             .map_err(failed)?;
-        assert!(
-            host.is_object(),
-            "{} release host response: {host}",
-            self.name
-        );
+        assert!(host.is_object(), "{} host response: {host}", self.name);
         assert_eq!(self.exec(&["cat", MARKER_PATH])?, self.instance.id);
         Ok(())
+    }
+
+    fn require_release_api(&self) -> io::Result<()> {
+        self.require_service_api()?;
+        let executable = self.exec(&[
+            "systemctl",
+            "show",
+            "--property=ExecStart",
+            "--value",
+            "firecrab-api.service",
+        ])?;
+        assert!(
+            executable.contains("/usr/local/lib/firecrab/firecrab-api"),
+            "{executable}"
+        );
+        assert!(
+            !executable.contains("/usr/local/lib/firecrab-dev/"),
+            "{executable}"
+        );
+        Ok(())
+    }
+
+    fn require_source_api(&self) -> io::Result<()> {
+        self.require_service_api()?;
+        let executable = self.exec(&[
+            "systemctl",
+            "show",
+            "--property=ExecStart",
+            "--value",
+            "firecrab-api.service",
+        ])?;
+        assert!(
+            executable.contains("/usr/local/lib/firecrab-dev/bin/firecrab-api"),
+            "{executable}"
+        );
+        let selected = self.exec(&["readlink", "/usr/local/lib/firecrab-dev/bin"])?;
+        assert!(
+            selected.starts_with("/usr/local/lib/firecrab-dev/build."),
+            "{selected}"
+        );
+        for binary in [
+            "firecrab-api",
+            "firecrab-helper",
+            "firecrab",
+            "firecrab-ingress",
+            "firecrab-guest-console",
+        ] {
+            self.exec(&[
+                "test",
+                "-x",
+                &format!("/usr/local/lib/firecrab-dev/bin/{binary}"),
+            ])?;
+        }
+        Ok(())
+    }
+
+    /// Stop through the production control path and retain only this instance's storage.
+    fn stop(&self) -> io::Result<()> {
+        run_with(
+            &self.docker,
+            &self.instance,
+            Some(DevCommand::Stop),
+            false,
+            false,
+            true,
+        )?;
+        let stopped = self
+            .docker
+            .inspect("container", &self.name)?
+            .ok_or_else(|| failed("stopped runtime disappeared"))?;
+        assert_eq!(stopped["State"]["Running"], false);
+        storage_owned(&self.docker, &self.instance, &self.name, &self.volume, true)
     }
 
     fn cleanup(&mut self) -> io::Result<()> {
@@ -272,6 +365,39 @@ impl Runtime {
     }
 }
 
+/// Establish the same namespace and ownership checks for both runtime scenarios.
+fn start_pair(first: &mut Runtime, second: &mut Runtime) -> io::Result<()> {
+    if first.docker.endpoint != second.docker.endpoint {
+        return Err(failed(
+            "Docker context changed while selecting runtime fixtures",
+        ));
+    }
+    first.create()?;
+    second.create()?;
+    let first_namespaces = first.start()?;
+    let second_namespaces = second.start()?;
+    for name in ["net", "pid", "ipc", "mnt", "cgroup"] {
+        let host = fs::read_link(format!("/proc/self/ns/{name}"))?;
+        assert_ne!(first_namespaces[name], second_namespaces[name], "{name}");
+        for namespaces in [&first_namespaces, &second_namespaces] {
+            assert_ne!(namespaces[name].as_str(), host.to_str(), "host {name}");
+        }
+    }
+    assert_ne!(first.instance.id, second.instance.id);
+    assert_ne!(first.volume, second.volume);
+    Ok(())
+}
+
+/// Cleanup A while proving B remains live, then remove only B's owned resources.
+fn finish_pair(first: &mut Runtime, second: &mut Runtime) -> io::Result<()> {
+    first.stop()?;
+    first.cleanup()?;
+    second.require_marker()?;
+    assert!(!first.instance.primary_home.exists());
+    assert!(!second.instance.primary_home.exists());
+    second.cleanup()
+}
+
 impl Drop for Runtime {
     fn drop(&mut self) {
         if self.cleaned {
@@ -300,61 +426,40 @@ impl Drop for Runtime {
 fn private_docker_runtimes_keep_namespaces_data_and_stop_independent() -> io::Result<()> {
     let mut first = Runtime::new()?;
     let mut second = Runtime::new()?;
-    if first.docker.endpoint != second.docker.endpoint {
-        return Err(failed(
-            "Docker context changed while selecting runtime fixtures",
-        ));
-    }
-    first.create()?;
-    second.create()?;
-    let first_namespaces = first.start()?;
-    let second_namespaces = second.start()?;
-    for name in ["net", "pid", "ipc", "mnt", "cgroup"] {
-        let host = fs::read_link(format!("/proc/self/ns/{name}"))?;
-        assert_ne!(first_namespaces[name], second_namespaces[name], "{name}");
-        for namespaces in [&first_namespaces, &second_namespaces] {
-            assert_ne!(namespaces[name].as_str(), host.to_str(), "host {name}");
-        }
-    }
-    assert_ne!(first.instance.id, second.instance.id);
-    assert_ne!(first.volume, second.volume);
-    run_with(
-        &first.docker,
-        &first.instance,
-        Some(DevCommand::Stop),
-        false,
-        false,
-        true,
-    )?;
-    let stopped = first
-        .docker
-        .inspect("container", &first.name)?
-        .ok_or_else(|| failed("stopped runtime disappeared"))?;
-    assert_eq!(stopped["State"]["Running"], false);
-    storage_owned(
-        &first.docker,
-        &first.instance,
-        &first.name,
-        &first.volume,
-        true,
-    )?;
+    start_pair(&mut first, &mut second)?;
+    first.stop()?;
     second.require_marker()?;
     // Restart A without its detached marker process. Exercise the actual verified
     // release installer and shared restore transaction, including API/helper health.
     run_with(&first.docker, &first.instance, None, false, true, true)?;
     first.require_release_api()?;
     second.require_marker()?;
-    run_with(
-        &first.docker,
-        &first.instance,
-        Some(DevCommand::Stop),
-        false,
-        false,
-        true,
-    )?;
-    first.cleanup()?;
+    finish_pair(&mut first, &mut second)
+}
+
+#[test]
+#[ignore = "builds the real checkout in a private Linux Docker runtime; requires rootful Docker, KVM/TUN, network access, and compiler disk space"]
+fn private_docker_source_build_and_restore_preserve_the_other_runtime() -> io::Result<()> {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or_else(|| failed("CLI manifest has no checkout root"))?;
+    let mut first = Runtime::from_checkout(source)?;
+    let mut second = Runtime::new()?;
+    start_pair(&mut first, &mut second)?;
+    // A's detached marker must exit before the installer starts the real API on
+    // guest port 5523. B retains its own marker throughout source build and restore.
+    first.stop()?;
     second.require_marker()?;
-    assert!(!first.instance.primary_home.exists());
-    assert!(!second.instance.primary_home.exists());
-    second.cleanup()
+    eprintln!("[RUNTIME TEST] building actual source in {}", first.name);
+    run_with(&first.docker, &first.instance, None, false, false, true)?;
+    first.require_source_api()?;
+    second.require_marker()?;
+    eprintln!(
+        "[RUNTIME TEST] restoring installed release in {}",
+        first.name
+    );
+    run_with(&first.docker, &first.instance, None, false, true, true)?;
+    first.require_release_api()?;
+    second.require_marker()?;
+    finish_pair(&mut first, &mut second)
 }
