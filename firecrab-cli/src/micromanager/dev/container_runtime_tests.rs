@@ -18,7 +18,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 http.server.HTTPServer(('127.0.0.1', 5523), Handler).serve_forever()
 "#;
 const PROBE: &str = r#"
-import fcntl, json, os, pathlib, stat, subprocess, tempfile
+import fcntl, grp, json, os, pathlib, stat, subprocess, tempfile
+grp.getgrnam('kvm')
 cgroups = pathlib.Path('/proc/self/cgroup').read_text().strip().splitlines()
 assert len(cgroups) == 1, cgroups
 cgroup = cgroups[0]
