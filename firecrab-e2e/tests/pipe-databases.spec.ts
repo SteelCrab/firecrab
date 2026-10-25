@@ -457,6 +457,10 @@ async function openWritable(page: Page, failure?: "unknown" | "conflict") {
     }
     if (path === "/api/pipe/database-maintenance/tools") return route.fulfill({ json: { postgres: true, mysql: true } });
     if (path.endsWith("/jobs")) return route.fulfill({ json: jobs });
+    if (path.includes("/database-jobs/") && path.endsWith("/backup") && method==="DELETE") {
+      const job=jobs.find(j=>path.includes(j.id as string));if(job)job.status="expired";
+      return route.fulfill({json:{deleted:true}});
+    }
     if (path.endsWith("/backups")) {
       jobs.push({ id: input().requestId, databaseId: id, kind: "backup", status: "succeeded", createdAt: 1, checksum: "abc", bytes: 100, backupId: null, safetyBackupId: null, version: null, error: null });
       return route.fulfill({ status: 202, json: jobs.at(-1) });
@@ -570,4 +574,18 @@ test("restores production TLS and requires confirmation to skip a failed deliver
   await expect.poll(() => mock.acknowledgements.length).toBe(1);
   expect(mock.acknowledgements[0]).toEqual({ confirmEventId: `${mock.triggers[0].id}:1` });
   await expect(page.getByText(/Skipped 1/)).toBeVisible();
+});
+
+test("removes a retained backup only after confirmation @dashboard",async({page})=>{
+  const mock=await openWritable(page);
+  await page.getByText("Backups & schema changes",{exact:true}).click();
+  await page.getByRole("button",{name:"Create backup",exact:true}).click();
+  await page.getByRole("button",{name:"Save",exact:true}).click();
+  await expect.poll(()=>mock.jobs.length).toBe(1);
+  page.once("dialog",d=>d.dismiss());
+  await page.getByRole("button",{name:"Remove backup",exact:true}).click();
+  expect(mock.jobs[0].status).toBe("succeeded");
+  page.once("dialog",d=>d.accept());
+  await page.getByRole("button",{name:"Remove backup",exact:true}).click();
+  await expect.poll(()=>mock.jobs[0].status).toBe("expired");
 });

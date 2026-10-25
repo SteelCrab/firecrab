@@ -536,6 +536,16 @@ pub fn dispatch(app: &Shared, action: &str, id: &str, button: &Element) -> bool 
                 "이 서비스 계정을 회수하는가? 먼저 서비스를 중지한다.",
             )),
         ),
+        "db-delete-backup" => perform(
+            app.clone(),
+            "DELETE",
+            format!("/api/pipe/database-jobs/{}/backup", api::encode(id)),
+            None,
+            Some(tr(
+                "Remove this retained backup?",
+                "보관한 백업을 제거하는가?",
+            )),
+        ),
         "db-pause" => {
             let s = app.borrow();
             let paused = list(s.databases.aux.get("triggers").unwrap_or(&Value::Null))

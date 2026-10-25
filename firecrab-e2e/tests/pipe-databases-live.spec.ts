@@ -39,6 +39,7 @@ test("connects, reads and removes a real database through the dashboard", async 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await panel.screenshot({ path: testInfo.outputPath("real-database-preview.png") });
     await panel.getByRole("button", { name: `${name} actions`, exact: true }).click();
+    page.once("dialog", dialog => dialog.accept());
     await page.getByRole("menuitem", { name: `Remove connection ${name}`, exact: true }).click();
     await expect(panel.getByRole("cell", { name, exact: true })).toHaveCount(0);
     await expect(panel.getByRole("status")).toHaveText("Connection removed. The source database is unchanged.");

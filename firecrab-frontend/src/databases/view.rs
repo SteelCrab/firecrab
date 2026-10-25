@@ -660,6 +660,16 @@ fn maintenance(app: &App) -> String {
                     "<a class=\"btn\" href=\"/api/pipe/database-jobs/{id}/backup\" download>Download backup</a>"
                 );
             }
+            if text(job, "kind") == "backup"
+                && matches!(text(job, "status"), "succeeded" | "failed")
+            {
+                out.push_str(&button(
+                    tr("Remove backup", "백업 제거"),
+                    "db-delete-backup",
+                    text(job, "id"),
+                    locked,
+                ));
+            }
             out.push_str("</td></tr>");
         }
         out.push_str("</tbody></table></div>");

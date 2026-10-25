@@ -105,6 +105,16 @@ impl Form {
         if domain_deploy {
             html.push_str(&format!("<p class=\"wasm-wide\">{} · Healthy replicas will connect to this domain automatically.</p><details class=\"wasm-wide\"><summary>Advanced settings</summary>",escape(text(&self.base,"domain"))));
         }
+        if matches!(
+            self.title.as_str(),
+            "Restore database snapshot" | "Apply database schema"
+        ) {
+            html.push_str(&format!(
+                "<p class=\"wasm-wide\">{}: <strong>{}</strong></p>",
+                crate::i18n::t("Confirm database name"),
+                escape(text(&self.base, "databaseName"))
+            ));
+        }
         let database_form = matches!(
             self.title.as_str(),
             "Connect database" | "Update connection credentials"
