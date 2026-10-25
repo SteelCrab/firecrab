@@ -69,6 +69,7 @@ async function openServices(
           cloudflaredAvailable: false,
         },
       });
+    if (path === "/api/queues") return route.fulfill({ json: [{ id: STORAGE, name: "notifications", phase: "ready" }] });
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/micro-networks") return route.fulfill({ json: [] });
     if (path === "/api/pipe/storage")
@@ -160,6 +161,27 @@ async function openServices(
 }
 
 test.describe("MicroService configuration @dashboard", () => {
+  test("saves and removes a Queue binding without exposing credentials", async ({ page }) => {
+    const writes = await openServices(page);
+    await page.getByRole("button", { name: "New MicroService", exact: true }).click();
+    await page.getByLabel("Name", { exact: true }).fill("orders");
+    await selectServiceApp(page);
+    await serviceStep(page, 2);
+    await page.getByRole("button", { name: "Add Queue connection", exact: true }).click();
+    await page.locator(".queue-binding-row").getByLabel("Alias", { exact: true }).fill("NOTIFICATIONS");
+    await page.locator(".queue-binding-row").getByRole("combobox", { name: "Access", exact: true }).selectOption("consume");
+    await saveService(page);
+    await expect.poll(() => writes.length).toBe(1);
+    expect(writes[0].body.queues).toEqual({ NOTIFICATIONS: { queueId: STORAGE, access: "consume" } });
+    expect(JSON.stringify(writes[0].body)).not.toContain("amqp://");
+    await page.getByRole("button", { name: "Edit orders", exact: true }).click();
+    await serviceStep(page, 2);
+    await page.locator(".queue-binding-row").getByRole("button", { name: "Remove", exact: true }).click();
+    await saveService(page);
+    await expect.poll(() => writes.length).toBe(2);
+    expect(writes[1].body.queues).toBeUndefined();
+  });
+
   test("binds and clears an S3 connection while preserving its security group", async ({
     page,
   }) => {

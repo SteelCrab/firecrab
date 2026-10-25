@@ -28,6 +28,7 @@ Automatic replacement of a replica that fails after a completed deployment remai
 | `drainTimeout` | 0–3600 seconds; default 30 |
 | `env` | Variable name to plain value; default `{}` |
 | `secrets` | Variable name to non-nil PipeSecrets UUID; default `{}`; values are never stored here |
+| `queues` | Optional alias-to-[Queue binding](queues.md#bind-a-microservice) map; up to eight sender/receiver connections |
 | `storageConnectionId` | Optional [S3 connection](pipe-storage.md) UUID for the app AWS SDK; default `null` |
 
 `env` and `secrets` together allow up to 64 entries.
@@ -241,12 +242,11 @@ Cleanup errors preserve the remaining VM identifiers so Stop can retry them.
 
 Stop withdraws host port forwards, waits up to `drainTimeout`, then stops and removes the VMs.
 The macOS TCP relay can close its SSH forwards when those port records disappear.
-An interrupted deploy or stop is marked failed after API restart; Stop cleans up remaining instances.
+An interrupted initial deploy or stop is marked failed after API restart; Stop cleans up remaining instances.
 A completed deployment uses the existing VM re-adoption mechanism.
 
-Domain services connect through PipeIngress after health
-checks. Services without a domain keep using direct host ports. Neither flow
-switches between running releases yet.
+Domain services connect through PipeIngress after health checks.
+Use [Deploy](deploy.md) for running updates and rollback. Direct host ports require Stop and initial Deploy.
 Deploy and Stop wait by default in the CLI.
 Use `--no-wait` to return after acceptance and poll `microservice status` later.
 Deploy exits nonzero when deployment or health fails.

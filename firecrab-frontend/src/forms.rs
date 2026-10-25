@@ -134,7 +134,9 @@ impl Form {
                 },
                 escape(crate::i18n::t(field.label))
             ));
-            if !field.options.is_empty()
+            if field.kind == "queue-bindings" {
+                html.push_str(&crate::advanced::queues::bindings(field));
+            } else if !field.options.is_empty()
                 || matches!(field.kind, "select" | "multi" | "nullable-select")
             {
                 html.push_str(&format!(
@@ -377,6 +379,7 @@ impl Form {
                         .parse::<u32>()
                         .map_err(|_| format!("{} must be a non-negative integer.", field.label))?
                 ),
+                "queue-bindings" => crate::advanced::queues::binding_payload(value)?,
                 "pairs" => pairs(value)?,
                 "ports" => ports(value)?,
                 "lines" | "multi" => json!(
@@ -424,6 +427,9 @@ impl Form {
                 Ok(body)
             }
             "New MicroService" | "Edit MicroService" | "Deploy update" => {
+                if body["queues"].as_object().is_some_and(|q| q.is_empty()) {
+                    body.as_object_mut().unwrap().remove("queues");
+                }
                 if body["storageConnectionId"].is_null() {
                     body.as_object_mut().unwrap().remove("storageConnectionId");
                 }
@@ -645,6 +651,13 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
                 format!("/api/micro-services{suffix}"),
                 method,
                 vec![
+                    Field::new(
+                        "queues",
+                        "Queue connections",
+                        "queue-bindings",
+                        crate::advanced::queues::binding_draft(&data["queues"]),
+                    )
+                    .optional(),
                     Field::new(
                         "storageConnectionId",
                         "S3 connection (optional)",
@@ -1214,7 +1227,7 @@ mod tests {
     }
     #[test]
     fn running_update_payload_keeps_release_fencing_outside_the_service_spec() {
-        let data = json!({"name":"web","image":"ghcr.io/team/web:v2","port":8080,"healthPath":"/health","ram":256,"cpu":1,"domain":"web.example.com","env":{"MODE":"prod"},"secrets":{}});
+        let data = json!({"name":"web","image":"ghcr.io/team/web:v2","port":8080,"healthPath":"/health","ram":256,"cpu":1,"domain":"web.example.com","env":{"MODE":"prod"},"secrets":{},"queues":{"JOBS":{"queueId":"33333333-3333-4333-8333-333333333333","access":"consume"}}});
         let mut form = resource_form("services", &data, "service").unwrap();
         form.title = "Deploy update".into();
         form.base["operationId"] = json!("11111111-1111-4111-8111-111111111111");
@@ -1234,6 +1247,10 @@ mod tests {
             firecrab_api_types::DeployStrategy::BlueGreen
         );
         assert_eq!(request.spec.env["MODE"], "prod");
+        assert_eq!(
+            request.spec.queues["JOBS"].access,
+            firecrab_api_types::QueueAccess::Consume
+        );
         assert!(body["spec"].get("operationId").is_none());
         assert!(body["spec"].get("expectedReleaseId").is_none());
         assert!(body["spec"].get("strategy").is_none());

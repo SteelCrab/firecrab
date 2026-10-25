@@ -382,6 +382,48 @@ async fn releases_stay_immutable_after_stop_and_ownership_covers_both_generation
 }
 
 #[tokio::test]
+async fn missing_queue_binding_is_rejected_before_mutating_the_active_release() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let record = journal();
+    let previous = &record.update.as_ref().unwrap().previous;
+    state.store.save_service_deployment(previous).unwrap();
+    let mut spec = record.spec.clone();
+    spec.queues.insert(
+        "JOBS".into(),
+        firecrab_api_types::QueueBinding {
+            queue_id: Uuid::new_v4(),
+            access: firecrab_api_types::QueueAccess::Consume,
+        },
+    );
+    let response = update(
+        State(state.clone()),
+        Extension(RequestId(record.id)),
+        Path(record.service_id.to_string()),
+        ValidatedJson(UpdateServiceRequest {
+            expected_release_id: Some(previous.id),
+            operation_id: record.id,
+            spec,
+            strategy: DeployStrategy::Rolling,
+        }),
+    )
+    .await
+    .unwrap_err()
+    .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        state
+            .store
+            .service_deployment(record.service_id)
+            .unwrap()
+            .unwrap()
+            .id,
+        previous.id
+    );
+    assert!(state.store.service_attempt(record.id).unwrap().is_none());
+}
+
+#[tokio::test]
 async fn direct_port_updates_fail_before_mutating_a_live_release() {
     let root = tempfile::tempdir().unwrap();
     let state = state(root.path()).await;

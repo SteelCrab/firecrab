@@ -68,7 +68,7 @@ pub fn panel(app: &App) -> String {
         .iter()
         .find_map(|key| data[key].as_str())
         .unwrap_or(t("Details"));
-    out.push_str(&format!("<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\"><header class=\"wasm-actions detail-head\"><h2 class=\"detail-title\">{}{}</h2>{}</header>{}",escape(title),if text(data,"purpose")=="pool"{" · Pool"}else{""},button("Close","close-detail",""),render::detail_actions(app,data)));
+    out.push_str(&format!("<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\"><header class=\"wasm-actions detail-head\"><h2 class=\"detail-title\">{}{}</h2>{}</header>{}",escape(title),match text(data,"purpose") { "pool" => " · Pool", "queue" => " · Queue", _ => "" },button("Close","close-detail",""),render::detail_actions(app,data)));
     if app.route == "vms" {
         out.push_str(
             "<div role=\"tablist\" class=\"tabs\" aria-label=\"MicroVM detail sections\">",

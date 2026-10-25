@@ -39,11 +39,12 @@ pub fn content(app: &App) -> String {
     let mut out = String::from(
         "<label for=\"schedule-filter\">Filter by VM</label><select id=\"schedule-filter\"><option value=\"\">All MicroVMs</option>",
     );
-    for vm in app
-        .vms
-        .iter()
-        .filter(|v| v.extra.get("purpose").and_then(Value::as_str) != Some("pool"))
-    {
+    for vm in app.vms.iter().filter(|v| {
+        !matches!(
+            v.extra.get("purpose").and_then(Value::as_str),
+            Some("pool" | "queue")
+        )
+    }) {
         out.push_str(&format!(
             "<option value=\"{}\" {}>{}</option>",
             escape(&vm.id),
@@ -110,7 +111,7 @@ pub fn detail(_app: &App, data: &Value) -> String {
     out
 }
 pub fn vm_schedules(app: &App, vm: &Value) -> String {
-    if text(vm, "purpose") == "pool" {
+    if ["pool", "queue"].contains(&text(vm, "purpose")) {
         return String::new();
     }
     let mut out = format!(

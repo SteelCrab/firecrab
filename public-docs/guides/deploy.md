@@ -78,6 +78,7 @@ Normal Nginx connection and inactivity timeouts still apply.
 Stop on an interrupted update withdraws its route and drains both generations before removing their VMs.
 
 Rollback restores the recorded image digest and service configuration.
+Queue bindings restore their references and access roles; broker data is unchanged.
 It resolves the recorded Secret UUIDs and storage connection with their current values and credentials.
 Automatic recovery keeps the previous generation's encrypted Secret snapshot until that generation is retired.
 Missing credentials, Secrets, images, or capacity can prevent recovery.

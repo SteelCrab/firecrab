@@ -124,6 +124,8 @@ pub struct AppState {
     pub(crate) service_mutations: Arc<AsyncMutex<()>>,
     /// Serializes durable apply admission and identical retry lookup, never worker execution.
     pub(crate) stack_apply_admission: Arc<AsyncMutex<()>>,
+    /// Serializes RabbitMQ engine lifecycle and queue declarations.
+    pub(crate) queue_mutations: Arc<AsyncMutex<()>>,
     /// Bound Git network work across all sources; checks never mutate host resources.
     pub(crate) stack_source_permits: Arc<Semaphore>,
     /// One image/VM deployment at a time bounds replica surge on one host.
@@ -213,6 +215,7 @@ impl AppState {
             vm_mutations: Arc::new(Mutex::new(HashMap::new())),
             secrets,
             service_mutations: Arc::new(AsyncMutex::new(())),
+            queue_mutations: Arc::new(AsyncMutex::new(())),
             service_deploy_permits: Arc::new(Semaphore::new(1)),
             processes: Arc::new(Mutex::new(HashMap::new())),
             reconciliation: Arc::new(Mutex::new(HashMap::new())),

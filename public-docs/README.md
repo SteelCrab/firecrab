@@ -22,6 +22,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Create VMs, use the console, and connect with SSH | [Dashboard](guides/dashboard.md) |
 | Configure and manage an app | [MicroService](guides/microservices.md) |
 | Update or roll back a running app through Nginx | [Deploy](guides/deploy.md) |
+| Connect apps with internal RabbitMQ message queues | [Queue](guides/queues.md) |
 | Validate a declarative YAML stack offline | [Stack validation](guides/stacks.md) |
 | Register stack ownership and preview configuration changes | [Stack planning](guides/stack-planning.md) |
 | Apply YAML stacks and inspect durable execution status | [Stack apply](guides/stack-apply.md) |

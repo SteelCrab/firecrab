@@ -235,6 +235,18 @@ async fn accept(
     require_image_auth(&state, &body.spec.image, request.0).await?;
     secrets::preflight(&state, &body.spec, request.0).await?;
     crate::handlers::pipe_storage::validate_binding(&state, &body.spec, request.0).await?;
+    crate::queues::validate_bindings(&state, &body.spec, request.0).await?;
+    let mut placement = previous.request.clone();
+    crate::queues::placement(&state, &body.spec, &mut placement, request.0)?;
+    if placement.micro_network_id != previous.request.micro_network_id {
+        return Err(AppError::validation(
+            BTreeMap::from([(
+                "queues".into(),
+                "Deploy must keep the existing MicroNetwork".into(),
+            )]),
+            request.0,
+        ));
+    }
     validate_placement(&state, &body.spec, &previous.request, request.0).await?;
     domain::preflight(&state, id, &body.spec, request.0).await?;
     let snapshot = inspect(&state)
