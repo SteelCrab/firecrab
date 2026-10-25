@@ -159,6 +159,9 @@ pub struct ServiceInstance {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MicroServiceDeployment {
+    /// Periodic health observations and restart-safe replica repair intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<Box<crate::ServiceRecovery>>,
     /// Unix time when the attempt was accepted; zero for older records.
     #[serde(default)]
     pub started_at: i64,

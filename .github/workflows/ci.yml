@@ -821,7 +821,7 @@ jobs:
       - name: Deploy with real MicroVMs and Nginx
         if: ${{ !cancelled() && steps.guest-kernel.outcome == 'success' }}
         timeout-minutes: 15
-        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation --report target/qa/secret-rotation.json 2>&1 | tee target/qa/deploy.log
+        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation --replica-recovery --report target/qa/secret-rotation.json 2>&1 | tee target/qa/deploy.log
 
       - name: Retain Deploy acceptance evidence
         if: always()

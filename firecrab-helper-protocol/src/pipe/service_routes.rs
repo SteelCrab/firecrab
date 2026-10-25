@@ -68,7 +68,9 @@ impl ServiceRouteRequest {
                 if upstreams.len() > 100 {
                     return Err("a service route supports at most 100 replicas".into());
                 }
-                validate_upstreams(upstreams, None, host).map_err(|error| error.to_string())?;
+                if !upstreams.is_empty() || matches!(self, Self::Publish { .. }) {
+                    validate_upstreams(upstreams, None, host).map_err(|error| error.to_string())?;
+                }
                 (owner, host)
             }
             Self::Remove { owner, host } => (owner, host),
@@ -88,8 +90,10 @@ impl ServiceRouteRequest {
             {
                 return Err("route transitions must retain the service owner".into());
             }
-            validate_upstreams(expected_upstreams, None, host)
-                .map_err(|error| error.to_string())?;
+            if !expected_upstreams.is_empty() {
+                validate_upstreams(expected_upstreams, None, host)
+                    .map_err(|error| error.to_string())?;
+            }
         }
         Ok(())
     }
@@ -225,6 +229,44 @@ mod tests {
             service_id: Uuid::from_u128(1),
             deployment_id: Uuid::from_u128(2),
         }
+    }
+
+    #[test]
+    fn an_owned_service_can_suspend_and_resume_without_losing_its_hostname() {
+        let mut saved = publish().updated_config(&config()).unwrap();
+        saved.quick_tunnels.push(super::super::QuickTunnelEntry {
+            id: Uuid::from_u128(3),
+            name: "service".into(),
+            target: super::super::QuickTunnelTarget::Routes {
+                host: "web.example.com".into(),
+            },
+        });
+        let request = ServiceRouteRequest::Replace {
+            expected_owner: owner(),
+            expected_upstreams: saved.routes[1].upstreams.clone(),
+            owner: owner(),
+            host: "web.example.com".into(),
+            upstreams: vec![],
+        };
+        let suspended = request.updated_config(&saved).unwrap();
+        suspended.validate().unwrap();
+        let nginx = suspended.nginx();
+        assert!(nginx.contains("server_name web.example.com"));
+        assert!(nginx.contains("location / { return 503; }"));
+        assert!(!nginx.contains("upstream fc_route_1"));
+        let restored = ServiceRouteRequest::Replace {
+            expected_owner: owner(),
+            expected_upstreams: vec![],
+            owner: owner(),
+            host: "web.example.com".into(),
+            upstreams: saved.routes[1].upstreams.clone(),
+        }
+        .updated_config(&suspended)
+        .unwrap();
+        assert_eq!(restored, saved);
+        let mut manual = suspended;
+        manual.routes[1].owner = None;
+        assert!(manual.validate().is_err());
     }
     fn publish() -> ServiceRouteRequest {
         ServiceRouteRequest::Publish {

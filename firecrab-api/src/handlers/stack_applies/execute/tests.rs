@@ -21,6 +21,7 @@ async fn fixture() -> (tempfile::TempDir, AppState, MicroServiceDeployment) {
         })
         .unwrap();
     let deployment = MicroServiceDeployment {
+        recovery: None,
         started_at: 0,
         finished_at: None,
         update: None,

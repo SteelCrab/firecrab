@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-pub(super) fn journal() -> MicroServiceDeployment {
+pub(in crate::service_runtime) fn journal() -> MicroServiceDeployment {
     let service = Uuid::new_v4();
     let mut previous = deployment(service);
     previous.phase = ServicePhase::Running;
@@ -56,12 +56,12 @@ pub(super) fn journal() -> MicroServiceDeployment {
     current
 }
 
-pub(super) struct Helper {
-    pub(super) client: crate::network::NetworkClient,
-    config: Arc<Mutex<Config>>,
-    workers: Arc<Mutex<Vec<IngressWorker>>>,
-    changes: Arc<AtomicUsize>,
-    auto_drain: Arc<AtomicBool>,
+pub(in crate::service_runtime) struct Helper {
+    pub(in crate::service_runtime) client: crate::network::NetworkClient,
+    pub(in crate::service_runtime) config: Arc<Mutex<Config>>,
+    pub(in crate::service_runtime) workers: Arc<Mutex<Vec<IngressWorker>>>,
+    pub(in crate::service_runtime) changes: Arc<AtomicUsize>,
+    pub(in crate::service_runtime) auto_drain: Arc<AtomicBool>,
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for Helper {
@@ -69,7 +69,10 @@ impl Drop for Helper {
         self.task.abort();
     }
 }
-pub(super) async fn helper(root: &std::path::Path, deployment: &MicroServiceDeployment) -> Helper {
+pub(in crate::service_runtime) async fn helper(
+    root: &std::path::Path,
+    deployment: &MicroServiceDeployment,
+) -> Helper {
     let path = root.join("deploy.sock");
     let listener = tokio::net::UnixListener::bind(&path).unwrap();
     let previous = &deployment.update.as_ref().unwrap().previous;
@@ -98,7 +101,10 @@ pub(super) async fn helper(root: &std::path::Path, deployment: &MicroServiceDepl
     let task = tokio::spawn(async move {
         loop {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let envelope: NetworkRequestEnvelope = read_frame(&mut stream).await.unwrap();
+            let envelope: Result<NetworkRequestEnvelope, _> = read_frame(&mut stream).await;
+            let Ok(envelope) = envelope else {
+                continue;
+            };
             let mut result = Ok(());
             if let NetworkRequest::Pipe {
                 request: Operation::ManageServiceRoute { request },
@@ -135,7 +141,8 @@ pub(super) async fn helper(root: &std::path::Path, deployment: &MicroServiceDepl
                 quick_tunnels: vec![],
                 firecrab_tunnels: vec![],
             };
-            write_frame(
+            // Drain timeouts can close the client before its reply; keep serving retries.
+            let _ = write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
                     version: PROTOCOL_VERSION,
@@ -144,8 +151,7 @@ pub(super) async fn helper(root: &std::path::Path, deployment: &MicroServiceDepl
                     pipe: Some(snapshot),
                 },
             )
-            .await
-            .unwrap();
+            .await;
         }
     });
     Helper {

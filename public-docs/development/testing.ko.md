@@ -282,6 +282,15 @@ systemctl --failed --plain --no-legend | grep firecrab-vm- || echo none
 
 ## nginx 통합 시나리오
 
+서비스 복구 검사는 비어 있는 임시 Linux/KVM 호스트에서 실행한다.
+`sudo python3 scripts/ci-qa-deploy.py --disposable-host --replica-recovery --report target/qa/replica-recovery.json`.
+
+- [ ] **SR1 — 복제본 재시작:** VM 하나를 중지한다. 자동 재시작, 고정 입력, 정상·무관한 VM의 연속 동작을 확인한다.
+- [ ] **SR2 — 앱 교체:** 상태 검사 하나를 실패시킨다. 경로 제외, 재시작, 교체, 기존 Secret 값 유지를 확인한다.
+- [ ] **SR3 — 복구 상태 보존:** 요청을 유지한 채 drain 중 API를 재시작한다. 교체 VM의 소유권과 기존 요청 완료를 확인한다.
+- [ ] **SR4 — 전체 실패와 중지:** 도메인을 유지한 503 응답, 정상 VM 복구, Stop, 재생성 방지, 리소스 정리를 확인한다.
+
+
 `scripts/ci-qa-nginx.sh nginx:1.27-alpine`을 실행한다.
 `QA_NGINX=ci`, POSIX 셸, TCP `18080 → 80`을 설정한다.
 환경 변수를 `QA_NGINX=two`로 바꾼다.

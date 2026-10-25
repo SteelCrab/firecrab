@@ -20,6 +20,8 @@ mod ai_sandbox;
 mod block_storage;
 pub use block_storage::*;
 mod micro_services;
+mod service_recovery;
+pub use service_recovery::*;
 mod pipe_ai;
 mod pipe_storage;
 mod schedules;

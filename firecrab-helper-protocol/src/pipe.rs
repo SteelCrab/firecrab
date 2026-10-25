@@ -247,7 +247,10 @@ impl Config {
                     format!("duplicate route: {} {}", route.host, route.path_prefix).into(),
                 );
             }
-            validate_upstreams(&route.upstreams, Some(self.listen), &route.host)?;
+            // An owned service keeps its hostname while every endpoint is unready.
+            if !route.upstreams.is_empty() || route.owner.is_none() {
+                validate_upstreams(&route.upstreams, Some(self.listen), &route.host)?;
+            }
         }
         self.validate_service_routes()?;
         let mut ids = BTreeSet::new();
@@ -343,6 +346,10 @@ impl Config {
         }
         let mut hosts: BTreeMap<&str, Vec<(usize, &Route)>> = BTreeMap::new();
         for (index, route) in self.routes.iter().chain(quick_routes.iter()).enumerate() {
+            if route.upstreams.is_empty() {
+                hosts.entry(&route.host).or_default().push((index, route));
+                continue;
+            }
             text.push_str(&format!(
                 "  upstream fc_route_{index} {{\n    zone fc_route_{index} 64k;\n"
             ));
@@ -377,6 +384,10 @@ impl Config {
                     vec![format!("= \"{prefix}\""), format!("^~ \"{prefix}/\"")]
                 };
                 for location in locations {
+                    if route.upstreams.is_empty() {
+                        text.push_str(&format!("    location {location} {{ return 503; }}\n"));
+                        continue;
+                    }
                     text.push_str(&format!("    location {location} {{\n      proxy_pass http://fc_route_{index};\n      proxy_http_version 1.1;\n      proxy_set_header Host {proxy_host};\n      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n      proxy_set_header X-Forwarded-Proto $fc_proto;\n      proxy_set_header Upgrade $http_upgrade;\n      proxy_set_header Connection $fc_connection;\n      proxy_connect_timeout 2s;\n      proxy_read_timeout 30s;\n      proxy_next_upstream error timeout http_500 http_502 http_503 http_504;\n      proxy_next_upstream_timeout 3s;\n    }}\n"));
                 }
             }

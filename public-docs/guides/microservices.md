@@ -237,13 +237,13 @@ Plain `env` values are applied through the existing guest service mechanism.
 Each health request must receive HTTP 2xx; redirects do not count as healthy.
 `startupTimeout` bounds the app health wait after each VM finishes booting.
 The existing VM boot pipeline has its own disk, process, and network timeouts.
-A health failure removes all replicas created by that deployment.
+A startup health failure removes the replicas created by that deployment.
 Cleanup errors preserve the remaining VM identifiers so Stop can retry them.
 
 Stop withdraws host port forwards, waits up to `drainTimeout`, then stops and removes the VMs.
 The macOS TCP relay can close its SSH forwards when those port records disappear.
 An interrupted initial deploy or stop is marked failed after API restart; Stop cleans up remaining instances.
-A completed deployment uses the existing VM re-adoption mechanism.
+A completed deployment uses VM re-adoption and [automatic replica recovery](service-recovery.md).
 
 Domain services connect through PipeIngress after health checks.
 Use [Deploy](deploy.md) for running updates and rollback. Direct host ports require Stop and initial Deploy.
