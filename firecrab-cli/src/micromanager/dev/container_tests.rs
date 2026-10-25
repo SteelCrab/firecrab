@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn object_absence_keeps_real_docker_messages_distinct_from_inspection_failures() {
+    for (kind, message) in [
+        (
+            "container",
+            "Error response from daemon: No such container: owned",
+        ),
+        (
+            "network",
+            "Error response from daemon: network owned not found",
+        ),
+        (
+            "volume",
+            "Error response from daemon: get owned: no such volume",
+        ),
+        ("image", "Error response from daemon: No such image: owned"),
+    ] {
+        assert!(missing_object(message, kind, "owned"), "{message}");
+    }
+    for message in [
+        "dial unix /var/run/docker.sock: no such file or directory",
+        "permission denied while trying to connect to the Docker daemon",
+        "Error response from daemon: network another not found",
+    ] {
+        assert!(!missing_object(message, "network", "owned"), "{message}");
+    }
+}
+
+#[test]
 fn endpoints_must_be_local_and_explicit_contexts_take_precedence() {
     for endpoint in [
         "unix:///var/run/docker.sock",
@@ -76,7 +104,11 @@ if args[0]=='info':
 if len(args)>1 and args[1]=='inspect':
     path=root/(args[0]+'.json')
     record()
-    if not path.exists(): print('Error: No such '+args[0]+': '+args[-1],file=sys.stderr);sys.exit(1)
+    if not path.exists():
+        message = ('network '+args[-1]+' not found' if args[0]=='network' else
+                   'get '+args[-1]+': no such volume' if args[0]=='volume' else
+                   'No such '+args[0]+': '+args[-1])
+        print('Error response from daemon: '+message,file=sys.stderr);sys.exit(1)
     print(path.read_text());sys.exit(0)
 if args[0]=='build':
     event['context_files']=sorted(str(p.relative_to(args[-1])) for p in pathlib.Path(args[-1]).rglob('*') if p.is_file())
@@ -428,6 +460,21 @@ record()
             value["Options"] = serde_json::json!({"type":"none","o":"bind","device":"/"})
         });
         assert!(fixture.run(Some(DevCommand::Start), false, false).is_err());
+    }
+
+    #[test]
+    fn a_missing_private_data_mount_rejects_control_before_stopping_the_container() {
+        let fixture = Fixture::new();
+        fixture.run(None, false, false).unwrap();
+        fixture.change("container", |value| value["Mounts"] = serde_json::json!([]));
+        fixture.clear_events();
+        assert!(fixture.run(Some(DevCommand::Stop), false, false).is_err());
+        assert!(
+            !fixture
+                .events()
+                .iter()
+                .any(|event| event["args"][0] == "stop")
+        );
     }
 
     #[test]

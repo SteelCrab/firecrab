@@ -36,6 +36,15 @@ fn failed(message: impl std::fmt::Display) -> io::Error {
     io::Error::other(message.to_string())
 }
 
+/// Match Docker's object-specific 404 messages without hiding transport or permission errors.
+fn missing_object(stderr: &str, kind: &str, name: &str) -> bool {
+    let stderr = stderr.to_ascii_lowercase();
+    stderr.contains("no such object")
+        || stderr.contains(&format!("no such {kind}"))
+        || (kind == "network"
+            && stderr.contains(&format!("network {} not found", name.to_ascii_lowercase())))
+}
+
 /// Permit only local sockets, named pipes, and loopback TCP Docker endpoints.
 fn local_endpoint(endpoint: &str) -> bool {
     if endpoint.chars().any(char::is_control) {
@@ -190,7 +199,7 @@ impl Docker {
                 .map_err(|error| failed(format!("invalid Docker {kind} metadata: {error}")));
         }
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("No such object") || stderr.contains(&format!("No such {kind}")) {
+        if missing_object(&stderr, kind, name) {
             return Ok(None);
         }
         Err(failed(format!(
@@ -367,16 +376,21 @@ fn container_owned(
             .and_then(|value| value.parse::<u16>().ok())
             == Some(instance.api_port)
         && metadata["Mounts"].as_array().is_some_and(|mounts| {
-            mounts.iter().all(|mount| {
-                (mount["Type"] == "volume"
-                    && mount["Name"] == volume
-                    && mount["Destination"] == "/var/lib/firecrab")
-                    || (mount["Type"] == "tmpfs"
-                        && matches!(
-                            mount["Destination"].as_str(),
-                            Some("/run" | "/run/lock" | "/tmp")
-                        ))
-            })
+            mounts
+                .iter()
+                .filter(|mount| mount["Type"] == "volume")
+                .count()
+                == 1
+                && mounts.iter().all(|mount| {
+                    (mount["Type"] == "volume"
+                        && mount["Name"] == volume
+                        && mount["Destination"] == "/var/lib/firecrab")
+                        || (mount["Type"] == "tmpfs"
+                            && matches!(
+                                mount["Destination"].as_str(),
+                                Some("/run" | "/run/lock" | "/tmp")
+                            ))
+                })
         });
     if !safe {
         return Err(failed(
