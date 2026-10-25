@@ -187,3 +187,12 @@
   .wasm-panel[data-view="vms"] { inset:0; }
   .app-frame:has(#detail-panel[data-view="vms"]:not([hidden])) .nav-toggle { display:none; }
 }
+
+.pipe-card { text-decoration: none; }
+.pipe-card-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.pipe-card-icon { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-subtle); color: var(--text-2); }
+.pipe-card-icon svg { width: 20px; height: 20px; }
+.pipe-card-icon img { object-fit: contain; }
+.pipe-card h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.pipe-card p { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.55; }
+@media (hover: hover) { .pipe-card:hover { border-color: var(--border-strong); background: var(--bg-subtle); } }

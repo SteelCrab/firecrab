@@ -1254,6 +1254,32 @@ fn public_address(url: &str) -> String {
         button("Copy", "copy-text", url)
     )
 }
+fn pipe_icon(id: &str) -> String {
+    let path = match id {
+        "auth" => "M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM4 21v-2a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v2",
+        "ai" => "m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3ZM20 2v4M18 4h4",
+        "storage" => {
+            "M3 7h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2"
+        }
+        "route" => "M3 7h18m-4-4 4 4-4 4M21 17H3m4-4-4 4 4 4",
+        "registry" => "m12 3 9 5v8l-9 5-9-5V8l9-5Zm0 10 9-5M12 13 3 8M12 13v8M7.5 5.5l9 5v5",
+        "database" => {
+            "M21 5c0 2.2-4 4-9 4S3 7.2 3 5s4-4 9-4 9 1.8 9 4ZM3 5v14c0 2.2 4 4 9 4s9-1.8 9-4V5M3 12c0 2.2 4 4 9 4s9-1.8 9-4"
+        }
+        "quick-tunnel" => "m13 2-9 12h7l-1 8 10-12h-7l1-8Z",
+        "firecrab-tunnel" => {
+            return "<img src=\"/firecrab.png\" width=\"20\" height=\"20\" alt=\"\">".into();
+        }
+        "named-tunnel" => {
+            return "<img src=\"/cloudflare.svg\" width=\"24\" height=\"20\" alt=\"\">".into();
+        }
+        _ => return String::new(),
+    };
+    format!(
+        "<svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"{path}\"/></svg>"
+    )
+}
+
 fn pipe_cards(app: &App) -> String {
     let mut out = "<div class=\"wasm-cards\">".to_string();
     for (id, label, description) in [
@@ -1277,7 +1303,8 @@ fn pipe_cards(app: &App) -> String {
     ] {
         let _ = write!(
             out,
-            "<a class=\"wasm-card\" href=\"#/pipe/{id}\"><h2>{}</h2><p>{}</p></a>",
+            "<a class=\"wasm-card pipe-card\" href=\"#/pipe/{id}\"><div class=\"pipe-card-heading\"><span class=\"pipe-card-icon\" aria-hidden=\"true\">{}</span><h2>{}</h2></div><p>{}</p></a>",
+            pipe_icon(id),
             crate::i18n::t(label),
             crate::i18n::t(description)
         );
