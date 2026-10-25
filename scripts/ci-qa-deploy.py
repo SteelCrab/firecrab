@@ -84,7 +84,13 @@ esac
 """,
             "recovery-health": "#!/bin/sh\nif [ -f /unhealthy ]; then printf 'Status: 503 Service Unavailable\\r\\n'; fi\nprintf 'Content-Type: text/plain\\r\\n\\r\\nhealth\\n'\n",
             "fail-health": "#!/bin/sh\n/bin/busybox touch /unhealthy\nprintf 'Content-Type: text/plain\\r\\n\\r\\ninjected\\n'\n",
-            "internal-call": "#!/bin/sh\nprintf 'Content-Type: text/plain\\r\\n\\r\\n'\nexec /bin/busybox wget -q -O - \"http://$SELF_INTERNAL/cgi-bin/rotation\"\n",
+            "internal-call": """#!/bin/sh
+reply=$(/bin/busybox wget -q -O - "http://$SELF_INTERNAL/cgi-bin/rotation") || {
+  printf 'Status: 502 Bad Gateway\\r\\nContent-Type: text/plain\\r\\n\\r\\nunavailable\\n'
+  exit 0
+}
+printf 'Content-Type: text/plain\\r\\n\\r\\n%s\\n' "$reply"
+""",
         }
         for name, script in scripts.items():
             data = script.encode()
@@ -173,9 +179,15 @@ class Api:
 
 def traffic(host, port, domain, path="/"):
     with contextlib.closing(http.client.HTTPConnection(host, port, timeout=120 if path == "/cgi-bin/hold" else 5)) as connection:
-        connection.request("GET", path, headers={"Host": domain})
-        response = connection.getresponse()
-        return response.status, response.read().decode().strip()
+        stage = "request"
+        try:
+            connection.request("GET", path, headers={"Host": domain})
+            stage = "response headers"
+            response = connection.getresponse()
+            stage = "response body"
+            return response.status, response.read().decode().strip()
+        except TimeoutError as error:
+            raise TimeoutError(f"{stage} timed out") from error
 
 
 def atomic_json(path, value):

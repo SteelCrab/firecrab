@@ -51,6 +51,7 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
         key = domain + ("/guest-internal" if internal else "")
         metrics["requests"][key] = 0
         while not stop.is_set():
+            request_started = round(time.monotonic() - started, 2)
             try:
                 response = traffic("127.0.0.1", port, domain, "/cgi-bin/internal-call" if internal else "/cgi-bin/rotation")
                 if response != (200, "old"):
@@ -59,7 +60,12 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
                 if len(metrics["httpFailures"]) < 10:
                     metrics["httpFailures"].append({"domain": domain, "channel": key,
                         "stage": metrics.get("currentStage"), "elapsedSeconds": round(time.monotonic() - started, 2),
+                        "startedSeconds": request_started,
                         "error": str(error)})
+                    if "ingressAtFailure" not in metrics:
+                        result = subprocess.run(["journalctl", "-u", "firecrab-ingress.service", "--no-pager", "-n", "40", "-o", "cat"],
+                                                capture_output=True, text=True, timeout=3)
+                        metrics["ingressAtFailure"] = result.stdout
             metrics["requests"][key] += 1
             stop.wait(metrics["requestIntervalSeconds"])
 
@@ -83,7 +89,9 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
         unrelated_ids = ids(unrelated["initial"])
         victim = original["instances"][0]["vmId"]
         metrics["currentStage"] = "restart after VM exit"
+        metrics["exitInjectionSeconds"] = round(time.monotonic() - started, 2)
         api.call("POST", "/api/vms/" + victim + "/stop")
+        metrics["exitAcknowledgedSeconds"] = round(time.monotonic() - started, 2)
         wait_for(lambda: (record if (record := ready(main)) and ids(record) == ids(original)
                          and api.call("GET", "/api/vms/" + victim)["state"] == "running" else None), timeout=180)
         metrics["stages"].append("exited VM restarted; healthy replicas, release, image and captured Secret retained")

@@ -7,8 +7,13 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import os
+import select
+import shlex
 import tarfile
 import subprocess
+import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -21,6 +26,36 @@ module.loader.exec_module(qa)
 
 
 class DeployQaTests(unittest.TestCase):
+    def test_internal_call_commits_a_response_only_after_its_upstream_finishes(self):
+        fixture = qa.image_fixture(b"static-toolbox-fixture", "A")
+        manifest = json.loads(fixture[1])
+        raw = gzip.decompress(fixture[2][manifest["layers"][0]["digest"]])
+        with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+            script = archive.extractfile("www/cgi-bin/internal-call").read().decode()
+        for failed in [False, True]:
+            with self.subTest(failed=failed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                tool = root / "busybox"
+                tool.write_text('#!/bin/sh\ntouch "$STARTED"\nwhile [ ! -e "$RELEASE" ]; do sleep .01; done\n'
+                                'if [ "$FAILED" = 1 ]; then exit 1; fi\nprintf "old\\n"\n')
+                tool.chmod(0o755)
+                started, release = root / "started", root / "release"
+                environment = dict(os.environ, STARTED=str(started), RELEASE=str(release), FAILED=str(int(failed)))
+                process = subprocess.Popen(["/bin/sh", "-c", script.replace("/bin/busybox", shlex.quote(str(tool)))],
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
+                try:
+                    deadline = time.monotonic() + 3
+                    while not started.exists() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue(started.exists())
+                    self.assertEqual(select.select([process.stdout], [], [], 0)[0], [])
+                finally:
+                    release.touch()
+                    output, error = process.communicate(timeout=3)
+                self.assertEqual(process.returncode, 0, error)
+                expected = b'Status: 502 Bad Gateway\r\nContent-Type: text/plain\r\n\r\nunavailable\n' if failed else b'Content-Type: text/plain\r\n\r\nold\n'
+                self.assertEqual(output, expected)
+
     def test_recovery_reads_the_network_detail_response_before_creating_resources(self):
         api = Mock()
 
