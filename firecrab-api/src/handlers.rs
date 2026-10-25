@@ -16,6 +16,7 @@ pub mod microregistry;
 pub mod network;
 pub mod oci;
 pub mod pools;
+pub mod queues;
 pub mod registries;
 pub mod schedules;
 pub mod secrets;

@@ -30,7 +30,7 @@ pub struct Lease {
 }
 
 /// What a VM record represents. `Builder` VMs stay out of `list_vms`.
-/// `Pool` members are listed there with user instances. Mutating VM routes
+/// `Pool` and `Queue` VMs are listed with user instances. Mutating VM routes
 /// still refuse a pool member; only its pool starts, stops, or deletes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,6 +44,8 @@ pub enum VmPurpose {
     /// A warm pool member (`crate::pool`). Listed by `list_vms`, and refused by
     /// every mutating VM route: only its pool starts, stops, or deletes it.
     Pool,
+    /// Stateful RabbitMQ engine; managed only by Queue lifecycle routes.
+    Queue,
 }
 
 impl VmPurpose {
@@ -52,6 +54,7 @@ impl VmPurpose {
             VmPurpose::Instance => "instance",
             VmPurpose::Builder => "builder",
             VmPurpose::Pool => "pool",
+            VmPurpose::Queue => "queue",
         }
     }
 }

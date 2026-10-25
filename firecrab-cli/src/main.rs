@@ -18,6 +18,7 @@ mod pipe;
 mod pipe_ai;
 mod pipe_storage;
 mod pool;
+mod queue;
 mod schedule;
 #[cfg(target_os = "linux")]
 mod service;
@@ -47,6 +48,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage the internal RabbitMQ engine and application queues.
+    Queue {
+        #[command(subcommand)]
+        command: queue::Command,
+    },
     /// Connect Pipe AI providers and select models through the host REST API.
     Ai {
         #[command(subcommand)]
@@ -161,6 +167,11 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
+        Command::Queue { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                queue::run(client, command)
+            })
+        }
         Command::Ai { command } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
             pipe_ai::run(client, command)
         }),

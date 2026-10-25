@@ -792,7 +792,9 @@ pub async fn update_vm(
                 request_id.0,
             ));
         }
-        if owner.is_some_and(|deployment| !deployment.spec.secrets.is_empty()) {
+        if owner.is_some_and(|deployment| {
+            !deployment.spec.secrets.is_empty() || !deployment.spec.queues.is_empty()
+        }) {
             return Err(AppError::conflict(
                 "vm_service_owned",
                 "Edit the MicroService configuration instead of its replica environment",
@@ -1472,13 +1474,15 @@ async fn finish_run_start(
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
         let storage_env = crate::pipe_storage::environment_for_vm(&store_for_shells, record.id)
             .map_err(|error| error.message.to_owned())?;
-        let has_storage_secrets = !storage_env.is_empty();
+        let queue_env = crate::queues::environment_for_vm(&store_for_shells, record.id)?;
+        let has_storage_secrets = !storage_env.is_empty() || !queue_env.is_empty();
         guest_env.extend(storage_env);
+        guest_env.extend(queue_env);
         rootfs::specialize_guest(&rootfs, record.id, &guest_env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
         if has_storage_secrets {
             rootfs::protect_vm_credentials(&rootfs)
-                .map_err(|_| "Could not protect the service's S3 credential file".to_owned())?;
+                .map_err(|_| "Could not protect the service credential file".to_owned())?;
         }
         crate::guest_ssh::install_on_guest(&rootfs, &paths)
             .map_err(|error| format!("guest SSH install failed: {error}"))?;
@@ -2231,7 +2235,9 @@ fn sorted_responses(
         .filter(|vm| {
             matches!(
                 vm.purpose,
-                crate::model::VmPurpose::Instance | crate::model::VmPurpose::Pool
+                crate::model::VmPurpose::Instance
+                    | crate::model::VmPurpose::Pool
+                    | crate::model::VmPurpose::Queue
             )
         })
         .collect();
@@ -2271,6 +2277,7 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
             crate::model::VmPurpose::Instance => VmPurpose::Instance,
             crate::model::VmPurpose::Builder => VmPurpose::Builder,
             crate::model::VmPurpose::Pool => VmPurpose::Pool,
+            crate::model::VmPurpose::Queue => VmPurpose::Queue,
         },
         state: vm.state,
         reconciliation: state

@@ -778,6 +778,13 @@ jobs:
           sudo ss -lun | grep -q ':67'
           ! sudo journalctl -u firecrab-helper --no-pager | grep -i 'operation not permitted'
 
+      - name: Queue MicroVM persistence and app disconnects
+        if: ${{ !cancelled() && steps.install-service.outcome == 'success' && steps.enable-kvm.outcome == 'success' }}
+        timeout-minutes: 30
+        run: |
+          npm ci --prefix examples/queue
+          python3 scripts/ci-qa-queue.py --disposable-host --restart-api
+
       - name: Re-running is safe
         run: |
           sudo -E env "PATH=$PATH" ./install.sh \
