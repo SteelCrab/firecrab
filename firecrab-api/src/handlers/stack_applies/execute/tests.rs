@@ -21,6 +21,9 @@ async fn fixture() -> (tempfile::TempDir, AppState, MicroServiceDeployment) {
         })
         .unwrap();
     let deployment = MicroServiceDeployment {
+        started_at: 0,
+        finished_at: None,
+        update: None,
         id: Uuid::new_v4(),
         service_id,
         spec,
@@ -175,4 +178,42 @@ async fn configuration_noop_does_not_report_an_unhealthy_service_as_successful()
             "stack_service_not_healthy"
         );
     }
+}
+
+#[tokio::test]
+async fn domain_updates_use_deploy_only_when_the_endpoint_and_network_are_stable() {
+    let (_root, state, mut deployment) = fixture().await;
+    let network = Uuid::new_v4();
+    deployment.phase = ServicePhase::Running;
+    deployment.domain_route_owned = true;
+    deployment.spec.domain = Some("web.example.com".into());
+    deployment.request.micro_network_id = Some(network);
+    state.store.save_service_deployment(&deployment).unwrap();
+    let mut desired = deployment.spec.clone();
+    desired.image = "ghcr.io/team/app:v2".into();
+    let id = Uuid::new_v4();
+    assert!(
+        supports_live_update(&state, deployment.service_id, &desired, network, id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !supports_live_update(&state, deployment.service_id, &desired, Uuid::new_v4(), id)
+            .await
+            .unwrap()
+    );
+    desired.domain = Some("another.example.com".into());
+    assert!(
+        !supports_live_update(&state, deployment.service_id, &desired, network, id)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        deploy_operation_id(id, deployment.service_id),
+        deploy_operation_id(id, deployment.service_id)
+    );
+    assert_ne!(
+        deploy_operation_id(id, deployment.service_id),
+        deploy_operation_id(Uuid::new_v4(), deployment.service_id)
+    );
 }

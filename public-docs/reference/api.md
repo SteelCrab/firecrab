@@ -158,6 +158,7 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | Update | GET / POST `/api/update`, GET `/api/update/progress` |
 
 See [MicroService](../guides/microservices.md) for configuration fields, validation, and deployment behavior.
+See [Deploy](../guides/deploy.md#rest) for running updates, release history, rollback, retry, and exact operation status.
 
 ## Host
 

@@ -174,6 +174,12 @@ Entries land here as work merges, and move under the next version heading when t
   an M2Image. Logins are write-only in API responses. See
   [Pipe Registry](public-docs/guides/pipe-registry.md).
 
+- Deploy updates running domain services through the existing Nginx ingress.
+  Rolling and blue-green updates, immutable release history, selected rollback,
+  verified worker drain, and restart/retry recovery share one REST/CLI/YAML
+  executor. The Rust/WASM dashboard exposes update and rollback actions (#335).
+  Deploy-owned rootfs caches are pruned after VM, pool, operation, and retained-release references are released.
+
 ### Changed
 
 - The dashboard's Pipe page lists its services as five cards: Route, Pipe

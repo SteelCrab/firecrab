@@ -5,7 +5,16 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 
-cargo build --release --locked -p firecrab-api -p firecrab-helper -p firecrab-cli
+(
+    if [[ ${FIRECRAB_QA_COVERAGE:-0} == 1 ]]; then
+        # shellcheck source=/dev/null
+        source <(cargo llvm-cov show-env --sh)
+        # Keep counters after systemd stops/restarts the API with SIGTERM.
+        export RUSTFLAGS="${RUSTFLAGS:-} -C llvm-args=-runtime-counter-relocation"
+        cargo llvm-cov clean --workspace
+    fi
+    cargo build --release --locked -p firecrab-api -p firecrab-helper -p firecrab-cli
+)
 ./scripts/build-ingress.sh target/release
 ./scripts/build-guest-console.sh target/release
 npm ci --prefix firecrab-frontend

@@ -131,7 +131,7 @@ pub fn page(app: &App) -> String {
     };
     let panel = crate::details::panel(app);
     let panel_width = app.panel_width;
-    let panel_hidden = if app.panel_open && app.route != "vms/new" {
+    let panel_hidden = if app.panel_open && !["vms/new", "queues"].contains(&app.route.as_str()) {
         ""
     } else {
         "hidden"
@@ -147,7 +147,7 @@ pub fn page(app: &App) -> String {
     let category = match section {
         "vms" | "services" | "pools" | "schedules" => tr(app, "Compute", "컴퓨팅"),
         "networks" | "pipe" | "security-groups" => tr(app, "Network", "네트워크"),
-        "storages" | "images" | "kernels" | "secrets" => tr(app, "Data", "데이터"),
+        "storages" | "images" | "kernels" | "secrets" | "queues" => tr(app, "Data", "데이터"),
         _ => tr(app, "System", "시스템"),
     };
     let meters = host_meters(app);
@@ -250,7 +250,9 @@ pub fn content(app: &App) -> String {
                 "조건에 맞는 MicroVM이 없습니다."
             )
         ),
-        "pools" | "schedules" | "security-groups" | "secrets" => crate::advanced::content(app),
+        "pools" | "schedules" | "security-groups" | "secrets" | "queues" => {
+            crate::advanced::content(app)
+        }
         "services" => resource_table(
             app,
             &app.resource,
@@ -476,7 +478,10 @@ pub fn vm_row(app: &App, vm: &Vm) -> String {
     } else {
         "—".into()
     };
-    let action = if vm.extra.get("purpose").and_then(Value::as_str) == Some("pool") {
+    let action = if matches!(
+        vm.extra.get("purpose").and_then(Value::as_str),
+        Some("pool" | "queue")
+    ) {
         String::new()
     } else if vm.state == "paused" {
         vm_icon_button("Resume", "vm-resume", &vm.id)
@@ -680,6 +685,10 @@ pub fn deployment(value: Option<&Value>) -> String {
         "running" => "Running",
         "stopped" => "Stopped",
         "failed" => "Deployment failed",
+        "queued" => "Queued",
+        "switching_traffic" => "Switching Nginx traffic",
+        "draining" => "Draining previous requests",
+        "rolling_back" => "Restoring previous release",
         _ => phase,
     };
     let mut out = format!("<p role=\"status\">{}</p>", escape(crate::i18n::t(label)));
@@ -790,7 +799,8 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
     match section {
         "vms" => {
             let state = text(data, "state");
-            let pool = text(data, "purpose") == "pool";
+            let queue = text(data, "purpose") == "queue";
+            let pool = queue || text(data, "purpose") == "pool";
             let editable = !pool && matches!(state, "created" | "stopped" | "error");
             if editable {
                 out.push_str(&button("Start", "vm-start", id));
@@ -830,7 +840,9 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
             if !pool {
                 out.push_str(&format!("<a class=\"btn\" href=\"#/schedules?vm={encoded}&new=1\" aria-label=\"Add schedule for {}\">Add schedule</a>",escape(text(data,"name"))));
             }
-            if pool {
+            if queue {
+                out.push_str("<a class=\"btn\" href=\"#/queues\">Queue</a>");
+            } else if pool {
                 out.push_str("<span class=\"badge\">Pool</span>");
             }
             out.push_str(&button("Logs", "logs", id));

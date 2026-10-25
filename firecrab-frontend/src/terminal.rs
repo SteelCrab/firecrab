@@ -432,9 +432,8 @@ fn redraw(app: &Shared) {
     if let Some(address) = element("console-address") {
         address.set_text_content(Some(text(&state.vm, "ipv4")));
     }
-    set_html(
-        "console-retry",
-        &if ["ended", "failed", "reconnecting", "disconnected"].contains(&state.status.as_str()) {
+    let retry_html =
+        if ["ended", "failed", "reconnecting", "disconnected"].contains(&state.status.as_str()) {
             render::button(
                 if state.status == "ended" {
                     "New session"
@@ -446,8 +445,14 @@ fn redraw(app: &Shared) {
             )
         } else {
             String::new()
-        },
-    );
+        };
+    // Keep the button across VM polling so a redraw between pointer-down and
+    // pointer-up cannot discard the user's New session click.
+    if let Some(retry) = element("console-retry")
+        && retry.inner_html() != retry_html
+    {
+        retry.set_inner_html(&retry_html);
+    }
     for (id, hidden) in [
         ("console-header", state.only),
         ("console-settings", state.only || !state.settings),

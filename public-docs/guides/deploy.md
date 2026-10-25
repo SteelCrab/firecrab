@@ -1,0 +1,123 @@
+# Deploy
+
+Deploy updates a running MicroService through its existing Nginx domain.
+The service UUID and domain stay the same.
+New replicas must pass their HTTP health check before they receive traffic.
+Use a compatible application and database schema across both releases.
+Deploy does not restore external database or object data.
+
+## Requirements
+
+- A running service with a deployment-owned Nginx domain.
+- The current API, helper, CLI host bundle, and Pipe configuration.
+- A matching [Auth connection](pipe-auth.md) for the requested image.
+- Host CPU, memory, and disk space for the rollout and recovery surge.
+
+Apply the current Pipe configuration before the first update.
+It sets `worker_shutdown_timeout 0` so Nginx does not force existing connections to close during reload.
+Wait for an earlier reload to finish draining before starting another Deploy.
+Services with direct host TCP ports must use the existing Stop and initial Deploy flow.
+Changing the service name, domain, or network requires that flow too.
+
+## Update and rollback
+
+```sh
+# Save the complete desired service configuration in web-v2.json.
+firecrab microservice rollout SERVICE_UUID --file web-v2.json
+
+# Inspect the current job and successful releases.
+firecrab microservice status SERVICE_UUID
+firecrab microservice releases SERVICE_UUID
+
+# Restore one successful release by UUID.
+firecrab microservice rollback SERVICE_UUID --release RELEASE_UUID
+
+# Resume an interrupted operation, including a drain timeout.
+firecrab microservice retry SERVICE_UUID
+```
+
+The default `--strategy rolling` starts one replacement at a time.
+Each replacement passes its health check before Nginx stops sending new requests to one old replica.
+The executor drains the old Nginx workers before deleting the retired VM.
+Use `--strategy blue_green` to prepare the full replacement generation before switching traffic.
+Blue-green needs enough capacity for both generations at once.
+
+The CLI prints the operation UUID before submitting the request.
+After a lost response, repeat the same command with `--operation-id UUID` and the same inputs.
+The API returns the recorded operation instead of creating a second deployment.
+Use `--expected-release UUID` to reject an update if the active release changed.
+`--no-wait` returns after acceptance.
+A client timeout does not cancel an accepted operation.
+
+In the dashboard, open a service and choose **Deploy update**.
+The guided form offers the same configuration and strategy choices.
+**Release history** lists successful releases and offers **Roll back**.
+**Retry Deploy** resumes a failed operation that still owns resources.
+The dashboard and YAML apply send the release they observed to prevent a stale update.
+
+## Failure and recovery
+
+Each operation stores its immutable OCI digest, service configuration, VM identifiers, and Nginx transition journal.
+The API resumes a busy update after restart.
+An explicitly failed recovery waits for Retry Deploy or Stop.
+The executor reuses recorded VM identifiers and compares the exact route owner and upstream list before changing Nginx.
+It confirms the new Nginx generation before draining old workers.
+Worker identity includes the host boot ID, PID, and process start time.
+
+An image, startup, or health failure restores the previous release through the same route transaction.
+Already retired replicas can be recreated from the previous pinned image.
+The failed attempt remains failed even after the previous release is running again.
+Read the exact attempt endpoint to distinguish that result from the active release.
+
+`drainTimeout` limits how long an operation waits for existing connections.
+It does not force connections or VMs to close.
+If the timeout expires, Deploy reports failure and retains the owned VMs and journal.
+Retry after the connections finish.
+A long-lived WebSocket can keep an old generation alive until it disconnects.
+Normal Nginx connection and inactivity timeouts still apply.
+Stop on an interrupted update withdraws its route and drains both generations before removing their VMs.
+
+Rollback restores the recorded image digest and service configuration.
+Queue bindings restore their references and access roles; broker data is unchanged.
+Queues used by active or interrupted Deploy generations cannot be deleted.
+It resolves the recorded Secret UUIDs and storage connection with their current values and credentials.
+Automatic recovery keeps the previous generation's encrypted Secret snapshot until that generation is retired.
+Missing credentials, Secrets, images, or capacity can prevent recovery.
+Deploy keeps owned resources and reports the reason instead of discarding the recovery record.
+
+## REST
+
+| Method | Path | Body or result |
+| --- | --- | --- |
+| `POST` | `/api/micro-services/{id}/updates` | `{operationId, expectedReleaseId?, spec, strategy?}`; `202` |
+| `GET` | `/api/micro-services/{id}/releases` | Up to 20 successful releases, newest first |
+| `POST` | `/api/micro-services/{id}/rollback` | `{operationId, expectedReleaseId?, releaseId, strategy?}`; `202` |
+| `POST` | `/api/micro-services/{id}/deployment/retry` | `{operationId}`; `202` |
+| `GET` | `/api/micro-services/{id}/deployments/{operationId}` | Exact recorded attempt, including failed attempts |
+
+`spec` is a complete [MicroService configuration](microservices.md#fields).
+`strategy` is `rolling` or `blue_green`.
+An operation UUID cannot be reused with different inputs or for another service.
+Concurrent operations, a stale expected release, or a stale Retry return `409`.
+The active configuration changes only when the replacement succeeds.
+
+Successful release metadata is immutable and limited to the newest 20 entries per service.
+Attempt records remain available until the service is deleted.
+Release records contain Secret references, not plaintext Secret values.
+Deploy removes retired VM disks and private environment snapshots after verified drain.
+New Deploy imports journal their own files under `rootfs/deploy/` before publication.
+Cleanup removes a file only after VM, pool, current-operation, and retained-release references are gone.
+It also protects active template readers and other registered aliases that share the file.
+Manual images, existing imports, shared kernels, and OCI blob/layer caches stay in the [Images inventory](images.md).
+Collection runs after completed deployments, at startup, and every minute.
+Failed cleanup keeps its ownership journal for retry.
+
+## Validate from source
+
+Run `scripts/test-deploy-nginx.py --firecrab PATH --nginx PATH` for real Nginx HTTP and WebSocket reload tests.
+The test uses disposable local application servers and does not boot MicroVMs.
+Full acceptance also requires a Linux/KVM host with real MicroVMs, image pulls, restart recovery, and resource measurements.
+The Installer CI job runs `sudo python3 scripts/ci-qa-deploy.py --disposable-host` for real MicroVM/Nginx updates, held requests, API restart, rollback, and injected failures.
+It also uploads continuous runtime coverage, including counters retained across API restarts.
+The script refuses hosts with existing VMs, services, pools, Auth connections, or ingress configuration.
+It uses local OCI images and a private Auth fixture; it does not validate an external registry or public TLS.

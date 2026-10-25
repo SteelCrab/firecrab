@@ -792,7 +792,9 @@ pub async fn update_vm(
                 request_id.0,
             ));
         }
-        if owner.is_some_and(|deployment| !deployment.spec.secrets.is_empty()) {
+        if owner.is_some_and(|deployment| {
+            !deployment.spec.secrets.is_empty() || !deployment.spec.queues.is_empty()
+        }) {
             return Err(AppError::conflict(
                 "vm_service_owned",
                 "Edit the MicroService configuration instead of its replica environment",
@@ -1472,13 +1474,18 @@ async fn finish_run_start(
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
         let storage_env = crate::pipe_storage::environment_for_vm(&store_for_shells, record.id)
             .map_err(|error| error.message.to_owned())?;
-        let has_storage_secrets = !storage_env.is_empty();
+        let queue_env = crate::queues::environment_for_vm(&store_for_shells, record.id)?;
+        let has_storage_secrets = !storage_env.is_empty() || !queue_env.is_empty();
         guest_env.extend(storage_env);
+        guest_env.extend(queue_env);
         rootfs::specialize_guest(&rootfs, record.id, &guest_env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
         if has_storage_secrets {
             rootfs::protect_vm_credentials(&rootfs)
-                .map_err(|_| "Could not protect the service's S3 credential file".to_owned())?;
+                .map_err(|_| "Could not protect the service credential file".to_owned())?;
+        }
+        if record.purpose == crate::model::VmPurpose::Queue {
+            crate::queues::prepare_engine_disk(&store_for_shells, record.id, &rootfs)?;
         }
         crate::guest_ssh::install_on_guest(&rootfs, &paths)
             .map_err(|error| format!("guest SSH install failed: {error}"))?;
@@ -1657,6 +1664,25 @@ fn network_timeout_result(console: &crate::console::ConsoleBroker) -> Result<(),
 /// line can straddle two separate console reads.
 fn find_network_sentinel(buffer: &[u8]) -> Option<Result<(), String>> {
     let text = String::from_utf8_lossy(buffer);
+    // Kernel printk can interrupt a userspace serial write in the middle of
+    // the token. Remove complete timestamped kernel messages before scanning.
+    let text: String = text
+        .split_inclusive('\n')
+        .map(|line| {
+            if line.ends_with('\n')
+                && let Some((prefix, kernel)) = line.split_once('[')
+                && let Some((timestamp, _)) = kernel.split_once(']')
+                && let Some((seconds, fraction)) = timestamp.trim().split_once('.')
+                && !seconds.is_empty()
+                && !fraction.is_empty()
+                && seconds.bytes().all(|b| b.is_ascii_digit())
+                && fraction.bytes().all(|b| b.is_ascii_digit())
+            {
+                return prefix;
+            }
+            line
+        })
+        .collect();
     for line in text.lines() {
         if line.contains("FIRECRAB_NETWORK_READY") {
             return Some(Ok(()));
@@ -2231,7 +2257,9 @@ fn sorted_responses(
         .filter(|vm| {
             matches!(
                 vm.purpose,
-                crate::model::VmPurpose::Instance | crate::model::VmPurpose::Pool
+                crate::model::VmPurpose::Instance
+                    | crate::model::VmPurpose::Pool
+                    | crate::model::VmPurpose::Queue
             )
         })
         .collect();
@@ -2271,6 +2299,7 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
             crate::model::VmPurpose::Instance => VmPurpose::Instance,
             crate::model::VmPurpose::Builder => VmPurpose::Builder,
             crate::model::VmPurpose::Pool => VmPurpose::Pool,
+            crate::model::VmPurpose::Queue => VmPurpose::Queue,
         },
         state: vm.state,
         reconciliation: state
@@ -5445,6 +5474,21 @@ while True:
         assert_matches!(find_network_sentinel(b"FIRECRAB_NETWORK_FAILED dns unreachable\n"),
             Some(Err(reason)) if reason.contains("dns unreachable"));
         assert_eq!(find_network_sentinel(b"just a normal boot line\n"), None);
+    }
+
+    #[test]
+    fn network_sentinel_survives_kernel_output_inside_the_token() {
+        let interrupted = b"FIRECRAB_NETWORK[    0.783028] busybox (61) used greatest stack depth: 12992 bytes left\r\n_READY 172.28.250.2\r\n";
+        assert_eq!(find_network_sentinel(interrupted), Some(Ok(())));
+        assert_matches!(
+            find_network_sentinel(b"FIRECRAB_NET[    1.000000] boot log\nWORK_FAILED dns-unreachable\n"),
+            Some(Err(reason)) if reason.contains("dns-unreachable")
+        );
+        assert_eq!(
+            find_network_sentinel(b"FIRECRAB_NETWORK[    0.783028] incomplete"),
+            None
+        );
+        assert_eq!(find_network_sentinel(b"FIRECRAB_NETWORK\n_READY"), None);
     }
 
     #[test]

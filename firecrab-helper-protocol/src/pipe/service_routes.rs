@@ -19,6 +19,19 @@ pub struct ServiceRouteOwner {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ServiceRouteRequest {
+    /// Replace a route only if its exact owner and upstreams still match.
+    Replace {
+        /// Owner observed before accepting the transition.
+        expected_owner: ServiceRouteOwner,
+        /// Exact upstream list observed before the transition.
+        expected_upstreams: Vec<SocketAddr>,
+        /// Owner of the new serving generation.
+        owner: ServiceRouteOwner,
+        /// Stable service hostname.
+        host: String,
+        /// Healthy targets for the new generation.
+        upstreams: Vec<SocketAddr>,
+    },
     /// Add an exclusive root route after every replica passed health checks.
     Publish {
         /// Exact owner; an existing route must have the same owner.
@@ -45,6 +58,12 @@ impl ServiceRouteRequest {
                 owner,
                 host,
                 upstreams,
+            }
+            | Self::Replace {
+                owner,
+                host,
+                upstreams,
+                ..
             } => {
                 if upstreams.len() > 100 {
                     return Err("a service route supports at most 100 replicas".into());
@@ -58,6 +77,20 @@ impl ServiceRouteRequest {
         {
             return Err("provide a service, deployment and valid domain".into());
         }
+        if let Self::Replace {
+            expected_owner,
+            expected_upstreams,
+            ..
+        } = self
+        {
+            if expected_owner.service_id != owner.service_id
+                || expected_owner.deployment_id.is_nil()
+            {
+                return Err("route transitions must retain the service owner".into());
+            }
+            validate_upstreams(expected_upstreams, None, host)
+                .map_err(|error| error.to_string())?;
+        }
         Ok(())
     }
 
@@ -66,6 +99,31 @@ impl ServiceRouteRequest {
         self.validate()?;
         let mut next = config.clone();
         match self {
+            Self::Replace {
+                expected_owner,
+                expected_upstreams,
+                owner,
+                host,
+                upstreams,
+            } => {
+                let route = next
+                    .routes
+                    .iter_mut()
+                    .find(|route| route.host == *host)
+                    .ok_or("service route is missing; inspect Deploy before retrying")?;
+                // A lost acknowledgement may be retried, but an older transition
+                // must never restore an earlier upstream list within the same deploy.
+                if route.owner.as_ref() == Some(owner) && route.upstreams == *upstreams {
+                    return Ok(next);
+                }
+                if route.owner.as_ref() != Some(expected_owner)
+                    || route.upstreams != *expected_upstreams
+                {
+                    return Err("service route changed since Deploy accepted the transition".into());
+                }
+                route.owner = Some(owner.clone());
+                route.upstreams = upstreams.clone();
+            }
             Self::Publish {
                 owner,
                 host,
@@ -194,6 +252,54 @@ mod tests {
         assert_eq!(remove(stale).updated_config(&next).unwrap(), next);
         assert_eq!(remove(owner()).updated_config(&next).unwrap(), saved);
         assert_eq!(remove(owner()).updated_config(&saved).unwrap(), saved);
+    }
+    #[test]
+    fn replacement_is_idempotent_but_rejects_stale_same_deployment_transitions() {
+        let saved = publish().updated_config(&config()).unwrap();
+        let mut next_owner = owner();
+        next_owner.deployment_id = Uuid::from_u128(3);
+        let replace = ServiceRouteRequest::Replace {
+            expected_owner: owner(),
+            expected_upstreams: saved.routes[1].upstreams.clone(),
+            owner: next_owner.clone(),
+            host: "web.example.com".into(),
+            upstreams: vec!["172.30.0.4:8080".parse().unwrap()],
+        };
+        let next = replace.updated_config(&saved).unwrap();
+        assert_eq!(replace.updated_config(&next).unwrap(), next);
+        assert_eq!(next.routes[0], saved.routes[0]);
+        let second = ServiceRouteRequest::Replace {
+            expected_owner: next_owner.clone(),
+            expected_upstreams: next.routes[1].upstreams.clone(),
+            owner: next_owner,
+            host: "web.example.com".into(),
+            upstreams: vec!["172.30.0.5:8080".parse().unwrap()],
+        };
+        let latest = second.updated_config(&next).unwrap();
+        assert!(replace.updated_config(&latest).is_err());
+        let stale_remove = ServiceRouteRequest::Remove {
+            owner: owner(),
+            host: "web.example.com".into(),
+        };
+        assert_eq!(stale_remove.updated_config(&latest).unwrap(), latest);
+    }
+
+    #[test]
+    fn replacement_cannot_take_another_services_or_a_manual_route() {
+        let saved = publish().updated_config(&config()).unwrap();
+        let mut foreign = owner();
+        foreign.service_id = Uuid::from_u128(99);
+        let replace = ServiceRouteRequest::Replace {
+            expected_owner: owner(),
+            expected_upstreams: saved.routes[1].upstreams.clone(),
+            owner: foreign,
+            host: "web.example.com".into(),
+            upstreams: vec!["172.30.0.4:8080".parse().unwrap()],
+        };
+        assert!(replace.updated_config(&saved).is_err());
+        let mut manual = saved;
+        manual.routes[1].owner = None;
+        assert!(replace.updated_config(&manual).is_err());
     }
     #[test]
     fn conflicts_and_stale_manual_applies_do_not_overwrite_service_domains() {

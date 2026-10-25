@@ -1,5 +1,6 @@
 mod advanced;
 mod api;
+mod deploy;
 mod details;
 mod forms;
 mod i18n;
@@ -56,6 +57,7 @@ struct App {
     detail_generation: u64,
     detail_polling: Option<u64>,
     service_deployment: Option<Value>,
+    deploy: deploy::State,
     job: Option<(String, Value)>,
     workflows: workflows::State,
     advanced: advanced::State,
@@ -183,7 +185,7 @@ fn render_detail(app: &Shared) {
         let open =
             (state.route != "security-groups" || state.detail.is_some() || state.form.is_some())
                 && state.panel_open
-                && state.route != "vms/new"
+                && !["vms/new", "queues"].contains(&state.route.as_str())
                 && (!narrow || state.detail.is_some() || state.form.is_some());
         let html = if open {
             details::panel(&state)
@@ -486,7 +488,7 @@ fn load_route(app: Shared) {
         advanced::security::load(&app);
     }
     if route == "services" {
-        aux.extend(["/api/pipe", "/api/pipe/storage"]);
+        aux.extend(["/api/pipe", "/api/pipe/storage", "/api/queues"]);
     }
     if route != "vms" {
         aux.push("/api/vms");
@@ -539,6 +541,10 @@ fn load_route(app: Shared) {
     }
 }
 fn refresh(app: Shared) {
+    if app.borrow().route == "queues" {
+        advanced::queues::refresh(app);
+        return;
+    }
     let mut state = app.borrow_mut();
     if state.refreshing || state.route == "vms/new" {
         return;
@@ -728,6 +734,7 @@ fn navigate(app: &Shared) {
         .unwrap_or(state.history_index + 1);
     save_history_index(state.history_index, None);
     state.advanced.reveals.clear();
+    state.advanced.queues = advanced::queues::State::default();
     state.advanced.ai = advanced::ai::State::default();
     state.advanced.storage = advanced::storage::State::default();
     state.route = next;
@@ -839,7 +846,7 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         if !target.is_connected() || language.borrow().rendering {
             return;
         }
-        if advanced::change(&language, &target) {
+        if deploy::change(&language, &target) || advanced::change(&language, &target) {
             return;
         }
         if terminal::change(&language, &target) {
@@ -889,6 +896,10 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         else {
             return;
         };
+        if advanced::queues::submit(&submitted, &form) {
+            event.prevent_default();
+            return;
+        }
         if form.id() == "ai-editor" {
             event.prevent_default();
             advanced::ai::submit(&submitted);
@@ -1026,6 +1037,9 @@ fn open_palette(app: &Shared) {
     }
 }
 fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
+    if deploy::dispatch(&app, action) {
+        return;
+    }
     if action != "vm-menu" {
         set_html("menu-root", "");
     }
@@ -1092,7 +1106,10 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
                 .max(8.0)
             );
             menu.push_str(&render::button("SSH connect", "ssh", id));
-            if vm.extra.get("purpose").and_then(Value::as_str) != Some("pool") {
+            if !matches!(
+                vm.extra.get("purpose").and_then(Value::as_str),
+                Some("pool" | "queue")
+            ) {
                 menu.push_str(&render::button(
                     if vm.state == "running" {
                         "stop"
@@ -1151,7 +1168,11 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
         }
         "vm-start" | "vm-stop" | "vm-pause" | "vm-resume" => {
             if app.borrow().vms.iter().any(|vm| {
-                vm.id == id && vm.extra.get("purpose").and_then(Value::as_str) == Some("pool")
+                vm.id == id
+                    && matches!(
+                        vm.extra.get("purpose").and_then(Value::as_str),
+                        Some("pool" | "queue")
+                    )
             }) {
                 return;
             }
@@ -1288,7 +1309,7 @@ fn open_form(app: Shared, kind: &str, id: &str) {
     } else {
         id.into()
     };
-    if kind.starts_with("vm-") && text(&data, "purpose") == "pool" {
+    if kind.starts_with("vm-") && ["pool", "queue"].contains(&text(&data, "purpose")) {
         return;
     }
     if kind == "secret-connection" {
@@ -1373,6 +1394,13 @@ fn save_form(app: Shared, form_element: HtmlFormElement) {
             return;
         }
     };
+    if form.title == "Deploy update"
+        && let Err(error) = deploy::prepare_update(&app, &mut payload)
+    {
+        app.borrow_mut().error = error;
+        render_messages(&app);
+        return;
+    }
     let path = if form.title == "Connect registry" {
         if let Some(object) = payload.as_object_mut() {
             object.remove("registry");
@@ -1466,7 +1494,8 @@ fn mutate(
                 if path == "/api/micro-services"
                     || (submits_form
                         && path.starts_with("/api/micro-services/")
-                        && !path.ends_with("/deployment"))
+                        && !path.ends_with("/deployment")
+                        && !path.ends_with("/updates"))
                 {
                     state.detail = Some(value.clone());
                     let mut rows = model::list(&state.resource).to_vec();
@@ -1517,7 +1546,12 @@ fn mutate(
                         {
                             base.extend(updated.clone());
                         }
-                    } else if path.ends_with("/deployment") || path.ends_with("/stop") {
+                    } else if path.ends_with("/deployment")
+                        || path.ends_with("/stop")
+                        || path.ends_with("/updates")
+                        || path.ends_with("/rollback")
+                        || path.ends_with("/deployment/retry")
+                    {
                         state.service_deployment = Some(value.clone());
                         state.detail_result.clear();
                     } else if text(&value, "id") == id
@@ -1583,6 +1617,12 @@ fn mutate(
                 state.error = if path.ends_with("/rules") && error.message.starts_with("HTTP 409:")
                 {
                     "Stop affected VMs and service deployments before changing rules.".into()
+                } else if path.starts_with("/api/micro-services/")
+                    && (path.ends_with("/updates")
+                        || path.ends_with("/rollback")
+                        || path.ends_with("/deployment/retry"))
+                {
+                    deploy::failure(error.message)
                 } else {
                     error.message
                 };
