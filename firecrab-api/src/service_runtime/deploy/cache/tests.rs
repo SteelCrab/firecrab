@@ -88,6 +88,30 @@ async fn one_shared_image_survives_until_both_services_release_it() {
 }
 
 #[tokio::test]
+async fn pinned_configuration_is_retained_but_clean_failed_attempts_do_not_pin_garbage() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let mut record = release(Uuid::new_v4(), 7);
+    let spec = owned_image(&state, &record, true);
+    record.phase = ServicePhase::Failed;
+    state.store.save_service_deployment(&record).unwrap();
+    let mut config = record.spec.clone();
+    config.image = pinned_reference(&record).unwrap();
+    state
+        .store
+        .insert_micro_service(&MicroServiceResponse {
+            id: record.service_id,
+            spec: config,
+        })
+        .unwrap();
+    assert_eq!(collect(&state).await.unwrap(), 0);
+    state.store.delete_micro_service(record.service_id).unwrap();
+    state.store.save_service_deployment(&record).unwrap();
+    assert_eq!(collect(&state).await.unwrap(), 1);
+    assert!(!root.path().join(spec.rootfs).exists());
+}
+
+#[tokio::test]
 async fn durable_vm_and_pool_users_and_inflight_template_readers_block_collection() {
     let root = tempfile::tempdir().unwrap();
     let state = state(root.path()).await;

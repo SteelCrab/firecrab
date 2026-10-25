@@ -931,6 +931,20 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn cache_cleanup_preserves_an_import_that_is_still_running() {
+        let tracker = ImageInstallTracker::default();
+        tracker.begin("shared-image").unwrap();
+        tracker.clear_finished("shared-image");
+        assert!(tracker.is_running("shared-image"));
+        tracker.finish_ok("shared-image");
+        tracker.clear_finished("shared-image");
+        assert_eq!(
+            tracker.snapshot("shared-image").status,
+            ImageInstallStatus::Idle
+        );
+    }
+
+    #[test]
     fn tracker_begin_running_and_clear() {
         let tracker = ImageInstallTracker::with_base_url("http://example.test");
         assert!(tracker.base_url().is_some());

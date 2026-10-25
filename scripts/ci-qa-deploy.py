@@ -149,7 +149,7 @@ class Api:
 
 
 def traffic(host, port, domain, path="/"):
-    with contextlib.closing(http.client.HTTPConnection(host, port, timeout=120)) as connection:
+    with contextlib.closing(http.client.HTTPConnection(host, port, timeout=120 if path == "/cgi-bin/hold" else 5)) as connection:
         connection.request("GET", path, headers={"Host": domain})
         response = connection.getresponse()
         return response.status, response.read().decode().strip()
