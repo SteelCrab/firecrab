@@ -34,7 +34,10 @@ jobs:
       - name: cargo test --release
         # Catches release-only bugs (overflow checks off, different codegen)
         # before they reach a tagged build.
-        run: cargo test --workspace --release --locked
+        run: |
+          cargo test --workspace --exclude firecrab-helper --release --locked
+          # Match CI's isolation for helper fork/exec and TCP port-release tests.
+          cargo test -p firecrab-helper --release --locked -- --test-threads=1
 
       - name: CLI installer contract
         run: bash scripts/test-install-cli-release.sh
