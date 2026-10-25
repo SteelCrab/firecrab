@@ -6,12 +6,9 @@ fn connection(base: &str) -> Connection {
         summary: ConnectionSummary {
             id: uuid::Uuid::new_v4(),
             name: "test".into(),
-            provider: Provider::Infisical,
+            provider: Provider::Firecrab,
             settings: Settings {
                 base_url: base.into(),
-                project_id: "project".into(),
-                environment: "prod".into(),
-                secret_path: "/".into(),
                 ..Default::default()
             },
             version: 1,
@@ -43,123 +40,10 @@ fn provider_urls_require_tls_except_for_loopback_and_refuse_embedded_credentials
 }
 
 #[tokio::test]
-async fn infisical_reads_values_checks_scope_and_refuses_hidden_values() {
-    use axum::{Json, Router, extract::Query, http::HeaderMap, routing::get};
-    let server = Router::new().route("/api/v4/secrets", get(|headers: HeaderMap, Query(query): Query<BTreeMap<String, String>>| async move {
-        assert_eq!(headers["authorization"], "Bearer fixture-token");
-        assert_eq!(query["projectId"], "project");
-        assert_eq!(query["environment"], "prod");
-        assert_eq!(query["expandSecretReferences"], "false");
-        Json(json!({"secrets":[{"secretKey":"PASSWORD","secretValue":"remote-value","secretValueHidden":false}]}))
-    }));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let task = tokio::spawn(async move {
-        axum::serve(listener, server).await.unwrap();
-    });
-    let values = list(&connection(&format!("http://{address}")))
-        .await
-        .unwrap();
-    assert_eq!(values["PASSWORD"], "remote-value");
-    task.abort();
-
-    let server = Router::new().route("/api/v4/secrets", get(|| async { Json(json!({"secrets":[{"secretKey":"PASSWORD","secretValue":"","secretValueHidden":true}]})) }));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let task = tokio::spawn(async move {
-        axum::serve(listener, server).await.unwrap();
-    });
-    assert!(matches!(
-        list(&connection(&format!("http://{address}"))).await,
-        Err(SecretError::Invalid(_))
-    ));
-    task.abort();
-}
-
-#[tokio::test]
-async fn infisical_creates_and_updates_scoped_multiline_values_with_encoded_names() {
-    use axum::{
-        Json, Router,
-        extract::Path,
-        http::{HeaderMap, Method},
-        routing::post,
-    };
-    let (sent, mut received) = tokio::sync::mpsc::unbounded_channel();
-    let receive = move |method: Method,
-                        Path(name): Path<String>,
-                        headers: HeaderMap,
-                        Json(body): Json<Value>| {
-        let sent = sent.clone();
-        async move {
-            sent.send((method, name, headers, body)).unwrap();
-            Json(json!({}))
-        }
-    };
-    let server = Router::new().route(
-        "/api/v4/secrets/{name}",
-        post(receive.clone()).patch(receive),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let task = tokio::spawn(async move {
-        axum::serve(listener, server).await.unwrap();
-    });
-    let mut connection = connection(&format!("http://{address}"));
-    connection.summary.settings.secret_path = "/services/api".into();
-    let value = "first line\n${REFERENCE}\nlast line";
-    for (previous, expected_method) in [(None, Method::POST), (Some("old"), Method::PATCH)] {
-        upload(&connection, "prod/db", value, previous)
-            .await
-            .unwrap();
-        let (method, name, headers, body) = received.try_recv().unwrap();
-        assert_eq!(method, expected_method);
-        assert_eq!(name, "prod/db");
-        assert_eq!(headers["authorization"], "Bearer fixture-token");
-        assert_eq!(headers["content-type"], "application/json");
-        assert_eq!(
-            body,
-            json!({
-                "projectId": "project",
-                "environment": "prod",
-                "secretPath": "/services/api",
-                "secretValue": value,
-                "type": "shared",
-                "skipMultilineEncoding": true,
-            })
-        );
-    }
-    task.abort();
-}
-
-#[tokio::test]
-async fn infisical_rejects_duplicate_names_instead_of_silently_overwriting_values() {
-    use axum::{Json, Router, routing::get};
-    let server = Router::new().route(
-        "/api/v4/secrets",
-        get(|| async {
-            Json(json!({"secrets": [
-                {"secretKey": "KEY", "secretValue": "first"},
-                {"secretKey": "KEY", "secretValue": "second"},
-            ]}))
-        }),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let task = tokio::spawn(async move {
-        axum::serve(listener, server).await.unwrap();
-    });
-    assert!(matches!(
-        list(&connection(&format!("http://{address}"))).await,
-        Err(SecretError::Provider)
-    ));
-    task.abort();
-}
-
-#[tokio::test]
 async fn redirects_and_provider_errors_do_not_leak_tokens_or_follow_redirects() {
     use axum::{Router, response::Redirect, routing::get};
     let server = Router::new().route(
-        "/api/v4/secrets",
+        "/api/secrets",
         get(|| async { Redirect::temporary("http://127.0.0.1:1/private-provider-token") }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

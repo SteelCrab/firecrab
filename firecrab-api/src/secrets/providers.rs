@@ -27,18 +27,6 @@ pub(crate) fn validate(connection: &Connection) -> Result<(), SecretError> {
             base_url(&settings.base_url)?;
             &[]
         }
-        Provider::Infisical => {
-            base_url(&settings.base_url)?;
-            if settings.project_id.is_empty()
-                || settings.environment.is_empty()
-                || !settings.secret_path.starts_with('/')
-            {
-                return Err(SecretError::Invalid(
-                    "Infisical needs a project ID, environment and absolute secret path",
-                ));
-            }
-            &["token"]
-        }
         Provider::AwsSecretsManager => {
             // AWS treats a leading `!` as negation; prefixes must stay literal.
             if !settings.prefix.is_empty() {
@@ -73,15 +61,9 @@ pub(crate) fn validate(connection: &Connection) -> Result<(), SecretError> {
     {
         return Err(SecretError::Invalid("connection credentials are invalid"));
     }
-    if [
-        &settings.base_url,
-        &settings.project_id,
-        &settings.environment,
-        &settings.secret_path,
-        &settings.prefix,
-    ]
-    .iter()
-    .any(|value| value.len() > 2048)
+    if [&settings.base_url, &settings.prefix]
+        .iter()
+        .any(|value| value.len() > 2048)
     {
         return Err(SecretError::Invalid("connection settings are too long"));
     }
@@ -131,7 +113,7 @@ fn endpoint(connection: &Connection, path: &str) -> Result<Url, SecretError> {
         .map_err(|_| SecretError::Provider)
 }
 
-/// Adds a saved bearer token for Infisical or an authenticating Firecrab proxy.
+/// Adds a saved bearer token for an authenticating Firecrab proxy.
 fn authorized(connection: &Connection, request: RequestBuilder) -> RequestBuilder {
     match connection
         .credentials
@@ -178,7 +160,6 @@ pub(crate) async fn list(connection: &Connection) -> Result<BTreeMap<String, Str
     validate(connection)?;
     let client = client()?;
     let values = match connection.summary.provider {
-        Provider::Infisical => list_infisical(&client, connection).await?,
         Provider::Firecrab => list_firecrab(&client, connection).await?,
         Provider::AwsSecretsManager => list_aws(&client, connection).await?,
     };
@@ -190,43 +171,6 @@ pub(crate) async fn list(connection: &Connection) -> Result<BTreeMap<String, Str
     for (name, value) in &values {
         validate_name(name)?;
         validate_value(value)?;
-    }
-    Ok(values)
-}
-
-/// Reads one Infisical scope with raw references and rejects hidden or duplicate values.
-async fn list_infisical(
-    client: &Client,
-    connection: &Connection,
-) -> Result<BTreeMap<String, String>, SecretError> {
-    let settings = &connection.summary.settings;
-    let url = endpoint(connection, "api/v4/secrets")?;
-    let result = response_json(authorized(
-        connection,
-        client.get(url).query(&[
-            ("projectId", settings.project_id.as_str()),
-            ("environment", settings.environment.as_str()),
-            ("secretPath", settings.secret_path.as_str()),
-            ("recursive", "false"),
-            ("viewSecretValue", "true"),
-            ("expandSecretReferences", "false"),
-        ]),
-    ))
-    .await?;
-    let items = result["secrets"].as_array().ok_or(SecretError::Provider)?;
-    let mut values = BTreeMap::new();
-    for item in items {
-        // Hidden values are not empty values. Refuse a snapshot we cannot compare safely.
-        if item["secretValueHidden"].as_bool() == Some(true) {
-            return Err(SecretError::Invalid(
-                "Infisical permission to read secret values is required",
-            ));
-        }
-        let name = item["secretKey"].as_str().ok_or(SecretError::Provider)?;
-        let value = item["secretValue"].as_str().ok_or(SecretError::Provider)?;
-        if values.insert(name.to_owned(), value.to_owned()).is_some() {
-            return Err(SecretError::Provider);
-        }
     }
     Ok(values)
 }
@@ -361,22 +305,6 @@ pub(crate) async fn upload(
     let client = client()?;
     let exists = previous.is_some();
     match connection.summary.provider {
-        Provider::Infisical => {
-            let mut url = endpoint(connection, "api/v4/secrets/")?;
-            url.path_segments_mut()
-                .map_err(|_| SecretError::Provider)?
-                .pop_if_empty()
-                .push(name);
-            let method = if exists { Method::PATCH } else { Method::POST };
-            let settings = &connection.summary.settings;
-            let body = json!({"projectId":settings.project_id,"environment":settings.environment,
-                "secretPath":settings.secret_path,"secretValue":value,"type":"shared","skipMultilineEncoding":true});
-            response_json(json_body(
-                authorized(connection, client.request(method, url)),
-                &body,
-            ))
-            .await?;
-        }
         Provider::Firecrab => {
             let summaries = firecrab_summaries(&client, connection).await?;
             let existing = summaries

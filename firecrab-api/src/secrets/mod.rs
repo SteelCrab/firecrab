@@ -1,6 +1,6 @@
 //! PipeSecrets stores values and provider credentials in one encrypted host-local vault.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -62,28 +62,27 @@ impl From<std::io::Error> for SecretError {
 pub(crate) enum Provider {
     /// Another Firecrab API exposing the PipeSecrets endpoints.
     Firecrab,
-    /// An Infisical v4 API with a project, environment, and folder scope.
-    Infisical,
     /// Regional AWS Secrets Manager using signed JSON requests.
     AwsSecretsManager,
+}
+
+impl Provider {
+    /// Returns the identifier retained in import history after an adapter is removed.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Firecrab => "firecrab",
+            Self::AwsSecretsManager => "awsSecretsManager",
+        }
+    }
 }
 
 /// Non-credential connection settings returned to the web console.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Settings {
-    /// Infisical or Firecrab API base URL; unused by the AWS adapter.
+    /// Firecrab API base URL; unused by the AWS adapter.
     #[serde(default)]
     pub base_url: String,
-    /// Infisical project identifier.
-    #[serde(default)]
-    pub project_id: String,
-    /// Infisical environment slug, such as staging or prod.
-    #[serde(default)]
-    pub environment: String,
-    /// Absolute Infisical folder path, such as `/services/api`.
-    #[serde(default)]
-    pub secret_path: String,
     /// AWS region used for the service endpoint and request signature.
     #[serde(default)]
     pub region: String,
@@ -147,8 +146,8 @@ pub(crate) struct SecretSource {
     pub connection_id: Uuid,
     /// Connection name captured at import time.
     pub connection_name: String,
-    /// External store adapter used for the import.
-    pub provider: Provider,
+    /// Historical provider identifier, including adapters that are no longer supported.
+    pub provider: String,
     /// Secret name in the external store.
     pub remote_key: String,
     /// Successful import time in Unix milliseconds.
@@ -384,8 +383,49 @@ impl Vault {
                 &mut bytes[MAGIC.len() + 12..],
             )
             .map_err(|_| SecretError::Encryption)?;
-        serde_json::from_slice(plain).map_err(|_| SecretError::Storage)
+        decode_contents(plain)
     }
+}
+
+/// Removes retired connections while preserving imported copies and their provenance.
+fn decode_contents(plain: &[u8]) -> Result<Contents, SecretError> {
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(plain).map_err(|_| SecretError::Storage)?;
+    let connections = stored
+        .get_mut("connections")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or(SecretError::Storage)?;
+    let mut retired = BTreeSet::new();
+    for connection in connections.iter() {
+        if connection["summary"]["provider"] == "infisical" {
+            let id = connection["summary"]["id"]
+                .as_str()
+                .ok_or(SecretError::Storage)?;
+            retired.insert(Uuid::parse_str(id).map_err(|_| SecretError::Storage)?);
+        }
+    }
+    connections.retain_mut(|connection| {
+        if connection["summary"]["provider"] == "infisical" {
+            return false;
+        }
+        // Older clients saved these unused settings on every provider.
+        if let Some(settings) = connection
+            .get_mut("summary")
+            .and_then(|summary| summary.get_mut("settings"))
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for field in ["projectId", "environment", "secretPath"] {
+                settings.remove(field);
+            }
+        }
+        true
+    });
+    let mut contents: Contents =
+        serde_json::from_value(stored).map_err(|_| SecretError::Storage)?;
+    contents
+        .plans
+        .retain(|plan| !retired.contains(&plan.connection_id));
+    Ok(contents)
 }
 
 /// Opens owner-only read/write files without following a final symlink.

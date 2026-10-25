@@ -198,6 +198,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Changed
 
+- Remove the Infisical connector, its dashboard fields, and its account QA requirement (#411).
+  Existing imported values and source history remain available. Older vaults discard
+  retired connections and pending previews on their next successful write.
+
 - The dashboard's Pipe page lists its services as five cards: Route, Pipe
   Registry, Firecrab Tunnel, Cloudflare Quick Tunnel, and Cloudflare Named
   Tunnel. Each card shows the service state and opens that service's page

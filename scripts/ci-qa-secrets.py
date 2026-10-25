@@ -130,7 +130,6 @@ def main():
                     stage.update(status="FAILED", reason=f"Invalid browser report: {error}")
     for number in range(1, 15):
         cases.setdefault(f"SEC{number}", {"status": "WARNING", "reason": "Browser case did not produce a result"})
-    cases["SEC15"] = {"status": "WARNING", "reason": "Real Infisical account QA is manual; local protocol fixtures ran separately"}
     cases["SEC16"] = {"status": "WARNING", "reason": "Real AWS account QA is manual; SigV4/provider contract tests ran separately"}
     report["cases"] = cases
     failed = any(item["status"] == "FAILED" for item in report["stages"]) or any(item["status"] != "PASS" for key, item in cases.items() if int(key[3:]) <= 14)
@@ -138,7 +137,7 @@ def main():
     (results / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
     lines = ["# PipeSecrets QA", "", f"Revision: `{report['revision']}`; dirty: `{report['dirty']}`.", "", "| Case | Result |", "| --- | --- |"]
     lines += [f"| {case} | {result['status']} |" for case, result in sorted(cases.items(), key=lambda item: int(item[0][3:]))]
-    lines += ["", "SEC15 and SEC16 require separate, scoped external-account QA.", "", f"Exit code: {int(failed)}. Details: summary.json.", ""]
+    lines += ["", "SEC16 requires separate, scoped AWS account QA.", "", f"Exit code: {int(failed)}. Details: summary.json.", ""]
     (results / "summary.md").write_text("\n".join(lines))
     print(f"Report: {results / 'summary.json'}", flush=True)
     return int(failed)

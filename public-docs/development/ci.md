@@ -49,7 +49,7 @@ The `e2e-dashboard` job also runs `python3 scripts/ci-qa-secrets.py`.
 Secrets uses disposable loopback API processes and local provider fixtures; it does not reuse the installed API.
 Reports include SEC1–SEC14, command logs, JSON/JUnit results, and failure traces.
 They are retained as `e2e-dashboard-results` for 14 days, even on failure.
-Real Infisical/AWS account checks remain manual SEC15/SEC16 warnings.
+Real AWS account checks remain manual SEC16 warnings.
 See [Secrets QA](qa.md#pipesecrets-qa) for commands and evidence limits.
 
 ## Local checks

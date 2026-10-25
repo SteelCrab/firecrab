@@ -302,7 +302,7 @@ python3 scripts/ci-qa-secrets.py
 
 The live suite runs on native Linux or managed Debian on macOS/Windows.
 It starts a built API in a new temporary working directory for every case.
-Firecrab transfers use a second actual API process; Infisical uses a local HTTP protocol fixture.
+Firecrab transfers use a second actual API process; proxy authentication uses a local HTTP fixture.
 The built dashboard is served by the actual API. Vite and a running installed API are not used.
 Listeners bind only to ephemeral loopback ports. Each API gets its own SQLite database,
 vault, image directory, home, and unused helper socket. Installed Firecrab settings and
@@ -311,9 +311,9 @@ in fixture teardown, including failed assertions. KVM, guests, and network helpe
 
 The six live cases cover CRUD and restart persistence, encrypted files and permissions,
 captured imports, retained local copies, selected uploads, remote and local version conflicts,
-single-use previews, Infisical credential retention and error masking, and refusal to reset
+single-use previews, Firecrab proxy credential retention and error masking, and refusal to reset
 a vault when its key is missing or its ciphertext is damaged.
-The UI suite additionally covers partial failures, all three provider forms, unsaved forms,
+The UI suite additionally covers partial failures, both provider forms, unsaved forms,
 Korean/mobile layouts, the 30-second reveal limit, and preview expiry using a controlled browser clock.
 
 | Variable | Default | Role |
@@ -331,8 +331,8 @@ build blocks live checks against old binaries. The runner contracts are checked 
 `python3 scripts/test-ci-qa-secrets.py`.
 
 CI runs the complete QA command in `e2e-dashboard` and retains reports for 14 days.
-Actual Infisical and AWS account checks are separate manual SEC15/SEC16 cases.
-They remain `WARNING` in the automated report; local fixtures and signing tests do not establish
+Actual AWS account checks are a separate manual SEC16 case.
+It remains `WARNING` in the automated report; local fixtures and signing tests do not establish
 real account permissions or service compatibility. Follow the [QA procedure](../public-docs/development/qa.md#pipesecrets-qa).
 
 ## Fixture
