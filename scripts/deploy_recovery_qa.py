@@ -16,7 +16,8 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
     held_ip = None
     stop = threading.Event()
     errors = []
-    metrics = {"requests": {}, "httpFailures": [], "stages": []}
+    metrics = {"requests": {}, "httpFailures": [], "stages": [], "requestIntervalSeconds": .1,
+               "httpTimeoutSeconds": 5}
     evidence["replicaRecovery"] = metrics
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     loaders = []
@@ -57,9 +58,11 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
                     raise AssertionError(repr(response))
             except Exception as error:
                 if len(metrics["httpFailures"]) < 10:
-                    metrics["httpFailures"].append({"domain": domain, "error": str(error)})
+                    metrics["httpFailures"].append({"domain": domain, "channel": key,
+                        "stage": metrics.get("currentStage"), "elapsedSeconds": round(time.monotonic() - started, 2),
+                        "error": str(error)})
             metrics["requests"][key] += 1
-            stop.wait(.03)
+            stop.wait(metrics["requestIntervalSeconds"])
 
     def ids(record):
         return {instance["vmId"] for instance in record["instances"]}
@@ -80,11 +83,13 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
         original = main["initial"]
         unrelated_ids = ids(unrelated["initial"])
         victim = original["instances"][0]["vmId"]
+        metrics["currentStage"] = "restart after VM exit"
         api.call("POST", "/api/vms/" + victim + "/stop")
         wait_for(lambda: (record if (record := ready(main)) and ids(record) == ids(original)
                          and api.call("GET", "/api/vms/" + victim)["state"] == "running" else None), timeout=180)
         metrics["stages"].append("exited VM restarted; healthy replicas, release, image and captured Secret retained")
 
+        metrics["currentStage"] = "replacement and durable drain"
         held = executor.submit(traffic, "127.0.0.1", port, main["spec"]["domain"], "/cgi-bin/hold")
 
         def holding():
@@ -130,6 +135,7 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
         assert "qa-secret-v0" not in json.dumps(repaired)
         metrics["stages"].append("unhealthy VM replaced after restart failed; held request and repair journal survived API restart")
 
+        metrics["currentStage"] = "all-unready internal-only service"
         single = create(1, private=True)
         only = single["initial"]["instances"][0]
         traffic(only["ipv4"], 8080, "fixture", "/cgi-bin/fail-health")
@@ -137,6 +143,7 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
         wait_for(lambda: (record if (record := ready(single)) and ids(record) != ids(single["initial"]) else None), timeout=180)
         metrics["stages"].append("all-unready service kept its hostname with HTTP 503 and recovered to a ready replacement")
         stop_service(single)
+        metrics["currentStage"] = "Stop retention"
         time.sleep(16)
         assert current(single)["phase"] == "stopped" and not current(single)["instances"]
         assert ids(current(unrelated)) == unrelated_ids

@@ -179,17 +179,18 @@ async fn private_only_and_shared_names_switch_together_and_keep_internal_dns() {
                 .all(|route| route.upstreams == next)
         );
         before_cleanup(&state, &record).await.unwrap();
-        let mut config = helper.config.lock().unwrap();
-        config
-            .routes
-            .iter_mut()
-            .find(|route| route.network.is_some())
-            .unwrap()
-            .owner
-            .as_mut()
-            .unwrap()
-            .service_id = Uuid::new_v4();
-        drop(config);
+        {
+            let mut config = helper.config.lock().unwrap();
+            config
+                .routes
+                .iter_mut()
+                .find(|route| route.network.is_some())
+                .unwrap()
+                .owner
+                .as_mut()
+                .unwrap()
+                .service_id = Uuid::new_v4();
+        }
         assert!(before_cleanup(&state, &record).await.is_err());
     }
 }
