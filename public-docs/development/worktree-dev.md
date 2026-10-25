@@ -151,6 +151,9 @@ MicroVMs and application data remain in the instance's named volume across devel
 ## First run and verification
 
 The first run can download a Debian runtime, a Firecrab release, compiler tools, and locked dependencies.
+Docker bootstrap verifies the published release installer against `SHA256SUMS` before executing it.
+That installer's baked release tag selects its matching Debian GNU bundle.
+This keeps the release baseline usable when the source checkout requires newer bundle contents.
 It then builds the source snapshot and dashboard.
 Allow disk space for the OS or Docker image, application data, and compiler caches.
 Concurrent management VMs also require separate CPU and RAM allocations.

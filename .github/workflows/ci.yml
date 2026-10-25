@@ -134,6 +134,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Private release bootstrap contracts
+        run: python3 scripts/test-dev-container-bootstrap.py
+
       - name: Cache cargo
         uses: actions/cache@v6
         with:
