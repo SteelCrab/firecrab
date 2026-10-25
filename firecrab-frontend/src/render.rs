@@ -14,6 +14,56 @@ pub fn button(label: &str, action: &str, id: &str) -> String {
         escape(crate::i18n::t(label))
     )
 }
+
+pub enum Icon {
+    Add,
+    Refresh,
+    Reveal,
+    Hide,
+    Edit,
+    Delete,
+    Close,
+}
+
+impl Icon {
+    fn svg(&self) -> String {
+        let path = match self {
+            Self::Add => "M12 5v14M5 12h14",
+            Self::Refresh => "M20 7v5h-5M4 17v-5h5m-5 0a8 8 0 0 1 14-6l2 2M4 16l2 2a8 8 0 0 0 14-6",
+            Self::Reveal => {
+                "M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12Zm13 0a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
+            }
+            Self::Hide => {
+                "m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.2A12 12 0 0 1 12 5c7 0 10 7 10 7a18 18 0 0 1-3.1 4.1M6.2 6.2A18 18 0 0 0 2 12s3 7 10 7a12 12 0 0 0 5.8-1.8"
+            }
+            Self::Edit => "m16 3 5 5M4 20l4-1 13-13a2.8 2.8 0 0 0-4-4L4 15l-1 6Z",
+            Self::Delete => "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7",
+            Self::Close => "m6 6 12 12M18 6 6 18",
+        };
+        format!(
+            "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"{path}\"/></svg>"
+        )
+    }
+}
+
+pub fn icon_button(label: &str, action: &str, id: &str, icon: Icon) -> String {
+    let label = escape(crate::i18n::t(label));
+    format!(
+        "<button type=\"button\" class=\"icon-btn\" aria-label=\"{label}\" title=\"{label}\" data-action=\"{}\" data-id=\"{}\">{}</button>",
+        escape(action),
+        escape(id),
+        icon.svg()
+    )
+}
+
+pub fn icon_request(label: &str, path: &str) -> String {
+    let label = escape(crate::i18n::t(label));
+    format!(
+        "<button type=\"button\" class=\"icon-btn danger\" aria-label=\"{label}\" title=\"{label}\" data-action=\"request\" data-method=\"DELETE\" data-path=\"{}\" data-body=\"null\">{}</button>",
+        escape(path),
+        Icon::Delete.svg()
+    )
+}
 fn vm_icon_button(label: &str, action: &str, id: &str) -> String {
     let path = match action {
         "vm-start" => "M6 3l14 9-14 9z",
@@ -132,20 +182,32 @@ pub fn page(app: &App) -> String {
         "pools" => button("New pool", "create", "pools"),
         "schedules" => button("New schedule", "create", "schedules"),
         "security-groups" => button("New security group", "create", "security-groups"),
-        "secrets" => button("New secret", "create", "secrets"),
+        "secrets" => icon_button("New secret", "create", "secrets", Icon::Add),
         "volumes" => button("Create volume", "create", "volumes"),
         _ => String::new(),
     };
     let panel = crate::details::panel(app);
     let panel_width = app.panel_width;
-    let panel_hidden =
-        if app.panel_open && !["vms/new", "queues", "ai-sandbox"].contains(&app.route.as_str()) {
-            ""
-        } else {
-            "hidden"
-        };
-    let panel_toggle = if section == "ai-sandbox" {
+    let panel_hidden = if app.panel_open
+        && !["vms/new", "queues", "cluster", "ai-sandbox"].contains(&app.route.as_str())
+    {
+        ""
+    } else {
+        "hidden"
+    };
+    let panel_toggle = if ["cluster", "ai-sandbox", "services"].contains(&section) {
         String::new()
+    } else if section == "secrets" {
+        let label = crate::i18n::t(if app.panel_open {
+            "Hide details"
+        } else {
+            "Show details"
+        });
+        format!(
+            "<button type=\"button\" class=\"btn\" id=\"panel-toggle\" data-action=\"panel-toggle\" title=\"{label}\" aria-expanded=\"{}\">{}</button>",
+            app.panel_open,
+            crate::i18n::t("Details")
+        )
     } else {
         format!(
             "<button type=\"button\" class=\"btn\" id=\"panel-toggle\" data-action=\"panel-toggle\">{}</button>",
@@ -157,7 +219,7 @@ pub fn page(app: &App) -> String {
         )
     };
     let category = match section {
-        "vms" | "services" | "pools" | "schedules" => tr(app, "Compute", "컴퓨팅"),
+        "vms" | "services" | "pools" | "schedules" | "cluster" => tr(app, "Compute", "컴퓨팅"),
         "networks" | "pipe" | "security-groups" => tr(app, "Network", "네트워크"),
         "storages" | "volumes" | "images" | "kernels" | "secrets" | "queues" => {
             tr(app, "Data", "데이터")
@@ -177,6 +239,13 @@ pub fn page(app: &App) -> String {
         if app.locale == "ko" { "selected" } else { "" },
         if section == "ai-sandbox" {
             String::new()
+        } else if section == "secrets" {
+            icon_button(
+                tr(app, "Refresh", "새로 고침"),
+                "refresh",
+                "",
+                Icon::Refresh,
+            )
         } else {
             button(tr(app, "Refresh", "새로 고침"), "refresh", "")
         },
@@ -269,19 +338,10 @@ pub fn content(app: &App) -> String {
                 "조건에 맞는 MicroVM이 없습니다."
             )
         ),
-        "pools" | "schedules" | "security-groups" | "secrets" | "queues" => {
+        "pools" | "schedules" | "security-groups" | "secrets" | "queues" | "cluster" => {
             crate::advanced::content(app)
         }
-        "services" => resource_table(
-            app,
-            &app.resource,
-            &[
-                ("name", "Name"),
-                ("image", "Image"),
-                ("port", "Port"),
-                ("replicas", "Replicas"),
-            ],
-        ),
+        "services" => services(app),
         "networks" => resource_table(
             app,
             &app.resource,
@@ -589,6 +649,87 @@ fn sparkline(vm: &Vm) -> String {
     )
 }
 
+fn services(app: &App) -> String {
+    let rows = list(&app.resource);
+    if rows.is_empty() {
+        return format!(
+            "<div class=\"empty-state\">{}</div>",
+            tr(
+                app,
+                "No service configurations yet.",
+                "서비스 구성이 없습니다."
+            )
+        );
+    }
+    let mut out = format!(
+        "<div class=\"service-list\"><table class=\"wasm-table service-table\" aria-label=\"MicroServices\"><thead><tr><th id=\"service-column-0\">{}</th><th id=\"service-column-2\">{}</th><th id=\"service-column-3\">{}</th><th><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
+        tr(app, "Service", "서비스"),
+        crate::i18n::t("Port"),
+        crate::i18n::t("Replicas"),
+        crate::i18n::t("Actions")
+    );
+    for row in rows {
+        let id = text(row, "id");
+        let name = text(row, "name");
+        let selected = app.detail.as_ref().is_some_and(|detail| detail["id"] == id);
+        let open = if app.locale == "ko" {
+            format!("{name} 열기")
+        } else {
+            format!("Open {name}")
+        };
+        let actions = if app.locale == "ko" {
+            format!("{name} 작업")
+        } else {
+            format!("Actions for {name}")
+        };
+        let edit = if app.locale == "ko" {
+            format!("{name} 수정")
+        } else {
+            format!("Edit {name}")
+        };
+        let delete = if app.locale == "ko" {
+            format!("{name} 삭제")
+        } else {
+            format!("Delete {name}")
+        };
+        let image = text(row, "image");
+        let image_name = image.rsplit('/').next().unwrap_or(image);
+        let image_label = if let Some((name, digest)) = image_name.split_once("@sha256:") {
+            format!(
+                "{name}@sha256:{}…",
+                digest.chars().take(12).collect::<String>()
+            )
+        } else {
+            image_name.to_string()
+        };
+        let _ = write!(
+            out,
+            "<tr data-id=\"{}\" aria-selected=\"{selected}\"><td headers=\"service-column-0\" aria-label=\"{}\"><button type=\"button\" class=\"service-name\" data-action=\"service-run\" data-id=\"{}\" aria-label=\"{}\" title=\"{}\">{}</button><span class=\"service-image\" title=\"{}\">{}</span></td><td headers=\"service-column-2\">{}</td><td headers=\"service-column-3\">{}</td><td><details class=\"service-row-menu\"><summary aria-label=\"{}\" title=\"{}\"><svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" aria-hidden=\"true\"><circle cx=\"5\" cy=\"12\" r=\"1.5\" fill=\"currentColor\"/><circle cx=\"12\" cy=\"12\" r=\"1.5\" fill=\"currentColor\"/><circle cx=\"19\" cy=\"12\" r=\"1.5\" fill=\"currentColor\"/></svg></summary><div class=\"service-row-actions\">{}{}</div></details></td></tr>",
+            escape(id),
+            escape(name),
+            escape(id),
+            escape(&open),
+            escape(name),
+            escape(name),
+            escape(image),
+            escape(&image_label),
+            display(&row["port"]),
+            display(&row["replicas"]),
+            escape(&actions),
+            escape(&actions),
+            button(&edit, "resource-edit", id),
+            request(
+                &delete,
+                "DELETE",
+                &format!("/api/micro-services/{}", encode(id)),
+                Value::Null
+            )
+        );
+    }
+    out.push_str("</tbody></table></div>");
+    out
+}
+
 fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> String {
     let rows = if resource.is_array() {
         list(resource)
@@ -600,15 +741,7 @@ fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> Stri
     if rows.is_empty() {
         return format!(
             "<div class=\"empty-state\">{}</div>",
-            if app.route == "services" {
-                tr(
-                    app,
-                    "No service configurations yet.",
-                    "서비스 구성이 없습니다.",
-                )
-            } else {
-                tr(app, "No items yet.", "항목이 없습니다.")
-            }
+            tr(app, "No items yet.", "항목이 없습니다.")
         );
     }
     let kind = app.route.trim_end_matches('s');
@@ -654,40 +787,7 @@ fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> Stri
         let _ = write!(
             out,
             "<td>{}</td></tr>",
-            if app.route == "services" {
-                let name = text(row, "name");
-                let edit = if app.locale == "ko" {
-                    format!("{name} 수정")
-                } else {
-                    format!("Edit {name}")
-                };
-                let run = if app.locale == "ko" {
-                    format!("{name} 실행")
-                } else {
-                    format!("Run {name}")
-                };
-                format!(
-                    "{}{}{}{}",
-                    button(tr(app, "Details", "상세"), "detail", id),
-                    button(&edit, "resource-edit", id),
-                    button(&run, "service-run", id).replace(
-                        "type=\"button\"",
-                        if app.form.is_some() {
-                            "type=\"button\" disabled"
-                        } else {
-                            "type=\"button\""
-                        }
-                    ),
-                    request(
-                        &format!("Delete {name}"),
-                        "DELETE",
-                        &format!("/api/micro-services/{}", encode(id)),
-                        Value::Null
-                    )
-                )
-            } else {
-                button(tr(app, "Details", "상세"), "detail", id)
-            }
+            button(tr(app, "Details", "상세"), "detail", id)
         );
     }
     out.push_str("</tbody></table></div>");
@@ -699,7 +799,10 @@ pub fn deployment(value: Option<&Value>) -> String {
         return format!("<p role=\"status\">{}</p>", crate::i18n::t("Loading…"));
     };
     if value.is_null() {
-        return "<p role=\"status\">Not deployed</p>".into();
+        return format!(
+            "<p class=\"service-state\" role=\"status\">{}</p>",
+            crate::i18n::t("Not deployed")
+        );
     }
     let phase = text(value, "phase");
     let label = match phase {
@@ -712,13 +815,46 @@ pub fn deployment(value: Option<&Value>) -> String {
         "rolling_back" => "Restoring previous release",
         _ => phase,
     };
-    let mut out = format!("<p role=\"status\">{}</p>", escape(crate::i18n::t(label)));
+    let instances = list(&value["instances"]);
+    let healthy = instances
+        .iter()
+        .filter(|instance| instance["healthy"] == true)
+        .count();
+    let mut out = format!(
+        "<div class=\"service-runtime\"><p class=\"service-state\" data-phase=\"{}\" role=\"status\">{}</p>",
+        escape(phase),
+        escape(crate::i18n::t(label))
+    );
+    if !instances.is_empty() {
+        out.push_str(&format!(
+            "<span class=\"service-health\">{healthy}/{} {}</span>",
+            instances.len(),
+            crate::i18n::t("healthy")
+        ));
+    }
+    out.push_str("</div>");
     if value["domainRouteOwned"] == true
         && ["running", "degraded"].contains(&phase)
         && !text(&value["spec"], "domain").is_empty()
     {
         let domain = text(&value["spec"], "domain");
-        out.push_str(&format!("<p>Domain routing is ready.</p><a class=\"btn\" href=\"https://{}\" target=\"_blank\" rel=\"noreferrer\">{}</a>",escape(domain),crate::i18n::t("Open domain")));
+        out.push_str(&format!("<a class=\"service-endpoint\" href=\"https://{}\" target=\"_blank\" rel=\"noreferrer\" aria-label=\"{}\">{} ↗</a>",escape(domain),crate::i18n::t("Open domain"),escape(domain)));
+    } else if ["running", "degraded"].contains(&phase) {
+        let endpoints = instances
+            .iter()
+            .filter_map(|instance| {
+                let port = instance["hostPort"].as_u64().filter(|port| *port > 0)?;
+                let ip = text(instance, "ipv4");
+                if ip.is_empty() {
+                    return None;
+                }
+                Some(format!(
+                    "<span class=\"service-endpoint mono\">{}:{port}</span>",
+                    escape(ip)
+                ))
+            })
+            .collect::<String>();
+        out.push_str(&endpoints);
     }
     if !text(value, "error").is_empty() {
         out.push_str(&format!(
@@ -726,23 +862,28 @@ pub fn deployment(value: Option<&Value>) -> String {
             escape(text(value, "error"))
         ));
     }
-    out.push_str("<table class=\"wasm-table\"><thead><tr><th>VM</th><th>IPv4</th><th>Port</th><th>Health</th></tr></thead><tbody>");
-    for instance in list(&value["instances"]) {
-        out.push_str(&format!(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+    if !instances.is_empty() {
+        out.push_str(&format!("<details class=\"service-disclosure\" id=\"service-instances\"><summary id=\"service-instances-toggle\">{} <span>{}</span></summary><table class=\"wasm-table service-instances\"><thead><tr><th>VM</th><th>IPv4</th><th>{}</th><th>{}</th></tr></thead><tbody>", crate::i18n::t("Instances"), instances.len(), crate::i18n::t("Port"), crate::i18n::t("Health")));
+        for instance in instances {
+            out.push_str(&format!(
+            "<tr><td><span class=\"service-instance-id\" title=\"{}\">{}</span></td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            escape(text(instance, "vmId")),
             escape(text(instance, "vmId")),
             escape(text(instance, "ipv4")),
             display(&instance["hostPort"]),
             if instance["healthy"] == true {
-                "Healthy"
+                crate::i18n::t("Healthy")
             } else {
-                "Unhealthy"
+                crate::i18n::t("Unhealthy")
             }
         ));
+        }
+        out.push_str("</tbody></table></details>");
     }
-    out.push_str("</tbody></table>");
-    out.push_str(&format!(
-        "<pre class=\"wasm-log\">{}</pre>",
+    if !list(&value["log"]).is_empty() {
+        out.push_str(&format!(
+        "<details class=\"service-disclosure\" id=\"service-log\"><summary id=\"service-log-toggle\">{}</summary><pre class=\"wasm-log\">{}</pre></details>",
+        crate::i18n::t("Deployment log"),
         escape(
             &list(&value["log"])
                 .iter()
@@ -751,6 +892,7 @@ pub fn deployment(value: Option<&Value>) -> String {
                 .join("\n")
         )
     ));
+    }
     out
 }
 fn display(value: &Value) -> String {
@@ -908,28 +1050,31 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
             out.push_str(&crate::advanced::actions(app, data))
         }
         "services" => {
-            out.push_str(&button("Edit", "edit", "services"));
-            out.push_str(&button("Deploy", "edit", "service-deploy"));
-            if app.service_deployment.as_ref().is_some_and(|value| {
-                matches!(
-                    text(value, "phase"),
-                    "queued" | "starting" | "running" | "draining"
-                )
-            }) {
-                out.push_str(&request(
+            if app
+                .service_deployment
+                .as_ref()
+                .is_some_and(crate::advanced::services::owns_resources)
+            {
+                let stop = request(
                     "Stop service",
                     "POST",
                     &format!("/api/micro-services/{encoded}/stop"),
                     Value::Null,
-                ));
+                )
+                .replace("type=\"button\"", "type=\"button\" id=\"service-stop\"");
+                if app.busy
+                    || app
+                        .service_deployment
+                        .as_ref()
+                        .is_some_and(crate::deploy::busy)
+                {
+                    out.push_str(&stop.replace("type=\"button\"", "type=\"button\" disabled"));
+                } else {
+                    out.push_str(&stop);
+                }
+            } else if app.service_deployment.is_some() {
+                out.push_str(&button("Deploy", "edit", "service-deploy"));
             }
-            out.push_str(&request(
-                "Delete",
-                "DELETE",
-                &format!("/api/micro-services/{encoded}"),
-                Value::Null,
-            ));
-            out.push_str(&button("Deployment status", "deployment", id));
         }
         "networks" => {
             out.push_str(&button("Edit", "edit", "networks"));
@@ -989,7 +1134,7 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
         "kernels" => {
             let version = encode(text(data, "version"));
             out.push_str(&request(
-                "Install",
+                "Build kernel",
                 "POST",
                 &format!("/api/kernels/{version}/install"),
                 Value::Null,
@@ -1095,6 +1240,9 @@ fn pipe_cards(app: &App) -> String {
     out
 }
 fn pipe(app: &App, card: &str) -> String {
+    if card == "database" {
+        return crate::databases::content(app);
+    }
     let mut out = "<p><a href=\"#/pipe\">← Pipe</a></p><div class=\"wasm-actions\">".to_string();
     match card {
         "auth" => {

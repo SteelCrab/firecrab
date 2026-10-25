@@ -97,6 +97,8 @@ const DISK_PREP_CONCURRENCY: usize = 2;
 /// table, template registry, and runtime config.
 #[derive(Debug, Clone)]
 pub struct AppState {
+    /// Authenticated cluster transport and worker enrollment; journals live in SQLite.
+    pub(crate) cluster: Arc<crate::cluster::Runtime>,
     /// Loopback fixture override, absent from production builds.
     #[cfg(test)]
     pub(crate) s3_test_origin: Option<String>,
@@ -191,7 +193,6 @@ impl AppState {
         let sandbox_database = db_file.clone();
         let (store, vms) = tokio::task::spawn_blocking(move || {
             let store = Store::open(&db_file)?;
-            store.interrupt_stack_applies()?;
             // Live states from the previous run stay as they are: the VM
             // may still be running, and `reconcile::reconcile` decides.
             let vms = store.load_all()?;
@@ -204,6 +205,7 @@ impl AppState {
         let network = NetworkClient::from_env();
         let runtime = RuntimeConfig::from_defaults(&storage, &network);
         Ok(AppState {
+            cluster: Arc::new(crate::cluster::Runtime::default()),
             #[cfg(test)]
             s3_test_origin: None,
             api_port: 5523,
@@ -234,7 +236,9 @@ impl AppState {
             network_mutations: Arc::new(AsyncMutex::new(())),
             image_installs: ImageInstallTracker::from_env(),
             image_packages: ImageInstallTracker::from_env(),
-            kernel_installs: ImageInstallTracker::from_env(),
+            kernel_installs: ImageInstallTracker::with_base_url(
+                crate::oci::kernel::configured_releases_url().unwrap_or_else(|| "none".to_owned()),
+            ),
             bootstraps: crate::bootstrap::BootstrapTracker::default(),
             oci_imports: ImageInstallTracker::default(),
             registry_transfers: ImageInstallTracker::default(),

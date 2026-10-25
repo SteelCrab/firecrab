@@ -12,6 +12,10 @@ mod queues;
 pub use queues::*;
 mod pool;
 pub use pool::*;
+mod cluster;
+pub use cluster::*;
+mod cluster_services;
+pub use cluster_services::*;
 mod ai_sandbox;
 mod block_storage;
 pub use block_storage::*;
@@ -1390,8 +1394,8 @@ pub struct ImageResponse {
     pub has_guest_service: bool,
 }
 
-/// A kernel release known to this Firecracker build, plus its local cache
-/// state. Kernels are managed independently from M2Image rootfs artifacts.
+/// An upstream stable or locally cached kernel release, plus its cache state.
+/// Kernels are managed independently from M2Image rootfs artifacts.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct KernelResponse {
@@ -1399,11 +1403,11 @@ pub struct KernelResponse {
     pub version: String,
     /// Firecracker architecture label (`x86_64` or `aarch64`).
     pub architecture: String,
-    /// Kernel filename inside the verified package.
+    /// Host-built or previously installed kernel filename.
     pub image: String,
-    /// SHA256 of the unpacked kernel image.
+    /// SHA256 of the kernel image; empty until a source build completes.
     pub image_sha256: String,
-    /// SHA256 of the compressed MicroRegistry package.
+    /// SHA256 of the upstream source archive; empty before installation.
     pub package_sha256: String,
     /// Local unpacked image size when installed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1412,7 +1416,7 @@ pub struct KernelResponse {
     pub installed: bool,
     /// Whether an installed image currently references this kernel.
     pub in_use: bool,
-    /// Remote package URL when kernel downloads are enabled.
+    /// Upstream kernel source archive URL when source downloads are enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package_url: Option<String>,
 }

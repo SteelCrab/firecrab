@@ -1,4 +1,5 @@
 import {
+  serviceAction,
   serviceStep,
   selectServiceApp,
   saveService,
@@ -443,9 +444,7 @@ test.describe("Security groups @dashboard", () => {
       page.getByRole("heading", { name: "New MicroService", exact: true }),
     ).toHaveCount(0);
     expect(state.serviceWrites[0].securityGroupId).toBe(GROUP);
-    await page
-      .getByRole("button", { name: "Edit orders", exact: true })
-      .click();
+    await serviceAction(page, "orders", "Edit");
     await expect(
       page.getByLabel("Security group", { exact: true }),
     ).toHaveValue(GROUP);
@@ -456,9 +455,7 @@ test.describe("Security groups @dashboard", () => {
       fullPage: true,
     });
     await saveService(page);
-    await page
-      .getByRole("button", { name: "Edit orders", exact: true })
-      .click();
+    await serviceAction(page, "orders", "Edit");
     await serviceStep(page, 1);
     await page.getByLabel("Security group", { exact: true }).selectOption("");
     await saveService(page);
@@ -466,15 +463,13 @@ test.describe("Security groups @dashboard", () => {
       page.getByRole("heading", { name: "Edit MicroService", exact: true }),
     ).toHaveCount(0);
     expect(state.serviceWrites.at(-1)?.securityGroupId).toBeNull();
-    await page
-      .getByRole("button", { name: "Edit orders", exact: true })
-      .click();
+    await serviceAction(page, "orders", "Edit");
     await serviceStep(page, 1);
     await page
       .getByLabel("Security group", { exact: true })
       .selectOption(GROUP);
     await saveService(page);
-    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
     await expect(page.getByLabel("Network", { exact: true })).toHaveValue(
       NETWORK,
     );
@@ -492,9 +487,7 @@ test.describe("Security groups @dashboard", () => {
   }) => {
     const state = await setup(page, [POLICY], "#/services");
     state.failGroups = true;
-    await page
-      .getByRole("button", { name: "Edit orders", exact: true })
-      .click();
+    await serviceAction(page, "orders", "Edit");
     await expect(page.getByRole("alert")).toContainText(
       "Policy list unavailable",
     );
@@ -528,7 +521,7 @@ test.describe("Security groups @dashboard", () => {
     page,
   }) => {
     const state = await setup(page, [], "#/services");
-    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
     await expect(page.getByRole("alert")).toContainText("Policy not found");
     await expect(
       page.getByRole("button", { name: "Deploy and run", exact: true }),

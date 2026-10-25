@@ -11,6 +11,8 @@ use super::*;
 use crate::server::{HttpConfig, build_router};
 use crate::templates::TemplateRegistry;
 
+mod inputs;
+
 async fn fixture(
     root: &std::path::Path,
     fail: Option<&'static str>,
@@ -260,6 +262,8 @@ async fn stack_apply_restart_preserves_reservations_guards_ownership_and_cleans_
     let id = Uuid::new_v4();
     let resource_id = Uuid::new_v4();
     let status = ApplyStatus {
+        inputs: Default::default(),
+        git_revision: None,
         operation_id: id,
         stack_id: record.id,
         name: "demo".into(),
@@ -282,14 +286,14 @@ async fn stack_apply_restart_preserves_reservations_guards_ownership_and_cleans_
     assert!(
         state
             .store
-            .begin_stack_apply(&record, &hash, false, &status)
+            .begin_stack_apply(&record, &hash, false, &status, None)
             .unwrap()
             .1
     );
     assert!(
         !state
             .store
-            .begin_stack_apply(&record, &hash, false, &status)
+            .begin_stack_apply(&record, &hash, false, &status, None)
             .unwrap()
             .1
     );
@@ -319,17 +323,32 @@ async fn stack_apply_restart_preserves_reservations_guards_ownership_and_cleans_
     assert!(matches!(
         state
             .store
-            .begin_stack_apply(&other, &hash, false, &competing),
+            .begin_stack_apply(&other, &hash, false, &competing, None),
         Err(PersistenceError::StackApplyBusy)
     ));
     assert!(matches!(
-        state.store.begin_stack_apply(&record, &hash, true, &status),
+        state
+            .store
+            .begin_stack_apply(&record, &hash, true, &status, None),
         Err(PersistenceError::StackApplyIdentity)
     ));
     let templates = TemplateRegistry::from_specs(root.path(), std::iter::empty()).unwrap();
     let restarted = AppState::with_db_file(templates, root.path().join("state.db"))
         .await
         .unwrap();
+    // Loading a second state must not interrupt another owner's active work.
+    assert_eq!(
+        restarted
+            .store
+            .stored_stack_apply(id)
+            .unwrap()
+            .unwrap()
+            .status
+            .state,
+        ApplyState::Queued
+    );
+    // Production performs recovery only after acquiring the process ownership lock.
+    restarted.store.interrupt_stack_applies().unwrap();
     let after = restarted
         .store
         .stored_stack_apply(id)
@@ -399,6 +418,7 @@ async fn stack_apply_requires_stop_permission_before_any_other_step_or_reservati
         .unwrap();
     let vm_id = Uuid::new_v4();
     let mut vm = crate::handlers::vms::test_support::record("worker", vm_id);
+    inputs::pin_record(&state, root.path(), &mut vm);
     vm.disk_gb = 1;
     vm.ram = 256;
     vm.micro_network_id = network;
@@ -487,6 +507,7 @@ async fn stack_apply_updates_an_inactive_vm_preserves_policy_and_redacts_journal
     state.store.insert_security_group(&group).unwrap();
     let vm_id = Uuid::new_v4();
     let mut vm = crate::handlers::vms::test_support::record("worker", vm_id);
+    inputs::pin_record(&state, root.path(), &mut vm);
     vm.disk_gb = 1;
     vm.ram = 256;
     vm.micro_network_id = network;
@@ -571,14 +592,18 @@ async fn stack_apply_creates_a_vm_then_restarts_only_that_vm_with_its_disk_and_i
     stack["microVMs"] = json!({"worker":{"name":"worker","template":"ubuntu-rootfs-26.04","network":"app","ram":128,"cpu":1,"diskGb":1}});
     let create_id = Uuid::new_v4();
     let body = planned(&router, &stack, create_id).await;
-    assert_eq!(
-        request(&router, "POST", "/api/stacks/demo/apply", body)
-            .await
-            .0,
-        StatusCode::ACCEPTED
-    );
+    let (code, response) = request(&router, "POST", "/api/stacks/demo/apply", body).await;
+    assert_eq!(code, StatusCode::ACCEPTED, "{response}");
     let created = terminal(&router, create_id).await;
     assert_eq!(created.state, ApplyState::Succeeded, "{created:?}");
+    assert_eq!(
+        created.inputs.templates["worker"],
+        state
+            .templates
+            .resolve_alias("ubuntu-rootfs-26.04")
+            .unwrap()
+            .stack_pin()
+    );
     let vm_id = state
         .store
         .stack("demo")

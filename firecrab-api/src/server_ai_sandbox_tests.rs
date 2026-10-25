@@ -12,6 +12,9 @@ use std::{
 use tower::ServiceExt;
 use uuid::Uuid;
 
+#[path = "server_ai_sandbox_access_tests.rs"]
+mod access_tests;
+
 #[derive(Clone, Default)]
 struct Provider {
     requests: Arc<Mutex<Vec<Value>>>,
@@ -85,6 +88,7 @@ fn router(state: &AppState) -> Router {
         state.clone(),
         &HttpConfig::from_values("127.0.0.1:5523", "http://localhost:8080").unwrap(),
     )
+    .layer(Extension(crate::ai_sandbox::access::LocalOperator))
 }
 async fn call(app: &Router, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
     let response = app
@@ -273,7 +277,6 @@ async fn sandbox_native_tools_edit_an_isolated_branch_and_apply_checks_conflicts
     pending.task.attempt_id = Uuid::new_v4();
     pending.task.state = firecrab_api_types::SandboxTaskState::InProgress;
     pending.workspace = None;
-    pending.guest = None;
     f.state.store.save_sandbox_task(&pending).unwrap();
     assert_eq!(
         call(&f.app, "POST", &apply, json!({"paths":["main.txt"]}))

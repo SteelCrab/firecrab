@@ -2,6 +2,23 @@
 .wasm-content .vm-list-scroll { margin: 0 -24px; }
 .wasm-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; max-width: 850px; }
 .wasm-form .field { display: flex; flex-direction: column; gap: 6px; }
+.cluster-screen { min-width: 0; max-width: 1200px; }
+.cluster-screen > h2 { margin: 24px 0 14px; }
+.cluster-screen > h2:first-child { margin-top: 0; }
+.cluster-screen p { overflow-wrap: anywhere; line-height: 1.6; }
+.cluster-hosts { margin: 16px 0 24px; }
+.cluster-hosts h3 { margin: 0 0 12px; }
+.cluster-hosts details { margin-top: 12px; }
+.cluster-fields { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 16px; }
+.cluster-fields > .field { grid-column: span 2; }
+.cluster-fields > .field:nth-child(-n+2) { grid-column: span 3; }
+.cluster-form > h3 { margin: 24px 0 12px; }
+.cluster-target { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; min-width: 0; margin: 12px 0; padding: 12px 16px 16px; }
+.cluster-target legend label { display: inline-flex; align-items: center; gap: 8px; }
+.cluster-target input[type="checkbox"] { width: 14px; height: 14px; margin: 0; }
+.cluster-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cluster-screen [data-cluster-placement] { margin-bottom: 12px; }
+@media(max-width:600px) { .cluster-fields > .field, .cluster-fields > .field:nth-child(-n+2) { grid-column: 1 / -1; } .cluster-target { grid-template-columns: 1fr; } }
 .wasm-form textarea { min-height: 120px; font-family: var(--mono); }
 .wasm-wide { grid-column: 1 / -1; }
 .volume-table-scroll { max-width:100%; overflow-x:auto; }
@@ -16,6 +33,16 @@
 .wasm-details dd { margin: 0; overflow-wrap: anywhere; }
 .wasm-cards { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: 16px; }
 .wasm-card { padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel); }
+.secrets-page, .secret-list { display: grid; gap: 16px; }
+.secrets-page > .btn { justify-self: start; }
+.secret-tabs, .secret-actions, .secret-export { display: flex; align-items: center; gap: 8px; }
+.secret-export { flex-wrap: wrap; }
+.secret-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.secret-heading h2 { margin: 0; }
+.secret-heading h2, .secret-heading label { min-width: 0; overflow-wrap: anywhere; }
+.secret-actions { flex-shrink: 0; gap: 4px; }
+.secret-card code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.secret-card .icon-btn.danger { color: var(--red-ink); }
 .wasm-table { width: 100%; border-collapse: collapse; }
 .wasm-table th,.wasm-table td { text-align: left; padding: 12px; border-bottom: 1px solid var(--border); }
 .wasm-message { padding: 12px 20px; border-bottom: 1px solid var(--border); }

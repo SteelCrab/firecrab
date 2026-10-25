@@ -18,7 +18,14 @@ firecrab stack status demo
 Registration is explicit. Apply does not register a name or adopt an existing resource by name.
 Existing resources require exact UUID bindings before planning.
 Without `--expected-plan`, the CLI requests a fresh plan immediately before applying.
-With `--expected-plan`, the server rejects changes to the declaration, ownership or observed host configuration with `409 stale_stack_plan`.
+With `--expected-plan`, the server rejects changes to the declaration, ownership, selected template content or observed host configuration with `409 stale_stack_plan`.
+Plan `inputs.templates` contains exact installed version, kernel, rootfs, optional initrd and boot-argument hashes.
+`inputs.serviceDigests` contains declared OCI digest identities.
+An explicit VM `templatePin` selects that exact installed version even if the alias is later repointed.
+Without it, alias resolution is covered by the reviewed plan fingerprint.
+Changed artifact bytes reject apply before resource mutation with `stack_template_changed`.
+The executor creates VMs from the approved version and retains these inputs in the apply journal.
+Later starts of an owned VM reject changed approved content, including changes after API restart.
 The plan fingerprint excludes live VM metrics, lifecycle state, service health samples and logs.
 Apply checks stop permissions again when executing each affected resource.
 
@@ -75,7 +82,7 @@ Use a real non-nil UUID in place of the uppercase placeholder.
 An accepted request returns `202` with `operationId`, `stackId`, `name`, `state`, `changes` and optional `error`.
 Each step includes its exact resource UUID and `pending`, `running`, `succeeded`, `failed` or `skipped` state.
 Overall states are `queued`, `running`, `succeeded`, `failed` and `interrupted`.
-Status records contain field names and static error categories, never manifest values or backend error details.
+Status records contain input identities, field names and static error categories, never environment values or backend error details.
 
 The journal stores a hash of the declaration, stop permission and redacted status.
 It does not store the manifest. The normal resource store still contains its usual configuration.
@@ -121,4 +128,7 @@ Offline validation's 1 MiB YAML limit does not raise that API limit.
 The planner and executor perform optimistic configuration checks; a multi-resource apply is not an atomic transaction with manual API edits.
 Existing per-resource operations still enforce their locks and validation.
 Partial success is recorded rather than hidden.
-Continuous Git polling, automatic replacement/pruning and a stack dashboard remain follow-up work for [#437](https://github.com/SteelCrab/firecrab/issues/437).
+Git sources use [source synchronization](stack-git-source.md) as their sole apply writer.
+Their services reject independent edit, deploy, rollback, retry, stop and delete requests, including while polling is paused.
+Explicitly release the source or exact service binding before direct recovery operations.
+Automatic replacement/pruning and a stack dashboard remain follow-up work for [#437](https://github.com/SteelCrab/firecrab/issues/437).

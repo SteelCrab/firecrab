@@ -1,5 +1,6 @@
 mod advanced;
 mod api;
+mod databases;
 mod deploy;
 mod details;
 mod forms;
@@ -62,6 +63,7 @@ struct App {
     deploy: deploy::State,
     job: Option<(String, Value)>,
     workflows: workflows::State,
+    databases: databases::State,
     advanced: advanced::State,
     sandbox: sandbox::State,
     volumes: volumes::State,
@@ -138,12 +140,14 @@ fn render_content(app: &Shared) {
         sandbox::render(app);
         return;
     }
+    let cluster_focus = advanced::cluster::focused_input();
     let (html, loaded) = {
         let state = app.borrow();
         (render::content(&state), state.loaded)
     };
     app.borrow_mut().rendering = true;
     set_html("content", &html);
+    advanced::cluster::restore_focus(cluster_focus);
     app.borrow_mut().rendering = false;
     if let Some(content) = element("content") {
         let _ = content.set_attribute("data-loaded", if loaded { "true" } else { "false" });
@@ -155,6 +159,11 @@ fn render_content(app: &Shared) {
     advanced::services::sync(app);
 }
 fn render_editor(app: &Shared) {
+    if app.borrow().route == "pipe/database" {
+        render_content(app);
+        return;
+    }
+
     if app.borrow().route == "vms/new" {
         render_content(app);
     } else {
@@ -194,11 +203,19 @@ fn render_detail(app: &Shared) {
                 .panel_width
                 .min(viewport.saturating_sub(716).clamp(320, 720));
         }
-        let open =
-            (state.route != "security-groups" || state.detail.is_some() || state.form.is_some())
-                && state.panel_open
-                && !["vms/new", "queues", "ai-sandbox"].contains(&state.route.as_str())
-                && (!narrow || state.detail.is_some() || state.form.is_some());
+        let open = (!["security-groups", "services"].contains(&state.route.as_str())
+            || state.detail.is_some()
+            || state.form.is_some())
+            && state.panel_open
+            && ![
+                "vms/new",
+                "queues",
+                "cluster",
+                "pipe/database",
+                "ai-sandbox",
+            ]
+            .contains(&state.route.as_str())
+            && (!narrow || state.detail.is_some() || state.form.is_some());
         let html = if open {
             details::panel(&state)
         } else {
@@ -230,7 +247,11 @@ fn render_detail(app: &Shared) {
         let _ = panel.set_attribute("data-view", &app.borrow().route);
         let _ = panel.set_attribute("style", &format!("width:{width}px"));
         if open {
-            panel.set_inner_html(&html);
+            if app.borrow().route == "services" {
+                details::set_service_html("detail-panel", &html);
+            } else {
+                panel.set_inner_html(&html);
+            }
             if more_open && let Some(menu) = element("vm-more-actions") {
                 let _ = menu.set_attribute("open", "");
             }
@@ -269,18 +290,28 @@ fn render_detail(app: &Shared) {
         }
     }
     if let Some(toggle) = element("panel-toggle") {
-        toggle.set_text_content(Some(i18n::t(if open {
-            "Hide details"
+        let label = i18n::t(if open { "Hide details" } else { "Show details" });
+        if app.borrow().route == "secrets" {
+            toggle.set_text_content(Some(i18n::t("Details")));
+            let _ = toggle.set_attribute("title", label);
+            let _ = toggle.set_attribute("aria-expanded", if open { "true" } else { "false" });
         } else {
-            "Show details"
-        })));
+            toggle.set_text_content(Some(label));
+        }
     }
     advanced::services::sync(app);
 }
 
 fn render_messages(app: &Shared) {
     let state = app.borrow();
-    set_html("messages", &render::messages(&state));
+    set_html(
+        "messages",
+        &if state.route == "pipe/database" {
+            String::new()
+        } else {
+            render::messages(&state)
+        },
+    );
     if state.route == "secrets"
         && let Ok(Some(button)) = document().query_selector("[data-action=create][data-id=secrets]")
     {
@@ -444,6 +475,7 @@ fn route_from_hash() -> String {
 }
 fn endpoint(route: &str) -> &'static str {
     match route {
+        "cluster" => "/api/cluster/hosts",
         "pools" => "/api/pools",
         "schedules" => "/api/schedules",
         "security-groups" => "/api/security-groups",
@@ -485,6 +517,9 @@ fn load_route(app: Shared) {
         return;
     }
     refresh(app.clone());
+    if route == "cluster" {
+        advanced::cluster::restore(&app);
+    }
     let mut aux = vec!["/api/host", "/api/update"];
     if route == "host" {
         aux.push("/api/info");
@@ -588,12 +623,37 @@ fn refresh(app: Shared) {
     drop(state);
     spawn_local(async move {
         let result = api::request("GET", endpoint(&route), None).await;
+        let placements = if route == "cluster" {
+            Some(api::request("GET", "/api/cluster/placements", None).await)
+        } else {
+            None
+        };
+        let services = if route == "cluster" {
+            Some(api::request("GET", "/api/cluster/services", None).await)
+        } else {
+            None
+        };
+        let result = match &placements {
+            Some(Err(error)) => Err(error.clone()),
+            _ => result,
+        };
         let mut state = app.borrow_mut();
         if state.generation != generation {
             return;
         }
         state.refreshing = false;
         let mut changed = !state.loaded || !state.connection_error.is_empty();
+        if let Some(services) = services {
+            let services = services.unwrap_or_else(|_| json!({"unavailable":true}));
+            changed |= state.cache.get("/api/cluster/services") != Some(&services);
+            state.cache.insert("/api/cluster/services".into(), services);
+        }
+        if let Some(Ok(placements)) = placements {
+            changed |= state.cache.get("/api/cluster/placements") != Some(&placements);
+            state
+                .cache
+                .insert("/api/cluster/placements".into(), placements);
+        }
         match result {
             Ok(value) => {
                 if route == "vms" {
@@ -648,6 +708,8 @@ fn refresh(app: Shared) {
         let has_form = state.form.is_some();
         drop(state);
         advanced::after_refresh(&app);
+        databases::after_refresh(&app);
+        databases::tick(&app);
         if !has_form {
             if changed {
                 render_content(&app);
@@ -729,6 +791,15 @@ fn save_history_index(index: i32, url: Option<&str>) {
     }
 }
 fn allow_discard(app: &Shared) -> bool {
+    if app
+        .borrow()
+        .databases
+        .row
+        .as_ref()
+        .is_some_and(|r| r.uncertain)
+    {
+        return false;
+    }
     let dirty = app.borrow().dirty;
     !dirty
         || window()
@@ -772,6 +843,7 @@ fn navigate(app: &Shared) {
     state.advanced.ai = advanced::ai::State::default();
     state.sandbox = sandbox::State::default();
     state.advanced.storage = advanced::storage::State::default();
+    state.databases = databases::State::default();
     state.volumes = volumes::State::default();
     state.route = next;
     state.generation += 1;
@@ -817,10 +889,24 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         if target.closest("[role=menu]").ok().flatten().is_none() {
             set_html("menu-root", "");
         }
+        if let Ok(menus) = document().query_selector_all(".service-row-menu[open]") {
+            for index in 0..menus.length() {
+                if let Some(menu) = menus
+                    .item(index)
+                    .and_then(|node| node.dyn_into::<Element>().ok())
+                    && !menu.contains(Some(&target))
+                {
+                    let _ = menu.remove_attribute("open");
+                }
+            }
+        }
         if target.closest("a[href]").ok().flatten().is_some() {
             set_html("palette-root", "");
         }
         let Some(button) = target.closest("[data-action]").ok().flatten() else {
+            if target.closest(".service-row-menu").ok().flatten().is_some() {
+                return;
+            }
             if let Some(row) = target.closest("tr[data-id]").ok().flatten() {
                 show_detail(
                     clicked.clone(),
@@ -830,6 +916,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             return;
         };
         event.prevent_default();
+        if let Ok(Some(menu)) = button.closest(".service-row-menu") {
+            let _ = menu.remove_attribute("open");
+        }
         let action = button.get_attribute("data-action").unwrap_or_default();
         let id = button.get_attribute("data-id").unwrap_or_default();
         if clicked.borrow().busy && !matches!(action.as_str(), "palette" | "palette-close" | "menu")
@@ -851,6 +940,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         if !target.is_connected() || changed.borrow().rendering {
             return;
         }
+        if databases::input(&changed, &target) {
+            return;
+        }
         match target.id().as_str() {
             "vm-search" => {
                 if let Ok(input) = target.dyn_into::<HtmlInputElement>() {
@@ -864,6 +956,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 }
             }
             _ => {
+                if advanced::cluster::input(&changed, &target) {
+                    return;
+                }
                 if target.id() == "field-hostPort" && advanced::services::change(&changed, &target)
                 {
                     return;
@@ -898,7 +993,10 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         if !target.is_connected() || language.borrow().rendering {
             return;
         }
-        if sandbox::change(&language, &target) || volumes::input(&language, &target) {
+        if databases::change(&language, &target)
+            || sandbox::change(&language, &target)
+            || volumes::input(&language, &target)
+        {
             return;
         }
         if deploy::change(&language, &target) || advanced::change(&language, &target) {
@@ -951,7 +1049,10 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         else {
             return;
         };
-        if sandbox::submit(&submitted, &form.id()) || advanced::queues::submit(&submitted, &form) {
+        if databases::submit(&submitted, &form)
+            || sandbox::submit(&submitted, &form.id())
+            || advanced::queues::submit(&submitted, &form)
+        {
             event.prevent_default();
             return;
         }
@@ -1005,6 +1106,14 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             return;
         }
         if event.key() == "Escape" {
+            if let Ok(Some(menu)) = document().query_selector(".service-row-menu[open]") {
+                let _ = menu.remove_attribute("open");
+                if let Ok(Some(summary)) = menu.query_selector("summary") {
+                    let _ = summary.unchecked_into::<web_sys::HtmlElement>().focus();
+                }
+                event.prevent_default();
+                return;
+            }
             if let Some(menu) = element("vm-more-actions").filter(|el| el.has_attribute("open")) {
                 let _ = menu.remove_attribute("open");
                 if let Some(summary) = element("vm-more-summary")
@@ -1111,7 +1220,7 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
     if action != "vm-menu" {
         set_html("menu-root", "");
     }
-    if sandbox::action(&app, action, id) {
+    if databases::dispatch(&app, action, id, button) || sandbox::action(&app, action, id) {
         return;
     }
     if volumes::dispatch(&app, action, id) || advanced::dispatch(&app, action, id, button) {
@@ -1264,7 +1373,7 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
                     .confirm_with_message(&if path == "/api/pipe/auth/firecrab" {
                         i18n::t("Disconnect the Firecrab account from this host? To revoke its account integration token, open console.firecrab.dev.").into()
                     } else {
-                        format!("{}?", button.text_content().unwrap_or_default())
+                        format!("{}?", button.get_attribute("aria-label").or_else(|| button.text_content()).unwrap_or_default())
                     })
                     .unwrap_or(false)
             {
@@ -1497,6 +1606,9 @@ fn save_form(app: Shared, form_element: HtmlFormElement) {
     } else {
         form.path.clone()
     };
+    if !databases::edit::before_submit(&form) {
+        return;
+    }
     // Preserve entered values if the API rejects a mutation.
     for field in &mut form.fields {
         field.value = values.get(field.key).cloned().unwrap_or_default();
@@ -1591,6 +1703,14 @@ fn mutate(
                     "Saved."
                 }
                 .into();
+                if method == "DELETE"
+                    && path.starts_with("/api/pipe/databases/")
+                    && !path
+                        .trim_start_matches("/api/pipe/databases/")
+                        .contains('/')
+                {
+                    state.notice = "Connection removed. The source database is unchanged.".into();
+                }
                 let selected = state
                     .detail
                     .as_ref()
@@ -1715,6 +1835,9 @@ fn mutate(
         render_content(&app);
         if succeeded {
             advanced::after_mutation(&app, &path);
+            if path.starts_with("/api/pipe/database") {
+                databases::after_mutation(&app);
+            }
             volumes::after_mutation(&app, &path);
         }
         refresh(app);

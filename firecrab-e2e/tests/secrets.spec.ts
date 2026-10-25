@@ -124,6 +124,28 @@ test.describe("Secrets web console @dashboard", () => {
     expect(writes.filter(write => write.path.endsWith("/preview")).map(write => write.body.secretIds)).toEqual([[ID], [ID]]);
   });
 
+  test("delete confirmations name the target and cancellation keeps Secrets and connections", async ({ page }) => {
+    const writes = await openSecrets(page);
+    for (const [name, path] of [
+      ["Delete DB_PASSWORD", `/api/secrets/${ID}`],
+      ["Delete connection Production", `/api/secrets/connections/${CONNECTION}`],
+    ]) {
+      if (path.includes("/connections/")) await page.getByRole("tab", { name: /External connections/ }).click();
+      const remove = page.getByRole("button", { name, exact: true });
+      for (const accept of [false, true]) {
+        const confirmation = page.waitForEvent("dialog");
+        const click = remove.click();
+        const dialog = await confirmation;
+        expect(dialog.message()).toBe(`${name}?`);
+        if (accept) await dialog.accept();
+        else await dialog.dismiss();
+        await click;
+        await expect(remove).toHaveCount(accept ? 0 : 1);
+        expect(writes.filter(write => write.method === "DELETE" && write.path === path)).toHaveLength(accept ? 1 : 0);
+      }
+    }
+  });
+
   test("SEC3: previews imports and requires selection before replacing existing values", async ({ page }, testInfo) => {
     const writes = await openSecrets(page);
     await page.getByRole("tab", { name: /External connections/ }).click();

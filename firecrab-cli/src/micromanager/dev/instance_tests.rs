@@ -195,6 +195,101 @@ fn repeated_resolution_reuses_the_record_and_allocated_ports() {
 }
 
 #[test]
+fn existing_backend_ports_outside_the_new_pool_remain_unchanged() {
+    let repository = Repository::new();
+    let mut first = repository.instance(&repository.first, 8098);
+    first.api_port = 60230;
+    first.resource_port = 60231;
+    let record = first.managed_home.join(RECORD);
+    let before = serde_json::to_vec(&first).unwrap();
+    fs::write(&record, &before).unwrap();
+    for create in [false, true] {
+        assert_eq!(
+            resolve(&repository.first, &repository.primary, create, 8098)
+                .unwrap()
+                .unwrap(),
+            first
+        );
+        assert_eq!(load(&first.managed_home).unwrap().unwrap(), first);
+        assert_eq!(fs::read(&record).unwrap(), before);
+    }
+    repository.primary_is_preserved();
+}
+
+#[test]
+fn primary_without_a_registry_reserves_defaults_without_creating_state() {
+    let repository = Repository::new();
+    let registry = repository.root.join("managed/dev-instances");
+    assert_eq!(
+        registered_backend_ports(&repository.primary).unwrap(),
+        HashSet::from([5523, 5524, 8080])
+    );
+    assert!(!registry.exists());
+    repository.primary_is_preserved();
+}
+
+#[test]
+fn primary_and_private_reservations_include_later_registered_worktrees() {
+    let repository = Repository::new();
+    let first = repository.instance(&repository.first, 8098);
+    let before = HashSet::from([5523, 5524, 8080, first.api_port, first.resource_port]);
+    for home in [&repository.primary, &first.managed_home] {
+        assert_eq!(registered_backend_ports(home).unwrap(), before);
+    }
+    let second = repository.instance(&repository.second, 8099);
+    let mut after = before;
+    after.extend([second.api_port, second.resource_port]);
+    for home in [
+        &repository.primary,
+        &first.managed_home,
+        &second.managed_home,
+    ] {
+        assert_eq!(registered_backend_ports(home).unwrap(), after);
+    }
+    repository.primary_is_preserved();
+}
+
+#[test]
+fn reservation_reads_wait_until_a_new_ownership_record_is_complete() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let repository = Repository::new();
+    repository.instance(&repository.first, 8098);
+    let directory = repository.root.join("managed");
+    let registry = directory.join("dev-instances");
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(registry.join("registry.lock"))
+        .unwrap();
+    FileExt::lock_exclusive(&lock).unwrap();
+    fs::create_dir_all(registry.join("0123456789abcdef/micromanager")).unwrap();
+    let primary = repository.primary.clone();
+    let (started, ready) = mpsc::channel();
+    let (sent, received) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        started.send(()).unwrap();
+        sent.send(registered_backend_ports(&primary)).unwrap();
+    });
+    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(matches!(
+        received.recv_timeout(Duration::from_millis(50)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    let registered = test_instance(&directory, "0123456789abcdef", 60230, 60231);
+    drop(lock);
+    let ports = received
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(ports.contains(&registered.api_port));
+    assert!(ports.contains(&registered.resource_port));
+    reader.join().unwrap();
+    repository.primary_is_preserved();
+}
+
+#[test]
 fn removed_worktrees_do_not_block_primary_or_other_private_instances() {
     for use_git in [true, false] {
         let repository = Repository::new();
@@ -401,10 +496,12 @@ fn conflicting_record_ports_block_all_private_instance_selection() {
         assert!(load(&instance.managed_home).is_err());
         assert!(api_port(&instance.managed_home).is_err());
         assert!(resource_port(&instance.managed_home).is_err());
+        assert!(registered_backend_ports(&instance.managed_home).is_err());
         for create in [false, true] {
             assert!(resolve(&instance.source, &repository.primary, create, 8098).is_err());
         }
     }
+    assert!(registered_backend_ports(&repository.primary).is_err());
     repository.primary_is_preserved();
 }
 

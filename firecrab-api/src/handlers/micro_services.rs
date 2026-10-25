@@ -80,8 +80,20 @@ pub async fn update(
     ValidatedJson(spec): ValidatedJson<MicroServiceSpec>,
 ) -> Result<Json<MicroServiceResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    update_from_stack(state, request_id.0, id, spec, None).await
+}
+
+pub(crate) async fn update_from_stack(
+    state: AppState,
+    request_id: Uuid,
+    id: Uuid,
+    spec: MicroServiceSpec,
+    operation: Option<Uuid>,
+) -> Result<Json<MicroServiceResponse>, AppError> {
+    let request_id = RequestId(request_id);
     validate(&spec, request_id.0)?;
     let _claim = state.service_mutations.lock().await;
+    ensure_stack_writer(&state, id, operation, request_id.0).await?;
     crate::service_runtime::ensure_editable(&state, id, request_id.0).await?;
     require_image_auth(&state, &spec.image, request_id.0).await?;
     super::pipe_storage::validate_binding(&state, &spec, request_id.0).await?;
@@ -108,11 +120,54 @@ pub async fn delete(
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
     let _claim = state.service_mutations.lock().await;
+    ensure_stack_writer(&state, id, None, request_id.0).await?;
     crate::service_runtime::ensure_editable(&state, id, request_id.0).await?;
+    if state
+        .store
+        .database_bindings()
+        .map_err(|_| AppError::internal(request_id.0))?
+        .iter()
+        .any(|b| b.input.service_id == id)
+        || state
+            .store
+            .database_triggers()
+            .map_err(|_| AppError::internal(request_id.0))?
+            .iter()
+            .any(|t| t.input.service_id == id)
+    {
+        return Err(AppError::conflict(
+            "database_service_in_use",
+            "Remove database bindings and finish retained triggers before deleting this service",
+            request_id.0,
+        ));
+    }
     if !database(request_id.0, move || state.store.delete_micro_service(id)).await? {
         return Err(AppError::not_found(request_id.0));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// HTTP request IDs never authorize a controller mutation. Only internal callers
+/// can supply an operation, checked against the durable running service step.
+pub(crate) async fn ensure_stack_writer(
+    state: &AppState,
+    service: Uuid,
+    operation: Option<Uuid>,
+    request_id: Uuid,
+) -> Result<(), AppError> {
+    let store = state.store.clone();
+    if !database(request_id, move || {
+        store.stack_service_mutation_allowed(service, operation)
+    })
+    .await?
+    {
+        return Err(AppError::conflict(
+            "stack_source_managed",
+            "service is controlled by its stack; use Git sync or explicitly release ownership before direct edits, deploy or stop",
+            request_id,
+        ));
+    }
+    Ok(())
 }
 
 /// Scope service images to the verified account, never to independent registry logins.

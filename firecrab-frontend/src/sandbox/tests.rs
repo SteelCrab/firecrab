@@ -4,10 +4,17 @@ fn task() -> Value {
 }
 #[test]
 fn full_task_projection_matches_the_authoritative_rest_summary_contract() {
-    let value = task();
-    let typed: firecrab_api_types::SandboxTask = serde_json::from_value(value.clone()).unwrap();
-    let wire = serde_json::to_value(firecrab_api_types::SandboxTaskSummary::from(&typed)).unwrap();
-    assert_eq!(summary(value), wire);
+    for runtime in [
+        Value::Null,
+        json!({"vmId":"55555555-5555-4555-8555-555555555555","runtimeId":"66666666-6666-4666-8666-666666666666"}),
+    ] {
+        let mut value = task();
+        value["runtime"] = runtime;
+        let typed: firecrab_api_types::SandboxTask = serde_json::from_value(value.clone()).unwrap();
+        let wire =
+            serde_json::to_value(firecrab_api_types::SandboxTaskSummary::from(&typed)).unwrap();
+        assert_eq!(summary(value), wire);
+    }
 }
 #[test]
 fn late_poll_does_not_erase_a_newer_mutation_or_older_loaded_history() {

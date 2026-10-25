@@ -1,5 +1,9 @@
 # CLI
 
+For authenticated hosts, drain, and durable VM placement, use
+[`firecrab cluster`](../guides/multihost.md#cli-and-dashboard). Existing
+`firecrab host` commands continue to manage saved API profiles.
+
 `firecrab` manages the same REST API as the dashboard on Linux, macOS, and Windows.
 Install it with the [CLI installer](../getting-started/installation.md#cli-only-installation).
 Use `firecrab --help` or `firecrab COMMAND --help` for flags.
@@ -79,7 +83,8 @@ See [Stack validation](../guides/stacks.md) for the experimental schema and its 
 `stack apply-status NAME --id OPERATION_UUID` reads redacted progress as JSON.
 `stack source configure NAME --file SOURCE_JSON --expected-generation N` configures a GitHub source separately from its resource manifest.
 `stack source status NAME`, `history NAME`, and `check NAME --generation N` expose read-only exact-commit comparisons.
-`stack source pause|resume NAME --generation N` controls periodic checks. See [Git source checks](../guides/stack-git-source.md).
+`stack source sync NAME --generation N [--recover-operation-id UUID]` resolves Git and applies supported changes. A failed/interrupted apply requires its operation ID before fresh recovery.
+`stack source pause|resume NAME --generation N` controls periodic checks and opt-in automatic synchronization. See [Git source synchronization](../guides/stack-git-source.md).
 See [Native YAML stack apply](../guides/stack-apply.md) for stop permissions, retry identity and explicit failure recovery.
 These commands use normal host selection; see [Stack ownership and planning](../guides/stack-planning.md) for the full workflow.
 
@@ -286,4 +291,10 @@ one. On failure it prints a retry command with that key; use it to recover the s
 
 ## AI Sandbox
 
-`firecrab sandbox` uses the shared durable Sandbox REST lifecycle. See the [AI Sandbox guide](../guides/ai-sandbox.md#cli-and-local-stdio-mcp) for model verification, project/task JSON, cancellation, review and selected-file apply. `firecrab mcp` exposes the corresponding `sandbox_*` tools.
+`firecrab sandbox` uses the shared durable Sandbox REST lifecycle. See the [AI Sandbox guide](../guides/ai-sandbox.md#cli-and-local-stdio-mcp) for model verification, project/task JSON, cancellation, review and selected-file apply. `firecrab mcp` exposes the corresponding `sandbox_*` tools. Operator-only `sandbox get-access`, `set-access`, and `revoke-access` manage [host resource grants](../guides/sandbox-access.md) through the same API.
+
+## Controller services
+
+`firecrab cluster service` provides `create`, `update`, `stop`, `list`, `show`, `reconcile` and `operations`.
+Mutations require `--idempotency-key`. Update and Stop also require `--expected-generation`. Create and Update read `--file service.json`.
+See [controller services](../guides/multihost.md#controller-services) for examples.

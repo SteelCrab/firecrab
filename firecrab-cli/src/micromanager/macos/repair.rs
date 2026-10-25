@@ -151,7 +151,7 @@ mod tests {
         let runtime = layout.managed_home.join("runtime");
         fs::write(
             runtime.join("provisioned"),
-            "schema=5\nkvm=usable\nfirecrab_api=active\nfirecrab_net_helper=active\nnested_firecracker=passed\n",
+            format!("schema={}\nkvm=usable\nfirecrab_api=active\nfirecrab_net_helper=active\nnested_firecracker=passed\n", provision::PROVISION_SCHEMA),
         ).unwrap();
         let mut kernel = [0_u8; 64];
         kernel[56..60].copy_from_slice(b"ARM\x64");
@@ -207,10 +207,12 @@ mod tests {
     #[test]
     fn guest_boot_report_requires_matching_live_address_and_active_services() {
         let ip = "192.0.2.7".parse().unwrap();
-        let valid = "schema=5\nip=192.0.2.7\nfirecrab_api=active\nfirecrab_net_helper=active\n";
-        verify_guest_boot_report(valid, ip).unwrap();
+        let schema = format!("schema={}", provision::PROVISION_SCHEMA);
+        let valid =
+            format!("{schema}\nip=192.0.2.7\nfirecrab_api=active\nfirecrab_net_helper=active\n");
+        verify_guest_boot_report(&valid, ip).unwrap();
         for invalid in [
-            valid.replace("schema=5", "schema=0"),
+            valid.replace(&schema, "schema=0"),
             valid.replace("192.0.2.7", "192.0.2.8"),
             valid.replace("firecrab_api=active", "firecrab_api=failed"),
             valid.replace("firecrab_net_helper=active\n", ""),

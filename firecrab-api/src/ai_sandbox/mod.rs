@@ -1,4 +1,5 @@
 //! Durable AI execution over saved Pipe AI accounts, confined project copies and borrowed MicroVMs.
+pub mod access;
 pub mod files;
 pub mod guest;
 pub mod model;
@@ -137,6 +138,7 @@ pub async fn admit(
     saved: SavedTask,
     _claim: tokio::sync::OwnedMutexGuard<()>,
 ) -> Result<SandboxTask, String> {
+    access::attempt(&state, &saved)?;
     let (cancel, receiver) = watch::channel(false);
     let key = saved.task.id;
     state
@@ -316,6 +318,7 @@ async fn execute(
     cancel: &mut watch::Receiver<bool>,
     deadline: tokio::time::Instant,
 ) -> Result<(), ExecutionError> {
+    access::attempt(state, saved).map_err(execution_error)?;
     saved.task.state = SandboxTaskState::Accepted;
     saved.task.updated_at = now();
     save(state, saved).await.map_err(execution_error)?;
@@ -332,7 +335,10 @@ async fn execute(
             .project
             .vm_id
             .ok_or_else(|| execution_error("Select a MicroVM for code tasks"))?;
-        saved.guest = Some(guest::binding(state, vm).map_err(execution_error)?);
+        let current = guest::binding(state, vm).map_err(execution_error)?;
+        if saved.task.runtime != Some(current) || saved.guest != Some(current) {
+            return Err(execution_error("MicroVM runtime changed after admission"));
+        }
         let attempt = state
             .sandbox
             .root
@@ -353,6 +359,7 @@ async fn execute(
                 credentials.push(session.refresh_token);
             }
         }
+        access::attempt(state, saved).map_err(execution_error)?;
         tokio::task::spawn_blocking(move || {
             workspace::prepare(&source, &attempt, id, Some(&database), &credentials)
         })
@@ -362,7 +369,7 @@ async fn execute(
     }
     let previous = state
         .store
-        .sandbox_history(saved.task.project_id)
+        .sandbox_history_for_source(saved.task.project_id, saved.project.source_path.as_deref())
         .map_err(|_| execution_error("Cannot read conversation history"))?;
     let mut history = Vec::new();
     if !saved.project.instructions.trim().is_empty() {
@@ -397,6 +404,7 @@ async fn execute(
             deadline,
         )
         .await?;
+        access::attempt(state, saved).map_err(execution_error)?;
         let mut account = proof(state, &saved.task.selection, code).map_err(execution_error)?;
         if account.connection.provider == AiProvider::Openai
             && state
@@ -423,6 +431,8 @@ async fn execute(
         if serde_json::to_vec(&history).map_err(execution_error)?.len() > 192 * 1024 {
             return Err(("sandbox_context_limit".into(), "Task reached the provider-context limit. Review retained changes and start a new task.".into()));
         }
+        // A credential refresh can also outlive a grant change.
+        access::attempt(state, saved).map_err(execution_error)?;
         let turn = interruptible(
             async {
                 model::turn(
@@ -441,6 +451,7 @@ async fn execute(
         )
         .await?;
         drop(guard);
+        access::attempt(state, saved).map_err(execution_error)?;
         let text = redact(&connections, &turn.text);
         if turn.calls.is_empty() {
             if text.trim().is_empty() {
@@ -458,6 +469,7 @@ async fn execute(
         history.extend(turn.continuation);
         let mut results = Vec::new();
         for mut call in turn.calls {
+            access::attempt(state, saved).map_err(execution_error)?;
             proof(state, &saved.task.selection, true).map_err(execution_error)?;
             connections.extend(
                 state

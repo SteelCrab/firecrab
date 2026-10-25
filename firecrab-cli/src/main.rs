@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 mod ai_sandbox;
 mod api_client;
 mod ca;
+mod cluster;
 #[cfg(target_os = "linux")]
 mod doctor;
 #[cfg(test)]
@@ -52,6 +53,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage authenticated cluster hosts and durable VM placement.
+    Cluster {
+        #[command(subcommand)]
+        command: cluster::Command,
+    },
+
     /// Select models, converse and run isolated project tasks inside a MicroVM.
     Sandbox {
         #[command(subcommand)]
@@ -188,6 +195,11 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
+        Command::Cluster { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                cluster::run(client, command)
+            })
+        }
         Command::Queue { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 queue::run(client, command)

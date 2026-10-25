@@ -6,8 +6,10 @@ use web_sys::{AbortController, Request, RequestInit, Response};
 
 #[derive(Debug)]
 pub struct Failure {
+    pub status: Option<u16>,
     pub message: String,
     pub fields: BTreeMap<String, String>,
+    pub code: Option<String>,
 }
 impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -17,8 +19,10 @@ impl fmt::Display for Failure {
 impl Failure {
     fn message(message: impl ToString) -> Self {
         Self {
+            status: None,
             message: message.to_string(),
             fields: BTreeMap::new(),
+            code: None,
         }
     }
     fn response(status: u16, status_text: &str, body: &str) -> Self {
@@ -46,8 +50,10 @@ impl Failure {
             })
             .unwrap_or_default();
         Self {
+            status: Some(status),
             message: format!("HTTP {status}: {message}"),
             fields,
+            code: value["error"]["code"].as_str().map(str::to_owned),
         }
     }
 }
@@ -94,6 +100,8 @@ async fn send(
             timeout.as_ref().unchecked_ref(),
             if path == "/api/info" {
                 5000
+            } else if path.starts_with("/api/pipe/database") && method != "GET" {
+                65000
             } else if path.starts_with("/api/ai-sandbox/") {
                 185000
             } else if path.ends_with("/acquire") {
@@ -192,6 +200,12 @@ pub async fn acquire(path: &str, key: &str) -> Result<Value, String> {
         .await
         .map_err(|e| e.to_string())?;
     serde_json::from_str(&body).map_err(|e| e.to_string())
+}
+
+/// Preserve a placement's exact body and retry key after an unknown response.
+pub async fn post_idempotent(path: &str, body: &Value, key: &str) -> Result<Value, Failure> {
+    let (body, _) = send("POST", path, Some(body), None, Some(key)).await?;
+    serde_json::from_str(&body).map_err(|e| Failure::message(e.to_string()))
 }
 
 // Object bodies remain binary; credential and metadata requests use the JSON path above.

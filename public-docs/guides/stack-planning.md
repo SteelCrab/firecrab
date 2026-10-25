@@ -81,6 +81,11 @@ A stale UUID cannot delete a newer registration with the same name.
 
 Plans compare declared fields to resource UUIDs in the ownership record.
 They report field names, not old/new values or environment contents.
+The `inputs` object reports exact template versions and artifact hashes, plus declared service digests.
+These identities are covered by the plan fingerprint and retained with accepted apply status.
+Missing templates and mismatched `templatePin` values block VM plans.
+Changing recorded boot content requires replacement instead of an in-place resource update.
+See [immutable inputs and controller ownership](stack-git-source.md#immutable-inputs-and-controller-ownership).
 Network dependencies appear before standalone VMs and services.
 Removed declarations appear last in reverse dependency order.
 

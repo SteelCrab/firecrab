@@ -5,6 +5,56 @@ use std::{
     thread::JoinHandle,
 };
 
+#[test]
+fn sandbox_access_mcp_exposes_operator_only_grants_without_self_elevation() {
+    let id = Uuid::new_v4();
+    let policy = json!({"grants":[{"resource":{"kind":"vm","id":Uuid::new_v4()},"permissions":["execute"]}]});
+    let (client, server) = mock(vec![
+        ("GET /api/ai-sandbox/access/", 200, policy.clone()),
+        ("PUT /api/ai-sandbox/access/", 200, policy.clone()),
+        ("DELETE /api/ai-sandbox/access/", 200, json!({"grants":[]})),
+    ]);
+    let mut session = Session::default();
+    assert_eq!(
+        session
+            .call(&client, "sandbox_access_get", json!({"id":id}))
+            .unwrap(),
+        policy
+    );
+    assert_eq!(
+        session
+            .call(
+                &client,
+                "sandbox_access_set",
+                json!({"id":id,"policy":policy})
+            )
+            .unwrap(),
+        policy
+    );
+    assert_eq!(
+        session
+            .call(&client, "sandbox_access_revoke", json!({"id":id}))
+            .unwrap(),
+        json!({"grants":[]})
+    );
+    server.join().unwrap();
+    assert!(
+        session
+            .call(
+                &client,
+                "sandbox_access_set",
+                json!({"id":id,"policy":{"grants":[]},"operator":true})
+            )
+            .is_err()
+    );
+    assert!(session.owned.is_empty());
+    let tool = catalog()
+        .into_iter()
+        .find(|t| t["name"] == "sandbox_access_set")
+        .unwrap();
+    assert_eq!(tool["annotations"]["destructiveHint"], true);
+}
+
 fn mock(replies: Vec<(&'static str, u16, Value)>) -> (ApiClient, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -200,7 +250,7 @@ fn sandbox_mcp_routes_durable_tasks_through_rest_and_requires_explicit_review_pa
     let id = Uuid::new_v4();
     let project = Uuid::new_v4();
     let connection = Uuid::new_v4();
-    let task = json!({"id":id,"projectId":project,"attemptId":Uuid::new_v4(),"request":{"kind":"chat","input":"hello","selection":null,"retryOf":null},"selection":{"connectionId":connection,"model":"fixture-model"},"state":"result","createdAt":1,"updatedAt":1,"result":"done","errorCode":null,"error":null,"events":[],"changes":[]});
+    let task = json!({"id":id,"projectId":project,"attemptId":Uuid::new_v4(),"runtime":null,"request":{"kind":"chat","input":"hello","selection":null,"retryOf":null},"selection":{"connectionId":connection,"model":"fixture-model"},"state":"result","createdAt":1,"updatedAt":1,"result":"done","errorCode":null,"error":null,"events":[],"changes":[]});
     let (client, server) = mock(vec![
         ("PUT /api/ai-sandbox/projects/", 202, task.clone()),
         ("GET /api/ai-sandbox/tasks/", 200, task.clone()),
@@ -254,10 +304,10 @@ fn sandbox_mcp_lists_saves_and_recovers_without_creating_a_new_attempt() {
     let connection = Uuid::new_v4();
     let selection = json!({"connectionId":connection,"model":"configured-model"});
     let spec = json!({"name":"Project","sourcePath":null,"vmId":null,"selection":selection,"instructions":"Be concise"});
-    let project_row = json!({"id":project,"spec":spec,"createdAt":1});
+    let project_row = json!({"id":project,"owner":"local","spec":spec,"createdAt":1});
     let model =
         json!({"id":"configured-model","name":"Configured","verified":true,"toolsVerified":true});
-    let task = json!({"id":id,"projectId":project,"attemptId":Uuid::new_v4(),"request":{"kind":"chat","input":"hello","selection":null,"retryOf":null},"selection":selection,"state":"interrupted","createdAt":1,"updatedAt":2,"result":"","errorCode":"sandbox_restart","error":"Reconcile first","events":[],"changes":[]});
+    let task = json!({"id":id,"projectId":project,"attemptId":Uuid::new_v4(),"runtime":null,"request":{"kind":"chat","input":"hello","selection":null,"retryOf":null},"selection":selection,"state":"interrupted","createdAt":1,"updatedAt":2,"result":"","errorCode":"sandbox_restart","error":"Reconcile first","events":[],"changes":[]});
     let mut summary = task.clone();
     summary.as_object_mut().unwrap().remove("events");
     summary.as_object_mut().unwrap().remove("changes");

@@ -343,11 +343,11 @@ esac
             }
             let mut script = AGENT_SCRIPT.to_string();
             for (guest, fixture) in [
+                ("/run", root.join("run")),
                 (crate::oci::provision::GUEST_TOOLBOX, toolbox),
                 ("/proc/stat", root.join("stat")),
                 ("/proc/meminfo", root.join("meminfo")),
                 ("/dev/console", root.join("console")),
-                ("/run", root.join("run")),
             ] {
                 script = script.replace(guest, fixture.to_str().unwrap());
             }

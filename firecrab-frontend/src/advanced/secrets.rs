@@ -1,12 +1,23 @@
 use crate::{
     App, Shared, api, element,
     model::{escape, list, text},
-    render::{button, request},
+    render::{Icon, icon_button, icon_request},
     render_content, render_messages, set_html,
 };
 use serde_json::{Value, json};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
+
+fn text_button(label: &str, caption: &str, action: &str, id: &str) -> String {
+    let label = escape(crate::i18n::t(label));
+    format!(
+        "<button type=\"button\" class=\"btn\" aria-label=\"{label}\" title=\"{label}\" data-action=\"{}\" data-id=\"{}\">{}</button>",
+        escape(action),
+        escape(id),
+        escape(crate::i18n::t(caption))
+    )
+}
+
 pub fn connections(app: &Shared) {
     for path in ["/api/secrets/connections", "/api/pipe/auth"] {
         load_connections(app, path);
@@ -36,14 +47,24 @@ fn load_connections(app: &Shared, path: &'static str) {
     });
 }
 pub fn content(app: &App) -> String {
+    use crate::i18n::t;
     let external = app.advanced.secrets_external;
     let mut out = format!(
-        "<div role=\"tablist\" aria-label=\"Secret stores\"><button class=\"btn\" role=\"tab\" aria-selected=\"{}\" data-action=\"secret-internal\">Internal</button><button class=\"btn\" role=\"tab\" aria-selected=\"{external}\" data-action=\"secret-external\">External connections</button></div>",
-        !external
+        "<div class=\"secrets-page\"><div class=\"secret-tabs\" role=\"tablist\" aria-label=\"Secret stores\"><button class=\"btn\" role=\"tab\" aria-label=\"{}\" aria-selected=\"{}\" data-action=\"secret-internal\">{}</button><button class=\"btn\" role=\"tab\" aria-label=\"{}\" aria-selected=\"{external}\" data-action=\"secret-external\">{}</button></div>",
+        t("Internal secrets"),
+        !external,
+        t("Secrets"),
+        t("External connections"),
+        t("Connections")
     );
     out.push_str(&account_card(app.cache.get("/api/pipe/auth"), app.busy));
     if external {
-        out.push_str(&button("Add connection", "create", "secret-connection"));
+        out.push_str(&text_button(
+            "Add connection",
+            "Connection",
+            "create",
+            "secret-connection",
+        ));
         for link in list(
             app.cache
                 .get("/api/secrets/connections")
@@ -52,25 +73,24 @@ pub fn content(app: &App) -> String {
             let id = text(link, "id");
             let name = text(link, "name");
             out.push_str(&format!(
-                "<article class=\"wasm-card\"><h2>{}</h2><p>{}</p>{}{}{}</article>",
+                "<article class=\"wasm-card secret-card\"><div class=\"secret-heading\"><h2>{}</h2><div class=\"secret-actions\">{}{}{}</div></div><p>{}</p></article>",
                 escape(name),
-                escape(text(link, "provider")),
-                button(&format!("Import from {name}"), "secret-import", id),
-                button(
-                    &format!("Edit connection {name}"),
+                text_button(&format!("{} {name}", t("Import from")), "Import", "secret-import", id),
+                icon_button(
+                    &format!("{} {name}", t("Edit connection")),
                     "secret-edit-connection",
-                    id
+                    id,
+                    Icon::Edit
                 ),
-                request(
-                    &format!("Delete connection {name}"),
-                    "DELETE",
-                    &format!("/api/secrets/connections/{}", api::encode(id)),
-                    Value::Null
-                )
+                icon_request(
+                    &format!("{} {name}", t("Delete connection")),
+                    &format!("/api/secrets/connections/{}", api::encode(id))
+                ),
+                escape(text(link, "provider"))
             ));
         }
     } else {
-        out.push_str("<section aria-label=\"Internal secrets\">");
+        out.push_str("<section class=\"secret-list\" aria-label=\"Internal secrets\"><p>Value changes automatically redeploy running services with a domain that use the secret. Follow progress under Deploy.</p>");
         if list(&app.resource).is_empty() {
             out.push_str("<p>No secrets yet.</p>");
         }
@@ -78,7 +98,13 @@ pub fn content(app: &App) -> String {
             let id = text(row, "id");
             let name = text(row, "name");
             let reveal = app.advanced.reveals.get(id);
-            out.push_str(&format!("<article class=\"wasm-card\"><label><input type=\"checkbox\" data-secret-id=\"{}\" aria-label=\"Select {}\"> {}</label><p>{}</p><code aria-label=\"{} value\">{}</code>{}{}{}</article>",escape(id),escape(name),escape(name),escape(text(row,"description")),escape(name),escape(reveal.map(|(v,_)|v.as_str()).unwrap_or("••••••••")),button(&format!("{} {name}",if reveal.is_some(){"Hide"}else{"Reveal"}),"secret-reveal",id),button(&format!("Edit {name}"),"secret-edit",id),request(&format!("Delete {name}"),"DELETE",&format!("/api/secrets/{}",api::encode(id)),Value::Null)));
+            out.push_str(&format!(
+                "<article class=\"wasm-card secret-card\"><div class=\"secret-heading\"><label><input type=\"checkbox\" data-secret-id=\"{}\" aria-label=\"Select {}\"> {}</label><div class=\"secret-actions\">{}{}{}</div></div><p>{}</p><code aria-label=\"{} value\">{}</code></article>",
+                escape(id), escape(name), escape(name),
+                icon_button(&format!("{} {name}", t(if reveal.is_some() { "Hide" } else { "Reveal" })), "secret-reveal", id, if reveal.is_some() { Icon::Hide } else { Icon::Reveal }),
+                icon_button(&format!("{} {name}", t("Edit")), "secret-edit", id, Icon::Edit),
+                icon_request(&format!("{} {name}", t("Delete")), &format!("/api/secrets/{}", api::encode(id))),
+                escape(text(row, "description")), escape(name), escape(reveal.map(|(value,_)|value.as_str()).unwrap_or("••••••••"))));
             if let Some(source) = row.get("source").filter(|v| v.is_object()) {
                 out.push_str(&format!(
                     "<p>{}: {} · v{}</p>",
@@ -88,7 +114,7 @@ pub fn content(app: &App) -> String {
                 ));
             }
         }
-        out.push_str("<label for=\"upload-destination\">Upload destination</label><select id=\"upload-destination\">");
+        out.push_str("<div class=\"secret-export\"><label for=\"upload-destination\">Upload destination</label><select id=\"upload-destination\">");
         for link in list(
             app.cache
                 .get("/api/secrets/connections")
@@ -105,10 +131,18 @@ pub fn content(app: &App) -> String {
             ));
         }
         out.push_str("</select>");
-        out.push_str(&button("Preview upload", "secret-export", ""));
-        out.push_str("</section>");
+        out.push_str(&text_button(
+            "Preview upload",
+            "Preview",
+            "secret-export",
+            "",
+        ));
+        out.push_str("</div></section>");
     }
-    out.push_str(&format!("<div id=\"secret-plan\">{}</div>", plan(app)));
+    out.push_str(&format!(
+        "<div id=\"secret-plan\">{}</div></div>",
+        plan(app)
+    ));
     out
 }
 fn account_card(auth: Option<&Value>, busy: bool) -> String {
@@ -121,7 +155,13 @@ fn account_card(auth: Option<&Value>, busy: bool) -> String {
                 t(
                     "Preview secrets from the Firecrab account connected in Auth. Only selected secrets are copied locally."
                 ),
-                button("Preview account secrets", "secret-account-import", "").replace(
+                text_button(
+                    "Preview account secrets",
+                    "Preview",
+                    "secret-account-import",
+                    ""
+                )
+                .replace(
                     "type=\"button\"",
                     if busy {
                         "type=\"button\" disabled"
@@ -132,7 +172,7 @@ fn account_card(auth: Option<&Value>, busy: bool) -> String {
             )
         }
         Some(_) => format!(
-            "<p>{}</p><a href=\"#/pipe/auth\">{}</a>",
+            "<p>{}</p><a href=\"#/pipe/auth\" aria-label=\"{}\">Auth</a>",
             t("Connect a Firecrab account in Auth to import account secrets."),
             t("Open Auth")
         ),
@@ -193,10 +233,15 @@ fn plan(app: &App) -> String {
         out.push_str(&format!("<label class=\"wasm-wide\"><input type=\"checkbox\" data-plan-name=\"{}\" aria-label=\"Apply {}\" {} {}> {} · {}</label>",escape(name),escape(name),if app.advanced.plan_names.iter().any(|s|s==name){"checked"}else{""},if row["change"]=="unchanged"||app.advanced.plan_expired{"disabled"}else{""},escape(name),escape(text(row,"change"))));
     }
     out.push_str(
-        &button(
+        &text_button(
             &format!(
                 "{} selected ({})",
                 if import { "Import" } else { "Upload" },
+                app.advanced.plan_names.len()
+            ),
+            &format!(
+                "{} ({})",
+                crate::i18n::t(if import { "Import" } else { "Upload" }),
                 app.advanced.plan_names.len()
             ),
             "secret-apply",
@@ -211,7 +256,12 @@ fn plan(app: &App) -> String {
             },
         ),
     );
-    out.push_str(&button("Close preview", "secret-plan-close", ""));
+    out.push_str(&icon_button(
+        "Close preview",
+        "secret-plan-close",
+        "",
+        Icon::Close,
+    ));
     out.push_str("</section>");
     out
 }

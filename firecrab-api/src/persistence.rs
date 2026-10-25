@@ -18,8 +18,12 @@ use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
 mod block_storage;
+mod cluster;
+mod cluster_services;
+mod database_services;
 mod pools;
 mod queues;
+pub(crate) use cluster::ClusterError;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod ai_sandbox;
 mod deploy_images;
@@ -33,6 +37,7 @@ mod schedules;
 mod security_groups;
 mod stack_applies;
 mod stack_sources;
+pub(crate) use stack_sources::SourceTrigger;
 mod stacks;
 pub use registries::RegistryLogin;
 pub(crate) use schedules::ScheduleMutation;
@@ -496,6 +501,9 @@ pub enum PersistenceError {
     /// Configuration remains stable while a durable check is active.
     #[error("stack Git source check is active")]
     StackSourceBusy,
+    /// A failed or interrupted Git apply needs explicit acknowledgement before another mutation.
+    #[error("inspect the recorded Git apply before explicit recovery")]
+    StackSyncRecoveryRequired,
     /// Invalid source configuration must not reach the network.
     #[error("invalid stack Git source")]
     InvalidStackSource,
@@ -508,6 +516,9 @@ pub enum PersistenceError {
     /// An operation ID was reused with a different registration or request.
     #[error("stack apply identity conflicts")]
     StackApplyIdentity,
+    /// Git source ownership prohibits an independent apply writer.
+    #[error("stack is managed by its Git source")]
+    StackSourceManaged,
     /// The requested operation is not recorded for this stack.
     #[error("stack apply does not exist")]
     MissingStackApply,
@@ -755,6 +766,7 @@ impl Store {
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
+        conn.execute_batch(database_services::CREATE_SQL)?;
         conn.execute(pipe_ai::CONNECTIONS_SQL, [])?;
         conn.execute(pipe_ai::DEFAULTS_SQL, [])?;
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
@@ -786,6 +798,8 @@ impl Store {
         conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_UNIQUE_HOST_PORT_SQL, [])?;
         pools::create_tables(&conn)?;
+        conn.execute_batch(cluster::SCHEMA)?;
+        conn.execute_batch(cluster_services::SCHEMA)?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
         // that still have NULL micro_network_id onto one explicit row.
         promote_implicit_default_network(&conn)?;
@@ -794,6 +808,7 @@ impl Store {
             conn: Arc::new(Mutex::new(conn)),
         };
         store.import_legacy(&path.with_file_name(LEGACY_FILE_NAME))?;
+        store.rebuild_sandbox_references()?;
         store.rebuild_sandbox_index()?;
         Ok(store)
     }

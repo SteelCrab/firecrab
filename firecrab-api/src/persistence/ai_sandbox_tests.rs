@@ -3,6 +3,7 @@ use firecrab_api_types::*;
 
 fn saved(project: Uuid, index: u64) -> SavedTask {
     SavedTask {
+        caller: Default::default(),
         project: SandboxProjectSpec {
             name: "Project".into(),
             source_path: None,
@@ -19,6 +20,7 @@ fn saved(project: Uuid, index: u64) -> SavedTask {
             id: Uuid::new_v4(),
             project_id: project,
             attempt_id: Uuid::new_v4(),
+            runtime: None,
             request: SandboxTaskInput {
                 kind: SandboxTaskKind::Chat,
                 input: format!("input {index}"),
@@ -54,6 +56,138 @@ fn saved(project: Uuid, index: u64) -> SavedTask {
             }],
         },
     }
+}
+
+#[test]
+fn attempt_references_are_immutable_and_duplicate_attempts_roll_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("state.db")).unwrap();
+    let original = saved(Uuid::new_v4(), 1);
+    store.save_sandbox_task(&original).unwrap();
+    let mut variants = Vec::new();
+    let mut changed = original.clone();
+    changed.task.project_id = Uuid::new_v4();
+    variants.push(changed);
+    let mut changed = original.clone();
+    changed.task.attempt_id = Uuid::new_v4();
+    variants.push(changed);
+    let mut changed = serde_json::to_value(&original).unwrap();
+    changed["caller"]["principal"] = serde_json::json!({"host":Uuid::new_v4()});
+    variants.push(serde_json::from_value(changed).unwrap());
+    let mut changed = original.clone();
+    changed.task.id = Uuid::new_v4();
+    variants.push(changed);
+    for changed in variants {
+        assert!(store.save_sandbox_task(&changed).is_err());
+    }
+    let persisted = store.sandbox_task(original.task.id).unwrap().unwrap();
+    assert_eq!(persisted.task.project_id, original.task.project_id);
+    assert_eq!(persisted.task.attempt_id, original.task.attempt_id);
+    assert_eq!(
+        store.sandbox_task_count(original.task.project_id).unwrap(),
+        1
+    );
+    let mut code = saved(Uuid::new_v4(), 2);
+    let runtime = SandboxRuntimeRef {
+        vm_id: Uuid::new_v4(),
+        runtime_id: Uuid::new_v4(),
+    };
+    code.task.request.kind = SandboxTaskKind::Code;
+    code.task.runtime = Some(runtime);
+    code.project.vm_id = Some(runtime.vm_id);
+    code.guest = Some(runtime);
+    store.save_sandbox_task(&code).unwrap();
+    code.task.runtime.as_mut().unwrap().runtime_id = Uuid::new_v4();
+    assert!(store.save_sandbox_task(&code).is_err());
+    assert_eq!(
+        store
+            .sandbox_task(code.task.id)
+            .unwrap()
+            .unwrap()
+            .task
+            .runtime,
+        Some(runtime)
+    );
+    code.task.runtime = Some(runtime);
+    code.guest.as_mut().unwrap().vm_id = Uuid::new_v4();
+    assert!(store.save_sandbox_task(&code).is_err());
+}
+
+#[test]
+fn legacy_local_records_backfill_runtime_identity_without_remote_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let store = Store::open(&path).unwrap();
+    let mut task = saved(Uuid::new_v4(), 1);
+    let runtime = SandboxRuntimeRef {
+        vm_id: Uuid::new_v4(),
+        runtime_id: Uuid::new_v4(),
+    };
+    task.task.request.kind = SandboxTaskKind::Code;
+    task.task.runtime = Some(runtime);
+    task.guest = Some(runtime);
+    task.project.vm_id = Some(runtime.vm_id);
+    let project = SandboxProject {
+        id: task.task.project_id,
+        owner: SandboxPrincipal::Local,
+        spec: task.project.clone(),
+        created_at: 0,
+    };
+    store.save_sandbox_project(&project).unwrap();
+    store.save_sandbox_task(&task).unwrap();
+    let mut legacy = serde_json::to_value(&task).unwrap();
+    legacy.as_object_mut().unwrap().remove("caller");
+    legacy["task"].as_object_mut().unwrap().remove("runtime");
+    legacy["guest"] = serde_json::json!({"vm_id":runtime.vm_id,"runtime_id":runtime.runtime_id});
+    store
+        .lock()
+        .execute(
+            "UPDATE ai_sandbox_tasks SET spec=?1 WHERE id=?2",
+            params![legacy.to_string(), task.task.id.to_string()],
+        )
+        .unwrap();
+    store
+        .lock()
+        .execute("DELETE FROM ai_sandbox_attempts", [])
+        .unwrap();
+    let mut legacy = serde_json::to_value(&project).unwrap();
+    legacy.as_object_mut().unwrap().remove("owner");
+    store
+        .lock()
+        .execute(
+            "UPDATE ai_sandbox_projects SET spec=?1 WHERE id=?2",
+            params![legacy.to_string(), project.id.to_string()],
+        )
+        .unwrap();
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    let loaded = store.sandbox_task(task.task.id).unwrap().unwrap();
+    assert_eq!(loaded.task.runtime, Some(runtime));
+    assert_eq!(loaded.caller.principal, SandboxPrincipal::Local);
+    assert_eq!(
+        store.sandbox_project(project.id).unwrap().unwrap().owner,
+        SandboxPrincipal::Local
+    );
+    assert!(
+        store
+            .sandbox_access(Uuid::new_v4())
+            .unwrap()
+            .grants
+            .is_empty()
+    );
+    let mut changed = project;
+    changed.owner = SandboxPrincipal::Host(Uuid::new_v4());
+    assert!(store.save_sandbox_project(&changed).is_err());
+    store.delete_sandbox_project(changed.id).unwrap();
+    assert!(store.sandbox_task(task.task.id).unwrap().is_none());
+    assert_eq!(
+        store
+            .lock()
+            .query_row("SELECT COUNT(*) FROM ai_sandbox_attempts", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
 }
 
 #[test]

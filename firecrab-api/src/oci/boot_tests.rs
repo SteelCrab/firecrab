@@ -256,7 +256,7 @@ const UNREACHABLE_BASE_URL: &str = "http://127.0.0.1:1";
 const PINNED_ARCHITECTURES: [Architecture; 2] = [Architecture::X86_64, Architecture::Aarch64];
 
 #[tokio::test]
-async fn resolution_falls_back_to_an_installed_catalog_kernel_when_the_registry_is_unreachable() {
+async fn resolution_falls_back_to_an_installed_catalog_kernel_when_kernel_org_is_unreachable() {
     for architecture in PINNED_ARCHITECTURES {
         let directory = tempfile::tempdir().expect("create fixture directory");
         let image_root = directory.path();
@@ -276,7 +276,7 @@ async fn resolution_falls_back_to_an_installed_catalog_kernel_when_the_registry_
 }
 
 #[tokio::test]
-async fn resolution_reports_the_registry_failure_when_no_catalog_kernel_is_installed() {
+async fn resolution_reports_the_source_failure_when_no_catalog_kernel_is_installed() {
     for architecture in PINNED_ARCHITECTURES {
         let directory = tempfile::tempdir().expect("create fixture directory");
         let image_root = directory.path();
@@ -289,7 +289,7 @@ async fn resolution_reports_the_registry_failure_when_no_catalog_kernel_is_insta
         assert_matches!(
             error,
             ResolveError::KernelDownloadFailed { .. },
-            "the registry failure is more actionable than a missing catalog kernel, got {error}"
+            "the source failure is more actionable than a missing catalog kernel, got {error}"
         );
     }
 }

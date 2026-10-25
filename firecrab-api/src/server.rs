@@ -225,6 +225,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::stack_sources::history),
         )
         .route(
+            "/api/stacks/{name}/source/sync",
+            post(handlers::stack_sources::sync),
+        )
+        .route(
             "/api/stacks/{name}/apply",
             post(handlers::stack_applies::apply),
         )
@@ -375,7 +379,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/pipe/databases/{id}",
-            delete(handlers::pipe_databases::delete),
+            delete(handlers::pipe_databases::delete).put(handlers::pipe_databases::update),
         )
         .route(
             "/api/pipe/databases/{id}/tables",
@@ -384,6 +388,85 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/pipe/databases/{id}/preview",
             post(handlers::pipe_databases::preview),
+        )
+        .route(
+            "/api/pipe/databases/{id}/access",
+            axum::routing::put(handlers::pipe_databases::access),
+        )
+        .route(
+            "/api/pipe/databases/{id}/rows",
+            post(handlers::pipe_databases::rows),
+        )
+        .route(
+            "/api/pipe/databases/{id}/mutations",
+            post(handlers::pipe_databases::mutate),
+        )
+        .route(
+            "/api/pipe/database-rabbitmq",
+            get(handlers::pipe_database_events::rabbitmq_get),
+        )
+        .route(
+            "/api/pipe/database-rabbitmq/managed",
+            get(handlers::pipe_database_events::managed_get)
+                .post(handlers::pipe_database_events::managed_create),
+        )
+        .route(
+            "/api/pipe/databases/{id}/triggers",
+            get(handlers::pipe_database_events::list),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}",
+            axum::routing::put(handlers::pipe_database_events::pause),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}/detach",
+            post(handlers::pipe_database_events::detach),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}/failures",
+            get(handlers::pipe_database_events::failures),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}/replay/{event}",
+            post(handlers::pipe_database_events::replay),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}/acknowledge/{event}",
+            post(handlers::pipe_database_events::acknowledge),
+        )
+        .route(
+            "/api/pipe/databases/{id}/bindings",
+            get(handlers::pipe_database_bindings::list)
+                .post(handlers::pipe_database_bindings::create),
+        )
+        .route(
+            "/api/pipe/database-bindings/{id}",
+            delete(handlers::pipe_database_bindings::delete),
+        )
+        .route(
+            "/api/pipe/database-maintenance/tools",
+            get(handlers::pipe_database_maintenance::capabilities),
+        )
+        .route(
+            "/api/pipe/databases/{id}/jobs",
+            get(handlers::pipe_database_maintenance::list),
+        )
+        .route(
+            "/api/pipe/databases/{id}/backups",
+            post(handlers::pipe_database_maintenance::backup),
+        )
+        .route(
+            "/api/pipe/databases/{id}/migrations",
+            post(handlers::pipe_database_maintenance::migrate),
+        )
+        .route(
+            "/api/pipe/databases/{id}/restore",
+            post(handlers::pipe_database_maintenance::restore),
+        )
+        .route(
+            "/api/pipe/database-jobs/{id}/backup",
+            get(handlers::pipe_database_maintenance::download)
+                .delete(handlers::pipe_database_maintenance::delete_backup),
         )
         .route("/api/pipe/registries", get(handlers::registries::list))
         .route(
@@ -695,6 +778,12 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // Model verification and explicit guest recovery need longer bounded HTTP waits.
     let sandbox = Router::new()
         .route(
+            "/api/ai-sandbox/access/{principal}",
+            get(handlers::ai_sandbox::get_access)
+                .put(handlers::ai_sandbox::set_access)
+                .delete(handlers::ai_sandbox::revoke_access),
+        )
+        .route(
             "/api/ai-sandbox/projects",
             get(handlers::ai_sandbox::projects),
         )
@@ -749,6 +838,18 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
 
     // Registry authentication and manifest GETs retain their bounded inspection deadline.
     let inspection = Router::new()
+        .route(
+            "/api/pipe/database-rabbitmq",
+            axum::routing::put(handlers::pipe_database_events::rabbitmq_save),
+        )
+        .route(
+            "/api/pipe/databases/{id}/triggers",
+            post(handlers::pipe_database_events::create),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}",
+            delete(handlers::pipe_database_events::delete),
+        )
         .route(
             "/api/pipe/ai/connections/{id}/login",
             post(handlers::pipe_ai::login_start),
@@ -809,7 +910,15 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             enforce_limits,
         ));
 
+    let cluster = crate::cluster::handlers::router()
+        .layer(cors.clone())
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn_with_state(
+            limits.clone(),
+            enforce_limits,
+        ));
     let app = rest
+        .merge(cluster)
         .merge(sandbox)
         .merge(recovery)
         .merge(inspection)
@@ -821,7 +930,11 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         // a client's URL never comes back as an HTML page.
         .route("/api/{*rest}", any(not_found))
         .route("/ws/{*rest}", any(not_found))
-        .with_state(state);
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::cluster::protect_vm,
+        ))
+        .with_state(state.clone());
 
     let app = match &config.static_root {
         // Anything else is the dashboard: a real file if it exists, otherwise
@@ -840,8 +953,12 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         None => app.fallback(not_found),
     };
 
-    app.layer(middleware::from_fn_with_state(policy, enforce_origin))
-        .layer(middleware::from_fn(assign_request_id))
+    app.layer(middleware::from_fn_with_state(
+        state,
+        crate::ai_sandbox::access::restrict_delegates,
+    ))
+    .layer(middleware::from_fn_with_state(policy, enforce_origin))
+    .layer(middleware::from_fn(assign_request_id))
 }
 
 async fn assign_request_id(mut request: Request, next: Next) -> Response {

@@ -34,6 +34,72 @@ async function detail(index = 1) {
 }
 function mutation(path, method = 'POST') { return fixture.requests.findLast(request => request.path === path && request.method === method); }
 
+test('cluster preserves an unknown placement across reload and routes lifecycle and drain through the controller', async () => {
+  await page.setViewportSize({ width: 1440, height: 1150 });
+  const hostIds = ['00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002'];
+  const networkIds = ['00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000012'];
+  const image = { alias: 'fixture', version: 'v1', kernelSha256: 'a'.repeat(64), rootfsSha256: 'b'.repeat(64), bootArgsSha256: 'c'.repeat(64) };
+  const hosts = hostIds.map((id, i) => ({ report: { id, name: `worker-${i + 1}`, endpoint: `https://worker-${i + 1}.test:5523`, architecture: 'aarch64',
+    capacity: { cpu: 4, ramMib: 4096 }, unmanaged: { cpu: 0, ramMib: 0 }, images: [image], labels: {},
+    networks: [{ id: networkIds[i], name: 'private' }], storages: [{ id: 'default', capacityGib: 40, unmanagedGib: 0 }] },
+    lastSeenMs: 0, draining: false, online: true, reserved: { cpu: 0, ramMib: 0 }, reservedDiskGib: {} }));
+  const calls = []; let placement = null; let attempts = 0;
+  await page.route('**/api/cluster/**', async route => {
+    const request = route.request(); const path = new URL(request.url()).pathname;
+    if (request.method() === 'GET' && path === '/api/cluster/hosts') {
+      hosts.forEach(host => host.lastSeenMs++);
+      return route.fulfill({ json: hosts });
+    }
+    if (request.method() === 'GET' && path === '/api/cluster/placements') return route.fulfill({ json: placement ? [placement] : [] });
+    calls.push({ path, method: request.method(), key: request.headers()['idempotency-key'], body: request.postData() ? request.postDataJSON() : null });
+    if (path === '/api/cluster/placements' && request.method() === 'POST') {
+      if (++attempts === 1) return route.abort('failed');
+      const spec = request.postDataJSON(); const id = '00000000-0000-0000-0000-000000000099';
+      placement = { id, idempotencyKey: request.headers()['idempotency-key'], vm: { hostId: hostIds[0], resourceId: id },
+        target: spec.targets[0], spec, generation: 0, action: 'create', phase: 'confirmed', observed: { id, name: spec.name, state: 'created' }, error: null, createdAtMs: 1 };
+      hosts[0].reserved = { cpu: 1, ramMib: 512 }; hosts[0].reservedDiskGib = { default: 2 };
+      return route.fulfill({ status: 202, json: placement });
+    }
+    if (request.method() === 'PATCH') {
+      const host = hosts.find(host => path.endsWith(host.report.id));
+      host.draining = request.postDataJSON().draining;
+      return route.fulfill({ json: host });
+    }
+    if (path.endsWith('/stop')) { placement.action = 'stop'; placement.generation++; placement.observed.state = 'stopped'; return route.fulfill({ status: 202, json: placement }); }
+    return route.fulfill({ status: 404, json: {} });
+  });
+  await open('cluster');
+  await expect(page.locator('#detail-panel')).toBeHidden();
+  await expect(page.locator('#panel-toggle')).toHaveCount(0);
+  const name = page.getByLabel('VM name', { exact: true });
+  await name.fill('resilient-vm'); await name.focus();
+  const heartbeat = page.waitForResponse(response => new URL(response.url()).pathname === '/api/cluster/hosts');
+  await heartbeat; await expect(name).toBeFocused(); await expect(name).toHaveValue('resilient-vm');
+  await page.getByRole('button', { name: 'Place VM', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Retry saved placement' })).toBeVisible();
+  const saved = await page.evaluate(() => sessionStorage.getItem('firecrab.cluster.placement.v1'));
+  assert.ok(saved); await page.reload();
+  await page.getByRole('button', { name: 'Retry saved placement' }).click();
+  const placed = page.locator('[data-cluster-placement]'); await expect(placed).toContainText('resilient-vm');
+  const submissions = calls.filter(call => call.path === '/api/cluster/placements');
+  assert.equal(submissions.length, 2); assert.equal(submissions[0].key, submissions[1].key); assert.deepEqual(submissions[0].body, submissions[1].body);
+  assert.equal(submissions[0].body.targets.length, 2);
+  assert.deepEqual(submissions[0].body.targets[1], { network: { hostId: hostIds[1], resourceId: networkIds[1] }, storage: { hostId: hostIds[1], resourceId: 'default' } });
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('firecrab.cluster.placement.v1')), null);
+  await page.locator(`[data-cluster-host="${hostIds[0]}"]`).getByRole('button', { name: 'Drain host' }).click();
+  await expect(page.locator(`[data-cluster-host="${hostIds[0]}"]`).getByRole('button', { name: 'Resume placement' })).toBeVisible();
+  const candidate = page.locator(`[data-cluster-input="candidate-${hostIds[0]}"]`); await expect(candidate).toBeDisabled(); await expect(candidate).not.toBeChecked();
+  await placed.getByRole('button', { name: 'Stop', exact: true }).click(); await expect(placed).toContainText('stopped');
+  assert.ok(calls.some(call => call.path === `/api/cluster/placements/${placement.id}/stop`));
+  assert.ok(calls.some(call => call.method === 'PATCH' && call.path === `/api/cluster/hosts/${hostIds[0]}` && call.body.draining));
+  if (process.env.FIRECRAB_CLUSTER_SCREENSHOT) {
+    await page.evaluate(() => { document.querySelector('#content').scrollTop = 0; });
+    await page.screenshot({ path: process.env.FIRECRAB_CLUSTER_SCREENSHOT, fullPage: true });
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Cluster view fits a mobile viewport');
+});
+
 test('WASM owns the app and filters the same names, images, addresses, and state tabs', async () => {
   await open();
   await expect(page.locator('#root')).toHaveAttribute('data-engine', 'wasm');
@@ -285,11 +351,19 @@ test('network, storage and Shell creation send the expected wire fields', async 
 });
 
 test('MicroService deployment collects hostPort instead of sending unsupported replicas', async () => {
+  fixture.handlers.set('GET /api/micro-services/service-1/deployment', ({ send }) => send(200, null));
   await open('services');
-  await page.getByRole('button', { name: 'Details', exact: true }).click();
-  await page.getByRole('button', { name: 'Deploy', exact: true }).click();
+  await page.getByRole('button', { name: 'Open web', exact: true }).click();
+  const deploy = page.getByRole('button', { name: 'Deploy and run', exact: true });
+  await expect(page.locator('#service-status').getByRole('status')).toHaveText('Not deployed');
+  await expect(deploy).toBeEnabled();
+  const checkedPort = page.waitForResponse(response =>
+    new URL(response.url()).pathname === '/api/micro-services/service-1/deployment/check' &&
+    response.request().method() === 'POST' && response.request().postDataJSON()?.hostPort === 30123);
   await page.getByLabel('First host port', { exact: true }).fill('30123');
-  await page.getByRole('button', { name: 'Deploy and run', exact: true }).click();
+  assert.equal((await checkedPort).status(), 200);
+  await expect(deploy).toBeEnabled();
+  await deploy.click();
   await expect(page.locator('#editor')).toHaveCount(0);
   assert.deepEqual(mutation('/api/micro-services/service-1/deployment').body, { hostPort: 30123, microNetworkId: null });
 });
@@ -365,10 +439,9 @@ test('routing preserves saved tunnel configuration', async () => {
 test('database table preview renders cells as text', async () => {
   fixture.state.databases.push({ id: 'db-1', name: 'local-db', provider: 'local', engine: 'postgres', host: 'localhost', port: 5432 });
   await open('pipe/database');
-  await page.getByRole('button', { name: 'Details', exact: true }).click();
-  await page.getByRole('button', { name: 'Tables', exact: true }).click();
-  await page.getByRole('button', { name: 'public.users', exact: true }).click();
-  await expect(page.locator('#detail-result table')).toContainText('1');
+  await page.getByRole('button', { name: 'Browse local-db', exact: true }).click();
+  await page.getByLabel('Table', {exact:true}).selectOption({label:'public.users'});
+  await expect(page.getByRole('table',{name:'Data preview'})).toContainText('1');
   assert.deepEqual(mutation('/api/pipe/databases/db-1/preview').body, { schema: 'public', table: 'users', offset: 0, limit: 50 });
 });
 
@@ -386,9 +459,9 @@ test('navigation cancels dirty forms and ignores late responses from the previou
   await page.locator('nav a.sidebar-item[href="#/vms"]').click();
   await page.locator('nav a.sidebar-item[href="#/services"]').click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('MicroService');
-  await expect(page.locator('#content')).toContainText('ghcr.io/team/orders:1.0');
+  await expect(page.locator('.service-image')).toHaveAttribute('title', 'ghcr.io/team/orders:1.0');
   await new Promise(resolve => setTimeout(resolve, 550));
-  await expect(page.locator('#content')).toContainText('ghcr.io/team/orders:1.0');
+  await expect(page.locator('.service-image')).toHaveAttribute('title', 'ghcr.io/team/orders:1.0');
 });
 
 test('untrusted API text cannot create DOM elements or execute handlers', async () => {
@@ -690,13 +763,12 @@ test('database preview paginates both directions with delimiter-containing ident
   fixture.handlers.set('GET /api/pipe/databases/db-1/tables', ({ send }) => send(200, { tables: [{ schema: 'a|b', name: 'a|users' }] }));
   fixture.handlers.set('POST /api/pipe/databases/db-1/preview', ({ body, send }) => send(200, { columns: [{ name: 'name' }], rows: [['<img src=x>']], hasMore: body.offset === 0 }));
   await open('pipe/database');
-  await page.getByRole('button', { name: 'Details', exact: true }).click();
-  await page.getByRole('button', { name: 'Tables', exact: true }).click();
-  await page.getByRole('button', { name: 'a|b.a|users', exact: true }).click();
-  await page.getByRole('button', { name: 'Next 50 rows', exact: true }).click();
-  await page.getByRole('button', { name: 'Previous 50 rows', exact: true }).click();
-  await expect(page.locator('#detail-result table')).toContainText('<img src=x>');
-  await expect(page.locator('#detail-result img')).toHaveCount(0);
+  await page.getByRole('button', {name:'Browse db',exact:true}).click();
+  await page.getByLabel('Table',{exact:true}).selectOption({label:'a|b.a|users'});
+  await page.getByRole('button', { name:'Next rows', exact: true }).click();
+  await page.getByRole('button', { name:'Previous rows', exact: true }).click();
+  await expect(page.getByRole('table',{name:'Data preview'})).toContainText('<img src=x>');
+  await expect(page.getByRole('table',{name:'Data preview'}).locator('img')).toHaveCount(0);
   assert.deepEqual(fixture.requests.filter(r => r.path.endsWith('/preview')).map(r => r.body.offset), [0,50,0]);
   assert.equal(mutation('/api/pipe/databases/db-1/preview').body.schema, 'a|b');
 });
@@ -853,12 +925,12 @@ test('OCI inspection and database connection tests preserve the active draft', a
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await open('pipe/database');
-  await page.getByRole('button', { name: 'Connect database', exact: true }).click();
-  await page.getByLabel('Name', { exact: true }).fill('draft-db');
-  await page.getByLabel('Connection URI', { exact: true }).fill('postgres://fixture.invalid/test');
+  await page.getByRole('button', { name: 'Add database', exact: true }).click();
+  await page.getByLabel('Connection name', { exact: true }).fill('draft-db');
+  await page.getByLabel('Database URI', { exact: true }).fill('postgres://fixture.invalid/test');
   await page.getByRole('button', { name: 'Test connection', exact: true }).click();
-  await expect(page.locator('#form-result')).toHaveText('Connected');
-  await expect(page.getByLabel('Name', { exact: true })).toHaveValue('draft-db');
+  await expect(page.locator('#db-notice')).toHaveText('Database connection succeeded.');
+  await expect(page.getByLabel('Connection name', { exact: true })).toHaveValue('draft-db');
 });
 
 
