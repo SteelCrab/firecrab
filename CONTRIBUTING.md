@@ -87,6 +87,7 @@ cargo build -p firecrab-cli --locked
 `service dev` installs microManager when missing, builds the local API and network
 helper inside WSL2, and restarts them. On macOS and Windows it also starts the
 source dashboard at `http://localhost:8080`; Node.js and npm are required.
+Use `service dev --port 8098` to select another dashboard port.
 The command verifies both the dashboard and its API connection before returning. See the
 [Windows guide](public-docs/development/micromanager.md#windows)
 for build, restore, and frontend options.

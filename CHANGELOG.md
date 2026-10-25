@@ -23,6 +23,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- `firecrab service dev --port PORT` selects the development dashboard port on
+  macOS and Windows. Development controls retain the selected port, and older
+  dashboard sessions default to 8080. Tracked in [#488](https://github.com/SteelCrab/firecrab/issues/488).
+
 - Pipe Auth links a Firecrab account with an account integration token issued
   by `console.firecrab.dev`. It displays the verified account ID, email, and
   token expiry. Address-scoped Tunnel tokens remain separate. Existing Tunnel

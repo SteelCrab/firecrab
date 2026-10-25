@@ -147,12 +147,13 @@ pub fn run(command: Command) -> Result<i32, Error> {
         Command::Dev {
             command,
             source,
+            port,
             release,
             restore,
             yes,
         } => match command {
             Some(command) => run_dev_control(command),
-            None => run_dev(source.as_deref(), release, restore, yes),
+            None => run_dev(source.as_deref(), port, release, restore, yes),
         },
         Command::Shell { command } => run_shell(&command),
         Command::ForwardPorts {
@@ -298,7 +299,13 @@ fn run_repair() -> Result<i32, Error> {
     Ok(0)
 }
 
-fn run_dev(source: Option<&Path>, release: bool, restore: bool, yes: bool) -> Result<i32, Error> {
+fn run_dev(
+    source: Option<&Path>,
+    port: u16,
+    release: bool,
+    restore: bool,
+    yes: bool,
+) -> Result<i32, Error> {
     // Validate and archive before installing or starting anything.
     let checkout = if restore {
         None
@@ -340,7 +347,7 @@ fn run_dev(source: Option<&Path>, release: bool, restore: bool, yes: bool) -> Re
     wait_for_dev_api(&layout)?;
     report!("[PASS] API: http://127.0.0.1:5523/");
     if let Some(source) = frontend {
-        dashboard::start(&source, &layout.managed_home).map_err(dev::Error::from)?;
+        dashboard::start(&source, &layout.managed_home, port).map_err(dev::Error::from)?;
     } else {
         dashboard::stop(&layout.managed_home).map_err(dev::Error::from)?;
     }
@@ -380,7 +387,8 @@ fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
         wait_for_dev_api(&layout)?;
         report!("[PASS] API: http://127.0.0.1:5523/");
         let source = dashboard::source(&layout.managed_home).map_err(dev::Error::from)?;
-        dashboard::start(&source, &layout.managed_home).map_err(dev::Error::from)?;
+        let port = dashboard::port(&layout.managed_home).map_err(dev::Error::from)?;
+        dashboard::start(&source, &layout.managed_home, port).map_err(dev::Error::from)?;
     }
     Ok(0)
 }

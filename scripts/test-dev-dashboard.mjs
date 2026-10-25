@@ -31,7 +31,7 @@ test("embedded dashboard starts real Vite and authenticates shutdown", { timeout
     try {
       const response = await fetch(`${url}/__firecrab_dev/`, { headers });
       if (response.headers.get("content-type")?.includes("application/json")) {
-        assert.deepEqual(await response.json(), { source: root, session, dependencies });
+        assert.deepEqual(await response.json(), { source: root, session, dependencies, port });
         ready = true; break;
       }
     } catch {}

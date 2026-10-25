@@ -180,7 +180,7 @@ pub enum Command {
         #[arg(long, requires = "logs", value_parser = clap::value_parser!(u16).range(1..=1000))]
         tail: Option<u16>,
     },
-    /// Build/deploy guest services and start the source dashboard on localhost:8080.
+    /// Build/deploy guest services and start the source dashboard.
     #[command(args_conflicts_with_subcommands = true)]
     Dev {
         #[command(subcommand)]
@@ -188,6 +188,9 @@ pub enum Command {
         /// Checkout root (defaults to the current directory).
         #[arg(long, conflicts_with = "restore")]
         source: Option<std::path::PathBuf>,
+        /// Development dashboard port (does not change the API port).
+        #[arg(long, default_value_t = 8080, conflicts_with = "restore", value_parser = clap::value_parser!(u16).range(1..))]
+        port: u16,
         /// Build optimized guest binaries instead of debug binaries.
         #[arg(long, conflicts_with = "restore")]
         release: bool,
@@ -388,6 +391,7 @@ mod tests {
         ));
         assert!(TestCli::try_parse_from(["test", "dev", "--restore", "--source", "."]).is_err());
         assert!(TestCli::try_parse_from(["test", "dev", "--restore", "--release"]).is_err());
+        assert!(TestCli::try_parse_from(["test", "dev", "--restore", "--port", "8098"]).is_err());
         let cli = TestCli::try_parse_from([
             "test",
             "dev",
@@ -406,6 +410,22 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn dev_dashboard_port_defaults_to_8080_and_accepts_only_nonzero_ports() {
+        let cli = TestCli::try_parse_from(["test", "dev"]).unwrap();
+        assert!(matches!(cli.command, Command::Dev { port: 8080, .. }));
+        for port in ["1", "8098", "65535"] {
+            let cli = TestCli::try_parse_from(["test", "dev", "--port", port]).unwrap();
+            assert!(
+                matches!(cli.command, Command::Dev { port: parsed, .. } if parsed.to_string() == port)
+            );
+        }
+        for port in ["0", "65536", "-1", "invalid"] {
+            assert!(TestCli::try_parse_from(["test", "dev", "--port", port]).is_err());
+        }
+        assert!(TestCli::try_parse_from(["test", "dev", "--port"]).is_err());
     }
 
     #[test]
@@ -446,6 +466,7 @@ mod tests {
             ));
             for options in [
                 &["--source", "."][..],
+                &["--port", "8098"][..],
                 &["--release"][..],
                 &["--restore"][..],
                 &["--yes"][..],

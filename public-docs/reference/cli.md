@@ -130,6 +130,8 @@ See [OCI images](../guides/oci.md) for registry access and import limits.
 `firecrab service` controls native systemd on Linux and managed Debian on macOS/Windows.
 Use the [macOS](../getting-started/macos.md#service-commands) or [Windows](../getting-started/windows.md#service-commands) command table for managed services.
 Use [service dev](../development/micromanager.md) to deploy source-built API/helper binaries.
+`firecrab service dev --port 8098` selects the development dashboard port (default 8080).
+Development start/restart controls reuse the saved port; the API port stays unchanged.
 
 On macOS and Windows, lifecycle controls have separate scopes:
 
