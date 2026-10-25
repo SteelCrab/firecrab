@@ -116,5 +116,6 @@ Run `scripts/test-deploy-nginx.py --firecrab PATH --nginx PATH` for real Nginx H
 The test uses disposable local application servers and does not boot MicroVMs.
 Full acceptance also requires a Linux/KVM host with real MicroVMs, image pulls, restart recovery, and resource measurements.
 The Installer CI job runs `sudo python3 scripts/ci-qa-deploy.py --disposable-host` for real MicroVM/Nginx updates, held requests, API restart, rollback, and injected failures.
+It also uploads continuous runtime coverage, including counters retained across API restarts.
 The script refuses hosts with existing VMs, services, pools, Auth connections, or ingress configuration.
 It uses local OCI images and a private Auth fixture; it does not validate an external registry or public TLS.
