@@ -72,10 +72,12 @@ pub fn cache_path(version: &str) -> Option<PathBuf> {
     kernel::cache_relative(Architecture::HOST, version)
 }
 
+/// Recover a kernel version only from a managed path for the host architecture.
 pub fn version_for_path(path: &Path) -> Option<String> {
     kernel::version_for_path(Architecture::HOST, path)
 }
 
+/// Build or reuse a kernel and record the install job's final result.
 pub async fn run_install(
     tracker: ImageInstallTracker,
     templates: TemplateRegistry,
@@ -103,6 +105,7 @@ pub async fn run_install(
     }
 }
 
+/// Expose the current install status, log, timing, and source download progress.
 pub fn snapshot(tracker: &ImageInstallTracker, version: &str) -> KernelInstallResponse {
     let snapshot = tracker.snapshot(version);
     KernelInstallResponse {
@@ -116,6 +119,7 @@ pub fn snapshot(tracker: &ImageInstallTracker, version: &str) -> KernelInstallRe
     }
 }
 
+/// Convert a prefixed legacy digest to the API's bare hexadecimal form.
 fn digest_body(value: &str) -> String {
     value.strip_prefix("sha256:").unwrap_or(value).to_owned()
 }

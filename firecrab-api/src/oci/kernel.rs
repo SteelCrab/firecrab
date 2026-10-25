@@ -11,33 +11,53 @@ use std::process::Stdio;
 use std::time::SystemTime;
 use tokio::io::AsyncBufReadExt as _;
 
+/// Official release catalog used unless the host supplies an override.
 pub(crate) const DEFAULT_RELEASES_URL: &str = "https://www.kernel.org/releases.json";
+/// Shared native build recipe embedded so installed hosts need no checkout.
 const BUILD_SCRIPT: &str = include_str!("../../../scripts/build-host-kernel.sh");
+/// Receipt revision that invalidates cached images when the build recipe changes.
 const BUILD_REVISION: &str = "firecrab-host1";
+/// Maximum image size accepted from either the builder or an operator.
 const KERNEL_MAX_BYTES: u64 = 256 * 1024 * 1024;
+/// Maximum compressed source size accepted during download and cache reuse.
 const SOURCE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+/// Maximum release catalog or checksum response size.
 const METADATA_MAX_BYTES: u64 = 4 * 1024 * 1024;
+/// Time before a cached stable release needs an upstream refresh.
 const RELEASE_CACHE_TTL: Duration = Duration::from_secs(3600);
+/// x86_64 console and virtio root disk settings for Firecracker guests.
 pub(super) const X86_64_BOOT_ARGS: &str = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw";
+/// aarch64 console and root disk settings, retaining the early boot console.
 pub(super) const AARCH64_BOOT_ARGS: &str =
     "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw";
 
+/// Active stable release with a validated official source archive URL.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub(crate) struct StableRelease {
+    /// Final numeric release, excluding release candidates and local suffixes.
     pub version: String,
+    /// Official kernel.org archive URL derived from the version.
     pub source_url: String,
 }
 
+/// Cache receipt linking the output image to its source and build recipe.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BuiltKernel {
+    /// Upstream numeric release used for the build.
     pub version: String,
+    /// CPU architecture required to reuse the image.
     pub architecture: String,
+    /// Official archive URL recorded when the source was verified.
     pub source_url: String,
+    /// Verified source SHA-256 encoded as lowercase hex without a prefix.
     pub source_sha256: String,
+    /// Built image SHA-256 encoded as lowercase hex without a prefix.
     pub image_sha256: String,
+    /// Build recipe revision required by the current runtime.
     pub build_revision: String,
 }
 
+/// Read the optional operator-supplied kernel path, ignoring empty values.
 pub(super) fn configured_kernel_override() -> Option<PathBuf> {
     std::env::var("FIRECRAB_OCI_KERNEL_PATH")
         .ok()
@@ -46,6 +66,7 @@ pub(super) fn configured_kernel_override() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Read the catalog URL; an empty value, `none`, or `-` disables source downloads.
 pub(crate) fn configured_releases_url() -> Option<String> {
     let value = std::env::var("FIRECRAB_KERNEL_RELEASES_URL")
         .unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_owned());
@@ -66,6 +87,7 @@ pub(crate) fn is_source_version(version: &str) -> bool {
         && parts[0] != "0"
 }
 
+/// Construct an official source URL only for a final numeric version.
 pub(crate) fn source_url(version: &str) -> Option<String> {
     is_source_version(version).then(|| {
         format!(
@@ -75,6 +97,7 @@ pub(crate) fn source_url(version: &str) -> Option<String> {
     })
 }
 
+/// Name a native image or a recognized legacy cache entry for its architecture.
 pub(crate) fn image_name(architecture: Architecture, version: &str) -> Option<String> {
     if !is_source_version(version) && kernel_legacy::image_digest(architecture, version).is_none() {
         return None;
@@ -86,6 +109,7 @@ pub(crate) fn image_name(architecture: Architecture, version: &str) -> Option<St
     Some(format!("{prefix}-{version}-{}", architecture.as_str()))
 }
 
+/// Return the managed image path relative to the image root.
 pub(crate) fn cache_relative(architecture: Architecture, version: &str) -> Option<PathBuf> {
     Some(
         Path::new(".oci/kernel")
@@ -94,6 +118,7 @@ pub(crate) fn cache_relative(architecture: Architecture, version: &str) -> Optio
     )
 }
 
+/// Recover a version only from the exact managed path for this architecture.
 pub(crate) fn version_for_path(architecture: Architecture, path: &Path) -> Option<String> {
     let filename = path.file_name()?.to_str()?;
     let prefix = match architecture {
@@ -106,6 +131,7 @@ pub(crate) fn version_for_path(architecture: Architecture, path: &Path) -> Optio
     (cache_relative(architecture, version)?.as_path() == path).then(|| version.to_owned())
 }
 
+/// Append the receipt suffix without replacing dots in the kernel version.
 fn receipt_path(image_root: &Path, architecture: Architecture, version: &str) -> Option<PathBuf> {
     Some(
         image_root
@@ -114,6 +140,8 @@ fn receipt_path(image_root: &Path, architecture: Architecture, version: &str) ->
     )
 }
 
+/// Read a receipt whose release, architecture, source URL, and recipe match.
+/// The image digest is checked separately by [`cached_kernel_is_valid`].
 pub(crate) async fn built_kernel(
     image_root: &Path,
     architecture: Architecture,
@@ -135,6 +163,7 @@ pub(crate) async fn built_kernel(
     Some(receipt)
 }
 
+/// Select the active stable entry and reject unexpected source locations.
 pub(crate) fn parse_stable_release(bytes: &[u8]) -> Result<StableRelease, ResolveError> {
     let document: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
         ResolveError::Malformed(format!("kernel.org release metadata: {error}"))
@@ -211,6 +240,7 @@ pub(crate) async fn latest_stable(
     }
 }
 
+/// Create a source client with bounded connection and read waits.
 fn http_client() -> Result<reqwest::Client, ResolveError> {
     reqwest::Client::builder()
         .user_agent(concat!("firecrab-api/", env!("CARGO_PKG_VERSION")))
@@ -220,6 +250,7 @@ fn http_client() -> Result<reqwest::Client, ResolveError> {
         .map_err(|error| download_failed(DEFAULT_RELEASES_URL, error.to_string()))
 }
 
+/// Fetch metadata with both a total timeout and a streamed byte limit.
 async fn fetch_bytes(url: &str, limit: u64) -> Result<Vec<u8>, ResolveError> {
     let mut response = http_client()?
         .get(url)
@@ -245,6 +276,7 @@ async fn fetch_bytes(url: &str, limit: u64) -> Result<Vec<u8>, ResolveError> {
     Ok(bytes)
 }
 
+/// Find the exact source archive in kernel.org's SHA-256 checksum list.
 pub(crate) fn source_checksum(bytes: &[u8], version: &str) -> Result<Sha256Digest, ResolveError> {
     let filename = format!("linux-{version}.tar.xz");
     let text =
@@ -265,6 +297,7 @@ pub(crate) fn source_checksum(bytes: &[u8], version: &str) -> Result<Sha256Diges
     )))
 }
 
+/// Verify image architecture and content against a receipt or legacy digest.
 pub(crate) async fn cached_kernel_is_valid(
     image_root: &Path,
     architecture: Architecture,
@@ -286,6 +319,8 @@ pub(crate) async fn cached_kernel_is_valid(
     actual.as_str() == expected
 }
 
+/// List recognized cache filenames from newest to oldest numeric release.
+/// Callers must validate each image before treating it as installed.
 pub(crate) async fn installed_versions(
     image_root: &Path,
     architecture: Architecture,
@@ -312,6 +347,7 @@ pub(crate) async fn installed_versions(
     versions
 }
 
+/// Serialize access to the cache entry for one architecture and version.
 pub(crate) async fn cache_lock(
     image_root: &Path,
     architecture: Architecture,
@@ -330,6 +366,8 @@ pub(crate) async fn cache_lock(
     .await
 }
 
+/// Reuse a verified image or build the requested source release on this host.
+/// `stable` resolves through the catalog; legacy entries require a valid cache.
 pub(crate) async fn ensure_managed_kernel(
     image_root: &Path,
     architecture: Architecture,
@@ -469,6 +507,8 @@ pub(crate) async fn ensure_managed_kernel(
     result
 }
 
+/// Publish a bounded source archive only after its expected SHA-256 matches.
+/// Valid cached archives are reused; failed partial downloads are removed.
 pub(crate) async fn download_source(
     url: &str,
     destination: &Path,
@@ -542,6 +582,7 @@ pub(crate) async fn download_source(
     result
 }
 
+/// Hash a bounded regular source archive without following a symlink.
 async fn source_digest(path: &Path) -> Result<Sha256Digest, ResolveError> {
     let path = path.to_owned();
     tokio::task::spawn_blocking(move || {
@@ -584,6 +625,7 @@ impl Drop for BuildGroup {
     }
 }
 
+/// Run the embedded recipe in a process group and stream both output pipes.
 async fn run_build(
     architecture: Architecture,
     version: &str,
@@ -631,6 +673,7 @@ async fn run_build(
     Ok(())
 }
 
+/// Forward compiler output to the install job and retain a bounded error tail.
 async fn build_log(
     reader: impl AsyncRead + Unpin,
     progress: Option<(&ImageInstallTracker, &str)>,
@@ -655,6 +698,7 @@ async fn build_log(
     Ok(tail.into_iter().collect::<Vec<_>>().join("\n"))
 }
 
+/// Select an operator image, current stable, or a verified installed fallback.
 pub(super) async fn ensure_host_kernel(
     image_root: &Path,
     architecture: Architecture,
@@ -695,6 +739,7 @@ pub(super) async fn ensure_host_kernel(
     Err(error)
 }
 
+/// Verify and copy an operator image into a cache entry named by its digest.
 async fn operator_kernel(
     image_root: &Path,
     architecture: Architecture,
@@ -746,6 +791,7 @@ async fn operator_kernel(
     result
 }
 
+/// Pair a managed image with the boot arguments for its CPU architecture.
 fn boot_pair(architecture: Architecture, kernel: PathBuf, version: &str) -> KernelBootPair {
     KernelBootPair {
         architecture,
@@ -760,6 +806,7 @@ fn boot_pair(architecture: Architecture, kernel: PathBuf, version: &str) -> Kern
     }
 }
 
+/// Hash a bounded regular image and check its executable architecture header.
 pub(crate) async fn inspect_kernel(
     path: &Path,
     architecture: Architecture,
@@ -807,6 +854,7 @@ pub(crate) async fn inspect_kernel(
     .map_err(|error| unavailable(architecture, format!("verify kernel: {error}")))?
 }
 
+/// Replace metadata through a sibling staging file and remove failed staging.
 async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ResolveError> {
     let partial = path.with_extension(format!("{}-partial", Uuid::new_v4()));
     let result = async {

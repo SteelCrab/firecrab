@@ -3,6 +3,7 @@
 
 use crate::image_install::Architecture;
 
+/// Return a legacy image digest for cache verification without enabling downloads.
 pub(crate) fn image_digest(architecture: Architecture, version: &str) -> Option<&'static str> {
     let pins: &[(&str, &str)] = match architecture {
         Architecture::X86_64 => &[
