@@ -97,7 +97,7 @@ Build API, helper, CLI, and dashboard together, then install them:
 ./install.sh --bin-dir target/release
 ```
 
-The script requires the pinned Rust toolchain, Node.js, and npm.
+The script requires the pinned Rust toolchain, its `wasm32-unknown-unknown` target, wasm-pack 0.14.0, Node.js, and npm.
 For a manual build, compile `firecrab-api`, `firecrab-helper`, and `firecrab-cli` with `cargo build --release --locked`, then run `npm ci` and `npm run build` in `firecrab-frontend`.
 Pass `--dashboard-dir firecrab-frontend/dist` to select that dashboard explicitly.
 

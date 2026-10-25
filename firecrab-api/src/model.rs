@@ -1,5 +1,5 @@
 //! Internal VM/lease record types, re-exporting the wire types shared with
-//! `firecrab-frontend` from `firecrab-api-types` alongside server-only
+//! the WASM frontend from `firecrab-api-types` alongside server-only
 //! fields (e.g. template artifact hashes) that never cross the API boundary.
 
 use std::collections::BTreeMap;
