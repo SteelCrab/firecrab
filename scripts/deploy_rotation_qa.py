@@ -151,8 +151,10 @@ def run_rotation(api, wait_for, traffic, network, spec_a, port, evidence):
         def bad_attempt():
             checks()
             record = current(first)
-            return record if record["id"] != rotated[0]["id"] and record["phase"] == "checking_health" else None
-        attempted = wait_for(bad_attempt, timeout=180)
+            probing = record["phase"] == "starting" and any(
+                instance["ipv4"] and not instance["healthy"] for instance in record["instances"])
+            return record if record["id"] != rotated[0]["id"] and probing else None
+        attempted = wait_for(bad_attempt, timeout=180, message="unhealthy rotation did not reach a booted candidate")
         # Restore desired values while the captured bad candidate is still probing.
         # That attempt must keep its private snapshot and fail without another retry race.
         edit("qa-secret-v2")
