@@ -38,9 +38,19 @@ async fn all_unready_endpoints_keep_the_owned_hostname_and_return_503_until_read
     assert!(suspended.nginx().contains("location / { return 503; }"));
     assert!(!suspended.nginx().contains("upstream fc_route_0"));
     assert!(record.domain_route_owned);
+    assert!(before_cleanup(&state, &record).await.is_err());
+    before_stop(&state, &record, record.instances[0].vm_id)
+        .await
+        .unwrap();
     let next = ready(&record, None).unwrap();
     switch(&state, &mut record, next.clone()).await.unwrap();
     assert_eq!(helper.config.lock().unwrap().routes[0].upstreams, next);
+    before_cleanup(&state, &record).await.unwrap();
+    assert!(
+        before_stop(&state, &record, record.instances[0].vm_id)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

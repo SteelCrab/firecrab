@@ -209,5 +209,53 @@ pub(super) fn ready(
         .collect()
 }
 
+/// A restart can resume long after drain was first confirmed. Recheck ownership.
+pub(super) async fn before_stop(
+    state: &AppState,
+    record: &MicroServiceDeployment,
+    id: Uuid,
+) -> Result<(), String> {
+    if record.spec.domain.is_none() {
+        return Ok(());
+    }
+    let snapshot = inspect(state).await?;
+    let route = owned_route(&snapshot, record)?.ok_or("Recovery route disappeared; VM retained")?;
+    let target = record
+        .instances
+        .iter()
+        .find(|instance| instance.vm_id == id)
+        .and_then(|instance| {
+            format!("{}:{}", instance.ipv4, record.spec.port)
+                .parse::<SocketAddr>()
+                .ok()
+        });
+    if target.is_some_and(|address| route.upstreams.contains(&address))
+        || snapshot
+            .ingress_workers
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|worker| worker.draining)
+    {
+        return Err("Recovery endpoint is still routed or draining; VM retained".into());
+    }
+    Ok(())
+}
+
+pub(super) async fn before_cleanup(
+    state: &AppState,
+    record: &MicroServiceDeployment,
+) -> Result<(), String> {
+    if record.spec.domain.is_none() {
+        return Ok(());
+    }
+    let snapshot = inspect(state).await?;
+    let route = owned_route(&snapshot, record)?.ok_or("Recovery route disappeared; VM retained")?;
+    if route.upstreams != ready(record, None)? {
+        return Err("Recovery serving generation changed before cleanup; VM retained".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

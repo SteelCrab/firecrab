@@ -218,6 +218,7 @@ async fn execute(state: &AppState, record: &mut MicroServiceDeployment) -> Resul
                 advance(state, record, ReplicaRepairStage::Stop).await?;
             }
             ReplicaRepairStage::Stop => {
+                routes::before_stop(state, record, repair.vm_id).await?;
                 stop(state, record, repair.vm_id).await?;
                 advance(
                     state,
@@ -231,6 +232,7 @@ async fn execute(state: &AppState, record: &mut MicroServiceDeployment) -> Resul
                 .await?;
             }
             ReplicaRepairStage::Start => {
+                routes::before_stop(state, record, repair.vm_id).await?;
                 if start(state, record, repair.vm_id).await.is_ok() {
                     advance(state, record, ReplicaRepairStage::Publish).await?;
                 } else {
@@ -238,6 +240,7 @@ async fn execute(state: &AppState, record: &mut MicroServiceDeployment) -> Resul
                 }
             }
             ReplicaRepairStage::Replace => {
+                routes::before_stop(state, record, repair.vm_id).await?;
                 stop(state, record, repair.vm_id).await?;
                 // Retry the exact reserved candidate after a crash; never create an untracked VM.
                 let id = if let Some(id) = repair.replacement_id {
@@ -285,6 +288,7 @@ async fn execute(state: &AppState, record: &mut MicroServiceDeployment) -> Resul
                 advance(state, record, ReplicaRepairStage::Cleanup).await?;
             }
             ReplicaRepairStage::Cleanup => {
+                routes::before_cleanup(state, record).await?;
                 if repair.replacement_id.is_some() {
                     stop(state, record, repair.vm_id).await?;
                     if vm(state, repair.vm_id).is_some() {
