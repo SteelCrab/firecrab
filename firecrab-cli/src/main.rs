@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 
 mod ai_sandbox;
 mod api_client;
+mod ca;
 #[cfg(target_os = "linux")]
 mod doctor;
 #[cfg(test)]
@@ -27,6 +28,7 @@ mod shell;
 mod stack;
 #[cfg(target_os = "linux")]
 mod status;
+mod tls;
 #[cfg(target_os = "linux")]
 mod update;
 mod vm;
@@ -52,6 +54,11 @@ enum Command {
     Sandbox {
         #[command(subcommand)]
         command: ai_sandbox::Command,
+    },
+    /// Bootstrap the private CA and issue authenticated host certificates offline.
+    Ca {
+        #[command(subcommand)]
+        command: ca::Command,
     },
     /// Connect Pipe AI providers and select models through the host REST API.
     Ai {
@@ -167,6 +174,7 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
+        Command::Ca { command } => finish_api_command(ca::run(command)),
         Command::Ai { command } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
             pipe_ai::run(client, command)
         }),
@@ -272,7 +280,8 @@ fn build_api_client(
     api: Option<&str>,
     host: Option<&str>,
 ) -> Result<api_client::ApiClient, hosts::Error> {
-    api_client::resolve_api_base(api, host).map(api_client::ApiClient::new)
+    let base = api_client::resolve_api_base(api, host)?;
+    api_client::ApiClient::try_new(base).map_err(|error| hosts::Error::Tls(error.to_string()))
 }
 
 /// Resolves one remote client and maps either resolution or API failure to an exit code.
@@ -335,7 +344,8 @@ fn run_info(json: bool, api: Option<&str>, host: Option<&str>) -> Result<(), hos
 fn run_status(json: bool, api: Option<&str>, host: Option<&str>) -> Result<(), hosts::Error> {
     let runner = shell::RealCommandRunner;
     let api_base = api_client::resolve_api_base(api, host)?;
-    let client = api_client::ApiClient::new(api_base);
+    let client = api_client::ApiClient::try_new(api_base)
+        .map_err(|error| hosts::Error::Tls(error.to_string()))?;
     let report = status::collect(&runner, &client);
     if json {
         status::print_json(&report);

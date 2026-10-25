@@ -1,0 +1,19 @@
+[package]
+name = "firecrab-pki"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+libc = "0.2"
+rcgen = { version = "0.14.10", features = ["x509-parser"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2.2"
+thiserror = { workspace = true }
+time = "0.3"
+uuid = { workspace = true, features = ["v4"] }
+x509-parser = { version = "0.18.1", features = ["verify"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

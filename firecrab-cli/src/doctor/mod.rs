@@ -89,6 +89,7 @@ pub struct DoctorEnv {
     /// itself.
     pub firecracker_bin: Option<String>,
     pub confdir: String,
+    pub tls_paths: Result<Option<firecrab_pki::TlsPaths>, firecrab_pki::Error>,
 }
 
 impl DoctorEnv {
@@ -109,6 +110,7 @@ impl DoctorEnv {
             storage_roots: std::env::var("FIRECRAB_STORAGE_ROOTS").ok(),
             firecracker_bin: std::env::var("FIRECRAB_FIRECRACKER_BIN").ok(),
             confdir: env_or("CONFDIR", "/etc/firecrab"),
+            tls_paths: firecrab_pki::TlsPaths::from_env(),
         }
     }
 }
@@ -129,6 +131,7 @@ impl Default for DoctorEnv {
             storage_roots: None,
             firecracker_bin: None,
             confdir: "/etc/firecrab".to_owned(),
+            tls_paths: Ok(None),
         }
     }
 }
@@ -191,7 +194,8 @@ fn run_checked<F: FnOnce() -> Vec<CheckResult>>(name: &str, f: F) -> Vec<CheckRe
     }
 }
 
-/// Runs all 13 checks in the same order as the bash script's `run` section
+/// Runs host checks in the original order, followed by configured TLS checks.
+/// The original bash `run` section covered
 /// (kvm, firecracker, ip_forward, nft, dnsmasq, helper_socket, ufw,
 /// data_root, images, image_install_tools, selinux_domain, registry_egress,
 /// reflink).
@@ -222,6 +226,9 @@ pub fn run_all(env: &DoctorEnv, runner: &dyn CommandRunner, digest: bool) -> Rep
         checks::check_registry_egress(env, runner)
     }));
     results.extend(run_checked("reflink", || checks::check_reflink(env)));
+    results.extend(run_checked("tls_certificates", || {
+        checks::check_tls_certificates(env)
+    }));
     Report { results }
 }
 

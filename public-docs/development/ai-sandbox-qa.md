@@ -81,7 +81,7 @@ Screenshots under `assets/dashboard/ai-sandbox/` use labelled fixture account/mo
 
 ## Rust/WASM integration, 2026-10-25
 
-PR #490 integrates main at `ec06ac64` and replaces its React slice with Rust-owned state, rendering and delegated events.
+PR #490 ports the UI from main at `ec06ac64` and integrates the subsequent Git-source/mTLS main at `5f913d87` and replaces its React slice with Rust-owned state, rendering and delegated events.
 The same conversation, project dialog, task board, diff/activity review, selected apply, icons and final AI sidebar group are preserved.
 The browser binding remains thin; the Sandbox application logic is in `firecrab-frontend/src/sandbox.rs` and its modules.
 The old React components, navigation files and browser API helper are removed.
@@ -93,4 +93,4 @@ The old React components, navigation files and browser API helper are removed.
 - Updated screenshots use the WASM UI and retain the fixture-data labels. Original live-provider/MicroVM evidence above is separate from this frontend port.
 
 Run `cargo test --manifest-path firecrab-frontend/Cargo.toml --locked` and `npm run test:sandbox --prefix firecrab-e2e` for the port-specific checks.
-The current head's CI and shared dashboard regressions are checked before marking the PR ready for review.
+Shared navigation/dashboard/Pipe AI browser regressions: **39 passed** after the port. The current head's CI is checked before marking the PR ready for review.

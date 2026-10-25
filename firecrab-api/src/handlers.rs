@@ -22,6 +22,7 @@ pub mod secrets;
 pub mod security_groups;
 pub mod shells;
 pub mod stack_applies;
+pub mod stack_sources;
 pub mod stacks;
 pub mod storage;
 pub mod update;

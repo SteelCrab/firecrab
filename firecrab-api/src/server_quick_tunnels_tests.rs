@@ -19,7 +19,7 @@ pub(super) async fn router(root: &std::path::Path, socket: PathBuf) -> Router {
         .await
         .unwrap();
     state.network = crate::network::NetworkClient::with_socket_path(socket);
-    let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+    let mut config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
     config.request_timeout = Duration::from_millis(1);
     build_router(state, &config)
 }

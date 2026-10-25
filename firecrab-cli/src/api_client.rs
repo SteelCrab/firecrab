@@ -83,12 +83,24 @@ impl ApiClient {
     /// response instead of timing out first. [`Self::get_host_status`] keeps
     /// its shorter 3s timeout so `status` stays responsive when the API is
     /// down.
-    pub fn new(base: String) -> Self {
-        let client = reqwest::blocking::Client::builder()
+    pub fn try_new(base: String) -> Result<Self, ApiError> {
+        let mut builder = reqwest::blocking::Client::builder()
             .timeout(DEFAULT_REQUEST_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none());
+        if base.starts_with("https://") {
+            let config =
+                crate::tls::client_config().map_err(|e| ApiError::Unreachable(e.to_string()))?;
+            builder = builder.use_preconfigured_tls(config);
+        }
+        let client = builder
             .build()
-            .expect("reqwest client build");
-        Self { base, client }
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Ok(Self { base, client })
+    }
+
+    #[cfg(test)]
+    pub fn new(base: String) -> Self {
+        Self::try_new(base).expect("test API client")
     }
 
     /// Resolved API origin without a trailing slash.
