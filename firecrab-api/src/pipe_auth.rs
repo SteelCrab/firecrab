@@ -166,7 +166,7 @@ impl SavedAuth {
                 expires_at: Some(*expires_at),
                 registry: None,
                 region: None,
-                services: vec![],
+                services: vec!["secrets"],
             },
             Self::Github { username, .. } => Connection {
                 provider: Provider::Github,
@@ -846,7 +846,7 @@ mod tests {
         );
         assert_eq!(connection["expiresAt"], 4102444800000u64);
         assert_eq!(connection["registry"], serde_json::Value::Null);
-        assert_eq!(connection["services"], serde_json::json!([]));
+        assert_eq!(connection["services"], serde_json::json!(["secrets"]));
         assert!(!connection.to_string().contains(&token));
         assert!(auth.registry_credential().await.is_err());
         task.abort();
