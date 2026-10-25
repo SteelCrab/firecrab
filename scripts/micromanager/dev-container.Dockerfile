@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && (getent group kvm >/dev/null || groupadd --system kvm) \
     && systemctl mask systemd-remount-fs.service systemd-udevd.service \
        systemd-udevd-control.socket systemd-udevd-kernel.socket \
-       getty.target console-getty.service
+       getty.target console-getty.service dnsmasq.service
 
 COPY install.sh /opt/firecrab-bootstrap/install.sh
 COPY scripts/ /opt/firecrab-bootstrap/scripts/

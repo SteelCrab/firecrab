@@ -267,6 +267,9 @@ impl<'a> MicroVm<'a> {
         let ready = Instant::now() + Duration::from_secs(300);
         loop {
             let detail = vm.api.get(&format!("/api/vms/{id}"))?;
+            if detail["state"] == "error" {
+                return Err(failed(format!("VM {id} failed during startup: {detail}")));
+            }
             if detail["state"] == "running" {
                 vm.ipv4 = detail["ipv4"]
                     .as_str()
@@ -450,22 +453,20 @@ impl Drop for MicroVm<'_> {
                 );
             }
             let unit = format!("firecrab-vm-{}.service", id.simple());
-            if let Ok(journal) = self.runtime.exec(&[
-                "journalctl",
-                "--no-pager",
-                "-n",
-                "60",
-                "-u",
-                &unit,
-                "-u",
-                "firecrab-api",
-                "-u",
-                "firecrab-helper",
-            ]) {
-                eprintln!(
-                    "[RUNTIME TEST] {} VM journal:\n{journal}",
-                    self.runtime.name
-                );
+            for (service, lines) in [
+                (unit.as_str(), "60"),
+                ("firecrab-helper", "80"),
+                ("firecrab-api", "20"),
+            ] {
+                if let Ok(journal) =
+                    self.runtime
+                        .exec(&["journalctl", "--no-pager", "-n", lines, "-u", service])
+                {
+                    eprintln!(
+                        "[RUNTIME TEST] {} {service} journal:\n{journal}",
+                        self.runtime.name
+                    );
+                }
             }
         }
         if let Err(error) = self.cleanup() {

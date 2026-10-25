@@ -23,6 +23,10 @@ http.server.HTTPServer(('127.0.0.1', 5523), Handler).serve_forever()
 const PROBE: &str = r#"
 import fcntl, grp, json, os, pathlib, stat, subprocess, tempfile
 grp.getgrnam('kvm')
+for command, expected in [('is-enabled', 'masked'), ('is-active', 'inactive')]:
+    service = subprocess.run(['systemctl', command, 'dnsmasq.service'],
+                             capture_output=True, text=True)
+    assert service.stdout.strip() == expected, (command, service.stdout, service.stderr)
 cgroups = pathlib.Path('/proc/self/cgroup').read_text().strip().splitlines()
 assert len(cgroups) == 1, cgroups
 cgroup = cgroups[0]

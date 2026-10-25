@@ -17,6 +17,7 @@ HELPERS = ROOT / "scripts/firecrab-release.sh"
 INSTALLER = r'''#!/bin/bash
 set -euo pipefail
 [ "$#" -eq 2 ]
+[ -f "$TEST_ROOT/dnsmasq-masked" ]
 printf '{"command":"installer","args":["%s","%s"]}\n' "$1" "$2" >> "$TEST_ROOT/events"
 [ "${INSTALL_FAIL:-0}" = 0 ] || exit 47
 printf 'verified release installed\n' > "$TEST_ROOT/installed-api"
@@ -35,13 +36,20 @@ if name == 'systemctl':
         state = os.environ.get('SYSTEM_STATE', 'running')
         print(state)
         sys.exit(0 if state == 'running' else 1)
+    if args == ['mask', '--now', 'dnsmasq.service']:
+        if os.environ.get('MASK_FAIL') == '1':
+            sys.exit(1)
+        (root / 'dnsmasq-masked').touch()
+        sys.exit(0)
     if args == ['cat', 'firecrab-api']:
+        assert (root / 'dnsmasq-masked').is_file(), 'service checked before dnsmasq mask'
         sys.exit(0 if os.environ.get('HAS_UNIT') == '1' else 1)
     if args == ['start', 'firecrab-dev-publish.service']:
         assert (root / 'installed-api').is_file(), 'relay started before installation'
         sys.exit(0)
     raise AssertionError(('unexpected systemctl', args))
 assert name == 'curl', name
+assert (root / 'dnsmasq-masked').is_file(), 'release downloaded before dnsmasq mask'
 assert args[:4] == ['--proto', '=https', '--tlsv1.2', '-fsSL'], args
 assert args[-2] == '-o', args
 url, output = args[-3], pathlib.Path(args[-1])
@@ -92,6 +100,8 @@ class PrivateBootstrapTest(unittest.TestCase):
         self.script.write_text(script)
 
     def bootstrap(self, **flags):
+        (self.root / "events").unlink(missing_ok=True)
+        (self.root / "dnsmasq-masked").unlink(missing_ok=True)
         environment = dict(os.environ)
         environment.update(
             TEST_ROOT=str(self.root),
@@ -103,6 +113,7 @@ class PrivateBootstrapTest(unittest.TestCase):
             SYSTEM_STATE="running",
             INSTALL_FAIL="0",
             DOWNLOAD_FAIL="",
+            MASK_FAIL="0",
         )
         environment.update({name: str(value) for name, value in flags.items()})
         return subprocess.run(["bash", str(self.script)], env=environment,
@@ -115,7 +126,10 @@ class PrivateBootstrapTest(unittest.TestCase):
     def mutations(self):
         return [event for event in self.events()
                 if event["command"] == "installer"
-                or (event["command"] == "systemctl" and event["args"][0] == "start")]
+                or (event["command"] == "systemctl" and event["args"][0] in ["mask", "start"])]
+
+    def mask_event(self):
+        return {"command": "systemctl", "args": ["mask", "--now", "dnsmasq.service"]}
 
     def assert_clean_downloads(self):
         self.assertEqual(list(self.downloads.iterdir()), [])
@@ -124,6 +138,7 @@ class PrivateBootstrapTest(unittest.TestCase):
         result = self.bootstrap()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.mutations(), [
+            self.mask_event(),
             {"command": "installer", "args": ["--libc", "gnu"]},
             {"command": "systemctl", "args": ["start", "firecrab-dev-publish.service"]},
         ])
@@ -136,7 +151,7 @@ class PrivateBootstrapTest(unittest.TestCase):
                 result = self.bootstrap(CHECKSUM_MODE=mode)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("checksum mismatch", result.stderr)
-                self.assertEqual(self.mutations(), [])
+                self.assertEqual(self.mutations(), [self.mask_event()])
                 self.assertFalse(self.installed.exists())
                 self.assert_clean_downloads()
 
@@ -145,7 +160,7 @@ class PrivateBootstrapTest(unittest.TestCase):
             with self.subTest(asset=asset):
                 result = self.bootstrap(DOWNLOAD_FAIL=asset)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(self.mutations(), [])
+                self.assertEqual(self.mutations(), [self.mask_event()])
                 self.assertFalse(self.installed.exists())
                 self.assert_clean_downloads()
 
@@ -157,6 +172,7 @@ class PrivateBootstrapTest(unittest.TestCase):
         self.assertFalse(any(event["command"] in ["curl", "installer"] for event in self.events()))
         self.assertEqual(self.installed.read_text(), "keep existing installed binary\n")
         self.assertEqual(self.mutations(), [
+            self.mask_event(),
             {"command": "systemctl", "args": ["start", "firecrab-dev-publish.service"]},
         ])
 
@@ -164,12 +180,15 @@ class PrivateBootstrapTest(unittest.TestCase):
         result = self.bootstrap(HAS_UNIT=1)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.installed.read_text(), "verified release installed\n")
-        self.assertEqual(len(self.mutations()), 2)
+        self.assertEqual(len(self.mutations()), 3)
 
     def test_installer_failure_never_starts_the_relay(self):
         result = self.bootstrap(INSTALL_FAIL=1)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.mutations(), [{"command": "installer", "args": ["--libc", "gnu"]}])
+        self.assertEqual(self.mutations(), [
+            self.mask_event(),
+            {"command": "installer", "args": ["--libc", "gnu"]},
+        ])
         self.assertFalse(self.installed.exists())
         self.assert_clean_downloads()
 
@@ -185,7 +204,15 @@ class PrivateBootstrapTest(unittest.TestCase):
     def test_degraded_systemd_is_a_usable_state(self):
         result = self.bootstrap(SYSTEM_STATE="degraded")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(len(self.mutations()), 2)
+        self.assertEqual(len(self.mutations()), 3)
+
+    def test_dnsmasq_mask_failure_stops_before_installation_or_relay(self):
+        result = self.bootstrap(MASK_FAIL=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.mutations(), [self.mask_event()])
+        self.assertFalse(any(event["command"] in ["curl", "installer"] for event in self.events()))
+        self.assertFalse(self.installed.exists())
+        self.assert_clean_downloads()
 
 
 if __name__ == "__main__":

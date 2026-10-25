@@ -10,6 +10,9 @@ case "$state" in
   running|degraded) ;;
   *) echo '[FAIL] private systemd did not become ready; inspect the instance container logs' >&2; exit 1 ;;
 esac
+# Firecrab's helper owns a dnsmasq process for each MicroNetwork. The distro
+# service must not bind DNS ports before the helper starts.
+systemctl mask --now dnsmasq.service
 test -c /dev/kvm && test -r /dev/kvm && test -w /dev/kvm
 if ! systemctl cat firecrab-api >/dev/null 2>&1 \
   || ! test -x /usr/local/lib/firecrab/firecrab-api; then
