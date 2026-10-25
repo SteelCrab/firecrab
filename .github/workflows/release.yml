@@ -6,6 +6,7 @@ on:
       - 'v*'
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -95,14 +96,16 @@ jobs:
             "target/${{ matrix.target }}/release/firecrab" "${{ matrix.arch }}" "$libc"
 
       - name: Build private ingress engine
-        run: ./scripts/build-ingress.sh "target/${{ matrix.target }}/release"
+        run: |
+          ./scripts/build-ingress.sh "target/${{ matrix.target }}/release"
+          ./scripts/build-guest-console.sh "target/${{ matrix.target }}/release"
 
       - name: Package binaries
         run: |
           cd target/${{ matrix.target }}/release
           install -m 0755 firecrab-helper firecrab-net-helper
           tar -czvf ../../../firecrab-${{ matrix.target }}.tar.gz \
-            firecrab-api firecrab-helper firecrab-net-helper firecrab firecrab-ingress ingress
+            firecrab-api firecrab-helper firecrab-net-helper firecrab firecrab-ingress ingress firecrab-guest-console guest-console
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -244,7 +247,9 @@ jobs:
           cache: npm
           cache-dependency-path: firecrab-frontend/package-lock.json
 
-      - name: npm ci && npm run build
+      - uses: ./.github/actions/setup-wasm
+
+      - name: Build Rust/WASM dashboard
         run: |
           npm ci
           npm run build
@@ -275,7 +280,9 @@ jobs:
           cache-dependency-path: firecrab-frontend/package-lock.json
 
       - name: Fetch dependency sources
-        run: cargo fetch --locked
+        run: |
+          cargo fetch --locked
+          cargo fetch --manifest-path firecrab-frontend/Cargo.toml --locked
 
       - name: Install frontend runtime dependencies
         run: npm ci --omit=dev
@@ -331,6 +338,9 @@ jobs:
               --filter-platform "$target" > "$path"
             metadata_args+=(--cargo-metadata "$path")
           done
+          cargo metadata --manifest-path firecrab-frontend/Cargo.toml \
+            --format-version=1 --locked --filter-platform wasm32-unknown-unknown > cargo-metadata-wasm.json
+          metadata_args+=(--cargo-metadata cargo-metadata-wasm.json)
           python3 scripts/release_compliance.py \
             "${metadata_args[@]}" \
             --frontend-lock firecrab-frontend/package-lock.json \
@@ -402,7 +412,7 @@ jobs:
           set -euo pipefail
           tar -tzf "firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz" > members.txt
           for path in LICENSE THIRD_PARTY_NOTICES.txt release-license-inventory.json \
-              licenses/GPL-2.0-only.txt extract-vmlinux firecrab-ingress \
+              licenses/GPL-2.0-only.txt extract-vmlinux firecrab-ingress firecrab-guest-console guest-console/LICENSE.musl \
               ingress/LICENSE.nginx ingress/LICENSE.pcre2 ingress/LICENSE.musl ingress/sources.json; do
             grep -qx "$path" members.txt || { echo "missing $path" >&2; exit 1; }
           done

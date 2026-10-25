@@ -32,11 +32,40 @@ FIRECRAB_MOCKED_E2E_PRODUCTION=1 FIRECRAB_MOCKED_E2E_CROSS_BROWSER=1 \
 ```
 
 `FIRECRAB_MOCKED_E2E_BASE_URL` selects the isolated frontend's address/port.
+To use the installed Google Chrome on macOS (instead of bundled Chromium):
+
+```sh
+FIRECRAB_MOCKED_E2E_PRODUCTION=1 FIRECRAB_MOCKED_E2E_CHANNEL=chrome \
+  npm run test:mocked --prefix firecrab-e2e -- tests/wasm-terminal.spec.ts tests/console-session.spec.ts
+```
+
+The Chrome composition cases drive the browser's IME engine through CDP. They
+check staged Korean syllables, commit/cancel, repeated syllables, Backspace,
+Enter, arrows, focus and resize against the exact socket input. Touch emulation
+checks history drag/return, tap focus, multi-touch and terminal mouse modes.
+These checks do not establish physical keyboard, OS candidate-window, mobile
+virtual-keyboard or device support. A touch drag scrolls local history only in
+the normal screen without terminal mouse tracking; it never sends mouse reports.
+Pinch zoom remains available. Native long-press selection on canvas is pending.
+
+For native macOS verification, use Chrome and the Korean two-set input source.
+Type `한글 한글`, edit/cancel a partial syllable, then check Enter, Backspace,
+arrows, focus changes, resize and reconnect in a disposable VM console. Verify
+the guest receives each committed syllable once. Compare any automation-only
+failure with a plain textarea: key injection that produces separate jamo there
+does not exercise the OS composition path. Keep that result pending.
+
 CI runs each engine in its own production-build job and checks the emitted
 WASM with `node --test firecrab-e2e/scripts/test-terminal-build.mjs`.
 Live DPR emulation uses Chromium CDP; other browsers skip that case. The initial
 DPR-2 rendering check runs in all three engines. Guest reattachment (B13) needs
 host runtime checks; synthetic composition does not validate a real OS IME.
+The size-control tests verify shared-grid rendering, viewport/font changes,
+reconnect and unavailable guest support without mixing controls into input.
+`FIRECRAB_E2E_REQUIRE_GUEST_RESIZE=1` adds real ttyS0 dimensions and foreground
+SIGWINCH assertions to the booted-guest console test. Installer CI requires it.
+Build/install the guest helper before this check; see
+[console resize](../public-docs/development/console-resize.md).
 
 ## Contents
 
@@ -72,6 +101,8 @@ host runtime checks; synthetic composition does not validate a real OS IME.
 ## Setup
 
 ```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack --version 0.14.0 --locked
 npm ci --prefix firecrab-frontend
 npm ci --prefix firecrab-e2e
 npm run install-browsers --prefix firecrab-e2e

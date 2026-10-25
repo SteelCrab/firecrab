@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { Project, SandboxTask, TaskInput } from "../../firecrab-frontend/src/api/aiSandbox";
+import type { Project, SandboxTask, TaskInput } from "./support/aiSandbox";
 const connection = "11111111-1111-4111-8111-111111111111", vm = "33333333-3333-4333-8333-333333333333";
 const selection = { connectionId: connection, model: "qa-native-model" };
 const project: Project = { id: "22222222-2222-4222-8222-222222222222", spec: { name: "Firecrab Dashboard", sourcePath: "/workspaces/firecrab-demo", vmId: vm, selection, instructions: "Keep the interface simple." }, createdAt: 1 };
@@ -9,7 +9,7 @@ async function open(page: Page, options: { locale?: "en" | "ko"; empty?: boolean
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const path = new URL(route.request().url()).pathname, method = route.request().method();
     const respond = (json: unknown, status = 200) => route.fulfill({ json, status });
-    if (path === "/api/vms") return respond([{ id: vm, name: "sandbox-dev", state: "running", purpose: "instance", cpu: 1, ram: 512, usageHistory: [], startupTimeline: [], env: {}, shellRefs: [], portForwards: [] }]);
+    if (path === "/api/vms") return respond([{ id: vm, name: "sandbox-dev", template: "alpine-3.24.1", diskGb: 1, state: "running", purpose: "instance", cpu: 1, ram: 512, usageHistory: [], startupTimeline: [], env: {}, shellRefs: [], portForwards: [] }]);
     if (path === "/api/update") return respond({ current: "0.3.1", latest: "0.3.1", updateAvailable: false });
     if (path === "/api/pipe/ai/connections") return respond([{ id: connection, name: "QA connected account", provider: "openai", authentication: "api_key", endpoint: "https://api.openai.com/v1/responses", models: [], streaming: false, toolCalls: false }]);
     if (path.endsWith("/models")) return respond({ discoveryAvailable: true, models: [{ id: selection.model, name: "QA native model", verified, toolsVerified: verified }] });
@@ -38,6 +38,7 @@ async function open(page: Page, options: { locale?: "en" | "ko"; empty?: boolean
     return route.fulfill({ status: 404 });
   });
   await page.addInitScript(locale => localStorage.setItem("firecrab.locale", locale), options.locale ?? "en"); await page.goto("/#/ai-sandbox");
+  await expect(page.locator("#root")).toHaveAttribute("data-engine", "wasm");
   return { starts, saves, recover() { failure = false; }, conflict(value: boolean) { conflict = value; }, interrupt() { const task = tasks.at(-1)!; task.state = "interrupted"; task.error = "Guest outcome needs reconciliation"; task.updatedAt++; } };
 }
 
@@ -81,6 +82,17 @@ test.describe("AI Sandbox @dashboard", () => {
     await conversation.focus(); await page.keyboard.press("ArrowRight"); await expect(page.getByRole("tab", { name: /Tasks/ })).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Home"); await expect(conversation).toHaveAttribute("aria-selected", "true");
     const settings = page.getByRole("button", { name: "Project settings", exact: true }); await settings.click(); await expect(page.getByRole("dialog")).toBeVisible(); await page.keyboard.press("Escape"); await expect(page.getByRole("dialog")).toHaveCount(0); await expect(settings).toBeFocused();
+  });
+
+  test("polling preserves the next draft and caret while a task changes state", async ({ page }) => {
+    const mock = await open(page, { hold: true });
+    const input = page.getByRole("textbox", { name: "Message or task", exact: true });
+    await input.fill("Long analysis"); await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Stop task", exact: true })).toBeVisible();
+    await input.fill("Keep this next draft"); await input.evaluate(node => (node as HTMLTextAreaElement).setSelectionRange(3, 3));
+    mock.interrupt(); await expect(page.getByText("Guest outcome needs reconciliation", { exact: true })).toBeVisible();
+    await expect(input).toHaveValue("Keep this next draft"); await expect(input).toBeFocused();
+    expect(await input.evaluate(node => (node as HTMLTextAreaElement).selectionStart)).toBe(3);
   });
 
   test("an uncertain project save retries the same identity", async ({ page }) => {

@@ -1,6 +1,6 @@
 # AI Sandbox UI captures
 
-These screenshots use the deterministic browser fixture in `firecrab-e2e/tests/ai-sandbox.spec.ts`.
+These Rust/WASM screenshots use the deterministic browser fixture in `firecrab-e2e/tests/ai-sandbox.spec.ts`.
 The account, model, task result, test output, and project path are fixture data.
 They demonstrate UI behavior, not live provider or MicroVM execution evidence.
 

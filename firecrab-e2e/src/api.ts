@@ -7,6 +7,7 @@ interface VmRow {
   template: string;
   ipv4?: string | null;
   ipv6?: string | null;
+  sshHostFingerprint?: string | null;
   portForwards?: Array<{ hostPort: number; guestPort: number; protocol: string }>;
 }
 

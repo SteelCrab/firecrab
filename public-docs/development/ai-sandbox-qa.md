@@ -78,3 +78,19 @@ An earlier root-container CLI run lacked Node.js; a restricted macOS run could n
 
 Anthropic live inference remains untested because no API key was supplied. It is covered by deterministic native Messages/tool-result fixtures. A single live-model-to-real-MicroVM end-to-end scenario, controller-crash/guest-reboot recovery on a real VM, and incremental browser token streaming are not claimed by these results.
 Screenshots under `assets/dashboard/ai-sandbox/` use labelled fixture account/model data; they are UI evidence only.
+
+## Rust/WASM integration, 2026-10-25
+
+PR #490 integrates main at `ec06ac64` and replaces its React slice with Rust-owned state, rendering and delegated events.
+The same conversation, project dialog, task board, diff/activity review, selected apply, icons and final AI sidebar group are preserved.
+The browser binding remains thin; the Sandbox application logic is in `firecrab-frontend/src/sandbox.rs` and its modules.
+The old React components, navigation files and browser API helper are removed.
+
+- Frontend Rust unit tests: **25 passed**, including authoritative REST summary compatibility, stale-poll protection, verified default/override gating and escaped review output.
+- WASM Clippy with warnings denied and production build: passed. Sandbox browser types, formatting, changelog and documentation links: passed.
+- The existing 9 Sandbox browser scenarios pass on WASM. A tenth scenario verifies draft text, focus and caret preservation when an active task changes state; **10 passed** in total.
+- Sandbox is included in the shared `test:dashboard` CI suite. The browser fixture now follows the VM response schema and asserts `data-engine=wasm`.
+- Updated screenshots use the WASM UI and retain the fixture-data labels. Original live-provider/MicroVM evidence above is separate from this frontend port.
+
+Run `cargo test --manifest-path firecrab-frontend/Cargo.toml --locked` and `npm run test:sandbox --prefix firecrab-e2e` for the port-specific checks.
+The current head's CI and shared dashboard regressions are checked before marking the PR ready for review.

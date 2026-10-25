@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-repo_dir=$(CDPATH= cd -- "${script_dir}/../.." && pwd -P)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+repo_dir=$(CDPATH='' cd -- "${script_dir}/../.." && pwd -P)
 
 kernel_releases_url='https://www.kernel.org/releases.json'
 artifact_dir="${repo_dir}/images/kernel"
@@ -136,8 +136,10 @@ configure_firecracker_kernel() {
     --enable SERIAL_8250_CONSOLE \
     --enable TTY \
     --enable UNIX \
+    --enable VSOCKETS \
     --enable VIRTIO \
     --enable VIRTIO_BLK \
+    --enable VIRTIO_VSOCKETS \
     --enable VIRTIO_MMIO \
     --enable VIRTIO_MMIO_CMDLINE_DEVICES
 
@@ -146,6 +148,13 @@ configure_firecracker_kernel() {
       --enable SERIAL_AMBA_PL011 \
       --enable SERIAL_AMBA_PL011_CONSOLE
   fi
+}
+
+console_resize_kernel_configured() {
+  # OCI images have no modules tree. Both the socket core and driver must be built in.
+  [ -f "${kernel_build_dir}/.config" ] &&
+    grep -qx 'CONFIG_VSOCKETS=y' "${kernel_build_dir}/.config" &&
+    grep -qx 'CONFIG_VIRTIO_VSOCKETS=y' "${kernel_build_dir}/.config"
 }
 
 main() {
@@ -207,7 +216,7 @@ main() {
   fi
 
   # Build an uncompressed vmlinux image that Firecracker can boot with --config-file.
-  if [ -f "${kernel_build_dir}/vmlinux" ]; then
+  if [ -f "${kernel_build_dir}/vmlinux" ] && console_resize_kernel_configured; then
     info "reusing existing kernel build: ${kernel_build_dir}"
   else
     info "configuring kernel build: ${kernel_build_dir}"
@@ -215,6 +224,7 @@ main() {
     make -C "$source_dir" O="$kernel_build_dir" ARCH="$make_arch" defconfig
     configure_firecracker_kernel
     make -C "$source_dir" O="$kernel_build_dir" ARCH="$make_arch" olddefconfig
+    console_resize_kernel_configured || fail 'Kernel config did not enable built-in virtio-vsock'
 
     info "building vmlinux with ${jobs} job(s)"
     make -C "$source_dir" O="$kernel_build_dir" ARCH="$make_arch" -j"$jobs" vmlinux
@@ -226,6 +236,7 @@ main() {
   fi
 
   install -m 0644 "${kernel_build_dir}/vmlinux" "$versioned_image"
+  install -m 0644 "${kernel_build_dir}/.config" "${versioned_image}.config"
 
   info "kernel versioned image: ${versioned_image}"
 

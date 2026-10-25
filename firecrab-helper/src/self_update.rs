@@ -135,6 +135,16 @@ fn swap_plan(layout: &InstallLayout, staging: &Path) -> Vec<(PathBuf, PathBuf)> 
     ] {
         plan.push((staging.join(name), layout.libdir.join(name)));
     }
+    if staging.join("firecrab-guest-console").is_file() {
+        plan.push((
+            staging.join("firecrab-guest-console"),
+            layout.libdir.join("firecrab-guest-console"),
+        ));
+        plan.push((
+            staging.join("guest-console"),
+            layout.libdir.join("guest-console"),
+        ));
+    }
     let helper = helper_source(staging);
     for name in ["firecrab-helper", "firecrab-net-helper"] {
         plan.push((helper.clone(), layout.libdir.join(name)));
@@ -375,6 +385,14 @@ fn extract_and_check(file: &mut File, staging: &Path) -> std::io::Result<()> {
                 format!("release bundle is missing ingress/{name}"),
             ));
         }
+    }
+    if staging.join("firecrab-guest-console").is_file()
+        && !staging.join("guest-console/LICENSE.musl").is_file()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "guest console helper is missing musl attribution",
+        ));
     }
     Ok(())
 }
@@ -828,6 +846,8 @@ mod tests {
             Member::File("firecrab-helper", b"new-helper"),
             Member::File("firecrab", b"new-cli"),
             Member::File("firecrab-ingress", b"new-ingress"),
+            Member::File("firecrab-guest-console", b"new-guest-console"),
+            Member::File("guest-console/LICENSE.musl", b"musl license"),
             Member::File("ingress/LICENSE.nginx", b"nginx license"),
             Member::File("ingress/LICENSE.pcre2", b"pcre2 license"),
             Member::File("ingress/LICENSE.musl", b"musl license"),
@@ -841,7 +861,11 @@ mod tests {
 
     #[tokio::test]
     async fn incomplete_ingress_bundle_keeps_installed_binaries() {
-        for missing in ["firecrab-ingress", "ingress/LICENSE.nginx"] {
+        for missing in [
+            "firecrab-ingress",
+            "ingress/LICENSE.nginx",
+            "guest-console/LICENSE.musl",
+        ] {
             let dir = tempfile::tempdir().unwrap();
             let layout = seed_layout(dir.path());
             fs::write(layout.libdir.join("firecrab-ingress"), b"old-ingress").unwrap();
@@ -1085,6 +1109,14 @@ mod tests {
         assert_eq!(
             fs::read(layout.libdir.join("firecrab-ingress")).unwrap(),
             b"new-ingress"
+        );
+        assert_eq!(
+            fs::read(layout.libdir.join("firecrab-guest-console")).unwrap(),
+            b"new-guest-console"
+        );
+        assert_eq!(
+            fs::read(layout.libdir.join("guest-console/LICENSE.musl")).unwrap(),
+            b"musl license"
         );
         assert_eq!(
             fs::read(layout.libdir.join("ingress/LICENSE.nginx")).unwrap(),

@@ -132,6 +132,7 @@ pub(crate) async fn require_image_auth(
     auths
         .into_iter()
         .find(|auth| match auth {
+            SavedAuth::Firecrab { .. } => false,
             SavedAuth::Github { username, .. } => {
                 reference.registry == "ghcr.io"
                     && reference
@@ -139,7 +140,9 @@ pub(crate) async fn require_image_auth(
                         .split_once('/')
                         .is_some_and(|(owner, _)| owner.eq_ignore_ascii_case(username))
             }
-            SavedAuth::Aws { .. } => reference.registry == auth.connection().registry,
+            SavedAuth::Aws { .. } => {
+                auth.connection().registry.as_deref() == Some(reference.registry.as_str())
+            }
         })
         .ok_or_else(invalid)
 }

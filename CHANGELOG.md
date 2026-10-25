@@ -29,6 +29,18 @@ Entries land here as work merges, and move under the next version heading when t
   recovery, actual tool results, and selected-file apply with source conflict checks.
   Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
 
+- Pipe Auth links a Firecrab account with an account integration token issued
+  by `console.firecrab.dev`. It displays the verified account ID, email, and
+  token expiry. Address-scoped Tunnel tokens remain separate. Existing Tunnel
+  connection requests also declare the service's required client protocol (#440).
+
+- Browser console dimensions reach the guest serial terminal through a private
+  vsock resize helper. Connected viewers share the smallest available grid.
+  The console reports whether the guest applied the size and keeps working
+  when guest resize support is unavailable. The default OCI kernel is
+  `7.2.2-vsock1`, with built-in vsock on x86_64 and ARM64, versioned packages,
+  and matching source archives. Tracked in [#471](https://github.com/SteelCrab/firecrab/issues/471).
+
 - The browser console uses Ghostty WebAssembly for VT parsing, Unicode cells,
   terminal modes and history. It supports mobile editing, composition,
   bracketed paste, application mouse/focus reports and native grapheme export.

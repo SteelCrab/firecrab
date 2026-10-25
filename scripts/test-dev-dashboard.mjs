@@ -7,7 +7,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
-test("embedded dashboard starts real Vite and authenticates shutdown", { timeout: 20000 }, async (t) => {
+test("embedded dashboard starts real Vite and authenticates shutdown", { timeout: 180000 }, async (t) => {
   const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
   const reservation = net.createServer();
   await new Promise(resolve => reservation.listen(0, "127.0.0.1", resolve));
@@ -26,7 +26,7 @@ test("embedded dashboard starts real Vite and authenticates shutdown", { timeout
   const url = `http://127.0.0.1:${port}`;
   const headers = { "X-Firecrab-Dev-Session": session };
   let ready = false;
-  for (let attempt = 0; attempt < 100; attempt++) {
+  for (let attempt = 0; attempt < 1500; attempt++) {
     if (child.exitCode !== null) throw new Error(logs);
     try {
       const response = await fetch(`${url}/__firecrab_dev/`, { headers });

@@ -1,0 +1,185 @@
+/* Console page (#/console/<id>): header, terminal well, VM details column. */
+
+.console-page {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--bg-sidebar);
+  color: var(--text);
+}
+.console-page.is-terminal-only { grid-template-rows: minmax(0, 1fr); }
+
+.console-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  height: 48px;
+  padding: 0 10px 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.console-brand {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--text);
+  color: #ffffff;
+}
+.console-brand svg { width: 15px; height: 15px; stroke-width: 1.75; }
+.console-heading { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.console-title { margin: 0; overflow: hidden; font-size: 13.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.console-host { overflow: hidden; color: var(--text-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.console-addr { color: var(--text-2); font: 12px var(--mono); white-space: nowrap; }
+
+.console-status {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 99px;
+  background: var(--gray-soft);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.console-status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.console-status.connected { background: var(--green-soft); color: var(--green-ink); }
+.console-status.connecting { background: var(--amber-soft); color: var(--amber-ink); }
+.console-status.connecting .console-status-dot { animation: console-pulse 1.2s ease-in-out infinite; }
+.console-status.error { background: var(--red-soft); color: var(--red-ink); }
+.console-status.ended { color: var(--text-3); }
+@keyframes console-pulse { 50% { opacity: 0.3; } }
+
+.console-tabs { flex-shrink: 0; width: 148px; }
+.console-tabs button[aria-selected="true"] {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(17, 17, 26, 0.08), 0 0 0 1px var(--border);
+}
+
+.console-header-end { display: flex; flex-shrink: 0; align-items: center; gap: 2px; margin-left: auto; }
+.console-header-end .btn.sm { margin-right: 4px; }
+.console-header .log-export-actions { gap: 0; }
+.console-divider { width: 1px; height: 18px; margin: 0 4px; background: var(--border); }
+.console-header .icon-btn[aria-expanded="true"],
+.console-header .icon-btn[aria-pressed="true"] { background: var(--bg-active); color: var(--text); }
+
+/* Display settings popover: anchored to its button, so it grows from there. */
+.console-settings { position: relative; }
+.console-settings-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  gap: 10px;
+  width: 220px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  box-shadow: var(--shadow-pop);
+  transform-origin: top right;
+  transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out);
+}
+@starting-style {
+  .console-settings-pop { opacity: 0; transform: scale(0.97); }
+}
+.console-settings-row { display: grid; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 500; }
+
+/* Body: the terminal well and the details column side by side. */
+.console-body { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; min-height: 0; padding: 12px; }
+.console-body.no-details { grid-template-columns: minmax(0, 1fr); }
+.console-page.is-terminal-only .console-body { padding: 0; }
+.console-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+/* `flex: 1; min-height: 0` lets the surface take the height left over, so
+   FitAddon measures the real box when chrome shows or hides. */
+.console-surface {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 12rem;
+  padding: 10px 6px 6px 12px;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: #18181b;
+  box-shadow: inset 0 0 0 1px rgba(17, 17, 26, 0.08);
+}
+.console-surface[hidden] { display: none; }
+.console-page.is-terminal-only .console-surface { min-height: 0; border-radius: 0; box-shadow: none; }
+.terminal-emulator { width: 100%; height: 100%; position: relative; outline: none; }
+.terminal-emulator canvas { touch-action: pan-x pinch-zoom; }
+/* Canvas output stays available as bounded plain text for assistive technology. */
+.terminal-output {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: pre;
+}
+
+.console-ssh-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+}
+.console-ssh-pane .console-ssh { max-width: 760px; margin: 0 auto; padding: 22px 24px 28px; }
+
+.console-detail {
+  min-height: 0;
+  padding: 0 16px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+}
+.console-detail .detail-sec-head .badge { margin-left: auto; }
+.console-detail .vm-usage-cards { grid-template-columns: 1fr; }
+.console-detail-note { margin: 16px 0; color: var(--text-3); font-size: 12px; }
+.console-detail-note.error { color: var(--red-ink); }
+.console-forwards { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.console-forwards li { color: var(--text-2); font: 12px/1.7 var(--mono); }
+
+/* Terminal only: one quiet way back besides Esc. */
+.console-exit-only {
+  position: fixed;
+  top: 10px;
+  right: 12px;
+  z-index: 30;
+  opacity: 0.72;
+  transition: opacity 150ms ease;
+}
+.console-exit-only:hover, .console-exit-only:focus-visible { opacity: 1; }
+
+@media (max-width: 1100px) {
+  .console-host { display: none; }
+  .console-body { grid-template-columns: minmax(0, 1fr) 280px; }
+}
+
+/* Narrow: the header wraps and the details move under the terminal. */
+@media (max-width: 899px) {
+  .console-page { position: static; min-height: 100dvh; }
+  .console-page.is-terminal-only { position: fixed; }
+  .console-header { flex-wrap: wrap; height: auto; min-height: 48px; padding-block: 8px; }
+  .console-header-end { flex-wrap: wrap; justify-content: flex-end; }
+  .console-body, .console-body.no-details { grid-template-columns: minmax(0, 1fr); }
+  .console-main { height: 62vh; height: 62dvh; }
+  .console-page.is-terminal-only .console-main { height: 100dvh; }
+  .console-detail { overflow: visible; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console-status.connecting .console-status-dot { animation: none; }
+  .console-settings-pop, .console-exit-only { transition: none; }
+}
+
+.console-geometry { margin: 5px 0 0; color: var(--text-3); font: 11px var(--mono); }
