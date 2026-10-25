@@ -40,6 +40,7 @@ mod shells;
 mod state;
 mod storage;
 mod templates;
+mod tls;
 mod vm_execution;
 mod vm_shim;
 
@@ -58,6 +59,8 @@ use thiserror::Error;
 enum StartupError {
     #[error("failed to load HTTP configuration")]
     Config(#[source] ConfigError),
+    #[error("failed to configure API TLS")]
+    Tls(#[source] firecrab_pki::Error),
     #[error("failed to initialize template registry")]
     Template(#[source] TemplateError),
     #[error("failed to load persisted VM state")]
@@ -122,6 +125,11 @@ fn init_tracing() {
 async fn run() -> Result<(), StartupError> {
     init_tracing();
     let config = HttpConfig::load().map_err(StartupError::Config)?;
+    let transport = tls::configuration(
+        config.bind_addr,
+        firecrab_pki::TlsPaths::from_env().map_err(StartupError::Tls)?,
+    )
+    .map_err(StartupError::Tls)?;
     let templates = TemplateRegistry::load_default().map_err(StartupError::Template)?;
     let mut state = AppState::new(templates)
         .await
@@ -161,8 +169,9 @@ async fn run() -> Result<(), StartupError> {
         .await
         .map_err(StartupError::Persistence)?;
     let app = build_router(state, &config);
-    tracing::info!(address = %local_address, "listening on http://{local_address}");
-    axum::serve(listener, app)
+    let scheme = if transport.is_some() { "https" } else { "http" };
+    tracing::info!(address = %local_address, %scheme, "listening on {scheme}://{local_address}");
+    tls::serve(listener, app, transport)
         .await
         .map_err(StartupError::Serve)?;
     Ok(())

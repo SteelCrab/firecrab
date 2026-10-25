@@ -2139,3 +2139,49 @@ mod tests {
         assert_eq!(results[0].status, Status::Pass, "{results:?}");
     }
 }
+
+/// TLS is optional locally. Configured certificates must remain valid for 30 days.
+pub fn check_tls_certificates(env: &DoctorEnv) -> Vec<CheckResult> {
+    let result = match &env.tls_paths {
+        Ok(paths) => crate::tls::expiry(paths.as_ref()),
+        Err(error) => Err(firecrab_pki::Error(error.to_string())),
+    };
+    let check = match result {
+        Ok(None) => CheckResult::skip("tls_certificates: not configured", None, None),
+        Ok(Some(seconds)) if seconds > 30 * 24 * 60 * 60 => CheckResult::pass("tls_certificates"),
+        Ok(Some(seconds)) => CheckResult::fail(
+            "tls_certificates: expires within 30 days",
+            Some(&format!("{} full days remain", seconds / 86400)),
+            Some("issue replacement certificates and restart the API before expiration"),
+        ),
+        Err(error) => CheckResult::fail(
+            "tls_certificates: invalid configuration",
+            Some(&error.to_string()),
+            Some("check TLS paths, certificate validity, and mode 0600"),
+        ),
+    };
+    vec![check]
+}
+
+#[cfg(test)]
+mod tls_tests {
+    use super::*;
+    use crate::doctor::Status;
+
+    #[test]
+    fn tls_checks_skip_unconfigured_and_report_validity_thresholds() {
+        let mut env = DoctorEnv::default();
+        assert_eq!(check_tls_certificates(&env)[0].status, Status::Skip);
+        let root = tempfile::tempdir().unwrap();
+        let ca = root.path().join("ca");
+        firecrab_pki::init_ca(&ca).unwrap();
+        for (days, expected) in [(7, Status::Fail), (90, Status::Pass)] {
+            env.tls_paths = Ok(Some(
+                firecrab_pki::issue_host_cert(&ca, uuid::Uuid::new_v4(), vec![], days).unwrap(),
+            ));
+            assert_eq!(check_tls_certificates(&env)[0].status, expected);
+        }
+        env.tls_paths = Err(firecrab_pki::Error("incomplete TLS paths".into()));
+        assert_eq!(check_tls_certificates(&env)[0].status, Status::Fail);
+    }
+}
