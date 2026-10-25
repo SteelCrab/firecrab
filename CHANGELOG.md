@@ -23,10 +23,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
-- Deploy updates running domain services through the existing Nginx ingress.
-  Rolling and blue-green updates, immutable release history, selected rollback,
-  verified worker drain, and restart/retry recovery share one REST/CLI/YAML
-  executor. The Rust/WASM dashboard exposes update and rollback actions (#335).
+- `firecrab service dev --port PORT` selects the development dashboard port on
+  macOS and Windows. Development controls retain the selected port, and older
+  dashboard sessions default to 8080. Tracked in [#488](https://github.com/SteelCrab/firecrab/issues/488).
 
 - Pipe Auth links a Firecrab account with an account integration token issued
   by `console.firecrab.dev`. It displays the verified account ID, email, and
@@ -166,6 +165,12 @@ Entries land here as work merges, and move under the next version heading when t
   logins, lists repository tags, pulls OCI images to this host, and imports a pulled image as
   an M2Image. Logins are write-only in API responses. See
   [Pipe Registry](public-docs/guides/pipe-registry.md).
+
+- Deploy updates running domain services through the existing Nginx ingress.
+  Rolling and blue-green updates, immutable release history, selected rollback,
+  verified worker drain, and restart/retry recovery share one REST/CLI/YAML
+  executor. The Rust/WASM dashboard exposes update and rollback actions (#335).
+  Deploy-owned rootfs caches are pruned after VM, pool, operation, and retained-release references are released.
 
 ### Changed
 

@@ -48,7 +48,8 @@ Sources and compiler caches persist under `/var/lib/firecrab/dev`.
 Local configuration, `.env` files, nested checkouts, and build output are excluded.
 
 After a successful build, deployment switches the two systemd executable overrides and checks guest and host API readiness.
-It starts the source dashboard in the background at `http://localhost:8080`.
+It starts the source dashboard in the background at `http://localhost:8080` by default.
+Use `service dev --port 8098` to select another dashboard port.
 The command returns only after the dashboard and its API proxy answer successfully.
 A build failure leaves services running; an ordinary deployment failure restores previous executables.
 Ctrl+C or a lost development-command connection cancels that command's guest build
@@ -68,6 +69,7 @@ Guest service restarts interrupt API/helper requests, so stop workloads before c
 | Command or option | Effect |
 | --- | --- |
 | `service dev --source PATH` | Select another checkout |
+| `service dev --port PORT` | Select the dashboard port (1–65535; default 8080) |
 | `service dev --release` | Optimize the source build |
 | `service dev --yes` | Skip pending-download confirmation |
 | `service dev start` / `stop` / `restart` | Control guest API/helper and the development dashboard without rebuilding |
@@ -89,26 +91,29 @@ Development subcommands cannot be combined with build/restore options.
 `service restart` stops the VM, starts it again, and waits for the local API.
 These commands leave the host development dashboard running; use `service dev stop` to stop it.
 Stopping or restarting the management VM also stops its guest services and workload MicroVMs.
-`--restore` needs no checkout and cannot be combined with `--source`, `--release`, or `--yes`.
+`--restore` needs no checkout and cannot be combined with `--source`, `--port`, `--release`, or `--yes`.
 Overrides persist across `service stop` and `start` until restored.
 `service start` resumes selected binaries; it does not build edited sources.
 
 ## Frontend
 
 `service dev` installs locked frontend dependencies with `npm ci` when needed.
-It compiles the selected checkout's Rust/WASM dashboard and launches its Vite server on `http://localhost:8080`.
+It compiles the selected checkout's Rust/WASM dashboard and launches its Vite server on `http://localhost:8080` by default.
+For example, `firecrab service dev --port 8098` serves it at `http://localhost:8098`.
+Each build uses `--port` or its default of 8080; the API port and proxy target are unchanged.
 The server continues after the command exits. Repeated commands reuse a healthy server.
 Selecting another checkout replaces only the dashboard started by Firecrab.
-An unrelated server on port 8080 causes an error; Firecrab does not stop it or select another port.
-Stop a manually started Vite server before using `service dev`.
+Changing the port stops the previous owned dashboard before starting its replacement.
+An unrelated server on the selected port causes an error; Firecrab does not stop it or select another port.
+Choose another `--port` value or stop the conflicting server before using `service dev`.
 
-`dev start` and `dev restart` use the last selected checkout, even from another directory.
+`dev start` and `dev restart` use the last selected checkout and port, even from another directory.
 `service dev stop`, `service dev clean`, and `service dev --restore` stop the development dashboard.
 The dashboard stays running across management VM stops and restarts; its API proxy recovers when the VM is ready again.
 Dashboard logs are stored at `runtime/dev-dashboard.log` in the managed home.
 The installed release dashboard remains available through the API's port 5523.
 Vite proxies `/api` and `/ws` to `127.0.0.1:5523` through the macOS SSH tunnel or WSL localhost forwarding.
-Use `localhost` for the configured browser origin.
+Use `localhost` or `127.0.0.1` on the selected port for the browser origin.
 
 ## macOS disk I/O
 
