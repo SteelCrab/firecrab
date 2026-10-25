@@ -96,3 +96,5 @@ The old React components, navigation files and browser API helper are removed.
 
 Run `cargo test --manifest-path firecrab-frontend/Cargo.toml --locked` and `npm run test:sandbox --prefix firecrab-e2e` for the port-specific checks.
 Shared navigation/dashboard/Pipe AI browser regressions: **39 passed** after the port. The current head's CI is checked before marking the PR ready for review.
+
+Native CI also runs the ignored root-only guest contract through `scripts/test-ai-sandbox-guest.sh` in a disposable, network-isolated container. Only its test executable and coverage directory are mounted. Dedicated users and task files stay in the container, and its LLVM profile is included in the native coverage report. CLI/MCP regression tests check wire identities, configured model selection, recovery, explicit review paths, bounded stdin and credential rejection.

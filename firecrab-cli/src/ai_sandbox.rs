@@ -43,9 +43,11 @@ pub enum Command {
     },
 }
 /// Read bounded typed JSON without placing prompts in process arguments.
-fn stdin<T: serde::de::DeserializeOwned>() -> Result<T, Box<dyn std::error::Error>> {
+fn read_input<T: serde::de::DeserializeOwned>(
+    input: impl Read,
+) -> Result<T, Box<dyn std::error::Error>> {
     let mut bytes = Vec::new();
-    io::stdin().lock().take(65537).read_to_end(&mut bytes)?;
+    input.take(65537).read_to_end(&mut bytes)?;
     if bytes.len() > 65536 {
         return Err("Sandbox input exceeds 64 KiB".into());
     }
@@ -53,6 +55,16 @@ fn stdin<T: serde::de::DeserializeOwned>() -> Result<T, Box<dyn std::error::Erro
 }
 /// Execute one selected host operation and print its secret-free JSON result.
 pub fn run(client: &ApiClient, command: Command) -> Result<(), Box<dyn std::error::Error>> {
+    let result = request(client, command, io::stdin().lock())?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+fn request(
+    client: &ApiClient,
+    command: Command,
+    input: impl Read,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let base = "/api/ai-sandbox";
     let result = match command {
         Command::Projects => {
@@ -60,14 +72,14 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), Box<dyn std::erro
         }
         Command::SaveProject { id } => serde_json::to_value(client.put::<_, SandboxProject>(
             &format!("{base}/projects/{id}"),
-            &stdin::<SandboxProjectSpec>()?,
+            &read_input::<SandboxProjectSpec>(input)?,
         )?)?,
         Command::Tasks { project } => serde_json::to_value(
             client.get::<Vec<SandboxTaskSummary>>(&format!("{base}/projects/{project}/tasks"))?,
         )?,
         Command::Run { project, id } => serde_json::to_value(client.put::<_, SandboxTask>(
             &format!("{base}/projects/{project}/tasks/{id}"),
-            &stdin::<SandboxTaskInput>()?,
+            &read_input::<SandboxTaskInput>(input)?,
         )?)?,
         Command::Inspect { id } => {
             serde_json::to_value(client.get::<SandboxTask>(&format!("{base}/tasks/{id}"))?)?
@@ -99,6 +111,9 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), Box<dyn std::erro
             &SandboxVerifyModel { model, tools },
         )?)?,
     };
-    println!("{}", serde_json::to_string_pretty(&result)?);
-    Ok(())
+    Ok(result)
 }
+
+#[cfg(test)]
+#[path = "ai_sandbox_tests.rs"]
+mod tests;

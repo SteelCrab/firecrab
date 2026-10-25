@@ -85,6 +85,10 @@ jobs:
           source <(cargo llvm-cov show-env --sh)
           cargo llvm-cov clean --workspace
           cargo test --workspace --locked
+          # The guest contract creates real users. Run only this test binary in
+          # an isolated disposable root container; retain its instrumented profile.
+          api_test_binary=$(cargo test -p firecrab-api --bin firecrab-api --no-run --message-format=json | python3 -c 'import json,sys; entries=[json.loads(line) for line in sys.stdin]; print(next(item["executable"] for item in entries if item.get("reason") == "compiler-artifact" and item.get("profile", {}).get("test") and item.get("target", {}).get("name") == "firecrab-api" and item.get("executable")))')
+          bash scripts/test-ai-sandbox-guest.sh "$api_test_binary" "$CARGO_LLVM_COV_TARGET_DIR"
           # The terminal test is ignored by cargo test because it needs a PTY.
           # Run its instrumented binary before exporting the coverage report.
           test_binary=$(cargo test -p firecrab-cli --no-run --message-format=json | python3 -c 'import json,sys; entries=[json.loads(line) for line in sys.stdin]; print(next(item["executable"] for item in entries if item.get("reason") == "compiler-artifact" and item.get("profile", {}).get("test") and item.get("target", {}).get("name") == "firecrab" and item.get("executable")))')
@@ -116,6 +120,14 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Retain native coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-coverage
+          path: lcov.info
+          retention-days: 7
 
   micromanager-macos-build:
     name: microManager (GitHub-hosted macOS build)
