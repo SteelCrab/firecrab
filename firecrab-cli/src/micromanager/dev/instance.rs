@@ -179,6 +179,7 @@ pub fn load(home: &Path) -> io::Result<Option<Instance>> {
     Ok(state)
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub fn api_port(home: &Path) -> io::Result<u16> {
     Ok(load(home)?.map_or(5523, |instance| instance.api_port))
 }
@@ -187,10 +188,12 @@ pub fn resource_port(home: &Path) -> io::Result<u16> {
     Ok(load(home)?.map_or(5524, |instance| instance.resource_port))
 }
 
+#[cfg(target_os = "macos")]
 pub fn api_url(home: &Path) -> io::Result<String> {
     Ok(format!("http://127.0.0.1:{}", api_port(home)?))
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub fn label(home: &Path, base: &str) -> io::Result<String> {
     Ok(load(home)?.map_or_else(
         || base.to_owned(),
