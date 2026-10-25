@@ -1,5 +1,6 @@
 mod advanced;
 mod api;
+mod databases;
 mod deploy;
 mod details;
 mod forms;
@@ -62,6 +63,7 @@ struct App {
     deploy: deploy::State,
     job: Option<(String, Value)>,
     workflows: workflows::State,
+    databases: databases::State,
     advanced: advanced::State,
     sandbox: sandbox::State,
     volumes: volumes::State,
@@ -157,6 +159,11 @@ fn render_content(app: &Shared) {
     advanced::services::sync(app);
 }
 fn render_editor(app: &Shared) {
+    if app.borrow().route == "pipe/database" {
+        render_content(app);
+        return;
+    }
+
     if app.borrow().route == "vms/new" {
         render_content(app);
     } else {
@@ -200,7 +207,14 @@ fn render_detail(app: &Shared) {
             || state.detail.is_some()
             || state.form.is_some())
             && state.panel_open
-            && !["vms/new", "queues", "cluster", "ai-sandbox"].contains(&state.route.as_str())
+            && ![
+                "vms/new",
+                "queues",
+                "cluster",
+                "pipe/database",
+                "ai-sandbox",
+            ]
+            .contains(&state.route.as_str())
             && (!narrow || state.detail.is_some() || state.form.is_some());
         let html = if open {
             details::panel(&state)
@@ -290,7 +304,14 @@ fn render_detail(app: &Shared) {
 
 fn render_messages(app: &Shared) {
     let state = app.borrow();
-    set_html("messages", &render::messages(&state));
+    set_html(
+        "messages",
+        &if state.route == "pipe/database" {
+            String::new()
+        } else {
+            render::messages(&state)
+        },
+    );
     if state.route == "secrets"
         && let Ok(Some(button)) = document().query_selector("[data-action=create][data-id=secrets]")
     {
@@ -677,6 +698,8 @@ fn refresh(app: Shared) {
         let has_form = state.form.is_some();
         drop(state);
         advanced::after_refresh(&app);
+        databases::after_refresh(&app);
+        databases::tick(&app);
         if !has_form {
             if changed {
                 render_content(&app);
@@ -758,6 +781,15 @@ fn save_history_index(index: i32, url: Option<&str>) {
     }
 }
 fn allow_discard(app: &Shared) -> bool {
+    if app
+        .borrow()
+        .databases
+        .row
+        .as_ref()
+        .is_some_and(|r| r.uncertain)
+    {
+        return false;
+    }
     let dirty = app.borrow().dirty;
     !dirty
         || window()
@@ -801,6 +833,7 @@ fn navigate(app: &Shared) {
     state.advanced.ai = advanced::ai::State::default();
     state.sandbox = sandbox::State::default();
     state.advanced.storage = advanced::storage::State::default();
+    state.databases = databases::State::default();
     state.volumes = volumes::State::default();
     state.route = next;
     state.generation += 1;
@@ -897,6 +930,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         if !target.is_connected() || changed.borrow().rendering {
             return;
         }
+        if databases::input(&changed, &target) {
+            return;
+        }
         match target.id().as_str() {
             "vm-search" => {
                 if let Ok(input) = target.dyn_into::<HtmlInputElement>() {
@@ -947,7 +983,10 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         if !target.is_connected() || language.borrow().rendering {
             return;
         }
-        if sandbox::change(&language, &target) || volumes::input(&language, &target) {
+        if databases::change(&language, &target)
+            || sandbox::change(&language, &target)
+            || volumes::input(&language, &target)
+        {
             return;
         }
         if deploy::change(&language, &target) || advanced::change(&language, &target) {
@@ -1000,7 +1039,10 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         else {
             return;
         };
-        if sandbox::submit(&submitted, &form.id()) || advanced::queues::submit(&submitted, &form) {
+        if databases::submit(&submitted, &form)
+            || sandbox::submit(&submitted, &form.id())
+            || advanced::queues::submit(&submitted, &form)
+        {
             event.prevent_default();
             return;
         }
@@ -1168,7 +1210,7 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
     if action != "vm-menu" {
         set_html("menu-root", "");
     }
-    if sandbox::action(&app, action, id) {
+    if databases::dispatch(&app, action, id, button) || sandbox::action(&app, action, id) {
         return;
     }
     if volumes::dispatch(&app, action, id) || advanced::dispatch(&app, action, id, button) {
@@ -1554,6 +1596,9 @@ fn save_form(app: Shared, form_element: HtmlFormElement) {
     } else {
         form.path.clone()
     };
+    if !databases::edit::before_submit(&form) {
+        return;
+    }
     // Preserve entered values if the API rejects a mutation.
     for field in &mut form.fields {
         field.value = values.get(field.key).cloned().unwrap_or_default();
@@ -1648,6 +1693,14 @@ fn mutate(
                     "Saved."
                 }
                 .into();
+                if method == "DELETE"
+                    && path.starts_with("/api/pipe/databases/")
+                    && !path
+                        .trim_start_matches("/api/pipe/databases/")
+                        .contains('/')
+                {
+                    state.notice = "Connection removed. The source database is unchanged.".into();
+                }
                 let selected = state
                     .detail
                     .as_ref()
@@ -1772,6 +1825,9 @@ fn mutate(
         render_content(&app);
         if succeeded {
             advanced::after_mutation(&app, &path);
+            if path.starts_with("/api/pipe/database") {
+                databases::after_mutation(&app);
+            }
             volumes::after_mutation(&app, &path);
         }
         refresh(app);

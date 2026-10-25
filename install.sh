@@ -261,6 +261,14 @@ pkg_name() {
         *:tar)        echo "tar" ;;
         apt-get:xz)   echo "xz-utils" ;;
         *:xz)         echo "xz" ;;
+        # Native logical backups use client tools, never database servers.
+        apt-get:mysql-client) echo "mariadb-client" ;;
+        dnf:postgresql-client) echo "postgresql" ;;
+        dnf:mysql-client) echo "mariadb" ;;
+        pacman:postgresql-client) echo "postgresql-libs" ;;
+        pacman:mysql-client) echo "mariadb-clients" ;;
+        zypper:postgresql-client) echo "postgresql" ;;
+        zypper:mysql-client) echo "mariadb-client" ;;
         # Dashboard M2Image install decompresses `{alias}.tar.zst` packages.
         *:zstd)       echo "zstd" ;;
         # semanage lives in a python tooling package on the SELinux distros.
@@ -398,6 +406,7 @@ ensure_runtime_deps() {
             || warn "SELinux is on but semanage is missing; the services will be confined to init_t"
     fi
     ensure mkfs.ext4 e2fsprogs || failed=1
+    ensure fakeroot fakeroot || failed=1
     ensure curl curl     || failed=1
     ensure git git       || failed=1
     ensure ssh openssh-client || failed=1
@@ -405,6 +414,13 @@ ensure_runtime_deps() {
     ensure tar tar       || failed=1
     ensure zstd zstd     || failed=1
     ensure sha256sum coreutils || failed=1
+    # Missing backup clients do not prevent VM or read-only DB operation.
+    # Install them by default; --no-deps and --check never change the host.
+    ensure pg_dump postgresql-client || warn "pg_dump unavailable; PostgreSQL backups need a compatible client"
+    ensure pg_restore postgresql-client || warn "pg_restore unavailable; PostgreSQL restore is unavailable"
+    ensure psql postgresql-client || warn "psql unavailable; PostgreSQL restore is unavailable"
+    ensure mysqldump mysql-client || warn "mysqldump unavailable; MySQL backups are unavailable"
+    ensure mysql mysql-client || warn "mysql unavailable; MySQL restore is unavailable"
     return $failed
 }
 

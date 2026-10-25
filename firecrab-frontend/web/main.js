@@ -5,6 +5,7 @@ import './styles/vm.css';
 import './styles/detail.css';
 import './wasm.css';
 import './styles/pipe-ai.css';
+import './styles/pipe-database.css';
 import './styles/ai-sandbox.css';
 import './styles/queues.css';
 import './styles/services.css';

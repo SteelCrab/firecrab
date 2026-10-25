@@ -138,8 +138,11 @@ for _ in $(seq 1 $((40 * WAIT_FACTOR))); do
     if [ "$CODE" = 200 ] && printf '%s' "$BODY" | python3 -c '
 import json, sys
 log = json.load(sys.stdin).get("consoleLog") or ""
-sys.exit(0 if "FIRECRAB_PACKAGES_FAILED" in log and
-         "FIRECRAB_SSHD skipped: no /usr/sbin/sshd" in log else 1)
+if "FIRECRAB_PACKAGES_FAILED" not in log or "FIRECRAB_SSHD skipped: no /usr/sbin/sshd" not in log:
+    sys.exit(1)
+# The caller removes its VM on exit; retain the failure before cleanup.
+print("Guest console (last 80 lines, at most 16000 characters):", file=sys.stderr)
+print("\n".join(log.splitlines()[-80:])[-16000:], file=sys.stderr)
 '; then
         # Do not print the API's ssh-key response on this failure path.
         BODY=

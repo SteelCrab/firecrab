@@ -55,6 +55,7 @@ pub(crate) async fn deploy_from_stack(
     let service = database(request_id.0, move || store.micro_service(id))
         .await?
         .ok_or_else(|| AppError::not_found(request_id.0))?;
+    validate_database_bindings(&state, id, request_id.0)?;
     require_image_auth(&state, &service.spec.image, request_id.0).await?;
     crate::queues::validate_bindings(&state, &service.spec, request_id.0).await?;
     crate::queues::placement(&state, &service.spec, &mut request, request_id.0)?;
@@ -86,6 +87,30 @@ pub(crate) async fn deploy_from_stack(
         run_deploy(task_state, task_deployment).await;
     });
     Ok((StatusCode::ACCEPTED, Json(deployment)))
+}
+
+fn validate_database_bindings(
+    state: &AppState,
+    id: Uuid,
+    request_id: Uuid,
+) -> Result<(), AppError> {
+    for binding in state
+        .store
+        .database_bindings()
+        .map_err(|_| AppError::internal(request_id))?
+        .into_iter()
+        .filter(|b| b.input.service_id == id)
+    {
+        if !binding.ready {
+            return Err(AppError::conflict(
+                "database_binding_not_ready",
+                "Finish database binding setup before deployment",
+                request_id,
+            ));
+        }
+        crate::handlers::pipe_databases::available(state, binding.database_id, request_id)?;
+    }
+    Ok(())
 }
 
 /// Check current placement without queuing a deployment or creating resources.
@@ -614,6 +639,10 @@ async fn execute(
         save(state, deployment).await?;
         drop(owner_guard);
         let vm_id = vm.id;
+        state
+            .store
+            .link_database_service_vm(vm_id, deployment.service_id)
+            .map_err(|_| "Could not persist private database binding ownership".to_owned())?;
         let Json(vm) = vms::start_vm(
             State(state.clone()),
             Extension(RequestId(deployment.id)),
@@ -669,7 +698,7 @@ async fn execute(
 }
 
 /// Reuse the `services` network or create it on a free subnet in `172.30.0.0/16`.
-async fn default_network(state: &AppState, request_id: Uuid) -> Result<Uuid, String> {
+pub(crate) async fn default_network(state: &AppState, request_id: Uuid) -> Result<Uuid, String> {
     let store = state.store.clone();
     let networks = database(request_id, move || store.list_micro_networks())
         .await

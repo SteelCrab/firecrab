@@ -449,6 +449,147 @@ async fn releases_stay_immutable_after_stop_and_ownership_covers_both_generation
 }
 
 #[tokio::test]
+async fn database_inputs_follow_both_deploy_generations_without_legacy_vm_links() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let record = journal();
+    let binding = database_binding(record.service_id);
+    state.store.save_database_binding(&binding).unwrap();
+    state.store.save_service_deployment(&record).unwrap();
+    let previous = &record.update.as_ref().unwrap().previous;
+    let mut secret = None;
+    for deployment in [&record, previous.as_ref()] {
+        let vm = deployment.instances[0].vm_id;
+        assert_eq!(
+            state.store.database_vm_service(vm).unwrap(),
+            Some(record.service_id)
+        );
+        let (env, files) = crate::pipe_databases::bindings::guest_inputs(&state.store, vm).unwrap();
+        assert_eq!(env["DATABASE_URL"], binding.connection.uri);
+        assert!(files.is_empty());
+        let event_secret = env["FIRECRAB_EVENT_SECRET"].clone();
+        if let Some(previous) = &secret {
+            assert_eq!(previous, &event_secret);
+        }
+        secret = Some(event_secret);
+        assert!(!deployment.spec.env.contains_key("DATABASE_URL"));
+    }
+    let (env, files) =
+        crate::pipe_databases::bindings::guest_inputs(&state.store, Uuid::new_v4()).unwrap();
+    assert!(env.is_empty());
+    assert!(files.is_empty());
+}
+
+fn database_binding(service_id: Uuid) -> crate::pipe_databases::bindings::BindingRecord {
+    use crate::pipe_databases::bindings::{Access, BindingInput, BindingRecord};
+    let id = Uuid::new_v4();
+    BindingRecord {
+        id,
+        database_id: Uuid::new_v4(),
+        input: BindingInput {
+            request_id: id,
+            service_id,
+            access: Access::Read,
+            env_name: "DATABASE_URL".into(),
+        },
+        connection: serde_json::from_value(serde_json::json!({
+            "name":"private service account",
+            "provider":"local",
+            "uri":format!("postgresql://app:{}@localhost/app", "fixture-only"),
+        }))
+        .unwrap(),
+        role: "app".into(),
+        tables: vec![],
+        ready: true,
+        event_inbox: false,
+    }
+}
+
+#[tokio::test]
+async fn database_setup_must_finish_before_deploy_changes_the_active_release() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let record = journal();
+    let previous = &record.update.as_ref().unwrap().previous;
+    state.store.save_service_deployment(previous).unwrap();
+    let mut binding = database_binding(record.service_id);
+    binding.ready = false;
+    state.store.save_database_binding(&binding).unwrap();
+    let response = update(
+        State(state.clone()),
+        Extension(RequestId(record.id)),
+        Path(record.service_id.to_string()),
+        ValidatedJson(UpdateServiceRequest {
+            expected_release_id: Some(previous.id),
+            operation_id: record.id,
+            spec: record.spec.clone(),
+            strategy: DeployStrategy::Rolling,
+        }),
+    )
+    .await
+    .unwrap_err()
+    .into_response();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["error"]["code"], "database_binding_not_ready");
+    assert_eq!(
+        state
+            .store
+            .service_deployment(record.service_id)
+            .unwrap()
+            .unwrap()
+            .id,
+        previous.id
+    );
+    assert!(state.store.service_attempt(record.id).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn database_maintenance_waits_for_retained_deploy_recovery() {
+    use crate::pipe_databases::{DatabaseRecord, maintenance};
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let mut deployment = journal();
+    deployment.phase = ServicePhase::Failed;
+    deployment.instances.clear();
+    let mut binding = database_binding(deployment.service_id);
+    binding.connection.write_enabled = true;
+    let source = DatabaseRecord {
+        id: binding.database_id,
+        input: binding.connection.clone(),
+    };
+    state
+        .store
+        .save_pipe_database(source.id, &source.input)
+        .unwrap();
+    state.store.save_database_binding(&binding).unwrap();
+    state.store.save_service_deployment(&deployment).unwrap();
+    assert!(
+        !deployment
+            .update
+            .as_ref()
+            .unwrap()
+            .previous
+            .instances
+            .is_empty()
+    );
+    assert!(matches!(
+        maintenance::require_maintenance(&state, &source).await,
+        Err(crate::pipe_databases::write::Error::Invalid(
+            "Stop every bound service before schema changes or restore"
+        ))
+    ));
+    deployment.update.as_mut().unwrap().completed = true;
+    state.store.save_service_deployment(&deployment).unwrap();
+    maintenance::require_maintenance(&state, &source)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn missing_queue_binding_is_rejected_before_mutating_the_active_release() {
     let root = tempfile::tempdir().unwrap();
     let state = state(root.path()).await;

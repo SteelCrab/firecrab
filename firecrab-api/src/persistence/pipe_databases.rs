@@ -12,6 +12,20 @@ pub(super) const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS pipe_datab
 ) STRICT";
 
 impl Store {
+    pub fn update_pipe_database(
+        &self,
+        id: Uuid,
+        input: &DatabaseInput,
+    ) -> Result<bool, PersistenceError> {
+        let spec = serde_json::to_string(input).map_err(|_| PersistenceError::CorruptRecord {
+            id: id.to_string(),
+            reason: "invalid database configuration".into(),
+        })?;
+        Ok(self.lock().execute(
+            "UPDATE pipe_databases SET spec=?2 WHERE id=?1",
+            params![id.to_string(), spec],
+        )? != 0)
+    }
     /// Return all saved connection inputs in insertion order.
     pub fn list_pipe_databases(&self) -> Result<Vec<DatabaseRecord>, PersistenceError> {
         let conn = self.lock();
@@ -60,6 +74,22 @@ impl Store {
             .lock()
             .execute("DELETE FROM pipe_databases WHERE id = ?1", [id.to_string()])?
             != 0)
+    }
+
+    pub fn set_database_writes(&self, id: Uuid, enabled: bool) -> Result<bool, PersistenceError> {
+        let Some(mut record) = self.pipe_database(id)? else {
+            return Ok(false);
+        };
+        record.input.write_enabled = enabled;
+        let spec =
+            serde_json::to_string(&record.input).map_err(|_| PersistenceError::CorruptRecord {
+                id: id.to_string(),
+                reason: "invalid database configuration".into(),
+            })?;
+        Ok(self.lock().execute(
+            "UPDATE pipe_databases SET spec=?2 WHERE id=?1",
+            params![id.to_string(), spec],
+        )? != 0)
     }
 }
 

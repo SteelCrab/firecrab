@@ -250,6 +250,7 @@ async fn accept(
     {
         return Err(AppError::validation(BTreeMap::from([("domain".into(), "Deploy requires the same Nginx-backed domain and service name; direct replica port forwards cannot switch traffic without interruption".into())]), request.0));
     }
+    validate_database_bindings(&state, id, request.0)?;
     require_image_auth(&state, &body.spec.image, request.0).await?;
     secrets::preflight(&state, &body.spec, request.0).await?;
     crate::handlers::pipe_storage::validate_binding(&state, &body.spec, request.0).await?;

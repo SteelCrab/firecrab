@@ -23,8 +23,10 @@ Connections originate from the API host. `localhost` on macOS and Windows means
 the managed Linux guest, not the desktop host. Use a desktop address reachable
 from that guest to connect to a database on the desktop.
 
-TLS defaults to disabled for local URI connections and certificate/hostname
-verification for Supabase and RDS. The URI may set `sslmode` or `ssl-mode` to
+Open **TLS & certificates** to change TLS or add a CA certificate. These optional
+settings are collapsed by default. TLS defaults to disabled for local URI
+connections and certificate/hostname verification for Supabase and RDS.
+The URI may set `sslmode` or `ssl-mode` to
 `disable`, `require`, or `verify-full` (MySQL also accepts `DISABLED`, `REQUIRED`,
 and `VERIFY_IDENTITY`). An explicit TLS selector overrides the URI. Cloud
 connections cannot disable TLS. Paste a PEM CA bundle into **CA certificate**
@@ -42,7 +44,8 @@ after eight seconds. **Refresh rows** retries the selected table.
 
 The API stores connection credentials in its existing owner-only SQLite file.
 URI passwords and CA certificates never appear in list or save responses.
-**Remove** deletes only the saved connection. It does not change the source DB.
+Open the connection's **⋯** menu and select **Remove connection** to delete only
+the saved connection. It does not change the source DB.
 Existing connections survive API restarts.
 
 | Endpoint | Action |

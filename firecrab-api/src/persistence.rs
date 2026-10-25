@@ -19,6 +19,7 @@ use crate::model::{Lease, VmRecord, VmState};
 
 mod block_storage;
 mod cluster;
+mod database_services;
 mod pools;
 mod queues;
 pub(crate) use cluster::ClusterError;
@@ -764,6 +765,7 @@ impl Store {
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
+        conn.execute_batch(database_services::CREATE_SQL)?;
         conn.execute(pipe_ai::CONNECTIONS_SQL, [])?;
         conn.execute(pipe_ai::DEFAULTS_SQL, [])?;
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
