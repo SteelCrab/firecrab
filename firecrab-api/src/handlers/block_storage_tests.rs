@@ -229,6 +229,10 @@ async fn block_storage_competing_attachments_and_live_vm_mutations_are_rejected(
         .await
         .is_err()
     );
+    // A parallel subprocess can inherit the descriptor until exec. Unlock the
+    // shared file description explicitly instead of waiting for every copy.
+    // SAFETY: held still owns the locked descriptor.
+    assert_eq!(unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_UN) }, 0);
     drop(held);
     // The failed delete marks ownership uncertain until reconciliation settles it.
     state.vms.lock().unwrap().get_mut(&owner).unwrap().state = crate::model::VmState::Stopped;
