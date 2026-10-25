@@ -677,7 +677,10 @@ fn render_apply_ruleset(
             // Keep the same-network path before routed-network isolation.
             let local6 = network.ipv6.as_ref().map(|ipv6| {
                 let subnet = ipv6.subnet_cidr();
-                format!("\t\tiifname \"{bridge}\" oifname \"{bridge}\" ip6 saddr {subnet} ip6 daddr {subnet} return\n")
+                format!(
+                    "\t\tiifname \"{bridge}\" oifname \"{bridge}\" ip6 saddr {subnet} ip6 daddr {subnet} return\n\
+                     \t\tiifname \"{bridge}\" oifname \"{bridge}\" icmpv6 type {{ nd-neighbor-solicit, nd-neighbor-advert }} return\n"
+                )
             }).unwrap_or_default();
             format!(
                 "\t\tiifname \"{bridge}\" oifname \"{bridge}\" ip saddr {subnet} ip daddr {subnet} return\n\
@@ -1403,6 +1406,31 @@ mod tests {
         assert!(ruleset.contains(
             "ip daddr { 127.0.0.0/8, 169.254.0.0/16, 172.31.0.0/24, 172.32.0.0/24 } drop"
         ));
+    }
+
+    #[test]
+    fn neighbor_discovery_stays_on_its_bridge_before_egress_dispatch() {
+        let mut network = dual_stack_network(
+            0x1234,
+            "172.31.0.1",
+            24,
+            "fd00:1::1",
+            Ipv6AddressMode::Slaac,
+        );
+        network.internet_enabled = false;
+        let bridge = network.bridge_name();
+        let ruleset = render_apply_ruleset("eth0", &[network]).unwrap();
+        let neighbor = format!(
+            "iifname \"{bridge}\" oifname \"{bridge}\" icmpv6 type {{ nd-neighbor-solicit, nd-neighbor-advert }} return"
+        );
+        let dispatch = format!("iifname \"{bridge}\" jump firecrab_egress");
+        assert!(ruleset.find(&neighbor).unwrap() < ruleset.find(&dispatch).unwrap());
+        assert!(!ruleset.contains("nd-router-advert"));
+        assert!(ruleset.contains("ip6 saddr { fd00:1::/64 } drop"));
+        assert!(ruleset.contains("ip6 saddr vmap @vm_egress6"));
+        let ipv4_only =
+            render_apply_ruleset("eth0", &[sample_network(0x5678, "172.32.0.1", 24)]).unwrap();
+        assert!(!ipv4_only.contains("nd-neighbor"));
     }
 
     #[test]

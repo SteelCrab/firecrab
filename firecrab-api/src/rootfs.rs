@@ -648,7 +648,7 @@ pub(crate) fn apply_private_service_inputs(
     private: &BTreeMap<String, String>,
     files: &BTreeMap<String, String>,
 ) -> Result<(), RootfsError> {
-    if private.is_empty() {
+    if private.is_empty() || !guest_path_exists(rootfs, GUEST_VM_SERVICE) {
         return Ok(());
     }
     let mut merged = public.clone();
@@ -2532,7 +2532,20 @@ mod tests {
 
         specialize_guest(&rootfs, Uuid::new_v4(), &env).unwrap();
 
-        assert!(!guest_path_exists(&rootfs, "/etc/firecrab/services.d/app"));
+        apply_private_service_inputs(
+            &rootfs,
+            &env,
+            &BTreeMap::from([("FIRECRAB_EVENT_SECRET".into(), "unused-secret".into())]),
+            &BTreeMap::from([("/etc/firecrab/database-ca.pem".into(), "unused-ca".into())]),
+        )
+        .unwrap();
+        for path in [
+            GUEST_VM_SERVICE,
+            crate::oci::service::GUEST_VM_ENV_FILE,
+            "/etc/firecrab/database-ca.pem",
+        ] {
+            assert!(!guest_path_exists(&rootfs, path), "{path}");
+        }
     }
 
     #[test]
