@@ -162,6 +162,99 @@ test("IME trailing input does not duplicate the committed syllables", async ({ p
   await expect.poll(() => received.join("")).toBe("한글");
 });
 
+for (const scenario of ["commit", "cancel", "edit", "focus", "repeat", "resize"] as const) {
+  test(`browser IME composition: ${scenario}`, async ({ page, browserName, browser }) => {
+    test.skip(browserName !== "chromium", "Browser composition uses Chromium CDP; this does not validate an OS input source");
+    test.info().annotations.push({ type: "browser-version", description: browser.version() });
+    const received: string[] = [];
+    await page.routeWebSocket(`**/ws/vms/${VM.id}/console`, socket => {
+      socket.send("composition ready");
+      socket.onMessage(message => received.push(message.toString()));
+    });
+    await openDashboard(page, { vms: [VM], hash: `#/console/${VM.id}`, routes: { [`/api/vms/${VM.id}`]: VM } });
+    await expect(page.locator(".terminal-output")).toContainText("composition ready");
+    const input = page.locator(".terminal-emulator textarea");
+    await input.focus();
+    const cdp = await page.context().newCDPSession(page);
+    const compose = (text: string) => cdp.send("Input.imeSetComposition", { text, selectionStart: text.length, selectionEnd: text.length });
+    const commit = (text: string) => cdp.send("Input.insertText", { text });
+    for (const text of ["ㅎ", "하", "한"]) await compose(text);
+    expect(received).toEqual([]);
+    let expected: string;
+    if (scenario === "cancel") {
+      await compose("");
+      await page.keyboard.type("a");
+      expected = "a";
+    } else if (scenario === "edit") {
+      await compose("하");
+      await commit("하");
+      await page.keyboard.press("Backspace");
+      expected = "하\x7f";
+    } else if (scenario === "focus") {
+      await page.getByRole("button", { name: "Display settings", exact: true }).focus();
+      await input.focus();
+      await page.keyboard.press("ArrowLeft");
+      expected = "한\x1b[D";
+    } else {
+      if (scenario === "resize") await page.setViewportSize({ width: 390, height: 640 });
+      await commit("한");
+      if (scenario === "repeat") { await compose("한"); await commit("한"); }
+      await page.keyboard.press("Enter");
+      expected = scenario === "repeat" ? "한한\r" : "한\r";
+    }
+    await expect.poll(() => received.join("")).toBe(expected);
+    await expect(input).toHaveValue("");
+  });
+}
+
+test("touch drags scroll history without opening the keyboard and taps focus input", async ({ page, browserName }) => {
+  test.skip(browserName !== "chromium", "Touch gestures use Chromium CDP; this does not validate a physical device");
+  const received: string[] = [];
+  let send: (text: string) => void = () => {};
+  await page.setViewportSize({ width: 390, height: 720 });
+  await page.routeWebSocket(`**/ws/vms/${VM.id}/console`, socket => {
+    send = text => socket.send(text);
+    socket.send(Array.from({ length: 160 }, (_, i) => `history-${i}\r\n`).join("") + "LIVE_OUTPUT");
+    socket.onMessage(message => received.push(message.toString()));
+  });
+  await openDashboard(page, { vms: [VM], hash: `#/console/${VM.id}`, routes: { [`/api/vms/${VM.id}`]: VM } });
+  await expect(page.locator(".terminal-output")).toContainText("LIVE_OUTPUT");
+  await page.getByRole("button", { name: "Terminal only", exact: true }).click();
+  const input = page.locator(".terminal-emulator textarea");
+  await input.evaluate(element => (element as HTMLTextAreaElement).blur());
+  const box = (await page.locator(".terminal-emulator canvas").boundingBox())!;
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+  const x = box.x + box.width / 2;
+  const startY = box.y + 60;
+  const drag = async (from: number, to: number) => {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: from }] });
+    for (let step = 1; step <= 8; step++) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: from + (to - from) * step / 8 }] });
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  };
+  await drag(startY, startY + 160);
+  await expect(page.locator(".terminal-output")).not.toContainText("LIVE_OUTPUT");
+  await expect(input).not.toBeFocused();
+  await drag(startY + 160, startY);
+  await expect(page.locator(".terminal-output")).toContainText("LIVE_OUTPUT");
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: startY }] });
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await expect(input).toBeFocused();
+  await input.evaluate(element => (element as HTMLTextAreaElement).blur());
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ id: 1, x, y: startY }] });
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ id: 1, x, y: startY }, { id: 2, x: x + 30, y: startY }] });
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await expect(input).not.toBeFocused();
+  send("\x1b[?1002h\x1b[?1006h\r\nMOUSE_MODE");
+  await expect(page.locator(".terminal-output")).toContainText("MOUSE_MODE");
+  await drag(startY, startY + 160);
+  await expect(page.locator(".terminal-output")).toContainText("MOUSE_MODE");
+  await expect(input).not.toBeFocused();
+  expect(received).toEqual([]);
+});
+
 test("WASM modes control application arrows and bracketed paste", async ({ page }) => {
   const received: string[] = [];
   await page.routeWebSocket(`**/ws/vms/${VM.id}/console`, socket => {

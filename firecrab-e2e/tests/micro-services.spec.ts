@@ -881,6 +881,19 @@ test.describe("MicroService configuration @dashboard", () => {
     expect(writes).toHaveLength(0);
   });
 
+  test("keeps a console account out of the app's registry account choices", async ({ page }) => {
+    const account = { provider: "firecrab", account: "owner@example.com", registry: null, region: null, services: [] };
+    await openServices(page, [], false, [account]);
+    await page.getByRole("button", { name: "New MicroService", exact: true }).click();
+    await expect(page.getByText("Connect an account first", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
+    await page.route("**/api/pipe/auth", (route) => route.fulfill({ json: [account, AUTH] }));
+    await page.getByRole("button", { name: "Check connections", exact: true }).click();
+    await expect(page.getByLabel("AUTH account", { exact: true }).getByRole("option", { name: /owner@example.com/ })).toHaveCount(0);
+    await selectApp(page);
+    await expect(page.locator(".service-selected-image code")).toHaveText("ghcr.io/team/orders:1.0");
+  });
+
   test("resets the app when switching AUTH accounts and discards late responses", async ({ page }) => {
     await openServices(page, [], false, [AUTH, AWS]);
     let releaseTags!: () => void;
