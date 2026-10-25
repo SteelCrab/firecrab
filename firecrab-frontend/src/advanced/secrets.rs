@@ -8,17 +8,22 @@ use serde_json::{Value, json};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 pub fn connections(app: &Shared) {
+    for path in ["/api/secrets/connections", "/api/pipe/auth"] {
+        load_connections(app, path);
+    }
+}
+fn load_connections(app: &Shared, path: &'static str) {
     let a = app.clone();
     let generation = app.borrow().generation;
     spawn_local(async move {
-        let result = api::request("GET", "/api/secrets/connections", None).await;
+        let result = api::request("GET", path, None).await;
         let mut s = a.borrow_mut();
         if s.generation != generation {
             return;
         }
         match result {
             Ok(v) => {
-                s.cache.insert("/api/secrets/connections".into(), v);
+                s.cache.insert(path.into(), v);
             }
             Err(e) => s.error = e,
         };
@@ -36,6 +41,7 @@ pub fn content(app: &App) -> String {
         "<div role=\"tablist\" aria-label=\"Secret stores\"><button class=\"btn\" role=\"tab\" aria-selected=\"{}\" data-action=\"secret-internal\">Internal</button><button class=\"btn\" role=\"tab\" aria-selected=\"{external}\" data-action=\"secret-external\">External connections</button></div>",
         !external
     );
+    out.push_str(&account_card(app.cache.get("/api/pipe/auth"), app.busy));
     if external {
         out.push_str(&button("Add connection", "create", "secret-connection"));
         for link in list(
@@ -73,6 +79,14 @@ pub fn content(app: &App) -> String {
             let name = text(row, "name");
             let reveal = app.advanced.reveals.get(id);
             out.push_str(&format!("<article class=\"wasm-card\"><label><input type=\"checkbox\" data-secret-id=\"{}\" aria-label=\"Select {}\"> {}</label><p>{}</p><code aria-label=\"{} value\">{}</code>{}{}{}</article>",escape(id),escape(name),escape(name),escape(text(row,"description")),escape(name),escape(reveal.map(|(v,_)|v.as_str()).unwrap_or("••••••••")),button(&format!("{} {name}",if reveal.is_some(){"Hide"}else{"Reveal"}),"secret-reveal",id),button(&format!("Edit {name}"),"secret-edit",id),request(&format!("Delete {name}"),"DELETE",&format!("/api/secrets/{}",api::encode(id)),Value::Null)));
+            if let Some(source) = row.get("source").filter(|v| v.is_object()) {
+                out.push_str(&format!(
+                    "<p>{}: {} · v{}</p>",
+                    crate::i18n::t("Imported from"),
+                    escape(text(source, "connectionName")),
+                    row["version"].as_u64().unwrap_or(1)
+                ));
+            }
         }
         out.push_str("<label for=\"upload-destination\">Upload destination</label><select id=\"upload-destination\">");
         for link in list(
@@ -97,6 +111,37 @@ pub fn content(app: &App) -> String {
     }
     out.push_str(&format!("<div id=\"secret-plan\">{}</div>", plan(app)));
     out
+}
+fn account_card(auth: Option<&Value>, busy: bool) -> String {
+    use crate::i18n::t;
+    let status = match auth {
+        None => format!("<p>{}</p>", t("Loading account connection…")),
+        Some(auth) if list(auth).iter().any(|a| a["provider"] == "firecrab") => {
+            format!(
+                "<p>{}</p>{}",
+                t(
+                    "Preview secrets from the Firecrab account connected in Auth. Only selected secrets are copied locally."
+                ),
+                button("Preview account secrets", "secret-account-import", "").replace(
+                    "type=\"button\"",
+                    if busy {
+                        "type=\"button\" disabled"
+                    } else {
+                        "type=\"button\""
+                    }
+                )
+            )
+        }
+        Some(_) => format!(
+            "<p>{}</p><a href=\"#/pipe/auth\">{}</a>",
+            t("Connect a Firecrab account in Auth to import account secrets."),
+            t("Open Auth")
+        ),
+    };
+    format!(
+        "<section class=\"wasm-card\" aria-label=\"Firecrab account secrets\"><h2>{}</h2>{status}</section>",
+        t("Firecrab account secrets")
+    )
 }
 pub fn sync_editor() {
     let Some(value) =
@@ -229,6 +274,7 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
     if ![
         "secret-reveal",
         "secret-import",
+        "secret-account-import",
         "secret-export",
         "secret-apply",
     ]
@@ -241,6 +287,7 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
         return true;
     }
     let (path, body) = match action {
+        "secret-account-import" => ("/api/secrets/account/preview".into(), json!({})),
         "secret-reveal" => (
             format!("/api/secrets/{}/reveal", api::encode(id)),
             json!({}),
@@ -307,7 +354,7 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
     {
         let mut state = app.borrow_mut();
         state.busy = true;
-        if action == "secret-import" || action == "secret-export" {
+        if ["secret-import", "secret-account-import", "secret-export"].contains(&action.as_str()) {
             state.advanced.plan = None;
             state.advanced.plan_names.clear();
         }

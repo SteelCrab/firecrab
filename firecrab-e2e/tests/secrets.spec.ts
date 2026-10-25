@@ -20,6 +20,7 @@ async function openSecrets(page: Page, options: { empty?: boolean; failSave?: bo
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/update") return route.fulfill({ json: { current: "0.3.1", latest: "0.3.1", updateAvailable: false } });
     if (path === "/api/update/progress") return route.fulfill({ json: { phase: "idle", percent: 0, updatedAtMs: 0 } });
+    if (path === "/api/pipe/auth") return route.fulfill({ json: [] });
     if (path === "/api/secrets" && method === "GET") return route.fulfill({ json: rows });
     if (path === "/api/secrets/connections" && method === "GET") return route.fulfill({ json: connections });
     if (path.endsWith("/reveal")) return route.fulfill({ json: { value: "fixture-private-password", version: 1 } });

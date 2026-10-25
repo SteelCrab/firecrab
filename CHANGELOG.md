@@ -35,6 +35,10 @@ Entries land here as work merges, and move under the next version heading when t
   macOS and Windows. Development controls retain the selected port, and older
   dashboard sessions default to 8080. Tracked in [#488](https://github.com/SteelCrab/firecrab/issues/488).
 
+- Secrets imports selected values from the Firecrab account linked in Auth.
+  The Rust/WASM dashboard previews names without values, requires explicit
+  selection for replacements, and records Firecrab Console as the source (#411).
+
 - Pipe Auth links a Firecrab account with an account integration token issued
   by `console.firecrab.dev`. It displays the verified account ID, email, and
   token expiry. Address-scoped Tunnel tokens remain separate. Existing Tunnel
@@ -196,6 +200,11 @@ Entries land here as work merges, and move under the next version heading when t
 - None.
 
 ### Fixed
+
+- Dashboard WASM builds reuse a version-checked `wasm-bindgen` Cargo installation
+  from the wasm-pack cache. The matching tool is exposed only to the build child,
+  avoiding an unnecessary installer pass while preserving normal discovery when
+  the cache is missing or stale.
 
 - The development API proxy preserves the dashboard's Host header so browser
   requests from custom ports such as 8098 pass the API's same-origin checks.

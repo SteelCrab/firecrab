@@ -211,9 +211,21 @@ pub(crate) struct PlannedValue {
     pub remote_value: Option<String>,
 }
 
+/// Account credential binding captured by an import preview; contains no bearer token.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct AccountImport {
+    /// Console account UUID that owns the captured values.
+    pub account_id: Uuid,
+    /// SHA-256 of the host credential; changing or disconnecting invalidates the preview.
+    pub token_hash: String,
+}
+
 /// Encrypted, single-use transfer snapshot with a ten-minute lifetime.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Plan {
+    /// Present only for imports from the linked console account.
+    #[serde(default)]
+    pub account: Option<AccountImport>,
     /// Identifier used to apply selected names from this preview.
     pub id: Uuid,
     /// Connection whose scope and credentials were used for the snapshot.
