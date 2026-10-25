@@ -11,8 +11,11 @@ fn ca_help_contract() {
     let output = cli().args(["ca", "--help"]).output().unwrap();
     assert!(output.status.success());
     assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        include_str!("snapshots/ca-help.txt")
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .replace("firecrab.exe", "firecrab")
+            .replace("\r\n", "\n"),
+        include_str!("snapshots/ca-help.txt").replace("\r\n", "\n")
     );
 }
 
