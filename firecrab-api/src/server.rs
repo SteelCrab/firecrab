@@ -643,6 +643,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/secrets/{id}",
             axum::routing::put(handlers::secrets::update).delete(handlers::secrets::delete),
         )
+        .route(
+            "/api/secrets/account/preview",
+            post(handlers::secrets::account_preview),
+        )
         .route("/api/secrets/{id}/reveal", post(handlers::secrets::reveal))
         .route(
             "/api/secrets/connections",
