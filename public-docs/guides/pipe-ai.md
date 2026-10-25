@@ -6,7 +6,7 @@ It supports OpenAI through ChatGPT sign-in or an API key, and Anthropic through 
 Model selection, conversation, and task UI belong to **AI Sandbox** and are not implemented on the Pipe AI page.
 Dashboard, CLI, and a local stdio MCP adapter reuse the same saved account connections.
 This is the connection and entry-point slice of [issue #414](https://github.com/SteelCrab/firecrab/issues/414).
-It does not implement task scheduling, guest command execution, or automatic agents.
+Project conversations, native tool calls, and guest execution are available in [AI Sandbox](ai-sandbox.md).
 
 ## Authentication and capabilities
 
@@ -32,11 +32,11 @@ Account, workspace, region, plan, and provider limits still apply.
 Select **API key → Anthropic (Claude)**, enter a workspace-scoped key from [Claude Console](https://platform.claude.com/settings/keys), then choose **Verify and save**.
 The server checks the [official Models API](https://platform.claude.com/docs/en/api/models/list) before saving. Authentication headers follow the [official API contract](https://platform.claude.com/docs/en/api/overview).
 Provider changes clear the draft key. Failed replacement keeps the previous connection.
-Only account connection, key replacement, and disconnect are implemented for Anthropic.
+Pipe AI provides account connection, key replacement, and disconnect for Anthropic. AI Sandbox provides its separate model and execution adapter.
 Saved metadata has no verified models and advertises `streaming: false`, `toolCalls: false`.
 Supplying an Anthropic `model` during connection returns `400 ai_invalid_input`.
 Shared model verification, selection, and response routes return `409 ai_connection_only` for Anthropic connections.
-Model discovery, inference, streaming, and tool calls remain AI Sandbox work.
+Use the separate AI Sandbox routes for Anthropic model discovery, verification, conversation, and native tool calls.
 Disconnect removes the server's saved key; revoke the actual key in Claude Console if needed.
 Claude Code installation, CLI login, terminal access, subscription tokens, and MicroVM execution are not part of this integration.
 
@@ -45,7 +45,7 @@ Claude Code installation, CLI login, terminal access, subscription tokens, and M
 The existing REST, CLI, and MCP model operations are integration primitives for AI Sandbox.
 These model operations currently support OpenAI connections.
 They do not expose model selection, conversation, or task controls in Pipe AI.
-The AI Sandbox UI remains future work.
+Use [AI Sandbox](ai-sandbox.md) for the Dashboard model picker, persistent conversation, task board, and guest commands. The older `/api/pipe/ai` model routes below remain OpenAI text-only compatibility APIs.
 
 | Capability | Supported behavior |
 | --- | --- |

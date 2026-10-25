@@ -116,6 +116,8 @@ pub struct AppState {
     pub(crate) pipe_ai_logins: Arc<crate::pipe_ai::LoginRegistry>,
     /// Serializes inference with disconnect/rotation, so successful disconnect blocks new calls.
     pub(crate) pipe_ai_mutations: Arc<AsyncMutex<()>>,
+    /// Durable AI projects and bounded model/guest execution coordination.
+    pub(crate) sandbox: Arc<crate::ai_sandbox::Runtime>,
     /// Encrypted, host-local PipeSecrets vault; opened lazily on first use.
     pub(crate) secrets: Arc<crate::secrets::Vault>,
     /// Active per-VM lifecycle locks; weak entries do not retain deleted VM IDs.
@@ -185,6 +187,8 @@ impl AppState {
         let secrets = Arc::new(crate::secrets::Vault::new(
             db_file.with_extension("secrets"),
         ));
+        let sandbox_root = db_file.with_extension("sandbox");
+        let sandbox_database = db_file.clone();
         let (store, vms) = tokio::task::spawn_blocking(move || {
             let store = Store::open(&db_file)?;
             store.interrupt_stack_applies()?;
@@ -212,6 +216,10 @@ impl AppState {
             pipe_ai_anthropic: crate::pipe_ai::anthropic::Anthropic::new(),
             pipe_ai_logins: Arc::new(crate::pipe_ai::LoginRegistry::default()),
             pipe_ai_mutations: Arc::new(AsyncMutex::new(())),
+            sandbox: Arc::new(crate::ai_sandbox::Runtime::new(
+                sandbox_root,
+                sandbox_database,
+            )),
             vm_mutations: Arc::new(Mutex::new(HashMap::new())),
             secrets,
             service_mutations: Arc::new(AsyncMutex::new(())),

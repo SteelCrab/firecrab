@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.pipe.json",
+  "include": [
+    "tests/ai-sandbox.spec.ts",
+    "playwright.ai-sandbox.config.ts"
+  ]
+}

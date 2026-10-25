@@ -48,9 +48,12 @@ impl SavedConnection {
 /// Bounded, fixed-endpoint OpenAI client without automatic redirects or inference retries.
 #[derive(Debug, Clone)]
 pub struct OpenAi {
-    client: Client,
-    endpoint: String,
-    credential_endpoint: String,
+    /// Fixed-policy HTTP client shared with the Sandbox native adapter.
+    pub(crate) client: Client,
+    /// Official Responses endpoint, replaced only by test fixtures.
+    pub(crate) endpoint: String,
+    /// Official model catalogue endpoint.
+    pub(crate) credential_endpoint: String,
     auth_base: String,
 }
 
@@ -258,7 +261,8 @@ impl OpenAi {
     }
 }
 
-async fn response_bytes(mut response: reqwest::Response) -> Result<Vec<u8>, Failure> {
+/// Reject oversized provider bodies before parsing or exposing them.
+pub(crate) async fn response_bytes(mut response: reqwest::Response) -> Result<Vec<u8>, Failure> {
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(transport_failure)? {
         if bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
@@ -270,10 +274,12 @@ async fn response_bytes(mut response: reqwest::Response) -> Result<Vec<u8>, Fail
 }
 
 /// A successful HTTP status or partial text is insufficient for plan inference.
-fn completed_stream(bytes: &[u8]) -> Result<Value, Failure> {
+pub(crate) fn completed_stream(bytes: &[u8]) -> Result<Value, Failure> {
     let text = std::str::from_utf8(bytes).map_err(|_| Failure::Provider)?;
     let text = text.replace("\r\n", "\n");
     let mut completed = None;
+    let mut finished = std::collections::BTreeMap::new();
+    let mut pending = std::collections::BTreeSet::new();
     for event in text.split("\n\n") {
         let data = event
             .lines()
@@ -285,6 +291,25 @@ fn completed_stream(bytes: &[u8]) -> Result<Value, Failure> {
         }
         let value: Value = serde_json::from_str(&data).map_err(|_| Failure::Provider)?;
         match value["type"].as_str() {
+            Some("response.output_item.added") => {
+                let index = value["output_index"]
+                    .as_u64()
+                    .filter(|v| *v < 256)
+                    .ok_or(Failure::Provider)?;
+                pending.insert(index);
+            }
+            Some("response.output_item.done") => {
+                let index = value["output_index"]
+                    .as_u64()
+                    .filter(|v| *v < 256)
+                    .ok_or(Failure::Provider)?;
+                if !value["item"].is_object()
+                    || finished.insert(index, value["item"].clone()).is_some()
+                {
+                    return Err(Failure::Provider);
+                }
+                pending.remove(&index);
+            }
             Some("response.completed") => completed = Some(value["response"].clone()),
             Some("response.failed") | Some("error") => {
                 let code = value
@@ -302,10 +327,20 @@ fn completed_stream(bytes: &[u8]) -> Result<Value, Failure> {
             _ => {}
         }
     }
-    completed.ok_or(Failure::NoText)
+    let mut response = completed.ok_or(Failure::NoText)?;
+    // ChatGPT plan streams can put complete items only in output_item.done and leave
+    // response.completed.output empty. Never promote argument/text deltas to completion.
+    if response["output"].as_array().is_none_or(Vec::is_empty) && !finished.is_empty() {
+        if !pending.is_empty() || finished.keys().copied().ne(0..finished.len() as u64) {
+            return Err(Failure::NoText);
+        }
+        response["output"] = serde_json::Value::Array(finished.into_values().collect());
+    }
+    Ok(response)
 }
 
-fn transport_failure(error: reqwest::Error) -> Failure {
+/// Report transport failures without reflecting request authentication.
+pub(crate) fn transport_failure(error: reqwest::Error) -> Failure {
     if error.is_timeout() {
         Failure::Timeout
     } else {
@@ -381,5 +416,25 @@ mod tests {
             completed_stream(b"data: {\"type\":\"response.incomplete\"}\n\n"),
             Err(Failure::NoText)
         ));
+    }
+    #[test]
+    fn plan_stream_reconstructs_only_completed_items_and_still_rejects_late_failure() {
+        let done = json!({"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","namespace":"sandbox","name":"sandbox_ready","call_id":"probe","arguments":"{}"}});
+        let completed =
+            json!({"type":"response.completed","response":{"status":"completed","output":[]}});
+        let stream = format!("data: {done}\n\ndata: {completed}\n\n");
+        assert_eq!(
+            completed_stream(stream.as_bytes()).unwrap()["output"][0]["name"],
+            "sandbox_ready"
+        );
+        let failed =
+            json!({"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded"}}});
+        assert!(matches!(
+            completed_stream(format!("{stream}data: {failed}\n\n").as_bytes()),
+            Err(Failure::RateLimited)
+        ));
+        let unfinished =
+            json!({"type":"response.output_item.added","output_index":1,"item":{"type":"message"}});
+        assert!(completed_stream(format!("data: {unfinished}\n\n{stream}").as_bytes()).is_err());
     }
 }

@@ -583,7 +583,7 @@ phase apt-update
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 phase apt-install
-apt-get install -y ca-certificates curl sudo tar findutils xz-utils gzip zstd lz4 lzop \
+apt-get install -y ca-certificates curl git openssh-client sudo tar findutils xz-utils gzip zstd lz4 lzop \
   nftables conntrack dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat openssh-server \
   linux-image-{kernel_version}
 # firecrab-helper runs its own dnsmasq per bridge; the packaged unit only

@@ -12,6 +12,7 @@ mod queues;
 pub use queues::*;
 mod pool;
 pub use pool::*;
+mod ai_sandbox;
 mod block_storage;
 pub use block_storage::*;
 mod micro_services;
@@ -19,6 +20,7 @@ mod pipe_ai;
 mod pipe_storage;
 mod schedules;
 mod security_groups;
+pub use ai_sandbox::*;
 pub use micro_services::{
     DeployMicroServiceRequest, DeployStrategy, MicroServiceDeployment, MicroServiceResponse,
     MicroServiceSpec, RetryServiceRequest, RollbackServiceRequest, ServiceInstance, ServicePhase,
