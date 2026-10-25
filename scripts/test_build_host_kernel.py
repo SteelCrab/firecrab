@@ -52,6 +52,7 @@ class NativeKernelBuildTests(unittest.TestCase):
         self.tools.mkdir()
         for name in ('cc', 'flex', 'bison', 'bc', 'perl'):
             self.executable(name, '#!/bin/sh\nexit 0\n')
+        self.executable('cc', '#!/bin/sh\n[ "${MISSING_KERNEL_HEADERS:-0}" = 0 ]\n')
         self.executable('uname', '#!/bin/sh\nif [ "$1" = -s ]; then echo "${TEST_HOST_OS:-Linux}"; else echo "$TEST_HOST_ARCH"; fi\n')
         self.executable('make', MAKE)
         self.archive = self.root / 'linux-7.2.12.tar.xz'
@@ -104,6 +105,12 @@ class NativeKernelBuildTests(unittest.TestCase):
         result = self.build(FAIL_BUILD='1')
         self.assertEqual(result.returncode, 17)
         self.assertFalse(self.output.exists())
+
+    def test_missing_development_headers_stop_before_extraction(self):
+        result = self.build(MISSING_KERNEL_HEADERS='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('install libelf and OpenSSL development packages', result.stderr)
+        self.assertFalse((self.root / 'work').exists())
 
     def test_non_linux_host_is_rejected_before_extraction(self):
         result = self.build(TEST_HOST_OS='Darwin')

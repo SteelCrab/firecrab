@@ -18,6 +18,10 @@ esac
 for tool in make cc flex bison bc perl tar xz install grep; do
   command -v "$tool" >/dev/null || { printf 'Missing kernel build tool: %s\n' "$tool" >&2; exit 1; }
 done
+if ! printf '#include <libelf.h>\n#include <gelf.h>\n#include <openssl/opensslv.h>\n' | cc -x c -fsyntax-only - >/dev/null 2>&1; then
+  printf 'Missing kernel build headers: install libelf and OpenSSL development packages\n' >&2
+  exit 1
+fi
 jobs=${FIRECRAB_KERNEL_BUILD_JOBS:-2}
 [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { printf 'FIRECRAB_KERNEL_BUILD_JOBS must be a positive integer\n' >&2; exit 1; }
 
