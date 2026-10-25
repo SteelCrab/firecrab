@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::env;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -29,8 +29,6 @@ const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 pub enum ConfigError {
     #[error("invalid FIRECRAB_BIND_ADDR: {0}")]
     InvalidBindAddress(String),
-    #[error("non-loopback bind requires both authentication and TLS")]
-    InsecureNonLoopbackBind,
     #[error("invalid FIRECRAB_ALLOWED_ORIGINS value: {0}")]
     InvalidOrigin(String),
 }
@@ -52,8 +50,6 @@ pub struct HttpConfig {
 impl HttpConfig {
     pub fn load() -> Result<Self, ConfigError> {
         let bind = bind_addr_or_default(env::var("FIRECRAB_BIND_ADDR").ok());
-        let authentication_enabled = env_flag("FIRECRAB_AUTHENTICATION_ENABLED");
-        let tls_enabled = env_flag("FIRECRAB_TLS_ENABLED");
         let production = env::var("FIRECRAB_ENV").is_ok_and(|value| value == "production");
         let origins = env::var("FIRECRAB_ALLOWED_ORIGINS").unwrap_or_else(|_| {
             if production {
@@ -63,22 +59,14 @@ impl HttpConfig {
             }
         });
 
-        let mut config = Self::from_values(&bind, &origins, authentication_enabled, tls_enabled)?;
+        let mut config = Self::from_values(&bind, &origins)?;
         config.static_root = resolve_static_root(env::var("FIRECRAB_STATIC_ROOT").ok());
         Ok(config)
     }
 
-    fn from_values(
-        bind: &str,
-        origins: &str,
-        authentication_enabled: bool,
-        tls_enabled: bool,
-    ) -> Result<Self, ConfigError> {
+    fn from_values(bind: &str, origins: &str) -> Result<Self, ConfigError> {
         let bind_addr = SocketAddr::from_str(bind)
             .map_err(|_| ConfigError::InvalidBindAddress(bind.to_owned()))?;
-        if !(is_loopback(bind_addr.ip()) || authentication_enabled && tls_enabled) {
-            return Err(ConfigError::InsecureNonLoopbackBind);
-        }
 
         let allowed_origins = origins
             .split(',')
@@ -118,14 +106,6 @@ fn resolve_static_root(configured: Option<String>) -> Option<PathBuf> {
 
 pub(crate) fn bind_addr_or_default(configured: Option<String>) -> String {
     configured.unwrap_or_else(|| "127.0.0.1:5523".to_owned())
-}
-
-fn env_flag(name: &str) -> bool {
-    env::var(name).is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"))
-}
-
-fn is_loopback(ip: IpAddr) -> bool {
-    ip.is_loopback()
 }
 
 #[derive(Clone)]
@@ -232,6 +212,18 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::stacks::list).post(handlers::stacks::register),
         )
         .route("/api/stacks/{name}/plan", post(handlers::stacks::plan))
+        .route(
+            "/api/stacks/{name}/source",
+            get(handlers::stack_sources::get).put(handlers::stack_sources::configure),
+        )
+        .route(
+            "/api/stacks/{name}/source/check",
+            post(handlers::stack_sources::check),
+        )
+        .route(
+            "/api/stacks/{name}/source/history",
+            get(handlers::stack_sources::history),
+        )
         .route(
             "/api/stacks/{name}/apply",
             post(handlers::stack_applies::apply),
@@ -868,20 +860,11 @@ pub fn request_id(request: &Request) -> Uuid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::assert_matches;
 
     #[test]
     fn defaults_are_loopback_only() {
-        let config =
-            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
-                .unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080").unwrap();
         assert!(config.bind_addr.ip().is_loopback());
-    }
-
-    #[test]
-    fn rejects_insecure_non_loopback_bind() {
-        let result = HttpConfig::from_values("0.0.0.0:3000", "", false, false);
-        assert_matches!(result, Err(ConfigError::InsecureNonLoopbackBind));
     }
 
     #[test]
@@ -964,7 +947,7 @@ mod tests {
             axum::serve(listener, registry).await.unwrap();
         });
         let directory = tempfile::tempdir().unwrap();
-        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         config.request_timeout = Duration::from_millis(10);
         config.max_concurrent_requests = 1;
         let app = build_router(test_state(directory.path()).await, &config);
@@ -1015,7 +998,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         // The installed shape: dashboard served from this API, so nothing is
         // listed as a cross-origin caller.
-        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         let app = build_router(test_state(directory.path()).await, &config);
 
         let post = |origin: &'static str| {
@@ -1077,7 +1060,7 @@ mod tests {
         use tower::ServiceExt;
 
         let directory = tempfile::tempdir().unwrap();
-        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         let state = test_state(directory.path()).await;
         let mut vm = crate::handlers::vms::test_support::record("pool-ci-1", uuid::Uuid::new_v4());
         vm.purpose = crate::model::VmPurpose::Pool;
@@ -1134,7 +1117,7 @@ mod tests {
         state.network = crate::network::NetworkClient::with_socket_path(
             directory.path().join("unused-helper.sock"),
         );
-        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         let app = build_router(state, &config);
         let valid = json!({"config":{"routes":[],"quickTunnel":{"upstreams":["172.30.1.2:80"]}}});
         let mut both = valid.clone();
@@ -1232,7 +1215,7 @@ mod tests {
         });
         let mut state = test_state(directory.path()).await;
         state.network = crate::network::NetworkClient::with_socket_path(socket);
-        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         config.request_timeout = Duration::from_millis(10);
         let app = build_router(state, &config);
         for (origin, expected_status) in [
@@ -1281,7 +1264,7 @@ mod tests {
         state.network = crate::network::NetworkClient::with_socket_path(
             directory.path().join("unused-helper.sock"),
         );
-        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         let app = build_router(state, &config);
         for body in [
             r#"{"service":"firecrab-api.service","action":"stop"}"#,
@@ -1374,7 +1357,7 @@ mod tests {
         });
         let mut state = test_state(directory.path()).await;
         state.network = crate::network::NetworkClient::with_socket_path(socket);
-        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         config.request_timeout = Duration::from_millis(10);
         let app = build_router(state, &config);
         for (origin, expected_status) in [
@@ -1417,7 +1400,7 @@ mod tests {
     #[tokio::test]
     async fn without_a_static_root_every_unknown_path_is_a_json_404() {
         let directory = tempfile::tempdir().unwrap();
-        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         let app = build_router(test_state(directory.path()).await, &config);
 
         for path in ["/", "/api/nope", "/dashboard"] {
@@ -1447,7 +1430,7 @@ mod tests {
         std::fs::write(assets.join("dashboard.wasm.br"), b"brotli representation").unwrap();
         std::fs::write(assets.join("dashboard.wasm.gz"), b"gzip representation").unwrap();
 
-        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         config.static_root = Some(assets);
         let app = build_router(test_state(directory.path()).await, &config);
 
@@ -1565,7 +1548,7 @@ mod tests {
         let (_helper, calls) = crate::network::test_support::spawn_recording_helper(&socket, None);
         let mut state = test_state(directory.path()).await;
         state.network = crate::network::NetworkClient::with_socket_path(socket);
-        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         config.request_timeout = Duration::from_millis(100);
         let app = build_router(state.clone(), &config);
 
@@ -1597,7 +1580,7 @@ mod tests {
     async fn network_recovery_still_counts_against_the_concurrency_limit() {
         let directory = tempfile::tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
         config.max_concurrent_requests = 1;
         let app = build_router(state.clone(), &config);
 
@@ -1619,9 +1602,7 @@ mod tests {
         use tower::ServiceExt;
 
         let directory = tempfile::tempdir().unwrap();
-        let config =
-            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
-                .unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080").unwrap();
         let app = build_router(test_state(directory.path()).await, &config);
 
         let preflight = app
@@ -1647,9 +1628,7 @@ mod tests {
         use axum::http::StatusCode;
         use tower::ServiceExt;
         let dir = tempfile::tempdir().unwrap();
-        let config =
-            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
-                .unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080").unwrap();
         let app = build_router(test_state(dir.path()).await, &config);
         for (host, status) in [
             ("untrusted.invalid", StatusCode::OK),
@@ -1677,9 +1656,7 @@ mod tests {
         use axum::http::StatusCode;
         use tower::ServiceExt;
         let dir = tempfile::tempdir().unwrap();
-        let config =
-            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
-                .unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080").unwrap();
         let app = build_router(test_state(dir.path()).await, &config);
         for (origin, status) in [
             ("https://untrusted.invalid", StatusCode::FORBIDDEN),

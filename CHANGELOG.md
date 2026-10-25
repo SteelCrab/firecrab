@@ -28,6 +28,13 @@ Entries land here as work merges, and move under the next version heading when t
   token expiry. Address-scoped Tunnel tokens remain separate. Existing Tunnel
   connection requests also declare the service's required client protocol (#440).
 
+- GitHub stack sources resolve exact commits and verified regular-file blobs, then
+  detect configuration drift without changing resources. Periodic and manual
+  checks share durable admission, generation guards, pause/resume, bounded
+  backoff and fifty redacted observations. `stack source` and REST expose the
+  configuration and history. Private sources use the existing GitHub Auth
+  connection. Automatic Git apply remains follow-up work for #437.
+
 - Browser console dimensions reach the guest serial terminal through a private
   vsock resize helper. Connected viewers share the smallest available grid.
   The console reports whether the guest applied the size and keeps working
@@ -46,6 +53,12 @@ Entries land here as work merges, and move under the next version heading when t
   references fail before VM creation. Values stay out of public VM/deployment
   records and SQLite; guest environment files are root-only. Stop and failed
   deployment cleanup remove snapshots after deleting owned replicas.
+
+- Remote API listeners require mutual TLS with a private CA and UUID host
+  identities. `firecrab ca` generates the CA and host certificates offline.
+  HTTPS API and WSS console clients share certificate configuration, and Linux
+  `doctor` checks validity and upcoming expiration. Boolean TLS/authentication
+  flags cannot enable plaintext remote access. Tracked in [#157](https://github.com/SteelCrab/firecrab/issues/157).
 
 - MicroService domains connect healthy replicas to PipeIngress automatically,
   without host ports or manual routes. The dashboard shows the domain and DNS

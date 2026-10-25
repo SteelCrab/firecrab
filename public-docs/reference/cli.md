@@ -50,6 +50,21 @@ Names allow letters, digits, `.`, `_`, and `-`.
 URLs require HTTP or HTTPS and reject credentials, queries, and fragments.
 The config stores only endpoints; unknown TOML keys block profile changes.
 
+## Private CA and mutual TLS
+
+`firecrab ca init [--dir PATH]` creates a private root CA offline.
+`firecrab ca issue-host-cert HOST_UUID [--dir PATH] [--san DNS_OR_IP] [--days 365]`
+issues a certificate for an API host or authenticated caller. Repeat `--san` for
+additional server names. Existing CA and host output directories are never replaced.
+The default directory is `~/.firecrab/pki`, or `FIRECRAB_CONFIG_DIR/pki`.
+
+For HTTPS API and WSS console connections, set `FIRECRAB_TLS_CERT`,
+`FIRECRAB_TLS_KEY`, and `FIRECRAB_TLS_CA` to the caller's certificate, private key,
+and private CA certificate. Unix files must have mode `0600`.
+See [mutual TLS setup](../guides/mtls.md) for issuance, server configuration,
+client examples, and certificate renewal. Linux `firecrab doctor` checks the
+configured leaf and CA and fails when either expires within 30 days.
+
 ## Resource commands
 
 `firecrab stack validate --file stack.yaml [--json]` checks a declarative YAML stack offline.
@@ -62,6 +77,9 @@ See [Stack validation](../guides/stacks.md) for the experimental schema and its 
 `stack plan --file YAML [--json]` compares a manifest to explicitly bound resource UUIDs without applying it.
 `stack apply --file YAML [--expected-plan PLAN_JSON] [--operation-id UUID] [--allow-stop] [--no-wait] [--timeout SECONDS] [--json]` executes supported changes with durable status.
 `stack apply-status NAME --id OPERATION_UUID` reads redacted progress as JSON.
+`stack source configure NAME --file SOURCE_JSON --expected-generation N` configures a GitHub source separately from its resource manifest.
+`stack source status NAME`, `history NAME`, and `check NAME --generation N` expose read-only exact-commit comparisons.
+`stack source pause|resume NAME --generation N` controls periodic checks. See [Git source checks](../guides/stack-git-source.md).
 See [Native YAML stack apply](../guides/stack-apply.md) for stop permissions, retry identity and explicit failure recovery.
 These commands use normal host selection; see [Stack ownership and planning](../guides/stack-planning.md) for the full workflow.
 
