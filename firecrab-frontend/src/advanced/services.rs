@@ -1066,6 +1066,7 @@ fn final_check(app: &Shared) {
         } else {
             Err(api::Failure {
                 status: None,
+                code: None,
                 message: "Reconnect AUTH to deploy".into(),
                 fields: BTreeMap::new(),
             })

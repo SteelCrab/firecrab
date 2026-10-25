@@ -171,6 +171,18 @@ pub async fn delete(
 }
 
 fn require_inactive_user_vm(state: &AppState, id: Uuid, request: Uuid) -> Result<(), AppError> {
+    if state
+        .store
+        .cluster_worker(id)
+        .map_err(|_| AppError::internal(request))?
+        .is_some()
+    {
+        return Err(AppError::conflict(
+            "controller_owned_vm",
+            "use the owning controller placement API for this VM",
+            request,
+        ));
+    }
     let vm = state
         .vms
         .lock()

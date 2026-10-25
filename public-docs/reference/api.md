@@ -163,6 +163,11 @@ See [Deploy](../guides/deploy.md#rest) for running updates, release history, rol
 
 ## Host
 
+Authenticated host registration, drain, and durable cross-host VM placement use
+`/api/cluster/hosts` and `/api/cluster/placements`. See
+[multi-host placement](../guides/multihost.md#rest) for the endpoint and recovery
+contract. Existing `/api/host` and `/api/vms` remain host-local.
+
 `GET /api/host` reports load, memory, disk, uptime, and `platform`:
 
 ```json
@@ -248,11 +253,12 @@ CLI `firecrab info --json` retains only the original six installation fields.
 ## Images and kernels
 
 Image list/detail records include installed state, kernel filename, artifact digests, and managed `kernelVersion` when present.
-The kernel catalog is architecture-specific; inspect `GET /api/kernels` for available versions.
+The kernel catalog lists upstream stable and local versions for the host architecture.
+Inspect `GET /api/kernels`; `POST /api/kernels/stable/install` builds the current stable source on the host.
 
 | Method | Path | Effect |
 | --- | --- | --- |
-| GET, POST | `/api/kernels/{version}/install` | Read / start verified download |
+| GET, POST | `/api/kernels/{version}/install` | Read / start a verified native source build |
 | DELETE | `/api/kernels/{version}` | Delete an unused cache entry |
 | PUT | `/api/images/{alias}/kernel` | Pair using `{"kernelVersion":"7.2.2-vsock1"}` |
 

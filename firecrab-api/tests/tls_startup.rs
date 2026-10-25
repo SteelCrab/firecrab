@@ -1,6 +1,30 @@
 use std::process::{Command, Stdio};
 
 #[test]
+fn worker_enrollment_without_mtls_is_rejected_before_state_initialization() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_firecrab-api"))
+        .current_dir(directory.path())
+        .env("FIRECRAB_BIND_ADDR", "127.0.0.1:0")
+        .env(
+            "FIRECRAB_CONTROLLER_ID",
+            "00000000-0000-0000-0000-000000000001",
+        )
+        .env("FIRECRAB_CONTROLLER_URL", "https://controller.test:5523")
+        .env("FIRECRAB_HOST_ENDPOINT", "https://worker.test:5523")
+        .env_remove("FIRECRAB_TLS_CERT")
+        .env_remove("FIRECRAB_TLS_KEY")
+        .env_remove("FIRECRAB_TLS_CA")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("worker enrollment requires mutual TLS")
+    );
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
+#[test]
 fn legacy_boolean_flags_cannot_enable_a_plaintext_remote_api() {
     let directory = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_firecrab-api"))

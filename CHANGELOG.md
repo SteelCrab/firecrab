@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- One controller registers authenticated workload hosts and places VMs using
+  deterministic image/resource filtering and durable capacity reservations.
+  Idempotent operations reconcile with the recorded owner after timeouts and
+  restarts. REST, `firecrab cluster`, and the dashboard expose inventory, VM
+  lifecycle, and host drain. Tracked in [#455](https://github.com/SteelCrab/firecrab/issues/455).
+
 - AI Sandbox reuses Pipe AI accounts for verified model selection, persistent
   conversations, isolated project edits, and bounded commands in a selected
   MicroVM. Dashboard, CLI, and local stdio MCP share durable attempts, cancellation,
@@ -197,6 +203,12 @@ Entries land here as work merges, and move under the next version heading when t
   Deploy-owned rootfs caches are pruned after VM, pool, operation, and retained-release references are released.
 
 ### Changed
+
+- Guest kernel installation and OCI import build kernel.org's current stable
+  source on the Linux host instead of downloading MicroRegistry kernel packages.
+  Source and image digests are verified, and existing image kernel assignments
+  remain explicit. `FIRECRAB_KERNEL_RELEASES_URL` and `FIRECRAB_KERNEL_BUILD_JOBS`
+  control source discovery and compiler parallelism.
 
 - The dashboard's Pipe page lists its services as five cards: Route, Pipe
   Registry, Firecrab Tunnel, Cloudflare Quick Tunnel, and Cloudflare Named

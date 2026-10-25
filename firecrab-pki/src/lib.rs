@@ -97,6 +97,22 @@ impl TlsPaths {
         Ok(config)
     }
 
+    /// Verify the normal chain/hostname and the expected Firecrab host UUID.
+    pub fn client_config_for_host(&self, id: uuid::Uuid) -> Result<ClientConfig, Error> {
+        if id.is_nil() {
+            return Err(Error("expected host UUID must not be nil".into()));
+        }
+        let mut config = self.client_config()?;
+        let mut roots = RootCertStore::empty();
+        roots
+            .add(root_certificate(&self.ca)?)
+            .map_err(|e| Error(e.to_string()))?;
+        config
+            .dangerous()
+            .set_certificate_verifier(Arc::new(verifier::ExpectedHostVerifier::new(roots, id)?));
+        Ok(config)
+    }
+
     fn material(
         &self,
     ) -> Result<
