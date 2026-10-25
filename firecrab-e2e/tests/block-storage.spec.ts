@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import type { MicroBlockStorageResponse, VmState } from "../../firecrab-frontend/src/bindings";
+import type { MicroBlockStorageResponse, VmState } from "../types/bindings";
 import { openDashboard, vm } from "./support/mockApi";
 import type { MockRoute } from "./support/mockApi";
 
@@ -63,9 +63,10 @@ async function open(page: Page, options: { hash?: string; ko?: boolean; failCrea
 test.describe("Persistent volumes @dashboard", () => {
   test("creates and explicitly deletes an independent data volume", async ({ page }, testInfo) => {
     const state = await open(page, { empty: true });
+    await page.getByRole("button", { name: "Create volume", exact: true }).click();
     await page.getByLabel("Name", { exact: true }).fill("uploads");
     await page.getByLabel("Size (GiB)", { exact: true }).fill("4");
-    await page.getByRole("button", { name: "Create volume", exact: true }).click();
+    await page.locator("#editor").getByRole("button", { name: "Create volume", exact: true }).click();
     await expect(page.getByRole("cell", { name: /^uploads/ })).toBeVisible();
     expect(state.writes[0]).toEqual({ method: "create", body: { name: "uploads", sizeGib: 4, storageRoot: null } });
     await page.screenshot({ path: testInfo.outputPath("volumes-desktop.png"), fullPage: true });
@@ -75,8 +76,9 @@ test.describe("Persistent volumes @dashboard", () => {
     expect(state.writes.at(-1)?.method).toBe("delete");
   });
 
-  test("attaches to a stopped VM and disables detach while paused", async ({ page }) => {
+  test("attaches to a stopped VM and disables detach while paused", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.addInitScript(() => localStorage.setItem("firecrab.detailPanelWidth", "600"));
     const state = await open(page, { hash: "#/vms?vm=" + VM });
     const panel = page.getByRole("complementary", { name: "MicroVM detail", exact: true });
     await panel.getByRole("tab", { name: "Volumes", exact: true }).click();
@@ -85,6 +87,7 @@ test.describe("Persistent volumes @dashboard", () => {
     await panel.getByRole("button", { name: "Attach volume", exact: true }).click();
     await expect(panel.getByText("/var/lib/postgresql/data", { exact: true })).toBeVisible();
     expect(state.writes[0]).toEqual({ method: "attach", body: { vmId: VM, mountPath: "/var/lib/postgresql/data" } });
+    await page.screenshot({ path: testInfo.outputPath("volumes-vm-attached.png"), fullPage: true });
     state.vmState = "paused";
     await expect(panel.getByRole("button", { name: "Detach", exact: true })).toBeDisabled({ timeout: 10000 });
     state.vmState = "stopped";
@@ -97,8 +100,9 @@ test.describe("Persistent volumes @dashboard", () => {
   test("shows create errors in the Korean mobile flow", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 390, height: 844 });
     const state = await open(page, { ko: true, failCreate: true, empty: true });
-    await page.getByLabel("이름", { exact: true }).fill("existing");
     await page.getByRole("button", { name: "볼륨 생성", exact: true }).click();
+    await page.getByLabel("이름", { exact: true }).fill("existing");
+    await page.locator("#editor").getByRole("button", { name: "볼륨 생성", exact: true }).click();
     await expect(page.getByRole("alert").filter({ hasText: "volume name is already registered" })).toBeVisible();
     expect(state.volumes).toHaveLength(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -112,7 +116,8 @@ test.describe("Persistent volumes @dashboard", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
-  test("selects a volume and guest path during VM creation", async ({ page }) => {
+  test("selects a volume and guest path during VM creation", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 1100 });
     const writes: Record<string, unknown>[] = [];
     await open(page, { hash: "#/vms/new", routes: {
       "/api/images": [{ alias: "alpine-test", installed: true, minDiskGb: 1, rootfsSizeBytes: 1024 ** 3 }],
@@ -123,11 +128,12 @@ test.describe("Persistent volumes @dashboard", () => {
         return route.fulfill({ status: 201, json: vm("volume-vm", VM, "created") });
       },
     } });
-    await page.locator("#vm-name").fill("volume-vm");
+    await page.locator("#field-name").fill("volume-vm");
     await page.getByRole("button", { name: "Add volume", exact: true }).click();
     await page.getByLabel("Volume", { exact: true }).selectOption(VOLUME);
     await page.getByLabel("Mount path", { exact: true }).fill("/data");
-    await page.getByRole("button", { name: "Create", exact: true }).click();
+    await page.screenshot({ path: testInfo.outputPath("volumes-create-vm.png"), fullPage: true });
+    await page.locator("#editor button[type=submit]").click();
     await expect.poll(() => writes.length).toBe(1);
     expect(writes[0].blockStorages).toEqual([{ volumeId: VOLUME, mountPath: "/data" }]);
   });

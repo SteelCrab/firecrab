@@ -111,37 +111,35 @@ test.describe("Host Firecrab panel @dashboard", () => {
   });
 
   test("service changes refresh, outage clears stale green states, and recovery retries", async ({ page }) => {
-    await page.clock.install();
     let response: object | null = INFO;
     await openHost(page, "en", () => response);
     const panel = page.getByRole("region", { name: "Firecrab" });
     await expect(panel.getByText("active", { exact: true })).toHaveCount(2);
 
     response = { ...INFO, netHelperService: "failed", helperUnit: "firecrab-net-helper.service" };
-    await page.clock.fastForward(10_001);
+    await page.waitForTimeout(3_100);
     await expect(panel.getByText("failed", { exact: true })).toHaveAttribute("title", "firecrab-net-helper.service");
     await expect(panel.getByText("failed", { exact: true })).toHaveClass(/error/);
 
     response = null;
-    await page.clock.fastForward(10_001);
+    await page.waitForTimeout(3_100);
     await expect(panel).toContainText("Could not load the Firecrab info.");
     await expect(panel.getByText("active", { exact: true })).toHaveCount(0);
 
     response = INFO;
-    await page.clock.fastForward(10_001);
+    await page.waitForTimeout(3_100);
     await expect(panel.getByText("active", { exact: true })).toHaveCount(2);
   });
 
   test("a stalled API request clears stale active states after five seconds", async ({ page }) => {
-    await page.clock.install();
     await openHost(page, "en", INFO);
     const panel = page.getByRole("region", { name: "Firecrab" });
     await expect(panel.getByText("active", { exact: true })).toHaveCount(2);
     await page.route("**/api/info", () => {});
     const request = page.waitForRequest("**/api/info");
-    await page.clock.fastForward(10_001);
+    await page.waitForTimeout(3_100);
     await request;
-    await page.clock.fastForward(5_001);
+    await page.waitForTimeout(5_100);
     await expect(panel).toContainText("Could not load the Firecrab info.");
     await expect(panel.getByText("active", { exact: true })).toHaveCount(0);
   });

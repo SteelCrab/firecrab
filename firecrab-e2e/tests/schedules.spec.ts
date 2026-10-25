@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import type { ScheduleResponse, ScheduleRun, ScheduleSpec } from "../../firecrab-frontend/src/bindings";
+import type { ScheduleResponse, ScheduleRun, ScheduleSpec } from "../../firecrab-e2e/types/bindings";
 import { openDashboard, vm } from "./support/mockApi";
 import type { MockRoute } from "./support/mockApi";
 
@@ -76,13 +76,13 @@ test.describe("Schedules @dashboard", () => {
     await page.getByRole("button", { name: "New schedule", exact: true }).click();
     await detail(page).getByRole("combobox", { name: "MicroVM", exact: true }).selectOption(WEB);
     await detail(page).getByLabel("Time", { exact: true }).fill("09:00");
-    await expect(detail(page).getByLabel("Cron expression", { exact: true })).toHaveCount(0);
+    await expect(detail(page).getByLabel("Cron expression", { exact: true })).toBeHidden();
     await detail(page).getByRole("button", { name: "Create schedule", exact: true }).click();
     await expect(page.getByRole("button", { name: "View schedule dev-web · Start", exact: true })).toBeVisible();
     expect(writes[0].body).toMatchObject({ vmId: WEB, action: "start", enabled: true, timing: { kind: "cron", expression: "0 9 * * Mon-Fri", timeZone: "Asia/Seoul" } });
     await page.getByRole("button", { name: "View schedule dev-web · Start", exact: true }).click();
     await detail(page).getByRole("button", { name: "Edit schedule", exact: true }).click();
-    await detail(page).getByRole("button", { name: "Stop VM", exact: true }).click();
+    await detail(page).getByLabel("Action", { exact: true }).selectOption("stop");
     await detail(page).getByLabel("Time", { exact: true }).fill("18:00");
     await detail(page).getByRole("button", { name: "Save changes", exact: true }).click();
     expect(writes.at(-1)?.body).toMatchObject({ action: "stop", timing: { expression: "0 18 * * Mon-Fri" } });
@@ -180,5 +180,24 @@ test.describe("Schedules @dashboard", () => {
     await expect(page.getByRole("listitem", { name: "주말 점검", exact: true }).getByRole("switch")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
     await page.screenshot({ path: testInfo.outputPath("scheduler-mobile-ko.png"), fullPage: true });
+  });
+});
+
+test.describe("Schedule daylight saving time @dashboard", () => {
+  test.use({ timezoneId: "America/New_York" });
+  test("rejects a missing local hour and chooses the first repeated hour", async ({ page }) => {
+    const writes = await open(page);
+    await page.getByRole("button", { name: "New schedule", exact: true }).click();
+    await detail(page).getByLabel("Repeat", { exact: true }).selectOption("once");
+    await detail(page).getByLabel("Date", { exact: true }).fill("2027-03-14");
+    await detail(page).getByLabel("Time", { exact: true }).fill("02:30");
+    await detail(page).getByRole("button", { name: "Create schedule", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("daylight saving");
+    expect(writes).toHaveLength(0);
+    await detail(page).getByLabel("Date", { exact: true }).fill("2027-11-07");
+    await detail(page).getByLabel("Time", { exact: true }).fill("01:30");
+    await detail(page).getByRole("button", { name: "Create schedule", exact: true }).click();
+    await expect.poll(() => writes.length).toBe(1);
+    expect(writes[0].body.timing).toEqual({ kind: "once", at: "2027-11-07T05:30:00.000Z" });
   });
 });

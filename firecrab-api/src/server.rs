@@ -735,7 +735,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         // index.html, because the router's routes only exist in the browser
         // (a reload on /vms/<id> must not 404).
         Some(root) => app.fallback_service(
-            ServeDir::new(root).fallback(ServeFile::new(root.join("index.html"))),
+            ServeDir::new(root)
+                .precompressed_br()
+                .precompressed_gzip()
+                .fallback(
+                    ServeFile::new(root.join("index.html"))
+                        .precompressed_br()
+                        .precompressed_gzip(),
+                ),
         ),
         None => app.fallback(not_found),
     };
@@ -1418,6 +1425,7 @@ mod tests {
 
     #[tokio::test]
     async fn with_a_static_root_the_dashboard_is_served_but_api_paths_still_answer_json() {
+        use tower::ServiceExt;
         let directory = tempfile::tempdir().unwrap();
         let assets = directory.path().join("dist");
         std::fs::create_dir_all(&assets).unwrap();
@@ -1427,6 +1435,10 @@ mod tests {
         )
         .unwrap();
         std::fs::write(assets.join("app.js"), "console.log(1)").unwrap();
+        let wasm = b"\0asm\x01\0\0\0";
+        std::fs::write(assets.join("dashboard.wasm"), wasm).unwrap();
+        std::fs::write(assets.join("dashboard.wasm.br"), b"brotli representation").unwrap();
+        std::fs::write(assets.join("dashboard.wasm.gz"), b"gzip representation").unwrap();
 
         let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
         config.static_root = Some(assets);
@@ -1439,6 +1451,65 @@ mod tests {
         let (status, body) = get(&app, "/app.js").await;
         assert_eq!(status, axum::http::StatusCode::OK);
         assert_eq!(body, "console.log(1)");
+
+        // Streaming WebAssembly compilation requires this exact MIME type.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/dashboard.wasm")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/wasm");
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(bytes.as_ref(), wasm);
+
+        for (accepted, encoding, expected) in [
+            ("br, gzip", Some("br"), b"brotli representation".as_slice()),
+            ("gzip", Some("gzip"), b"gzip representation".as_slice()),
+            ("br;q=0, gzip;q=0", None, wasm.as_slice()),
+            (
+                "br;q=0.5, gzip;q=1",
+                Some("gzip"),
+                b"gzip representation".as_slice(),
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/dashboard.wasm")
+                        .header(header::ACCEPT_ENCODING, accepted)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "application/wasm");
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::CONTENT_ENCODING)
+                    .map(|v| v.to_str().unwrap()),
+                encoding
+            );
+            assert_eq!(response.headers()[header::VARY], "accept-encoding");
+            assert_eq!(
+                response.headers()[header::CONTENT_LENGTH].to_str().unwrap(),
+                expected.len().to_string()
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(bytes.as_ref(), expected);
+        }
 
         // A client-side route the browser reloads on: no such file, so the
         // SPA entry point answers instead of a 404.

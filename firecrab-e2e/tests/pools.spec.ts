@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { importOci } from "./support/wasmDashboard";
 import { ApiCleanup } from "../src/api.js";
 import {
   FIXED_ALIAS,
@@ -9,7 +10,10 @@ import {
   READY_SENTINEL,
   SKIP_GUEST_BOOT,
 } from "../src/constants.js";
-import { startLocalOciRegistry, type LocalOciRegistry } from "../src/registry.js";
+import {
+  startLocalOciRegistry,
+  type LocalOciRegistry,
+} from "../src/registry.js";
 
 /**
  * Issue #291 browser E2E — warm MicroVM pools. Does not boot a guest.
@@ -49,7 +53,9 @@ function poolsPanel(page: Page): Locator {
 async function deleteOwnedPool(): Promise<void> {
   const deadline = Date.now() + POOL_DELETE_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const owned = (await api.listPools()).filter((pool) => pool.name === POOL_E2E_NAME);
+    const owned = (await api.listPools()).filter(
+      (pool) => pool.name === POOL_E2E_NAME,
+    );
     if (owned.length === 0) return;
     for (const pool of owned) {
       if (!pool.deleting) await api.deletePool(pool.id);
@@ -59,31 +65,18 @@ async function deleteOwnedPool(): Promise<void> {
   const left = (await api.listPools())
     .filter((pool) => pool.name === POOL_E2E_NAME)
     .map((pool) => pool.id);
-  throw new Error(`pool ${POOL_E2E_NAME} still present after delete: ${left.join(", ")}`);
+  throw new Error(
+    `pool ${POOL_E2E_NAME} still present after delete: ${left.join(", ")}`,
+  );
 }
 
-async function importFixture(page: Page, reference: string, alias: string): Promise<void> {
+async function importFixture(
+  page: Page,
+  reference: string,
+  alias: string,
+): Promise<void> {
   await openEnglish(page, "/#/images");
-  await expect(page.locator("#oci-reference")).toBeVisible();
-  await expect(page.locator("#oci-import")).toBeDisabled();
-
-  await page.locator("#oci-reference").fill(reference);
-  await page.locator("#oci-inspect").click();
-
-  const oci = page.locator("section.panel", { has: page.getByRole("heading", { name: "OCI" }) });
-  await expect(oci.getByText("Compatible with this host.")).toBeVisible({ timeout: 30_000 });
-  await expect(oci.locator("dd", { hasText: alias }).first()).toBeVisible();
-  await expect(page.locator("#oci-import")).toBeEnabled();
-
-  await page.locator("#oci-import").click();
-  const status = oci.locator(".state-badge");
-  await expect(status).toHaveText(/Imported|Import failed/, { timeout: 180_000 });
-  if ((await status.textContent())?.includes("failed")) {
-    const log = (await oci.locator(".image-install-log").textContent()) ?? "";
-    throw new Error(`OCI import failed for ${reference}:\n${log}`);
-  }
-
-  await expect(page.locator("table.image-table")).toContainText(alias);
+  await importOci(page, reference, alias);
 }
 
 /** Fixture alias from the #90 registry. Import only when it is not installed. */
@@ -106,18 +99,25 @@ async function submitCreate(page: Page, panel: Locator): Promise<void> {
   const pending = page.waitForResponse((response) => {
     if (response.request().method() !== "POST") return false;
     try {
-      return new URL(response.url()).pathname.replace(/\/$/, "") === "/api/pools";
+      return (
+        new URL(response.url()).pathname.replace(/\/$/, "") === "/api/pools"
+      );
     } catch {
       return false;
     }
   });
-  await panel.getByRole("button", { name: "Create pool" }).click();
+  await page.locator("#editor button[type=submit]").click();
   const response = await pending;
   const body = await response.text();
   if (!response.ok()) {
     throw new Error(`POST /api/pools ${response.status()}: ${body}`);
   }
-  const created = JSON.parse(body) as { name?: string; minReady?: number; leaseTtlSeconds?: number; members?: unknown };
+  const created = JSON.parse(body) as {
+    name?: string;
+    minReady?: number;
+    leaseTtlSeconds?: number;
+    members?: unknown;
+  };
   expect(created.name).toBe(POOL_E2E_NAME);
   expect(created.minReady).toBe(0);
   expect(created.leaseTtlSeconds).toBe(600);
@@ -145,24 +145,24 @@ test.afterAll(async () => {
   }
 });
 
-test("shows a simple create form with optional advanced settings", async ({ page }) => {
+test("shows a pool create form with image, network, capacity and lease settings", async ({
+  page,
+}) => {
   await openEnglish(page, "/#/pools");
-  await expect(page).toHaveURL(/#\/pools$/);
-  await expect(page.locator(".screen-header")).toContainText("Pools");
-  const panel = poolsPanel(page);
-  await expect(panel.getByRole("heading", { name: "Fresh VMs, ready to use" })).toBeVisible();
-  await expect(panel.getByText("Loading pools…", { exact: true })).toHaveCount(0);
-  if ((await api.listPools()).length > 0) await panel.getByRole("button", { name: "New pool", exact: true }).click();
-  await expect(panel.locator("#pool-name")).toBeVisible();
-  await expect(panel.locator("#pool-image")).toBeVisible();
-  await expect(panel.locator("#pool-network")).toBeHidden();
-  await expect(panel.locator("#pool-min")).toBeHidden();
-  await panel.getByText("Advanced settings", { exact: true }).click();
-  await expect(panel.locator("#pool-network")).toBeVisible();
-  await expect(panel.locator("#pool-min")).toBeVisible();
-  await expect(panel.locator("#pool-max")).toBeVisible();
-  await expect(panel.locator("#pool-ttl")).toHaveValue(SESSION_MINUTES);
-  await expect(panel.getByRole("button", { name: "Create pool", exact: true })).toBeVisible();
+  await page.locator('[data-action="create"][data-id="pools"]').click();
+  await page.locator("#editor").getByText("Advanced settings", { exact: true }).click();
+  for (const field of [
+    "name",
+    "template",
+    "microNetworkId",
+    "minReady",
+    "maxSize",
+    "leaseMinutes",
+  ]) {
+    await expect(page.locator(`#field-${field}`)).toBeVisible();
+  }
+  await expect(page.locator("#field-leaseMinutes")).toHaveValue("10");
+  await expect(page.locator("#editor button[type=submit]")).toBeVisible();
 });
 
 test("creates pool-e2e, reports no ready member on acquire, and deletes the row", async ({
@@ -180,29 +180,39 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
 
   await openEnglish(page, "/#/pools");
   const panel = poolsPanel(page);
-  if ((await api.listPools()).length > 0) await panel.getByRole("button", { name: "New pool", exact: true }).click();
-  await panel.getByText("Advanced settings", { exact: true }).click();
-  await expect(panel.locator(`#pool-image option[value="${alias}"]`)).toHaveCount(1, {
+  await page.locator('[data-action="create"][data-id="pools"]').click();
+  await expect(
+    page.locator(`#field-template option[value="${alias}"]`),
+  ).toHaveCount(1, {
     timeout: 15_000,
   });
-  await expect(panel.locator(`#pool-network option[value="${network.id}"]`)).toHaveCount(1);
-  await panel.locator("#pool-name").fill(POOL_E2E_NAME);
-  await panel.locator("#pool-image").selectOption(alias);
-  await panel.locator("#pool-network").selectOption(network.id);
-  await panel.locator("#pool-min").fill(MIN_READY);
-  await panel.locator("#pool-max").fill(MAX_SIZE);
-  await panel.locator("#pool-ttl").fill(SESSION_MINUTES);
-  await expect(panel.locator("#pool-min")).toHaveValue(MIN_READY);
-  await expect(panel.locator("#pool-max")).toHaveValue(MAX_SIZE);
-  await expect(panel.locator("#pool-ttl")).toHaveValue(SESSION_MINUTES);
-  await expect(panel.locator("#pool-image")).toHaveValue(alias);
-  await expect(panel.locator("#pool-network")).toHaveValue(network.id);
+  await expect(
+    page.locator(`#field-microNetworkId option[value="${network.id}"]`),
+  ).toHaveCount(1);
+  await page.locator("#field-name").fill(POOL_E2E_NAME);
+  await page.locator("#field-template").selectOption(alias);
+  await page.locator("#editor").getByText("Advanced settings", { exact: true }).click();
+  await page.locator("#field-microNetworkId").selectOption(network.id);
+  await page.locator("#field-minReady").fill(MIN_READY);
+  await page.locator("#field-maxSize").fill(MAX_SIZE);
+  await page.locator("#field-leaseMinutes").fill(SESSION_MINUTES);
+  await expect(page.locator("#field-minReady")).toHaveValue(MIN_READY);
+  await expect(page.locator("#field-maxSize")).toHaveValue(MAX_SIZE);
+  await expect(page.locator("#field-leaseMinutes")).toHaveValue(
+    SESSION_MINUTES,
+  );
+  await expect(page.locator("#field-template")).toHaveValue(alias);
+  await expect(page.locator("#field-microNetworkId")).toHaveValue(network.id);
 
   await submitCreate(page, panel);
-  const row = panel.locator(".pool-row").filter({ hasText: POOL_E2E_NAME });
+  const row = panel
+    .locator("article.wasm-card")
+    .filter({ hasText: POOL_E2E_NAME });
   await expect(row).toBeVisible();
-  await expect(row).toContainText("0 in use");
-  const created = (await api.listPools()).find((pool) => pool.name === POOL_E2E_NAME);
+  await expect(row).toContainText("0 members");
+  const created = (await api.listPools()).find(
+    (pool) => pool.name === POOL_E2E_NAME,
+  );
   expect(created, `API missing ${POOL_E2E_NAME}`).toBeTruthy();
   expect(created?.minReady).toBe(0);
   expect(created?.members).toBe(0);
@@ -218,13 +228,16 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
   const acquireBody = await acquired.text();
   expect(acquired.status(), acquireBody).toBe(409);
   expect(acquireBody).toContain("pool_exhausted");
-  expect((await api.listPools()).find((pool) => pool.name === POOL_E2E_NAME)?.members).toBe(0);
+  expect(
+    (await api.listPools()).find((pool) => pool.name === POOL_E2E_NAME)
+      ?.members,
+  ).toBe(0);
 
   page.once("dialog", async (dialog) => {
-    expect(dialog.message()).toContain(POOL_E2E_NAME);
+    expect(dialog.message()).toContain("Delete");
     await dialog.accept();
   });
-  await panel.getByText("Pool settings", { exact: true }).click();
-  await panel.getByRole("button", { name: "Delete pool", exact: true }).click();
+  await row.getByRole("button", { name: POOL_E2E_NAME, exact: true }).click();
+  await page.getByRole("button", { name: "Delete pool", exact: true }).click();
   await expect(row).toHaveCount(0, { timeout: 30_000 });
 });

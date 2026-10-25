@@ -15,7 +15,8 @@ test("SEC9: CRUD survives an API restart and leaves only encrypted values on dis
   const [created] = await local.rows();
   expect(created).not.toHaveProperty("value");
   await page.getByRole("button", { name: "Edit qa-DB_PASSWORD", exact: true }).click();
-  await expect(page.getByLabel("Secret value", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Secret value", { exact: true })).toBeHidden();
+  await expect(page.getByLabel("Secret value", { exact: true })).toHaveValue("");
   await page.getByLabel("Description", { exact: true }).fill("qa-description-only");
   await page.getByRole("button", { name: "Save secret", exact: true }).click();
   await expect(page.getByText("qa-description-only", { exact: true })).toBeVisible();
@@ -140,6 +141,7 @@ test("SEC13: Infisical credentials survive edits and restarts; provider failures
     await openSecrets(page, local);
     await page.getByRole("tab", { name: /External connections/ }).click();
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
+    await page.getByLabel("Provider", { exact: true }).selectOption("infisical");
     await page.getByLabel("Connection name", { exact: true }).fill("qa-infisical");
     await page.getByLabel("Base URL", { exact: true }).fill(`http://127.0.0.1:${address.port}`);
     await page.getByLabel("Project ID", { exact: true }).fill("qa-project");

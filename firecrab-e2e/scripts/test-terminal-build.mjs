@@ -11,8 +11,10 @@ test("the production console ships native WASM without xterm or inline Base64", 
   const files = await readdir(assets);
   assert(!files.some(name => /xterm/i.test(name)), "xterm assets remain in the build");
   const wasm = files.filter(name => name.endsWith(".wasm"));
-  assert.equal(wasm.length, 1, "the terminal must emit one WASM asset");
-  const binary = await readFile(new URL(wasm[0], assets));
+  assert.equal(wasm.length, 2, "the app and terminal must each emit one WASM asset");
+  const terminal = wasm.find(name => name.startsWith("ghostty-vt-"));
+  assert(terminal, "the external terminal WASM is missing");
+  const binary = await readFile(new URL(terminal, assets));
   assert.deepEqual(binary, await readFile(new URL("node_modules/ghostty-web/ghostty-vt.wasm", frontend)));
   const exports = WebAssembly.Module.exports(new WebAssembly.Module(binary)).map(item => item.name);
   assert(exports.includes("ghostty_terminal_write"), "the WASM VT parser is missing");
