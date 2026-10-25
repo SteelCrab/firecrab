@@ -72,6 +72,8 @@ pub enum Error {
     Settings(#[from] super::settings::Error),
     #[error(transparent)]
     Controller(#[from] super::controller::Error),
+    #[error("private development environment: {detail}; inspect logs at {logs}")]
+    PrivateDev { detail: String, logs: PathBuf },
     #[error("the management VM is not running; run `firecrab service start` first")]
     ShellNotRunning,
     #[error("the management SSH key is missing from {0}; run `firecrab service reinstall`")]
@@ -89,9 +91,52 @@ pub enum Error {
 }
 
 impl Error {
+    /// Keep private failures actionable without suggesting primary lifecycle commands.
+    fn private_development(self, logs: PathBuf) -> Self {
+        let detail = match self {
+            Self::ShellNotRunning => "the management VM is not running".to_owned(),
+            Self::ShellCredentials(path) => {
+                format!("the management SSH key is missing from {}", path.display())
+            }
+            Self::Dev(error) => match error {
+                dev::Error::GuestNotReady => "management VM is not ready".to_owned(),
+                dev::Error::GuestSshUnavailable { ip, detail } => format!(
+                    "management VM SSH at {ip} is not ready: {detail} (source upload was not attempted)"
+                ),
+                dev::Error::GuestFilesystemUnhealthy(detail) => {
+                    format!("management VM filesystem is unhealthy: {detail}")
+                }
+                dev::Error::GuestSshInterrupted(action) => {
+                    format!("management SSH failed during {action}")
+                }
+                dev::Error::LocalApiUnavailable => {
+                    "guest services are ready but the localhost API is unavailable".to_owned()
+                }
+                other => other.to_string(),
+            },
+            Self::Lifecycle(lifecycle::Error::AlreadyInstalled(path)) => {
+                format!("microManager is already installed at {}", path.display())
+            }
+            Self::Repair(repair::Error::MissingFile(path)) => {
+                format!("installed file is missing: {}", path.display())
+            }
+            Self::Repair(repair::Error::NotExecutable(path)) => {
+                format!("installed file is not executable: {}", path.display())
+            }
+            Self::Repair(repair::Error::Daemon(error)) => error.to_string(),
+            Self::Repair(repair::Error::Unhealthy(detail)) => {
+                format!("management VM is unhealthy: {detail}")
+            }
+            private @ Self::PrivateDev { .. } => return private,
+            other => other.to_string(),
+        };
+        Self::PrivateDev { detail, logs }
+    }
+
     /// Keep service recovery advice separate from installation and source errors.
     pub fn recovery_hint(&self) -> Option<&'static str> {
         match self {
+            Self::PrivateDev { .. } => None,
             Self::Daemon(daemon::Error::NotInstalled(_)) => {
                 let installed = lifecycle::Layout::from_process_env()
                     .is_ok_and(|layout| repair::validate(&layout).is_ok());
@@ -156,10 +201,18 @@ pub fn run(command: Command) -> Result<i32, Error> {
             release,
             restore,
             yes,
-        } => match command {
-            Some(command) => run_dev_control(command),
-            None => run_dev(source.as_deref(), port, release, restore, yes),
-        },
+        } => {
+            let layout = lifecycle::Layout::from_process_env()?;
+            let private_logs = private_runtime(&layout.managed_home)?;
+            let result = match command {
+                Some(command) => run_dev_control(command),
+                None => run_dev(source.as_deref(), port, release, restore, yes),
+            };
+            match private_logs {
+                Some(logs) => result.map_err(|error| error.private_development(logs)),
+                None => result,
+            }
+        }
         Command::Shell { command } => run_shell(&command),
         Command::ForwardPorts {
             manager,
@@ -178,6 +231,21 @@ pub fn run(command: Command) -> Result<i32, Error> {
             run_with_helper(&helper, &helper_command)
         }
     }
+}
+
+/// Resolve private ownership before choosing guidance; invalid state never becomes primary advice.
+fn private_runtime(home: &Path) -> Result<Option<PathBuf>, Error> {
+    super::dev::instance::load(home)
+        .map(|instance| instance.map(|instance| instance.managed_home.join("runtime")))
+        .map_err(|source| super::dev::io_error("read development instance guidance", source).into())
+}
+
+/// Return a selected instance's log path, or the established primary debug command.
+fn development_logs(home: &Path) -> Result<String, Error> {
+    Ok(match private_runtime(home)? {
+        Some(logs) => format!("logs: {}", logs.display()),
+        None => "logs: firecrab service debug --logs --tail 100".to_owned(),
+    })
 }
 
 fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
@@ -362,7 +430,7 @@ fn run_dev(
     } else {
         dashboard::stop(&layout.managed_home).map_err(dev::Error::from)?;
     }
-    report!("  logs: firecrab service debug --logs --tail 100");
+    report!("  {}", development_logs(&layout.managed_home)?);
     Ok(0)
 }
 
@@ -437,7 +505,8 @@ fn run_status() -> Result<i32, Error> {
 
 fn run_debug(options: debug::Options) -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
-    let repair_available = repair::validate(&layout).is_ok();
+    let private_logs = private_runtime(&layout.managed_home)?;
+    let repair_available = private_logs.is_none() && repair::validate(&layout).is_ok();
     let mut report = debug::DebugReport::new(
         "macos",
         &layout.managed_home,
@@ -457,16 +526,21 @@ fn run_debug(options: debug::Options) -> Result<i32, Error> {
             report.service = if !installed {
                 debug::Probe::fail(format!(
                     "managed launchd files are missing; {}",
-                    if repair_available {
-                        REPAIR_HINT
-                    } else {
-                        INSTALL_HINT
+                    match &private_logs {
+                        Some(logs) =>
+                            format!("inspect private development logs at {}", logs.display()),
+                        None if repair_available => REPAIR_HINT.to_owned(),
+                        None => INSTALL_HINT.to_owned(),
                     }
                 ))
             } else if status.loaded {
                 debug::Probe::pass("launchd agent loaded")
             } else {
-                debug::Probe::fail("launchd agent not loaded; run `firecrab service start`")
+                debug::Probe::fail(if private_logs.is_some() {
+                    "launchd agent not loaded"
+                } else {
+                    "launchd agent not loaded; run `firecrab service start`"
+                })
             };
             report.api = if installed && status.ready && status.api_reachable {
                 debug::Probe::pass(format!(
@@ -520,11 +594,14 @@ fn run_debug(options: debug::Options) -> Result<i32, Error> {
             report.api = debug::Probe::unavailable("service status unavailable");
         }
     }
-    if repair_available {
+    let guidance = private_logs
+        .map(|logs| format!("inspect private development logs at {}", logs.display()))
+        .or_else(|| repair_available.then(|| REPAIR_HINT.to_owned()));
+    if let Some(guidance) = guidance {
         for probe in [&mut report.service, &mut report.guest, &mut report.api] {
-            if probe.state != "pass" && !probe.detail.contains(REPAIR_HINT) {
+            if probe.state != "pass" && !probe.detail.contains(&guidance) {
                 probe.detail.push_str("; ");
-                probe.detail.push_str(REPAIR_HINT);
+                probe.detail.push_str(&guidance);
             }
         }
     }
@@ -810,8 +887,16 @@ fn print_daemon_status(status: &daemon::Status, layout: &lifecycle::Layout) {
             "unreachable".to_owned()
         }
     );
-    if !status.success() && repair::validate(layout).is_ok() {
-        report!("{REPAIR_HINT}");
+    if !status.success() {
+        match private_runtime(&layout.managed_home) {
+            Ok(Some(logs)) => report!(
+                "Recovery: inspect private development logs at {}",
+                logs.display()
+            ),
+            Ok(None) if repair::validate(layout).is_ok() => report!("{REPAIR_HINT}"),
+            Ok(None) => {}
+            Err(error) => report!("{error}"),
+        }
     }
 }
 
@@ -1091,6 +1176,64 @@ mod tests {
         ] {
             assert_eq!(error.recovery_hint(), None, "{error}");
         }
+    }
+
+    #[test]
+    fn private_runtime_errors_point_to_their_logs_without_primary_lifecycle_commands() {
+        let directory = tempfile::tempdir().unwrap();
+        let instance = super::super::dev::instance::test_instance(
+            directory.path(),
+            "0123456789abcdef",
+            45121,
+            45122,
+        );
+        let logs = private_runtime(&instance.managed_home).unwrap().unwrap();
+        for error in [
+            Error::ShellNotRunning,
+            Error::ShellCredentials(instance.managed_home.join("runtime/manager_ed25519")),
+            Error::Dev(dev::Error::GuestNotReady),
+            Error::Dev(dev::Error::GuestSshUnavailable {
+                ip: "192.0.2.7".parse().unwrap(),
+                detail: "connection reset by peer".to_owned(),
+            }),
+            Error::Dev(dev::Error::GuestSshInterrupted("source upload")),
+            Error::Dev(dev::Error::GuestFilesystemUnhealthy(
+                "read-only root".into(),
+            )),
+            Error::Dev(dev::Error::LocalApiUnavailable),
+            Error::Daemon(daemon::Error::ReadyTimeout(120)),
+            Error::Lifecycle(lifecycle::Error::AlreadyInstalled(
+                instance.install_dir.clone(),
+            )),
+            Error::Repair(repair::Error::MissingFile(
+                instance.install_dir.join("firecrab"),
+            )),
+            Error::Repair(repair::Error::NotExecutable(
+                instance.install_dir.join("firecrab"),
+            )),
+            Error::Repair(repair::Error::Unhealthy("API unavailable".into())),
+        ] {
+            let private = error.private_development(logs.clone());
+            let message = private.to_string();
+            assert_eq!(private.recovery_hint(), None);
+            assert!(message.contains(logs.to_str().unwrap()), "{message}");
+            for action in ["start", "repair", "reinstall", "install", "debug"] {
+                assert!(
+                    !message.contains(&format!("firecrab service {action}")),
+                    "{message}"
+                );
+            }
+        }
+        let private_guidance = development_logs(&instance.managed_home).unwrap();
+        assert!(private_guidance.contains(logs.to_str().unwrap()));
+        assert!(!private_guidance.contains("firecrab service debug"));
+        assert!(
+            development_logs(&instance.primary_home)
+                .unwrap()
+                .contains("firecrab service debug")
+        );
+        fs::write(instance.managed_home.join("dev-instance.json"), b"invalid").unwrap();
+        assert!(development_logs(&instance.managed_home).is_err());
     }
     fn shell_ip() -> std::net::IpAddr {
         "192.0.2.7".parse().unwrap()
