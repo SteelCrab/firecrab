@@ -21,6 +21,7 @@ mod block_storage;
 mod pools;
 mod queues;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
+mod ai_sandbox;
 mod deploy_images;
 mod micro_services;
 mod pipe_ai;
@@ -758,6 +759,7 @@ impl Store {
         conn.execute(pipe_ai::DEFAULTS_SQL, [])?;
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
+        conn.execute_batch(ai_sandbox::SCHEMA)?;
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute_batch(micro_services::HISTORY_SQL)?;
@@ -792,6 +794,7 @@ impl Store {
             conn: Arc::new(Mutex::new(conn)),
         };
         store.import_legacy(&path.with_file_name(LEGACY_FILE_NAME))?;
+        store.rebuild_sandbox_index()?;
         Ok(store)
     }
 

@@ -42,6 +42,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Configure services, upgrade, or uninstall | [Operations](guides/operations.md) |
 | Route domains and paths across apps | [Pipe ingress and tunnel](guides/pipe.md) |
 | Connect AWS and GitHub accounts to Pipe services | [Auth](guides/pipe-auth.md) |
+| Select models, converse, and run isolated project tasks in a MicroVM | [AI Sandbox](guides/ai-sandbox.md) |
 | Manage AI account connections and use shared CLI/MCP integration APIs | [Pipe AI](guides/pipe-ai.md) |
 | Connect and browse an existing database | [Pipe databases](guides/pipe-databases.md) |
 | Connect an existing Amazon S3 bucket and manage files | [PipeStorage](guides/pipe-storage.md) |
@@ -71,6 +72,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Run checks and runtime E2E | [CI](development/ci.md) |
 | Choose QA scripts and report results | [QA](development/qa.md) |
 | Run the complete checklist | [English](development/testing.md) · [Korean](development/testing.ko.md) |
+| Validate AI models, isolated tasks, guest execution, and recovery | [AI Sandbox QA](development/ai-sandbox-qa.md) |
 | Test macOS repair | [Repair QA](development/macos-repair.md) |
 | Review past platform results | [Validation history](development/validation-history.md) |
 

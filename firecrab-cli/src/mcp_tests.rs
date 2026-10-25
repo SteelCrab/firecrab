@@ -194,3 +194,170 @@ fn stdio_bounds_input_and_omits_guest_environment_from_model_context() {
             .contains("Unsupported")
     );
 }
+
+#[test]
+fn sandbox_mcp_routes_durable_tasks_through_rest_and_requires_explicit_review_paths() {
+    let id = Uuid::new_v4();
+    let project = Uuid::new_v4();
+    let connection = Uuid::new_v4();
+    let task = json!({"id":id,"projectId":project,"attemptId":Uuid::new_v4(),"request":{"kind":"chat","input":"hello","selection":null,"retryOf":null},"selection":{"connectionId":connection,"model":"fixture-model"},"state":"result","createdAt":1,"updatedAt":1,"result":"done","errorCode":null,"error":null,"events":[],"changes":[]});
+    let (client, server) = mock(vec![
+        ("PUT /api/ai-sandbox/projects/", 202, task.clone()),
+        ("GET /api/ai-sandbox/tasks/", 200, task.clone()),
+        ("POST /api/ai-sandbox/tasks/", 200, task.clone()),
+    ]);
+    let mut session = Session::default();
+    assert_eq!(
+        session
+            .call(
+                &client,
+                "sandbox_task_start",
+                json!({"id":id,"projectId":project,"request":{"kind":"chat","input":"hello"}})
+            )
+            .unwrap()["id"],
+        id.to_string()
+    );
+    assert_eq!(
+        session
+            .call(&client, "sandbox_task_get", json!({"id":id}))
+            .unwrap()["state"],
+        "result"
+    );
+    assert_eq!(
+        session
+            .call(
+                &client,
+                "sandbox_task_apply",
+                json!({"id":id,"paths":["src/main.rs"]})
+            )
+            .unwrap()["id"],
+        id.to_string()
+    );
+    assert!(
+        session
+            .call(&client, "sandbox_task_apply", json!({"id":id}))
+            .is_err()
+    );
+    server.join().unwrap();
+    let tools = catalog();
+    let start = tools
+        .iter()
+        .find(|v| v["name"] == "sandbox_task_start")
+        .unwrap();
+    assert_eq!(start["annotations"]["destructiveHint"], true);
+}
+
+#[test]
+fn sandbox_mcp_lists_saves_and_recovers_without_creating_a_new_attempt() {
+    let id = Uuid::new_v4();
+    let project = Uuid::new_v4();
+    let connection = Uuid::new_v4();
+    let selection = json!({"connectionId":connection,"model":"configured-model"});
+    let spec = json!({"name":"Project","sourcePath":null,"vmId":null,"selection":selection,"instructions":"Be concise"});
+    let project_row = json!({"id":project,"spec":spec,"createdAt":1});
+    let model =
+        json!({"id":"configured-model","name":"Configured","verified":true,"toolsVerified":true});
+    let task = json!({"id":id,"projectId":project,"attemptId":Uuid::new_v4(),"request":{"kind":"chat","input":"hello","selection":null,"retryOf":null},"selection":selection,"state":"interrupted","createdAt":1,"updatedAt":2,"result":"","errorCode":"sandbox_restart","error":"Reconcile first","events":[],"changes":[]});
+    let mut summary = task.clone();
+    summary.as_object_mut().unwrap().remove("events");
+    summary.as_object_mut().unwrap().remove("changes");
+    summary["eventCount"] = json!(0);
+    summary["changeCount"] = json!(0);
+    summary["lastTool"] = Value::Null;
+    let (client, server) = mock(vec![
+        ("GET /api/ai-sandbox/projects ", 200, json!([project_row])),
+        ("PUT /api/ai-sandbox/projects/", 200, project_row.clone()),
+        (
+            "GET /api/ai-sandbox/connections/",
+            200,
+            json!({"models":[model],"discoveryAvailable":false}),
+        ),
+        ("POST /api/ai-sandbox/connections/", 200, model.clone()),
+        ("GET /api/ai-sandbox/projects/", 200, json!([summary])),
+        ("POST /api/ai-sandbox/tasks/", 200, task.clone()),
+        ("POST /api/ai-sandbox/tasks/", 200, task.clone()),
+    ]);
+    let mut session = Session::default();
+    assert_eq!(
+        session
+            .call(&client, "sandbox_projects_list", json!({}))
+            .unwrap()[0]["id"],
+        project.to_string()
+    );
+    assert_eq!(
+        session
+            .call(
+                &client,
+                "sandbox_project_save",
+                json!({"id":project,"spec":spec})
+            )
+            .unwrap(),
+        project_row
+    );
+    assert_eq!(
+        session
+            .call(&client, "sandbox_models_list", json!({"id":connection}))
+            .unwrap()["discoveryAvailable"],
+        false
+    );
+    assert_eq!(
+        session
+            .call(
+                &client,
+                "sandbox_model_verify",
+                json!({"id":connection,"model":"configured-model","tools":true})
+            )
+            .unwrap(),
+        model
+    );
+    assert_eq!(
+        session
+            .call(&client, "sandbox_tasks_list", json!({"projectId":project}))
+            .unwrap()[0]["attemptId"],
+        task["attemptId"]
+    );
+    for operation in ["sandbox_task_cancel", "sandbox_task_reconcile"] {
+        let result = session.call(&client, operation, json!({"id":id})).unwrap();
+        assert_eq!(result["attemptId"], task["attemptId"]);
+        assert_eq!(result["state"], "interrupted");
+    }
+    server.join().unwrap();
+    assert!(session.owned.is_empty());
+}
+
+#[test]
+fn sandbox_mcp_rejects_credentials_and_unknown_fields_before_any_http_request() {
+    let client = ApiClient::new("http://127.0.0.1:1".into());
+    let id = Uuid::new_v4();
+    let mut session = Session::default();
+    for (operation, args) in [
+        ("sandbox_projects_list", json!({"apiKey":"private"})),
+        (
+            "sandbox_project_save",
+            json!({"id":id,"spec":{"name":"Project","apiKey":"private"}}),
+        ),
+        ("sandbox_models_list", json!({"id":id,"discover":"true"})),
+        (
+            "sandbox_model_verify",
+            json!({"id":id,"model":"model","tools":true,"token":"private"}),
+        ),
+        ("sandbox_tasks_list", json!({"projectId":"invalid"})),
+        (
+            "sandbox_task_start",
+            json!({"id":id,"projectId":id,"request":{"kind":"chat","input":"hello","env":{"KEY":"private"}}}),
+        ),
+        ("sandbox_task_cancel", json!({"id":id,"force":true})),
+        ("sandbox_task_reconcile", json!({"id":id,"rerun":true})),
+        (
+            "sandbox_task_apply",
+            json!({"id":id,"paths":["a"],"all":true}),
+        ),
+    ] {
+        let error = session.call(&client, operation, args).unwrap_err();
+        assert!(
+            error.starts_with("Invalid tool arguments"),
+            "{operation}: {error}"
+        );
+        assert!(!error.contains("private"));
+    }
+}

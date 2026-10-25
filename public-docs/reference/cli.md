@@ -275,3 +275,7 @@ See [API: Pools](api.md#pools) for sizing, TTL, and release rules.
 
 Pool acquire always sends an idempotency key. If `--idempotency-key` is omitted, the CLI generates
 one. On failure it prints a retry command with that key; use it to recover the same lease.
+
+## AI Sandbox
+
+`firecrab sandbox` uses the shared durable Sandbox REST lifecycle. See the [AI Sandbox guide](../guides/ai-sandbox.md#cli-and-local-stdio-mcp) for model verification, project/task JSON, cancellation, review and selected-file apply. `firecrab mcp` exposes the corresponding `sandbox_*` tools.
