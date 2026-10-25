@@ -165,8 +165,8 @@ async fn run() -> Result<(), StartupError> {
         .map_err(StartupError::VolumeRecovery)?;
     reconcile::reconcile(&state).await;
     service_runtime::recover(&state).await;
-    service_runtime::deploy::rotation::start(state.clone());
     queues::recover(&state).await;
+    service_runtime::deploy::rotation::start(state.clone());
     // Fetch the shared bootstrap builder source now, in the background, so
     // the request that needs it doesn't have to — see spawn_warmup.
     microboot::spawn_warmup(state.clone());

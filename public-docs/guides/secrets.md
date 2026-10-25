@@ -157,6 +157,8 @@ drain checks apply to automatic updates. A failed attempt retains or restores th
 previous release and its captured values. Invalid references, oversized guest
 values, missing private snapshots, or a service without an Nginx domain preserve
 the running service and show a status error.
+For external credentials shared by both generations, keep the old and new values
+valid until the rollout finishes.
 
 Retries use increasing delays and stop after five failed admissions/attempts for
 the same values and source release. Fix the reported cause and use Deploy to
