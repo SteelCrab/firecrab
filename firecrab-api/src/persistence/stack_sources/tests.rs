@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::json;
 
+mod sync;
+
 fn request(generation: u64, paused: bool) -> ConfigureGitSource {
     serde_json::from_value(json!({"expectedGeneration":generation,"source":{"repository":"https://github.com/example/infra","ref":"main","manifestPath":"stack.yaml","paused":paused,"pollIntervalSeconds":60}})).unwrap()
 }
@@ -37,17 +39,17 @@ fn source_generation_claims_pause_and_recovery_survive_reopen() {
     );
     assert!(
         store
-            .begin_stack_check("demo", 1, 10, true)
+            .begin_stack_check("demo", 1, 10, SourceTrigger::Poll)
             .unwrap()
             .is_none()
     );
     let (source, fresh) = store
-        .begin_stack_check("demo", 1, 10, false)
+        .begin_stack_check("demo", 1, 10, SourceTrigger::Check)
         .unwrap()
         .unwrap();
     assert!(fresh);
     let repeated = store
-        .begin_stack_check("demo", 1, 10, false)
+        .begin_stack_check("demo", 1, 10, SourceTrigger::Check)
         .unwrap()
         .unwrap();
     assert!(!repeated.1);
@@ -86,7 +88,7 @@ fn source_generation_claims_pause_and_recovery_survive_reopen() {
     assert_eq!(resumed.generation, 2);
     assert!(resumed.latest.is_none());
     assert!(matches!(
-        store.begin_stack_check("demo", 1, 30, false),
+        store.begin_stack_check("demo", 1, 30, SourceTrigger::Check),
         Err(PersistenceError::StaleStackSource)
     ));
     assert_eq!(store.stack_check_history("demo").unwrap().len(), 1);
@@ -112,7 +114,7 @@ fn source_history_is_bounded_and_failures_back_off_without_suppressing_manual_ch
         .unwrap();
     for n in 0..55 {
         let (source, fresh) = store
-            .begin_stack_check("demo", 1, n, false)
+            .begin_stack_check("demo", 1, n, SourceTrigger::Check)
             .unwrap()
             .unwrap();
         assert!(fresh);
@@ -123,7 +125,7 @@ fn source_history_is_bounded_and_failures_back_off_without_suppressing_manual_ch
     assert_eq!(source.next_check_at, 54 + 60 * 64);
     assert!(
         store
-            .begin_stack_check("demo", 1, 55, true)
+            .begin_stack_check("demo", 1, 55, SourceTrigger::Poll)
             .unwrap()
             .is_none()
     );
@@ -132,7 +134,7 @@ fn source_history_is_bounded_and_failures_back_off_without_suppressing_manual_ch
     assert_eq!(history[0].started_at, 54);
     assert_eq!(history[49].started_at, 5);
     let (source, _) = store
-        .begin_stack_check("demo", 1, 60, false)
+        .begin_stack_check("demo", 1, 60, SourceTrigger::Check)
         .unwrap()
         .unwrap();
     finish(&store, &source, GitCheckState::InSync, 60);
@@ -141,7 +143,7 @@ fn source_history_is_bounded_and_failures_back_off_without_suppressing_manual_ch
     assert_eq!(source.next_check_at, 120);
     assert!(
         store
-            .begin_stack_check("demo", 1, 120, true)
+            .begin_stack_check("demo", 1, 120, SourceTrigger::Poll)
             .unwrap()
             .unwrap()
             .1
@@ -163,13 +165,13 @@ fn independent_database_connections_coalesce_concurrent_check_admission() {
     let thread = std::thread::spawn(move || {
         guard.wait();
         other
-            .begin_stack_check("demo", 1, 0, false)
+            .begin_stack_check("demo", 1, 0, SourceTrigger::Check)
             .unwrap()
             .unwrap()
     });
     barrier.wait();
     let first = store
-        .begin_stack_check("demo", 1, 0, false)
+        .begin_stack_check("demo", 1, 0, SourceTrigger::Check)
         .unwrap()
         .unwrap();
     let second = thread.join().unwrap();

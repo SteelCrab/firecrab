@@ -33,10 +33,23 @@ pub async fn deploy(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
-    ValidatedJson(mut request): ValidatedJson<DeployMicroServiceRequest>,
+    ValidatedJson(request): ValidatedJson<DeployMicroServiceRequest>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let id = vms::parse_id(&id, request_id.0)?;
+    deploy_from_stack(state, request_id.0, id, request, None).await
+}
+
+pub(crate) async fn deploy_from_stack(
+    state: AppState,
+    request_id: Uuid,
+    id: Uuid,
+    mut request: DeployMicroServiceRequest,
+    operation: Option<Uuid>,
+) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
+    let request_id = RequestId(request_id);
     let _claim = state.service_mutations.lock().await;
+    crate::handlers::micro_services::ensure_stack_writer(&state, id, operation, request_id.0)
+        .await?;
     ensure_editable(&state, id, request_id.0).await?;
     let store = state.store.clone();
     let service = database(request_id.0, move || store.micro_service(id))
@@ -215,7 +228,19 @@ pub async fn stop(
     Path(id): Path<String>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let id = vms::parse_id(&id, request_id.0)?;
+    stop_from_stack(state, request_id.0, id, None).await
+}
+
+pub(crate) async fn stop_from_stack(
+    state: AppState,
+    request_id: Uuid,
+    id: Uuid,
+    operation: Option<Uuid>,
+) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
+    let request_id = RequestId(request_id);
     let claim = state.service_mutations.clone().lock_owned().await;
+    crate::handlers::micro_services::ensure_stack_writer(&state, id, operation, request_id.0)
+        .await?;
     let store = state.store.clone();
     let mut deployment = database(request_id.0, move || store.service_deployment(id))
         .await?

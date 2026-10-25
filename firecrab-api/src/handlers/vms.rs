@@ -299,7 +299,19 @@ pub(crate) async fn create_vm_with_id(
     req: CreateVmRequest,
     id: Uuid,
 ) -> Result<(StatusCode, Json<VmResponse>), AppError> {
-    let fields = validate_create(&req, &state);
+    let template = state.templates.resolve_alias(&req.template);
+    create_vm_from_template(state, request_id, req, id, template).await
+}
+
+/// Keep stack approval and pool-style creation bound to one resolved version.
+pub(crate) async fn create_vm_from_template(
+    state: AppState,
+    request_id: RequestId,
+    req: CreateVmRequest,
+    id: Uuid,
+    template: Option<std::sync::Arc<crate::templates::TemplateVersion>>,
+) -> Result<(StatusCode, Json<VmResponse>), AppError> {
+    let fields = validate_create_for(&req, template.as_deref(), &state);
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
     }
@@ -314,10 +326,7 @@ pub(crate) async fn create_vm_with_id(
     // and run_start already re-verifies right before the template is
     // actually used, which is the point that matters for catching a
     // tampered/corrupted artifact.
-    let template = state
-        .templates
-        .resolve_alias(&req.template)
-        .ok_or_else(|| AppError::internal(request_id.0))?;
+    let template = template.ok_or_else(|| AppError::internal(request_id.0))?;
     let response = insert_vm(
         &state,
         request_id,
@@ -1529,6 +1538,28 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
         })?;
 
     set_startup_step(state, vm.id, StartupStep::PreparingDisk);
+    let store = state.store.clone();
+    let vm_id = vm.id;
+    let approved_template = template.clone();
+    let templates = state.templates.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let pin = store.stack_vm_pin(vm_id, true)
+            .map_err(|_| "Could not read approved stack template".to_owned())?;
+        let Some(pin) = pin else { return Ok(()); };
+        if pin != approved_template.stack_pin() {
+            return Err("Approved stack template content changed; restore its exact artifacts before starting the VM".into());
+        }
+        for artifact in std::iter::once(&approved_template.kernel)
+            .chain(std::iter::once(&approved_template.rootfs))
+            .chain(approved_template.initrd.iter())
+        {
+            templates.open_verified(artifact)
+                .map_err(|_| "Approved stack template artifact changed; restore its exact bytes before starting the VM".to_owned())?;
+        }
+        Ok(())
+    })
+        .await
+        .map_err(|_| "Could not read approved stack template".to_owned())??;
 
     // Set up before the disk copy so a network failure fails fast, without
     // paying for a multi-GB copy first. Any failure *after* this succeeds

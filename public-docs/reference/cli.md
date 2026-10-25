@@ -83,7 +83,8 @@ See [Stack validation](../guides/stacks.md) for the experimental schema and its 
 `stack apply-status NAME --id OPERATION_UUID` reads redacted progress as JSON.
 `stack source configure NAME --file SOURCE_JSON --expected-generation N` configures a GitHub source separately from its resource manifest.
 `stack source status NAME`, `history NAME`, and `check NAME --generation N` expose read-only exact-commit comparisons.
-`stack source pause|resume NAME --generation N` controls periodic checks. See [Git source checks](../guides/stack-git-source.md).
+`stack source sync NAME --generation N [--recover-operation-id UUID]` resolves Git and applies supported changes. A failed/interrupted apply requires its operation ID before fresh recovery.
+`stack source pause|resume NAME --generation N` controls periodic checks and opt-in automatic synchronization. See [Git source synchronization](../guides/stack-git-source.md).
 See [Native YAML stack apply](../guides/stack-apply.md) for stop permissions, retry identity and explicit failure recovery.
 These commands use normal host selection; see [Stack ownership and planning](../guides/stack-planning.md) for the full workflow.
 

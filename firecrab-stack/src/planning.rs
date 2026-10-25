@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::{Diagnostic, Stack, diagnostic, logical_name, subnet, validate};
+use crate::{
+    Diagnostic, PlanInputs, Stack, TemplateSnapshot, diagnostic, logical_name, subnet, validate,
+};
 
 /// Resource namespaces shared by ownership records, CLI arguments and plans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
@@ -102,8 +104,18 @@ pub struct VmSnapshot {
     pub id: Uuid,
     /// API resource name.
     pub name: String,
-    /// Original template alias; this does not verify its current content identity.
+    /// Original template alias.
     pub template: String,
+    /// Template provenance persisted when this VM was created.
+    pub template_version: String,
+    /// Kernel content recorded at creation.
+    pub template_kernel_sha256: String,
+    /// Rootfs content recorded at creation.
+    pub template_rootfs_sha256: String,
+    /// Boot arguments recorded at creation.
+    pub template_boot_args_sha256: String,
+    /// Full boot approval from a created or successfully reconciled owned VM.
+    pub template_pin: Option<crate::TemplatePin>,
     /// Current virtual CPU count.
     pub cpu: u8,
     /// Current RAM in MiB.
@@ -132,6 +144,8 @@ pub struct ServiceSnapshot {
 /// Host configuration supplied by the API. The planner never fetches it itself.
 #[derive(Debug, Clone, Default)]
 pub struct Inventory {
+    /// Verified installed template versions and current alias selections.
+    pub templates: Vec<TemplateSnapshot>,
     /// Existing networks, including resources outside this stack.
     pub networks: Vec<MicroNetworkResponse>,
     /// Existing standalone VMs; builders and service replicas must be excluded.
@@ -203,6 +217,9 @@ pub struct Change {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
+    /// Immutable inputs included in the fingerprint. Legacy responses default to empty.
+    #[serde(default)]
+    pub inputs: PlanInputs,
     /// Opaque configuration/ownership identity; apply rejects a stale observation.
     #[serde(default)]
     pub fingerprint: String,
@@ -221,7 +238,7 @@ pub struct Plan {
 /// Compare declared fields to explicitly owned resources without adopting or mutating them.
 ///
 /// A plan is advisory and may become stale immediately. This API does not authorize apply,
-/// check host capacity, verify installed image content, or promise deployment readiness.
+/// check host capacity, read artifact bytes, or promise deployment readiness.
 pub fn plan(
     stack: &Stack,
     record: &StackRecord,
@@ -247,6 +264,7 @@ pub fn plan(
             )]);
         }
     }
+    let inputs = resolved_inputs(stack, inventory);
     let mut changes = Vec::new();
     let mut networks = BTreeMap::new();
     for (key, desired) in &stack.micro_networks {
@@ -312,7 +330,17 @@ pub fn plan(
             difference(
                 &mut change,
                 "template",
-                desired.template != current.template,
+                desired.template != current.template
+                    || inputs.templates.get(key).is_some_and(|pin| {
+                        pin.version != current.template_version
+                            || pin.kernel_sha256 != current.template_kernel_sha256
+                            || pin.rootfs_sha256 != current.template_rootfs_sha256
+                            || pin.boot_args_sha256 != current.template_boot_args_sha256
+                            || current
+                                .template_pin
+                                .as_ref()
+                                .is_some_and(|approved| approved != pin)
+                    }),
             );
             difference(
                 &mut change,
@@ -358,6 +386,11 @@ pub fn plan(
                     && current.is_none_or(|owned| owned.name != desired.name)
             }),
         );
+        if !inputs.templates.contains_key(key) {
+            change.action = Action::Blocked;
+            change.reason =
+                Some("installed template is missing or does not match templatePin".into());
+        }
         changes.push(change);
     }
     for (key, desired) in &stack.micro_services {
@@ -430,10 +463,12 @@ pub fn plan(
                     && current.is_none_or(|owned| owned.service.spec.name != desired.config.name)
             }),
         );
-        if current.is_some_and(|s| s.deployment.as_ref().is_some_and(|d| d.phase.is_busy())) {
+        if current.is_some_and(|s| s.deployment.as_ref().is_some_and(deployment_busy)) {
             change.action = Action::Blocked;
-            change.reason =
-                Some("service deployment is in progress; plan again after it completes".to_owned());
+            change.reason = Some(
+                "service deployment or recovery is in progress; inspect it before planning again"
+                    .to_owned(),
+            );
         }
         changes.push(change);
     }
@@ -455,6 +490,7 @@ pub fn plan(
         }
     }
     Ok(Plan {
+        inputs,
         fingerprint: fingerprint(stack, record, inventory),
         stack_id: record.id,
         name: stack.name.clone(),
@@ -483,7 +519,7 @@ pub fn fingerprint(stack: &Stack, record: &StackRecord, inventory: &Inventory) -
                     &d.spec,
                     &d.request,
                     &d.digest,
-                    d.phase.is_busy(),
+                    deployment_busy(d),
                     d.domain_route_owned,
                     instances,
                 )
@@ -499,12 +535,54 @@ pub fn fingerprint(stack: &Stack, record: &StackRecord, inventory: &Inventory) -
         &record.name,
         record.revision,
         bindings,
+        resolved_inputs(stack, inventory),
         networks,
         vms,
         services,
     ))
     .expect("stack configuration is JSON");
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn resolved_inputs(stack: &Stack, inventory: &Inventory) -> PlanInputs {
+    PlanInputs {
+        templates: stack
+            .micro_vms
+            .iter()
+            .filter_map(|(key, vm)| {
+                inventory
+                    .templates
+                    .iter()
+                    .find(|template| {
+                        template.name == vm.template
+                            && match &vm.template_pin {
+                                Some(pin) => *pin == template.pin,
+                                None => template.current,
+                            }
+                    })
+                    .map(|template| (key.clone(), template.pin.clone()))
+            })
+            .collect(),
+        service_digests: stack
+            .micro_services
+            .iter()
+            .filter_map(|(key, service)| {
+                service
+                    .config
+                    .image
+                    .split_once('@')
+                    .map(|(_, digest)| (key.clone(), digest.to_ascii_lowercase()))
+            })
+            .collect(),
+    }
+}
+
+fn deployment_busy(deployment: &MicroServiceDeployment) -> bool {
+    deployment.phase.is_busy()
+        || deployment
+            .update
+            .as_ref()
+            .is_some_and(|update| !update.completed)
 }
 
 fn entry(

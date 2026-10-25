@@ -225,6 +225,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::stack_sources::history),
         )
         .route(
+            "/api/stacks/{name}/source/sync",
+            post(handlers::stack_sources::sync),
+        )
+        .route(
             "/api/stacks/{name}/apply",
             post(handlers::stack_applies::apply),
         )

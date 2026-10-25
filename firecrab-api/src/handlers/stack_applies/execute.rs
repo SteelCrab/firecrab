@@ -11,8 +11,8 @@ use firecrab_api_types::{
     UpdateVmResourcesRequest, VmState,
 };
 use firecrab_stack::{
-    Action, ApplyFailure, ApplyState, ApplyStatus, Change, Inventory, Plan, ResourceKind, Stack,
-    StackRecord, StepState,
+    Action, ApplyFailure, ApplyState, ApplyStatus, Change, Inventory, Plan, PlanInputs,
+    ResourceKind, Stack, StackRecord, StepState, TemplatePin,
 };
 use uuid::Uuid;
 
@@ -31,6 +31,31 @@ pub(super) async fn preflight(
     allow_stop: bool,
     id: Uuid,
 ) -> Result<(), AppError> {
+    // Verify bytes before any network, VM or service mutation. Registry reads are
+    // metadata-only during planning; open_verified caches unchanged artifact hashes.
+    let templates = state.templates.clone();
+    let desired = stack.clone();
+    let inputs = plan.inputs.clone();
+    tokio::task::spawn_blocking(move || {
+        for (key, pin) in &inputs.templates {
+            let template = pinned_template(&templates, &desired.micro_vms[key].template, pin, id)?;
+            for artifact in std::iter::once(&template.kernel)
+                .chain(std::iter::once(&template.rootfs))
+                .chain(template.initrd.iter())
+            {
+                templates.open_verified(artifact).map_err(|_| {
+                    conflict(
+                        "stack_template_changed",
+                        "approved template artifacts are unavailable or changed",
+                        id,
+                    )
+                })?;
+            }
+        }
+        Ok::<_, AppError>(())
+    })
+    .await
+    .map_err(|_| AppError::internal(id))??;
     let networks = network_ids(&plan.changes);
     for change in &plan.changes {
         match change.kind {
@@ -44,7 +69,13 @@ pub(super) async fn preflight(
                     ));
                 }
                 let req = vm_create(desired, networks[desired.network.as_str()]);
-                let mut fields = vms::validate_create(&req, state);
+                let template = pinned_template(
+                    &state.templates,
+                    &desired.template,
+                    &plan.inputs.templates[&change.key],
+                    id,
+                )?;
+                let mut fields = vms::validate_create_for(&req, Some(&template), state);
                 if plan.changes.iter().any(|c| {
                     c.kind == ResourceKind::Network
                         && c.key == desired.network
@@ -178,7 +209,16 @@ async fn run_steps(
                 id,
             )?;
         }
-        execute(state, stack, change, &networks, allow_stop, id).await?;
+        execute(
+            state,
+            stack,
+            change,
+            &networks,
+            &status.inputs,
+            allow_stop,
+            id,
+        )
+        .await?;
         status.changes[index].state = StepState::Succeeded;
         save(state, status).await?;
     }
@@ -190,6 +230,7 @@ async fn execute(
     stack: &Stack,
     change: &Change,
     networks: &BTreeMap<&str, Uuid>,
+    inputs: &PlanInputs,
     allow_stop: bool,
     id: Uuid,
 ) -> Result<(), AppError> {
@@ -237,15 +278,37 @@ async fn execute(
                     id,
                 ));
             }
-            let _ = vms::create_vm_with_id(
+            let pin = inputs.templates.get(&change.key).ok_or_else(|| {
+                conflict(
+                    "stack_template_changed",
+                    "approved template identity is missing",
+                    id,
+                )
+            })?;
+            let template = pinned_template(&state.templates, &desired.template, pin, id)?;
+            let _ = vms::create_vm_from_template(
                 state.clone(),
                 request_id,
                 vm_create(desired, networks[desired.network.as_str()]),
                 resource_id,
+                Some(template),
             )
             .await?;
         }
         (ResourceKind::Vm, Action::Update) => {
+            let pin = inputs.templates.get(&change.key).ok_or_else(|| {
+                conflict(
+                    "stack_template_changed",
+                    "approved template identity is missing",
+                    id,
+                )
+            })?;
+            pinned_template(
+                &state.templates,
+                &stack.micro_vms[&change.key].template,
+                pin,
+                id,
+            )?;
             let vm = editable_vm(state, resource_id, allow_stop, id)?;
             let restart = vm.state == VmState::Running;
             if restart {
@@ -309,16 +372,17 @@ async fn execute(
                         )
                     })?
                     .id;
-                let (_, Json(deployment)) = crate::service_runtime::deploy::update(
-                    State(state.clone()),
-                    Extension(request_id),
-                    Path(resource_id.to_string()),
-                    ValidatedJson(UpdateServiceRequest {
+                let (_, Json(deployment)) = crate::service_runtime::deploy::update_from_stack(
+                    state.clone(),
+                    request_id,
+                    resource_id,
+                    UpdateServiceRequest {
                         expected_release_id: Some(expected),
                         operation_id: deploy_operation_id(id, resource_id),
                         spec: desired.config.clone(),
                         strategy: DeployStrategy::Rolling,
-                    }),
+                    },
+                    Some(id),
                 )
                 .await?;
                 wait_service(
@@ -336,10 +400,11 @@ async fn execute(
                 .await?;
                 return Ok(());
             } else if service_stop_needed(state, resource_id, allow_stop, id).await? {
-                let (_, Json(stopping)) = crate::service_runtime::stop(
-                    State(state.clone()),
-                    Extension(request_id),
-                    Path(resource_id.to_string()),
+                let (_, Json(stopping)) = crate::service_runtime::stop_from_stack(
+                    state.clone(),
+                    id,
+                    resource_id,
+                    Some(id),
                 )
                 .await?;
                 wait_service(
@@ -353,22 +418,24 @@ async fn execute(
                 .await?;
             }
             if change.action == Action::Update {
-                let _ = micro_services::update(
-                    State(state.clone()),
-                    Extension(request_id),
-                    Path(resource_id.to_string()),
-                    ValidatedJson(desired.config.clone()),
+                let _ = micro_services::update_from_stack(
+                    state.clone(),
+                    id,
+                    resource_id,
+                    desired.config.clone(),
+                    Some(id),
                 )
                 .await?;
             }
-            let (_, Json(deployment)) = crate::service_runtime::deploy(
-                State(state.clone()),
-                Extension(request_id),
-                Path(resource_id.to_string()),
-                ValidatedJson(DeployMicroServiceRequest {
+            let (_, Json(deployment)) = crate::service_runtime::deploy_from_stack(
+                state.clone(),
+                id,
+                resource_id,
+                DeployMicroServiceRequest {
                     micro_network_id: Some(networks[desired.network.as_str()]),
                     host_port: desired.host_port,
-                }),
+                },
+                Some(id),
             )
             .await?;
             wait_service(
@@ -651,7 +718,8 @@ fn exact_id(change: &Change, id: Uuid) -> Result<Uuid, AppError> {
 
 async fn observe(state: &AppState, id: Uuid) -> Result<Inventory, AppError> {
     let store = state.store.clone();
-    database(id, move || inventory(&store)).await
+    let templates = state.templates.clone();
+    database(id, move || inventory(&store, &templates)).await
 }
 
 async fn save(state: &AppState, status: &ApplyStatus) -> Result<(), AppError> {
@@ -699,6 +767,7 @@ fn verify_current(
         return Ok(());
     }
     let select = |inventory: &Inventory| Inventory {
+        templates: inventory.templates.clone(),
         networks: inventory
             .networks
             .iter()
@@ -734,6 +803,24 @@ fn verify_current(
 
 fn conflict(code: &'static str, message: &'static str, id: Uuid) -> AppError {
     AppError::conflict(code, message, id)
+}
+
+fn pinned_template(
+    registry: &crate::templates::TemplateRegistry,
+    alias: &str,
+    pin: &TemplatePin,
+    id: Uuid,
+) -> Result<std::sync::Arc<crate::templates::TemplateVersion>, AppError> {
+    registry
+        .resolve_version(alias, &pin.version)
+        .filter(|template| template.stack_pin() == *pin)
+        .ok_or_else(|| {
+            conflict(
+                "stack_template_changed",
+                "approved template identity is unavailable or changed; review a fresh plan",
+                id,
+            )
+        })
 }
 
 #[cfg(test)]
