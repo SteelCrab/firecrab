@@ -99,6 +99,14 @@ class ReleaseComplianceTests(unittest.TestCase):
         self.assertEqual(runtime, {"runtime"})
         self.assertEqual(build, {"dev", "macro"})
 
+    def test_wasm_runtime_dependencies_are_included(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = self.cargo_fixture(Path(tmp))
+            metadata["packages"][0]["name"] = "firecrab-frontend"
+            runtime, build = rc.cargo_sets(metadata)
+        self.assertEqual(runtime, {"runtime"})
+        self.assertEqual(build, {"dev", "macro"})
+
     def test_npm_sets_use_lockfile_dev_flag(self):
         lock = {
             "packages": {

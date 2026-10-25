@@ -206,6 +206,8 @@ sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
 cargo run -p firecrab-api --locked
 
 # 3
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack --version 0.14.0 --locked
 npm ci --prefix firecrab-frontend
 npm run dev --prefix firecrab-frontend
 # http://localhost:8080/
