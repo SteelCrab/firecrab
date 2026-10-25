@@ -158,6 +158,6 @@
 .wasm-panel .props { display:block; margin:0; }
 
 @media(max-width:767px) {
-  .wasm-panel { inset:0; }
-  .app-frame:has(#detail-panel:not([hidden])) .nav-toggle { display:none; }
+  .wasm-panel[data-view="vms"] { inset:0; }
+  .app-frame:has(#detail-panel[data-view="vms"]:not([hidden])) .nav-toggle { display:none; }
 }

@@ -216,6 +216,7 @@ fn render_detail(app: &Shared) {
         element("detail-panel").and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
     {
         panel.set_hidden(!open);
+        let _ = panel.set_attribute("data-view", &app.borrow().route);
         let _ = panel.set_attribute("style", &format!("width:{width}px"));
         if open {
             panel.set_inner_html(&html);
