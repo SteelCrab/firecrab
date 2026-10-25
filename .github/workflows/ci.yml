@@ -169,7 +169,7 @@ jobs:
           -- --ignored --exact --nocapture --test-threads=1
 
   dev-container-source:
-    name: Worktree dev (source build and release restore, real KVM)
+    name: Worktree dev (source build, MicroVM isolation and restore, real KVM)
     # The fresh guest compiler/cache makes this a longer explicit acceptance run.
     if: github.event_name == 'workflow_dispatch'
     needs: dev-container-runtime
@@ -199,7 +199,7 @@ jobs:
           sudo chmod a+rw /dev/kvm
           docker version
 
-      - name: Build worktree source and restore the release while preserving another runtime
+      - name: Build source and restore the release while preserving the other MicroVM
         run: >-
           cargo test -p firecrab-cli --locked
           micromanager::dev::container::runtime_tests::private_docker_source_build_and_restore_preserve_the_other_runtime

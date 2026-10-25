@@ -3,6 +3,9 @@
 use super::*;
 use std::net::{Ipv4Addr, TcpListener};
 
+#[path = "container_microvm_tests.rs"]
+mod microvms;
+
 const MARKER_PATH: &str = "/var/lib/firecrab/runtime-test-marker";
 const API: &str = r#"
 import http.server, pathlib, sys
@@ -447,19 +450,48 @@ fn private_docker_source_build_and_restore_preserve_the_other_runtime() -> io::R
     let mut second = Runtime::new()?;
     start_pair(&mut first, &mut second)?;
     // A's detached marker must exit before the installer starts the real API on
-    // guest port 5523. B retains its own marker throughout source build and restore.
+    // guest port 5523. B retains its marker while A builds the actual source.
     first.stop()?;
     second.require_marker()?;
     eprintln!("[RUNTIME TEST] building actual source in {}", first.name);
     run_with(&first.docker, &first.instance, None, false, false, true)?;
     first.require_source_api()?;
     second.require_marker()?;
+    // Replace B's marker with its verified release API before creating real
+    // guests. Its MicroVM must then survive every operation performed on A.
+    second.stop()?;
+    run_with(&second.docker, &second.instance, None, false, true, true)?;
+    second.require_release_api()?;
+    let deadline = Instant::now() + Duration::from_secs(20 * 60);
+    let mut first_vm = microvms::MicroVm::boot(&first, deadline)?;
+    let mut second_vm = microvms::MicroVm::boot(&second, deadline)?;
+    first_vm.require_same_image(&second_vm);
+    first_vm.require_absent_from(&second)?;
+    second_vm.require_absent_from(&first)?;
+    first_vm.require_running()?;
+    second_vm.require_running()?;
     eprintln!(
         "[RUNTIME TEST] restoring installed release in {}",
         first.name
     );
     run_with(&first.docker, &first.instance, None, false, true, true)?;
     first.require_release_api()?;
-    second.require_marker()?;
-    finish_pair(&mut first, &mut second)
+    first_vm.require_persisted()?;
+    second_vm.require_absent_from(&first)?;
+    second.require_release_api()?;
+    second_vm.require_running()?;
+    first_vm.cleanup()?;
+    drop(first_vm);
+    second_vm.require_running()?;
+    first.stop()?;
+    second_vm.require_running()?;
+    first.cleanup()?;
+    second.require_release_api()?;
+    second_vm.require_running()?;
+    assert!(!first.instance.primary_home.exists());
+    assert!(!second.instance.primary_home.exists());
+    second_vm.cleanup()?;
+    drop(second_vm);
+    second.stop()?;
+    second.cleanup()
 }

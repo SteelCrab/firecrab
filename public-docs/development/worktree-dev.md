@@ -185,11 +185,14 @@ cargo test -p firecrab-cli --locked \
 ```
 
 This check uploads and builds the current checkout in one private runtime, verifies the development API and runtime tools, and restores the release.
-The other runtime must retain its API and data.
+It installs the same pinned Alpine image in both runtimes and boots one isolated MicroVM in each, with one CPU, 256 MiB RAM, and a 1 GiB disk.
+Both networks use the same private CIDR to exercise namespace isolation.
+The other runtime must retain its API, data, SSH response, and the same live MicroVM processes across restore, stop, and cleanup.
 It starts with fresh guest compiler caches, so allow more time and disk space than the baseline check.
 A manual run of the CI workflow includes this check with a 45-minute limit.
-It does not prepare the host dashboard or boot MicroVMs.
-Native live validation with multiple management VMs has not yet been completed.
+It does not prepare the host dashboard.
+macOS live checks cover two private management VMs, independent dashboards and data, and stop/start while preserving the primary environment.
+Native Windows Docker/WSL and macOS application-MicroVM lifecycle checks remain pending.
 Unit, proxy, and command-fixture tests do not replace that runtime check.
 
 ## Related
