@@ -183,6 +183,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
+- The development API proxy preserves the dashboard's Host header so browser
+  requests from custom ports such as 8098 pass the API's same-origin checks.
+  Vite's default host checks and the API's origin checks reject untrusted requests.
+  This fixes the `--port` behavior from [#488](https://github.com/SteelCrab/firecrab/issues/488).
+
 - OCI guests recreate image-declared `/run` directories with `systemd-tmpfiles`
   before app services on every boot. MariaDB can restart after tmpfs clears
   `/run/mysqld`, without a manual guest startup hook.
