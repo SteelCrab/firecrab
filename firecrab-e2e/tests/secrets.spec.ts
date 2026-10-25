@@ -6,7 +6,7 @@ const CONNECTION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const PLAN = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const NEW = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const SECRET = { id: ID, name: "DB_PASSWORD", description: "Database credential", version: 1, createdAt: 1_792_544_000_000, updatedAt: 1_792_544_000_000, source: null };
-const LINK = { id: CONNECTION, name: "Production", provider: "infisical", settings: { baseUrl: "https://us.infisical.com", projectId: "project-id", environment: "prod", secretPath: "/", region: "", prefix: "" }, version: 1, updatedAt: 1_792_544_000_000 };
+const LINK = { id: CONNECTION, name: "Production", provider: "firecrab", settings: { baseUrl: "https://secrets.example.com", region: "", prefix: "" }, version: 1, updatedAt: 1_792_544_000_000 };
 
 async function openSecrets(page: Page, options: { empty?: boolean; failSave?: boolean; partial?: boolean; unavailable?: boolean; conflictApply?: boolean } = {}) {
   const writes: { path: string; method: string; body: Record<string, unknown> }[] = [];
@@ -33,7 +33,7 @@ async function openSecrets(page: Page, options: { empty?: boolean; failSave?: bo
       }
       if (path.endsWith("/apply")) {
         if (options.conflictApply) { options.conflictApply = false; return route.fulfill({ status: 409, json: { error: { message: "The values changed" } } }); }
-        if (direction === "import" && body.names.includes("NEW_TOKEN")) rows.push({ ...SECRET, id: NEW, name: "NEW_TOKEN", source: { connectionId: CONNECTION, connectionName: "Production", provider: "infisical", remoteKey: "NEW_TOKEN", importedAt: Date.now() } });
+        if (direction === "import" && body.names.includes("NEW_TOKEN")) rows.push({ ...SECRET, id: NEW, name: "NEW_TOKEN", source: { connectionId: CONNECTION, connectionName: "Production", provider: "firecrab", remoteKey: "NEW_TOKEN", importedAt: Date.now() } });
         return route.fulfill({ json: options.partial ? { applied: [], failed: [{ name: "DB_PASSWORD", message: "failed" }] } : { applied: body.names, failed: [] } });
       }
       if (path.includes("/connections")) {
@@ -175,7 +175,7 @@ test.describe("Secrets web console @dashboard", () => {
     await expect(page.getByText("0 secret(s) applied.", { exact: true })).toBeVisible();
   });
 
-  test("SEC5: configures all three providers and keeps credentials out of edit forms", async ({ page }) => {
+  test("SEC5: configures both providers and keeps credentials out of edit forms", async ({ page }) => {
     const writes = await openSecrets(page);
     await page.getByRole("tab", { name: /External connections/ }).click();
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
@@ -194,9 +194,9 @@ test.describe("Secrets web console @dashboard", () => {
     await page.getByLabel("Provider", { exact: true }).selectOption("firecrab");
     await expect(page.getByLabel("Base URL", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Bearer token (optional)", { exact: true })).toHaveAttribute("type", "password");
-    await page.getByLabel("Provider", { exact: true }).selectOption("infisical");
-    await expect(page.getByLabel("Project ID", { exact: true })).toBeVisible();
-    await expect(page.getByLabel("Access token", { exact: true })).toHaveAttribute("type", "password");
+    await expect(page.getByLabel("Provider", { exact: true }).locator("option")).toHaveText(["Firecrab · PipeSecrets", "AWS Secrets Manager"]);
+    await expect(page.getByLabel("Project ID", { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel("Secret path", { exact: true })).toHaveCount(0);
   });
 
   test("SEC6: keeps a failed save editable and protects unsaved forms during navigation", async ({ page }) => {

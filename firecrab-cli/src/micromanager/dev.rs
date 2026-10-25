@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 pub(crate) mod container;
 pub(super) mod dashboard;
 pub(crate) mod instance;
+mod ports;
 pub(super) mod session;
 
 pub(super) const GUEST_SCRIPT: &str =

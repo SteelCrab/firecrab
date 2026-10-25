@@ -1,9 +1,12 @@
 //! Cross-host lifecycle acceptance uses real HTTPS/mTLS and fixture VM observations.
 use super::super::services::reconcile_one as reconcile_service;
 use super::*;
+mod contract;
 
 fn service_spec(hosts: &[HostReport]) -> ClusterServiceSpec {
     ClusterServiceSpec {
+        state: ClusterServiceState::default(),
+        credentials: Default::default(),
         service: serde_json::from_value(serde_json::json!({"name":"web","image":format!("ghcr.io/team/web@sha256:{}","a".repeat(64)),"port":8080,"cpu":1,"ram":512,"replicas":hosts.len(),"drainTimeout":0})).unwrap(),
         mode: ClusterServiceMode::Replicated,
         targets: hosts.iter().map(|h| ClusterServiceTarget { host_id:h.id,replicas:1,request:DeployMicroServiceRequest { micro_network_id:Some(h.networks[0].id),host_port:30100 } }).collect(),
@@ -503,7 +506,7 @@ async fn public_service_routes_validate_and_expose_operations_with_authenticatio
     assert_eq!(
         foreign
             .put(&worker_url)
-            .json(&service.hosts[0].intent)
+            .json(&serde_json::json!({"intent":service.hosts[0].intent}))
             .send()
             .await
             .unwrap()
@@ -726,7 +729,7 @@ async fn local_service_apis_use_reserved_ids_and_recover_interrupted_create_and_
                 "{}/api/cluster/worker/services/{}",
                 host.report.endpoint, initial.id
             ))
-            .json(old)
+            .json(&serde_json::json!({"intent":old}))
             .send()
             .await
             .unwrap();

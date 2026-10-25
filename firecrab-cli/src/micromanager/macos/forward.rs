@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -56,12 +56,13 @@ pub fn run(manager: Manager) -> Result<i32, Error> {
         .key
         .parent()
         .and_then(|path| path.parent())
-        .ok_or(Error::CredentialsPath)?;
-    let settings = super::ssh::load(home)?;
-    let api_port = instance::api_port(home)?;
-    let resource_port = instance::resource_port(home)?;
-    let vms_url = format!("{}/api/vms", instance::api_url(home)?.trim_end_matches('/'));
-    let reserved = BTreeSet::from([api_port, resource_port]);
+        .ok_or(Error::CredentialsPath)?
+        .to_owned();
+    let settings = super::ssh::load(&home)?;
+    let vms_url = format!(
+        "{}/api/vms",
+        instance::api_url(&home)?.trim_end_matches('/')
+    );
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
@@ -69,12 +70,13 @@ pub fn run(manager: Manager) -> Result<i32, Error> {
     let mut relays = Relays::new(PathBuf::from("/usr/bin/ssh"), manager, settings);
     let mut last_error = None;
     loop {
+        let reserved = relays.refresh_reserved(&home)?;
         match wanted_ports(&client, &vms_url, &reserved) {
             Ok(wanted) => {
                 last_error = None;
                 relays.sync(&wanted);
             }
-            // Existing forwards stay up while the API is briefly unreachable.
+            // Only forwards outside the current reservations survive an API outage.
             Err(error) => {
                 let error = error.to_string();
                 if last_error.as_ref() != Some(&error) {
@@ -129,9 +131,23 @@ impl Relays {
         }
     }
 
-    fn sync(&mut self, wanted: &BTreeSet<u16>) {
+    /// Read every registered backend before polling the API; unknown ownership closes all relays.
+    fn refresh_reserved(&mut self, home: &Path) -> std::io::Result<BTreeSet<u16>> {
+        let reserved = match instance::registered_backend_ports(home) {
+            Ok(ports) => ports.into_iter().collect::<BTreeSet<_>>(),
+            Err(error) => {
+                self.sync(&BTreeSet::new());
+                return Err(error);
+            }
+        };
+        self.retain(|port| !reserved.contains(&port));
+        Ok(reserved)
+    }
+
+    /// Close disallowed relays before checking for dead SSH children.
+    fn retain(&mut self, keep: impl Fn(u16) -> bool) {
         self.active.retain(|port, ssh| {
-            if !wanted.contains(port) {
+            if !keep(*port) {
                 let _ = ssh.kill();
                 let _ = ssh.wait();
                 eprintln!("port-forward: closed 127.0.0.1:{port}");
@@ -147,7 +163,11 @@ impl Relays {
                 Err(_) => false,
             }
         });
-        self.unavailable.retain(|port| wanted.contains(port));
+        self.unavailable.retain(|port| keep(*port));
+    }
+
+    fn sync(&mut self, wanted: &BTreeSet<u16>) {
+        self.retain(|port| wanted.contains(&port));
         for &port in wanted {
             if self.active.contains_key(&port) {
                 continue;
@@ -244,6 +264,22 @@ mod tests {
         }
     }
 
+    fn fake_relays(directory: &Path) -> Relays {
+        let ssh = directory.join("ssh");
+        fs::write(&ssh, "#!/bin/sh\nexec sleep 600\n").unwrap();
+        fs::set_permissions(&ssh, Permissions::from_mode(0o755)).unwrap();
+        Relays::new(ssh, manager(), Ssh::default())
+    }
+
+    fn process_alive(pid: u32) -> bool {
+        ProcessCommand::new("/bin/kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    }
+
     #[test]
     fn only_running_tcp_forwards_reach_the_loopback() {
         let vms: Vec<Vm> = serde_json::from_str(
@@ -260,31 +296,106 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            loopback_ports(&vms, &BTreeSet::from([5523, 5524])),
-            BTreeSet::from([2222, 8080])
+            loopback_ports(&vms, &BTreeSet::from([5523, 5524, 8080])),
+            BTreeSet::from([2222])
         );
     }
 
     #[test]
-    fn selected_api_and_resource_ports_are_reserved_for_each_instance() {
+    fn primary_and_private_relays_reserve_every_registered_backend() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = instance::test_instance(directory.path(), "aaaaaaaaaaaaaaaa", 60230, 60231);
+        let second = instance::test_instance(directory.path(), "bbbbbbbbbbbbbbbb", 61230, 61231);
         let vms: Vec<Vm> = serde_json::from_str(
             r#"[{"state":"running","portForwards":[
                 {"hostPort":60230,"guestPort":80},
                 {"hostPort":60231,"guestPort":80},
+                {"hostPort":61230,"guestPort":80},
+                {"hostPort":61231,"guestPort":80},
                 {"hostPort":5523,"guestPort":80},
                 {"hostPort":5524,"guestPort":80},
-                {"hostPort":8080,"guestPort":80}
+                {"hostPort":8080,"guestPort":80},
+                {"hostPort":2222,"guestPort":22}
             ]}]"#,
         )
         .unwrap();
-        assert_eq!(
-            loopback_ports(&vms, &BTreeSet::from([60230, 60231])),
-            BTreeSet::from([5523, 5524, 8080])
-        );
-        assert_eq!(
-            loopback_ports(&vms, &BTreeSet::from([5523, 5524])),
-            BTreeSet::from([8080, 60230, 60231])
-        );
+        for home in [
+            &first.primary_home,
+            &first.managed_home,
+            &second.managed_home,
+        ] {
+            let mut relays = fake_relays(directory.path());
+            let reserved = relays.refresh_reserved(home).unwrap();
+            assert_eq!(loopback_ports(&vms, &reserved), BTreeSet::from([2222]));
+        }
+    }
+
+    #[test]
+    fn new_reservations_close_conflicting_relays_even_when_the_api_is_unreachable() {
+        for primary in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let instance =
+                instance::test_instance(directory.path(), "aaaaaaaaaaaaaaaa", 60230, 60231);
+            let home = if primary {
+                &instance.primary_home
+            } else {
+                &instance.managed_home
+            };
+            let held = TcpListener::bind((Ipv4Addr::LOCALHOST, free_port())).unwrap();
+            let blocked = held.local_addr().unwrap().port();
+            let safe = free_port();
+            drop(held);
+            let mut relays = fake_relays(directory.path());
+            let reserved = relays.refresh_reserved(home).unwrap();
+            assert!(!reserved.contains(&blocked));
+            assert!(!reserved.contains(&safe));
+            let wanted = BTreeSet::from([blocked, safe]);
+            sync_until_active(&mut relays, &wanted, blocked);
+            sync_until_active(&mut relays, &wanted, safe);
+            let blocked_pid = relays.active[&blocked].id();
+            let safe_pid = relays.active[&safe].id();
+
+            instance::test_instance(directory.path(), "bbbbbbbbbbbbbbbb", blocked, 61231);
+            let reserved = relays.refresh_reserved(home).unwrap();
+            let api = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let url = format!("http://{}/api/vms", api.local_addr().unwrap());
+            drop(api);
+            let client = reqwest::blocking::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(1))
+                .build()
+                .unwrap();
+            assert!(wanted_ports(&client, &url, &reserved).is_err());
+            assert!(!relays.active.contains_key(&blocked));
+            assert!(!process_alive(blocked_pid));
+            assert_eq!(relays.active[&safe].id(), safe_pid);
+            assert!(process_alive(safe_pid));
+        }
+    }
+
+    #[test]
+    fn unreadable_reservations_close_all_existing_relays() {
+        for primary in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let instance =
+                instance::test_instance(directory.path(), "aaaaaaaaaaaaaaaa", 60230, 60231);
+            let home = if primary {
+                &instance.primary_home
+            } else {
+                &instance.managed_home
+            };
+            let mut relays = fake_relays(directory.path());
+            relays.refresh_reserved(home).unwrap();
+            let port = free_port();
+            sync_until_active(&mut relays, &BTreeSet::from([port]), port);
+            let pid = relays.active[&port].id();
+            fs::write(instance.managed_home.join("dev-instance.json"), "invalid").unwrap();
+
+            assert!(relays.refresh_reserved(home).is_err());
+            assert!(relays.active.is_empty());
+            assert!(relays.unavailable.is_empty());
+            assert!(!process_alive(pid));
+        }
     }
 
     #[test]
@@ -316,7 +427,7 @@ mod tests {
                 assert_ne!(read, 0, "request ended before its HTTP headers");
                 request.extend_from_slice(&chunk[..read]);
             }
-            let body = r#"[{"state":"running","portForwards":[{"hostPort":60230,"guestPort":80},{"hostPort":60231,"guestPort":80},{"hostPort":8080,"guestPort":80}]}]"#;
+            let body = r#"[{"state":"running","portForwards":[{"hostPort":60230,"guestPort":80},{"hostPort":60231,"guestPort":80},{"hostPort":8080,"guestPort":80},{"hostPort":2222,"guestPort":22}]}]"#;
             write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
             String::from_utf8_lossy(&request).into_owned()
         });
@@ -325,10 +436,14 @@ mod tests {
             .timeout(Duration::from_secs(3))
             .build()
             .unwrap();
-        let result = wanted_ports(&client, &url, &BTreeSet::from([60230, 60231]));
+        let result = wanted_ports(
+            &client,
+            &url,
+            &BTreeSet::from([5523, 5524, 8080, 60230, 60231]),
+        );
         let request = server.join().unwrap();
         assert!(request.starts_with("GET /api/vms HTTP/1.1\r\n"));
-        assert_eq!(result.unwrap(), BTreeSet::from([8080]));
+        assert_eq!(result.unwrap(), BTreeSet::from([2222]));
     }
 
     #[test]
@@ -352,13 +467,10 @@ mod tests {
     #[test]
     fn sync_starts_skips_busy_respawns_and_closes_forwards() {
         let directory = tempfile::tempdir().unwrap();
-        let ssh = directory.path().join("ssh");
-        fs::write(&ssh, "#!/bin/sh\nexec sleep 600\n").unwrap();
-        fs::set_permissions(&ssh, Permissions::from_mode(0o755)).unwrap();
         let busy = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let busy_port = busy.local_addr().unwrap().port();
         let port = free_port();
-        let mut relays = Relays::new(ssh, manager(), Ssh::default());
+        let mut relays = fake_relays(directory.path());
         let wanted = BTreeSet::from([busy_port, port]);
 
         sync_until_active(&mut relays, &wanted, port);
@@ -376,12 +488,6 @@ mod tests {
         relays.sync(&BTreeSet::new());
         assert!(relays.active.is_empty());
         assert!(relays.unavailable.is_empty());
-        let alive = ProcessCommand::new("/bin/kill")
-            .args(["-0", &second.to_string()])
-            .stderr(Stdio::null())
-            .status()
-            .unwrap()
-            .success();
-        assert!(!alive, "a closed forward's ssh is gone");
+        assert!(!process_alive(second), "a closed forward's ssh is gone");
     }
 }

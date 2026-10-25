@@ -403,7 +403,9 @@ fn unreadable_or_invalid_placement_files_fail_before_sending_a_request() {
 
 fn controller_service() -> ClusterService {
     let spec:ClusterServiceSpec=serde_json::from_value(serde_json::json!({
-        "service":{"name":"web","image":format!("ghcr.io/team/web@sha256:{}","a".repeat(64)),"port":8080,"ram":512,"cpu":1,"replicas":1},
+        "service":{"name":"web","image":format!("ghcr.io/team/web@sha256:{}","a".repeat(64)),"port":8080,"ram":512,"cpu":1,"replicas":1,"env":{"SESSION_URL":"https://sessions.example"}},
+        "state":{"mode":"external_state","sessions":"SESSION_URL","requestsDuplicateSafe":true,"backgroundWork":"duplicate_safe"},
+        "credentials":{"TOKEN":{"secretId":Uuid::from_u128(5),"version":7}},
         "targets":[{"hostId":Uuid::from_u128(1),"replicas":1,"request":{"microNetworkId":Uuid::from_u128(2),"hostPort":30100}}]
     })).unwrap();
     ClusterService {

@@ -691,7 +691,7 @@ async fn apply_with_account_endpoint(
                     let source = SecretSource {
                         connection_id: connection.summary.id,
                         connection_name: connection.summary.name.clone(),
-                        provider: connection.summary.provider,
+                        provider: connection.summary.provider.as_str().into(),
                         remote_key: value.summary.name.clone(),
                         imported_at: now_ms(),
                     };

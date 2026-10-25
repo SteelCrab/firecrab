@@ -23,6 +23,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Replicated controller services declare stateless or shared external application
+  state and distribute version-pinned PipeSecrets through encrypted deployment
+  snapshots. Invalid state, credential references and exclusive work fail before
+  dispatch. Tracked in [#457](https://github.com/SteelCrab/firecrab/issues/457).
+
 - Changed PipeSecret values automatically rotate running domain services through
   Deploy. Rotation keeps the current image and encrypted per-attempt values,
   shares queue/capacity limits, and retains bounded retries across API restarts.
@@ -226,6 +231,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Changed
 
+- Remove the Infisical connector, its dashboard fields, and its account QA requirement (#411).
+  Existing imported values and source history remain available. Older vaults discard
+  retired connections and pending previews on their next successful write.
+
 - Guest kernel installation and OCI import build kernel.org's current stable
   source on the Linux host instead of downloading MicroRegistry kernel packages.
   Source and image digests are verified, and existing image kernel assignments
@@ -247,12 +256,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
-- ChatGPT login callbacks follow trusted loopback development ports. Dashboard
-  proxies keep callbacks on their selected API, including private worktrees.
-- Source development bundles preserve the embedded host-kernel build script,
-  allowing current API sources to compile in the management VM.
-- Sandbox live QA checks API-visible source paths before model usage and accepts
-  successful task responses with nullable or textual task-error fields (#414).
+- Worktree development cleanup retains the selected dashboard checkout and port.
+  Private start/restart requires that saved selection before changing the backend.
+  macOS VM port relays protect primary and all registered backend ports, including
+  instances registered after relay startup. New backend ports use 20000–32767,
+  excluding the host's current IPv4 TCP ephemeral range; existing saved ports
+  remain valid. Tracked in #495.
 
 - PipeSecrets rejects AWS name prefixes containing filter operators or other
   non-name characters, preventing a negated prefix from listing secrets outside
@@ -267,6 +276,13 @@ Entries land here as work merges, and move under the next version heading when t
   requests from custom ports such as 8098 pass the API's same-origin checks.
   Vite's default host checks and the API's origin checks reject untrusted requests.
   This fixes the `--port` behavior from [#488](https://github.com/SteelCrab/firecrab/issues/488).
+
+- ChatGPT login callbacks follow trusted loopback development ports. Dashboard
+  proxies keep callbacks on their selected API, including private worktrees.
+- Source development bundles preserve the embedded host-kernel build script,
+  allowing current API sources to compile in the management VM.
+- Sandbox live QA checks API-visible source paths before model usage and accepts
+  successful task responses with nullable or textual task-error fields (#414).
 
 - OCI guests recreate image-declared `/run` directories with `systemd-tmpfiles`
   before app services on every boot. MariaDB can restart after tmpfs clears

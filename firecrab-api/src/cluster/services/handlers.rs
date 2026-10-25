@@ -61,7 +61,7 @@ async fn submit(
     id: Option<Uuid>,
     action: ClusterServiceAction,
     expected: Option<u64>,
-    spec: Option<ClusterServiceSpec>,
+    mut spec: Option<ClusterServiceSpec>,
 ) -> Result<(StatusCode, Json<ClusterService>), AppError> {
     super::super::handlers::require_transport(&state, request)?;
     let key = headers
@@ -69,6 +69,12 @@ async fn submit(
         .and_then(|h| h.to_str().ok())
         .unwrap_or_default()
         .to_owned();
+    if let Some(spec) = &mut spec {
+        validate_spec(spec).map_err(|e| super::super::handlers::error(e, request))?;
+        credentials::prepare(&state, spec)
+            .await
+            .map_err(|e| super::super::handlers::error(e, request))?;
+    }
     let store = state.store.clone();
     let s = stored(move || store.cluster_service_admit(&key, id, action, expected, spec, now_ms()))
         .await
