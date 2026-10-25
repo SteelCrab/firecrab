@@ -626,6 +626,16 @@ fn image_services_start_while_optional_package_install_waits() {
     let app = services.join("app");
     std::fs::write(&app, "#!/bin/sh\n: > \"$QA_APP_READY\"\n").unwrap();
     std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let ssh = services.join("sshd");
+    std::fs::write(
+        &ssh,
+        r#"#!/bin/sh
+[ -f "$QA_PACKAGES_DONE" ] || exit 92
+: > "$QA_SSH_READY"
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
     let toolbox = root.join("bb");
     std::fs::write(&toolbox, "#!/bin/sh\nexec \"$@\"\n").unwrap();
     std::fs::set_permissions(&toolbox, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -635,9 +645,11 @@ fn image_services_start_while_optional_package_install_waits() {
     let boot = provision::boot_script();
     let worker = &boot[boot.find("# The image carries").unwrap()..];
     let script = worker
+        .replace(provision::PREPARE_RUNTIME, ":")
         .replace(
             provision::BASE_PACKAGE_INSTALL,
             r#"
+[ ! -f "$QA_SSH_READY" ] || exit 91
 attempt=0
 while [ "$attempt" -lt 200 ]; do
   if [ -f "$QA_APP_READY" ]; then
@@ -647,6 +659,7 @@ while [ "$attempt" -lt 200 ]; do
   sleep 0.01
   attempt=$((attempt + 1))
 done
+: > "$QA_PACKAGES_DONE"
 "#,
         )
         .replace("/etc/firecrab/services.d", services.to_str().unwrap())
@@ -655,21 +668,28 @@ done
         .replace("/dev/console", root.join("console").to_str().unwrap());
     let ready = root.join("app-ready");
     let observed = root.join("package-saw-app");
+    let ssh_ready = root.join("ssh-ready");
     let output = std::process::Command::new("sh")
         .args(["-c", &script])
         .env("BB", &toolbox)
         .env("QA_APP_READY", &ready)
         .env("QA_PACKAGE_SAW_APP", &observed)
+        .env("QA_PACKAGES_DONE", root.join("packages-done"))
+        .env("QA_SSH_READY", &ssh_ready)
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    while !observed.exists() && std::time::Instant::now() < deadline {
+    while (!observed.exists() || !ssh_ready.exists()) && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(
         observed.exists(),
         "Application startup waited for optional packages"
+    );
+    assert!(
+        ssh_ready.exists(),
+        "SSH must start after its package dependencies are installed"
     );
 }
 

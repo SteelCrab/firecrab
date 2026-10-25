@@ -955,6 +955,7 @@ $BB mkdir -p /run/firecrab
 for service in {services}/*; do
   [ -x "$service" ] || continue
   name=${{service##*/}}
+  [ "$name" = app ] || continue
   $BB setsid "$service" >/dev/console 2>&1 &
   echo $! > /run/firecrab/$name.pid
   [ "$name" = app ] && echo $! > /run/firecrab-app.pid
@@ -964,6 +965,17 @@ done
 # from application startup and the interactive console.
 (
 {base_packages}
+
+{prepare_runtime}
+
+# SSH and other operational services need the packages installed above.
+for service in {services}/*; do
+  [ -x "$service" ] || continue
+  name=${{service##*/}}
+  [ "$name" != app ] || continue
+  $BB setsid "$service" >/dev/console 2>&1 &
+  echo $! > /run/firecrab/$name.pid
+done
 
 # Fallback only: glibc guests already received a pinned /usr/bin/fastfetch at
 # import. Alpine and other musl trees still try the guest package manager.
