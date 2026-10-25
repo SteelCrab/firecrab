@@ -1,7 +1,7 @@
 //! The browser's Host screen controls the outer VM through this native service.
 //! Bind only loopback and reject foreign Host/Origin headers, including DNS rebinding.
 use std::fs::{self, OpenOptions};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
@@ -41,12 +41,18 @@ impl IntoResponse for Error {
     }
 }
 
-fn allowed(headers: &HeaderMap) -> bool {
+fn allowed(headers: &HeaderMap, home: &Path) -> bool {
     let host = headers.get("host").and_then(|value| value.to_str().ok());
     let good_host = host.is_some_and(|host| host == "127.0.0.1:5524" || host == "localhost:5524");
-    let good_origin = headers
-        .get("origin")
-        .is_none_or(|value| value.to_str().is_ok_and(|origin| ORIGINS.contains(&origin)));
+    let good_origin = headers.get("origin").is_none_or(|value| {
+        value.to_str().is_ok_and(|origin| {
+            ORIGINS.contains(&origin)
+                || super::dev::dashboard::port(home).is_ok_and(|port| {
+                    origin == format!("http://localhost:{port}")
+                        || origin == format!("http://127.0.0.1:{port}")
+                })
+        })
+    });
     good_host && good_origin
 }
 
@@ -55,7 +61,7 @@ async fn guard(
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    if !allowed(request.headers()) {
+    if !allowed(request.headers(), &controller.home) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let origin = request.headers().get("origin").cloned();

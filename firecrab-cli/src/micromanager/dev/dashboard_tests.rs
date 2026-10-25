@@ -76,7 +76,7 @@ impl Fixture {
         format!("http://127.0.0.1:{}", self.port)
     }
     fn start(&self) -> Result<(), Error> {
-        start_at(&self.source(), self.home.path(), self.port)
+        start(&self.source(), self.home.path(), self.port)
     }
     fn state(&self) -> Session {
         read_session(self.home.path()).unwrap().unwrap()
@@ -85,7 +85,7 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        let _ = stop_at(self.home.path(), &self.url());
+        let _ = stop(self.home.path());
     }
 }
 
@@ -107,11 +107,18 @@ fn starts_reuses_stops_and_resumes_the_selected_checkout() {
         fixture.source().join("firecrab-frontend").to_str().unwrap()
     );
     assert_eq!(source(fixture.home.path()).unwrap(), fixture.source());
-    stop_at(fixture.home.path(), &fixture.url()).unwrap();
-    stop_at(fixture.home.path(), &fixture.url()).unwrap();
+    assert_eq!(port(fixture.home.path()).unwrap(), fixture.port);
+    stop(fixture.home.path()).unwrap();
+    stop(fixture.home.path()).unwrap();
     assert!(!running(&client().unwrap(), &original, &fixture.url()));
-    fixture.start().unwrap();
+    start(
+        &source(fixture.home.path()).unwrap(),
+        fixture.home.path(),
+        port(fixture.home.path()).unwrap(),
+    )
+    .unwrap();
     assert_ne!(fixture.state().session, original.session);
+    assert_eq!(fixture.state().port, fixture.port);
 }
 
 #[test]
@@ -145,7 +152,7 @@ fn clean_stops_the_dashboard_and_forgets_only_its_runtime_files() {
     let runtime = fixture.home.path().join("runtime");
     fs::write(runtime.join("other-state.json"), "preserved").unwrap();
     for _ in 0..2 {
-        clean_at(fixture.home.path(), &fixture.url()).unwrap();
+        clean(fixture.home.path()).unwrap();
         assert!(!running(&client().unwrap(), &state, &fixture.url()));
         assert!(read_session(fixture.home.path()).unwrap().is_none());
         for name in [
@@ -208,6 +215,7 @@ fn refuses_unauthorized_shutdown_and_stale_session_ownership() {
         source: fixture.source(),
         session: Uuid::new_v4(),
         dependencies: fixture.state().dependencies,
+        port: fixture.port,
     };
     stop_session(&client, &stale, &fixture.url()).unwrap();
     assert!(running(&client, &fixture.state(), &fixture.url()));
@@ -219,9 +227,42 @@ fn switches_checkouts_by_stopping_only_the_previous_owned_server() {
     let second = Fixture::new();
     first.start().unwrap();
     let original = first.state();
-    start_at(&second.source(), first.home.path(), first.port).unwrap();
+    start(&second.source(), first.home.path(), first.port).unwrap();
     assert!(!running(&client().unwrap(), &original, &first.url()));
     assert_eq!(first.state().source, second.source());
+}
+
+#[test]
+fn changing_ports_stops_the_previous_dashboard_and_remembers_the_new_port() {
+    let fixture = Fixture::new();
+    let other = Fixture::new();
+    fixture.start().unwrap();
+    let original = fixture.state();
+    start(&fixture.source(), fixture.home.path(), other.port).unwrap();
+    let selected = fixture.state();
+    assert_eq!(selected.port, other.port);
+    assert!(!listening(&original.url()));
+    assert!(running(&client().unwrap(), &selected, &selected.url()));
+    stop(fixture.home.path()).unwrap();
+    assert!(!listening(&selected.url()));
+    assert_eq!(port(fixture.home.path()).unwrap(), other.port);
+}
+
+#[test]
+fn old_sessions_and_missing_state_use_the_default_port() {
+    let home = tempfile::tempdir().unwrap();
+    assert_eq!(port(home.path()).unwrap(), 8080);
+    let runtime = home.path().join("runtime");
+    fs::create_dir_all(&runtime).unwrap();
+    fs::write(
+        runtime.join("dev-dashboard.json"),
+        serde_json::json!({"source": home.path(), "session": Uuid::new_v4()}).to_string(),
+    )
+    .unwrap();
+    let state = read_session(home.path()).unwrap().unwrap();
+    assert_eq!(state.port, 8080);
+    assert_eq!(state.url(), "http://127.0.0.1:8080");
+    assert_eq!(port(home.path()).unwrap(), 8080);
 }
 
 #[test]
@@ -257,11 +298,29 @@ fn occupied_ports_are_errors_and_the_other_listener_remains_open() {
 }
 
 #[test]
+fn an_occupied_new_port_preserves_the_running_dashboard_and_selected_port() {
+    let fixture = Fixture::new();
+    fixture.start().unwrap();
+    let original = fixture.state();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let occupied = listener.local_addr().unwrap().port();
+    assert!(
+        start(&fixture.source(), fixture.home.path(), occupied)
+            .unwrap_err()
+            .to_string()
+            .contains("already in use")
+    );
+    assert_eq!(fixture.state(), original);
+    assert!(running(&client().unwrap(), &original, &original.url()));
+    assert!(listener.local_addr().is_ok());
+}
+
+#[test]
 fn dependency_or_proxy_failure_never_reports_a_ready_dashboard() {
     let fixture = Fixture::new();
     fs::write(fixture.source().join("firecrab-frontend/api-status"), "503").unwrap();
     assert!(fixture.start().is_err());
-    stop_at(fixture.home.path(), &fixture.url()).unwrap();
+    stop(fixture.home.path()).unwrap();
     fs::write(
         fixture
             .source()

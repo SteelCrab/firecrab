@@ -17,7 +17,7 @@ const control = (request, response) => {
   }
   if (request.method === "GET" && request.url === "/") {
     response.setHeader("Content-Type", "application/json");
-    response.end(JSON.stringify({ source: resolve(root, ".."), session, dependencies: process.env.FIRECRAB_DEV_DEPENDENCIES }));
+    response.end(JSON.stringify({ source: resolve(root, ".."), session, dependencies: process.env.FIRECRAB_DEV_DEPENDENCIES, port }));
   } else if (request.method === "POST" && request.url === "/stop") {
     response.writeHead(202).end();
     setImmediate(async () => { await server.close(); process.exit(0); });
