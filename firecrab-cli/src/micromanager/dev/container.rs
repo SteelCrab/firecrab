@@ -566,6 +566,30 @@ fn guest(
     ))
 }
 
+fn container_lock(home: &Path) -> io::Result<fs::File> {
+    fs::create_dir_all(home.join("runtime"))?;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(home.join("runtime/container.lock"))?;
+    // Another thread's child can briefly inherit this descriptor before exec.
+    let started = Instant::now();
+    loop {
+        match lock.try_lock_exclusive() {
+            Ok(()) => return Ok(lock),
+            Err(error) if error.kind() != fs2::lock_contended_error().kind() => return Err(error),
+            Err(_) if started.elapsed() >= Duration::from_secs(1) => {
+                return Err(failed(
+                    "another development operation owns this worktree container",
+                ));
+            }
+            Err(_) => thread::sleep(Duration::from_millis(50)),
+        }
+    }
+}
+
 fn run_with(
     docker: &Docker,
     instance: &Instance,
@@ -585,15 +609,7 @@ fn run_with(
     {
         return Err(failed("invalid private Docker development instance"));
     }
-    fs::create_dir_all(instance.managed_home.join("runtime"))?;
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(instance.managed_home.join("runtime/container.lock"))?;
-    lock.try_lock_exclusive()
-        .map_err(|_| failed("another development operation owns this worktree container"))?;
+    let _lock = container_lock(&instance.managed_home)?;
     let checkout = if command.is_none() && !restore {
         Some(Checkout::prepare(&instance.source).map_err(|error| failed(error.to_string()))?)
     } else {

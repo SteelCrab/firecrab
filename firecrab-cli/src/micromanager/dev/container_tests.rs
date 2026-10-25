@@ -339,6 +339,19 @@ record()
     }
 
     #[test]
+    fn a_busy_instance_rejects_control_before_contacting_docker() {
+        let fixture = Fixture::new();
+        let lock = container_lock(&fixture.instance.managed_home).unwrap();
+        let error = fixture
+            .run(Some(DevCommand::Stop), false, false)
+            .unwrap_err();
+        assert!(error.to_string().contains("another development operation"));
+        assert!(fixture.events().is_empty());
+        fs2::FileExt::unlock(&lock).unwrap();
+        fixture.run(Some(DevCommand::Stop), false, false).unwrap();
+    }
+
+    #[test]
     fn missing_instances_stop_without_creation_and_start_fails_closed() {
         let fixture = Fixture::new();
         fixture.run(Some(DevCommand::Stop), false, false).unwrap();
