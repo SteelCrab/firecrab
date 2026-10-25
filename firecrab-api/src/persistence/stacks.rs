@@ -246,7 +246,8 @@ fn validate_resource(conn: &Connection, binding: &Binding) -> Result<(), Persist
     let query = match binding.kind {
         ResourceKind::Network => "SELECT EXISTS(SELECT 1 FROM micro_networks WHERE id = ?1)",
         ResourceKind::Vm => {
-            "SELECT EXISTS(SELECT 1 FROM vms WHERE id = ?1 AND purpose = 'instance')"
+            "SELECT EXISTS(SELECT 1 FROM vms WHERE id = ?1 AND purpose = 'instance'
+                AND NOT EXISTS(SELECT 1 FROM cluster_worker_receipts WHERE id = ?1))"
         }
         ResourceKind::Service => "SELECT EXISTS(SELECT 1 FROM micro_services WHERE id = ?1)",
     };

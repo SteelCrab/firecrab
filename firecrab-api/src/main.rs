@@ -2,6 +2,7 @@ mod ai_sandbox;
 mod artifacts;
 mod block_storage;
 mod bootstrap;
+mod cluster;
 mod console;
 mod console_replay;
 mod console_resize;
@@ -131,15 +132,15 @@ fn init_tracing() {
 async fn run() -> Result<(), StartupError> {
     init_tracing();
     let config = HttpConfig::load().map_err(StartupError::Config)?;
-    let transport = tls::configuration(
-        config.bind_addr,
-        firecrab_pki::TlsPaths::from_env().map_err(StartupError::Tls)?,
-    )
-    .map_err(StartupError::Tls)?;
+    let paths = firecrab_pki::TlsPaths::from_env().map_err(StartupError::Tls)?;
+    let transport =
+        tls::configuration(config.bind_addr, paths.clone()).map_err(StartupError::Tls)?;
+    let cluster = cluster::Runtime::from_env(paths).map_err(StartupError::Tls)?;
     let templates = TemplateRegistry::load_default().map_err(StartupError::Template)?;
     let mut state = AppState::new(templates)
         .await
         .map_err(StartupError::Persistence)?;
+    state.cluster = std::sync::Arc::new(cluster);
     // Reject a second owner before recovering any host or scheduled work.
     let scheduler_ownership = state
         .store
@@ -185,6 +186,7 @@ async fn run() -> Result<(), StartupError> {
 
     let local_address = listener.local_addr().map_err(StartupError::LocalAddress)?;
     state.api_port = local_address.port();
+    cluster::spawn(state.clone());
     scheduler::spawn(state.clone(), scheduler_ownership)
         .await
         .map_err(StartupError::Persistence)?;

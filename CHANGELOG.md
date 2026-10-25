@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- One controller registers authenticated workload hosts and places VMs using
+  deterministic image/resource filtering and durable capacity reservations.
+  Idempotent operations reconcile with the recorded owner after timeouts and
+  restarts. REST, `firecrab cluster`, and the dashboard expose inventory, VM
+  lifecycle, and host drain. Tracked in [#455](https://github.com/SteelCrab/firecrab/issues/455).
+
 - AI Sandbox reuses Pipe AI accounts for verified model selection, persistent
   conversations, isolated project edits, and bounded commands in a selected
   MicroVM. Dashboard, CLI, and local stdio MCP share durable attempts, cancellation,

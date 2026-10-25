@@ -18,8 +18,10 @@ use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
 mod block_storage;
+mod cluster;
 mod pools;
 mod queues;
+pub(crate) use cluster::ClusterError;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod ai_sandbox;
 mod deploy_images;
@@ -786,6 +788,7 @@ impl Store {
         conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_UNIQUE_HOST_PORT_SQL, [])?;
         pools::create_tables(&conn)?;
+        conn.execute_batch(cluster::SCHEMA)?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
         // that still have NULL micro_network_id onto one explicit row.
         promote_implicit_default_network(&conn)?;

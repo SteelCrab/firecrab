@@ -12,6 +12,8 @@ mod queues;
 pub use queues::*;
 mod pool;
 pub use pool::*;
+mod cluster;
+pub use cluster::*;
 mod ai_sandbox;
 mod block_storage;
 pub use block_storage::*;

@@ -97,6 +97,8 @@ const DISK_PREP_CONCURRENCY: usize = 2;
 /// table, template registry, and runtime config.
 #[derive(Debug, Clone)]
 pub struct AppState {
+    /// Authenticated cluster transport and worker enrollment; journals live in SQLite.
+    pub(crate) cluster: Arc<crate::cluster::Runtime>,
     /// Loopback fixture override, absent from production builds.
     #[cfg(test)]
     pub(crate) s3_test_origin: Option<String>,
@@ -204,6 +206,7 @@ impl AppState {
         let network = NetworkClient::from_env();
         let runtime = RuntimeConfig::from_defaults(&storage, &network);
         Ok(AppState {
+            cluster: Arc::new(crate::cluster::Runtime::default()),
             #[cfg(test)]
             s3_test_origin: None,
             api_port: 5523,
