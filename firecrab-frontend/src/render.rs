@@ -1240,6 +1240,9 @@ fn pipe_cards(app: &App) -> String {
     out
 }
 fn pipe(app: &App, card: &str) -> String {
+    if card == "database" {
+        return crate::databases::content(app);
+    }
     let mut out = "<p><a href=\"#/pipe\">← Pipe</a></p><div class=\"wasm-actions\">".to_string();
     match card {
         "auth" => {

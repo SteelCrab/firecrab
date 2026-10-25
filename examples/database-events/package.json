@@ -1,0 +1,13 @@
+{
+  "name": "firecrab-database-events-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test receiver.test.mjs"
+  },
+  "dependencies": {
+    "mysql2": "^3.15.3",
+    "pg": "^8.16.3"
+  }
+}

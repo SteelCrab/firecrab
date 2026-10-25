@@ -52,10 +52,23 @@ if [ ! -f /etc/firecrab/base-packages.ok ]; then
     /usr/bin/microdnf -y install iputils iproute ca-certificates curl procps-ng openssh-server && ok=1
   elif [ -x /usr/bin/yum ]; then
     /usr/bin/yum install -y -q iputils iproute ca-certificates curl procps-ng openssh-server && ok=1
-  elif [ -x /sbin/apk ]; then
-    /sbin/apk add --no-cache iputils iproute2 ca-certificates curl procps openssh && ok=1
-  elif [ -x /usr/bin/apk ]; then
-    /usr/bin/apk add --no-cache iputils iproute2 ca-certificates curl procps openssh && ok=1
+  elif [ -x /sbin/apk ] || [ -x /usr/bin/apk ]; then
+    apk_path=/sbin/apk
+    [ -x "$apk_path" ] || apk_path=/usr/bin/apk
+    # A transient mirror/index failure must not leave SSH unavailable until
+    # the next reboot. Bound network waits without killing an apk transaction.
+    apk_attempt=1
+    while [ "$apk_attempt" -le 3 ]; do
+      if "$apk_path" --timeout 20 add --no-cache iputils iproute2 ca-certificates curl procps openssh; then
+        ok=1
+        break
+      else
+        echo "FIRECRAB_APK_FAILED attempt=$apk_attempt exit=$?" >/dev/console
+      fi
+      [ "$apk_attempt" -lt 3 ] || break
+      $BB sleep 2
+      apk_attempt=$((apk_attempt + 1))
+    done
   elif [ -x /usr/bin/zypper ]; then
     /usr/bin/zypper --non-interactive install -y iputils iproute2 ca-certificates curl procps openssh udev && ok=1
   elif [ -x /usr/bin/pacman ]; then

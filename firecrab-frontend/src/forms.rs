@@ -30,7 +30,7 @@ impl Field {
             translate_options: true,
         }
     }
-    fn optional(mut self) -> Self {
+    pub(crate) fn optional(mut self) -> Self {
         self.required = false;
         self
     }
@@ -105,7 +105,28 @@ impl Form {
         if domain_deploy {
             html.push_str(&format!("<p class=\"wasm-wide\">{} · Healthy replicas will connect to this domain automatically.</p><details class=\"wasm-wide\"><summary>Advanced settings</summary>",escape(text(&self.base,"domain"))));
         }
+        if matches!(
+            self.title.as_str(),
+            "Restore database snapshot" | "Apply database schema"
+        ) {
+            html.push_str(&format!(
+                "<p class=\"wasm-wide\">{}: <strong>{}</strong></p>",
+                crate::i18n::t("Confirm database name"),
+                escape(text(&self.base, "databaseName"))
+            ));
+        }
+        let database_form = matches!(
+            self.title.as_str(),
+            "Connect database" | "Update connection credentials"
+        );
         for (index, field) in self.fields.iter().enumerate() {
+            if database_form && index == 3 {
+                html.push_str(&format!(
+                    "<details class=\"wasm-wide\"><summary>{}</summary><div class=\"wasm-form\">",
+                    escape(crate::i18n::t("TLS & certificates"))
+                ));
+            }
+
             if field.kind == "mounts" {
                 html.push_str(&crate::volumes::mount_editor(&field.value, &field.options));
                 if let Some(error) = errors.get(field.key) {
@@ -246,7 +267,20 @@ impl Form {
                     escape(crate::i18n::t(error))
                 ));
             }
+            if database_form && field.key == "uri" {
+                html.push_str(&crate::render::button("Show URI", "db-show-uri", ""));
+            }
             html.push_str("</div>");
+            if database_form && index == 4 {
+                html.push_str("</div></details>");
+            }
+        }
+        if database_form {
+            html = html.replacen(
+                "class=\"wasm-form\"",
+                "class=\"wasm-form pipe-database-form\"",
+                1,
+            );
         }
         if self.title == "Create a pool" {
             html.push_str("</div></details>");
@@ -266,7 +300,9 @@ impl Form {
         }
         let extra = match self.title.as_str() {
             "Connect Cloudflare" => crate::render::button("Load zones", "load-zones", ""),
-            "Connect database" => crate::render::button("Test connection", "database-test", ""),
+            "Connect database" | "Update connection credentials" => {
+                crate::render::button("Test connection", "database-test", "")
+            }
             "Import OCI image" => crate::render::button("Inspect image", "oci-inspect", ""),
             _ => String::new(),
         };
@@ -284,7 +320,21 @@ impl Form {
             );
             html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\" aria-label=\"{label}\">{}</button>{}</div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>", crate::i18n::t("Save"), crate::render::icon_button("Cancel", "cancel", "", crate::render::Icon::Close)));
         } else {
-            html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\">{}</button><button class=\"btn\" type=\"button\" data-action=\"cancel\">{}</button></div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>",crate::i18n::t(match self.title.as_str() { "Create volume"=>"Create volume", "Deploy MicroService"=>"Deploy and run", "Deploy update"=>"Deploy update", "New MicroService"|"Edit MicroService"=>"Save configuration", "New schedule"=>"Create schedule", "Edit schedule"=>"Save changes", "Create a pool"=>"Create pool", "Pool settings"=>"Save settings", "New security group"=>"Create security group", "Security group rules"=>"Save rules", "New secret"|"Edit secret"=>"Save secret", "New connection"|"Edit connection"=>"Save connection", _=>"Save" }),crate::i18n::t("Cancel")));
+            html.push_str(&format!("<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\">{}</button><button class=\"btn\" type=\"button\" data-action=\"cancel\">{}</button></div></fieldset></form><div id=\"form-result\" aria-live=\"polite\"></div>",crate::i18n::t(match self.title.as_str() { "Connect database"|"Update connection credentials"=>"Save connection", "Create volume"=>"Create volume", "Deploy MicroService"=>"Deploy and run", "Deploy update"=>"Deploy update", "New MicroService"|"Edit MicroService"=>"Save configuration", "New schedule"=>"Create schedule", "Edit schedule"=>"Save changes", "Create a pool"=>"Create pool", "Pool settings"=>"Save settings", "New security group"=>"Create security group", "Security group rules"=>"Save rules", "New secret"|"Edit secret"=>"Save secret", "New connection"|"Edit connection"=>"Save connection", _=>"Save" }),crate::i18n::t("Cancel")));
+        }
+        if database_form
+            && (busy
+                || self
+                    .fields
+                    .iter()
+                    .any(|f| matches!(f.key, "name" | "uri") && f.value.trim().is_empty()))
+        {
+            html = html
+                .replace("type=\"submit\"", "type=\"submit\" disabled")
+                .replace(
+                    "data-action=\"database-test\"",
+                    "data-action=\"database-test\" disabled",
+                );
         }
         if self.base["policyError"] == true {
             html = html.replace("type=\"submit\"", "type=\"submit\" disabled");
@@ -433,6 +483,9 @@ impl Form {
                 }
                 _ => json!(value),
             };
+        }
+        if let Some(result) = crate::databases::edit::payload(self, &body) {
+            return result;
         }
         match self.title.as_str() {
             "Create volume" => {
@@ -901,19 +954,28 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
             "/api/pipe/databases".into(),
             "POST",
             vec![
-                Field::new("name", "Name", "text", ""),
-                Field::new("provider", "Provider", "select", "local").choices(&[
+                Field::new("name", "Connection name", "text", ""),
+                Field::new("provider", "Database source", "select", "local").choices(&[
                     ("local", "Local"),
                     ("supabase", "Supabase"),
                     ("rds", "RDS"),
                 ]),
-                Field::new("uri", "Connection URI", "password", ""),
-                Field::new("tlsMode", "TLS", "select", "disable").choices(&[
-                    ("disable", "Disabled"),
-                    ("require", "Required"),
-                    ("verify_full", "Verify certificate"),
-                ]),
-                Field::new("caCertificate", "CA certificate (optional)", "textarea", "").optional(),
+                Field::new("uri", "Database URI", "password", ""),
+                Field::new("tlsMode", "TLS", "select", "")
+                    .choices(&[
+                        ("disable", "Disabled"),
+                        ("require", "Required"),
+                        ("verify_full", "Verify certificate"),
+                    ])
+                    .optional(),
+                Field::new(
+                    "caCertificate",
+                    "CA certificate (PEM, optional)",
+                    "textarea",
+                    "",
+                )
+                .optional(),
+                Field::new("writeEnabled", "Allow writes", "checkbox", "false").optional(),
             ],
             "pipe/database",
         ),
@@ -1232,7 +1294,7 @@ mod tests {
         );
         let body = form.payload(&input).unwrap();
         assert!(body.get("caCertificate").is_none());
-        assert_eq!(body["tlsMode"], "disable");
+        assert!(body.get("tlsMode").is_none());
         input.insert(
             "caCertificate".into(),
             "-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----".into(),

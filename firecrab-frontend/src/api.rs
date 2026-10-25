@@ -6,9 +6,9 @@ use web_sys::{AbortController, Request, RequestInit, Response};
 
 #[derive(Debug)]
 pub struct Failure {
+    pub status: Option<u16>,
     pub message: String,
     pub fields: BTreeMap<String, String>,
-    pub status: Option<u16>,
     pub code: Option<String>,
 }
 impl fmt::Display for Failure {
@@ -19,9 +19,9 @@ impl fmt::Display for Failure {
 impl Failure {
     fn message(message: impl ToString) -> Self {
         Self {
+            status: None,
             message: message.to_string(),
             fields: BTreeMap::new(),
-            status: None,
             code: None,
         }
     }
@@ -50,9 +50,9 @@ impl Failure {
             })
             .unwrap_or_default();
         Self {
+            status: Some(status),
             message: format!("HTTP {status}: {message}"),
             fields,
-            status: Some(status),
             code: value["error"]["code"].as_str().map(str::to_owned),
         }
     }
@@ -100,6 +100,8 @@ async fn send(
             timeout.as_ref().unchecked_ref(),
             if path == "/api/info" {
                 5000
+            } else if path.starts_with("/api/pipe/database") && method != "GET" {
+                65000
             } else if path.starts_with("/api/ai-sandbox/") {
                 185000
             } else if path.ends_with("/acquire") {

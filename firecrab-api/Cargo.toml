@@ -26,10 +26,16 @@ libc = "0.2.186"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 ring = "0.17.14"
 rusqlite = { version = "0.39", features = ["bundled"] }
+lapin = { version = "4.12.3", default-features = false, features = ["tokio", "rustls--ring", "rustls-webpki-roots-certs"] }
+rcgen = "0.14.5"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2"
+webpki-roots = "1"
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = { workspace = true }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "mysql"] }
+sqlparser = { version = "0.63", default-features = false, features = ["std", "visitor"] }
 tar = { version = "0.4.46", default-features = false }
 thiserror = { workspace = true }
 tokio = { version = "1", features = ["full"] }

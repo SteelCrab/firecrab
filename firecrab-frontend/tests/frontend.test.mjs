@@ -439,10 +439,9 @@ test('routing preserves saved tunnel configuration', async () => {
 test('database table preview renders cells as text', async () => {
   fixture.state.databases.push({ id: 'db-1', name: 'local-db', provider: 'local', engine: 'postgres', host: 'localhost', port: 5432 });
   await open('pipe/database');
-  await page.getByRole('button', { name: 'Details', exact: true }).click();
-  await page.getByRole('button', { name: 'Tables', exact: true }).click();
-  await page.getByRole('button', { name: 'public.users', exact: true }).click();
-  await expect(page.locator('#detail-result table')).toContainText('1');
+  await page.getByRole('button', { name: 'Browse local-db', exact: true }).click();
+  await page.getByLabel('Table', {exact:true}).selectOption({label:'public.users'});
+  await expect(page.getByRole('table',{name:'Data preview'})).toContainText('1');
   assert.deepEqual(mutation('/api/pipe/databases/db-1/preview').body, { schema: 'public', table: 'users', offset: 0, limit: 50 });
 });
 
@@ -764,13 +763,12 @@ test('database preview paginates both directions with delimiter-containing ident
   fixture.handlers.set('GET /api/pipe/databases/db-1/tables', ({ send }) => send(200, { tables: [{ schema: 'a|b', name: 'a|users' }] }));
   fixture.handlers.set('POST /api/pipe/databases/db-1/preview', ({ body, send }) => send(200, { columns: [{ name: 'name' }], rows: [['<img src=x>']], hasMore: body.offset === 0 }));
   await open('pipe/database');
-  await page.getByRole('button', { name: 'Details', exact: true }).click();
-  await page.getByRole('button', { name: 'Tables', exact: true }).click();
-  await page.getByRole('button', { name: 'a|b.a|users', exact: true }).click();
-  await page.getByRole('button', { name: 'Next 50 rows', exact: true }).click();
-  await page.getByRole('button', { name: 'Previous 50 rows', exact: true }).click();
-  await expect(page.locator('#detail-result table')).toContainText('<img src=x>');
-  await expect(page.locator('#detail-result img')).toHaveCount(0);
+  await page.getByRole('button', {name:'Browse db',exact:true}).click();
+  await page.getByLabel('Table',{exact:true}).selectOption({label:'a|b.a|users'});
+  await page.getByRole('button', { name:'Next rows', exact: true }).click();
+  await page.getByRole('button', { name:'Previous rows', exact: true }).click();
+  await expect(page.getByRole('table',{name:'Data preview'})).toContainText('<img src=x>');
+  await expect(page.getByRole('table',{name:'Data preview'}).locator('img')).toHaveCount(0);
   assert.deepEqual(fixture.requests.filter(r => r.path.endsWith('/preview')).map(r => r.body.offset), [0,50,0]);
   assert.equal(mutation('/api/pipe/databases/db-1/preview').body.schema, 'a|b');
 });
@@ -927,12 +925,12 @@ test('OCI inspection and database connection tests preserve the active draft', a
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await open('pipe/database');
-  await page.getByRole('button', { name: 'Connect database', exact: true }).click();
-  await page.getByLabel('Name', { exact: true }).fill('draft-db');
-  await page.getByLabel('Connection URI', { exact: true }).fill('postgres://fixture.invalid/test');
+  await page.getByRole('button', { name: 'Add database', exact: true }).click();
+  await page.getByLabel('Connection name', { exact: true }).fill('draft-db');
+  await page.getByLabel('Database URI', { exact: true }).fill('postgres://fixture.invalid/test');
   await page.getByRole('button', { name: 'Test connection', exact: true }).click();
-  await expect(page.locator('#form-result')).toHaveText('Connected');
-  await expect(page.getByLabel('Name', { exact: true })).toHaveValue('draft-db');
+  await expect(page.locator('#db-notice')).toHaveText('Database connection succeeded.');
+  await expect(page.getByLabel('Connection name', { exact: true })).toHaveValue('draft-db');
 });
 
 

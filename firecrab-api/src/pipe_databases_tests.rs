@@ -2,6 +2,7 @@ use super::*;
 
 fn input(uri: &str, provider: Provider) -> DatabaseInput {
     DatabaseInput {
+        write_enabled: false,
         name: "Test DB".into(),
         provider,
         uri: uri.into(),
@@ -179,6 +180,36 @@ fn saved_connections_survive_reopening_and_can_be_removed() {
 
 /// Run against fresh disposable databases, never an operator's existing DB.
 #[tokio::test]
+#[ignore = "requires disposable FIRECRAB_TEST_MARIADB_URI"]
+async fn mariadb_sessions_apply_native_timeout_and_access_mode() {
+    let mut spec = input(
+        &std::env::var("FIRECRAB_TEST_MARIADB_URI").unwrap(),
+        Provider::Local,
+    );
+    for write in [false, true] {
+        spec.write_enabled = write;
+        let settings = spec.settings(Uuid::new_v4()).unwrap();
+        let connection = DatabaseConnection::connect_mode(&spec, &settings, write)
+            .await
+            .unwrap();
+        let DatabaseConnection::Mysql(mut c) = connection else {
+            panic!("MariaDB fixture must use MySQL")
+        };
+        let timeout: f64 = sqlx::query_scalar("SELECT @@max_statement_time")
+            .fetch_one(&mut c)
+            .await
+            .unwrap();
+        let readonly: i64 = sqlx::query_scalar("SELECT CAST(@@tx_read_only AS SIGNED)")
+            .fetch_one(&mut c)
+            .await
+            .unwrap();
+        assert_eq!(timeout, 5.0);
+        assert_eq!(readonly, i64::from(!write));
+    }
+}
+
+/// Run against fresh disposable databases, never an operator's existing DB.
+#[tokio::test]
 #[ignore = "requires disposable FIRECRAB_TEST_POSTGRES_URI and FIRECRAB_TEST_MYSQL_URI databases"]
 async fn reads_real_postgres_and_mysql_tables() {
     for (variable, engine, schema) in [
@@ -249,5 +280,43 @@ async fn reads_real_postgres_and_mysql_tables() {
         assert!(connection.preview(&request).await.unwrap().has_more);
         request.offset = 100;
         assert!(connection.preview(&request).await.unwrap().rows.is_empty());
+    }
+}
+
+#[test]
+fn supabase_transaction_pooling_is_read_only_and_spatial_previews_stay_binary() {
+    let uri = format!(
+        "postgresql://user:{}@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres",
+        "qa-fixture"
+    );
+    let mut connection = input(&uri, Provider::Supabase);
+    assert!(connection.settings(Uuid::nil()).is_ok());
+    connection.write_enabled = true;
+    assert!(connection.settings(Uuid::nil()).is_err());
+    for kind in [
+        "geometry",
+        "point",
+        "linestring",
+        "polygon",
+        "multipoint",
+        "multilinestring",
+        "multipolygon",
+        "geomcollection",
+        "geometrycollection",
+    ] {
+        let sql = preview_sql(
+            Engine::Mysql,
+            &PreviewRequest {
+                schema: "app".into(),
+                table: "places".into(),
+                limit: 50,
+                offset: 0,
+            },
+            &[Column {
+                name: "shape".into(),
+                data_type: kind.into(),
+            }],
+        );
+        assert!(sql.contains("HEX(`shape`)"), "{kind}: {sql}");
     }
 }

@@ -497,7 +497,11 @@ pub fn capture_form(app: &Shared) {
         for f in &mut form.fields {
             if let Some(el) = element(&format!("field-{}", f.key)) {
                 if let Some(v) = el.dyn_ref::<HtmlInputElement>() {
-                    f.value = v.value();
+                    f.value = if v.type_() == "checkbox" {
+                        v.checked().to_string()
+                    } else {
+                        v.value()
+                    };
                 } else if let Some(v) = el.dyn_ref::<HtmlSelectElement>() {
                     f.value = v.value();
                 } else if let Some(v) = el.dyn_ref::<web_sys::HtmlTextAreaElement>() {

@@ -349,6 +349,14 @@ pub fn t(value: &str) -> &str {
             "이 레지스트리는 저장소 자동 조회를 지원하지 않습니다."
         }
         "Connect database" => "데이터베이스 연결",
+        "Connection name" => "연결 이름",
+        "Database source" => "DB 위치",
+        "Database URI" => "DB URI",
+        "CA certificate (PEM, optional)" => "CA 인증서 (PEM, 선택)",
+        "Allow writes" => "쓰기 허용",
+        "Show URI" => "URI 표시",
+        "Hide URI" => "URI 숨기기",
+        "TLS & certificates" => "TLS·인증서",
         "Connection URI" => "연결 URI",
         "Local" => "로컬",
         "Required" => "필수",
