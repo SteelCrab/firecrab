@@ -115,6 +115,45 @@ async fn source_api_guards_generations_and_records_missing_credentials_without_n
     assert_eq!(code, StatusCode::OK);
     assert_eq!(history.as_array().unwrap().len(), 1);
     assert_eq!(history[0]["state"], "failed");
+    let (code, _) = request(
+        &app,
+        "POST",
+        "/api/stacks/demo/source/sync",
+        json!({"generation":0}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::CONFLICT);
+    let (code, _) = request(
+        &app,
+        "POST",
+        "/api/stacks/demo/source/sync",
+        json!({"generation":1,"recoverOperationId":"22222222-2222-4222-8222-222222222222"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::CONFLICT);
+    let (code, sync) = request(
+        &app,
+        "POST",
+        "/api/stacks/demo/source/sync",
+        json!({"generation":1}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::ACCEPTED);
+    assert_eq!(sync["latest"]["sync"], true);
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let (code, source) = request(&app, "GET", "/api/stacks/demo/source", Value::Null).await;
+            assert_eq!(code, StatusCode::OK);
+            if source["latest"]["state"] == "failed" {
+                assert_eq!(source["latest"]["error"], "credential_unavailable");
+                assert!(source["lastApply"].is_null());
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
     assert!(state.store.load_all().unwrap().is_empty());
     assert!(state.store.list_micro_networks().unwrap().is_empty());
     assert!(

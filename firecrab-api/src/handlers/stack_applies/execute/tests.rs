@@ -169,6 +169,7 @@ async fn configuration_noop_does_not_report_an_unhealthy_service_as_successful()
                 &stack,
                 &change,
                 &BTreeMap::new(),
+                &PlanInputs::default(),
                 false,
                 Uuid::new_v4()
             )

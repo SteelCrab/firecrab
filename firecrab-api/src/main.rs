@@ -149,6 +149,7 @@ async fn run() -> Result<(), StartupError> {
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || {
         store.interrupt_sandbox_tasks()?;
+        store.interrupt_stack_applies()?;
         store.interrupt_stack_checks(stack_source::now())
     })
     .await
@@ -171,6 +172,7 @@ async fn run() -> Result<(), StartupError> {
     reconcile::reconcile(&state).await;
     service_runtime::recover(&state).await;
     queues::recover(&state).await;
+    service_runtime::deploy::rotation::start(state.clone());
     // Fetch the shared bootstrap builder source now, in the background, so
     // the request that needs it doesn't have to — see spawn_warmup.
     microboot::spawn_warmup(state.clone());

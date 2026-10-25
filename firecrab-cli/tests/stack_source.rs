@@ -122,7 +122,10 @@ fn source_cli_configures_and_reads_status_and_history_as_json() {
 #[test]
 fn source_cli_pause_and_resume_preserve_configuration_and_require_current_generation() {
     for (action, paused) in [("pause", true), ("resume", false)] {
-        let (url, receive, task) = server(vec![status(), status()]);
+        let mut automatic = status();
+        automatic["source"]["syncMode"] = "automatic".into();
+        automatic["source"]["allowStop"] = true.into();
+        let (url, receive, task) = server(vec![automatic.clone(), automatic]);
         let result = command(&url)
             .args([action, "demo", "--generation", "1"])
             .output()
@@ -131,6 +134,8 @@ fn source_cli_pause_and_resume_preserve_configuration_and_require_current_genera
         task.join().unwrap();
         let requests = receive.try_iter().collect::<Vec<_>>();
         assert_eq!(requests[1].2["source"]["paused"], paused);
+        assert_eq!(requests[1].2["source"]["syncMode"], "automatic");
+        assert_eq!(requests[1].2["source"]["allowStop"], true);
         assert_eq!(
             requests[1].2["source"]["repository"],
             source()["repository"]
@@ -170,4 +175,35 @@ fn source_cli_rejects_embedded_tokens_and_invalid_names_before_contacting_api() 
         .output()
         .unwrap();
     assert!(!result.status.success());
+}
+
+#[test]
+fn source_cli_sync_sends_generation_and_explicit_recovery_identity() {
+    let operation = "22222222-2222-4222-8222-222222222222";
+    let (url, receive, task) = server(vec![status(), status()]);
+    for recovery in [false, true] {
+        let mut cmd = command(&url);
+        cmd.args(["sync", "demo", "--generation", "1"]);
+        if recovery {
+            cmd.args(["--recover-operation-id", operation]);
+        }
+        let result = cmd.output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    task.join().unwrap();
+    let requests = receive.try_iter().collect::<Vec<_>>();
+    assert_eq!(requests[0].0, "POST");
+    assert_eq!(requests[0].1, "/api/stacks/demo/source/sync");
+    assert_eq!(
+        requests[0].2,
+        json!({"generation":1,"recoverOperationId":null})
+    );
+    assert_eq!(
+        requests[1].2,
+        json!({"generation":1,"recoverOperationId":operation})
+    );
 }

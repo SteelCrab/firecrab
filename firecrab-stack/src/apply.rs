@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::{Change, Stack};
+use crate::{Change, GitRevision, PlanInputs, Stack};
 
 /// Apply one reviewed observation with an operator-known retry identity.
 #[derive(Deserialize, Serialize)]
@@ -110,6 +110,9 @@ pub struct ApplyFailure {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyStatus {
+    /// Exact template and service content identities accepted with this operation.
+    #[serde(default)]
+    pub inputs: PlanInputs,
     /// Operator-supplied retry identity.
     pub operation_id: Uuid,
     /// Exact registration identity; old operations cannot target a later registration.
@@ -122,6 +125,9 @@ pub struct ApplyStatus {
     pub changes: Vec<ApplyStep>,
     /// Static failure information, if any.
     pub error: Option<ApplyFailure>,
+    /// Immutable Git provenance for source-driven applies, retained with the operation journal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_revision: Option<GitRevision>,
 }
 
 /// Canonical desired identity used only for exact operation-ID retries.

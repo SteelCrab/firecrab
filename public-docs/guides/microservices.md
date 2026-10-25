@@ -140,7 +140,8 @@ For an existing configuration, select **Run** to open the same panel.
 The panel shows image preparation, app startup, health checks, and an **Open app**
 link once the app responds successfully. Failed deployments show a log and next
 steps. Services with a domain connect through PipeIngress. PipeSecrets values
-are injected into every replica. Secret edits apply to the next deployment.
+are injected into every replica. Value changes automatically rotate running
+domain services through Deploy.
 The panel checks Pipe Auth when opened, every three seconds, when returning to
 this browser tab, and immediately before deployment. Deploy stays disabled during
 the initial and pre-deployment checks, when the image's account is disconnected
@@ -203,8 +204,7 @@ Tunnel references this hostname, remove that connector before stopping the servi
 Interrupted publication is recorded durably, so Stop can clean it up after an API
 restart. A completed domain route keeps serving independently of API restarts.
 
-Changing the configured domain still requires stopping the service first. This
-step does not add rolling updates or release rollback.
+Changing the configured domain requires stopping the service first.
 
 ## Deploy behavior
 
@@ -254,7 +254,7 @@ Deploy exits nonzero when deployment or health fails.
 ## Inject Secrets
 
 Create values in **Secrets**. Reference their UUIDs in **Resources → Advanced settings**.
-Every replica receives one encrypted deployment snapshot. Secret edits apply at the next deployment.
+Each encrypted deployment snapshot supports automatic rotation of running domain services.
 See [Secret injection](secrets.md#microservice-injection) for limits, storage and restart behavior.
 
 ## Verification

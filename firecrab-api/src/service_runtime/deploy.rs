@@ -12,6 +12,7 @@ use std::net::SocketAddr;
 
 pub(crate) mod cache;
 mod replicas;
+pub(crate) mod rotation;
 mod routes;
 use replicas::*;
 use routes::*;
@@ -59,7 +60,17 @@ pub async fn update(
     Path(id): Path<String>,
     ValidatedJson(body): ValidatedJson<UpdateServiceRequest>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
-    accept(state, request, vms::parse_id(&id, request.0)?, body, None).await
+    update_from_stack(state, request, vms::parse_id(&id, request.0)?, body, None).await
+}
+
+pub(crate) async fn update_from_stack(
+    state: AppState,
+    request: RequestId,
+    id: Uuid,
+    body: UpdateServiceRequest,
+    operation: Option<Uuid>,
+) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
+    accept(state, request, id, body, None, None, operation).await
 }
 
 /// Rollback chooses immutable inputs from a successful release of the same service.
@@ -70,6 +81,7 @@ pub async fn rollback(
     ValidatedJson(body): ValidatedJson<RollbackServiceRequest>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let id = vms::parse_id(&id, request.0)?;
+    crate::handlers::micro_services::ensure_stack_writer(&state, id, None, request.0).await?;
     let operation_id = body.operation_id;
     let store = state.store.clone();
     if let Some(saved) = database(request.0, move || store.service_attempt(operation_id)).await? {
@@ -115,6 +127,8 @@ pub async fn rollback(
             strategy: body.strategy,
         },
         Some(release_id),
+        None,
+        None,
     )
     .await
 }
@@ -128,6 +142,7 @@ pub async fn retry(
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let id = vms::parse_id(&id, request.0)?;
     let claim = state.service_mutations.clone().lock_owned().await;
+    crate::handlers::micro_services::ensure_stack_writer(&state, id, None, request.0).await?;
     let store = state.store.clone();
     let mut deployment = database(request.0, move || store.service_deployment(id))
         .await?
@@ -158,6 +173,8 @@ async fn accept(
     id: Uuid,
     body: UpdateServiceRequest,
     rollback_of: Option<Uuid>,
+    pinned_digest: Option<String>,
+    operation: Option<Uuid>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     crate::handlers::micro_services::validate(&body.spec, request.0)?;
     if body.operation_id.is_nil() {
@@ -167,6 +184,7 @@ async fn accept(
         ));
     }
     let claim = state.service_mutations.clone().lock_owned().await;
+    crate::handlers::micro_services::ensure_stack_writer(&state, id, operation, request.0).await?;
     let store = state.store.clone();
     let operation_id = body.operation_id;
     if let Some(saved) = database(request.0, move || store.service_attempt(operation_id)).await? {
@@ -280,6 +298,11 @@ async fn accept(
         .await
         .map_err(|_| AppError::internal(request.0))?;
     previous.update = None;
+    let message = if pinned_digest.is_some() {
+        "Secret rotation accepted; the current image digest is retained"
+    } else {
+        "Deploy accepted; previous release continues serving"
+    };
     let deployment = MicroServiceDeployment {
         started_at: chrono::Utc::now().timestamp(),
         finished_at: None,
@@ -301,14 +324,44 @@ async fn accept(
         phase: ServicePhase::Queued,
         spec: body.spec,
         request: previous.request,
-        digest: None,
+        digest: pinned_digest,
         instances: vec![],
-        log: vec!["Deploy accepted; previous release continues serving".into()],
+        log: vec![message.into()],
         domain_route_owned: false,
         error: None,
     };
     let deployment = submit(state.clone(), deployment, claim, request.0).await?;
     Ok((StatusCode::ACCEPTED, Json(deployment)))
+}
+
+/// Rotate private inputs without resolving a mutable image tag or changing service configuration.
+async fn rotate(
+    state: AppState,
+    previous: &MicroServiceDeployment,
+    operation_id: Uuid,
+) -> Result<MicroServiceDeployment, AppError> {
+    pinned_reference(previous).map_err(|_| {
+        AppError::unavailable(
+            "Secret rotation requires a pinned running release.",
+            operation_id,
+        )
+    })?;
+    accept(
+        state,
+        RequestId(operation_id),
+        previous.service_id,
+        UpdateServiceRequest {
+            expected_release_id: Some(previous.id),
+            operation_id,
+            spec: previous.spec.clone(),
+            strategy: DeployStrategy::Rolling,
+        },
+        None,
+        previous.digest.clone(),
+        None,
+    )
+    .await
+    .map(|(_, Json(record))| record)
 }
 
 pub(super) fn resume_worker(state: AppState, deployment: MicroServiceDeployment) {
