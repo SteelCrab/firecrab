@@ -1,6 +1,7 @@
 //! Private engine credentials and application queue declarations.
 use super::{PersistenceError, Store};
 use crate::queues::{EngineRecord, QueueRecord};
+use firecrab_api_types::MicroServiceDeployment;
 use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
@@ -39,6 +40,22 @@ fn encode<T: serde::Serialize>(record: &T) -> Result<String, PersistenceError> {
     })
 }
 impl Store {
+    /// Keep both active Deploy generations and reserved recovery bindings.
+    pub(crate) fn queue_has_deployment_reference(
+        &self,
+        id: Uuid,
+    ) -> Result<bool, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare("SELECT deployment FROM micro_service_deployments")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            if deployment_uses_queue(&decode(&row?)?, id, false) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Load the single private engine record, if configured.
     pub(crate) fn queue_engine(&self) -> Result<Option<EngineRecord>, PersistenceError> {
         let text: Option<String> = self
@@ -98,6 +115,26 @@ impl Store {
         )?;
         Ok(())
     }
+}
+
+fn deployment_uses_queue(deployment: &MicroServiceDeployment, id: Uuid, reserved: bool) -> bool {
+    let pending = deployment
+        .update
+        .as_ref()
+        .is_some_and(|update| !update.completed);
+    if (reserved || pending || deployment.phase.is_busy() || !deployment.instances.is_empty())
+        && deployment
+            .spec
+            .queues
+            .values()
+            .any(|binding| binding.queue_id == id)
+    {
+        return true;
+    }
+    deployment
+        .update
+        .as_ref()
+        .is_some_and(|update| deployment_uses_queue(&update.previous, id, !update.completed))
 }
 
 #[cfg(test)]

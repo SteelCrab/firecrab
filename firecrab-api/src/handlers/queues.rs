@@ -276,6 +276,10 @@ pub async fn delete(
     if services
         .iter()
         .any(|s| s.spec.queues.values().any(|b| b.queue_id == id))
+        || state
+            .store
+            .queue_has_deployment_reference(id)
+            .map_err(|_| AppError::internal(request_id.0))?
     {
         return Err(AppError::conflict(
             "queue_in_use",
