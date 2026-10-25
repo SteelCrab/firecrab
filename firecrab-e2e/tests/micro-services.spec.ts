@@ -180,17 +180,20 @@ test.describe("MicroService configuration @dashboard", () => {
   });
 
   test("keeps expanded runtime sections and keyboard focus through status polling", async ({ page }) => {
-    const spec = { ...INITIAL, domain: null, env: { PRIVATE_VALUE: "configuration-value-not-for-overview" } };
+    const spec = { ...INITIAL, env: { PRIVATE_VALUE: "configuration-value-not-for-overview" } };
     await openServices(page, [spec]);
     let reads = 0;
     await page.route(`**/api/micro-services/${ID}/deployment`, route => {
       reads++;
       return route.fulfill({ json: {
-        id: SECRET, serviceId: ID, spec, phase: "running", request: { hostPort: 30190 },
+        id: SECRET, serviceId: ID, spec, phase: "running", domainRouteOwned: true, request: { hostPort: 30190 },
         instances: [{ vmId: SECRET, ipv4: "172.30.0.2", hostPort: 30190, healthy: true }],
         log: ["All replicas answered the app health check"], error: null,
       } });
     });
+    await page.route(`**/api/micro-services/${ID}/releases`, route => route.fulfill({ json: [
+      { id: SECRET, spec, digest: `sha256:${"a".repeat(64)}` },
+    ] }));
     await page.getByRole("button", { name: "Open orders", exact: true }).click();
     await expect(page.locator("#service-status").getByRole("status")).toHaveText("Running");
     await expect(page.locator("#service-deploy-form")).toBeHidden();
@@ -208,6 +211,49 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect(page.getByText("All replicas answered the app health check", { exact: true })).toBeVisible();
     await expect(page.locator(".service-panel")).not.toContainText("configuration-value-not-for-overview");
     await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeEnabled();
+    const history = page.getByRole("button", { name: "Release history", exact: true });
+    await history.click();
+    await expect(page.locator("#deploy-release")).toBeVisible();
+    for (const control of [page.getByRole("button", { name: "Stop service", exact: true }), history]) {
+      await control.focus();
+      const original = await control.elementHandle();
+      const prior = reads;
+      await expect.poll(() => reads).toBeGreaterThan(prior);
+      await expect(control).toBeFocused();
+      expect(await original?.evaluate(node => node.isConnected)).toBe(true);
+      await original?.dispose();
+    }
+  });
+
+  test("keeps Stop available until an owned domain route is withdrawn", async ({ page }) => {
+    await openServices(page, [INITIAL]);
+    let deployment = { id: SECRET, serviceId: ID, spec: INITIAL, phase: "failed", domainRouteOwned: true, instances: [], log: [], error: "Could not withdraw the owned domain route" as string | null };
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: deployment }));
+    await page.route(`**/api/micro-services/${ID}/stop`, route => {
+      expect(route.request().method()).toBe("POST");
+      deployment = { ...deployment, phase: "stopped", domainRouteOwned: false, error: null };
+      return route.fulfill({ status: 202, json: deployment });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await expect(page.locator("#service-status").getByRole("status")).toHaveText("Deployment failed");
+    await expect(page.locator("#service-deploy-form")).toBeHidden();
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeEnabled();
+    page.once("dialog", dialog => dialog.accept());
+    await page.getByRole("button", { name: "Stop service", exact: true }).click();
+    await expect(page.locator("#service-status").getByRole("status")).toHaveText("Stopped");
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeEnabled();
+  });
+
+  test("uses Korean in the Delete menu and confirmation", async ({ page }) => {
+    await openServices(page, [INITIAL]);
+    await page.getByRole("combobox", { name: "Language", exact: true }).selectOption("ko");
+    await page.getByLabel("orders 작업", { exact: true }).click();
+    let confirmation = "";
+    page.once("dialog", async dialog => { confirmation = dialog.message(); await dialog.dismiss(); });
+    await page.getByRole("button", { name: "orders 삭제", exact: true }).click();
+    expect(confirmation).toBe("orders 삭제?");
+    await expect(page.getByRole("button", { name: "orders 열기", exact: true })).toBeVisible();
   });
 
   test("saves and removes a Queue binding without exposing credentials", async ({ page }) => {
@@ -272,6 +318,7 @@ test.describe("MicroService configuration @dashboard", () => {
     await openServices(page, [service]);
     let deployment: Record<string, unknown> | null = null;
     let read = 0;
+    let statusReads = 0;
     const instances = [
       {
         vmId: SECRET,
@@ -303,6 +350,7 @@ test.describe("MicroService configuration @dashboard", () => {
           read = 0;
           return route.fulfill({ status: 202, json: deployment });
         }
+        statusReads++;
         if (deployment?.phase === "queued" && ++read >= 1)
           deployment = {
             ...deployment,
@@ -352,6 +400,11 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect(
       page.getByRole("cell", { name: "Healthy", exact: true }),
     ).toBeVisible();
+    const stop = page.getByRole("button", { name: "Stop service", exact: true });
+    await stop.focus();
+    const before = statusReads;
+    await expect.poll(() => statusReads).toBeGreaterThan(before);
+    await expect(stop).toBeFocused();
     await page.locator("#service-instances-toggle").click();
     await page.screenshot({
       path: testInfo.outputPath("service-running-desktop.png"),

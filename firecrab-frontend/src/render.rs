@@ -618,6 +618,11 @@ fn services(app: &App) -> String {
         } else {
             format!("Edit {name}")
         };
+        let delete = if app.locale == "ko" {
+            format!("{name} 삭제")
+        } else {
+            format!("Delete {name}")
+        };
         let image = text(row, "image");
         let image_name = image.rsplit('/').next().unwrap_or(image);
         let image_label = if let Some((name, digest)) = image_name.split_once("@sha256:") {
@@ -645,7 +650,7 @@ fn services(app: &App) -> String {
             escape(&actions),
             button(&edit, "resource-edit", id),
             request(
-                &format!("Delete {name}"),
+                &delete,
                 "DELETE",
                 &format!("/api/micro-services/{}", encode(id)),
                 Value::Null
@@ -986,7 +991,8 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
                     "POST",
                     &format!("/api/micro-services/{encoded}/stop"),
                     Value::Null,
-                );
+                )
+                .replace("type=\"button\"", "type=\"button\" id=\"service-stop\"");
                 if app.busy
                     || app
                         .service_deployment

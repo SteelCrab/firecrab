@@ -285,10 +285,15 @@ test('network, storage and Shell creation send the expected wire fields', async 
 });
 
 test('MicroService deployment collects hostPort instead of sending unsupported replicas', async () => {
+  fixture.handlers.set('GET /api/micro-services/service-1/deployment', ({ send }) => send(200, null));
   await open('services');
   await page.getByRole('button', { name: 'Open web', exact: true }).click();
+  const deploy = page.getByRole('button', { name: 'Deploy and run', exact: true });
+  await expect(page.locator('#service-status').getByRole('status')).toHaveText('Not deployed');
+  await expect(deploy).toBeEnabled();
   await page.getByLabel('First host port', { exact: true }).fill('30123');
-  await page.getByRole('button', { name: 'Deploy and run', exact: true }).click();
+  await expect(deploy).toBeEnabled();
+  await deploy.click();
   await expect(page.locator('#editor')).toHaveCount(0);
   assert.deepEqual(mutation('/api/micro-services/service-1/deployment').body, { hostPort: 30123, microNetworkId: null });
 });

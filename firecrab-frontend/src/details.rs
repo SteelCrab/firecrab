@@ -286,6 +286,17 @@ pub fn set_service_html(id: &str, html: &str) {
     let Some(root) = element(id) else {
         return;
     };
+    let current = root.inner_html();
+    if current == html {
+        return;
+    }
+    // Normalize browser serialization, including boolean attributes like disabled.
+    if let Ok(template) = document().create_element("template") {
+        template.set_inner_html(html);
+        if current == template.inner_html() {
+            return;
+        }
+    }
     let focused = document()
         .active_element()
         .filter(|el| root.contains(Some(el)))
@@ -699,7 +710,7 @@ pub fn tick(app: &Shared) {
         drop(state);
         if deploy_form {
             set_service_html("service-status", &status);
-            set_html("deploy-panel", &crate::deploy::html(&app.borrow()));
+            set_service_html("deploy-panel", &crate::deploy::html(&app.borrow()));
             crate::advanced::services::sync(&app);
         } else {
             crate::render_detail(&app);
