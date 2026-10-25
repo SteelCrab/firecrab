@@ -227,6 +227,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Changed
 
+- Remove the Infisical connector, its dashboard fields, and its account QA requirement (#411).
+  Existing imported values and source history remain available. Older vaults discard
+  retired connections and pending previews on their next successful write.
+
 - Guest kernel installation and OCI import build kernel.org's current stable
   source on the Linux host instead of downloading MicroRegistry kernel packages.
   Source and image digests are verified, and existing image kernel assignments

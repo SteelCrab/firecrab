@@ -122,16 +122,19 @@ test("SEC12: stale editor versions and stale transfer previews cannot overwrite 
   expect(await local.reveal(row.id)).toBe("qa-after-preview");
 });
 
-test("SEC13: Infisical credentials survive edits and restarts; provider failures stay masked", async ({ page, local }) => {
+test("SEC13: Firecrab proxy credentials survive edits and restarts; provider failures stay masked", async ({ page, local }) => {
   let deny = true;
-  const calls: { auth?: string; query: string }[] = [];
+  const calls: { auth?: string; path: string }[] = [];
+  const remoteId = "11111111-1111-4111-8111-111111111113";
   const provider = createServer((request, response) => {
     const url = new URL(request.url!, "http://localhost");
-    calls.push({ auth: request.headers.authorization, query: url.search });
+    calls.push({ auth: request.headers.authorization, path: url.pathname });
     response.writeHead(deny ? 403 : 200, { "Content-Type": "application/json" });
     response.end(JSON.stringify(deny
       ? { error: "qa-raw-error-private-token" }
-      : { secrets: [{ secretKey: "qa-INFISICAL", secretValue: "qa-infisical-copy", secretValueHidden: false }] }));
+      : url.pathname.endsWith("/reveal")
+        ? { value: "qa-proxy-copy", version: 1 }
+        : [{ id: remoteId, name: "qa-PROXY", description: "", version: 1 }]));
   });
   provider.listen(0, "127.0.0.1");
   await once(provider, "listening");
@@ -141,40 +144,36 @@ test("SEC13: Infisical credentials survive edits and restarts; provider failures
     await openSecrets(page, local);
     await page.getByRole("tab", { name: /External connections/ }).click();
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
-    await page.getByLabel("Provider", { exact: true }).selectOption("infisical");
-    await page.getByLabel("Connection name", { exact: true }).fill("qa-infisical");
+    await page.getByLabel("Provider", { exact: true }).selectOption("firecrab");
+    await page.getByLabel("Connection name", { exact: true }).fill("qa-proxy");
     await page.getByLabel("Base URL", { exact: true }).fill(`http://127.0.0.1:${address.port}`);
-    await page.getByLabel("Project ID", { exact: true }).fill("qa-project");
-    await page.getByLabel("Environment", { exact: true }).fill("qa");
-    await page.getByLabel("Secret path", { exact: true }).fill("/qa");
-    await page.getByLabel("Access token", { exact: true }).fill("qa-private-credential");
+    await page.getByLabel("Bearer token (optional)", { exact: true }).fill("qa-private-credential");
     await page.getByRole("button", { name: "Save connection", exact: true }).click();
-    await page.getByRole("button", { name: "Edit connection qa-infisical", exact: true }).click();
-    await expect(page.getByLabel("Access token", { exact: true })).toHaveValue("");
+    await page.getByRole("button", { name: "Edit connection qa-proxy", exact: true }).click();
+    await expect(page.getByLabel("Bearer token (optional)", { exact: true })).toHaveValue("");
     await page.getByRole("button", { name: "Save connection", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Edit connection: qa-infisical", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Edit connection: qa-proxy", exact: true })).toHaveCount(0);
     expect(JSON.stringify((await local.request("GET", "/connections")).body)).not.toContain("qa-private-credential");
     expect((await readFile(path.join(local.vault, "vault.bin"))).includes(Buffer.from("qa-private-credential"))).toBe(false);
     await local.restart();
     await page.reload();
     await page.getByRole("tab", { name: /External connections/ }).click();
     const failed = page.waitForResponse((response) => response.url().endsWith("/preview"));
-    await page.getByRole("button", { name: "Import from qa-infisical", exact: true }).click();
+    await page.getByRole("button", { name: "Import from qa-proxy", exact: true }).click();
     const failure = await failed;
     expect(failure.status()).toBe(503);
     expect(await failure.text()).not.toContain("qa-raw-error-private-token");
     await expect(page.getByRole("alert")).toContainText("External service request failed");
     deny = false;
-    await page.getByRole("button", { name: "Import from qa-infisical", exact: true }).click();
+    await page.getByRole("button", { name: "Import from qa-proxy", exact: true }).click();
     await page.getByRole("button", { name: "Import selected (1)", exact: true }).click();
     await expect(page.getByText("1 secret(s) applied.", { exact: true })).toBeVisible();
     const [imported] = await local.rows();
-    expect(await local.reveal(imported.id)).toBe("qa-infisical-copy");
+    expect(await local.reveal(imported.id)).toBe("qa-proxy-copy");
     expect(calls.length).toBeGreaterThanOrEqual(2);
     for (const call of calls) {
       expect(call.auth).toBe("Bearer qa-private-credential");
-      const query = new URLSearchParams(call.query);
-      expect(Object.fromEntries(query)).toMatchObject({ projectId: "qa-project", environment: "qa", secretPath: "/qa", recursive: "false", expandSecretReferences: "false" });
+      expect(["/api/secrets", `/api/secrets/${remoteId}/reveal`]).toContain(call.path);
     }
   } finally {
     provider.closeAllConnections();

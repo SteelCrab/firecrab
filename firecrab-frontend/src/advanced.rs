@@ -181,23 +181,9 @@ pub fn sync_form() {
         visible("replaceKeys", own);
     }
     let provider = value("provider");
-    if element("field-projectId").is_some()
-        && let Some(label) = element("field-token")
-            .and_then(|el| el.closest(".field").ok().flatten())
-            .and_then(|el| el.query_selector("label").ok().flatten())
-    {
-        label.set_text_content(Some(if provider == "firecrab" {
-            "Bearer token (optional)"
-        } else {
-            "Access token"
-        }));
-    }
-    if !provider.is_empty() && element("field-projectId").is_some() {
+    if !provider.is_empty() && element("field-token").is_some() {
         for (key, show) in [
             ("baseUrl", provider != "awsSecretsManager"),
-            ("projectId", provider == "infisical"),
-            ("environment", provider == "infisical"),
-            ("secretPath", provider == "infisical"),
             ("region", provider == "awsSecretsManager"),
             ("prefix", provider == "awsSecretsManager"),
             ("token", provider != "awsSecretsManager"),

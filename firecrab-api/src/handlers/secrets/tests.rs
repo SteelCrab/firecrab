@@ -153,7 +153,7 @@ async fn secrets_crud_is_masked_persistent_and_checks_versions() {
 async fn connections_keep_credentials_out_of_responses_and_preserve_omitted_credentials() {
     let root = tempfile::tempdir().unwrap();
     let router = app(root.path()).await;
-    let input = json!({"name":"infisical","provider":"infisical","settings":{"baseUrl":"https://us.infisical.com","projectId":"project","environment":"prod","secretPath":"/"},"credentials":{"token":"private-fixture-token"}});
+    let input = json!({"name":"remote","provider":"firecrab","settings":{"baseUrl":"https://secrets.example.com"},"credentials":{"token":"private-fixture-token"}});
     let (status, connection) =
         request(&router, "POST", "/api/secrets/connections", input.clone()).await;
     assert_eq!(status, StatusCode::CREATED);
@@ -177,6 +177,26 @@ async fn connections_keep_credentials_out_of_responses_and_preserve_omitted_cred
         .1;
     assert!(!listed.to_string().contains("private-fixture-token"));
     assert_eq!(listed[0]["version"], 2);
+}
+
+#[tokio::test]
+async fn retired_provider_and_its_settings_are_rejected_without_saving_a_connection() {
+    let root = tempfile::tempdir().unwrap();
+    let router = app(root.path()).await;
+    for input in [
+        json!({"name":"retired","provider":"infisical","settings":{},"credentials":{"token":"private-retired-token"}}),
+        json!({"name":"remote","provider":"firecrab","settings":{"baseUrl":"https://secrets.example.com","projectId":"old-project"}}),
+    ] {
+        let (status, body) = request(&router, "POST", "/api/secrets/connections", input).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(!body.to_string().contains("private-retired-token"));
+    }
+    assert_eq!(
+        request(&router, "GET", "/api/secrets/connections", Value::Null)
+            .await
+            .1,
+        json!([])
+    );
 }
 
 #[tokio::test]

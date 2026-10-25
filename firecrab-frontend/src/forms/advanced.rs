@@ -269,15 +269,11 @@ pub fn resource(kind: &str, data: &Value, id: &str) -> Option<Form> {
                 )
                 .choices(&[
                     ("firecrab", "Firecrab · PipeSecrets"),
-                    ("infisical", "Infisical"),
                     ("awsSecretsManager", "AWS Secrets Manager"),
                 ]),
             ];
             for (key, label, default) in [
                 ("baseUrl", "Base URL", ""),
-                ("projectId", "Project ID", ""),
-                ("environment", "Environment", "prod"),
-                ("secretPath", "Secret path", "/"),
                 ("region", "Region", "us-east-1"),
                 ("prefix", "Name prefix (optional)", ""),
             ] {
@@ -296,7 +292,7 @@ pub fn resource(kind: &str, data: &Value, id: &str) -> Option<Form> {
                 );
             }
             for (key, label) in [
-                ("token", "Access token"),
+                ("token", "Bearer token (optional)"),
                 ("accessKeyId", "AWS access key ID"),
                 ("secretAccessKey", "AWS secret access key"),
                 ("sessionToken", "AWS session token (optional)"),
@@ -434,14 +430,7 @@ pub fn payload(title: &str, mut body: Value) -> Result<Value, String> {
         }
         "New connection" | "Edit connection" => {
             let mut settings = json!({});
-            for key in [
-                "baseUrl",
-                "projectId",
-                "environment",
-                "secretPath",
-                "region",
-                "prefix",
-            ] {
+            for key in ["baseUrl", "region", "prefix"] {
                 settings[key] = body[key].clone();
             }
             let mut credentials = json!({});

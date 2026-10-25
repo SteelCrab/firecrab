@@ -126,7 +126,6 @@ pub fn content(app: &App) -> String {
                 escape(text(link, "name")),
                 match text(link, "provider") {
                     "firecrab" => "Firecrab · PipeSecrets",
-                    "infisical" => "Infisical",
                     _ => "AWS Secrets Manager",
                 }
             ));

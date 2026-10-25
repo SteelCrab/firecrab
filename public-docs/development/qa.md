@@ -45,7 +45,7 @@ The Firecrab API host is native Linux or managed Debian on macOS/Windows.
 | `scripts/test-pipe-databases-qa.py` | Database QA remote-host guard and cleanup after failures |
 | `firecrab-e2e` `test:secrets` | SEC1–SEC8; isolated Secrets UI checks with a mocked API |
 | `firecrab-e2e` `test:secrets:live` | SEC9–SEC14; Chromium, actual API processes, encrypted vaults, and local providers |
-| `scripts/ci-qa-secrets.py` | Secrets unit tests, lint/types/builds, SEC1–SEC14; JSON/Markdown report, SEC15/SEC16 manual warnings |
+| `scripts/ci-qa-secrets.py` | Secrets unit tests, lint/types/builds, SEC1–SEC14; JSON/Markdown report, SEC16 manual warning |
 | `scripts/test-ci-qa-secrets.py` | Failure aggregation, missing-case reporting, manual warnings, and stale-build prevention |
 
 See [PIPE database E2E and QA](pipe-databases-qa.md) for the case matrix,
@@ -67,13 +67,13 @@ Run `python3 scripts/ci-qa-secrets.py` on Linux or managed Debian.
 This pass does not require a VM, KVM, a network helper, or a running installed API.
 It uses temporary stores and local providers. It never targets the installed host database.
 See the [Secrets suite](../../firecrab-e2e/README.md#pipesecrets) for individual commands and artifact paths.
-See [provider account QA](pipe-secrets-provider-qa.md) for real AWS results and the pending Infisical check.
+See [provider account QA](pipe-secrets-provider-qa.md) for recorded AWS and Firecrab results.
 
 Record SEC1–SEC14 from the generated report. The report retains each command and exit code.
 Missing or skipped automated cases are `WARNING` and produce a nonzero aggregate exit.
-SEC15 and SEC16 remain `WARNING` until the following external-account checks are performed separately.
+SEC16 remains `WARNING` until the following AWS account checks are performed separately.
 
-1. Use a dedicated Infisical QA project/environment/path and an AWS QA prefix such as `qa-<run>/`.
+1. Use a dedicated AWS QA region and name prefix such as `qa-<run>/`.
 2. Use short-lived credentials scoped to those resources. Enter them in the web console.
 3. Create synthetic source values. Preview and import them. Reveal a copy and check that its source is correct.
 4. Change a local copy. Preview the upload, select the replacement, and verify the external value.
@@ -83,7 +83,7 @@ SEC15 and SEC16 remain `WARNING` until the following external-account checks are
 8. Record provider/region, scope, timestamp, case result, and cleanup status. Keep secret values and credentials out of reports and screenshots.
 
 Use `WARNING` if an account, permission, or cleanup step is unavailable.
-Infisical protocol fixtures and AWS SigV4 tests do not substitute for SEC15/SEC16.
+AWS SigV4 tests do not substitute for SEC16.
 These checks validate web-console secret management; VM environment injection is outside this pass.
 
 ## Platform limits

@@ -38,7 +38,7 @@ class SecretsQaTests(unittest.TestCase):
         code, report, _ = self.run_qa()
         self.assertEqual(code, 0)
         self.assertEqual([report["cases"][f"SEC{number}"]["status"] for number in range(1, 15)], ["PASS"] * 14)
-        self.assertEqual(report["cases"]["SEC15"]["status"], "WARNING")
+        self.assertNotIn("SEC15", report["cases"])
         self.assertEqual(report["cases"]["SEC16"]["status"], "WARNING")
 
     def test_failure_still_runs_later_checks_and_returns_nonzero(self):
