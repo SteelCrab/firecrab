@@ -123,6 +123,10 @@ impl Store {
             "DELETE FROM pipe_ai_connections WHERE id=?1",
             [id.to_string()],
         )?;
+        tx.execute(
+            "DELETE FROM ai_sandbox_models WHERE connection_id=?1",
+            [id.to_string()],
+        )?;
         tx.commit()?;
         Ok(())
     }

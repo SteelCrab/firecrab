@@ -28,6 +28,7 @@ pub mod update;
 pub mod vm_execution;
 pub mod vms;
 
+pub mod ai_sandbox;
 pub mod cloudflare;
 pub mod pipe;
 pub mod pipe_ai;

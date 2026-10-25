@@ -26,7 +26,9 @@
     "typecheck:pipe": "node ../firecrab-frontend/node_modules/tsrs/bin/tsrs -p tsconfig.pipe.json",
     "test:secrets": "playwright test --config playwright.secrets.config.ts",
     "test:secrets:live": "playwright test --config playwright.secrets-live.config.ts",
-    "typecheck:secrets": "node ../firecrab-frontend/node_modules/tsrs/bin/tsrs -p tsconfig.secrets.json"
+    "typecheck:secrets": "node ../firecrab-frontend/node_modules/tsrs/bin/tsrs -p tsconfig.secrets.json",
+    "test:sandbox": "playwright test --config playwright.ai-sandbox.config.ts",
+    "typecheck:sandbox": "node ../firecrab-frontend/node_modules/tsrs/bin/tsrs -p tsconfig.ai-sandbox.json"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

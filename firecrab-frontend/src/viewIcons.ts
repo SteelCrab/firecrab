@@ -1,4 +1,4 @@
-import { Atom, Boxes, CalendarClock, Cpu, HardDrive, KeyRound, Layers, Network, Server, Shield, SquareTerminal, Workflow } from "lucide-react";
+import { Atom, Bot, Boxes, CalendarClock, Cpu, HardDrive, KeyRound, Layers, Network, Server, Shield, SquareTerminal, Workflow } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ViewId } from "./navigation";
 
@@ -7,6 +7,7 @@ import type { ViewId } from "./navigation";
  * component files so they keep exporting only components (Vite fast refresh).
  */
 export const VIEW_ICONS: Record<ViewId, LucideIcon> = {
+  "ai-sandbox": Bot,
   vms: Cpu,
   pools: Layers,
   services: Boxes,

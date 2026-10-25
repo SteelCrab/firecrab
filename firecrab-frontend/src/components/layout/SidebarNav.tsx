@@ -16,7 +16,7 @@ interface SidebarNavProps {
   vmErrorCount: number;
 }
 
-const GROUPS: ViewGroup[] = ["compute", "network", "data", "system"];
+const GROUPS: ViewGroup[] = ["compute", "network", "data", "system", "ai"];
 
 /** Left column: brand, palette entry, grouped destinations, host card, update and language (spec §6.1). */
 export default function SidebarNav({ view, onSelectView, onOpenPalette, vmCount, vmErrorCount }: SidebarNavProps) {

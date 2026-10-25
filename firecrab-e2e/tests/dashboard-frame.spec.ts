@@ -39,7 +39,7 @@ test.describe("dashboard frame", () => {
 
   test("groups the navigation", async ({ page }) => {
     await openDashboard(page, { vms: VMS });
-    for (const group of ["Compute", "Network", "Data", "System"]) {
+    for (const group of ["Compute", "Network", "Data", "System", "AI"]) {
       await expect(nav(page).getByText(group, { exact: true })).toBeVisible();
     }
     for (const name of ["MicroVM", "MicroService", "Networks", "Pipe", "Secrets", "Storage", "Images", "Kernels", "Shells", "Host"]) {

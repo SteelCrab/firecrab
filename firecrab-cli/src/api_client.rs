@@ -113,6 +113,11 @@ impl ApiClient {
         let resp = self
             .client
             .get(self.url(path))
+            .timeout(if path.starts_with("/api/ai-sandbox/") {
+                Duration::from_secs(185)
+            } else {
+                DEFAULT_REQUEST_TIMEOUT
+            })
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(resp)
@@ -129,7 +134,9 @@ impl ApiClient {
             .client
             .get(self.url(path))
             .query(query)
-            .timeout(if path == "/api/oci/inspect" {
+            .timeout(if path.starts_with("/api/ai-sandbox/") {
+                std::time::Duration::from_secs(185)
+            } else if path == "/api/oci/inspect" {
                 OCI_INSPECT_TIMEOUT
             } else {
                 DEFAULT_REQUEST_TIMEOUT
@@ -150,7 +157,9 @@ impl ApiClient {
             .client
             .post(self.url(path))
             .json(body)
-            .timeout(if path.starts_with("/api/pipe/ai/") {
+            .timeout(if path.starts_with("/api/ai-sandbox/") {
+                std::time::Duration::from_secs(185)
+            } else if path.starts_with("/api/pipe/ai/") {
                 self.mutation_timeout().max(OCI_INSPECT_TIMEOUT)
             } else {
                 self.mutation_timeout()
@@ -211,7 +220,9 @@ impl ApiClient {
         let resp = self
             .client
             .delete(self.url(path))
-            .timeout(if path.starts_with("/api/pipe/ai/") {
+            .timeout(if path.starts_with("/api/ai-sandbox/") {
+                std::time::Duration::from_secs(185)
+            } else if path.starts_with("/api/pipe/ai/") {
                 self.mutation_timeout().max(OCI_INSPECT_TIMEOUT)
             } else {
                 self.mutation_timeout()
@@ -232,7 +243,9 @@ impl ApiClient {
             .client
             .put(self.url(path))
             .json(body)
-            .timeout(if path.starts_with("/api/pipe/ai/") {
+            .timeout(if path.starts_with("/api/ai-sandbox/") {
+                std::time::Duration::from_secs(185)
+            } else if path.starts_with("/api/pipe/ai/") {
                 self.mutation_timeout().max(OCI_INSPECT_TIMEOUT)
             } else {
                 self.mutation_timeout()

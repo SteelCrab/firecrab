@@ -11,11 +11,13 @@ use uuid::Uuid;
 
 mod pool;
 pub use pool::*;
+mod ai_sandbox;
 mod micro_services;
 mod pipe_ai;
 mod pipe_storage;
 mod schedules;
 mod security_groups;
+pub use ai_sandbox::*;
 pub use micro_services::{
     DeployMicroServiceRequest, MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec,
     ServiceInstance, ServicePhase, ServiceRuntime,

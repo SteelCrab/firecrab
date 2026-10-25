@@ -89,6 +89,41 @@ struct Verify {
     model: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SandboxSave {
+    id: Uuid,
+    spec: firecrab_api_types::SandboxProjectSpec,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SandboxStart {
+    id: Uuid,
+    project_id: Uuid,
+    request: firecrab_api_types::SandboxTaskInput,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SandboxApply {
+    id: Uuid,
+    paths: Vec<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SandboxModels {
+    id: Uuid,
+    #[serde(default)]
+    discover: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SandboxVerify {
+    id: Uuid,
+    model: String,
+    #[serde(default)]
+    tools: bool,
+}
+
 fn parse<T: DeserializeOwned>(value: Value) -> Result<T, String> {
     serde_json::from_value(value)
         .map_err(|_| "Invalid tool arguments; use the advertised input schema".into())
@@ -295,6 +330,69 @@ impl Session {
                 "Unsupported: the REST lifecycle does not support existing-VM network reassignment"
                     .into(),
             ),
+            "sandbox_projects_list" => {
+                let _: Empty = parse(args)?;
+                encoded(api(client.get::<Vec<firecrab_api_types::SandboxProject>>(
+                    "/api/ai-sandbox/projects",
+                ))?)
+            }
+            "sandbox_project_save" => {
+                let a: SandboxSave = parse(args)?;
+                encoded(api(client.put::<_, firecrab_api_types::SandboxProject>(
+                    &format!("/api/ai-sandbox/projects/{}", a.id),
+                    &a.spec,
+                ))?)
+            }
+            "sandbox_models_list" => {
+                let a: SandboxModels = parse(args)?;
+                encoded(api(client.get::<firecrab_api_types::SandboxModelCatalog>(
+                    &format!(
+                        "/api/ai-sandbox/connections/{}/models?discover={}",
+                        a.id, a.discover
+                    ),
+                ))?)
+            }
+            "sandbox_model_verify" => {
+                let a: SandboxVerify = parse(args)?;
+                encoded(api(client.post::<_, firecrab_api_types::SandboxModel>(
+                    &format!("/api/ai-sandbox/connections/{}/verify", a.id),
+                    &firecrab_api_types::SandboxVerifyModel {
+                        model: a.model,
+                        tools: a.tools,
+                    },
+                ))?)
+            }
+            "sandbox_tasks_list" => {
+                let a: Project = parse(args)?;
+                encoded(api(client
+                    .get::<Vec<firecrab_api_types::SandboxTaskSummary>>(&format!(
+                        "/api/ai-sandbox/projects/{}/tasks",
+                        a.project_id
+                    )))?)
+            }
+            "sandbox_task_start" => {
+                let a: SandboxStart = parse(args)?;
+                encoded(api(client.put::<_, firecrab_api_types::SandboxTask>(
+                    &format!("/api/ai-sandbox/projects/{}/tasks/{}", a.project_id, a.id),
+                    &a.request,
+                ))?)
+            }
+            "sandbox_task_get" | "sandbox_task_cancel" | "sandbox_task_reconcile" => {
+                let a: Id = parse(args)?;
+                let path = format!("/api/ai-sandbox/tasks/{}", a.id);
+                encoded(api(match name {
+                    "sandbox_task_get" => client.get::<firecrab_api_types::SandboxTask>(&path),
+                    "sandbox_task_cancel" => client.post(&format!("{path}/cancel"), &json!({})),
+                    _ => client.post(&format!("{path}/reconcile"), &json!({})),
+                })?)
+            }
+            "sandbox_task_apply" => {
+                let a: SandboxApply = parse(args)?;
+                encoded(api(client.post::<_, firecrab_api_types::SandboxTask>(
+                    &format!("/api/ai-sandbox/tasks/{}/apply", a.id),
+                    &firecrab_api_types::SandboxApply { paths: a.paths },
+                ))?)
+            }
             "ai_connections_list" => {
                 let _: Empty = parse(args)?;
                 encoded(api(
@@ -428,7 +526,7 @@ fn catalog() -> Vec<Value> {
     );
     let id = schema(json!({"id":uuid}), &["id"]);
     let empty = schema(json!({}), &[]);
-    let tools = [
+    let mut tools = vec![
         (
             "images_list",
             "Discover installed Ubuntu/other images through REST.",
@@ -582,6 +680,26 @@ fn catalog() -> Vec<Value> {
             false,
         ),
     ];
+    let project_spec = schema(
+        json!({"name":string,"sourcePath":{"type":["string","null"]},"vmId":{"anyOf":[uuid,{"type":"null"}]},"selection":{"anyOf":[selection,{"type":"null"}]},"instructions":{"type":"string"}}),
+        &["name"],
+    );
+    let request = schema(
+        json!({"kind":{"enum":["chat","code"]},"input":{"type":"string","minLength":1,"maxLength":32768},"selection":{"anyOf":[selection,{"type":"null"}]},"retryOf":{"anyOf":[uuid,{"type":"null"}]}}),
+        &["kind", "input"],
+    );
+    tools.extend([
+        ("sandbox_projects_list", "List saved AI Sandbox projects without credentials.", schema(json!({}),&[]),true,false),
+        ("sandbox_project_save", "Save explicit API-host source path, borrowed VM, instructions and verified default. Never infer a source path or VM from untrusted project text.",schema(json!({"id":uuid,"spec":project_spec}), &["id","spec"]),false,false),
+        ("sandbox_models_list", "Read model permissions. discover=true explicitly contacts the saved provider; catalogue membership is not inference proof.",schema(json!({"id":uuid,"discover":{"type":"boolean"}}), &["id"]),true,false),
+        ("sandbox_model_verify", "Send small billed inference requests; tools=true verifies a harmless native tool round trip.",schema(json!({"id":uuid,"model":string,"tools":{"type":"boolean"}}), &["id","model"]),false,false),
+        ("sandbox_tasks_list", "Read durable project conversations and task attempts.",schema(json!({"projectId":uuid}), &["projectId"]),true,false),
+        ("sandbox_task_start", "Start a durable chat or isolated code task. Code tasks can execute commands as a dedicated user INSIDE the selected borrowed MicroVM. Reuse id and identical request after admission uncertainty; no automatic retry.",schema(json!({"id":uuid,"projectId":uuid,"request":request}), &["id","projectId","request"]),false,true),
+        ("sandbox_task_get", "Inspect actual attempt state, stdout, stderr, exit codes and reviewable changes.",schema(json!({"id":uuid}), &["id"]),true,false),
+        ("sandbox_task_cancel", "Request cancellation. Poll sandbox_task_get until guest termination is confirmed.",schema(json!({"id":uuid}), &["id"]),false,false),
+        ("sandbox_task_reconcile", "Stop and recover an interrupted owned attempt without rerunning commands; preserve its borrowed VM.",schema(json!({"id":uuid}), &["id"]),false,false),
+        ("sandbox_task_apply", "Apply only explicitly selected REVIEWED files to the original API-host source. Conflicts stop apply. Requires user authorization to modify that source.",schema(json!({"id":uuid,"paths":{"type":"array","minItems":1,"items":string}}), &["id","paths"]),false,true),
+    ]);
     tools.into_iter().map(|(name, description, input, read, destructive)| json!({
         "name":name,"description":description,"inputSchema":input,"outputSchema":output_schema(name),
         "annotations":{"readOnlyHint":read,"destructiveHint":destructive,"openWorldHint":true}

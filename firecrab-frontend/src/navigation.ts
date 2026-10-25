@@ -21,6 +21,7 @@ export const VIEWS = [
   { id: "kernels", group: "data", labels: { en: "Kernels", ko: "커널" } },
   { id: "shells", group: "system", labels: { en: "Shells", ko: "Shell" } },
   { id: "host", group: "system", labels: { en: "Host", ko: "호스트" } },
+  { id: "ai-sandbox", group: "ai", labels: { en: "AI Sandbox", ko: "AI Sandbox" } },
 ] as const;
 
 export type ViewId = (typeof VIEWS)[number]["id"];
@@ -36,6 +37,7 @@ const VIEW_GROUP_LABELS: Record<ViewGroup, Record<Locale, string>> = {
   network: { en: "Network", ko: "네트워크" },
   data: { en: "Data", ko: "데이터" },
   system: { en: "System", ko: "시스템" },
+  ai: { en: "AI", ko: "AI" },
 };
 
 export function viewGroupLabel(group: ViewGroup, locale: Locale): string {

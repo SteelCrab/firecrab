@@ -194,3 +194,55 @@ fn stdio_bounds_input_and_omits_guest_environment_from_model_context() {
             .contains("Unsupported")
     );
 }
+
+#[test]
+fn sandbox_mcp_routes_durable_tasks_through_rest_and_requires_explicit_review_paths() {
+    let id = Uuid::new_v4();
+    let project = Uuid::new_v4();
+    let connection = Uuid::new_v4();
+    let task = json!({"id":id,"projectId":project,"attemptId":Uuid::new_v4(),"request":{"kind":"chat","input":"hello","selection":null,"retryOf":null},"selection":{"connectionId":connection,"model":"fixture-model"},"state":"result","createdAt":1,"updatedAt":1,"result":"done","errorCode":null,"error":null,"events":[],"changes":[]});
+    let (client, server) = mock(vec![
+        ("PUT /api/ai-sandbox/projects/", 202, task.clone()),
+        ("GET /api/ai-sandbox/tasks/", 200, task.clone()),
+        ("POST /api/ai-sandbox/tasks/", 200, task.clone()),
+    ]);
+    let mut session = Session::default();
+    assert_eq!(
+        session
+            .call(
+                &client,
+                "sandbox_task_start",
+                json!({"id":id,"projectId":project,"request":{"kind":"chat","input":"hello"}})
+            )
+            .unwrap()["id"],
+        id.to_string()
+    );
+    assert_eq!(
+        session
+            .call(&client, "sandbox_task_get", json!({"id":id}))
+            .unwrap()["state"],
+        "result"
+    );
+    assert_eq!(
+        session
+            .call(
+                &client,
+                "sandbox_task_apply",
+                json!({"id":id,"paths":["src/main.rs"]})
+            )
+            .unwrap()["id"],
+        id.to_string()
+    );
+    assert!(
+        session
+            .call(&client, "sandbox_task_apply", json!({"id":id}))
+            .is_err()
+    );
+    server.join().unwrap();
+    let tools = catalog();
+    let start = tools
+        .iter()
+        .find(|v| v["name"] == "sandbox_task_start")
+        .unwrap();
+    assert_eq!(start["annotations"]["destructiveHint"], true);
+}

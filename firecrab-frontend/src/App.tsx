@@ -18,6 +18,7 @@ import SecurityGroups from "./components/SecurityGroups";
 import Schedules from "./components/Schedules";
 import Shell from "./components/Shell";
 import Pipe from "./components/Pipe";
+import AiSandbox from "./components/AiSandbox";
 import Shells from "./components/Shells";
 import Secrets from "./components/Secrets";
 import CommandPalette from "./components/CommandPalette";
@@ -142,13 +143,15 @@ export default function App() {
   const refreshGen = useRef(0);
   const pipeHasUnsavedChanges = useRef(false);
   const onPipeUnsavedChange = useCallback((dirty: boolean) => { pipeHasUnsavedChanges.current = dirty; }, []);
+  const sandboxHasUnsavedChanges = useRef(false);
+  const onSandboxUnsavedChange = useCallback((dirty: boolean) => { sandboxHasUnsavedChanges.current = dirty; }, []);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const initialRoute = parseAppRoute();
   const [detailOpen, setDetailOpen] = useDetailPanelOpen(initialRoute.kind === "shell" && !!(initialRoute.vmId || initialRoute.scheduleId || initialRoute.createSchedule));
   const [detailWidth, setDetailWidth] = useDetailPanelWidth();
   const [secretsHasUnsavedChanges, setSecretsHasUnsavedChanges] = useState(false);
-  const confirmLeave = useCallback(() => !(pipeHasUnsavedChanges.current || secretsHasUnsavedChanges) || window.confirm(
-    secretsHasUnsavedChanges
+  const confirmLeave = useCallback(() => !(pipeHasUnsavedChanges.current || secretsHasUnsavedChanges || sandboxHasUnsavedChanges.current) || window.confirm(
+    sandboxHasUnsavedChanges.current ? t("Sandbox changes have not been sent or saved. Leave this page?", "Sandbox 내용을 보내거나 저장하지 않았다. 이동할까요?") : secretsHasUnsavedChanges
       ? t("Secrets changes have not been saved or are still processing. Leave this page?", "Secrets 변경을 저장하지 않았거나 처리 중이다. 이동할까요?")
       : t("Pipe changes have not been saved. Leave without saving?", "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?"),
   ), [secretsHasUnsavedChanges, t]);
@@ -290,6 +293,7 @@ export default function App() {
       {/* Each page mounts only while selected, so its own polling stops
           the moment you navigate away. */}
       {view === "pools" && <Screen view="pools"><Pools /></Screen>}
+      {view === "ai-sandbox" && <AiSandbox vms={state.vms} onUnsavedChange={onSandboxUnsavedChange} />}
       {view === "networks" && <MicroNetworks />}
       {view === "security-groups" && <SecurityGroups vms={state.vms} vmsAvailable={state.loaded && state.consecutiveFailures === 0} />}
       {view === "services" && <MicroServices />}

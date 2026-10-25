@@ -637,9 +637,62 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         ))
         .layer(middleware::from_fn(handlers::secrets::no_store));
 
-    // Inspection performs registry authentication and multiple manifest GETs.
-    // Allow their bounded connection retries to finish while retaining the
-    // same concurrency pool, body limit, CORS and origin checks as other REST.
+    // Model verification and explicit guest recovery need longer bounded HTTP waits.
+    let sandbox = Router::new()
+        .route(
+            "/api/ai-sandbox/projects",
+            get(handlers::ai_sandbox::projects),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{id}",
+            get(handlers::ai_sandbox::get_project)
+                .put(handlers::ai_sandbox::save_project)
+                .delete(handlers::ai_sandbox::delete_project),
+        )
+        .route(
+            "/api/ai-sandbox/connections/{id}/models",
+            get(handlers::ai_sandbox::models),
+        )
+        .route(
+            "/api/ai-sandbox/connections/{id}/verify",
+            post(handlers::ai_sandbox::verify_model),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{project}/tasks",
+            get(handlers::ai_sandbox::tasks),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{project}/tasks/{id}",
+            axum::routing::put(handlers::ai_sandbox::create_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}",
+            get(handlers::ai_sandbox::get_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}/cancel",
+            post(handlers::ai_sandbox::cancel_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}/reconcile",
+            post(handlers::ai_sandbox::reconcile_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}/apply",
+            post(handlers::ai_sandbox::apply_task),
+        )
+        .layer(cors.clone())
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn_with_state(
+            RequestLimits {
+                permits: limits.permits.clone(),
+                timeout: Some(Duration::from_secs(180)),
+            },
+            enforce_limits,
+        ))
+        .layer(middleware::from_fn(handlers::secrets::no_store));
+
+    // Registry authentication and manifest GETs retain their bounded inspection deadline.
     let inspection = Router::new()
         .route(
             "/api/pipe/ai/connections/{id}/login",
@@ -702,6 +755,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         ));
 
     let app = rest
+        .merge(sandbox)
         .merge(recovery)
         .merge(inspection)
         .merge(secrets)
@@ -1658,3 +1712,15 @@ mod pipe_auth_tests;
 #[cfg(test)]
 #[path = "server_pipe_ai_tests.rs"]
 mod pipe_ai_tests;
+
+#[cfg(test)]
+#[path = "server_ai_sandbox_tests.rs"]
+mod ai_sandbox_tests;
+
+#[cfg(test)]
+#[path = "server_ai_sandbox_live_tests.rs"]
+mod live_provider_tests;
+
+#[cfg(test)]
+#[path = "server_live_guest_tests.rs"]
+mod live_guest_tests;

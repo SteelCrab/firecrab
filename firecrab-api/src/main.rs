@@ -1,3 +1,4 @@
+mod ai_sandbox;
 mod artifacts;
 mod bootstrap;
 mod console;
@@ -128,6 +129,10 @@ async fn run() -> Result<(), StartupError> {
     let scheduler_ownership = state
         .store
         .scheduler_lock()
+        .map_err(StartupError::Persistence)?;
+    state
+        .store
+        .interrupt_sandbox_tasks()
         .map_err(StartupError::Persistence)?;
     // Bridges, nftables rules and dnsmasq's config are all host state a
     // reboot wipes, so they are re-applied here rather than assumed. Doing it
