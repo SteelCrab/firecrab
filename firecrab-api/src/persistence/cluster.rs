@@ -49,7 +49,7 @@ fn placements(conn: &Connection) -> Result<Vec<VmPlacement>, ClusterError> {
         .collect()
 }
 
-fn hosts(conn: &Connection, now: i64) -> Result<Vec<ClusterHost>, ClusterError> {
+pub(super) fn hosts(conn: &Connection, now: i64) -> Result<Vec<ClusterHost>, ClusterError> {
     let placements = placements(conn)?;
     let mut stmt =
         conn.prepare("SELECT report,last_seen_ms,draining FROM cluster_hosts ORDER BY id")?;
@@ -64,7 +64,7 @@ fn hosts(conn: &Connection, now: i64) -> Result<Vec<ClusterHost>, ClusterError> 
     for row in rows {
         let (json, last_seen_ms, draining) = row?;
         let report: HostReport = serde_json::from_str(&json)?;
-        let mut reserved = HostCapacity::default();
+        let mut reserved = super::cluster_services::reserved(conn, report.id)?;
         let mut disks = BTreeMap::<String, u64>::new();
         for p in placements
             .iter()

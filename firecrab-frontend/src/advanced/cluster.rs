@@ -1,4 +1,6 @@
 //! Hosts and VM placements use controller APIs, never host profile switching.
+mod services;
+
 use crate::{
     App, Shared, api,
     model::{escape, list, text},
@@ -60,6 +62,8 @@ pub fn restore_focus(focus: Option<Focus>) {
 pub struct State {
     values: BTreeMap<String, String>,
     pending: Option<Value>,
+    service_pending: Option<Value>,
+    editing_service: Option<(String, u64)>,
 }
 
 fn value<'a>(state: &'a State, key: &str, default: &'a str) -> &'a str {
@@ -125,6 +129,7 @@ pub fn content(app: &App) -> String {
     if hosts.is_empty() {
         out.push_str("<p class=\"empty-state\">No workload hosts registered. Configure worker enrollment with the controller's host UUID and HTTPS endpoint.</p>");
     }
+    out.push_str(&services::content(app));
     out.push_str("<h2>Place a VM</h2>");
     if let Some(saved) = &state.pending {
         out.push_str(&format!("<article class=\"wasm-card\"><p>A saved request for <strong>{}</strong> has no acknowledged result. Retry to recover the same placement.</p>{}</article>",
@@ -235,6 +240,7 @@ pub fn content(app: &App) -> String {
 }
 
 pub fn restore(app: &Shared) {
+    services::restore(app);
     if app.borrow().advanced.cluster.pending.is_some() {
         return;
     }
@@ -318,6 +324,9 @@ fn new_request(app: &App) -> Result<Value, String> {
 }
 
 pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
+    if services::dispatch(app, action, id) {
+        return true;
+    }
     if !action.starts_with("cluster-") {
         return false;
     }

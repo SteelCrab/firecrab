@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
+        .merge(super::services::router())
         .route("/api/cluster/hosts", get(list_hosts))
         .route("/api/cluster/hosts/register", post(register))
         .route("/api/cluster/hosts/{id}", get(get_host).patch(drain))
@@ -186,7 +187,7 @@ fn wake(state: AppState, id: Uuid) {
     });
 }
 
-fn require_transport(state: &AppState, request: RequestId) -> Result<(), AppError> {
+pub(super) fn require_transport(state: &AppState, request: RequestId) -> Result<(), AppError> {
     if state.cluster.paths.is_none() {
         return Err(AppError::new(
             StatusCode::SERVICE_UNAVAILABLE,

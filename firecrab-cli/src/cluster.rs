@@ -1,4 +1,6 @@
 //! Controller registry and placement commands, separate from saved `host` profiles.
+mod services;
+
 use crate::api_client::{ApiClient, ApiError};
 use firecrab_api_types::{ClusterHost, DrainHostRequest, PlacementSpec, VmPlacement};
 use std::path::PathBuf;
@@ -7,6 +9,11 @@ use uuid::Uuid;
 #[derive(Debug, clap::Subcommand)]
 /// Commands executed against the selected controller API.
 pub enum Command {
+    /// Deploy and reconcile services with one identity across workload hosts.
+    Service {
+        #[command(subcommand)]
+        command: services::Command,
+    },
     /// Inspect or drain registered workload hosts.
     Host {
         #[command(subcommand)]
@@ -132,6 +139,7 @@ pub enum Error {
 
 pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
     match command {
+        Command::Service { command } => services::run(client, command)?,
         Command::Host { command } => {
             let multiple = matches!(&command, HostCommand::List { .. });
             let (hosts, json) = match command {

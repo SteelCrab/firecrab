@@ -19,6 +19,7 @@ use crate::model::{Lease, VmRecord, VmState};
 
 mod block_storage;
 mod cluster;
+mod cluster_services;
 mod database_services;
 mod pools;
 mod queues;
@@ -798,6 +799,7 @@ impl Store {
         conn.execute(CREATE_PORT_FORWARDS_UNIQUE_HOST_PORT_SQL, [])?;
         pools::create_tables(&conn)?;
         conn.execute_batch(cluster::SCHEMA)?;
+        conn.execute_batch(cluster_services::SCHEMA)?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
         // that still have NULL micro_network_id onto one explicit row.
         promote_implicit_default_network(&conn)?;

@@ -400,3 +400,131 @@ fn unreadable_or_invalid_placement_files_fail_before_sending_a_request() {
         );
     }
 }
+
+fn controller_service() -> ClusterService {
+    let spec:ClusterServiceSpec=serde_json::from_value(serde_json::json!({
+        "service":{"name":"web","image":format!("ghcr.io/team/web@sha256:{}","a".repeat(64)),"port":8080,"ram":512,"cpu":1,"replicas":1},
+        "targets":[{"hostId":Uuid::from_u128(1),"replicas":1,"request":{"microNetworkId":Uuid::from_u128(2),"hostPort":30100}}]
+    })).unwrap();
+    ClusterService {
+        id: Uuid::from_u128(3),
+        spec,
+        generation: 1,
+        release_generation: 1,
+        operation_id: Uuid::from_u128(4),
+        desired: ClusterServiceDesired::Running,
+        observed: ClusterServiceObserved::Pending,
+        pending: true,
+        degraded: false,
+        hosts: vec![],
+    }
+}
+
+#[test]
+fn service_mutations_preserve_retry_keys_specification_and_expected_generation() {
+    let s = controller_service();
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("service.json");
+    std::fs::write(&file, serde_json::to_vec(&s.spec).unwrap()).unwrap();
+    for action in ["create", "update", "stop"] {
+        let (url, request) = server(serde_json::to_value(&s).unwrap());
+        let mut command = cli(&url);
+        command.args(["cluster", "service", action]);
+        if action != "create" {
+            command.args([&s.id.to_string(), "--expected-generation", "1"]);
+        }
+        if action != "stop" {
+            command.arg("--file").arg(&file);
+        }
+        command.args(["--idempotency-key", "service-retry", "--json"]);
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            serde_json::from_slice::<ClusterService>(&output.stdout).unwrap(),
+            s
+        );
+        let request = request.join().unwrap();
+        let path = if action == "create" {
+            "/api/cluster/services".into()
+        } else {
+            format!("/api/cluster/services/{}/{action}", s.id)
+        };
+        assert!(request.starts_with(&format!("POST {path} HTTP/1.1")));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("idempotency-key: service-retry")
+        );
+        let (_, body) = request.split_once("\r\n\r\n").unwrap();
+        let body: serde_json::Value = serde_json::from_str(body).unwrap();
+        if action != "create" {
+            assert_eq!(body["expectedGeneration"], 1);
+        }
+        if action != "stop" {
+            assert_eq!(
+                if action == "create" {
+                    body
+                } else {
+                    body["spec"].clone()
+                },
+                serde_json::to_value(&s.spec).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn service_status_and_operation_history_are_available_from_the_selected_controller() {
+    let s = controller_service();
+    let (url, request) = server(serde_json::to_value(vec![s.clone()]).unwrap());
+    let output = cli(&url)
+        .args(["cluster", "service", "list"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains(&s.id.to_string()));
+    assert!(text.contains("Pending"));
+    assert!(
+        request
+            .join()
+            .unwrap()
+            .starts_with("GET /api/cluster/services HTTP/1.1")
+    );
+    for action in ["show", "reconcile"] {
+        let (url, request) = server(serde_json::to_value(&s).unwrap());
+        let output = cli(&url)
+            .args(["cluster", "service", action, &s.id.to_string(), "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            serde_json::from_slice::<ClusterService>(&output.stdout).unwrap(),
+            s
+        );
+        let expected = if action == "show" {
+            format!("GET /api/cluster/services/{} HTTP/1.1", s.id)
+        } else {
+            format!("POST /api/cluster/services/{}/reconcile HTTP/1.1", s.id)
+        };
+        assert!(request.join().unwrap().starts_with(&expected));
+    }
+    let (url, request) = server(serde_json::json!([]));
+    let output = cli(&url)
+        .args(["cluster", "service", "operations", &s.id.to_string()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!([])
+    );
+    assert!(request.join().unwrap().starts_with(&format!(
+        "GET /api/cluster/services/{}/operations HTTP/1.1",
+        s.id
+    )));
+}

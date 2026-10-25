@@ -2,6 +2,7 @@ use super::*;
 use crate::persistence::Store;
 
 mod management;
+mod services;
 
 fn report(n: u128) -> HostReport {
     HostReport {
