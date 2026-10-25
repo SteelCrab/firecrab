@@ -312,7 +312,7 @@ fn restarts_the_dashboard_after_dependencies_are_reinstalled() {
 }
 
 #[test]
-fn clean_stops_the_dashboard_and_forgets_only_its_runtime_files() {
+fn clean_stops_the_dashboard_and_preserves_its_source_and_port() {
     let fixture = Fixture::new();
     fixture.start().unwrap();
     let state = fixture.state();
@@ -321,12 +321,10 @@ fn clean_stops_the_dashboard_and_forgets_only_its_runtime_files() {
     for _ in 0..2 {
         clean(fixture.home.path()).unwrap();
         assert!(!running(&client().unwrap(), &state, &fixture.url()));
-        assert!(read_session(fixture.home.path()).unwrap().is_none());
-        for name in [
-            "dev-dashboard.json",
-            "dev-dashboard.mjs",
-            "dev-dashboard.log",
-        ] {
+        assert_eq!(fixture.state(), state);
+        assert_eq!(source(fixture.home.path()).unwrap(), fixture.source());
+        assert_eq!(port(fixture.home.path()).unwrap(), fixture.port);
+        for name in ["dev-dashboard.mjs", "dev-dashboard.log"] {
             assert!(!runtime.join(name).exists());
         }
         assert!(runtime.join("dev-dashboard.lock").is_file());
@@ -341,6 +339,50 @@ fn clean_stops_the_dashboard_and_forgets_only_its_runtime_files() {
                 .is_file()
         );
     }
+}
+
+#[test]
+fn a_cleaned_private_dashboard_resumes_its_saved_source_and_port() {
+    let fixture = Fixture::new();
+    let instance = fixture.private_instance("0123456789abcdef", 45121, 45122);
+    fixture.start_private(&instance).unwrap();
+    let original = read_session(&instance.managed_home).unwrap().unwrap();
+    clean(&instance.managed_home).unwrap();
+    assert!(!listening(&fixture.url()));
+    assert!(has_session(&instance.managed_home).unwrap());
+    // The process cwd is outside this fixture; resume must use the canonical
+    // saved checkout rather than treating cwd as the dashboard source.
+    let selected = source(&instance.managed_home).unwrap();
+    let selected_port = port(&instance.managed_home).unwrap();
+    assert_eq!(selected, instance.source);
+    assert_eq!(selected_port, fixture.port);
+    start(&selected, &instance.managed_home, selected_port).unwrap();
+    let resumed = DashboardGuard(read_session(&instance.managed_home).unwrap().unwrap());
+    assert_ne!(resumed.0.session, original.session);
+    assert_eq!(resumed.0.source, original.source);
+    assert_eq!(resumed.0.port, original.port);
+    assert!(running(&client().unwrap(), &resumed.0, &fixture.url()));
+    assert!(!instance.primary_home.exists());
+}
+
+#[test]
+fn a_private_instance_without_dashboard_settings_cannot_resume_the_current_directory() {
+    let fixture = Fixture::new();
+    let instance = fixture.private_instance("0123456789abcdef", 45121, 45122);
+    assert!(!has_session(&instance.managed_home).unwrap());
+    assert!(
+        source(&instance.managed_home)
+            .unwrap_err()
+            .to_string()
+            .contains("run service dev --port PORT first")
+    );
+    assert!(
+        !instance
+            .managed_home
+            .join("runtime/dev-dashboard.json")
+            .exists()
+    );
+    assert!(!instance.primary_home.exists());
 }
 
 #[test]

@@ -278,10 +278,20 @@ fn run_dev(
 }
 
 fn run_dev_control(layout: &lifecycle::Layout, command: DevCommand) -> Result<i32, Error> {
-    if wsl::is_running(DISTRO_NAME) {
-        dev::control(command)?;
-    } else if command != DevCommand::Stop {
+    let running = wsl::is_running(DISTRO_NAME);
+    if !running && command != DevCommand::Stop {
         return Err(Error::GuestNotRunning);
+    }
+    let frontend = if matches!(command, DevCommand::Start | DevCommand::Restart) {
+        let port = dashboard::port(&layout.managed_home).map_err(super::dev::Error::from)?;
+        dashboard::check_port(&layout.managed_home, port).map_err(super::dev::Error::from)?;
+        let source = dashboard::source(&layout.managed_home).map_err(super::dev::Error::from)?;
+        Some((source, port))
+    } else {
+        None
+    };
+    if running {
+        dev::control(command)?;
     }
     if command == DevCommand::Clean {
         dashboard::clean(&layout.managed_home).map_err(super::dev::Error::from)?;
@@ -290,9 +300,7 @@ fn run_dev_control(layout: &lifecycle::Layout, command: DevCommand) -> Result<i3
     if command != DevCommand::Start {
         dashboard::stop(&layout.managed_home).map_err(super::dev::Error::from)?;
     }
-    if command != DevCommand::Stop {
-        let source = dashboard::source(&layout.managed_home).map_err(super::dev::Error::from)?;
-        let port = dashboard::port(&layout.managed_home).map_err(super::dev::Error::from)?;
+    if let Some((source, port)) = frontend {
         dashboard::start(&source, &layout.managed_home, port).map_err(super::dev::Error::from)?;
     }
     Ok(0)
@@ -642,6 +650,35 @@ mod tests {
         (directory, layout)
     }
 
+    fn dashboard_settings(layout: &lifecycle::Layout, port: u16) -> std::path::PathBuf {
+        use sha2::Digest;
+        let source = layout.managed_home.parent().unwrap().join("source");
+        let frontend = source.join("firecrab-frontend");
+        std::fs::create_dir_all(frontend.join("node_modules/vite")).unwrap();
+        for name in [
+            "package.json",
+            "package-lock.json",
+            "node_modules/vite/package.json",
+        ] {
+            std::fs::write(frontend.join(name), "{}").unwrap();
+        }
+        std::fs::write(
+            frontend.join("node_modules/.firecrab-dev-dependencies"),
+            format!("{:x}", sha2::Sha256::digest(b"{}\0{}\0")),
+        )
+        .unwrap();
+        let source = std::fs::canonicalize(source).unwrap();
+        std::fs::write(
+            layout.runtime().join("dev-dashboard.json"),
+            serde_json::json!({
+                "source": source, "session": uuid::Uuid::new_v4(), "port": port,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        source
+    }
+
     /// A host with WSL but nothing else registered or running.
     fn empty_host(line: &str) -> wsl::fake::Reply {
         match line {
@@ -729,6 +766,7 @@ mod tests {
     #[test]
     fn dev_control_failure_is_reported_without_starting_micro_manager() {
         let (_directory, layout) = layout();
+        dashboard_settings(&layout, 0);
         let wsl = fake::answer(|line| match line {
             "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
             l if l.contains("--exec bash -s -- restart") => Err("restart failed".into()),
@@ -739,6 +777,52 @@ mod tests {
             Err(Error::Wsl(_))
         ));
         assert_eq!(wsl.calls().len(), 2);
+    }
+
+    #[test]
+    fn invalid_dashboard_sources_and_foreign_sessions_fail_before_guest_controls() {
+        for command in [DevCommand::Start, DevCommand::Restart] {
+            for foreign in [false, true] {
+                let (_directory, layout) = layout();
+                let source = dashboard_settings(&layout, 0);
+                if foreign {
+                    let path = layout.runtime().join("dev-dashboard.json");
+                    let mut state: serde_json::Value =
+                        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                    state["isolated"] = true.into();
+                    std::fs::write(path, serde_json::to_vec(&state).unwrap()).unwrap();
+                } else {
+                    std::fs::remove_file(source.join("firecrab-frontend/package-lock.json"))
+                        .unwrap();
+                }
+                let wsl = fake::answer(|line| match line {
+                    "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
+                    other => panic!("dashboard validation changed the guest: {other}"),
+                });
+                assert!(matches!(
+                    run_dev_control(&layout, command),
+                    Err(Error::Dev(_))
+                ));
+                assert_eq!(wsl.calls().len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn a_dashboard_port_conflict_fails_before_guest_controls() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        for command in [DevCommand::Start, DevCommand::Restart] {
+            let (_directory, layout) = layout();
+            dashboard_settings(&layout, listener.local_addr().unwrap().port());
+            let wsl = fake::answer(|line| match line {
+                "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
+                other => panic!("dashboard port conflict changed the guest: {other}"),
+            });
+            let error = run_dev_control(&layout, command).unwrap_err();
+            assert!(error.to_string().contains("already in use"), "{error}");
+            assert_eq!(wsl.calls().len(), 1);
+            assert!(listener.local_addr().is_ok());
+        }
     }
 
     #[test]
