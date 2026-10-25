@@ -493,6 +493,12 @@ async fn releases_stay_immutable_after_stop_and_ownership_covers_both_generation
     let root = tempfile::tempdir().unwrap();
     let state = state(root.path()).await;
     let mut record = journal();
+    record
+        .update
+        .as_mut()
+        .unwrap()
+        .previous
+        .internal_route_owned = true;
     let old = (*record.update.as_ref().unwrap().previous).clone();
     state
         .store
@@ -537,6 +543,7 @@ async fn releases_stay_immutable_after_stop_and_ownership_covers_both_generation
     assert_eq!(releases[0].spec, old.spec);
     assert!(releases[0].instances.is_empty());
     assert!(!releases[0].domain_route_owned);
+    assert!(!releases[0].internal_route_owned);
     assert!(!format!("{releases:?}").contains("test-only-secret"));
 }
 

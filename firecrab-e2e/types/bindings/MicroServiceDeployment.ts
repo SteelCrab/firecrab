@@ -16,6 +16,6 @@ export type ServiceInstance = { vmId: string; ipv4: string; hostPort: number; st
 export type MicroServiceDeployment = {
   id: string; serviceId: string; phase: ServicePhase; spec: MicroServiceSpec;
   request: DeployMicroServiceRequest; digest: string | null; instances: ServiceInstance[];
-  log: string[]; error: string | null; domainRouteOwned?: boolean;
+  log: string[]; error: string | null; domainRouteOwned?: boolean; internalRouteOwned?: boolean;
   update?: ServiceUpdate; startedAt?: number; finishedAt?: number | null;
 };

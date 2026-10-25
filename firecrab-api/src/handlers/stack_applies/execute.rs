@@ -567,6 +567,7 @@ async fn service_stop_needed(
     }
     let needed = !deployment.instances.is_empty()
         || deployment.domain_route_owned
+        || deployment.internal_route_owned
         || deployment
             .update
             .as_ref()
@@ -676,6 +677,7 @@ async fn wait_service(
                 && current.phase == ServicePhase::Stopped
                 && current.instances.is_empty()
                 && !current.domain_route_owned
+                && !current.internal_route_owned
             {
                 return Ok(());
             }

@@ -284,3 +284,19 @@ async fn failed_unlink_keeps_the_journal_for_retry_and_rejects_symlink_parents()
     assert_eq!(collect(&state).await.unwrap(), 1);
     assert!(state.store.deploy_images().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn pending_internal_route_retains_the_image_until_withdrawal() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let mut record = release(Uuid::new_v4(), 9);
+    let image = owned_image(&state, &record, true);
+    record.phase = ServicePhase::Failed;
+    record.internal_route_owned = true;
+    state.store.save_service_deployment(&record).unwrap();
+    assert_eq!(collect(&state).await.unwrap(), 0);
+    assert!(root.path().join(&image.rootfs).exists());
+    record.internal_route_owned = false;
+    state.store.save_service_deployment(&record).unwrap();
+    assert_eq!(collect(&state).await.unwrap(), 1);
+}

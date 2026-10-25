@@ -282,6 +282,7 @@ pub fn owns_resources(deployment: &Value) -> bool {
         || !list(&deployment["update"]["previous"]["instances"]).is_empty()
         || deployment["domainRouteOwned"] == true
         || deployment["internalRouteOwned"] == true
+        || deployment["update"]["previous"]["internalRouteOwned"] == true
         || crate::deploy::busy(deployment)
 }
 

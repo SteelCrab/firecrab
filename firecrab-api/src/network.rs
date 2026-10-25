@@ -316,7 +316,19 @@ pub(crate) mod test_support {
                 Err(_) => return,
             };
             let response = NetworkResponseEnvelope {
-                pipe: None,
+                pipe: matches!(envelope.request, NetworkRequest::Pipe { .. }).then(|| {
+                    firecrab_helper_protocol::pipe::Snapshot {
+                        config: None,
+                        units: vec![],
+                        nginx_available: true,
+                        cloudflared_available: false,
+                        quick_tunnel: None,
+                        quick_tunnels: vec![],
+                        firecrab_tunnels: vec![],
+                        ingress_workers: None,
+                        ingress_graceful_drain: false,
+                    }
+                }),
                 version: PROTOCOL_VERSION,
                 request_id: envelope.request_id,
                 result: Ok(()),
