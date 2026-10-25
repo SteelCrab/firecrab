@@ -85,7 +85,7 @@ async fn saved_chatgpt_discovers_verifies_native_tools_and_completes_persistent_
         .id;
     let app = build_router(
         state,
-        &HttpConfig::from_values("127.0.0.1:5523", "http://localhost:8080", false, false).unwrap(),
+        &HttpConfig::from_values("127.0.0.1:5523", "http://localhost:8080").unwrap(),
     );
     let catalogue = call(
         &app,

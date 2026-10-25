@@ -83,7 +83,7 @@ async fn fixture() -> Fixture {
 fn router(state: &AppState) -> Router {
     build_router(
         state.clone(),
-        &HttpConfig::from_values("127.0.0.1:5523", "http://localhost:8080", false, false).unwrap(),
+        &HttpConfig::from_values("127.0.0.1:5523", "http://localhost:8080").unwrap(),
     )
 }
 async fn call(app: &Router, method: &str, path: &str, body: Value) -> (StatusCode, Value) {

@@ -88,6 +88,7 @@ The old React components, navigation files and browser API helper are removed.
 
 - Frontend Rust unit tests: **25 passed**, including authoritative REST summary compatibility, stale-poll protection, verified default/override gating and escaped review output.
 - WASM Clippy with warnings denied and production build: passed. Sandbox browser types, formatting, changelog and documentation links: passed.
+- Production frontend browser/compression contracts: **47 passed**.
 - The existing 9 Sandbox browser scenarios pass on WASM. A tenth scenario verifies draft text, focus and caret preservation when an active task changes state; **10 passed** in total.
 - Sandbox is included in the shared `test:dashboard` CI suite. The browser fixture now follows the VM response schema and asserts `data-engine=wasm`.
 - Updated screenshots use the WASM UI and retain the fixture-data labels. Original live-provider/MicroVM evidence above is separate from this frontend port.
