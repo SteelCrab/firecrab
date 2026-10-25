@@ -23,6 +23,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Changed PipeSecret values automatically rotate running domain services through
+  Deploy. Rotation keeps the current image and encrypted per-attempt values,
+  shares queue/capacity limits, and retains bounded retries across API restarts.
+  Tracked in [#503](https://github.com/SteelCrab/firecrab/issues/503).
+
 - One controller registers authenticated workload hosts and places VMs using
   deterministic image/resource filtering and durable capacity reservations.
   Idempotent operations reconcile with the recorded owner after timeouts and

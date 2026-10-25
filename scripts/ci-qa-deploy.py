@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 import uuid
 
 from deploy_fleet_qa import host_evidence, run_fleet
+from deploy_rotation_qa import run_rotation
 
 
 def digest(data):
@@ -65,6 +66,21 @@ printf 'release-{label}\\n'
             "release": "#!/bin/sh\n/bin/busybox touch /tmp/deploy-release\nprintf 'Content-Type: text/plain\\r\\n\\r\\nreleased\\n'\n",
             "holding": "#!/bin/sh\nprintf 'Content-Type: text/plain\\r\\n\\r\\n'\nif [ -f /tmp/deploy-holding ]; then echo holding; else echo idle; fi\n",
             "environment": "#!/bin/sh\nprintf 'Content-Type: text/plain\\r\\n\\r\\n%s:%s\\n' \"$FLEET_SERVICE\" \"$FLEET_RELEASE\"\n",
+            "rotation": """#!/bin/sh
+printf 'Content-Type: text/plain\\r\\n\\r\\n'
+case "$PASSWORD" in
+  qa-secret-v0) echo old ;;
+  qa-secret-v1) echo next ;;
+  qa-secret-v2) echo latest ;;
+  *) if [ "$UNRELATED" = 1 ]; then echo unrelated; else echo invalid; fi ;;
+esac
+""",
+            "rotation-health": """#!/bin/sh
+case "$PASSWORD:$UNRELATED" in
+  qa-secret-v0:*|qa-secret-v1:*|qa-secret-v2:*|:1) printf 'Content-Type: text/plain\\r\\n\\r\\nhealthy\\n' ;;
+  *) printf 'Status: 503 Service Unavailable\\r\\nContent-Type: text/plain\\r\\n\\r\\nunhealthy\\n' ;;
+esac
+""",
         }
         for name, script in scripts.items():
             data = script.encode()
@@ -177,13 +193,17 @@ def require_empty_host(api):
 
 def run(args, evidence):
     assert args.disposable_host and os.geteuid() == 0 and Path("/dev/kvm").exists()
-    assert int(subprocess.check_output(["nproc"], text=True)) >= 3, "three CPUs required for a two-replica rolling surge"
+    required_cpus = 4 if args.secret_rotation else 3
+    assert int(subprocess.check_output(["nproc"], text=True)) >= required_cpus, f"{required_cpus} CPUs required for the selected rolling-surge acceptance"
     if args.fifteen_services:
         evidence["host"] = host_evidence(args.images)
     assert "httpd" in subprocess.check_output([args.busybox, "--list"], text=True).splitlines()
     api = Api(args.api)
     api.ready()
     require_empty_host(api)
+    if args.secret_rotation:
+        assert not api.call("GET", "/api/secrets"), "refusing existing Secrets"
+        assert not api.call("GET", "/api/secrets/connections"), "refusing existing Secret connections"
     unit = "firecrab-ingress.service"
     fixtures = [image_fixture(Path(args.busybox).read_bytes(), label, label != "bad") for label in ["A", "B", "bad"]]
     registry = Registry(fixtures)
@@ -365,12 +385,15 @@ def run(args, evidence):
         assert len(samples) > 20 and not failures, {"samples": len(samples), "failures": failures[:10]}
         print(f"PASS unhealthy candidate stays out of traffic; {len(samples)} continuous HTTP requests, zero errors", flush=True)
         evidence["coreRequests"] = len(samples)
-        if args.fifteen_services:
+        if args.fifteen_services or args.secret_rotation:
             stop.set()
             loader.join(timeout=10)
             stop_service()
             service = None
-            run_fleet(api, wait_for, traffic, network, spec_a, fixtures[1][0], ingress_port, evidence)
+            if args.secret_rotation:
+                run_rotation(api, wait_for, traffic, network, spec_a, ingress_port, evidence)
+            else:
+                run_fleet(api, wait_for, traffic, network, spec_a, fixtures[1][0], ingress_port, evidence)
     finally:
         stop.set()
         if loader: loader.join(timeout=10)
@@ -413,11 +436,13 @@ if __name__ == "__main__":
     parser.add_argument("--images", default="/var/lib/firecrab/images")
     parser.add_argument("--config", default="/etc/firecrab")
     parser.add_argument("--busybox", default="/usr/bin/busybox")
-    parser.add_argument("--fifteen-services", action="store_true", help="require 16 CPUs and run the live 15-service acceptance")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--fifteen-services", action="store_true", help="require 16 CPUs and run the live 15-service acceptance")
+    modes.add_argument("--secret-rotation", action="store_true", help="require four CPUs and run live shared-Secret rotation acceptance")
     parser.add_argument("--report", type=Path, help="write measured evidence even when acceptance fails")
     args = parser.parse_args()
-    if args.fifteen_services and not args.report:
-        parser.error("--fifteen-services requires --report")
+    if (args.fifteen_services or args.secret_rotation) and not args.report:
+        parser.error("extended acceptance requires --report")
     evidence = {"status": "failed", "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}
     try:
         run(args, evidence)

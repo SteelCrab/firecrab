@@ -2,13 +2,14 @@
 
 Open **Secrets** in the web console, or navigate to `#/secrets`.
 PipeSecrets is Firecrab's internal secret store.
-Use **Internal** to create, edit, reveal, or delete a secret.
+Use the **Secrets** tab to create, edit, reveal, or delete a secret.
+Add, reveal, edit, and delete use plus, eye, pencil, and trash icons with action labels.
 Names support up to 512 ASCII characters: letters, numbers, and `_ . / + = @ -`.
 A secret value may be empty and may contain multiple lines.
 Values are limited to 16384 UTF-8 bytes, with no NUL bytes.
 The store supports up to 1000 secrets and 20 external connections.
 Secret lists and save responses contain metadata, never values.
-**Reveal** shows a value temporarily and hides it after 30 seconds or when the window loses focus.
+The eye icon shows a value temporarily and hides it after 30 seconds or when the window loses focus.
 Edits require the current version, so a stale editor cannot overwrite a newer value.
 A service reference prevents deletion of its secret.
 
@@ -16,8 +17,8 @@ A service reference prevents deletion of its secret.
 
 Store account secrets at `https://console.firecrab.dev/#secrets`.
 Connect that account under **Auth** with an integration token that has secrets-read permission.
-In the local **Secrets** screen, select **Preview account secrets**.
-Review the changes, then select **Import selected** to copy selected names into PipeSecrets.
+In the local **Secrets** screen, select **Preview** in the account card.
+Review the changes, then select **Import** to copy selected names into PipeSecrets.
 Existing values require explicit selection before replacement.
 The API uses the saved Auth credential; the browser does not receive the credential or preview values.
 Imports record **Firecrab Console** as the source.
@@ -27,7 +28,7 @@ A disconnected, replaced, expired, or revoked token blocks the import.
 
 ## External connections
 
-Use **External connections** to register a store.
+Open **Connections** and select **Connection** to register a store.
 Settings and credentials are saved on the Firecrab API host.
 
 | Provider | Settings | Credentials |
@@ -57,9 +58,9 @@ Use the optional token's clear checkbox to remove a saved token.
 
 ## Import and upload
 
-1. Select **Preview import** on an external connection.
+1. Select **Import** on an external connection.
 2. Review the added, changed, and unchanged names.
-3. Select the changes to apply, then choose **Import selected**.
+3. Select the changes to apply, then choose **Import**.
 
 New values are selected initially.
 Existing values require explicit selection before replacement.
@@ -69,8 +70,8 @@ Later external changes appear only after another import.
 Applying an import preserves an existing secret's ID and description.
 Deleting a connection preserves imported secrets and their source history.
 
-For uploads, select local values under **Internal**, choose a connection, then select **Preview upload**.
-Review the changes and select **Upload selected**.
+For uploads, select local values under **Secrets**, choose a connection, then select **Preview**.
+Review the changes and select **Upload**.
 The API checks local versions, connection versions, and the remote values again before uploading.
 Provider writes are separate requests, so an upload is not a transaction across providers or names.
 The response reports completed and failed names separately.
@@ -114,7 +115,7 @@ Apply bodies use `{"names":["DB_PASSWORD"]}`.
 Secret and connection updates require their latest `version`.
 Manage stored values and transfers through the web console.
 Reference local Secret UUIDs from [MicroService](microservices.md#inject-secrets).
-This feature does not add Secrets CLI commands or automatic rotation.
+This feature does not add Secrets CLI commands. MicroService value rotation is automatic.
 
 ## MicroService injection
 
@@ -136,9 +137,39 @@ larger values, but the guest environment limit still applies.
 
 When queued work starts, Firecrab resolves all references together and stores one
 encrypted deployment snapshot. Every replica uses that snapshot, including after
-a VM or API restart. Changes to a Secret apply to the next deployment; updating
-or importing a Secret does not restart running apps. Stop and redeploy to use the
-new value. Automatic rotation and rolling updates remain follow-up work.
+a VM or API restart.
+
+### Automatic value rotation
+
+Editing or importing a different value automatically redeploys running,
+Nginx-backed services that reference it. Firecrab checks for changes every five
+seconds and waits for admitted Deploy work to finish. The update keeps the
+current image digest, tag declaration, service configuration, domain, and network.
+Metadata edits and unchanged values keep the current replicas. Stopped and
+unrelated services stay as they are.
+Git-managed services keep their stack's single-writer rule. Use Git sync or
+explicitly release stack ownership before a direct deployment.
+
+Every attempt captures one encrypted Secret environment when its worker starts.
+Edits made during an update are reconciled after that attempt finishes. API
+restart resumes admitted Deploy work and compares desired values again, so an
+in-memory edit notification is not required.
+
+Use the service's Deploy status/log or `firecrab microservice status SERVICE_UUID`
+to follow progress and failures. Auth, capacity, readiness, ownership, and verified
+drain checks apply to automatic updates. A failed attempt retains or restores the
+previous release and its captured values. Invalid references, oversized guest
+values, missing private snapshots, or a service without an Nginx domain preserve
+the running service and show a status error.
+For external credentials shared by both generations, keep the old and new values
+valid until the rollout finishes.
+
+Retries use increasing delays and stop after five failed admissions/attempts for
+the same values and source release. Fix the reported cause and use Deploy to
+retry, or save a different Secret value. Metadata edits do not reset this limit.
+A drain failure that retains owned VMs requires the existing Deploy retry/Stop
+recovery controls. Rollback history still contains Secret references; selecting
+an older release uses the current values of those references.
 
 Secret values stay out of service configuration, deployment records, VM metadata,
 logs generated by the deployment controller, and SQLite. On boot they are merged
@@ -156,3 +187,13 @@ or a service without Secret references does not need the vault.
 Stop and failed-deploy cleanup remove the encrypted snapshot after removing all
 owned replicas. If cleanup fails, the snapshot remains available for a retry.
 Normal PipeSecrets records remain stored for reuse by other services.
+
+## Verification
+
+Verify shared-Secret rotation, restart recovery, failed-health rollback, and cleanup
+on an empty disposable Linux/KVM host with at least four CPUs:
+
+```sh
+sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation \
+  --report target/qa/secret-rotation.json
+```

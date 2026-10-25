@@ -252,6 +252,26 @@ pub(crate) struct Contents {
     /// Immutable Secret environments for deployments, never returned by the API.
     #[serde(default)]
     pub service_environments: BTreeMap<Uuid, BTreeMap<String, String>>,
+    /// Durable rotation admission/retry state; never exposed through Secrets APIs.
+    #[serde(default)]
+    pub service_rotations: BTreeMap<Uuid, ServiceRotation>,
+}
+
+/// Private reconciliation state. The value fingerprint remains encrypted in the vault.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ServiceRotation {
+    /// Successful source release fenced by the automatic update request.
+    pub release_id: Uuid,
+    /// Reused after a lost admission acknowledgement or a retryable admission error.
+    pub operation_id: Uuid,
+    /// Canonical value fingerprint; encrypted and excluded from public metadata.
+    pub fingerprint: String,
+    /// Number of admission attempts for these private values and this source release.
+    pub attempts: u8,
+    /// Earliest retry in Unix milliseconds, retained across API restarts.
+    pub retry_after: u64,
+    /// Exhausted retries wait for a different value or an explicit Deploy.
+    pub paused: bool,
 }
 
 /// Encrypted file store opened lazily by Secrets requests.
@@ -267,6 +287,11 @@ impl Vault {
     /// Records the vault directory without creating files or reading its key.
     pub(crate) fn new(root: PathBuf) -> Self {
         Self { root }
+    }
+
+    /// Avoid creating an unused vault during periodic service reconciliation.
+    pub(crate) fn is_initialized(&self) -> bool {
+        self.root.join("vault.bin").is_file()
     }
 
     /// Runs a read operation on decrypted contents under an exclusive file lock.
