@@ -73,7 +73,7 @@ def main():
     try:
         with tempfile.TemporaryDirectory(prefix=prefix) as directory:
             temporary = Path(directory)
-            run(["docker", "build", "-q", "-t", "firecrab-database-services-qa", "-f", str(ROOT / "scripts/database-services-qa.Dockerfile"), str(ROOT)], quiet=True)
+            run(["docker", "build", "-q", "-t", "firecrab-database-services-qa", "-f", str(ROOT / "scripts/database-services-qa.Dockerfile"), str(temporary)], quiet=True)
             run(["docker", "network", "create", prefix], quiet=True)
             mount = ["-v", f"{binary.parent}:/tests:ro", "-v", f"{temporary}:/qa"]
             if args.profiles:
