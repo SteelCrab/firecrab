@@ -125,7 +125,7 @@ Full suites ran as an unprivileged user with zstd, fakeroot, dnsmasq, sudo and N
 Earlier runs lacked tools or used root/read-only source mounts; those environment failures were corrected without weakening tests.
 This slice uses temporary databases and local provider fixtures. It does not rerun live provider inference or the combined real-model-to-MicroVM foundation gate.
 
-## Combined foundation QA attempt, 2026-10-26
+## Initial combined foundation QA attempts, 2026-10-26
 
 The opt-in [foundation harness](ai-sandbox-foundation-qa.md) requires one live provider-to-MicroVM run.
 Its regression suite passes **11 tests** without credentials. Fixtures cannot satisfy the live gate.
@@ -142,12 +142,55 @@ Ubuntu `ubuntu-26.04-v5` boots on a disposable user VM with one CPU, 512 MiB RAM
 The VM uses a dedicated MicroNetwork with internet disabled and isolated egress. Its pinned SSH host key matches.
 The development API/helper build and deployment pass after the source-archive fix.
 
-Live model validation is **blocked before inference**. Two fresh ChatGPT OAuth flows reach the official OpenAI consent page, then return `Operation timed out`.
+Live model validation was **blocked before inference** in these initial attempts. Two fresh ChatGPT OAuth flows reached the official OpenAI consent page, then returned `Operation timed out`.
 Neither callback completes. The dedicated API stores zero connections and sends no inference request. Pending local login attempts are cancelled.
 No local OAuth session is available to confirm retirement of a possible provider-side grant.
 The user's pre-existing connection database is not changed or copied.
 
-The combined execution, default/override, denied-model and post-disconnect checks remain **unverified**.
-The corresponding #414 checkbox and Canvas handoff stay open. Separate VM preparation and fixture checks do not pass them.
+At the end of these initial attempts, the combined execution, default/override, denied-model and post-disconnect checks were **unverified**.
+The successful follow-up below replaces that blocked status. Canvas handoff still requires the separate recovery checks.
 Private preflight, authentication-attempt and cleanup records retain the disposable resource IDs and observed failures.
 The owned workload VM, MicroNetwork, installed Ubuntu image/package and temporary management VM are removed after evidence export.
+
+## Verified combined model and MicroVM execution, 2026-10-26
+
+The combined live run passes all nine harness checks on the real Linux API/helper and Ubuntu `ubuntu-26.04-v5` MicroVM.
+Runtime code is `c0480b4c`; the harness includes the source-visibility and HTTP-response fixes described below.
+The run finishes at **05:12 KST on 2026-10-26**. Both tasks reach `result` and retain one real `run_command` event each.
+
+The earlier first-registration consent requests timed out at OpenAI.
+Reauthorization with the existing issued client registration completes a new OAuth exchange on a new QA host.
+Only the non-secret client/validated-subject mapping is initialized in the private QA database. The original tokens and database are not copied or changed.
+The QA host receives its own tokens through the normal callback, PKCE and signed-identity checks.
+This validates returning-account authorization; first-time registration remains dependent on the provider's registration service.
+
+Two failures in the QA harness are fixed before the complete passing run:
+
+- The installed API uses `PrivateTmp=yes` and `ProtectHome=yes`. A source created in the command shell's `/tmp` is invisible to the API. The fixture now uses a private API-user-owned directory under `/srv/firecrab-qa`, with the service protections retained. The API validates source access before any model probe.
+- Successful task responses contain `error: null`; retained task failures can contain an error string. The HTTP client now checks status before interpreting API-error objects. An already-admitted command is inspected and exported after the original parser failure, without resubmitting it.
+
+The harness regression suite now passes **14 tests**.
+
+| Selection | Model | Task | Attempt | Guest nonce returned by the model |
+| --- | --- | --- | --- | --- |
+| Project default | `gpt-6.1-sol` | `ab6fd85c-da0a-48e6-baef-4144260b6d28` | `4d8ef9e5-f4a5-4339-a817-844dccbe5429` | `58f6fa4f5a8607a0aaa3b3ad8bfcbb35` |
+| Task override | `gpt-6-luna` | `4589abec-9186-456a-b975-8055f002c884` | `a4e2c9c6-249f-4795-95a5-3faa81b490db` | `3fb559c09d428fd64b85b7f40102559d` |
+
+The VM is `8355498f-fd60-47b7-898c-296f59fbdcce` and both tasks retain runtime `e9633e7f-4c1b-4111-9686-e125913a68a1`.
+Project `d1189ca2-0fed-474e-b2b9-c11b6041e42b` keeps `gpt-6.1-sol` as its default after the override.
+Each exact command proves an unprivileged UID, no-new-privileges and an empty provider-key/SSH-agent environment, then generates 128 bits from `/dev/urandom`.
+Its nonce appears in stdout, the model's final response and the exported `guest-result.txt` diff. Stderr remains separate and the deliberate exit status is **7**.
+The host source and Git worktree remain unchanged; changes are not applied.
+
+The invalid configured model is rejected by verification and admission with HTTP **400**, without a saved proof or task.
+After local disconnect, catalogue discovery, verification and task admission are blocked; the rejected task remains absent.
+The disconnect receipt reports `deleted: true` and **`remoteRevocationConfirmed: true`** for the QA session.
+
+The owner-only full report retains all command inputs, outputs, model responses, changes and references before project/source cleanup.
+Its SHA-256 is `fe8c7b6c67627c28cb385c92169b1b6d557477420be58110b8441a8ba28c1c06`.
+The executed harness SHA-256 is `e3c22b6f8e5e7d991d229786ac3c681e6f70c1ac1edc3fc1147abef636b29fba`.
+An earlier completed task (`77a088c7-969e-4cc5-9bb3-5cab01145484`, nonce `321e0b93d7e51ec14756ea5dafe98e5d`) is also retained separately with its actual UI capture after parser-error reconciliation.
+
+Host storage exhaustion occurs during report export after the passing run. The complete JSON is preserved before stopping and purging only the disposable management VM and its owned workload/network/image data.
+Physical host free space returns to **18 GiB**. The runbook now requires host-level headroom for sparse disks and staging, separately from guest free space.
+Timeout/cancellation, controller-crash/guest-reboot reconciliation and the Canvas handoff remain separate unchecked acceptance steps.

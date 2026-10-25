@@ -122,6 +122,27 @@ class SandboxFoundationQaTests(unittest.TestCase):
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
             self.assertEqual(list(Path(directory).iterdir()), [output])
 
+    def test_http_success_preserves_task_error_fields(self):
+        for status, error in ((200, None), (202, None), (200, "A retained task failure")):
+            with self.subTest(status=status, error=error):
+                response = io.BytesIO(json.dumps({"id": PROJECT, "error": error}).encode())
+                response.code = status
+                api = qa.Api("http://127.0.0.1:5523")
+                api.http = SimpleNamespace(open=lambda *args, **kwargs: response)
+                code, task = api.request("GET", "/api/ai-sandbox/tasks/" + PROJECT, allowed=(200, 202))
+                self.assertEqual(code, status)
+                self.assertEqual(task, {"id": PROJECT, "error": error})
+
+    def test_http_failures_handle_nonstandard_error_shapes(self):
+        for error in (None, "Unavailable", {"code": "sandbox_busy"}):
+            with self.subTest(error=error):
+                response = io.BytesIO(json.dumps({"error": error}).encode())
+                response.code = 409
+                api = qa.Api("http://127.0.0.1:5523")
+                api.http = SimpleNamespace(open=lambda *args, **kwargs: response)
+                with self.assertRaises(qa.QaFailure):
+                    api.request("PUT", "/api/ai-sandbox/tasks/" + PROJECT, {})
+
     def test_live_and_disconnect_flags_are_required_before_contacting_api(self):
         args = ["ci-qa-ai-sandbox.py", "--api", "http://127.0.0.1:5523", "--run-id", RUN,
                 "--connection", CONNECTION, "--vm", VM, "--default-model", "one", "--override-model", "two", "--results-dir", "/unused"]
@@ -142,7 +163,7 @@ class SandboxFoundationQaTests(unittest.TestCase):
             report = json.loads((args.results_dir / "summary.json").read_text())
             self.assertEqual(report["status"], "PASS")
             self.assertEqual(len(report["tasks"]), 2)
-            self.assertEqual(set(report["checks"]), {"nativeModelPermissions", "projectDefault", "taskOverride",
+            self.assertEqual(set(report["checks"]), {"sourceVisibleToApi", "nativeModelPermissions", "projectDefault", "taskOverride",
                 "deniedModelVerification", "deniedModel", "afterDisconnect", "resultExport", "ownedCleanup"})
             self.assertEqual({t["selection"]["model"] for t in report["tasks"].values()}, {"default", "override"})
             self.assertTrue(api.disconnected)
@@ -150,6 +171,27 @@ class SandboxFoundationQaTests(unittest.TestCase):
             self.assertIs(report["connectionDisconnect"]["remoteRevocationConfirmed"], False)
             self.assertFalse((args.results_dir / "source").exists())
             self.assertFalse(any(method == "DELETE" and path.startswith("/api/vms/") for method, path in api.calls))
+
+    def test_api_invisible_source_fails_before_model_usage(self):
+        class PrivateTmpApi(LifecycleApi):
+            def request(self, method, path, body=None, allowed=(200,)):
+                if method == "PUT" and "/projects/" in path:
+                    self.calls.append((method, path))
+                    raise qa.QaFailure("Project directory is unavailable on the API host")
+                return super().request(method, path, body, allowed)
+
+        with tempfile.TemporaryDirectory() as directory:
+            api = PrivateTmpApi()
+            args = SimpleNamespace(run_id=uuid.UUID(RUN), connection=uuid.UUID(CONNECTION), vm=uuid.UUID(VM),
+                                   api="http://127.0.0.1:5523", default_model="default", override_model="override",
+                                   results_dir=Path(directory) / "results")
+            with redirect_stdout(io.StringIO()), self.assertRaises(qa.QaFailure):
+                qa.run_gate(args, api)
+            report = json.loads((args.results_dir / "summary.json").read_text())
+            self.assertEqual(report["status"], "FAILED")
+            self.assertEqual(report["tasks"], {})
+            self.assertFalse(any("/verify" in path or "discover=true" in path for _, path in api.calls))
+            self.assertFalse(api.disconnected or api.project_deleted)
 
     def test_failed_guest_proof_retains_source_and_ids_for_reconciliation(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -9,6 +9,8 @@ The checks consume the connected account's model usage and disconnect the select
 Use a [worktree development instance](worktree-dev.md) or a disposable Linux host running the current API/helper.
 Confirm usable KVM and a healthy writable filesystem before creating the workload VM.
 Run one gate at a time in this environment.
+For a new macOS instance with the default 16 GiB data disk, reserve at least 24 GiB of free physical host storage for the management disks, staging and downloads.
+Guest filesystem free space does not measure the host's remaining capacity for sparse backing files.
 
 1. Generate a run UUID, for example with `python3 -c 'import uuid; print(uuid.uuid4())'`.
 2. Create a fresh Pipe AI connection named exactly `sandbox-foundation-RUN_UUID`. Complete authentication through Pipe AI; keep tokens and API keys out of arguments, files used as project context, logs, and guests.
@@ -20,11 +22,20 @@ Use a connection created for this run. Do not rename a borrowed connection or co
 A separate connection keeps its OAuth refresh rotation and disconnection independent of the user's existing connection.
 The harness rejects resources with another name and projects already referring to the selected connection or VM.
 
+For an already registered ChatGPT account, reauthorize with its issued client ID and validated identity binding.
+The [official host contract](https://developers.openai.com/siwc/token-sharing-open-source) permits a registration to serve multiple hosts for the same account/workspace; each host keeps its own stable ID.
+An operator can initialize only that non-secret registration mapping on a disposable QA host, then complete a fresh OAuth exchange there.
+Keep the new session's tokens in the QA server and disconnect that session at the end. Preserve the original account's tokens and database.
+Accounts without a saved registration use the initial registration flow.
+
 ## Run on the API host
 
 Use the same OS user as the API so it can read the source fixture.
 Copy the standalone Python script to the API host if the checkout is elsewhere.
 Use that host's loopback API port, which can differ from the desktop's forwarded API and dashboard ports.
+Create `/srv/firecrab-qa` owned by that API user with mode `0700` first.
+Use a directory visible to both the script and the API. A systemd service with `PrivateTmp=yes` has a separate `/tmp` and `/var/tmp`; `ProtectHome=yes` also hides home directories.
+Keep those protections enabled and use the shared `/srv` path below.
 
 ```sh
 python3 scripts/ci-qa-ai-sandbox.py \
@@ -34,7 +45,7 @@ python3 scripts/ci-qa-ai-sandbox.py \
   --vm VM_UUID \
   --default-model DEFAULT_MODEL_ID \
   --override-model OVERRIDE_MODEL_ID \
-  --results-dir /tmp/sandbox-foundation-RUN_UUID \
+  --results-dir /srv/firecrab-qa/sandbox-foundation-RUN_UUID \
   --live --disconnect-owned-connection
 ```
 
@@ -44,6 +55,7 @@ The two explicit flags authorize real provider requests and disconnection of the
 
 The fixture is a private Git repository containing one baseline file. Its commit is recorded before execution.
 The harness creates one Sandbox project and admits two code tasks through REST.
+It checks API access to the source before discovering or verifying models, so an inaccessible source consumes no model usage.
 The first uses the project default; the second supplies a distinct task-specific model.
 
 ## Required evidence

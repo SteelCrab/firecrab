@@ -251,6 +251,8 @@ Entries land here as work merges, and move under the next version heading when t
   proxies keep callbacks on their selected API, including private worktrees.
 - Source development bundles preserve the embedded host-kernel build script,
   allowing current API sources to compile in the management VM.
+- Sandbox live QA checks API-visible source paths before model usage and accepts
+  successful task responses with nullable or textual task-error fields (#414).
 
 - PipeSecrets rejects AWS name prefixes containing filter operators or other
   non-name characters, preventing a negated prefix from listing secrets outside

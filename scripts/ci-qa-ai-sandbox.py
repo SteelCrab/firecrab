@@ -59,8 +59,10 @@ class Api:
             raw = response.read(2 * 1024 * 1024 + 1)
             require(len(raw) <= 2 * 1024 * 1024, "API response exceeds the QA limit")
             document = json.loads(raw)
-            code = document.get("error", {}).get("code", "unknown") if isinstance(document, dict) else "unknown"
-            require(response.code in allowed, f"{method} {path}: HTTP {response.code}, code={code}")
+            if response.code not in allowed:
+                error = document.get("error") if isinstance(document, dict) else None
+                code = error.get("code", "unknown") if isinstance(error, dict) else "unknown"
+                raise QaFailure(f"{method} {path}: HTTP {response.code}, code={code}")
             return response.code, document
 
 
@@ -175,6 +177,13 @@ def run_gate(args, api):
               "checks": {}, "tasks": {}, "retainedOnFailure": True}
     save_report(output, report)
     try:
+        # Validate the API's view of the source before any paid model probe.
+        # A systemd service can have a different /tmp from this process.
+        spec = {"name": f"sandbox-foundation-{run_id}", "sourcePath": str(source), "vmId": vm,
+                "selection": None, "instructions": "Use only the exact command authorized by this QA task."}
+        api.request("PUT", f"/api/ai-sandbox/projects/{project}", spec)
+        report["checks"]["sourceVisibleToApi"] = "PASS"
+        save_report(output, report)
         _, catalogue = api.request("GET", f"/api/ai-sandbox/connections/{connection}/models?discover=true")
         available = {m["id"] for m in catalogue["models"]}
         require({args.default_model, args.override_model} <= available, "Requested models are not account-visible")
@@ -183,8 +192,7 @@ def run_gate(args, api):
             require(proof.get("verified") and proof.get("toolsVerified"), "Real model native-tool verification failed")
         report["checks"]["nativeModelPermissions"] = "PASS"
         default = {"connectionId": connection, "model": args.default_model}
-        spec = {"name": f"sandbox-foundation-{run_id}", "sourcePath": str(source), "vmId": vm,
-                "selection": default, "instructions": "Use only the exact command authorized by this QA task."}
+        spec["selection"] = default
         api.request("PUT", f"/api/ai-sandbox/projects/{project}", spec)
         nonces = []
         attempts = set()
