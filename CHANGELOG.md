@@ -199,6 +199,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
+- Dashboard WASM builds reuse a version-checked `wasm-bindgen` Cargo installation
+  from the wasm-pack cache. The matching tool is exposed only to the build child,
+  avoiding an unnecessary installer pass while preserving normal discovery when
+  the cache is missing or stale.
+
 - The development API proxy preserves the dashboard's Host header so browser
   requests from custom ports such as 8098 pass the API's same-origin checks.
   Vite's default host checks and the API's origin checks reject untrusted requests.
