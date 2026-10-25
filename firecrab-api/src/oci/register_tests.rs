@@ -86,6 +86,42 @@ fn registering_leaves_the_source_ext4_in_place() {
 }
 
 #[test]
+fn deploy_registration_journals_private_rootfs_and_does_not_adopt_manual_imports() {
+    let (root, templates) = empty_registry();
+    let store = crate::persistence::Store::open(&root.path().join("cache.db")).unwrap();
+    let named = named_image(root.path(), "deploy-image", b"owned-ext4");
+    let result = register::register_named_image(named, &templates, Some(&store)).unwrap();
+    let rows = store.deploy_images().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].rootfs, result.rootfs);
+    assert!(crate::templates::deploy_cache::owned_rootfs(&result.rootfs));
+    assert_eq!(
+        std::fs::read(root.path().join(result.rootfs)).unwrap(),
+        b"owned-ext4"
+    );
+    register_named_oci_image(
+        named_image(root.path(), "manual-image", b"manual-ext4"),
+        &templates,
+    )
+    .unwrap();
+    assert_eq!(store.deploy_images().unwrap().len(), 1);
+    assert!(root.path().join("rootfs/manual-image.ext4").is_file());
+}
+
+#[test]
+fn deploy_journal_exists_before_publication_and_survives_registration_failure() {
+    let (root, templates) = empty_registry();
+    let store = crate::persistence::Store::open(&root.path().join("cache.db")).unwrap();
+    let named = named_image(root.path(), "failed-deploy-image", b"owned-ext4");
+    std::fs::remove_file(root.path().join(named.image.kernel())).unwrap();
+    assert!(register::register_named_image(named, &templates, Some(&store)).is_err());
+    let rows = store.deploy_images().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(!root.path().join(&rows[0].rootfs).exists());
+    assert!(templates.resolve_alias("failed-deploy-image").is_none());
+}
+
+#[test]
 fn registering_refuses_to_overwrite_an_existing_rootfs() {
     let (_keep, templates) = empty_registry();
     let dest = templates.image_root_path().join("rootfs/nginx-1.27.ext4");

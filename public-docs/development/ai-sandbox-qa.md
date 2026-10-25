@@ -82,12 +82,12 @@ Screenshots under `assets/dashboard/ai-sandbox/` use labelled fixture account/mo
 ## Rust/WASM integration, 2026-10-25
 
 PR #490 ports the UI from main at `ec06ac64` and replaces its React slice with Rust-owned state, rendering and delegated events.
-It integrates subsequent main changes through `0ec3cbaa`, including Git sources, mTLS, the development dashboard port option, RabbitMQ queues and console reconnect handling.
+It integrates subsequent main changes through `75a1ab4e`, including Git sources, mTLS, the development dashboard port/proxy changes, RabbitMQ queues, console reconnect handling and Deploy/rollback.
 The same conversation, project dialog, task board, diff/activity review, selected apply, icons and final AI sidebar group are preserved.
 The browser binding remains thin; the Sandbox application logic is in `firecrab-frontend/src/sandbox.rs` and its modules.
 The old React components, navigation files and browser API helper are removed.
 
-- Frontend Rust unit tests: **27 passed** after Queue integration, including authoritative REST summary compatibility, stale-poll protection, verified default/override gating and escaped review output.
+- Frontend Rust unit tests: **28 passed** after Queue/Deploy integration, including authoritative REST summary compatibility, stale-poll protection, verified default/override gating and escaped review output.
 - WASM Clippy with warnings denied and production build: passed. Sandbox browser types, formatting, changelog and documentation links: passed.
 - Production frontend browser/compression contracts: **47 passed**.
 - The existing 9 Sandbox browser scenarios pass on WASM. A tenth scenario verifies draft text, focus and caret preservation when an active task changes state; **10 passed** in total.
@@ -96,6 +96,6 @@ The old React components, navigation files and browser API helper are removed.
 - REST project guards cover invalid/system/private source paths, credential rejection, ineligible or duplicate VM bindings, active-work mutation/deletion, and owned-only deletion that preserves source files and borrowed VMs. The Linux Sandbox suite now passes **24 tests**, including the isolated root guest contract.
 
 Run `cargo test --manifest-path firecrab-frontend/Cargo.toml --locked` and `npm run test:sandbox --prefix firecrab-e2e` for the port-specific checks.
-Shared navigation/dashboard/Pipe AI browser regressions: **39 passed** after the port, plus **4 Queue scenarios** after latest-main integration. The current head's CI is checked before marking the PR ready for review.
+Latest-main integration passes **69 Sandbox/Pipe AI/navigation/Deploy browser scenarios**, plus **4 Queue scenarios**. The current head's CI and the unchanged 80% patch-coverage gate are checked before completion.
 
 Native CI also runs the ignored root-only guest contract through `scripts/test-ai-sandbox-guest.sh` in a disposable, network-isolated container. Only its test executable and coverage directory are mounted. Dedicated users and task files stay in the container, and its LLVM profile is included in the native coverage report. CLI/MCP regression tests check wire identities, configured model selection, recovery, explicit review paths, bounded stdin and credential rejection.

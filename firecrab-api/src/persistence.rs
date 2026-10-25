@@ -21,6 +21,7 @@ mod pools;
 mod queues;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod ai_sandbox;
+mod deploy_images;
 mod micro_services;
 mod pipe_ai;
 mod pipe_auth;
@@ -753,6 +754,9 @@ impl Store {
         conn.execute_batch(ai_sandbox::SCHEMA)?;
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
+        conn.execute_batch(micro_services::HISTORY_SQL)?;
+        conn.execute(deploy_images::SCHEMA, [])?;
+        micro_services::migrate_history(&conn)?;
         conn.execute_batch(stacks::SCHEMA_SQL)?;
         conn.execute_batch(stack_applies::SCHEMA_SQL)?;
         conn.execute_batch(queues::SCHEMA)?;

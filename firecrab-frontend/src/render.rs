@@ -702,6 +702,10 @@ pub fn deployment(value: Option<&Value>) -> String {
         "running" => "Running",
         "stopped" => "Stopped",
         "failed" => "Deployment failed",
+        "queued" => "Queued",
+        "switching_traffic" => "Switching Nginx traffic",
+        "draining" => "Draining previous requests",
+        "rolling_back" => "Restoring previous release",
         _ => phase,
     };
     let mut out = format!("<p role=\"status\">{}</p>", escape(crate::i18n::t(label)));

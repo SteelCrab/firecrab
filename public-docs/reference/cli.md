@@ -87,6 +87,7 @@ These commands use normal host selection; see [Stack ownership and planning](../
 | --- | --- |
 | VM | `vm list`, `create`, `start ID`, `stop ID`, `delete ID` |
 | MicroService | `microservice list`, `get ID`, `create --file JSON`, `update ID --file JSON`, `delete ID`, `deploy ID [--host-port PORT]`, `status ID`, `stop ID`; `--host-port` may be omitted only for services with a domain; see [MicroService](../guides/microservices.md) |
+| Deploy | `microservice rollout ID --file JSON`, `releases ID`, `rollback ID --release UUID`, `retry ID`; rollout and rollback accept `--strategy rolling\|blue_green`, `--operation-id UUID`, `--expected-release UUID`, `--no-wait`, and `--timeout SECONDS`; see [Deploy](../guides/deploy.md) |
 | Console | `vm console ID` (`terminal` alias) |
 | Network | `network list`, `create`, `delete ID` |
 | Image | `image list`, `inspect REFERENCE`, `import REFERENCE`, `import-status ALIAS` |

@@ -1,5 +1,6 @@
 mod advanced;
 mod api;
+mod deploy;
 mod details;
 mod forms;
 mod i18n;
@@ -57,6 +58,7 @@ struct App {
     detail_generation: u64,
     detail_polling: Option<u64>,
     service_deployment: Option<Value>,
+    deploy: deploy::State,
     job: Option<(String, Value)>,
     workflows: workflows::State,
     advanced: advanced::State,
@@ -872,7 +874,7 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         if sandbox::change(&language, &target) {
             return;
         }
-        if advanced::change(&language, &target) {
+        if deploy::change(&language, &target) || advanced::change(&language, &target) {
             return;
         }
         if terminal::change(&language, &target) {
@@ -1066,6 +1068,9 @@ fn open_palette(app: &Shared) {
     }
 }
 fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
+    if deploy::dispatch(&app, action) {
+        return;
+    }
     if action != "vm-menu" {
         set_html("menu-root", "");
     }
@@ -1423,6 +1428,13 @@ fn save_form(app: Shared, form_element: HtmlFormElement) {
             return;
         }
     };
+    if form.title == "Deploy update"
+        && let Err(error) = deploy::prepare_update(&app, &mut payload)
+    {
+        app.borrow_mut().error = error;
+        render_messages(&app);
+        return;
+    }
     let path = if form.title == "Connect registry" {
         if let Some(object) = payload.as_object_mut() {
             object.remove("registry");
@@ -1516,7 +1528,8 @@ fn mutate(
                 if path == "/api/micro-services"
                     || (submits_form
                         && path.starts_with("/api/micro-services/")
-                        && !path.ends_with("/deployment"))
+                        && !path.ends_with("/deployment")
+                        && !path.ends_with("/updates"))
                 {
                     state.detail = Some(value.clone());
                     let mut rows = model::list(&state.resource).to_vec();
@@ -1567,7 +1580,12 @@ fn mutate(
                         {
                             base.extend(updated.clone());
                         }
-                    } else if path.ends_with("/deployment") || path.ends_with("/stop") {
+                    } else if path.ends_with("/deployment")
+                        || path.ends_with("/stop")
+                        || path.ends_with("/updates")
+                        || path.ends_with("/rollback")
+                        || path.ends_with("/deployment/retry")
+                    {
                         state.service_deployment = Some(value.clone());
                         state.detail_result.clear();
                     } else if text(&value, "id") == id
@@ -1633,6 +1651,12 @@ fn mutate(
                 state.error = if path.ends_with("/rules") && error.message.starts_with("HTTP 409:")
                 {
                     "Stop affected VMs and service deployments before changing rules.".into()
+                } else if path.starts_with("/api/micro-services/")
+                    && (path.ends_with("/updates")
+                        || path.ends_with("/rollback")
+                        || path.ends_with("/deployment/retry"))
+                {
+                    deploy::failure(error.message)
                 } else {
                     error.message
                 };
