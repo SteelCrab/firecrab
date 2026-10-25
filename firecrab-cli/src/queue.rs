@@ -5,6 +5,7 @@ use firecrab_api_types::*;
 use serde::Serialize;
 use uuid::Uuid;
 
+/// Administrative commands for the internal broker and application queues.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Inspect or control the stateful internal RabbitMQ engine.
@@ -36,8 +37,10 @@ pub enum Command {
     /// Delete an empty, unused queue. Referencing services must be unbound first.
     Delete { id: Uuid },
 }
+/// Lifecycle operations for the single persistent RabbitMQ VM.
 #[derive(Debug, Subcommand)]
 pub enum EngineCommand {
+    /// Read the current engine lifecycle and readiness state.
     Status,
     /// Import the official image and create one stateful RabbitMQ MicroVM.
     Create {
@@ -57,12 +60,16 @@ pub enum EngineCommand {
     /// Stop messaging, keeping the VM and all queue data.
     Stop,
 }
+/// Role whose credential-bearing connection is explicitly requested.
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum Access {
+    /// Reveal the write-only publisher connection.
     Publish,
+    /// Reveal the read-only consumer connection.
     Consume,
 }
 
+/// Execute one Queue command through the selected host API.
 pub fn run(client: &ApiClient, command: Command) -> Result<(), ApiError> {
     match command {
         Command::Engine { command } => match command {
@@ -129,6 +136,7 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), ApiError> {
     }
     Ok(())
 }
+/// Write a public response or explicitly requested connection as formatted JSON.
 fn print(value: &impl Serialize) {
     match serde_json::to_string_pretty(value) {
         Ok(text) => println!("{text}"),

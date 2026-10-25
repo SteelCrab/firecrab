@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use uuid::Uuid;
 
+/// Bounded management client for the owned broker with sanitized failures.
 pub(crate) struct RabbitClient {
     client: Client,
     origin: String,
@@ -15,6 +16,7 @@ pub(crate) struct RabbitClient {
     password: String,
 }
 impl RabbitClient {
+    /// Resolve the owned broker address and its private management credentials.
     pub(crate) fn new(store: &Store) -> Result<Self, &'static str> {
         let record = store
             .queue_engine()
@@ -26,6 +28,7 @@ impl RabbitClient {
             .ok_or("Queue engine has no network address")?;
         Self::at(format!("http://{}:15672", lease.ipv4), record)
     }
+    /// Build transport for an explicit broker origin; disposable tests use a loopback origin.
     pub(super) fn at(origin: String, record: EngineRecord) -> Result<Self, &'static str> {
         let client = Client::builder()
             .no_proxy()
@@ -41,6 +44,7 @@ impl RabbitClient {
             password: record.password,
         })
     }
+    /// Send a bounded management request and sanitize upstream failures.
     pub(crate) async fn request(
         &self,
         method: Method,
@@ -50,6 +54,7 @@ impl RabbitClient {
     ) -> Result<Value, AppError> {
         self.send(method, path, body, id, false).await
     }
+    /// Implement bounded response decoding and idempotent missing-resource deletion.
     async fn send(
         &self,
         method: Method,
@@ -111,11 +116,13 @@ impl RabbitClient {
         serde_json::from_slice(&bytes)
             .map_err(|_| AppError::unavailable("RabbitMQ returned invalid metadata", id))
     }
+    /// Require the RabbitMQ overview endpoint to respond successfully.
     pub(crate) async fn verify(&self, id: Uuid) -> Result<(), AppError> {
         self.request(Method::GET, "overview?columns=rabbitmq_version", None, id)
             .await?;
         Ok(())
     }
+    /// Idempotently declare durable queues, failure routing and separate role permissions.
     pub(crate) async fn declare(&self, q: &QueueRecord, id: Uuid) -> Result<(), AppError> {
         let v = segment(&q.vhost());
         let main = segment(&q.name);
@@ -158,6 +165,7 @@ impl RabbitClient {
         }
         Ok(())
     }
+    /// Read main and failure queue counts without returning upstream metadata.
     pub(crate) async fn metrics(
         &self,
         q: &QueueRecord,
@@ -201,6 +209,7 @@ impl RabbitClient {
             failed: failed["messages"].as_u64().unwrap_or(0),
         })
     }
+    /// Delete only empty, unused resources and tolerate an interrupted prior deletion.
     pub(crate) async fn delete(&self, q: &QueueRecord, id: Uuid) -> Result<(), AppError> {
         // Check both queues before any deletion. Conditional deletes still guard races.
         let metrics = self.read_metrics(q, id, true).await?;

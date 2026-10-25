@@ -9,6 +9,7 @@ use firecrab_api_types::*;
 use std::{collections::BTreeMap, time::Duration};
 use uuid::Uuid;
 
+/// Build a broker VM request without putting credentials into VM metadata.
 fn vm_request(spec: &CreateQueueEngineRequest) -> CreateVmRequest {
     CreateVmRequest {
         name: "firecrab-queue".into(),
@@ -25,6 +26,7 @@ fn vm_request(spec: &CreateQueueEngineRequest) -> CreateVmRequest {
         env: BTreeMap::new(),
     }
 }
+/// Reconcile persisted engine state with its VM and omit private credentials.
 fn response(state: &AppState, record: &EngineRecord) -> QueueEngineResponse {
     let mut phase = record.phase;
     let mut error = record.error.clone();
@@ -48,6 +50,7 @@ fn response(state: &AppState, record: &EngineRecord) -> QueueEngineResponse {
         log: state.oci_imports.snapshot(TEMPLATE).log,
     }
 }
+/// Read engine state and verify management readiness for a running broker.
 pub(crate) async fn engine_status(
     state: &AppState,
     id: Uuid,
@@ -73,6 +76,7 @@ pub(crate) async fn engine_status(
     Ok(Some(result))
 }
 
+/// Reserve one engine identity and launch serialized asynchronous provisioning.
 pub(crate) async fn create_engine(
     state: AppState,
     spec: CreateQueueEngineRequest,
@@ -130,6 +134,7 @@ pub(crate) async fn create_engine(
     });
     Ok(result)
 }
+/// Recover the reserved engine identity without replacing an existing disk.
 pub(crate) async fn start_engine(
     state: AppState,
     id: Uuid,
@@ -163,6 +168,7 @@ pub(crate) async fn start_engine(
     });
     Ok(result)
 }
+/// Stop the broker VM asynchronously while preserving its disk and declarations.
 pub(crate) async fn stop_engine(
     state: AppState,
     id: Uuid,
@@ -221,6 +227,7 @@ pub(crate) async fn stop_engine(
     });
     Ok(result)
 }
+/// Persist the final result of one detached engine provisioning operation.
 async fn run(state: AppState, mut record: EngineRecord, id: Uuid) {
     match provision(&state, &mut record, id).await {
         Ok(()) => {
@@ -236,6 +243,7 @@ async fn run(state: AppState, mut record: EngineRecord, id: Uuid) {
         tracing::error!("could not save Queue engine result")
     }
 }
+/// Import on first use, checkpoint ownership and start only the reserved VM.
 async fn provision(state: &AppState, record: &mut EngineRecord, id: Uuid) -> Result<(), AppError> {
     let existing = state
         .vms

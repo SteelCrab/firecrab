@@ -4,6 +4,7 @@ use crate::queues::{EngineRecord, QueueRecord};
 use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
+/// Private engine and queue tables added to the existing SQLite store.
 pub(super) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS queue_engine (
     id INTEGER PRIMARY KEY CHECK (id = 1), record TEXT NOT NULL
@@ -12,12 +13,14 @@ CREATE TABLE IF NOT EXISTS application_queues (
     id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, record TEXT NOT NULL
 ) STRICT;";
 
+/// Decode a private record without exposing its contents on corruption.
 fn decode<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, PersistenceError> {
     serde_json::from_str(text).map_err(|_| PersistenceError::CorruptRecord {
         id: "queue".into(),
         reason: "invalid Queue record".into(),
     })
 }
+/// Reject a declaration whose identity differs from its SQLite key.
 fn decode_queue(id: &str, name: &str, text: &str) -> Result<QueueRecord, PersistenceError> {
     let record: QueueRecord = decode(text)?;
     if Uuid::parse_str(id).ok() != Some(record.id) || name != record.name {
@@ -28,6 +31,7 @@ fn decode_queue(id: &str, name: &str, text: &str) -> Result<QueueRecord, Persist
     }
     Ok(record)
 }
+/// Serialize private records with sanitized errors.
 fn encode<T: serde::Serialize>(record: &T) -> Result<String, PersistenceError> {
     serde_json::to_string(record).map_err(|_| PersistenceError::CorruptRecord {
         id: "queue".into(),
@@ -35,6 +39,7 @@ fn encode<T: serde::Serialize>(record: &T) -> Result<String, PersistenceError> {
     })
 }
 impl Store {
+    /// Load the single private engine record, if configured.
     pub(crate) fn queue_engine(&self) -> Result<Option<EngineRecord>, PersistenceError> {
         let text: Option<String> = self
             .lock()
@@ -44,10 +49,12 @@ impl Store {
             .optional()?;
         text.map(|s| decode(&s)).transpose()
     }
+    /// Persist the engine identity and lifecycle checkpoint atomically.
     pub(crate) fn save_queue_engine(&self, record: &EngineRecord) -> Result<(), PersistenceError> {
         self.lock().execute("INSERT INTO queue_engine(id,record) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET record=excluded.record", [encode(record)?])?;
         Ok(())
     }
+    /// Load declarations in display order and fail closed on identity corruption.
     pub(crate) fn list_queues(&self) -> Result<Vec<QueueRecord>, PersistenceError> {
         let conn = self.lock();
         let mut stmt =
@@ -65,6 +72,7 @@ impl Store {
         })
         .collect()
     }
+    /// Load and validate one queue identity from its stored primary key.
     pub(crate) fn queue(&self, id: Uuid) -> Result<Option<QueueRecord>, PersistenceError> {
         let row: Option<(String, String)> = self
             .lock()
@@ -77,10 +85,12 @@ impl Store {
         row.map(|(name, text)| decode_queue(&id.to_string(), &name, &text))
             .transpose()
     }
+    /// Persist a queue declaration and keep its indexed name consistent.
     pub(crate) fn save_queue(&self, record: &QueueRecord) -> Result<(), PersistenceError> {
         self.lock().execute("INSERT INTO application_queues(id,name,record) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET name=excluded.name,record=excluded.record", params![record.id.to_string(),record.name,encode(record)?])?;
         Ok(())
     }
+    /// Remove local declaration metadata after RabbitMQ deletion succeeds.
     pub(crate) fn delete_queue(&self, id: Uuid) -> Result<(), PersistenceError> {
         self.lock().execute(
             "DELETE FROM application_queues WHERE id=?1",

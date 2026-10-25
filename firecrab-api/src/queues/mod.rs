@@ -11,35 +11,56 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
+/// Immutable official RabbitMQ management image used by the internal engine.
 pub(crate) const IMAGE: &str = "docker.io/library/rabbitmq@sha256:79fb281ef7e0a15e3c5e0e12e66e944cebbf14a129493ef464369abd2c48d01a";
+/// Private image alias reserved for broker provisioning.
 pub(crate) const TEMPLATE: &str = "firecrab-rabbitmq-4-3-7";
 
 // Intentionally no Debug: these private records contain passwords.
+/// Private durable broker identity, lifecycle checkpoint and administrator credentials.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct EngineRecord {
+    /// Reserved VM identity that must never change during recovery.
     pub vm_id: Uuid,
+    /// Ownership checkpoint that prevents replacement of a previously created VM.
     pub vm_created: bool,
+    /// Original network, storage and guest resource allocation.
     pub spec: CreateQueueEngineRequest,
+    /// Last persisted lifecycle state.
     pub phase: QueueEnginePhase,
+    /// Publicly safe operation failure.
     pub error: Option<String>,
+    /// Private RabbitMQ administrator account.
     pub username: String,
+    /// Stable administrator password stored only in the owner-only database.
     pub password: String,
 }
+/// Private queue declaration and stable publisher/consumer credentials.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct QueueRecord {
+    /// Stable identifier used to derive the private vhost and role accounts.
     pub id: Uuid,
+    /// Validated RabbitMQ queue name.
     pub name: String,
+    /// Failed-redelivery limit before moving work to the failure queue.
     pub delivery_limit: u16,
+    /// Byte limit for each main and failure queue.
     pub max_bytes: u64,
+    /// Persisted declaration checkpoint for explicit retries.
     pub phase: QueuePhase,
+    /// Publicly safe provisioning failure.
     pub error: Option<String>,
+    /// Stable secret for the write-only application role.
     pub publish_password: String,
+    /// Stable secret for the read-only application role.
     pub consume_password: String,
 }
 impl QueueRecord {
+    /// Derive a private vhost from the immutable queue identifier.
     pub(crate) fn vhost(&self) -> String {
         format!("firecrab_{}", self.id.simple())
     }
+    /// Derive a stable role account within this queue vhost.
     pub(crate) fn username(&self, access: QueueAccess) -> String {
         format!(
             "{}_{}",
@@ -50,12 +71,14 @@ impl QueueRecord {
             }
         )
     }
+    /// Return the selected role secret without cloning it.
     pub(crate) fn password(&self, access: QueueAccess) -> &str {
         match access {
             QueueAccess::Publish => &self.publish_password,
             QueueAccess::Consume => &self.consume_password,
         }
     }
+    /// Expose queue settings and service references without credentials.
     pub(crate) fn response(&self, services: &[MicroServiceResponse]) -> QueueResponse {
         QueueResponse {
             id: self.id,
@@ -84,18 +107,22 @@ impl QueueRecord {
         }
     }
 }
+/// Generate a fresh high-entropy credential for a new persisted identity.
 pub(crate) fn password() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
+/// Percent-encode one AMQP URI or RabbitMQ management path segment.
 pub(crate) fn segment(value: &str) -> String {
     percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
 }
+/// Check the restricted queue-name alphabet and byte-length limit.
 pub(crate) fn valid_name(name: &str) -> bool {
     (1..=40).contains(&name.len())
         && name
             .bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
 }
+/// Check aliases used to form service environment variable names.
 pub(crate) fn valid_alias(alias: &str) -> bool {
     (1..=24).contains(&alias.len())
         && alias.as_bytes()[0].is_ascii_uppercase()
@@ -104,6 +131,7 @@ pub(crate) fn valid_alias(alias: &str) -> bool {
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
 }
 
+/// Resolve a role-scoped AMQP URL using the existing broker lease.
 pub(crate) fn connection(
     store: &Store,
     queue: &QueueRecord,
@@ -165,6 +193,7 @@ pub(crate) fn environment_for_vm(
     Ok(env)
 }
 
+/// Reject unknown queues, invalid aliases and environment-name conflicts.
 pub(crate) async fn validate_bindings(
     state: &AppState,
     spec: &MicroServiceSpec,
@@ -207,6 +236,7 @@ pub(crate) async fn validate_bindings(
     }
 }
 
+/// Place bound services on the broker network and reject conflicting selection.
 pub(crate) fn placement(
     state: &AppState,
     spec: &MicroServiceSpec,

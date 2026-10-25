@@ -16,12 +16,14 @@ use firecrab_api_types::*;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
+/// Return public engine state and management readiness.
 pub async fn engine(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
 ) -> Result<Json<Option<QueueEngineResponse>>, AppError> {
     queues::engine_status(&state, id.0).await.map(Json)
 }
+/// Accept installation of the single internal RabbitMQ engine.
 pub async fn create_engine(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -32,6 +34,7 @@ pub async fn create_engine(
         Json(queues::create_engine(state, spec, id.0).await?),
     ))
 }
+/// Accept recovery of the same broker VM and disk.
 pub async fn start_engine(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -41,6 +44,7 @@ pub async fn start_engine(
         Json(queues::start_engine(state, id.0).await?),
     ))
 }
+/// Accept a broker stop without deleting messages or credentials.
 pub async fn stop_engine(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -50,6 +54,7 @@ pub async fn stop_engine(
         Json(queues::stop_engine(state, id.0).await?),
     ))
 }
+/// List public queue declarations and their service references.
 pub async fn list(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -66,6 +71,7 @@ pub async fn list(
         records.iter().map(|q| q.response(&services)).collect(),
     ))
 }
+/// Resolve one validated private queue record or return a sanitized error.
 fn load(state: &AppState, id: Uuid, request_id: Uuid) -> Result<QueueRecord, AppError> {
     state
         .store
@@ -73,9 +79,11 @@ fn load(state: &AppState, id: Uuid, request_id: Uuid) -> Result<QueueRecord, App
         .map_err(|_| AppError::internal(request_id))?
         .ok_or_else(|| AppError::not_found(request_id))
 }
+/// Resolve the owned broker transport without exposing administrator credentials.
 fn client(state: &AppState, id: Uuid) -> Result<RabbitClient, AppError> {
     RabbitClient::new(&state.store).map_err(|message| AppError::unavailable(message, id))
 }
+/// Validate and persist a queue identity before detached provisioning starts.
 pub async fn create(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -150,6 +158,7 @@ pub async fn create(
     });
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
+/// Declare RabbitMQ resources and persist success or a retryable failure.
 async fn provision(state: AppState, mut record: QueueRecord, client: RabbitClient, id: Uuid) {
     match client.declare(&record, id).await {
         Ok(()) => {
@@ -165,6 +174,7 @@ async fn provision(state: AppState, mut record: QueueRecord, client: RabbitClien
         tracing::error!("could not save Queue provisioning result")
     }
 }
+/// Retry failed provisioning with the original identity and role passwords.
 pub async fn retry(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -209,6 +219,7 @@ pub async fn retry(
     });
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
+/// Return message and consumer counts for one queue.
 pub async fn metrics(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -221,6 +232,7 @@ pub async fn metrics(
         .await
         .map(Json)
 }
+/// Explicitly reveal one role connection with Cache-Control set to no-store.
 pub async fn reveal(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -237,6 +249,7 @@ pub async fn reveal(
         .map_err(|_| AppError::unavailable("Queue connection is unavailable", request_id.0))?;
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(connection)).into_response())
 }
+/// Reject referenced or busy queues before deleting broker and local records.
 pub async fn delete(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
