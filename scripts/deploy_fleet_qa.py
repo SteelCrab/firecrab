@@ -219,14 +219,26 @@ def run_fleet(api, wait_for, traffic, network, spec_a, digest_b, port, evidence)
                 traffic(hold_ip, 8080, "fixture", "/cgi-bin/release")
         hold_executor.shutdown(wait=True, cancel_futures=True)
         cleanup_errors = []
-        for service in services:
+
+        def remove_service(item):
+            index, service = item
             try:
+                # Space Nginx reloads while overlapping the longer drain waits.
+                time.sleep(index)
                 wait_for(lambda: api.call("GET", path(service, "/deployment"))["phase"] in terminal_phases | {"degraded"}, timeout=900)
-                api.call("POST", path(service, "/stop"))
-                wait_for(lambda: api.call("GET", path(service, "/deployment"))["phase"] == "stopped", timeout=180)
+                for _ in range(3):
+                    api.call("POST", path(service, "/stop"))
+                    result = wait_for(lambda: (record if (record := api.call("GET", path(service, "/deployment")))["phase"] in terminal_phases else None), timeout=180)
+                    if result["phase"] == "stopped":
+                        break
+                    time.sleep(1)
+                assert result["phase"] == "stopped", result
                 api.call("DELETE", path(service))
             except Exception as error:
                 cleanup_errors.append({"service": service["id"], "error": str(error)})
+        # Stop still honours each service's drain timeout. Overlap those waits.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=15) as cleanup:
+            list(cleanup.map(remove_service, enumerate(services)))
         metrics["elapsedSeconds"] = round(time.monotonic() - started, 2)
         metrics["cleanupErrors"] = cleanup_errors
         assert not cleanup_errors, cleanup_errors

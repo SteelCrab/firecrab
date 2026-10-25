@@ -869,6 +869,7 @@ pub(crate) async fn recover(state: &AppState) {
     let Ok(services) = database(Uuid::new_v4(), move || store.list_micro_services()).await else {
         return;
     };
+    let mut resumable = Vec::new();
     for service in services {
         let store = state.store.clone();
         let Ok(Some(mut deployment)) =
@@ -882,7 +883,7 @@ pub(crate) async fn recover(state: &AppState) {
             .is_some_and(|update| !update.completed)
         {
             if deployment.phase.is_busy() {
-                deploy::resume_worker(state.clone(), deployment);
+                resumable.push(deployment);
             }
             continue;
         }
@@ -894,6 +895,17 @@ pub(crate) async fn recover(state: &AppState) {
             );
             let _ = save(state, &deployment).await;
         }
+    }
+    // Finish an interrupted surge before queued requests inspect host capacity.
+    resumable.sort_by_key(|deployment| {
+        (
+            deployment.phase == ServicePhase::Queued,
+            deployment.started_at,
+            deployment.id,
+        )
+    });
+    for deployment in resumable {
+        deploy::resume_worker(state.clone(), deployment);
     }
 }
 
