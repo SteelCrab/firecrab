@@ -27,6 +27,24 @@ pub mod units;
 /// `firecrab service <sub>`.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Build an isolated development environment without changing host systemd services.
+    #[command(args_conflicts_with_subcommands = true)]
+    Dev {
+        #[command(subcommand)]
+        command: Option<crate::micromanager::DevCommand>,
+        /// Checkout root (defaults to the current directory).
+        #[arg(long, conflicts_with = "restore")]
+        source: Option<PathBuf>,
+        /// Development dashboard port.
+        #[arg(long, default_value_t = 8080, conflicts_with = "restore", value_parser = clap::value_parser!(u16).range(1..))]
+        port: u16,
+        #[arg(long, conflicts_with = "restore")]
+        release: bool,
+        #[arg(long)]
+        restore: bool,
+        #[arg(short, long, conflicts_with = "restore")]
+        yes: bool,
+    },
     /// Install the host services (install.sh equivalent).
     Install(InstallOpts),
     /// Stop and remove units, binaries and the dashboard.
@@ -135,9 +153,41 @@ impl Error {
 
 /// Executes one `firecrab service` command.
 pub fn run(runner: &dyn CommandRunner, command: Command) -> Result<(), Error> {
+    #[cfg(target_os = "linux")]
+    if let Command::Dev {
+        command,
+        source,
+        port,
+        release,
+        restore,
+        yes,
+    } = command
+    {
+        let code = crate::micromanager::dev::instance::linux_dev(
+            command,
+            source.as_deref(),
+            port,
+            release,
+            restore,
+            yes,
+        )
+        .map_err(|error| Error::step("dev", error.to_string()))?;
+        return if code == 0 {
+            Ok(())
+        } else {
+            Err(Error::step(
+                "dev",
+                format!("development command exited with {code}"),
+            ))
+        };
+    }
     let env = env::ServiceEnv::from_process_env();
     let privileged = privileged::Privileged::detect(runner);
     match command {
+        Command::Dev { .. } => Err(Error::step(
+            "dev",
+            "container development is selected through the native platform dispatcher",
+        )),
         Command::Start | Command::Stop | Command::Restart | Command::Enable | Command::Disable => {
             units::require_installed(&env)?;
             privileged.ensure_ticket()?;

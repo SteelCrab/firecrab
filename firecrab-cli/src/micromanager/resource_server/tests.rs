@@ -13,6 +13,47 @@ fn only_loopback_hosts_and_trusted_browser_origins_are_accepted() {
     headers.insert("host", HeaderValue::from_static("evil.example:5524"));
     assert!(!allowed(&headers, home.path()));
 }
+
+#[test]
+fn private_resource_control_accepts_only_its_own_host_and_browser_ports() {
+    let directory = tempfile::tempdir().unwrap();
+    let instance = super::super::dev::instance::test_instance(
+        directory.path(),
+        "0123456789abcdef",
+        45121,
+        45122,
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert("host", "127.0.0.1:45122".parse().unwrap());
+    for origin in ["http://localhost:45121", "http://127.0.0.1:45121"] {
+        headers.insert("origin", origin.parse().unwrap());
+        assert!(allowed(&headers, &instance.managed_home));
+    }
+    for origin in [
+        "http://localhost:8080",
+        "http://localhost:5523",
+        "http://localhost:8098",
+        "http://localhost:45123",
+    ] {
+        headers.insert("origin", origin.parse().unwrap());
+        assert!(!allowed(&headers, &instance.managed_home));
+    }
+    fs::create_dir_all(instance.managed_home.join("runtime")).unwrap();
+    fs::write(
+        instance.managed_home.join("runtime/dev-dashboard.json"),
+        json!({
+            "source": instance.source, "session": uuid::Uuid::new_v4(), "port": 8098,
+            "api_port": instance.api_port, "resource_port": instance.resource_port,
+            "isolated": true
+        })
+        .to_string(),
+    )
+    .unwrap();
+    headers.insert("origin", "http://localhost:8098".parse().unwrap());
+    assert!(allowed(&headers, &instance.managed_home));
+    headers.insert("host", "127.0.0.1:5524".parse().unwrap());
+    assert!(!allowed(&headers, &instance.managed_home));
+}
 use axum::body::{Body, to_bytes};
 use axum::http::Request;
 use serde_json::{Value, json};

@@ -60,6 +60,12 @@ pub enum Error {
 }
 
 pub fn run(command: Command) -> Result<i32, Error> {
+    #[cfg(target_os = "windows")]
+    if let Some(code) = super::dev::instance::dispatch(&command)
+        .map_err(|source| super::dev::io_error("select worktree development instance", source))?
+    {
+        return Ok(code);
+    }
     match command {
         Command::Resource { options } => Ok(super::resource::run(options)?),
         Command::ResourceServer { home } => Ok(super::resource_server::run(home)?),

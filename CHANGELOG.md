@@ -39,6 +39,14 @@ Entries land here as work merges, and move under the next version heading when t
   macOS and Windows. Development controls retain the selected port, and older
   dashboard sessions default to 8080. Tracked in [#488](https://github.com/SteelCrab/firecrab/issues/488).
 
+- Git-linked worktrees have independent `service dev --port PORT` environments.
+  macOS uses a separate management VM; Windows and Linux use a private Docker
+  runtime with separate data, caches, ownership, and network state. Backend
+  API/resource ports are assigned and saved; dashboard ports remain manual.
+  Primary macOS/Windows development remains separate, and Linux primary-checkout
+  development uses Docker without changing production systemd services.
+  Tracked in [#495](https://github.com/SteelCrab/firecrab/issues/495).
+
 - Secrets imports selected values from the Firecrab account linked in Auth.
   The Rust/WASM dashboard previews names without values, requires explicit
   selection for replacements, and records Firecrab Console as the source (#411).

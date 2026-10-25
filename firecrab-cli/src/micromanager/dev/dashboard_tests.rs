@@ -78,14 +78,49 @@ impl Fixture {
     fn start(&self) -> Result<(), Error> {
         start(&self.source(), self.home.path(), self.port)
     }
+    fn start_private(&self, instance: &super::super::instance::Instance) -> Result<(), Error> {
+        start(&self.source(), &instance.managed_home, self.port).inspect_err(|_| {
+            if let Ok(log) =
+                fs::read_to_string(instance.managed_home.join("runtime/dev-dashboard.log"))
+            {
+                eprintln!("private dashboard startup log:\n{log}");
+            }
+        })
+    }
     fn state(&self) -> Session {
         read_session(self.home.path()).unwrap().unwrap()
+    }
+    fn private_instance(
+        &self,
+        id: &str,
+        api_port: u16,
+        resource_port: u16,
+    ) -> super::super::instance::Instance {
+        let mut instance =
+            super::super::instance::test_instance(self.home.path(), id, api_port, resource_port);
+        instance.source = self.source();
+        fs::write(
+            instance.managed_home.join("dev-instance.json"),
+            serde_json::to_vec(&instance).unwrap(),
+        )
+        .unwrap();
+        instance
     }
 }
 
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = stop(self.home.path());
+    }
+}
+
+struct DashboardGuard(Session);
+
+impl Drop for DashboardGuard {
+    fn drop(&mut self) {
+        if let Ok(client) = client() {
+            let _ = stop_session(&client, &self.0, &self.0.url());
+        }
     }
 }
 
@@ -119,6 +154,138 @@ fn starts_reuses_stops_and_resumes_the_selected_checkout() {
     .unwrap();
     assert_ne!(fixture.state().session, original.session);
     assert_eq!(fixture.state().port, fixture.port);
+}
+
+#[test]
+fn different_managed_homes_keep_their_dashboards_and_stop_independently() {
+    let first = Fixture::new();
+    let second = Fixture::new();
+    first.start().unwrap();
+    second.start().unwrap();
+    let selected = second.state();
+    assert_ne!(first.state().session, selected.session);
+    stop(first.home.path()).unwrap();
+    assert!(!listening(&first.url()));
+    assert!(running(&client().unwrap(), &selected, &second.url()));
+    clean(first.home.path()).unwrap();
+    assert_eq!(second.state(), selected);
+    assert!(running(&client().unwrap(), &selected, &second.url()));
+}
+
+#[test]
+fn a_private_instance_passes_its_backend_ports_to_the_owned_server() {
+    let fixture = Fixture::new();
+    let instance = fixture.private_instance("0123456789abcdef", 45121, 45122);
+    // Canonical Windows homes use the verbatim prefix that Node must not receive
+    // as its ESM entry argument. This fixture must retain that production shape.
+    #[cfg(windows)]
+    assert!(matches!(
+        instance.managed_home.components().next(),
+        Some(std::path::Component::Prefix(prefix)) if prefix.kind().is_verbatim()
+    ));
+    fixture.start_private(&instance).unwrap();
+    let selected = read_session(&instance.managed_home).unwrap().unwrap();
+    assert_eq!(selected.api_port, 45121);
+    assert_eq!(selected.resource_port, 45122);
+    assert!(selected.isolated);
+    assert!(running(&client().unwrap(), &selected, &fixture.url()));
+    stop(&instance.managed_home).unwrap();
+}
+
+#[test]
+fn copied_sessions_cannot_control_primary_or_other_private_dashboards() {
+    let primary = Fixture::new();
+    let first = Fixture::new();
+    let second = Fixture::new();
+    let first_instance = first.private_instance("0123456789abcdef", 45121, 45122);
+    let second_instance = second.private_instance("fedcba9876543210", 45123, 45124);
+    primary.start().unwrap();
+    let primary_server = DashboardGuard(primary.state());
+    first.start_private(&first_instance).unwrap();
+    let first_server = DashboardGuard(read_session(&first_instance.managed_home).unwrap().unwrap());
+    second.start_private(&second_instance).unwrap();
+    let second_server = DashboardGuard(
+        read_session(&second_instance.managed_home)
+            .unwrap()
+            .unwrap(),
+    );
+    let primary_bytes = serde_json::to_vec(&primary_server.0).unwrap();
+    let first_bytes = serde_json::to_vec(&first_server.0).unwrap();
+    let second_bytes = serde_json::to_vec(&second_server.0).unwrap();
+    let primary_home = primary.home.path().to_owned();
+    let cases = [
+        (
+            &first_instance.managed_home,
+            first.source(),
+            first.port,
+            &first_bytes,
+            &primary_bytes,
+        ),
+        (
+            &second_instance.managed_home,
+            second.source(),
+            second.port,
+            &second_bytes,
+            &first_bytes,
+        ),
+        (
+            &primary_home,
+            primary.source(),
+            primary.port,
+            &primary_bytes,
+            &first_bytes,
+        ),
+    ];
+    let client = client().unwrap();
+    for (home, source, selected_port, original, foreign) in cases {
+        let record = home.join("runtime/dev-dashboard.json");
+        assert!(check_port(home, selected_port).is_ok());
+        fs::write(&record, foreign).unwrap();
+        assert!(stop(home).is_err());
+        assert!(clean(home).is_err());
+        assert!(start(&source, home, selected_port).is_err());
+        assert!(check_port(home, selected_port).is_err());
+        assert!(port(home).is_err());
+        assert_eq!(fs::read(&record).unwrap(), *foreign);
+        for server in [&primary_server, &first_server, &second_server] {
+            assert!(running(&client, &server.0, &server.0.url()));
+        }
+        fs::write(record, original).unwrap();
+    }
+}
+
+#[test]
+fn a_private_dashboard_rejects_a_different_source_before_stopping_its_server() {
+    let fixture = Fixture::new();
+    let other = Fixture::new();
+    let instance = fixture.private_instance("0123456789abcdef", 45121, 45122);
+    fixture.start_private(&instance).unwrap();
+    let server = DashboardGuard(read_session(&instance.managed_home).unwrap().unwrap());
+    let record = instance.managed_home.join("runtime/dev-dashboard.json");
+    let before = fs::read(&record).unwrap();
+    assert!(start(&other.source(), &instance.managed_home, fixture.port).is_err());
+    assert_eq!(fs::read(&record).unwrap(), before);
+    assert!(running(&client().unwrap(), &server.0, &server.0.url()));
+    let mut foreign: Session = serde_json::from_slice(&before).unwrap();
+    foreign.source = other.source();
+    fs::write(&record, serde_json::to_vec(&foreign).unwrap()).unwrap();
+    assert!(stop(&instance.managed_home).is_err());
+    assert!(clean(&instance.managed_home).is_err());
+    assert!(check_port(&instance.managed_home, fixture.port).is_err());
+    assert!(start(&fixture.source(), &instance.managed_home, fixture.port).is_err());
+    assert!(running(&client().unwrap(), &server.0, &server.0.url()));
+    fs::write(record, before).unwrap();
+}
+
+#[test]
+fn check_port_never_creates_state_and_preserves_foreign_listeners() {
+    let fixture = Fixture::new();
+    assert!(check_port(fixture.home.path(), fixture.port).is_ok());
+    assert!(!fixture.home.path().join("runtime").exists());
+    let listener = TcpListener::bind(("127.0.0.1", fixture.port)).unwrap();
+    assert!(check_port(fixture.home.path(), fixture.port).is_err());
+    assert!(!fixture.home.path().join("runtime").exists());
+    assert!(listener.local_addr().is_ok());
 }
 
 #[test]
@@ -216,6 +383,7 @@ fn refuses_unauthorized_shutdown_and_stale_session_ownership() {
         session: Uuid::new_v4(),
         dependencies: fixture.state().dependencies,
         port: fixture.port,
+        ..fixture.state()
     };
     stop_session(&client, &stale, &fixture.url()).unwrap();
     assert!(running(&client, &fixture.state(), &fixture.url()));
@@ -261,6 +429,9 @@ fn old_sessions_and_missing_state_use_the_default_port() {
     .unwrap();
     let state = read_session(home.path()).unwrap().unwrap();
     assert_eq!(state.port, 8080);
+    assert_eq!(state.api_port, 5523);
+    assert_eq!(state.resource_port, 5524);
+    assert!(!state.isolated);
     assert_eq!(state.url(), "http://127.0.0.1:8080");
     assert_eq!(port(home.path()).unwrap(), 8080);
 }
