@@ -14,9 +14,23 @@ pub const ENDPOINT: &str = "/api/microblockstorage";
 
 #[derive(Default)]
 pub struct State {
-    pub draft: Option<Draft>,
+    draft: Option<Draft>,
+    attach_open: bool,
+    detaching: Option<String>,
+    action_error: String,
+    notice: String,
     loading: Option<u64>,
     error: String,
+}
+
+impl State {
+    pub fn reset_editor(&mut self) {
+        self.draft = None;
+        self.attach_open = false;
+        self.detaching = None;
+        self.action_error.clear();
+        self.notice.clear();
+    }
 }
 
 pub struct Draft {
@@ -86,8 +100,8 @@ pub fn content(app: &App) -> String {
             button(label, "navigate-vm", vm)
         };
         html.push_str(&format!(
-            "<tr><td><strong>{}</strong><div class=\"mono\">{}</div></td><td>{}</td><td>{}</td><td>{}</td><td>{owner}</td><td class=\"mono\">{}</td><td><button type=\"button\" class=\"btn danger\" data-action=\"volume-delete\" data-id=\"{}\" {}>{}</button></td></tr>",
-            escape(text(volume,"name")), escape(text(volume,"id")), volume["sizeGib"], t(text(volume,"state")),
+            "<tr><td><strong>{}</strong><div class=\"mono volume-id\" title=\"{}\">{}</div></td><td>{}</td><td>{}</td><td>{}</td><td>{owner}</td><td class=\"mono\">{}</td><td><button type=\"button\" class=\"btn danger\" data-action=\"volume-delete\" data-id=\"{}\" {}>{}</button></td></tr>",
+            escape(text(volume,"name")), escape(text(volume,"id")), escape(text(volume,"id")), volume["sizeGib"], t(text(volume,"state")),
             escape(text(volume,"storageRoot")), escape(text(volume,"mountPath")), escape(text(volume,"id")),
             disabled(app.busy || !available(volume)), t("Delete")
         ));
@@ -142,14 +156,31 @@ pub fn tick(app: &Shared) {
     }
 }
 
+pub fn mutation_finished(app: &mut App, path: &str, succeeded: bool) {
+    if app.route != "vms" || !path.starts_with(ENDPOINT) {
+        return;
+    }
+    app.notice.clear();
+    if succeeded {
+        app.volumes.reset_editor();
+        app.volumes.notice = t(if path.ends_with("/attach") {
+            "Volume attached."
+        } else {
+            "Volume detached."
+        })
+        .into();
+    } else {
+        app.volumes.action_error = std::mem::take(&mut app.error);
+    }
+}
+
 pub fn after_mutation(app: &Shared, path: &str) {
     if path.starts_with(ENDPOINT) {
-        if let Some(draft) = &mut app.borrow_mut().volumes.draft {
-            draft.volume.clear();
-        }
         load(app);
     }
 }
+
+const DISK_ICON: &str = "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\"/><path d=\"M3 14h18M7 17h.01M11 17h.01\"/></svg>";
 
 pub fn panel(app: &App, vm: &Value) -> String {
     let cached = app.cache.get(ENDPOINT);
@@ -158,55 +189,120 @@ pub fn panel(app: &App, vm: &Value) -> String {
         .iter()
         .filter(|volume| volume["attachedVmId"] == vm["id"])
         .collect();
+    let free: Vec<_> = volumes.iter().filter(|volume| available(volume)).collect();
     let enabled = editable(vm) && !app.busy && cached.is_some() && app.volumes.error.is_empty();
+    let can_attach = enabled && attached.len() < 8 && !free.is_empty();
     let mut html = format!(
-        "<section><h3>{}</h3><p>{}</p>",
+        "<section class=\"detail-sec volume-section\" aria-label=\"{}\"><div class=\"detail-sec-head\"><h3>{} <span class=\"volume-count\">{}</span></h3>{}</div><p class=\"detail-note\">{}</p>",
         t("Data volumes"),
-        t("Stop this VM to attach or detach a volume. Data stays after VM deletion.")
+        t("Attached volumes"),
+        attached.len(),
+        if can_attach && !app.volumes.attach_open {
+            format!(
+                "<button id=\"volume-open-attach\" class=\"btn sm\" type=\"button\" data-action=\"volume-open-attach\"><span aria-hidden=\"true\">＋</span> {}</button>",
+                t("Attach volume")
+            )
+        } else {
+            String::new()
+        },
+        t("Data stays after VM deletion.")
     );
     if !app.volumes.error.is_empty() {
         html.push_str(&format!(
-            "<p role=\"alert\">{}</p>{}",
+            "<div class=\"volume-notice error\" role=\"alert\">{}{}</div>",
             escape(&app.volumes.error),
             button("Retry", "volume-refresh", "")
         ));
     } else if cached.is_none() {
-        html.push_str(&format!("<p>{}</p>", t("Loading volumes…")));
-    } else if attached.is_empty() {
-        html.push_str(&format!("<p>{}</p>", t("No attached volumes.")));
+        html.push_str(&format!(
+            "<p class=\"detail-note\">{}</p>",
+            t("Loading volumes…")
+        ));
+    } else if attached.is_empty() && !app.volumes.attach_open {
+        html.push_str(&format!(
+            "<div class=\"volume-empty\">{DISK_ICON}<strong>{}</strong><p>{}</p></div>",
+            t("No attached volumes."),
+            t("Attach a volume to keep application data separate from the VM disk.")
+        ));
+    }
+    if !app.volumes.notice.is_empty() {
+        html.push_str(&format!(
+            "<p class=\"volume-notice success\" role=\"status\">{}</p>",
+            escape(&app.volumes.notice)
+        ));
+    }
+    if !editable(vm) {
+        html.push_str(&format!(
+            "<p class=\"volume-notice\">{}</p>",
+            t(if matches!(text(vm, "purpose"), "" | "instance") {
+                "Stop this VM to attach or detach a volume."
+            } else {
+                "Data volumes can only be attached to instance VMs."
+            })
+        ));
     }
     for volume in &attached {
+        let id = text(volume, "id");
+        html.push_str(&format!("<div class=\"volume-item\"><div class=\"volume-item-head\"><span class=\"volume-icon\">{DISK_ICON}</span><div class=\"volume-item-name\"><strong>{}</strong><span>{} GiB</span></div><button class=\"btn ghost sm\" type=\"button\" id=\"volume-detach-{}\" data-action=\"volume-detach-prompt\" data-id=\"{}\" {}>{}</button></div><div class=\"volume-path\"><span>{}</span><code>{}</code></div>", escape(text(volume,"name")), volume["sizeGib"], escape(id), escape(id), disabled(!enabled), t("Detach"), t("Mount path"), escape(text(volume,"mountPath"))));
+        if app.volumes.detaching.as_deref() == Some(id) {
+            html.push_str(&format!("<div class=\"volume-confirm\"><p>{}</p><div class=\"volume-editor-actions\">{}<button class=\"btn danger sm\" data-action=\"volume-detach\" data-id=\"{}\" {}>{}</button></div></div>", t("Detach this volume? Its data will be kept."), format_args!("<button id=\"volume-confirm-cancel\" class=\"btn sm\" data-action=\"volume-cancel\">{}</button>",t("Cancel")), escape(id), disabled(!enabled), t("Detach volume")));
+        }
+        html.push_str("</div>");
+    }
+    if !app.volumes.action_error.is_empty() {
         html.push_str(&format!(
-            "<section class=\"wasm-card\"><strong>{}</strong> · {} GiB<p class=\"mono\">{}</p><button class=\"btn\" type=\"button\" data-action=\"volume-detach\" data-id=\"{}\" {}>{}</button></section>",
-            escape(text(volume,"name")),volume["sizeGib"],escape(text(volume,"mountPath")),escape(text(volume,"id")),disabled(!enabled),t("Detach")
+            "<p class=\"volume-notice error\" role=\"alert\">{}</p>",
+            escape(&app.volumes.action_error)
         ));
     }
-    let draft = app
-        .volumes
-        .draft
-        .as_ref()
-        .filter(|draft| draft.vm == text(vm, "id"));
-    let selected = draft.map(|draft| draft.volume.as_str()).unwrap_or("");
-    let selection_available = volumes
-        .iter()
-        .any(|volume| volume["id"] == selected && available(volume));
-    let mount = draft.map(|draft| draft.mount.as_str()).unwrap_or("/data");
-    html.push_str(&format!("<div class=\"wasm-form\"><div class=\"field wasm-wide\"><label for=\"vm-volume\">{}</label><select id=\"vm-volume\" {}><option value=\"\">{}</option>",t("Available volume"),disabled(!enabled || attached.len() >= 8),t("Select a volume")));
-    for volume in volumes.iter().filter(|volume| available(volume)) {
+    if app.volumes.attach_open && editable(vm) {
+        let draft = app
+            .volumes
+            .draft
+            .as_ref()
+            .filter(|draft| draft.vm == text(vm, "id"));
+        let selected = draft.map(|draft| draft.volume.as_str()).unwrap_or("");
+        let mount = draft.map(|draft| draft.mount.as_str()).unwrap_or("/data");
+        let selection_available = free.iter().any(|volume| volume["id"] == selected);
+        html.push_str(&format!("<div class=\"volume-editor\" role=\"group\" aria-label=\"{}\"><h4>{}</h4><div class=\"field\"><label for=\"vm-volume\">{}</label><select id=\"vm-volume\" {}><option value=\"\">{}</option>", t("Attach volume"), t("Attach volume"), t("Available volume"), disabled(!enabled), t("Select a volume")));
+        for volume in &free {
+            html.push_str(&format!(
+                "<option value=\"{}\" {}>{} · {} GiB</option>",
+                escape(text(volume, "id")),
+                if volume["id"] == selected {
+                    "selected"
+                } else {
+                    ""
+                },
+                escape(text(volume, "name")),
+                volume["sizeGib"]
+            ));
+        }
+        html.push_str(&format!("</select></div><div class=\"field\"><label for=\"vm-volume-path\">{}</label><input id=\"vm-volume-path\" value=\"{}\" aria-describedby=\"volume-path-help\" {}><p id=\"volume-path-help\" class=\"detail-note\">{}</p></div><div class=\"volume-editor-actions\">{}<button id=\"vm-volume-attach\" class=\"btn primary\" type=\"button\" data-action=\"volume-attach\" {}>{}</button></div></div>", t("Mount path"), escape(mount), disabled(!enabled), t("Directory inside the VM. Existing files at this path are hidden."), button("Cancel", "volume-cancel", ""), disabled(!can_attach || !selection_available), t("Attach volume")));
+    } else if enabled && attached.len() >= 8 {
         html.push_str(&format!(
-            "<option value=\"{}\" {}>{} · {} GiB</option>",
-            escape(text(volume, "id")),
-            if volume["id"] == selected {
-                "selected"
-            } else {
-                ""
-            },
-            escape(text(volume, "name")),
-            volume["sizeGib"]
+            "<p class=\"detail-note\">{}</p>",
+            t("A VM can have at most eight volumes.")
+        ));
+    } else if enabled && free.is_empty() {
+        html.push_str(&format!(
+            "<p class=\"volume-availability\"><span>{}</span> <a href=\"#/volumes\">{}</a></p>",
+            t("No available volumes."),
+            t("Create volume")
         ));
     }
-    html.push_str(&format!("</select></div><div class=\"field wasm-wide\"><label for=\"vm-volume-path\">{}</label><input id=\"vm-volume-path\" value=\"{}\" {}></div><button id=\"vm-volume-attach\" class=\"btn primary\" type=\"button\" data-action=\"volume-attach\" {}>{}</button></div><p><a href=\"#/volumes\">{}</a></p></section>",t("Mount path"),escape(mount),disabled(!enabled),disabled(!enabled || attached.len()>=8 || !selection_available),t("Attach volume"),t("Manage data volumes")));
+    if !enabled || !free.is_empty() {
+        html.push_str(&format!("<a class=\"volume-manage\" href=\"#/volumes\">{} <span aria-hidden=\"true\">↗</span></a></section>", t("Manage data volumes")));
+    } else {
+        html.push_str("</section>");
+    }
     html
+}
+
+fn focus(id: &str) {
+    if let Some(control) = element(id).and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok()) {
+        let _ = control.focus();
+    }
 }
 
 pub fn parse_mounts(value: &str) -> Result<Value, String> {
@@ -406,6 +502,59 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
         return true;
     }
     match action {
+        "volume-open-attach" => {
+            let mut state = app.borrow_mut();
+            let Some(vm) = state.detail.as_ref().filter(|vm| editable(vm)) else {
+                return true;
+            };
+            let vm_id = text(vm, "id").to_string();
+            let free: Vec<_> = state
+                .cache
+                .get(ENDPOINT)
+                .map(list)
+                .unwrap_or(&[])
+                .iter()
+                .filter(|volume| available(volume))
+                .collect();
+            let selected = if free.len() == 1 {
+                text(free[0], "id").to_string()
+            } else {
+                String::new()
+            };
+            state.volumes.draft = Some(Draft {
+                vm: vm_id,
+                volume: selected,
+                mount: "/data".into(),
+            });
+            state.volumes.attach_open = true;
+            state.volumes.detaching = None;
+            state.volumes.action_error.clear();
+            state.volumes.notice.clear();
+            drop(state);
+            crate::render_detail(app);
+            focus("vm-volume");
+        }
+        "volume-cancel" => {
+            let mut state = app.borrow_mut();
+            let restore = state
+                .volumes
+                .detaching
+                .as_ref()
+                .map(|id| format!("volume-detach-{id}"))
+                .unwrap_or_else(|| "volume-open-attach".into());
+            state.volumes.reset_editor();
+            drop(state);
+            crate::render_detail(app);
+            focus(&restore);
+        }
+        "volume-detach-prompt" => {
+            let mut state = app.borrow_mut();
+            state.volumes.reset_editor();
+            state.volumes.detaching = Some(id.into());
+            drop(state);
+            crate::render_detail(app);
+            focus("volume-confirm-cancel");
+        }
         "volume-refresh" => load(app),
         "volume-delete" => {
             let state = app.borrow();
@@ -467,11 +616,22 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
                 {
                     return true;
                 }
+                if !draft.mount.starts_with('/') {
+                    drop(state);
+                    app.borrow_mut().volumes.action_error =
+                        t("Select a volume and an absolute mount path.").into();
+                    crate::render_detail(app);
+                    focus("vm-volume-path");
+                    return true;
+                }
                 (
                     draft.volume.clone(),
                     Some(json!({"vmId":vm_id,"mountPath":draft.mount})),
                 )
             } else {
+                if state.volumes.detaching.as_deref() != Some(id) {
+                    return true;
+                }
                 if !list(volumes)
                     .iter()
                     .any(|volume| volume["id"] == id && volume["attachedVmId"] == vm_id)

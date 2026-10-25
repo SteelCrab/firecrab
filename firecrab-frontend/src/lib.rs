@@ -159,6 +159,7 @@ fn render_editor(app: &Shared) {
     }
 }
 fn render_detail(app: &Shared) {
+    let more_open = element("vm-more-actions").is_some_and(|el| el.has_attribute("open"));
     let focused = document()
         .active_element()
         .filter(|el| el.closest("#detail-panel").ok().flatten().is_some())
@@ -218,6 +219,9 @@ fn render_detail(app: &Shared) {
         let _ = panel.set_attribute("style", &format!("width:{width}px"));
         if open {
             panel.set_inner_html(&html);
+            if more_open && let Some(menu) = element("vm-more-actions") {
+                let _ = menu.set_attribute("open", "");
+            }
         }
     }
     app.borrow_mut().rendering = false;
@@ -770,6 +774,16 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         else {
             return;
         };
+        if (target.closest("#vm-more-actions").ok().flatten().is_none()
+            || target
+                .closest("[data-action], a[href]")
+                .ok()
+                .flatten()
+                .is_some())
+            && let Some(menu) = element("vm-more-actions")
+        {
+            let _ = menu.remove_attribute("open");
+        }
         if target.closest("[role=menu]").ok().flatten().is_none() {
             set_html("menu-root", "");
         }
@@ -939,6 +953,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         {
             return;
         }
+        if details::tab_key(&keyboard, &event) {
+            return;
+        }
         if details::resize_key(&keyboard, &event) {
             return;
         }
@@ -951,6 +968,16 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             return;
         }
         if event.key() == "Escape" {
+            if let Some(menu) = element("vm-more-actions").filter(|el| el.has_attribute("open")) {
+                let _ = menu.remove_attribute("open");
+                if let Some(summary) = element("vm-more-summary")
+                    .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+                {
+                    let _ = summary.focus();
+                }
+                event.prevent_default();
+                return;
+            }
             if element("menu-root").is_some_and(|el| !el.inner_html().is_empty()) {
                 set_html("menu-root", "");
                 event.prevent_default();
@@ -1606,6 +1633,7 @@ fn mutate(
                 };
             }
         }
+        volumes::mutation_finished(&mut state, &path, succeeded);
         let registry_done = path == "/api/pipe/registry-transfers"
             && state
                 .job
@@ -1641,7 +1669,7 @@ fn show_detail(app: Shared, id: String) {
     state.service_deployment = None;
     state.detail_log_loaded = false;
     state.show_env = false;
-    state.volumes.draft = None;
+    state.volumes.reset_editor();
     state.detail_generation += 1;
     let detail_generation = state.detail_generation;
     let generation = state.generation;

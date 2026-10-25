@@ -8,6 +8,28 @@ pub fn t(value: &str) -> &str {
         return value;
     }
     match value {
+        "More" => "더 보기",
+        "More VM actions" => "VM 추가 작업",
+        "VM settings" => "VM 설정",
+        "Data volumes can only be attached to instance VMs." => {
+            "데이터 볼륨은 일반 VM에만 연결합니다."
+        }
+        "Attached volumes" => "연결된 볼륨",
+        "Data stays after VM deletion." => "VM을 삭제해도 볼륨 데이터는 유지됩니다.",
+        "Attach a volume to keep application data separate from the VM disk." => {
+            "볼륨을 연결하면 앱 데이터를 VM 디스크와 별도로 보관합니다."
+        }
+        "Stop this VM to attach or detach a volume." => "볼륨 연결·해제 전 VM을 중지합니다.",
+        "Detach this volume? Its data will be kept." => {
+            "볼륨 연결을 해제합니까? 데이터는 유지됩니다."
+        }
+        "Detach volume" => "볼륨 연결 해제",
+        "Directory inside the VM. Existing files at this path are hidden." => {
+            "VM 내부의 폴더 경로입니다. 연결 중에는 이 경로의 기존 파일이 가려집니다."
+        }
+        "No available volumes." => "연결 가능한 볼륨이 없습니다.",
+        "Volume attached." => "볼륨을 연결했습니다.",
+        "Volume detached." => "볼륨 연결을 해제했습니다.",
         "Volumes" => "볼륨",
         "Volume" => "볼륨",
         "Create volume" => "볼륨 생성",

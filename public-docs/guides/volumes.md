@@ -20,8 +20,10 @@ Files already present at the target path are hidden while the volume is mounted.
 Set application ownership and permissions inside the guest as required.
 There is no automatic copy of image files into an empty volume.
 
-The dashboard has a **Volumes** page for creation and deletion.
-Use the **Volumes** tab in an inactive VM's details to attach or detach a disk.
+The dashboard has a **MicroBlockStorage** page for creation and deletion.
+Use the **Volumes** tab in an inactive VM's details to manage attachments.
+Select **Attach volume**, choose an available volume, and enter its path inside the VM.
+To release a disk, select **Detach** and confirm **Detach volume**. Its data is kept.
 The VM creation form can also select existing volumes.
 
 ## Move data between VMs

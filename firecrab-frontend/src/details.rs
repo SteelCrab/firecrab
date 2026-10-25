@@ -40,8 +40,12 @@ pub fn panel(app: &App) -> String {
     if app.route == "vms/new" {
         return String::new();
     }
-    out.push_str(&button("Close detail", "panel-toggle", ""));
+    let close = format!(
+        "<button type=\"button\" class=\"icon-btn detail-close\" data-action=\"panel-toggle\" aria-label=\"{}\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"m6 6 12 12M18 6 6 18\"/></svg></button>",
+        t("Close detail")
+    );
     if let Some(form) = &app.form {
+        out.push_str(&close);
         out.push_str(&format!(
             "<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\">{}</section>",
             if form.return_route == "services" { crate::advanced::services::html(app, form) } else { form.html(app.busy, &app.field_errors) } + &if form.title == "Deploy MicroService" { format!("<div id=\"service-status\">{}</div>", render::deployment(app.service_deployment.as_ref())) } else { String::new() }
@@ -58,6 +62,7 @@ pub fn panel(app: &App) -> String {
         return out;
     }
     let Some(data) = &app.detail else {
+        out.push_str(&close);
         out.push_str(&format!(
             "<div class=\"empty-state\">{}</div>",
             t("Select an item to see its details.")
@@ -68,10 +73,32 @@ pub fn panel(app: &App) -> String {
         .iter()
         .find_map(|key| data[key].as_str())
         .unwrap_or(t("Details"));
-    out.push_str(&format!("<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\"><header class=\"wasm-actions detail-head\"><h2 class=\"detail-title\">{}{}</h2>{}</header>{}",escape(title),if text(data,"purpose")=="pool"{" · Pool"}else{""},button("Close","close-detail",""),render::detail_actions(app,data)));
+    out.push_str(&format!("<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\"><header class=\"detail-head vm-detail-head\"><div class=\"detail-heading\"><h2 class=\"detail-title\">{}{}</h2>{close}</div>", escape(title), if text(data,"purpose")=="pool" {" · Pool"} else {""}));
+    if app.route == "vms" {
+        let state = text(data, "state");
+        let label = match state {
+            "running" => "Running",
+            "stopped" => "Stopped",
+            "paused" => "Paused",
+            "created" => "Created",
+            "error" => "Error",
+            "starting" => "Starting",
+            "pausing" => "Pausing",
+            "resuming" => "Resuming",
+            _ => state,
+        };
+        out.push_str(&format!(
+            "<div class=\"detail-meta\"><span class=\"badge {}\">{}</span><span>{}</span></div>",
+            escape(state),
+            escape(t(label)),
+            escape(text(data, "template"))
+        ));
+    }
+    out.push_str(&render::detail_actions(app, data));
+    out.push_str("</header>");
     if app.route == "vms" {
         out.push_str(
-            "<div role=\"tablist\" class=\"tabs\" aria-label=\"MicroVM detail sections\">",
+            "<div role=\"tablist\" class=\"tabs vm-detail-tabs\" aria-label=\"MicroVM detail sections\">",
         );
         for (id, label) in [
             ("overview", "Overview"),
@@ -80,7 +107,7 @@ pub fn panel(app: &App) -> String {
             ("env", "Environment"),
             ("logs", "Log"),
         ] {
-            out.push_str(&format!("<button role=\"tab\" type=\"button\" aria-selected=\"{}\" aria-controls=\"vm-tab-panel\" id=\"vm-tab-{id}\" data-action=\"detail-tab\" data-id=\"{id}\">{}</button>",app.detail_tab==id,t(label)));
+            out.push_str(&format!("<button class=\"tab\" role=\"tab\" type=\"button\" aria-selected=\"{}\" aria-controls=\"vm-tab-panel\" id=\"vm-tab-{id}\" tabindex=\"{}\" data-action=\"detail-tab\" data-id=\"{id}\">{}</button>",app.detail_tab==id,if app.detail_tab==id {0} else {-1},t(label)));
         }
         out.push_str("</div>");
         let body = match app.detail_tab.as_str() {
@@ -578,6 +605,39 @@ pub fn tick(app: &Shared) {
         }
     });
 }
+pub fn tab_key(app: &Shared, event: &KeyboardEvent) -> bool {
+    let Some(target) = event
+        .target()
+        .and_then(|target| target.dyn_into::<Element>().ok())
+    else {
+        return false;
+    };
+    if !target.id().starts_with("vm-tab-") || target.get_attribute("role").as_deref() != Some("tab")
+    {
+        return false;
+    }
+    let tabs = ["overview", "network", "volumes", "env", "logs"];
+    let index = tabs
+        .iter()
+        .position(|id| target.id() == format!("vm-tab-{id}"))
+        .unwrap_or(0);
+    let next = match event.key().as_str() {
+        "ArrowRight" => (index + 1) % tabs.len(),
+        "ArrowLeft" => (index + tabs.len() - 1) % tabs.len(),
+        "Home" => 0,
+        "End" => tabs.len() - 1,
+        _ => return false,
+    };
+    event.prevent_default();
+    dispatch(app, "detail-tab", tabs[next]);
+    if let Some(control) = element(&format!("vm-tab-{}", tabs[next]))
+        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        let _ = control.focus();
+    }
+    true
+}
+
 pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
     match action {
         "detail-tab" => {

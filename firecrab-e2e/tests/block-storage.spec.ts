@@ -11,7 +11,7 @@ const seed: MicroBlockStorageResponse = {
   state: "available", attachedVmId: null, mountPath: null,
 };
 
-async function open(page: Page, options: { hash?: string; ko?: boolean; failCreate?: boolean; empty?: boolean; routes?: Record<string, MockRoute> } = {}) {
+async function open(page: Page, options: { hash?: string; ko?: boolean; failCreate?: boolean; failAttach?: boolean; empty?: boolean; routes?: Record<string, MockRoute> } = {}) {
   const state = {
     volumes: options.empty ? [] as MicroBlockStorageResponse[] : [{ ...seed }],
     vmState: "stopped" as VmState,
@@ -45,6 +45,9 @@ async function open(page: Page, options: { hash?: string; ko?: boolean; failCrea
       [`/api/microblockstorage/${VOLUME}/attach`]: route => {
         const body = route.request().postDataJSON();
         state.writes.push({ method: "attach", body });
+        if (options.failAttach) return route.fulfill({ status: 409, json: {
+          error: { code: "volume_conflict", message: "volume is already attached" },
+        } });
         const result = { ...seed, state: "attached" as const, attachedVmId: body.vmId, mountPath: body.mountPath };
         state.volumes = [result];
         return route.fulfill({ json: result });
@@ -82,7 +85,10 @@ test.describe("Persistent volumes @dashboard", () => {
     const state = await open(page, { hash: "#/vms?vm=" + VM });
     const panel = page.getByRole("complementary", { name: "MicroVM detail", exact: true });
     await panel.getByRole("tab", { name: "Volumes", exact: true }).click();
-    await panel.getByLabel("Available volume", { exact: true }).selectOption(VOLUME);
+    await expect(panel.getByLabel("Available volume", { exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Close detail", exact: true })).toHaveCount(1);
+    await panel.getByRole("button", { name: "Attach volume", exact: true }).click();
+    await expect(panel.getByLabel("Available volume", { exact: true })).toHaveValue(VOLUME);
     await panel.getByLabel("Mount path", { exact: true }).fill("/var/lib/postgresql/data");
     await panel.getByRole("button", { name: "Attach volume", exact: true }).click();
     await expect(panel.getByText("/var/lib/postgresql/data", { exact: true })).toBeVisible();
@@ -93,8 +99,81 @@ test.describe("Persistent volumes @dashboard", () => {
     state.vmState = "stopped";
     await expect(panel.getByRole("button", { name: "Detach", exact: true })).toBeEnabled({ timeout: 10000 });
     await panel.getByRole("button", { name: "Detach", exact: true }).click();
+    expect(state.writes).toHaveLength(1);
+    await expect(panel.getByText("Detach this volume? Its data will be kept.")).toBeVisible();
+    await panel.getByRole("button", { name: "Detach volume", exact: true }).click();
     await expect(panel.getByText("No attached volumes.", { exact: true })).toBeVisible();
     expect(state.writes.at(-1)?.method).toBe("detach");
+  });
+
+  test("keeps unavailable actions out of the empty volume flow", async ({ page }) => {
+    await open(page, { hash: "#/vms?vm=" + VM, empty: true });
+    const panel = page.getByRole("complementary", { name: "MicroVM detail", exact: true });
+    await panel.getByRole("tab", { name: "Volumes", exact: true }).click();
+    await expect(panel.getByText("No available volumes.", { exact: true })).toBeVisible();
+    await expect(panel.getByRole("link", { name: "Create volume", exact: true })).toHaveAttribute("href", "#/volumes");
+    await expect(panel.getByLabel("Available volume", { exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Attach volume", exact: true })).toHaveCount(0);
+  });
+
+  test("supports keyboard tabs and dismisses More without closing the panel", async ({ page }) => {
+    await open(page, { hash: "#/vms?vm=" + VM });
+    const panel = page.getByRole("complementary", { name: "MicroVM detail", exact: true });
+    await expect.poll(async () => {
+      const start = await panel.getByRole("button", { name: "Start", exact: true }).boundingBox();
+      const more = await panel.getByLabel("More VM actions", { exact: true }).boundingBox();
+      return start && more ? Math.abs(start.y - more.y) : Infinity;
+    }).toBeLessThan(2);
+    await panel.getByLabel("More VM actions", { exact: true }).click();
+    await expect(panel.getByRole("button", { name: "Resources", exact: true })).toBeVisible();
+    // A refresh must not collapse a menu while it is in use.
+    await page.waitForTimeout(3500);
+    await expect(panel.getByRole("button", { name: "Resources", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(panel.getByRole("button", { name: "Resources", exact: true })).toBeHidden();
+    await expect(panel).toBeVisible();
+    const overview = panel.getByRole("tab", { name: "Overview", exact: true });
+    await overview.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(panel.getByRole("tab", { name: "Network", exact: true })).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect(panel.getByRole("tab", { name: "Volumes", exact: true })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("preserves the attachment draft after an API error and cancels without a write", async ({ page }) => {
+    const state = await open(page, { hash: "#/vms?vm=" + VM, failAttach: true });
+    const panel = page.getByRole("complementary", { name: "MicroVM detail", exact: true });
+    await panel.getByRole("tab", { name: "Volumes", exact: true }).click();
+    await panel.getByRole("button", { name: "Attach volume", exact: true }).click();
+    await panel.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(state.writes).toHaveLength(0);
+    await expect(panel.getByRole("button", { name: "Attach volume", exact: true })).toBeFocused();
+    await panel.getByRole("button", { name: "Attach volume", exact: true }).click();
+    await panel.getByLabel("Mount path", { exact: true }).fill("/var/lib/postgresql/data");
+    await panel.getByRole("button", { name: "Attach volume", exact: true }).click();
+    await expect(panel.getByRole("alert")).toContainText("volume is already attached");
+    await page.waitForTimeout(3500);
+    await expect(panel.getByLabel("Mount path", { exact: true })).toHaveValue("/var/lib/postgresql/data");
+    await expect(panel.getByLabel("Available volume", { exact: true })).toHaveValue(VOLUME);
+    await expect(page.getByText("Saved.", { exact: true })).toHaveCount(0);
+  });
+
+  test("fits the attachment editor and connected volume in a phone viewport", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, { hash: "#/vms?vm=" + VM, ko: true });
+    const panel = page.getByRole("complementary", { name: "MicroVM 상세", exact: true });
+    await expect(page.getByRole("button", { name: "Open menu", exact: true })).toBeHidden();
+    await panel.getByRole("tab", { name: "볼륨", exact: true }).click();
+    await panel.getByRole("button", { name: "볼륨 연결", exact: true }).click();
+    await panel.getByLabel("마운트 경로", { exact: true }).fill("/var/lib/postgresql/data");
+    expect(await panel.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("volumes-attach-mobile.png"), fullPage: true });
+    await panel.getByRole("button", { name: "볼륨 연결", exact: true }).click();
+    await expect(panel.getByText("/var/lib/postgresql/data", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("volumes-attached-mobile.png"), fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.screenshot({ path: testInfo.outputPath("volumes-attached-default.png"), fullPage: true });
   });
 
   test("shows create errors in the Korean mobile flow", async ({ page }, testInfo) => {
