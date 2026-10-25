@@ -141,6 +141,9 @@ Source snapshots are uploaded to the selected container.
 The backend does not change global WSL configuration or the primary distribution.
 Linux `service dev` also uses this backend from the primary checkout, separately from production systemd services.
 
+Each container's private `/tmp` permits execution so verified installers and compiler toolchains can run temporary tools.
+The `nosuid` and `nodev` mount options remain enabled.
+
 Native outer-VM resource controls are unavailable for Docker instances.
 The development dashboard does not use the primary native resource endpoint as a fallback.
 MicroVMs and application data remain in the instance's named volume across development cleanup and release restoration.
@@ -164,7 +167,7 @@ cargo test -p firecrab-cli --locked \
 ```
 
 This check requires local rootful Docker, KVM, and TUN.
-It verifies the production image, systemd, private kernel namespaces, writable cgroups, API relay, separate data, and independent stop/cleanup.
+It verifies the production image, systemd, private kernel namespaces, writable cgroups, temporary tool execution, API relay, separate data, and independent stop/cleanup.
 It then installs the checksum-verified release and runs the restore transaction in one runtime.
 The real API/helper must become healthy while that runtime retains its data and the other runtime keeps serving its marker API.
 This check does not build source services or exercise MicroVM lifecycle.

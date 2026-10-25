@@ -368,6 +368,12 @@ fn container_owned(
             .as_array()
             .is_none_or(Vec::is_empty)
         && config["Binds"].as_array().is_none_or(Vec::is_empty)
+        && config["Tmpfs"]
+            .as_object()
+            .is_some_and(|mounts| mounts.len() == 3)
+        && config["Tmpfs"]["/run"] == ""
+        && config["Tmpfs"]["/run/lock"] == ""
+        && config["Tmpfs"]["/tmp"] == "exec,nosuid,nodev"
         && bindings.as_object().is_some_and(|ports| ports.len() == 1)
         && publication.as_array().is_some_and(|ports| ports.len() == 1)
         && publication[0]["HostIp"] == "127.0.0.1"
@@ -394,7 +400,7 @@ fn container_owned(
         });
     if !safe {
         return Err(failed(
-            "refusing a Docker container with foreign mounts, ports or shared namespaces",
+            "refusing a Docker container with foreign mounts, ports, shared namespaces or unsupported tmpfs options",
         ));
     }
     Ok(())
@@ -525,7 +531,7 @@ fn create_runtime(
         "--tmpfs",
         "/run/lock",
         "--tmpfs",
-        "/tmp",
+        "/tmp:exec,nosuid,nodev",
         "--mount",
         &mount,
         "--publish",

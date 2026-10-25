@@ -18,7 +18,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 http.server.HTTPServer(('127.0.0.1', 5523), Handler).serve_forever()
 "#;
 const PROBE: &str = r#"
-import fcntl, json, os, pathlib, stat
+import fcntl, json, os, pathlib, stat, subprocess, tempfile
 cgroups = pathlib.Path('/proc/self/cgroup').read_text().strip().splitlines()
 assert len(cgroups) == 1, cgroups
 cgroup = cgroups[0]
@@ -37,6 +37,12 @@ with open('/proc/sys/net/ipv4/ip_forward', 'r+') as forwarding:
     value = forwarding.read()
     forwarding.seek(0)
     forwarding.write(value)
+with tempfile.TemporaryDirectory(prefix='firecrab-runtime-', dir='/tmp') as directory:
+    executable = pathlib.Path(directory) / 'exec-probe'
+    executable.write_text('#!/bin/sh\nprintf firecrab-runtime-tmp-exec\n')
+    executable.chmod(0o700)
+    result = subprocess.run([str(executable)], check=True, capture_output=True, text=True)
+    assert result.stdout == 'firecrab-runtime-tmp-exec', result.stdout
 namespaces = {name: os.readlink('/proc/self/ns/' + name)
               for name in ['net', 'pid', 'ipc', 'mnt', 'cgroup']}
 print(json.dumps(namespaces))

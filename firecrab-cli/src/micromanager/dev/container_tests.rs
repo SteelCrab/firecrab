@@ -118,8 +118,9 @@ elif args[:2] in [['network','create'],['volume','create']]:
 elif args[0]=='create':
     publication=option('--publish').split(':')
     volume=option('--mount').split('source=')[1].split(',')[0]
+    tmpfs={value.partition(':')[0]:value.partition(':')[2] for i,value in enumerate(args) if i and args[i-1]=='--tmpfs'}
     devices=[{'PathOnHost':path,'PathInContainer':path,'CgroupPermissions':'rwm'} for path in ['/dev/kvm','/dev/net/tun']]
-    value={'Config':{'Labels':labels()},'HostConfig':{'Privileged':False,'NetworkMode':option('--network'),'PidMode':'','UTSMode':'','UsernsMode':'','IpcMode':option('--ipc'),'CgroupnsMode':option('--cgroupns'),'CapAdd':['SYS_ADMIN','NET_ADMIN'],'Devices':devices,'Binds':[], 'PortBindings':{'5523/tcp':[{'HostIp':publication[0],'HostPort':publication[1]}]}},'NetworkSettings':{'Networks':{option('--network'):{}}},'Mounts':[{'Type':'volume','Name':volume,'Destination':'/var/lib/firecrab'}],'State':{'Running':False}}
+    value={'Config':{'Labels':labels()},'HostConfig':{'Privileged':False,'NetworkMode':option('--network'),'PidMode':'','UTSMode':'','UsernsMode':'','IpcMode':option('--ipc'),'CgroupnsMode':option('--cgroupns'),'CapAdd':['SYS_ADMIN','NET_ADMIN'],'Devices':devices,'Binds':[],'Tmpfs':tmpfs, 'PortBindings':{'5523/tcp':[{'HostIp':publication[0],'HostPort':publication[1]}]}},'NetworkSettings':{'Networks':{option('--network'):{}}},'Mounts':[{'Type':'volume','Name':volume,'Destination':'/var/lib/firecrab'}],'State':{'Running':False}}
     save('container',option('--name'),value)
 elif args[0] in ['start','stop','restart']:
     value=json.loads((root/'container.json').read_text()); value['State']['Running']=args[0]!='stop';save('container',args[-1],value)
@@ -266,6 +267,7 @@ record()
         assert!(has_pair("--ipc", "private"));
         assert!(has_pair("--device", "/dev/kvm:/dev/kvm:rwm"));
         assert!(has_pair("--device", "/dev/net/tun:/dev/net/tun:rwm"));
+        assert!(has_pair("--tmpfs", "/tmp:exec,nosuid,nodev"));
         assert!(has_pair(
             "--publish",
             &format!("127.0.0.1:{}:5523/tcp", fixture.instance.api_port)
@@ -475,6 +477,30 @@ record()
                 .iter()
                 .any(|event| event["args"][0] == "stop")
         );
+    }
+
+    #[test]
+    fn unsupported_temporary_storage_rejects_control_before_mutating_the_container() {
+        for mounts in [
+            serde_json::json!({"/run":"", "/run/lock":"", "/tmp":""}),
+            serde_json::json!({"/run":"", "/run/lock":"", "/tmp":"exec,nosuid,nodev,noexec"}),
+            serde_json::json!({"/run":"", "/run/lock":"", "/tmp":"exec"}),
+            serde_json::json!({"/run":"", "/run/lock":""}),
+            serde_json::json!({"/run":"", "/run/lock":"", "/tmp":"exec,nosuid,nodev", "/etc":""}),
+        ] {
+            let fixture = Fixture::new();
+            fixture.run(None, false, false).unwrap();
+            fixture.change("container", |value| value["HostConfig"]["Tmpfs"] = mounts);
+            fixture.clear_events();
+            assert!(
+                fixture
+                    .run(Some(DevCommand::Restart), false, false)
+                    .is_err()
+            );
+            assert!(fixture.events().iter().all(|event| {
+                matches!(event["args"][0].as_str(), Some("info")) || event["args"][1] == "inspect"
+            }));
+        }
     }
 
     #[test]
