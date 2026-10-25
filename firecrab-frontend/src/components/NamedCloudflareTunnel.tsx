@@ -24,9 +24,9 @@ export default function NamedCloudflareTunnel({ config, snapshot, busy, onBusy, 
   const [loading, setLoading] = useState(false);
   const active = useRef(false);
   const zone = zones.find(value => value.id === zoneId);
-  const hosts = [...new Set(config.routes.map(route => route.host))].filter(host => zone && (host === zone.name || host.endsWith("." + zone.name)));
+  const hosts = [...new Set(config.routes.filter(route => !route.network).map(route => route.host))].filter(host => zone && (host === zone.name || host.endsWith("." + zone.name)));
   const configured = config.tunnel;
-  const urls = configured?.hostname ? [configured.hostname] : configured ? [...new Set(config.routes.map(route => route.host))] : [];
+  const urls = configured?.hostname ? [configured.hostname] : configured ? [...new Set(config.routes.filter(route => !route.network).map(route => route.host))] : [];
   const unit = snapshot?.units.find(unit => unit.unit === "firecrab-tunnel.service");
   const state = unit?.activeState;
   const changing = ["activating", "deactivating", "reloading"].includes(state ?? "");

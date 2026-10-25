@@ -69,7 +69,9 @@ They never fall back to unrestricted access.
 ## Traffic and changes
 
 ARP, DHCP, gateway DNS, and host-originated administration remain available.
-Other new VM-to-host connections are denied.
+Internal service HTTP is allowed only when a source egress rule permits TCP 80
+to its own gateway. PipeIngress separately checks the destination service group
+against the caller address and app port. Other new VM-to-host connections are denied.
 Forwarded host ports still require an ingress rule for the original client CIDR and guest port.
 Network `internetEnabled`, VM `egressPolicy`, and cross-network isolation still apply.
 

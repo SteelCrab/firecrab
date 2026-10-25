@@ -24,7 +24,7 @@ export default function FirecrabTunnel({ snapshot, busy, apps, vmsLoading, vmsUn
   const [error, setError] = useState<string | null>(null);
   const active = useRef(false);
   const addresses = snapshot?.firecrabTunnels ?? [];
-  const hosts = [...new Set(snapshot?.config?.routes.map(route => route.host) ?? [])];
+  const hosts = [...new Set(snapshot?.config?.routes.filter(route => !route.network).map(route => route.host) ?? [])];
   const original = addresses.find(address => address.subdomain === editor?.original);
   const originalTarget = original ? addressTarget(original) : null;
   const preserved = originalTarget?.type === "apps" ? originalTarget.upstreams : [];

@@ -1,7 +1,7 @@
 import { fetchJson } from "./client";
 
 /** Shared with firecrab-helper-protocol::pipe; credentials never appear in GET. */
-export interface PipeRoute { host: string; pathPrefix: string; upstreams: string[]; owner?: { serviceId: string; deploymentId: string } | null }
+export interface PipeRoute { network?: { micro_network_id: string; gateway: string; prefix: number } | null; host: string; pathPrefix: string; upstreams: string[]; owner?: { serviceId: string; deploymentId: string } | null }
 export interface PipeConfig {
   listen: string;
   routes: PipeRoute[];

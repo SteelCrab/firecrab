@@ -37,7 +37,7 @@ export default function CloudflareConnect({ config, snapshot, busy, apps, vmsLoa
   const [notice, setNotice] = useState<string | null>(null);
   const running = useRef(false);
   const tunnels = snapshot?.quickTunnels ?? [];
-  const hosts = [...new Set(config.routes.map(route => route.host))];
+  const hosts = [...new Set(config.routes.filter(route => !route.network).map(route => route.host))];
   const original = tunnels.find(tunnel => tunnel.id === editor?.id);
   const preserved = original?.target.type === "apps" ? original.target.upstreams : [];
   const changed = !!editor && (editor.id === null

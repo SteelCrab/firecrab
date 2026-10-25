@@ -379,6 +379,25 @@ test.describe("Pipe dashboard @dashboard", () => {
     expect(mock.firecrabSaves).toEqual([{ token: CONNECTION_TOKEN, target: { type: "nginx", host: "app.example.com" } }]);
   });
 
+  test("excludes private service routes from public connector targets", async ({ page }) => {
+    const savedRoutes: PipeConfig["routes"] = [...initial.config.routes, {
+      host: "orders.internal", pathPrefix: "/", upstreams: ["172.30.36.4:8080"],
+      owner: { serviceId: QUICK_ID, deploymentId: SECOND_QUICK_ID },
+      network: { micro_network_id: QUICK_ID, gateway: "172.30.36.1", prefix: 24 },
+    }];
+    await open(page, { savedRoutes, card: "firecrab-tunnel" });
+    const fixed = page.getByRole("region", { name: "Firecrab Tunnel", exact: true });
+    await fixed.getByRole("button", { name: "Add fixed address" }).click();
+    await fixed.getByLabel("Connection target", { exact: true }).selectOption("nginx");
+    await expect(fixed.getByLabel("Nginx route domain", { exact: true }).locator('option[value="orders.internal"]')).toHaveCount(0);
+    await expect(fixed.getByLabel("Nginx route domain", { exact: true }).locator('option[value="app.example.com"]')).toHaveCount(1);
+    await switchCard(page, "Cloudflare Quick Tunnel");
+    const quick = page.getByRole("region", { name: "Quick Tunnel", exact: true });
+    await quick.getByRole("button", { name: "Add tunnel", exact: true }).click();
+    await quick.getByLabel("Target", { exact: true }).selectOption("routes");
+    await expect(quick.getByLabel("Route domain", { exact: true }).locator('option[value="orders.internal"]')).toHaveCount(0);
+  });
+
   test("keeps the address form when registration fails", async ({ page }) => {
     await open(page, { quickTunnels: [webTunnel], firecrabFailure: true, card: "firecrab-tunnel" });
     const panel = page.getByRole("region", { name: "Firecrab Tunnel", exact: true });

@@ -233,6 +233,34 @@ fn empty_groups_deny_new_connections_but_preserve_gateway_and_admin_replies() {
 }
 
 #[test]
+fn internal_http_needs_an_explicit_tcp_egress_grant_for_the_own_gateway() {
+    let (networks, mut policies) = fixture();
+    let host = format!("host_{}", policies[0].vm_id.simple());
+    for (protocol, port, peer, allowed) in [
+        (PortProtocol::Tcp, 80, "172.30.0.1", true),
+        (PortProtocol::Udp, 80, "172.30.0.1", false),
+        (PortProtocol::Tcp, 8080, "172.30.0.1", false),
+        (PortProtocol::Tcp, 80, "172.31.0.1", false),
+    ] {
+        policies[0].security_group.as_mut().unwrap().rules = vec![SecurityGroupRuleSpec {
+            direction: SecurityGroupDirection::Egress,
+            protocol,
+            port_from: port,
+            port_to: port,
+            peer_address: peer.parse().unwrap(),
+            peer_prefix: 32,
+        }];
+        let text = crate::security_groups::render(&policies, &networks, "");
+        let rules = group_chain_rules(&text, "inet", &host);
+        assert_eq!(
+            rules.contains(&"ip daddr 172.30.0.1 tcp dport 80 return"),
+            allowed
+        );
+        assert_eq!(rules.last().copied(), Some("drop"));
+    }
+}
+
+#[test]
 fn detaching_the_last_group_removes_only_existing_owned_tables() {
     let (networks, mut policies) = fixture();
     for vm in &mut policies {

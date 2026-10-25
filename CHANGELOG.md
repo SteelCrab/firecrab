@@ -23,6 +23,13 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- MicroServices publish private `<name>.internal` DNS and network-scoped ingress
+  after app health succeeds. Internal-only deployments need no host ports.
+  DNS and routes retain deployment ownership through restart and cleanup retries.
+  Private listeners support HTTP/1.1, HTTP/2 and WebSockets, preserve source and
+  destination security-group rules, and stay outside public tunnel configuration.
+  The bundled ingress gains HTTP/2 and the port-binding capability.
+
 - The browser console uses Ghostty WebAssembly for VT parsing, Unicode cells,
   terminal modes and history. It supports mobile editing, composition,
   bracketed paste, application mouse/focus reports and native grapheme export.
@@ -147,6 +154,10 @@ Entries land here as work merges, and move under the next version heading when t
 - None.
 
 ### Fixed
+
+- Gateway MAC addresses remain stable when MicroVM TAP ports join or leave.
+  Stopping a service no longer strands surviving guests' cached gateway
+  neighbors or delays their internal DNS requests.
 
 - OCI guests recreate image-declared `/run` directories with `systemd-tmpfiles`
   before app services on every boot. MariaDB can restart after tmpfs clears

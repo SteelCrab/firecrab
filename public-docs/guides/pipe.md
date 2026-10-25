@@ -1,20 +1,17 @@
 # Independent service data plane
 
-The data-plane slice of [#335](https://github.com/SteelCrab/firecrab/issues/335)
-adds independent Nginx PipeIngress and cloudflared PipeTunnel systemd units.
+The data-plane slice of [#335](https://github.com/SteelCrab/firecrab/issues/335) adds independent Nginx PipeIngress and cloudflared PipeTunnel systemd units.
 
 ```text
 Public domain or Quick Tunnel URL → Cloudflare connector / public ingress
   → firecrab-ingress.service (Nginx) → app in a MicroVM
 ```
 
-The API manages configuration. systemd owns Nginx and each tunnel connector. API
-stop/restart does not stop those units. They start at boot after an explicit
+The API manages configuration. systemd owns Nginx and each tunnel connector. API stop/restart does not stop those units. They start at boot after an explicit
 apply and restart after failure. They have no API `PartOf`, `BindsTo`, or
 `Requires` dependency. Stopping the whole host or management VM interrupts traffic.
 
-VM continuity still requires a compatible VM shim protocol from #123. Startup
-reconciliation stops incompatible shims. This does not guarantee traffic across
+VM continuity still requires a compatible VM shim protocol from #123. Startup reconciliation stops incompatible shims. This does not guarantee traffic across
 incompatible VM protocol upgrades.
 
 This slice routes to existing reachable app addresses. The MicroService model,
@@ -47,8 +44,10 @@ VM apps and saved Nginx routes. The operator must deploy that service.
 - Existing locally managed named tunnels remain compatible through CLI manifests.
   Omit `tunnel` and `quickTunnel`, and leave `quickTunnels` empty, for ingress-only operation.
 
-The listener is HTTP on loopback, on port >= 1024. Public TLS terminates at
-Cloudflare. Direct public HTTPS and MicroNetwork listeners are subsequent work.
+The public-origin listener is HTTP on loopback, on port >= 1024. Public TLS terminates at Cloudflare. Deployment-owned `.internal` routes use separate
+MicroNetwork gateway listeners on port 80 with source-subnet and security-group checks. These private hosts are excluded from public tunnel configuration.
+See [internal service addresses](internal-service-routing.md).
+Direct public HTTPS remains separate work.
 
 ## Install and configure
 
@@ -62,8 +61,7 @@ firecrab pipe install
 ```
 
 `pipe install` checks the bundled ingress engine and downloads the pinned cloudflared
-release. It verifies SHA-256 before replacing the executable and skips unchanged
-verified downloads. Installing does not start Firecrab traffic units or apply
+release. It verifies SHA-256 before replacing the executable and skips unchanged verified downloads. Installing does not start Firecrab traffic units or apply
 routes. `install.sh --with-pipe` also installs the connector during host setup.
 
 Cloudflared versions and release digests are in
@@ -79,13 +77,13 @@ digests are pinned in `packaging/ingress-sources.json`. Nginx and PCRE2 are link
 statically with musl; the build rejects a dynamic executable. HTTPS terminates at
 the tunnel, so OpenSSL is not included. Compression is left to the application.
 The engine retains the rewrite, map, proxy and upstream modules used by Pipe.
+It includes the HTTP/2 module for private clients. The ingress unit grants only
+`CAP_NET_BIND_SERVICE` so its dynamic user can bind private gateway port 80.
 
 The host bundle includes `firecrab-ingress` and an `ingress/` attribution directory
-with upstream licenses and source identities. Source installs must build these
-beside the API, helper and CLI before running `install.sh --bin-dir`.
+with upstream licenses and source identities. Source installs must build these beside the API, helper and CLI before running `install.sh --bin-dir`.
 `firecrab service install` on Linux invokes the same host installer.
-Routes remain in `$CONFDIR/pipe` across engine replacement. An engine update
-replaces the on-disk executable; an already-running master keeps its old version
+Routes remain in `$CONFDIR/pipe` across engine replacement. An engine update replaces the on-disk executable; an already-running master keeps its old version
 until an explicit ingress restart. Plan that restart when updating the engine.
 
 For an existing installation whose old self-update helper does not know about the

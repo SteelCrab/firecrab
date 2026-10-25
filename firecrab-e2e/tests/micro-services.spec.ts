@@ -68,6 +68,43 @@ async function advanced(page: Page) {
 }
 
 test.describe("MicroService configuration @dashboard", () => {
+  test("deploys privately with an empty host port and shows its internal address", async ({ page }) => {
+    const service = { ...INITIAL, domain: null, replicas: 2 };
+    await openServices(page, [service]);
+    let deployment: object | null = null;
+    await page.route(`**/api/micro-services/${ID}/deployment`, async (route) => {
+      if (route.request().method() === "POST") {
+        expect(route.request().postDataJSON()).toEqual({ hostPort: 0, microNetworkId: null });
+        deployment = { id: SECRET, serviceId: ID, spec: service, phase: "running", request: { hostPort: 0, microNetworkId: NETWORK.id },
+          digest: null, internalRouteOwned: true, domainRouteOwned: false, error: null, log: [],
+          instances: [{ vmId: SECRET, ipv4: "172.30.0.2", hostPort: 0, state: "running", healthy: true }] };
+        return route.fulfill({ status: 202, json: deployment });
+      }
+      return route.fulfill({ json: deployment });
+    });
+    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await page.getByLabel("First host port (optional)", { exact: true }).fill("");
+    await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
+    await expect(page.getByText("Available to apps in the same MicroNetwork.", { exact: true })).toBeVisible();
+    await expect(page.locator("code").filter({ hasText: "http://orders.internal" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open app", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeEnabled();
+  });
+
+  test("retains Stop after uncertain internal routing cleanup without replicas", async ({ page }) => {
+    const service = { ...INITIAL, domain: null };
+    await openServices(page, [service]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, (route) => route.fulfill({ json: {
+      id: SECRET, serviceId: ID, spec: service, phase: "failed", request: { hostPort: 0 }, digest: null,
+      internalRouteOwned: true, instances: [], log: [], error: "Could not withdraw internal DNS and routing; retry Stop."
+    } }));
+    await page.getByRole("button", { name: "Run orders", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeDisabled();
+    await expect(page.getByLabel("First host port (optional)", { exact: true })).toBeDisabled();
+    await expect(page.getByText("Available to apps in the same MicroNetwork.", { exact: true })).toHaveCount(0);
+  });
+
   test("binds and clears an S3 connection while preserving its security group", async ({ page }) => {
     const writes = await openServices(page);
     await page.getByRole("button", { name: "New MicroService", exact: true }).click();
@@ -177,7 +214,7 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect(deploy).toHaveAttribute("aria-describedby", /service-deploy-auth/);
     await expect(page.getByRole("status")).toHaveText("Not deployed");
     await page.getByLabel("Network", { exact: true }).selectOption(NETWORK.id);
-    await page.getByLabel("First host port", { exact: true }).fill("31234");
+    await page.getByLabel("First host port (optional)", { exact: true }).fill("31234");
     const reconnect = page.getByRole("link", { name: "Reconnect AUTH", exact: true });
     await expect(reconnect).toHaveAttribute("href", "#/pipe/auth");
     await page.screenshot({ path: testInfo.outputPath("service-auth-disconnected-desktop.png"), fullPage: true });
@@ -197,7 +234,7 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect(page).toHaveURL(/#\/services$/);
     await expect(page.getByRole("heading", { name: "Run: orders", exact: true })).toBeVisible();
     await expect(page.getByLabel("Network", { exact: true })).toHaveValue(NETWORK.id);
-    await expect(page.getByLabel("First host port", { exact: true })).toHaveValue("31234");
+    await expect(page.getByLabel("First host port (optional)", { exact: true })).toHaveValue("31234");
     await expect(deploy).toBeEnabled();
     await expect(reconnect).toHaveCount(0);
     expect(dialogs).toEqual([]);
@@ -233,7 +270,7 @@ test.describe("MicroService configuration @dashboard", () => {
     });
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await page.getByLabel("Network", { exact: true }).selectOption(NETWORK.id);
-    await page.getByLabel("First host port", { exact: true }).fill("31234");
+    await page.getByLabel("First host port (optional)", { exact: true }).fill("31234");
     await page.getByRole("link", { name: "Reconnect AUTH", exact: true }).click();
     networks = [];
     await page.getByRole("button", { name: "Connect GitHub", exact: true }).click();
@@ -241,7 +278,7 @@ test.describe("MicroService configuration @dashboard", () => {
     await page.getByRole("button", { name: "Verify and connect", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Run: orders", exact: true })).toBeVisible();
     const network = page.getByLabel("Network", { exact: true });
-    const port = page.getByLabel("First host port", { exact: true });
+    const port = page.getByLabel("First host port (optional)", { exact: true });
     const deploy = page.getByRole("button", { name: "Deploy and run", exact: true });
     await expect(network).toHaveValue(NETWORK.id);
     await expect(network).toHaveAttribute("aria-invalid", "true");
@@ -278,11 +315,11 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect(page.getByText("Unable to verify deployment choices", { exact: true })).toBeVisible();
     const deploy = page.getByRole("button", { name: "Deploy and run", exact: true });
     await expect(deploy).toBeDisabled();
-    await expect(page.getByLabel("First host port", { exact: true })).toBeEditable();
+    await expect(page.getByLabel("First host port (optional)", { exact: true })).toBeEditable();
     fail = false;
     await page.getByRole("button", { name: "Retry deployment check", exact: true }).click();
     await expect(deploy).toBeEnabled();
-    await expect(page.getByLabel("First host port", { exact: true })).toHaveValue("30100");
+    await expect(page.getByLabel("First host port (optional)", { exact: true })).toHaveValue("30100");
   });
 
   test("ignores a late placement response for an older port and validates the replica range locally", async ({ page }) => {
@@ -301,7 +338,7 @@ test.describe("MicroService configuration @dashboard", () => {
     });
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     const deploy = page.getByRole("button", { name: "Deploy and run", exact: true });
-    const port = page.getByLabel("First host port", { exact: true });
+    const port = page.getByLabel("First host port (optional)", { exact: true });
     await expect(deploy).toBeEnabled();
     await port.fill("31234");
     await pending;
@@ -335,7 +372,7 @@ test.describe("MicroService configuration @dashboard", () => {
       });
       await page.getByRole("button", { name: "Run orders", exact: true }).click();
       const deploy = page.getByRole("button", { name: "Deploy and run", exact: true });
-      const port = page.getByLabel("First host port", { exact: true });
+      const port = page.getByLabel("First host port (optional)", { exact: true });
       await expect(deploy).toBeEnabled();
       occupied = true;
       await deploy.click();
@@ -362,7 +399,7 @@ test.describe("MicroService configuration @dashboard", () => {
         return route.fulfill({ json: connection });
       });
       await page.getByRole("button", { name: "Run orders", exact: true }).click();
-      await page.getByLabel("First host port", { exact: true }).fill("32100");
+      await page.getByLabel("First host port (optional)", { exact: true }).fill("32100");
       await page.getByRole("link", { name: "Reconnect AUTH", exact: true }).click();
       await page.getByRole("button", { name: provider === "github" ? "Connect GitHub" : "Connect AWS", exact: true }).click();
       const fillCredentials = async () => {
@@ -384,7 +421,7 @@ test.describe("MicroService configuration @dashboard", () => {
       await expect(page).toHaveURL(/#\/services$/);
       await expect(page.getByRole("heading", { name: "Run: orders", exact: true })).toBeVisible();
       await expect(page.getByLabel("Network", { exact: true })).toHaveValue("");
-      await expect(page.getByLabel("First host port", { exact: true })).toHaveValue("32100");
+      await expect(page.getByLabel("First host port (optional)", { exact: true })).toHaveValue("32100");
       await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeEnabled();
     });
   }
@@ -396,7 +433,7 @@ test.describe("MicroService configuration @dashboard", () => {
     await page.route("**/api/pipe/auth/github", (route) => route.fulfill({ status: 400, json: { error: { message: "GitHub rejected the token" } } }));
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await page.getByLabel("Network", { exact: true }).selectOption(NETWORK.id);
-    await page.getByLabel("First host port", { exact: true }).fill("32200");
+    await page.getByLabel("First host port (optional)", { exact: true }).fill("32200");
     await page.getByRole("link", { name: "Reconnect AUTH", exact: true }).click();
     await page.getByRole("button", { name: "Connect GitHub", exact: true }).click();
     await page.getByLabel("Personal access token (classic)", { exact: true }).fill("rejected-token");
@@ -407,11 +444,11 @@ test.describe("MicroService configuration @dashboard", () => {
     await page.goBack();
     await expect(page.getByRole("heading", { name: "Run: orders", exact: true })).toBeVisible();
     await expect(page.getByLabel("Network", { exact: true })).toHaveValue(NETWORK.id);
-    await expect(page.getByLabel("First host port", { exact: true })).toHaveValue("32200");
+    await expect(page.getByLabel("First host port (optional)", { exact: true })).toHaveValue("32200");
     await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeDisabled();
     await page.getByRole("button", { name: "Close", exact: true }).click();
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
-    await expect(page.getByLabel("First host port", { exact: true })).toHaveValue("30100");
+    await expect(page.getByLabel("First host port (optional)", { exact: true })).toHaveValue("30100");
   });
 
   test("handles a service deleted during AUTH reconnection without opening another service", async ({ page }) => {
@@ -466,7 +503,7 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect(page.getByRole("link", { name: "Reconnect AUTH", exact: true })).toBeVisible();
     await expect(deploy).toBeDisabled();
     await page.locator(".service-deployment form").dispatchEvent("submit");
-    await page.getByLabel("First host port", { exact: true }).press("Enter");
+    await page.getByLabel("First host port (optional)", { exact: true }).press("Enter");
     await expect(deploy).toBeDisabled();
     expect(deploys).toBe(0);
   });

@@ -670,9 +670,23 @@ async fn dispatch(
     peer: &vm_unit::Peer,
 ) -> Result<AfterResponse, HelperFailure> {
     match request {
-        NetworkRequest::Pipe { request } => pipe::run(request)
-            .await
-            .map(|snapshot| AfterResponse::Pipe(Box::new(snapshot))),
+        NetworkRequest::Pipe { request } => {
+            let changed = !matches!(request, firecrab_helper_protocol::pipe::Operation::Inspect);
+            let result = pipe::run(request).await;
+            if changed {
+                // A failed Pipe transaction may have rolled back a manifest seen
+                // by a concurrent DHCP sync. Restore DNS from the committed state.
+                let dns_result = dhcp::refresh_service_dns(&config.dhcp).await;
+                if result.is_ok() {
+                    dns_result.map_err(|error| HelperFailure::Internal {
+                        detail: error_chain(&error),
+                    })?;
+                } else if let Err(error) = dns_result {
+                    tracing::warn!(%error, "could not restore service DNS after failed Pipe transaction");
+                }
+            }
+            result.map(|snapshot| AfterResponse::Pipe(Box::new(snapshot)))
+        }
         NetworkRequest::EnsureBridge => bridge::ensure_bridge(&config.bridge, config.bridge_mtu)
             .await
             .map(|()| AfterResponse::Continue)

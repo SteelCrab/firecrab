@@ -5,9 +5,7 @@ use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{
-    Config, Result, ServiceAction, UnitStatus, hostname, reserved_quick_host, validate_upstreams,
-};
+use super::{Config, Result, ServiceAction, UnitStatus, valid_route_hostname, validate_upstreams};
 
 /// Maximum number of anonymous connectors, including the legacy singleton.
 pub const MAX_QUICK_TUNNELS: usize = 16;
@@ -44,7 +42,7 @@ impl QuickTunnelTarget {
     fn validate(&self, listen: Option<SocketAddr>) -> Result<()> {
         match self {
             Self::Apps { upstreams } => validate_upstreams(upstreams, listen, "Quick Tunnel"),
-            Self::Routes { host } if hostname(host) && !reserved_quick_host(host) => Ok(()),
+            Self::Routes { host } if valid_route_hostname(host) => Ok(()),
             Self::Routes { .. } => {
                 Err("select a valid existing Nginx hostname for Quick Tunnel".into())
             }
@@ -70,7 +68,10 @@ impl QuickTunnelEntry {
         validate_name(&self.name)?;
         self.target.validate(Some(config.listen))?;
         if let QuickTunnelTarget::Routes { host } = &self.target
-            && !config.routes.iter().any(|route| &route.host == host)
+            && !config
+                .routes
+                .iter()
+                .any(|route| &route.host == host && route.network.is_none())
         {
             return Err(format!(
                 "edit or delete Quick Tunnel '{}' before removing the last route for {host}",

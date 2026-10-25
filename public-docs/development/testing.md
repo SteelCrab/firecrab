@@ -359,3 +359,32 @@ Keep logs and summaries; see [QA script coverage](qa.md#script-coverage).
 - [CI](ci.md)
 - [Validation history](validation-history.md)
 - [Contributing](../../CONTRIBUTING.md)
+
+## MicroService internal routing
+
+- **IR1 — Transport:** inside a disposable Linux Docker container with NET_ADMIN,
+  run `python3 scripts/test-internal-service-routing.py --cli target/debug/firecrab --nginx target/ingress/firecrab-ingress`.
+  Requires Python 3, iproute2, dnsmasq and HTTP/2-enabled curl. It validates real
+  DNS, both backends, Host/path forwarding, network isolation, HTTP/2, WebSockets,
+  ingress-group allow/deny, passive failover, withdrawal and cleanup.
+  This transport fixture does not boot a MicroVM.
+- **IR2 — Deployment ownership:** run the `service_runtime` Rust tests and helper
+  DNS tests. Verify lost publication responses, interrupted API recovery, failed
+  cleanup ownership, DNS rebuild, and rejection of damaged persisted routes.
+- **IR3 — Browser:** run `npm run test:services --prefix firecrab-e2e`. Verify an
+  empty host port, the private address, absence of a host-browser Open app link,
+  and Stop availability while internal cleanup remains owned without replicas.
+- **IR4 — Real MicroVMs:** on a dedicated Linux/KVM QA host, deploy two services
+  on one MicroNetwork without domains or host ports. Give the destination two
+  replicas. From the caller guest, resolve and request `<destination>.internal`.
+  Verify both replica identities, foreign-network rejection, grouped allow/deny,
+  API stop/start continuity, helper restart recovery and Stop withdrawal.
+  Delete only QA-owned resources. Record WARNING when this native run is unavailable.
+- **IR5 — Gateway MAC stability:** run `scripts/ci-qa-bridge-mac.py --helper target/debug/firecrab-helper`
+  as root on Linux. It uses a private network namespace to test port churn,
+  repair of an existing automatic bridge, and helper restart.
+- **IR6 — Stop DNS latency:** run `scripts/test-service-dns-live.py` against an
+  empty, dedicated QA API with Pipe Auth connected. Supply `--image`,
+  `--caller-template`, and `--output`. The image must answer the configured app
+  port and health path. Two deploy/stop cycles check the gateway MAC, the first
+  A/AAAA responses within one second, and access to a surviving service.
