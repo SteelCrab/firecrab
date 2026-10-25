@@ -19,11 +19,15 @@ http.server.HTTPServer(('127.0.0.1', 5523), Handler).serve_forever()
 "#;
 const PROBE: &str = r#"
 import fcntl, json, os, pathlib, stat
-assert pathlib.Path('/proc/self/cgroup').read_text().strip() == '0::/'
+cgroups = pathlib.Path('/proc/self/cgroup').read_text().strip().splitlines()
+assert len(cgroups) == 1, cgroups
+cgroup = cgroups[0]
+assert cgroup.startswith('0::/'), cgroup
+assert '..' not in pathlib.PurePosixPath(cgroup[3:]).parts, cgroup
 probe = pathlib.Path('/sys/fs/cgroup/firecrab-runtime-probe')
 probe.mkdir()
 probe.rmdir()
-with open('/dev/kvm', 'rb', buffering=0) as kvm:
+with open('/dev/kvm', 'r+b', buffering=0) as kvm:
     version = fcntl.ioctl(kvm.fileno(), 0xAE00, 0)
 assert version == 12, version
 assert stat.S_ISCHR(os.stat('/dev/net/tun').st_mode)
