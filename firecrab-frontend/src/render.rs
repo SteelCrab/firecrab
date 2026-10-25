@@ -989,7 +989,7 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
         "kernels" => {
             let version = encode(text(data, "version"));
             out.push_str(&request(
-                "Install",
+                "Build kernel",
                 "POST",
                 &format!("/api/kernels/{version}/install"),
                 Value::Null,
