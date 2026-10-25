@@ -3,7 +3,10 @@
 Build the CLI on the host and the Linux API/helper inside managed Debian.
 Install Node.js, npm, wasm-pack 0.14.0, and the `wasm32-unknown-unknown` Rust target on the host for the development dashboard.
 Run commands from the checkout root with the pinned Rust toolchain.
-See [Contributing](../../CONTRIBUTING.md#run-from-source) for native Linux development.
+The managed Debian examples below describe the primary checkout on macOS and Windows.
+Linked worktrees select [independent development instances](worktree-dev.md): a separate VM on macOS and a private Docker runtime on Windows.
+Linux `service dev` also uses a private Docker runtime, including from the primary checkout.
+See [Contributing](../../CONTRIBUTING.md#run-from-source) for manual native Linux development.
 
 ## macOS
 
@@ -42,7 +45,7 @@ See [Windows setup and release limits](../getting-started/windows.md).
 
 ## Build and deploy
 
-`service dev` installs microManager if missing, then starts its resident service.
+In the primary macOS or Windows checkout, `service dev` installs microManager if missing, then starts its resident service.
 It uploads a source snapshot, installs compiler prerequisites on the first run, and builds `firecrab-api` and `firecrab-helper` with `--locked`.
 Sources and compiler caches persist under `/var/lib/firecrab/dev`.
 Local configuration, `.env` files, nested checkouts, and build output are excluded.
@@ -87,7 +90,8 @@ A failure to list or stop the units cancels restoration and preserves developmen
 VM disks and application data remain available for the next start.
 After `dev clean`, `dev start` uses the installed release; `service dev` builds and deploys sources again.
 Development subcommands cannot be combined with build/restore options.
-`service start`, `stop`, and `restart` control the management VM and its resident host service.
+`service start`, `stop`, and `restart` keep their primary management VM scope, including when run from a linked worktree.
+`service repair` also keeps its primary scope. Use `service dev` controls for the selected development environment.
 `service restart` stops the VM, starts it again, and waits for the local API.
 These commands leave the host development dashboard running; use `service dev stop` to stop it.
 Stopping or restarting the management VM also stops its guest services and workload MicroVMs.
@@ -100,19 +104,23 @@ Overrides persist across `service stop` and `start` until restored.
 `service dev` installs locked frontend dependencies with `npm ci` when needed.
 It compiles the selected checkout's Rust/WASM dashboard and launches its Vite server on `http://localhost:8080` by default.
 For example, `firecrab service dev --port 8098` serves it at `http://localhost:8098`.
-Each build uses `--port` or its default of 8080; the API port and proxy target are unchanged.
+Each build uses `--port` or its default of 8080.
+The option changes only the dashboard address; private instances have separately allocated backend ports.
 The server continues after the command exits. Repeated commands reuse a healthy server.
-Selecting another checkout replaces only the dashboard started by Firecrab.
+Within one environment, selecting another source replaces only the dashboard owned by that environment.
+Selecting another linked worktree uses that worktree's separate dashboard state.
 Changing the port stops the previous owned dashboard before starting its replacement.
 An unrelated server on the selected port causes an error; Firecrab does not stop it or select another port.
 Choose another `--port` value or stop the conflicting server before using `service dev`.
 
-`dev start` and `dev restart` use the last selected checkout and port, even from another directory.
+Run `dev start` and `dev restart` from the same worktree to reuse its selected checkout and port.
+The primary environment retains its existing remembered-checkout behavior.
 `service dev stop`, `service dev clean`, and `service dev --restore` stop the development dashboard.
 The dashboard stays running across management VM stops and restarts; its API proxy recovers when the VM is ready again.
 Dashboard logs are stored at `runtime/dev-dashboard.log` in the managed home.
-The installed release dashboard remains available through the API's port 5523.
-Vite proxies `/api` and `/ws` to `127.0.0.1:5523` through the macOS SSH tunnel or WSL localhost forwarding.
+The primary installed release dashboard remains available through its API, normally on port 5523.
+Vite proxies `/api` and `/ws` to the selected environment's API port.
+Primary managed services normally use 5523; independent instances persist their assigned backend ports.
 The API proxy preserves the dashboard's Host and Origin headers so same-origin requests work on the selected port.
 Use `localhost` or `127.0.0.1` on the selected port for the browser origin.
 
@@ -145,3 +153,4 @@ It requires the host mounts, API response, and running service PIDs to remain un
 - [Architecture](../reference/architecture.md)
 - [CI and runtime E2E](ci.md)
 - [Repair QA](macos-repair.md)
+- [Worktree development instances](worktree-dev.md)

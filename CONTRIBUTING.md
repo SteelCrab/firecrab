@@ -47,6 +47,11 @@ A full installation is unnecessary for unit tests and frontend builds.
 
 Run these commands from the repository root.
 
+Use [independent worktree development](public-docs/development/worktree-dev.md) to keep the primary environment running while testing other checkouts.
+Linked worktrees use a separate management VM on macOS and a private Docker runtime on Windows.
+Linux `service dev` uses private Docker instances from both primary and linked checkouts.
+The Docker backend requires a local rootful Linux engine with KVM, TUN, and cgroup v2 support.
+
 **Linux:** Build the API and network helper, then run each command in a separate terminal.
 VMs run in systemd units the helper starts, so the host needs systemd; rerun the helper script after rebuilding either binary.
 
@@ -84,10 +89,11 @@ cargo build -p firecrab-cli --locked
 .\target\debug\firecrab.exe service dev
 ```
 
-`service dev` installs microManager when missing, builds the local API and network
+In the primary macOS/Windows checkout, `service dev` installs microManager when missing, builds the local API and network
 helper inside WSL2, and restarts them. On macOS and Windows it also starts the
 source dashboard at `http://localhost:8080`; Node.js and npm are required.
 Use `service dev --port 8098` to select another dashboard port.
+Run development controls from their worktree. Use the printed API URL explicitly with `firecrab --api URL` for general VM commands.
 The command verifies both the dashboard and its API connection before returning. See the
 [Windows guide](public-docs/development/micromanager.md#windows)
 for build, restore, and frontend options.

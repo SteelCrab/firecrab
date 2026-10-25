@@ -10,6 +10,8 @@ fn service(root: &Path, arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_firecrab"))
         .arg("service")
         .args(arguments)
+        .current_dir(root)
+        .env_remove("FIRECRAB_DEV_INSTANCE_ID")
         .env("HOME", root)
         .env("FIRECRAB_INSTALL_DIR", root.join("bin"))
         .env("FIRECRAB_MICROMANAGER_HOME", root.join("micromanager"))

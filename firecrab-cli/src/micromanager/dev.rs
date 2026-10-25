@@ -5,7 +5,10 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+pub(crate) mod container;
 pub(super) mod dashboard;
+pub(crate) mod instance;
 pub(super) mod session;
 
 pub(super) const GUEST_SCRIPT: &str =
@@ -32,6 +35,11 @@ const SOURCE_INPUTS: &[&str] = &[
 ];
 // Older checkouts predate these resources and remain valid development sources.
 const OPTIONAL_SOURCE_INPUTS: &[&str] = &[
+    "scripts/micromanager/dev-container.Dockerfile",
+    "scripts/micromanager/dev-container-bootstrap.sh",
+    "scripts/micromanager/dev-container-entrypoint.sh",
+    "scripts/micromanager/dev-container-publish.sh",
+    "scripts/install-firecracker.sh",
     "install.sh",
     "scripts/firecrab-release.sh",
     "scripts/build-ingress.sh",

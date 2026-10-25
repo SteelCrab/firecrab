@@ -122,6 +122,11 @@ impl Error {
 }
 
 pub fn run(command: Command) -> Result<i32, Error> {
+    if let Some(code) = super::dev::instance::dispatch(&command)
+        .map_err(|source| super::dev::io_error("select worktree development instance", source))?
+    {
+        return Ok(code);
+    }
     match command {
         Command::Resource { options } => Ok(super::resource::run(options)?),
         Command::ResourceServer { home } => Ok(super::resource_server::run(home)?),
@@ -237,7 +242,7 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
     }
     manifest.save(&layout.managed_home)?;
     report!(
-        "microManager {}\n  CLI: {}\n  helper: {}\n  managed data: {}\n  Debian {}: {}\n  Firecracker {}: {}\n  Firecrab {} host: {}\n  guest installer: {}\n  OS disk: {}\n  data disk: {}\n  cloud-init seed: {}\n  EFI variable store: {}\n  provision marker: {}\n  SSH key: {}\n  launchd: {}\n  API: http://127.0.0.1:5523/\n  guest: {}",
+        "microManager {}\n  CLI: {}\n  helper: {}\n  managed data: {}\n  Debian {}: {}\n  Firecracker {}: {}\n  Firecrab {} host: {}\n  guest installer: {}\n  OS disk: {}\n  data disk: {}\n  cloud-init seed: {}\n  EFI variable store: {}\n  provision marker: {}\n  SSH key: {}\n  launchd: {}\n  API: {}/\n  guest: {}",
         if reinstall {
             "reinstalled"
         } else {
@@ -260,6 +265,8 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
         prepared.provision_marker.display(),
         prepared.ssh_private_key.display(),
         daemon_paths.plist.display(),
+        super::dev::instance::api_url(&layout.managed_home)
+            .map_err(|source| super::dev::io_error("read development API port", source))?,
         guest_result.lines().collect::<Vec<_>>().join(", ")
     );
     report!(
@@ -345,7 +352,11 @@ fn run_dev(
         .ok_or(dev::Error::GuestNotReady)?;
     dev::deploy(&layout, ip, checkout.as_ref(), release)?;
     wait_for_dev_api(&layout)?;
-    report!("[PASS] API: http://127.0.0.1:5523/");
+    report!(
+        "[PASS] API: {}/",
+        super::dev::instance::api_url(&layout.managed_home)
+            .map_err(|source| super::dev::io_error("read development API port", source))?
+    );
     if let Some(source) = frontend {
         dashboard::start(&source, &layout.managed_home, port).map_err(dev::Error::from)?;
     } else {
@@ -377,7 +388,11 @@ fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
     if command == DevCommand::Clean {
         dashboard::clean(&layout.managed_home).map_err(dev::Error::from)?;
         wait_for_dev_api(&layout)?;
-        report!("[PASS] installed release API: http://127.0.0.1:5523/");
+        report!(
+            "[PASS] installed release API: {}/",
+            super::dev::instance::api_url(&layout.managed_home)
+                .map_err(|source| super::dev::io_error("read development API port", source))?
+        );
         return Ok(0);
     }
     if command != DevCommand::Start {
@@ -385,7 +400,11 @@ fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
     }
     if command != DevCommand::Stop {
         wait_for_dev_api(&layout)?;
-        report!("[PASS] API: http://127.0.0.1:5523/");
+        report!(
+            "[PASS] API: {}/",
+            super::dev::instance::api_url(&layout.managed_home)
+                .map_err(|source| super::dev::io_error("read development API port", source))?
+        );
         let source = dashboard::source(&layout.managed_home).map_err(dev::Error::from)?;
         let port = dashboard::port(&layout.managed_home).map_err(dev::Error::from)?;
         dashboard::start(&source, &layout.managed_home, port).map_err(dev::Error::from)?;
@@ -450,7 +469,12 @@ fn run_debug(options: debug::Options) -> Result<i32, Error> {
                 debug::Probe::fail("launchd agent not loaded; run `firecrab service start`")
             };
             report.api = if installed && status.ready && status.api_reachable {
-                debug::Probe::pass("http://127.0.0.1:5523/")
+                debug::Probe::pass(format!(
+                    "{}/",
+                    super::dev::instance::api_url(&layout.managed_home).map_err(|source| {
+                        super::dev::io_error("read development API port", source)
+                    })?
+                ))
             } else {
                 debug::Probe::fail(
                     "local API is not ready for this managed home; inspect daemon and console logs",
@@ -779,9 +803,11 @@ fn print_daemon_status(status: &daemon::Status, layout: &lifecycle::Layout) {
             "FAILED"
         },
         if status.api_reachable {
-            "http://127.0.0.1:5523/"
+            super::dev::instance::api_url(&layout.managed_home)
+                .map(|url| format!("{url}/"))
+                .unwrap_or_else(|error| format!("invalid development API state: {error}"))
         } else {
-            "unreachable"
+            "unreachable".to_owned()
         }
     );
     if !status.success() && repair::validate(layout).is_ok() {

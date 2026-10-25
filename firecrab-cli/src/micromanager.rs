@@ -6,7 +6,7 @@ mod artifact;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod controller;
 mod debug;
-mod dev;
+pub(crate) mod dev;
 mod host_platform;
 #[cfg(target_os = "macos")]
 mod macos;
