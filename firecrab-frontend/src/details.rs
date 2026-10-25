@@ -44,7 +44,7 @@ pub fn panel(app: &App) -> String {
     if let Some(form) = &app.form {
         out.push_str(&format!(
             "<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body\">{}</section>",
-            if form.return_route == "services" { crate::advanced::services::html(app, form) } else { form.html(app.busy, &app.field_errors) } + &if form.title == "Deploy MicroService" { format!("<div id=\"service-status\">{}</div>", render::deployment(app.service_deployment.as_ref())) } else { String::new() }
+            if form.return_route == "services" { crate::advanced::services::html(app, form) } else { form.html(app.busy, &app.field_errors) } + &if form.title == "Deploy MicroService" { format!("<div id=\"service-status\">{}</div><div id=\"deploy-panel\">{}</div>", render::deployment(app.service_deployment.as_ref()), crate::deploy::html(app)) } else { String::new() }
         ));
         if form.title == "Deploy MicroService" && !text(&form.base, "domain").is_empty() {
             if let Some(pipe) = app.cache.get("/api/pipe")
@@ -123,8 +123,9 @@ pub fn panel(app: &App) -> String {
         }
         if app.route == "services" {
             out.push_str(&format!(
-                "<div id=\"service-status\">{}</div>",
-                render::deployment(app.service_deployment.as_ref())
+                "<div id=\"service-status\">{}</div><div id=\"deploy-panel\">{}</div>",
+                render::deployment(app.service_deployment.as_ref()),
+                crate::deploy::html(app)
             ));
         }
         let related: Vec<_> = app
@@ -515,7 +516,8 @@ pub fn tick(app: &Shared) {
         .form
         .as_ref()
         .is_some_and(|form| form.title == "Deploy MicroService");
-    if state.form.is_some() && !deploy_form
+    if state.busy
+        || state.form.is_some() && !deploy_form
         || !state.panel_open
         || !["vms", "services"].contains(&state.route.as_str())
         || state.detail_polling == Some(state.detail_generation)
@@ -567,6 +569,7 @@ pub fn tick(app: &Shared) {
         drop(state);
         if deploy_form {
             set_html("service-status", &status);
+            set_html("deploy-panel", &crate::deploy::html(&app.borrow()));
             crate::advanced::services::sync(&app);
         } else {
             crate::render_detail(&app);

@@ -23,6 +23,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Deploy updates running domain services through the existing Nginx ingress.
+  Rolling and blue-green updates, immutable release history, selected rollback,
+  verified worker drain, and restart/retry recovery share one REST/CLI/YAML
+  executor. The Rust/WASM dashboard exposes update and rollback actions (#335).
+
 - Pipe Auth links a Firecrab account with an account integration token issued
   by `console.firecrab.dev`. It displays the verified account ID, email, and
   token expiry. Address-scoped Tunnel tokens remain separate. Existing Tunnel

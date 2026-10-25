@@ -941,6 +941,15 @@ test("placement ignores an older port result and checks the final request again"
   expect(checks).toBeGreaterThan(before);
 });
 
+const RELEASE_A = "11111111-1111-4111-8111-111111111111";
+const RELEASE_B = "22222222-2222-4222-8222-222222222222";
+const DEPLOY_SPEC = { ...INITIAL, cpu: 1, ram: 128, replicas: 1, secrets: {} };
+function release(id: string, image = "ghcr.io/team/orders:1.0") {
+  return { id, serviceId: ID, phase: "running", spec: { ...DEPLOY_SPEC, image }, request: { microNetworkId: ID, hostPort: 0 },
+    digest: `sha256:${(id === RELEASE_A ? "a" : "b").repeat(64)}`, instances: [{ vmId: SECRET, ipv4: "172.30.0.2", hostPort: 0, state: "running", healthy: true }],
+    domainRouteOwned: true, log: ["All replicas answered the app health check"], error: null, startedAt: 1792886400, finishedAt: 1792886410 };
+}
+
 test.describe("Deploy release management @dashboard", () => {
   test("uses Deploy for a running update and preserves the reviewed release identity", async ({ page }) => {
     const writes = await openServices(page, [DEPLOY_SPEC]);
@@ -957,13 +966,13 @@ test.describe("Deploy release management @dashboard", () => {
     });
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await page.getByRole("button", { name: "Deploy update", exact: true }).click();
-    await expect(page.getByLabel("Name", { exact: true })).toBeDisabled();
-    await selectApp(page, "team/orders", "2.0");
-    await next(page);
-    await expect(page.getByLabel("Domain (optional)", { exact: true })).toBeDisabled();
-    await next(page);
-    await page.getByLabel("Memory per instance", { exact: true }).selectOption("256");
-    await next(page);
+    await expect(page.getByLabel("Name", { exact: true })).toHaveAttribute("readonly", "");
+    await selectServiceApp(page, "ghcr.io/team/orders:2.0");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect(page.getByLabel("Domain (optional)", { exact: true })).toHaveAttribute("readonly", "");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
+    await page.getByLabel("Memory (MiB)", { exact: true }).fill("256");
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByLabel("Deployment strategy", { exact: true }).selectOption("blue_green");
     await page.getByRole("button", { name: "Deploy update", exact: true }).click();
     await expect(page.getByText("Switching Nginx traffic", { exact: true })).toBeVisible();
@@ -1023,7 +1032,7 @@ test.describe("Deploy release management @dashboard", () => {
     });
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await page.getByRole("button", { name: "Release history", exact: true }).click();
-    await expect(page.getByText("Release storage unavailable", { exact: true })).toBeVisible();
+    await expect(page.getByText("HTTP 503: Release storage unavailable", { exact: true })).toBeVisible();
     await expect(page.getByText("No successful releases are retained yet.", { exact: true })).toHaveCount(0);
     await page.getByRole("button", { name: "Retry Deploy", exact: true }).click();
     expect(retries).toEqual([{ operationId: RELEASE_B }]);
