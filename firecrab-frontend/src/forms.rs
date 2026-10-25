@@ -1213,6 +1213,32 @@ mod tests {
             serde_json::from_value(deploy.payload(&values(&deploy)).unwrap()).unwrap();
     }
     #[test]
+    fn running_update_payload_keeps_release_fencing_outside_the_service_spec() {
+        let data = json!({"name":"web","image":"ghcr.io/team/web:v2","port":8080,"healthPath":"/health","ram":256,"cpu":1,"domain":"web.example.com","env":{"MODE":"prod"},"secrets":{}});
+        let mut form = resource_form("services", &data, "service").unwrap();
+        form.title = "Deploy update".into();
+        form.base["operationId"] = json!("11111111-1111-4111-8111-111111111111");
+        form.base["expectedReleaseId"] = json!("22222222-2222-4222-8222-222222222222");
+        form.fields.push(Field::new(
+            "strategy",
+            "Deployment strategy",
+            "select",
+            "blue_green",
+        ));
+        let body = form.payload(&values(&form)).unwrap();
+        let request: firecrab_api_types::UpdateServiceRequest =
+            serde_json::from_value(body.clone()).unwrap();
+        assert!(request.expected_release_id.is_some());
+        assert_eq!(
+            request.strategy,
+            firecrab_api_types::DeployStrategy::BlueGreen
+        );
+        assert_eq!(request.spec.env["MODE"], "prod");
+        assert!(body["spec"].get("operationId").is_none());
+        assert!(body["spec"].get("expectedReleaseId").is_none());
+        assert!(body["spec"].get("strategy").is_none());
+    }
+    #[test]
     fn unicode_ids_are_encoded_as_one_path_component() {
         assert_eq!(
             crate::api::encode("hello/한글?x=1"),

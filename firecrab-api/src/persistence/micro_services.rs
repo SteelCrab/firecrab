@@ -311,6 +311,14 @@ impl Store {
             "UPDATE micro_service_deployments SET deployment = ?2 WHERE service_id = ?1",
             params![restored.service_id.to_string(), restored_text],
         )?;
+        let service = MicroServiceResponse {
+            id: restored.service_id,
+            spec: restored.spec.clone(),
+        };
+        tx.execute(
+            "UPDATE micro_services SET name = ?2, spec = ?3 WHERE id = ?1",
+            params![service.id.to_string(), service.spec.name, encode(&service)?],
+        )?;
         tx.commit()?;
         Ok(())
     }
