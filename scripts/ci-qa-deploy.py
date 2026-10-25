@@ -84,6 +84,7 @@ esac
 """,
             "recovery-health": "#!/bin/sh\nif [ -f /unhealthy ]; then printf 'Status: 503 Service Unavailable\\r\\n'; fi\nprintf 'Content-Type: text/plain\\r\\n\\r\\nhealth\\n'\n",
             "fail-health": "#!/bin/sh\n/bin/busybox touch /unhealthy\nprintf 'Content-Type: text/plain\\r\\n\\r\\ninjected\\n'\n",
+            "internal-call": "#!/bin/sh\nprintf 'Content-Type: text/plain\\r\\n\\r\\n'\nexec /bin/busybox wget -q -O - \"http://$SELF_INTERNAL/cgi-bin/rotation\"\n",
         }
         for name, script in scripts.items():
             data = script.encode()

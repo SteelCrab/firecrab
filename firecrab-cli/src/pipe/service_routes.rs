@@ -35,9 +35,9 @@ pub(super) fn manage() -> Result<()> {
     let path = directory.path().join("pipe.json");
     std::fs::write(&path, serde_json::to_vec(&next)?)?;
     match request {
-        ServiceRouteRequest::Publish { .. } | ServiceRouteRequest::Replace { .. } => {
-            super::host::apply_service_locked(&path)
-        }
+        ServiceRouteRequest::Publish { .. }
+        | ServiceRouteRequest::PublishInternal { .. }
+        | ServiceRouteRequest::Replace { .. } => super::host::apply_service_locked(&path),
         ServiceRouteRequest::Remove { .. } => super::host::apply_quick_locked(&path),
     }
 }

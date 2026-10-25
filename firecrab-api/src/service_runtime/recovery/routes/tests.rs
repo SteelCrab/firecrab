@@ -35,7 +35,11 @@ async fn all_unready_endpoints_keep_the_owned_hostname_and_return_503_until_read
     assert_eq!(suspended.routes.len(), 1);
     assert_eq!(suspended.routes[0].owner, Some(owner(&record)));
     assert!(suspended.routes[0].upstreams.is_empty());
-    assert!(suspended.nginx().contains("location / { return 503; }"));
+    assert!(
+        suspended
+            .nginx()
+            .contains("location / { root /dev/null; try_files /unready =503; }")
+    );
     assert!(!suspended.nginx().contains("upstream fc_route_0"));
     assert!(record.domain_route_owned);
     assert!(before_cleanup(&state, &record).await.is_err());
@@ -126,4 +130,66 @@ async fn foreign_route_and_unexpected_upstream_never_allow_destructive_recovery(
         .deployment_id = Uuid::new_v4();
     assert!(switch(&state, &mut record, vec![]).await.is_err());
     assert_eq!(helper.changes.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn private_only_and_shared_names_switch_together_and_keep_internal_dns() {
+    for public in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let template = journal();
+        let helper = helper(root.path(), &template).await;
+        helper.auto_drain.store(true, Ordering::SeqCst);
+        let mut state = state(root.path()).await;
+        state.network = helper.client.clone();
+        let mut record = active(&template);
+        record.internal_route_owned = true;
+        let mut private = helper.config.lock().unwrap().routes[0].clone();
+        private.host = "web.internal".into();
+        private.service_port = Some(record.spec.port);
+        private.network = Some(
+            serde_json::from_value(serde_json::json!({
+                "micro_network_id": Uuid::new_v4(), "gateway":"172.30.0.1", "prefix":24,
+            }))
+            .unwrap(),
+        );
+        if !public {
+            record.spec.domain = None;
+            record.domain_route_owned = false;
+            helper.config.lock().unwrap().routes.clear();
+        }
+        helper.config.lock().unwrap().routes.push(private);
+        switch(&state, &mut record, vec![]).await.unwrap();
+        let saved = helper.config.lock().unwrap().clone();
+        assert_eq!(saved.routes.len(), if public { 2 } else { 1 });
+        assert!(saved.routes.iter().all(|route| route.upstreams.is_empty()));
+        assert_eq!(saved.internal_dns_hosts(), "172.30.0.1 web.internal\n");
+        assert_eq!(record.domain_route_owned, public);
+        before_stop(&state, &record, record.instances[0].vm_id)
+            .await
+            .unwrap();
+        let next = ready(&record, None).unwrap();
+        switch(&state, &mut record, next.clone()).await.unwrap();
+        assert!(
+            helper
+                .config
+                .lock()
+                .unwrap()
+                .routes
+                .iter()
+                .all(|route| route.upstreams == next)
+        );
+        before_cleanup(&state, &record).await.unwrap();
+        let mut config = helper.config.lock().unwrap();
+        config
+            .routes
+            .iter_mut()
+            .find(|route| route.network.is_some())
+            .unwrap()
+            .owner
+            .as_mut()
+            .unwrap()
+            .service_id = Uuid::new_v4();
+        drop(config);
+        assert!(before_cleanup(&state, &record).await.is_err());
+    }
 }

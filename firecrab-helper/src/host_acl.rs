@@ -248,6 +248,13 @@ async fn apply_ufw_bridge(bridge: &str, uplink: &str) {
         &["allow", "in", "on", bridge, "to", "any", "port", "53"],
     )
     .await;
+    let _ = run_tool(
+        "ufw",
+        &[
+            "allow", "in", "on", bridge, "to", "any", "port", "80", "proto", "tcp",
+        ],
+    )
+    .await;
     if is_safe_ifname(uplink) {
         let _ = run_tool(
             "ufw",
@@ -352,7 +359,7 @@ async fn insert_nft_input(spec: NftTable, bridge: &str) {
                 Some(text) => text,
                 None => continue,
             };
-        for (proto, port) in [("udp", "67"), ("udp", "53"), ("tcp", "53")] {
+        for (proto, port) in [("udp", "67"), ("udp", "53"), ("tcp", "53"), ("tcp", "80")] {
             let quoted = format!("iifname \"{bridge}\" {proto} dport {port}");
             let bare = format!("iifname {bridge} {proto} dport {port}");
             if nft_rule_present(&listed, &quoted, &bare) {
@@ -472,6 +479,7 @@ async fn ensure_iptables_input(bridge: &str) {
             vec!["-i", bridge, "-p", "udp", "--dport", "67", "-j", "ACCEPT"],
             vec!["-i", bridge, "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
             vec!["-i", bridge, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"],
+            vec!["-i", bridge, "-p", "tcp", "--dport", "80", "-j", "ACCEPT"],
         ] {
             let already = run_tool(binary, &flatten_check("INPUT", &args)).await;
             if !already {
@@ -487,6 +495,7 @@ async fn remove_iptables_input(bridge: &str) {
             vec!["-i", bridge, "-p", "udp", "--dport", "67", "-j", "ACCEPT"],
             vec!["-i", bridge, "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
             vec!["-i", bridge, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"],
+            vec!["-i", bridge, "-p", "tcp", "--dport", "80", "-j", "ACCEPT"],
         ] {
             let _ = run_tool(binary, &flatten_delete("INPUT", &args)).await;
         }

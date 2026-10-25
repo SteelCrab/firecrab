@@ -92,6 +92,7 @@ pub(super) async fn begin_transition(
     });
     update.retiring = retiring;
     deployment.domain_route_owned = true;
+    deployment.internal_route_owned |= update.previous.internal_route_owned;
     phase(
         state,
         deployment,
@@ -149,6 +150,10 @@ pub(super) async fn finish_transition(
         update.routed_new = transition.next_deployment_id == deployment.id;
         update.previous.domain_route_owned = !update.routed_new;
         deployment.domain_route_owned = update.routed_new;
+        let internal_owned =
+            deployment.internal_route_owned || update.previous.internal_route_owned;
+        update.previous.internal_route_owned = internal_owned && !update.routed_new;
+        deployment.internal_route_owned = internal_owned && update.routed_new;
         update.transition.as_mut().expect("transition").confirmed = true;
         save(state, deployment).await?;
     }
@@ -290,6 +295,23 @@ pub(super) async fn finish_stop(
         .clone()
         .expect("stop transition");
     if !transition.confirmed {
+        if deployment.internal_route_owned
+            || deployment
+                .update
+                .as_ref()
+                .expect("journal")
+                .previous
+                .internal_route_owned
+        {
+            let request = ServiceRouteRequest::Remove {
+                owner: ServiceRouteOwner {
+                    service_id: deployment.service_id,
+                    deployment_id: transition.expected_deployment_id,
+                },
+                host: format!("{}.internal", deployment.spec.name),
+            };
+            domain::apply(state, request, deployment.service_id).await?;
+        }
         let request = ServiceRouteRequest::Remove {
             owner: ServiceRouteOwner {
                 service_id: deployment.service_id,
@@ -307,8 +329,10 @@ pub(super) async fn finish_stop(
             .await
             .map_err(|_| "Could not withdraw Deploy route; VMs retained")?;
         deployment.domain_route_owned = false;
+        deployment.internal_route_owned = false;
         let update = deployment.update.as_mut().expect("journal");
         update.previous.domain_route_owned = false;
+        update.previous.internal_route_owned = false;
         update.transition.as_mut().expect("transition").confirmed = true;
         save(state, deployment).await?;
     }

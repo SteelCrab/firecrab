@@ -250,6 +250,17 @@ async fn accept(
     {
         return Err(AppError::validation(BTreeMap::from([("domain".into(), "Deploy requires the same Nginx-backed domain and service name; direct replica port forwards cannot switch traffic without interruption".into())]), request.0));
     }
+    if previous.internal_route_owned
+        && body.spec.security_group_id != previous.spec.security_group_id
+    {
+        return Err(AppError::validation(
+            BTreeMap::from([(
+                "securityGroupId".into(),
+                "Stop the service before changing its internal routing security group".into(),
+            )]),
+            request.0,
+        ));
+    }
     validate_database_bindings(&state, id, request.0)?;
     require_image_auth(&state, &body.spec.image, request.0).await?;
     secrets::preflight(&state, &body.spec, request.0).await?;
@@ -329,6 +340,7 @@ async fn accept(
         instances: vec![],
         log: vec![message.into()],
         domain_route_owned: false,
+        internal_route_owned: false,
         error: None,
     };
     let deployment = submit(state.clone(), deployment, claim, request.0).await?;

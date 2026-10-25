@@ -3,6 +3,7 @@
 import concurrent.futures
 import contextlib
 import json
+import ipaddress
 import subprocess
 import threading
 import time
@@ -31,10 +32,13 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
         record = current(service)
         return record if record["phase"] == "running" and not (record.get("recovery") or {}).get("repair") else None
 
-    def create(replicas):
+    gateway = str(ipaddress.ip_network(api.call("GET", "/api/micro-networks/" + network)["subnetCidr"]).network_address + 1)
+
+    def create(replicas, private=False):
         name = "repair-" + uuid.uuid4().hex[:8]
-        spec = {**spec_a, "name": name, "domain": name + ".example.test", "replicas": replicas,
+        spec = {**spec_a, "name": name, "domain": None if private else name + ".example.test", "replicas": replicas,
                 "healthPath": "/cgi-bin/recovery-health", "startupTimeout": 3, "drainTimeout": 30,
+                "env": {**spec_a.get("env", {}), "SELF_INTERNAL": name + ".internal"},
                 "secrets": {"PASSWORD": secret}}
         service = {"id": api.call("POST", "/api/micro-services", spec)["id"], "spec": spec}
         services.append(service)
@@ -42,18 +46,19 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
         service["initial"] = wait_for(lambda: ready(service), timeout=180)
         return service
 
-    def load(service):
+    def load(service, internal=False):
         domain = service["spec"]["domain"]
-        metrics["requests"][domain] = 0
+        key = domain + ("/guest-internal" if internal else "")
+        metrics["requests"][key] = 0
         while not stop.is_set():
             try:
-                response = traffic("127.0.0.1", port, domain, "/cgi-bin/rotation")
+                response = traffic("127.0.0.1", port, domain, "/cgi-bin/internal-call" if internal else "/cgi-bin/rotation")
                 if response != (200, "old"):
                     raise AssertionError(repr(response))
             except Exception as error:
                 if len(metrics["httpFailures"]) < 10:
                     metrics["httpFailures"].append({"domain": domain, "error": str(error)})
-            metrics["requests"][domain] += 1
+            metrics["requests"][key] += 1
             stop.wait(.03)
 
     def ids(record):
@@ -68,9 +73,10 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
         secret = api.call("POST", "/api/secrets", {"name": "recovery-" + uuid.uuid4().hex[:8], "value": "qa-secret-v0"})["id"]
         main, unrelated = create(2), create(1)
         for service in [main, unrelated]:
-            thread = threading.Thread(target=load, args=(service,), daemon=True)
-            loaders.append(thread)
-            thread.start()
+            for internal in [False, True]:
+                thread = threading.Thread(target=load, args=(service, internal), daemon=True)
+                loaders.append(thread)
+                thread.start()
         original = main["initial"]
         unrelated_ids = ids(unrelated["initial"])
         victim = original["instances"][0]["vmId"]
@@ -116,14 +122,18 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
         assert repaired["id"] == original["id"] and repaired["digest"] == original["digest"]
         assert repaired["spec"] == original["spec"] and repaired["request"] == original["request"]
         assert ids(current(unrelated)) == unrelated_ids
+        routes = [route for route in api.call("GET", "/api/pipe")["config"]["routes"]
+                  if (route.get("owner") or {}).get("serviceId") == main["id"]]
+        expected = sorted(instance["ipv4"] + ":8080" for instance in repaired["instances"])
+        assert len(routes) == 2 and all(sorted(route["upstreams"]) == expected for route in routes), routes
         assert target["vmId"] not in {vm["id"] for vm in api.call("GET", "/api/vms")}
         assert "qa-secret-v0" not in json.dumps(repaired)
         metrics["stages"].append("unhealthy VM replaced after restart failed; held request and repair journal survived API restart")
 
-        single = create(1)
+        single = create(1, private=True)
         only = single["initial"]["instances"][0]
         traffic(only["ipv4"], 8080, "fixture", "/cgi-bin/fail-health")
-        wait_for(lambda: traffic("127.0.0.1", port, single["spec"]["domain"])[0] == 503, timeout=60)
+        wait_for(lambda: traffic(gateway, 80, single["spec"]["name"] + ".internal")[0] == 503, timeout=60)
         wait_for(lambda: (record if (record := ready(single)) and ids(record) != ids(single["initial"]) else None), timeout=180)
         metrics["stages"].append("all-unready service kept its hostname with HTTP 503 and recovered to a ready replacement")
         stop_service(single)

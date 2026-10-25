@@ -129,6 +129,23 @@ pub fn render(policies: &[VmPolicy], networks: &[MicroNetworkSpec], listing: &st
                         network.gateway
                     ));
                 }
+                // Internal HTTP is host-local. Require source egress permission
+                // before Nginx checks the destination service's ingress rules.
+                let internal_http = group.rules.iter().any(|allow| {
+                    let mask = u32::MAX
+                        .checked_shl(u32::from(32 - allow.peer_prefix))
+                        .unwrap_or(0);
+                    allow.direction == SecurityGroupDirection::Egress
+                        && allow.protocol == firecrab_api_types::PortProtocol::Tcp
+                        && (allow.port_from..=allow.port_to).contains(&80)
+                        && (u32::from(network.gateway) & mask) == u32::from(allow.peer_address)
+                });
+                if internal_http {
+                    output.push_str(&format!(
+                        "{rule} ip daddr {} tcp dport 80 return\n",
+                        network.gateway
+                    ));
+                }
                 output.push_str(&format!("{rule} drop\nadd rule inet {TABLE} input iifname \"{bridge}\" ip saddr {} jump {chain}\n", policy.ipv4));
             }
         }

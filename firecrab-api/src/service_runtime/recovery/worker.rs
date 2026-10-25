@@ -138,6 +138,9 @@ async fn ports(
         .iter()
         .find(|instance| instance.vm_id == id)
         .ok_or("Recovery replica ownership is missing")?;
+    if instance.host_port == 0 {
+        return Ok(());
+    }
     let port_forwards = if publish {
         vec![PortForward {
             host_port: instance.host_port,
@@ -211,7 +214,12 @@ async fn execute(state: &AppState, record: &mut MicroServiceDeployment) -> Resul
                 verify(state, record, repair.vm_id)?;
                 routes::switch(state, record, routes::ready(record, Some(repair.vm_id))?).await?;
                 ports(state, record, repair.vm_id, false).await?;
-                if record.spec.domain.is_none() {
+                if record.spec.domain.is_none()
+                    && record
+                        .instances
+                        .iter()
+                        .any(|instance| instance.vm_id == repair.vm_id && instance.host_port != 0)
+                {
                     tokio::time::sleep(Duration::from_secs(u64::from(record.spec.drain_timeout)))
                         .await;
                 }

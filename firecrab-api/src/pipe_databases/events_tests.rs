@@ -273,6 +273,7 @@ async fn durable_events_real_rabbitmq() {
                 }],
                 log: vec![],
                 domain_route_owned: false,
+                internal_route_owned: false,
                 error: None,
             })
             .unwrap();

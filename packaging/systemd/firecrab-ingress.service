@@ -21,7 +21,8 @@ ProtectHome=yes
 ProtectSystem=strict
 # Bind the directory so atomic config replacements stay visible after reload.
 BindReadOnlyPaths=@CONFDIR@/pipe:/etc/firecrab-pipe
-CapabilityBoundingSet=
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 UMask=0000
 # The Unix endpoint only returns a generation hash. Other users can connect,

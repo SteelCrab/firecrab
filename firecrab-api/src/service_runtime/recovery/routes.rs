@@ -5,6 +5,18 @@ use firecrab_api_types::ServiceRouteTransition;
 use firecrab_helper_protocol::pipe::{Operation, ServiceRouteOwner, ServiceRouteRequest, Snapshot};
 use std::net::SocketAddr;
 
+fn uses_ingress(record: &MicroServiceDeployment) -> bool {
+    record.spec.domain.is_some() || record.internal_route_owned
+}
+
+fn hostname(record: &MicroServiceDeployment) -> String {
+    record
+        .spec
+        .domain
+        .clone()
+        .unwrap_or_else(|| format!("{}.internal", record.spec.name))
+}
+
 fn owned_route<'a>(
     snapshot: &'a Snapshot,
     record: &MicroServiceDeployment,
@@ -13,9 +25,24 @@ fn owned_route<'a>(
         config
             .routes
             .iter()
-            .find(|route| Some(&route.host) == record.spec.domain.as_ref())
+            .find(|route| route.host == hostname(record))
     });
     if let Some(route) = route {
+        if record.internal_route_owned
+            && snapshot
+                .config
+                .as_ref()
+                .unwrap()
+                .routes
+                .iter()
+                .find(|other| other.host == format!("{}.internal", record.spec.name))
+                .is_none_or(|other| {
+                    other.owner.as_ref() != Some(&owner(record))
+                        || other.upstreams != route.upstreams
+                })
+        {
+            return Err("Private recovery route changed; VMs retained".into());
+        }
         let addresses = record
             .instances
             .iter()
@@ -25,11 +52,26 @@ fn owned_route<'a>(
                     .ok()
             })
             .collect::<BTreeSet<_>>();
-        if route.owner.as_ref() != Some(&owner(record))
-            || route
-                .upstreams
-                .iter()
-                .any(|address| !addresses.contains(address))
+        if snapshot
+            .config
+            .as_ref()
+            .unwrap()
+            .routes
+            .iter()
+            .filter(|other| {
+                other
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.service_id == record.service_id)
+            })
+            .any(|other| {
+                other.owner.as_ref() != Some(&owner(record))
+                    || other.upstreams != route.upstreams
+                    || other
+                        .upstreams
+                        .iter()
+                        .any(|address| !addresses.contains(address))
+            })
         {
             return Err("Replica recovery found a foreign route; VMs retained".into());
         }
@@ -67,7 +109,7 @@ pub(super) async fn switch(
     record: &mut MicroServiceDeployment,
     next: Vec<SocketAddr>,
 ) -> Result<(), String> {
-    if record.spec.domain.is_none() {
+    if !uses_ingress(record) {
         return Ok(());
     }
     if record
@@ -88,7 +130,7 @@ pub(super) async fn switch(
             {
                 return Err("An earlier Nginx generation is still draining".into());
             }
-            record.domain_route_owned = route.is_some();
+            record.domain_route_owned = record.spec.domain.is_some() && route.is_some();
             return save(state, record).await;
         }
         let workers = snapshot.ingress_workers.as_ref().expect("verified workers");
@@ -144,7 +186,7 @@ pub(super) async fn switch(
             }
             ServiceRouteRequest::Publish {
                 owner: owner(record),
-                host: record.spec.domain.clone().unwrap(),
+                host: hostname(record),
                 upstreams: next.clone(),
             }
         } else {
@@ -152,7 +194,7 @@ pub(super) async fn switch(
                 expected_owner: owner(record),
                 expected_upstreams: expected,
                 owner: owner(record),
-                host: record.spec.domain.clone().unwrap(),
+                host: hostname(record),
                 upstreams: next.clone(),
             }
         };
@@ -162,7 +204,7 @@ pub(super) async fn switch(
             .await
             .map_err(|_| "Nginx did not confirm replica recovery; VMs retained")?;
     }
-    record.domain_route_owned = true;
+    record.domain_route_owned = record.spec.domain.is_some();
     record
         .recovery
         .as_mut()
@@ -215,7 +257,7 @@ pub(super) async fn before_stop(
     record: &MicroServiceDeployment,
     id: Uuid,
 ) -> Result<(), String> {
-    if record.spec.domain.is_none() {
+    if !uses_ingress(record) {
         return Ok(());
     }
     let snapshot = inspect(state).await?;
@@ -246,7 +288,7 @@ pub(super) async fn before_cleanup(
     state: &AppState,
     record: &MicroServiceDeployment,
 ) -> Result<(), String> {
-    if record.spec.domain.is_none() {
+    if !uses_ingress(record) {
         return Ok(());
     }
     let snapshot = inspect(state).await?;

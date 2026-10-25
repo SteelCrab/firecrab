@@ -256,7 +256,8 @@ pub(crate) fn validate(spec: &MicroServiceSpec, request_id: Uuid) -> Result<(), 
         );
     }
     if let Some(domain) = &spec.domain
-        && !firecrab_helper_protocol::pipe::valid_route_hostname(domain)
+        && (!firecrab_helper_protocol::pipe::valid_route_hostname(domain)
+            || domain.ends_with(".internal"))
     {
         fields.insert(
             "domain".to_owned(),

@@ -26,6 +26,7 @@ use crate::state::AppState;
 
 pub(crate) mod deploy;
 mod domain;
+mod internal;
 pub(crate) mod recovery;
 pub(crate) mod secrets;
 
@@ -100,6 +101,7 @@ async fn deploy_with_id(
         secrets::preflight(&state, &service.spec, request_id.0).await?;
     }
     domain::preflight(&state, id, &service.spec, request_id.0).await?;
+    internal::preflight(&state, id, &service.spec, request_id.0).await?;
     let deployment = MicroServiceDeployment {
         recovery: None,
         started_at: chrono::Utc::now().timestamp(),
@@ -111,6 +113,7 @@ async fn deploy_with_id(
         request,
         phase: ServicePhase::Queued,
         domain_route_owned: false,
+        internal_route_owned: false,
         digest: None,
         instances: vec![],
         log: vec!["Deployment queued".into()],
@@ -167,6 +170,7 @@ pub async fn check(
     crate::queues::placement(&state, &service.spec, &mut request, request_id.0)?;
     validate_placement(&state, &service.spec, &request, request_id.0).await?;
     domain::preflight(&state, id, &service.spec, request_id.0).await?;
+    internal::preflight(&state, id, &service.spec, request_id.0).await?;
     Ok(Json(()))
 }
 
@@ -188,6 +192,7 @@ async fn validate_placement(
         }
     }
     if spec.domain.is_none()
+        && request.host_port != 0
         && !fields.contains_key("hostPort")
         && let Some(conflict) =
             host_port_conflict(state, request, spec.replicas, request_id).await?
@@ -362,6 +367,7 @@ pub(crate) async fn ensure_editable(
                 .is_some_and(|update| !update.completed)
             || !deployment.instances.is_empty()
             || deployment.domain_route_owned
+            || deployment.internal_route_owned
         {
             return Err(AppError::conflict(
                 "service_in_use",
@@ -407,6 +413,7 @@ pub(crate) fn deployment_fields(
     let mut fields = BTreeMap::new();
     let end = u32::from(request.host_port) + u32::from(spec.replicas) - 1;
     if spec.domain.is_none()
+        && request.host_port != 0
         && (request.host_port < 1024
             || end > 65535
             || (u32::from(request.host_port)..=end).contains(&5523)
@@ -500,6 +507,7 @@ async fn execute(
     secrets::capture(state, deployment).await?;
     check_capacity(state, &deployment.spec).await?;
     if deployment.spec.domain.is_none()
+        && deployment.request.host_port != 0
         && let Some(conflict) = host_port_conflict(
             state,
             &deployment.request,
@@ -622,7 +630,7 @@ async fn execute(
             ),
         )
         .await?;
-        let host_port = if deployment.spec.domain.is_some() {
+        let host_port = if deployment.spec.domain.is_some() || deployment.request.host_port == 0 {
             0
         } else {
             deployment.request.host_port + index
@@ -731,6 +739,7 @@ async fn execute(
         save(state, deployment).await?;
     }
     domain::publish(state, deployment).await?;
+    internal::publish(state, deployment).await?;
     phase(
         state,
         deployment,
@@ -890,8 +899,10 @@ async fn refresh_instances(state: &AppState, deployment: &mut MicroServiceDeploy
 /// Retain unremoved identifiers if cleanup fails so a later Stop can retry.
 async fn cleanup(state: &AppState, deployment: &mut MicroServiceDeployment) -> Result<(), String> {
     domain::withdraw(state, deployment).await?;
+    let internal_was_owned = deployment.internal_route_owned;
+    internal::withdraw(state, deployment).await?;
     if deployment.phase == ServicePhase::Stopping && deployment.spec.drain_timeout > 0 {
-        let mut draining = false;
+        let mut draining = internal_was_owned;
         for instance in &deployment.instances {
             let running = state
                 .vms

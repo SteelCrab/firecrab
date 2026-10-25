@@ -61,6 +61,7 @@ pub(super) fn migrate_history(conn: &rusqlite::Connection) -> Result<(), Persist
             deployment.recovery = None;
             deployment.update = None;
             deployment.domain_route_owned = false;
+            deployment.internal_route_owned = false;
             let text = serde_json::to_string(&deployment).map_err(|error| {
                 PersistenceError::CorruptRecord {
                     id: id.clone(),
@@ -257,6 +258,7 @@ impl Store {
             // Releases describe reproducible inputs, not ownership of retired VMs.
             release.instances.clear();
             release.domain_route_owned = false;
+            release.internal_route_owned = false;
             let release = serde_json::to_string(&release).map_err(|error| {
                 PersistenceError::CorruptRecord {
                     id: deployment.id.to_string(),

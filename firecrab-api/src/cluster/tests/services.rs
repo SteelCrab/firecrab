@@ -39,6 +39,7 @@ fn stopped(id: Uuid, intent: &ServiceWorkerIntent) -> MicroServiceDeployment {
         instances: vec![],
         log: vec![],
         domain_route_owned: false,
+        internal_route_owned: false,
         error: None,
     }
 }

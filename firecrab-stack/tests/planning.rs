@@ -167,6 +167,7 @@ fn fixture() -> (Stack, StackRecord, Inventory) {
         log: Vec::new(),
         error: None,
         domain_route_owned: false,
+        internal_route_owned: false,
     };
     let inventory = Inventory {
         templates: vec![firecrab_stack::TemplateSnapshot { name: desired.template.clone(), pin, current: true }],

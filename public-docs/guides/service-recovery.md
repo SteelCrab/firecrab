@@ -1,6 +1,7 @@
 # Automatic replica recovery
 
 The API probes running host-local MicroServices every five seconds.
+Use matching API, helper, and ingress binaries from the same host bundle.
 Three consecutive failures mark a replica unhealthy. Two successful probes restore readiness.
 The scan can take longer when several probes time out.
 
@@ -10,8 +11,10 @@ Healthy replicas keep their VM IDs. The service keeps its release ID, image dige
 captured encrypted Secret values, network, ports, and configuration.
 Applications must keep persistent data in external storage; replacement creates a fresh disk.
 
-If every replica is unhealthy, the owned hostname returns HTTP 503.
+Public and internal routes switch together. Internal-only services use the same recovery flow.
+If every replica is unhealthy, the owned hostnames return HTTP 503.
 Named and Quick Tunnel routing remains configured. Only ready endpoints rejoin Nginx.
+Private listener security-group restrictions remain active while the service is unready.
 Old Nginx workers must finish before a failed VM is stopped or deleted.
 A drain timeout retains the VM and its recovery journal.
 

@@ -116,8 +116,10 @@ fn deployment_uses(
         .update
         .as_ref()
         .is_some_and(|update| !update.completed);
-    let owns_resources =
-        !deployment.instances.is_empty() || deployment.domain_route_owned || pending;
+    let owns_resources = !deployment.instances.is_empty()
+        || deployment.domain_route_owned
+        || deployment.internal_route_owned
+        || pending;
     if (!matches!(
         deployment.phase,
         firecrab_api_types::ServicePhase::Stopped | firecrab_api_types::ServicePhase::Failed
