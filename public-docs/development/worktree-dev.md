@@ -61,12 +61,15 @@ An explicit `FIRECRAB_MICROMANAGER_HOME` selects the primary base used to derive
 Private paths are passed to the selected child command; the CLI does not change the caller's environment.
 
 The first run allocates separate localhost API and resource ports and saves them in `dev-instance.json`.
-Subsequent runs retain these backend ports.
+New allocations use ports 20000–32767 and exclude the host's current IPv4 TCP ephemeral range.
+Existing saved backend ports remain valid, including ports outside that candidate range.
 The dashboard port is saved separately for `dev start` and `dev restart`.
 Changing `--port` changes only the selected dashboard address.
 Default primary ports 5523, 5524, and 8080 are excluded from automatic backend allocation.
 The registry also excludes backend ports reserved by other instances.
 Missing, malformed, or foreign private ownership records cause an error; they do not select primary services.
+macOS VM port relays also protect the primary ports and every registered instance's backend ports while their listeners are stopped.
+The relays refresh these reservations as new instances are registered.
 
 The dashboard proxies `/api` and `/ws` to its own API port.
 Its API proxy preserves `Host` and `Origin` for same-origin validation.
@@ -93,7 +96,9 @@ On macOS, `dev stop` stops that environment's API/helper and dashboard; its dedi
 On Docker backends, `dev stop` stops the selected container and dashboard.
 `dev clean` and `--restore` restore the installed release inside the selected environment and retain application data.
 Docker clean and restore do not delete its container, named volume, or private network.
-Clean also removes development files and host dashboard state.
+Clean removes development files and stops the dashboard, but retains its selected checkout and dashboard port.
+Private `dev start` and `dev restart` require a saved checkout and port before changing the backend.
+If an older or missing dashboard session lacks that selection, run `firecrab service dev --port PORT` from the worktree to save it.
 
 Non-development commands such as `service start`, `service stop`, and `service repair` keep their existing primary scope on macOS and Windows.
 On Linux, native service commands keep their production systemd scope.

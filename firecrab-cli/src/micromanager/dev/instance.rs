@@ -3,7 +3,6 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
-use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
@@ -201,6 +200,35 @@ pub fn load(home: &Path) -> io::Result<Option<Instance>> {
     Ok(state)
 }
 
+/// Protect primary and registered backend ports, including instances created after relay startup.
+#[cfg(any(target_os = "macos", test))]
+pub fn registered_backend_ports(home: &Path) -> io::Result<HashSet<u16>> {
+    let home = absolute(home)?;
+    let state = load_record(&home)?;
+    let primary = state
+        .as_ref()
+        .map_or(&home, |instance| &instance.primary_home);
+    let root = primary
+        .parent()
+        .ok_or_else(|| invalid("primary managed home has no parent"))?
+        .join("dev-instances");
+    safe_path(&root)?;
+    if !root.exists() {
+        return Ok(HashSet::from([5523, 5524, 8080]));
+    }
+    let lock_path = root.join("registry.lock");
+    safe_path(&lock_path)?;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)?;
+    // A creator holds the exclusive lock until its ownership record is complete.
+    FileExt::lock_shared(&lock)?;
+    reserved_ports(&root)
+}
+
 #[cfg(any(target_os = "macos", test))]
 /// Select the private API port, or the existing primary port for an ordinary home.
 pub fn api_port(home: &Path) -> io::Result<u16> {
@@ -329,20 +357,6 @@ fn reserved_ports(root: &Path) -> io::Result<HashSet<u16>> {
     Ok(ports)
 }
 
-/// Hold an OS-selected loopback port until the caller persists both backend reservations.
-fn available_port(reserved: &HashSet<u16>) -> io::Result<TcpListener> {
-    for _ in 0..128 {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-        if !reserved.contains(&listener.local_addr()?.port()) {
-            return Ok(listener);
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AddrInUse,
-        "no free development API/resource port",
-    ))
-}
-
 /// Only a Git-linked checkout selects a private VM on managed desktop hosts.
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub fn resolve(
@@ -468,10 +482,10 @@ fn resolve_inner(
         ));
     }
     reserved.insert(dashboard_port);
-    let api = available_port(&reserved)?;
+    let api = super::ports::available(&reserved)?;
     let api_port = api.local_addr()?.port();
     reserved.insert(api_port);
-    let resource = available_port(&reserved)?;
+    let resource = super::ports::available(&reserved)?;
     let instance = Instance {
         id,
         source: identity.source,
@@ -535,6 +549,13 @@ fn preflight_dashboard(
     restore: bool,
 ) -> io::Result<()> {
     use super::super::DevCommand;
+    if matches!(control, Some(DevCommand::Start | DevCommand::Restart))
+        && !super::dashboard::has_session(home).map_err(|error| invalid(error.to_string()))?
+    {
+        return Err(invalid(
+            "development dashboard settings are missing; run service dev --port PORT first",
+        ));
+    }
     let saved_port = super::dashboard::port(home).map_err(|error| invalid(error.to_string()))?;
     if !restore && !matches!(control, Some(DevCommand::Stop | DevCommand::Clean)) {
         let port = if control.is_none() {
@@ -638,13 +659,21 @@ pub fn run_container(
     use super::super::DevCommand;
     let home = &instance.managed_home;
     preflight_dashboard(home, command, requested_port, restore)?;
-    let source = if command.is_none() && !restore {
-        Some(
-            super::dashboard::prepare(&instance.source)
-                .map_err(|error| invalid(error.to_string()))?,
-        )
-    } else {
+    let frontend = if restore || matches!(command, Some(DevCommand::Stop | DevCommand::Clean)) {
         None
+    } else {
+        let source = if command.is_none() {
+            super::dashboard::prepare(&instance.source)
+                .map_err(|error| invalid(error.to_string()))?
+        } else {
+            super::dashboard::source(home).map_err(|error| invalid(error.to_string()))?
+        };
+        let port = if command.is_none() {
+            requested_port
+        } else {
+            super::dashboard::port(home).map_err(|error| invalid(error.to_string()))?
+        };
+        Some((source, port))
     };
     let code = super::container::run(instance, command, release, restore, yes)?;
     if code != 0 {
@@ -654,19 +683,10 @@ pub fn run_container(
         super::dashboard::clean(home).map_err(|error| invalid(error.to_string()))?;
     } else if restore || command == Some(DevCommand::Stop) {
         super::dashboard::stop(home).map_err(|error| invalid(error.to_string()))?;
-    } else {
+    } else if let Some((source, port)) = frontend {
         if command == Some(DevCommand::Restart) {
             super::dashboard::stop(home).map_err(|error| invalid(error.to_string()))?;
         }
-        let source = match source {
-            Some(source) => source,
-            None => super::dashboard::source(home).map_err(|error| invalid(error.to_string()))?,
-        };
-        let port = if command.is_none() {
-            requested_port
-        } else {
-            super::dashboard::port(home).map_err(|error| invalid(error.to_string()))?
-        };
         super::dashboard::start(&source, home, port).map_err(|error| invalid(error.to_string()))?;
     }
     Ok(0)
@@ -732,3 +752,7 @@ pub fn test_instance(directory: &Path, id: &str, api_port: u16, resource_port: u
 #[cfg(test)]
 #[path = "instance_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "instance_control_tests.rs"]
+mod control_tests;

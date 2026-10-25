@@ -459,11 +459,22 @@ fn wait_for_dev_api(layout: &lifecycle::Layout) -> Result<(), Error> {
 
 fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
-    match running_guest_ip(&layout) {
-        Ok(ip) => dev::control(&layout, ip, command)?,
+    let ip = match running_guest_ip(&layout) {
+        Ok(ip) => Some(ip),
         // The dashboard can outlive a management VM stopped by `service stop`.
-        Err(Error::ShellNotRunning) if command == DevCommand::Stop => {}
+        Err(Error::ShellNotRunning) if command == DevCommand::Stop => None,
         Err(error) => return Err(error),
+    };
+    let frontend = if matches!(command, DevCommand::Start | DevCommand::Restart) {
+        let port = dashboard::port(&layout.managed_home).map_err(dev::Error::from)?;
+        dashboard::check_port(&layout.managed_home, port).map_err(dev::Error::from)?;
+        let source = dashboard::source(&layout.managed_home).map_err(dev::Error::from)?;
+        Some((source, port))
+    } else {
+        None
+    };
+    if let Some(ip) = ip {
+        dev::control(&layout, ip, command)?;
     }
     if command == DevCommand::Clean {
         dashboard::clean(&layout.managed_home).map_err(dev::Error::from)?;
@@ -478,15 +489,13 @@ fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
     if command != DevCommand::Start {
         dashboard::stop(&layout.managed_home).map_err(dev::Error::from)?;
     }
-    if command != DevCommand::Stop {
+    if let Some((source, port)) = frontend {
         wait_for_dev_api(&layout)?;
         report!(
             "[PASS] API: {}/",
             super::dev::instance::api_url(&layout.managed_home)
                 .map_err(|source| super::dev::io_error("read development API port", source))?
         );
-        let source = dashboard::source(&layout.managed_home).map_err(dev::Error::from)?;
-        let port = dashboard::port(&layout.managed_home).map_err(dev::Error::from)?;
         dashboard::start(&source, &layout.managed_home, port).map_err(dev::Error::from)?;
     }
     Ok(0)

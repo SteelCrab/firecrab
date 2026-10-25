@@ -79,6 +79,11 @@ pub fn port(home: &Path) -> Result<u16, Error> {
     Ok(read_session(home)?.map_or_else(default_port, |state| state.port))
 }
 
+/// Distinguish a stopped dashboard's settings from an instance never configured.
+pub fn has_session(home: &Path) -> Result<bool, Error> {
+    Ok(read_session(home)?.is_some())
+}
+
 /// Track both manifests so branch changes cannot reuse stale installed packages.
 fn dependency_revision(frontend: &Path) -> Result<String, Error> {
     let mut revision = Sha256::new();
@@ -152,8 +157,16 @@ pub fn prepare(source: &Path) -> Result<PathBuf, Error> {
 
 /// Use the last selected checkout for control commands, or the current checkout initially.
 pub fn source(home: &Path) -> Result<PathBuf, Error> {
-    let selected =
-        read_session(home)?.map_or_else(std::env::current_dir, |state| Ok(state.source))?;
+    let selected = match read_session(home)? {
+        Some(state) => state.source,
+        None if super::instance::load(home)?.is_some() => {
+            return Err(Error::Failed(
+                "development dashboard settings are missing; run service dev --port PORT first"
+                    .into(),
+            ));
+        }
+        None => std::env::current_dir()?,
+    };
     prepare(&selected)
 }
 
@@ -290,17 +303,13 @@ pub fn stop(home: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// Stop the owned server and forget its checkout, generated script, and log.
+/// Stop the owned server and remove generated files, preserving its source and port.
 pub fn clean(home: &Path) -> Result<(), Error> {
     let _lock = lock(home)?;
     if let Some(state) = read_session(home)? {
         stop_session(&client()?, &state, &state.url())?;
     }
-    for name in [
-        "dev-dashboard.json",
-        "dev-dashboard.mjs",
-        "dev-dashboard.log",
-    ] {
+    for name in ["dev-dashboard.mjs", "dev-dashboard.log"] {
         match fs::remove_file(home.join("runtime").join(name)) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
