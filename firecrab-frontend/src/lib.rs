@@ -1267,7 +1267,7 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
                     .confirm_with_message(&if path == "/api/pipe/auth/firecrab" {
                         i18n::t("Disconnect the Firecrab account from this host? To revoke its account integration token, open console.firecrab.dev.").into()
                     } else {
-                        format!("{}?", button.text_content().unwrap_or_default())
+                        format!("{}?", button.get_attribute("aria-label").or_else(|| button.text_content()).unwrap_or_default())
                     })
                     .unwrap_or(false)
             {
