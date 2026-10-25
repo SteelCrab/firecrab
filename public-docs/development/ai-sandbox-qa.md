@@ -93,6 +93,7 @@ The old React components, navigation files and browser API helper are removed.
 - The existing 9 Sandbox browser scenarios pass on WASM. A tenth scenario verifies draft text, focus and caret preservation when an active task changes state; **10 passed** in total.
 - Sandbox is included in the shared `test:dashboard` CI suite. The browser fixture now follows the VM response schema and asserts `data-engine=wasm`.
 - Updated screenshots use the WASM UI and retain the fixture-data labels. Original live-provider/MicroVM evidence above is separate from this frontend port.
+- REST project guards cover invalid/system/private source paths, credential rejection, ineligible or duplicate VM bindings, active-work mutation/deletion, and owned-only deletion that preserves source files and borrowed VMs. The Linux Sandbox suite now passes **24 tests**, including the isolated root guest contract.
 
 Run `cargo test --manifest-path firecrab-frontend/Cargo.toml --locked` and `npm run test:sandbox --prefix firecrab-e2e` for the port-specific checks.
 Shared navigation/dashboard/Pipe AI browser regressions: **39 passed** after the port. The current head's CI is checked before marking the PR ready for review.

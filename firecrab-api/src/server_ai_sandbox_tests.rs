@@ -595,3 +595,141 @@ async fn sandbox_disconnected_admission_still_dispatches_once_and_preserves_earl
         assert_eq!(count, if cancel_early { 1 } else { 2 });
     }
 }
+
+#[tokio::test]
+async fn sandbox_project_settings_reject_unsafe_sources_credentials_and_ineligible_vms() {
+    let f = fixture().await;
+    connect(&f, "openai").await;
+    let id = Uuid::new_v4();
+    let uri = format!("/api/ai-sandbox/projects/{id}");
+    let source_file = f.dir.path().join("regular-file");
+    std::fs::write(&source_file, "keep").unwrap();
+    std::fs::create_dir_all(&f.state.sandbox.root).unwrap();
+    let builder_id = Uuid::new_v4();
+    let mut builder = crate::handlers::vms::test_support::record("builder", builder_id);
+    builder.purpose = crate::model::VmPurpose::Builder;
+    crate::handlers::vms::test_support::seed_vm(&f.state, &builder);
+    let base =
+        json!({"name":"Project","sourcePath":null,"vmId":null,"selection":null,"instructions":""});
+    for fields in [
+        json!({"name":"   "}),
+        json!({"name":"bad\nname"}),
+        json!({"name":"x".repeat(201)}),
+        json!({"instructions":"x".repeat(16385)}),
+        json!({"sourcePath":"relative/path"}),
+        json!({"sourcePath":f.dir.path().join("missing")}),
+        json!({"sourcePath":source_file}),
+        json!({"sourcePath":"/"}),
+        json!({"sourcePath":"/etc"}),
+        json!({"sourcePath":f.state.sandbox.root}),
+        json!({"vmId":Uuid::new_v4()}),
+        json!({"vmId":builder_id}),
+        json!({"instructions":"Do not copy sandbox-private-key into a project"}),
+    ] {
+        let mut spec = base.clone();
+        for (key, value) in fields.as_object().unwrap() {
+            spec[key] = value.clone();
+        }
+        let (status, body) = call(&f.app, "PUT", &uri, spec).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{fields}: {body}");
+        assert!(f.state.store.sandbox_project(id).unwrap().is_none());
+    }
+    assert_eq!(
+        call(&f.app, "GET", &uri, Value::Null).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(call(&f.app, "PUT", &uri, base).await.0, StatusCode::OK);
+    assert_eq!(
+        call(&f.app, "DELETE", &uri, Value::Null).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(&f.app, "GET", "/api/ai-sandbox/projects", Value::Null)
+            .await
+            .1,
+        json!([])
+    );
+    assert!(f.provider.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn sandbox_project_crud_blocks_active_work_and_preserves_borrowed_resources_on_delete() {
+    let f = fixture().await;
+    let connection = connect(&f, "openai").await;
+    verify(&f, connection, false).await;
+    let id = Uuid::new_v4();
+    let uri = format!("/api/ai-sandbox/projects/{id}");
+    let vm = Uuid::new_v4();
+    crate::handlers::vms::test_support::seed_vm(
+        &f.state,
+        &crate::handlers::vms::test_support::record("borrowed", vm),
+    );
+    let source = f.dir.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("keep.txt"), "user-owned").unwrap();
+    let spec = json!({"name":"  Project  ","sourcePath":source,"vmId":vm,"selection":{"connectionId":connection,"model":"fixture-model"},"instructions":"Be concise"});
+    let (status, first) = call(&f.app, "PUT", &uri, spec.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["spec"]["name"], "Project");
+    assert_eq!(
+        first["spec"]["sourcePath"],
+        json!(source.canonicalize().unwrap())
+    );
+    let (_, second) = call(&f.app, "PUT", &uri, spec.clone()).await;
+    assert_eq!(second["createdAt"], first["createdAt"]);
+    assert_eq!(call(&f.app, "GET", &uri, Value::Null).await.1, second);
+    assert_eq!(
+        call(&f.app, "GET", "/api/ai-sandbox/projects", Value::Null)
+            .await
+            .1,
+        json!([second])
+    );
+    let other = format!("/api/ai-sandbox/projects/{}", Uuid::new_v4());
+    assert_eq!(
+        call(&f.app, "PUT", &other, spec.clone()).await.0,
+        StatusCode::BAD_REQUEST
+    );
+
+    let owned = f.state.sandbox.root.join(id.to_string());
+    let unrelated = f.state.sandbox.root.join("unrelated");
+    std::fs::create_dir_all(&owned).unwrap();
+    std::fs::create_dir_all(&unrelated).unwrap();
+    std::fs::write(owned.join("result.txt"), "retained").unwrap();
+    std::fs::write(unrelated.join("keep.txt"), "other task").unwrap();
+    let task = Uuid::new_v4();
+    start(&f, id, task, "chat", "hold-request").await;
+    assert_eq!(
+        call(&f.app, "PUT", &uri, spec).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(&f.app, "DELETE", &uri, Value::Null).await.0,
+        StatusCode::CONFLICT
+    );
+    assert!(owned.join("result.txt").exists());
+    call(
+        &f.app,
+        "POST",
+        &format!("/api/ai-sandbox/tasks/{task}/cancel"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(finish(&f, task).await["state"], "cancelled");
+    let requests = f.provider.requests.lock().unwrap().len();
+    let (status, deleted) = call(&f.app, "DELETE", &uri, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+    assert_eq!(deleted, json!({"deleted":true}));
+    assert!(!owned.exists());
+    assert_eq!(
+        std::fs::read_to_string(unrelated.join("keep.txt")).unwrap(),
+        "other task"
+    );
+    assert_eq!(
+        std::fs::read_to_string(source.join("keep.txt")).unwrap(),
+        "user-owned"
+    );
+    assert!(f.state.vms.lock().unwrap().contains_key(&vm));
+    assert!(f.state.store.sandbox_project(id).unwrap().is_none());
+    assert!(f.state.store.sandbox_task(task).unwrap().is_none());
+    assert_eq!(f.provider.requests.lock().unwrap().len(), requests);
+}
