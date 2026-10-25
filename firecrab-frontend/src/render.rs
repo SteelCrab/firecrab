@@ -14,6 +14,56 @@ pub fn button(label: &str, action: &str, id: &str) -> String {
         escape(crate::i18n::t(label))
     )
 }
+
+pub enum Icon {
+    Add,
+    Refresh,
+    Reveal,
+    Hide,
+    Edit,
+    Delete,
+    Close,
+}
+
+impl Icon {
+    fn svg(&self) -> String {
+        let path = match self {
+            Self::Add => "M12 5v14M5 12h14",
+            Self::Refresh => "M20 7v5h-5M4 17v-5h5m-5 0a8 8 0 0 1 14-6l2 2M4 16l2 2a8 8 0 0 0 14-6",
+            Self::Reveal => {
+                "M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12Zm13 0a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
+            }
+            Self::Hide => {
+                "m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.2A12 12 0 0 1 12 5c7 0 10 7 10 7a18 18 0 0 1-3.1 4.1M6.2 6.2A18 18 0 0 0 2 12s3 7 10 7a12 12 0 0 0 5.8-1.8"
+            }
+            Self::Edit => "m16 3 5 5M4 20l4-1 13-13a2.8 2.8 0 0 0-4-4L4 15l-1 6Z",
+            Self::Delete => "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7",
+            Self::Close => "m6 6 12 12M18 6 6 18",
+        };
+        format!(
+            "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"{path}\"/></svg>"
+        )
+    }
+}
+
+pub fn icon_button(label: &str, action: &str, id: &str, icon: Icon) -> String {
+    let label = escape(crate::i18n::t(label));
+    format!(
+        "<button type=\"button\" class=\"icon-btn\" aria-label=\"{label}\" title=\"{label}\" data-action=\"{}\" data-id=\"{}\">{}</button>",
+        escape(action),
+        escape(id),
+        icon.svg()
+    )
+}
+
+pub fn icon_request(label: &str, path: &str) -> String {
+    let label = escape(crate::i18n::t(label));
+    format!(
+        "<button type=\"button\" class=\"icon-btn danger\" aria-label=\"{label}\" title=\"{label}\" data-action=\"request\" data-method=\"DELETE\" data-path=\"{}\" data-body=\"null\">{}</button>",
+        escape(path),
+        Icon::Delete.svg()
+    )
+}
 fn vm_icon_button(label: &str, action: &str, id: &str) -> String {
     let path = match action {
         "vm-start" => "M6 3l14 9-14 9z",
@@ -132,7 +182,7 @@ pub fn page(app: &App) -> String {
         "pools" => button("New pool", "create", "pools"),
         "schedules" => button("New schedule", "create", "schedules"),
         "security-groups" => button("New security group", "create", "security-groups"),
-        "secrets" => button("New secret", "create", "secrets"),
+        "secrets" => icon_button("New secret", "create", "secrets", Icon::Add),
         "volumes" => button("Create volume", "create", "volumes"),
         _ => String::new(),
     };
@@ -146,6 +196,17 @@ pub fn page(app: &App) -> String {
         };
     let panel_toggle = if section == "ai-sandbox" {
         String::new()
+    } else if section == "secrets" {
+        let label = crate::i18n::t(if app.panel_open {
+            "Hide details"
+        } else {
+            "Show details"
+        });
+        format!(
+            "<button type=\"button\" class=\"btn\" id=\"panel-toggle\" data-action=\"panel-toggle\" title=\"{label}\" aria-expanded=\"{}\">{}</button>",
+            app.panel_open,
+            crate::i18n::t("Details")
+        )
     } else {
         format!(
             "<button type=\"button\" class=\"btn\" id=\"panel-toggle\" data-action=\"panel-toggle\">{}</button>",
@@ -177,6 +238,13 @@ pub fn page(app: &App) -> String {
         if app.locale == "ko" { "selected" } else { "" },
         if section == "ai-sandbox" {
             String::new()
+        } else if section == "secrets" {
+            icon_button(
+                tr(app, "Refresh", "새로 고침"),
+                "refresh",
+                "",
+                Icon::Refresh,
+            )
         } else {
             button(tr(app, "Refresh", "새로 고침"), "refresh", "")
         },

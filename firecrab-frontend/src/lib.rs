@@ -269,11 +269,14 @@ fn render_detail(app: &Shared) {
         }
     }
     if let Some(toggle) = element("panel-toggle") {
-        toggle.set_text_content(Some(i18n::t(if open {
-            "Hide details"
+        let label = i18n::t(if open { "Hide details" } else { "Show details" });
+        if app.borrow().route == "secrets" {
+            toggle.set_text_content(Some(i18n::t("Details")));
+            let _ = toggle.set_attribute("title", label);
+            let _ = toggle.set_attribute("aria-expanded", if open { "true" } else { "false" });
         } else {
-            "Show details"
-        })));
+            toggle.set_text_content(Some(label));
+        }
     }
     advanced::services::sync(app);
 }
