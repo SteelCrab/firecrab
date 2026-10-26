@@ -1185,7 +1185,7 @@ FIRECRAB_PAYLOAD
     printf '%s:x:%s:\n' "$user" "$(id -g "$user")" >>"$cmd/rootfs/etc/group"
     printf '#!/bin/sh\nset -eu\nulimit -n 1024\nulimit -f 65536\nulimit -t __CPU_SECONDS__\nulimit -v __MEMORY_KIB__\ncd /workspace\nexec /bin/sh /firecrab/command\n' >"$cmd/container-start"
     chgrp "$user" "$cmd/container-start"; chmod 640 "$cmd/container-start"
-    printf 'exec systemd-nspawn --quiet --register=no --directory=%s/rootfs --machine=fcai-%s --user=%s --private-users=no --drop-capability=all --no-new-privileges=yes --property=MemoryMax=__MEMORY_KIB__K --property=TasksMax=128 --property=CPUQuota=100%% --bind=%s:/workspace --bind-ro=%s/command:/firecrab/command --bind-ro=%s/container-start:/firecrab/container-start --chdir=/workspace --setenv=HOME=/workspace --setenv=PATH=/usr/local/bin:/usr/bin:/bin /bin/sh /firecrab/container-start\n' "$cmd" "$invocation" "$user" "$work" "$cmd" "$cmd" >>"$cmd/launch"
+    printf 'exec systemd-nspawn --quiet --console=pipe --register=no --directory=%s/rootfs --machine=fcai-%s --user=%s --private-users=no --drop-capability=all --no-new-privileges=yes --property=MemoryMax=__MEMORY_KIB__K --property=TasksMax=128 --property=CPUQuota=100%% --bind=%s:/workspace --bind-ro=%s/command:/firecrab/command --bind-ro=%s/container-start:/firecrab/container-start --chdir=/workspace --setenv=HOME=/workspace --setenv=PATH=/usr/local/bin:/usr/bin:/bin /bin/sh /firecrab/container-start\n' "$cmd" "$invocation" "$user" "$work" "$cmd" "$cmd" >>"$cmd/launch"
     ;;
   *) fail_run 'unsupported_execution_mode';;
   esac
