@@ -22,6 +22,18 @@ pub fn prepare(
     database: Option<&Path>,
     credentials: &[String],
 ) -> io::Result<()> {
+    prepare_from_commit(source, attempt, id, database, credentials, None)
+}
+
+/// Stage either current authorized files or an immutable local Git commit.
+pub fn prepare_from_commit(
+    source: &Path,
+    attempt: &Path,
+    id: Uuid,
+    database: Option<&Path>,
+    credentials: &[String],
+    commit: Option<&str>,
+) -> io::Result<()> {
     fs::create_dir_all(attempt)?;
     fs::set_permissions(attempt, fs::Permissions::from_mode(0o700))?;
     for name in ["base", "work"] {
@@ -39,12 +51,41 @@ pub fn prepare(
             paths
         })
         .unwrap_or_default();
-    files::snapshot_excluding(source, &attempt.join("base"), &excluded, credentials)?;
+    if let Some(commit) = commit {
+        let archive = super::context::git(
+            source,
+            &["archive", "--format=tar", commit],
+            files::TREE_LIMIT + 4 * 1024 * 1024,
+        )?;
+        import(&attempt.join("base"), &archive)?;
+        let base = Root::open(&attempt.join("base"))?;
+        for path in base.files()? {
+            let bytes = base.read(&path)?;
+            if excluded.iter().any(|p| source.join(&path).starts_with(p))
+                || credentials
+                    .iter()
+                    .filter(|v| !v.is_empty())
+                    .any(|v| bytes.windows(v.len()).any(|part| part == v.as_bytes()))
+            {
+                base.remove(&path)?;
+            }
+        }
+    } else {
+        files::snapshot_excluding(source, &attempt.join("base"), &excluded, credentials)?;
+    }
     let root = Root::open(source)?;
-    let modes: BTreeMap<_, _> = root
+    let base = Root::open(&attempt.join("base"))?;
+    let modes: BTreeMap<_, _> = base
         .files()?
         .into_iter()
-        .map(|p| root.mode(&p).map(|mode| (p, mode)))
+        .map(|p| {
+            let mode = match root.mode(&p) {
+                Ok(mode) => mode,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => 0o644 | (base.mode(&p)? & 0o111),
+                Err(e) => return Err(e),
+            };
+            Ok((p, mode))
+        })
         .collect::<io::Result<_>>()?;
     fs::write(attempt.join("base-modes.json"), serde_json::to_vec(&modes)?)?;
     files::snapshot(&attempt.join("base"), &attempt.join("work"))?;
@@ -147,6 +188,43 @@ fn optional(root: &Root, path: &str) -> io::Result<Option<Vec<u8>>> {
     }
 }
 
+/// Pass successful Debug edits to Test without writing the authorized original source.
+/// Multiple dependency outputs must agree with the source snapshot or with each other.
+pub fn inherit(attempt: &Path, changes: &[SandboxFileChange]) -> io::Result<()> {
+    let root = Root::open(&attempt.join("work"))?;
+    for change in changes {
+        let current = optional(&root, &change.path)?;
+        let before = change.before.as_ref().map(|text| text.as_bytes().to_vec());
+        let after = change.after.as_ref().map(|text| text.as_bytes().to_vec());
+        let current_mode = if current.is_some() {
+            Some(root.mode(&change.path)? & 0o111)
+        } else {
+            None
+        };
+        let before_mode = change.before_mode.map(|mode| mode & 0o111);
+        let after_mode = change.after_mode.map(|mode| mode & 0o111);
+        if current == after && current_mode == after_mode {
+            continue;
+        }
+        if current != before || current_mode != before_mode {
+            return Err(io::Error::other(
+                "Dependency changes conflict with the task snapshot; original source was preserved",
+            ));
+        }
+        match &change.after {
+            Some(text) => {
+                root.write(&change.path, text.as_bytes())?;
+                root.set_mode(
+                    &change.path,
+                    0o600 | (change.after_mode.unwrap_or(0o644) & 0o111),
+                )?;
+            }
+            None => root.remove(&change.path)?,
+        }
+    }
+    Ok(())
+}
+
 /// Pack only bounded allowed files; never include Git metadata or credentials.
 pub fn archive(work: &Path) -> io::Result<Vec<u8>> {
     let root = Root::open(work)?;
@@ -181,12 +259,17 @@ pub fn import(work: &Path, bytes: &[u8]) -> io::Result<()> {
         let mut count = 0;
         for entry in tar::Archive::new(bytes).entries()? {
             let mut entry = entry?;
+            // Git archives include a PAX commit comment. Metadata never creates a file;
+            // every materialized entry still passes the confined path/type checks below.
+            if entry.header().entry_type().is_pax_global_extensions() {
+                continue;
+            }
             let name = entry
                 .path()?
                 .to_str()
                 .ok_or_else(|| io::Error::other("Invalid guest path"))?
-                .trim_start_matches("./")
                 .to_owned();
+            let name = name.strip_prefix("./").unwrap_or(&name).to_owned();
             if name.is_empty() || entry.header().entry_type().is_dir() {
                 continue;
             }

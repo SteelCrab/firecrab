@@ -36,6 +36,8 @@ pub fn tools() -> Vec<Value> {
         ("write_file", "Create or replace a UTF-8 file in the isolated project copy.", json!({"path":{"type":"string"},"content":{"type":"string"}})),
         ("delete_file", "Delete a file from the isolated project copy, retaining the change for review.", json!({"path":{"type":"string"}})),
         ("run_command", "Run a shell command as the task's unprivileged user INSIDE the selected MicroVM. The working directory is the task project. Returns separate stdout/stderr and exit code. Host execution is unavailable.", json!({"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":120}})),
+        ("record_test", "Record a test using the sequence number of an ACTUAL completed run_command event. Pass/fail is derived from its exit status, never from a model claim.", json!({"name":{"type":"string"},"event_sequence":{"type":"integer","minimum":0}})),
+        ("retain_artifact", "Export one permitted workspace file, up to 1 MiB, into immutable task/attempt storage before temporary guest cleanup. Retain required outputs before finishing.", json!({"path":{"type":"string"}})),
     ].into_iter().map(|(name, description, properties)| {
         let required: Vec<_> = properties.as_object().unwrap().keys().cloned().collect();
         json!({"name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})

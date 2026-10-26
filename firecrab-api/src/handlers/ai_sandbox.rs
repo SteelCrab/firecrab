@@ -309,6 +309,7 @@ pub async fn save_project(
                 .iter()
                 .any(|p| canonical.starts_with(p))
             || canonical.starts_with(&state.sandbox.root)
+            || state.sandbox.root.starts_with(&canonical)
         {
             return Err(invalid(
                 id,
@@ -320,6 +321,7 @@ pub async fn save_project(
     } else {
         spec.source_path = None;
     }
+    ai_sandbox::context::validate(&spec).map_err(|e| invalid(id, "context", e))?;
     caller.settings(&state, &spec).map_err(|e| denied(id, e))?;
     if let Some(selection) = &spec.selection {
         pipe_ai::validate_model(&selection.model).map_err(|e| provider(id, e))?;
@@ -719,6 +721,29 @@ pub async fn create_task(
         }
         return Ok((StatusCode::OK, Json(previous.task)));
     }
+    ai_sandbox::coordination::validate(&input).map_err(|e| invalid(id, "coordination", e))?;
+    let serialized = serde_json::to_string(&input).map_err(|_| AppError::internal(id.0))?;
+    if ai_sandbox::redact(&accounts, &serialized) != serialized {
+        return Err(invalid(
+            id,
+            "coordination",
+            "Task settings must not contain provider credentials",
+        ));
+    }
+    if let Some(prior) = input.retry_of {
+        task(&state, id, prior, caller, SandboxPermission::Execute).await?;
+    }
+    let (retry_root, retry_number) =
+        ai_sandbox::coordination::retry(&state.store, project_id, key, &input)
+            .map_err(|e| invalid(id, "retryOf", e))?;
+    ai_sandbox::coordination::dependencies(
+        &state,
+        caller,
+        project_id,
+        project.spec.source_path.as_deref(),
+        &input,
+    )
+    .map_err(|e| invalid(id, "dependencies", e))?;
     let store = state.store.clone();
     if db(id, move || store.sandbox_pending_count()).await? >= 16 {
         return Err(error(
@@ -738,38 +763,14 @@ pub async fn create_task(
             "This project reached its 500-task limit",
         ));
     }
-    let store = state.store.clone();
-    if db(id, move || store.sandbox_project_busy(project_id)).await? {
+    if !ai_sandbox::coordination::queued_allowed(&state.store, project_id, &input, retry_root)
+        .map_err(|e| invalid(id, "dependencies", e))?
+    {
         return Err(error(
             id,
             "sandbox_busy",
             "Finish or reconcile the current task before starting another",
         ));
-    }
-    if let Some(retry) = input.retry_of {
-        let store = state.store.clone();
-        let prior = db(id, move || store.sandbox_task(retry))
-            .await?
-            .filter(|t| t.task.project_id == project_id)
-            .ok_or_else(|| {
-                invalid(
-                    id,
-                    "retryOf",
-                    "Previous task does not belong to this project",
-                )
-            })?;
-        if !matches!(
-            prior.task.state,
-            SandboxTaskState::Failed | SandboxTaskState::Cancelled | SandboxTaskState::Interrupted
-        ) || prior.guest_pending
-            || prior.guest_staged
-        {
-            return Err(error(
-                id,
-                "sandbox_retry_blocked",
-                "Reconcile the previous attempt before retrying",
-            ));
-        }
     }
     let selection = input
         .selection
@@ -812,12 +813,17 @@ pub async fn create_task(
         runtime = Some(ai_sandbox::guest::binding(&state, vm).map_err(|e| invalid(id, "vmId", e))?);
     }
     let timestamp = ai_sandbox::now();
+    let spec = project.spec.clone();
+    let git_commit = tokio::task::spawn_blocking(move || ai_sandbox::context::resolve(&spec))
+        .await
+        .map_err(|_| AppError::internal(id.0))?
+        .map_err(|e| invalid(id, "gitRef", e))?;
     let saved = SavedTask {
         caller,
         task: SandboxTask {
-            git_commit: None,
-            retry_root: None,
-            retry_number: 0,
+            git_commit,
+            retry_root: Some(retry_root),
+            retry_number,
             dependency_results: vec![],
             tests: vec![],
             artifacts: vec![],
@@ -909,8 +915,19 @@ pub async fn reconcile_task(
         .await
         .map_err(|e| invalid(id, "guest", e))?;
     if let Some(path) = &saved.workspace {
-        saved.task.changes =
-            ai_sandbox::workspace::changes(path).map_err(|e| invalid(id, "workspace", e))?;
+        saved.task.changes = match ai_sandbox::workspace::changes(path) {
+            Ok(changes) => changes,
+            // Preparation checkpoints precede every provider/tool action. A partial initial
+            // snapshot has no produced outputs to recover and remains retained for inspection.
+            Err(_)
+                if saved.task.events.is_empty()
+                    && saved.task.result.is_empty()
+                    && saved.task.artifacts.is_empty() =>
+            {
+                Vec::new()
+            }
+            Err(error) => return Err(invalid(id, "workspace", error)),
+        };
     }
     let connections = state
         .store
@@ -930,10 +947,44 @@ pub async fn reconcile_task(
     saved.task.updated_at = ai_sandbox::now();
     saved.task.error_code = None;
     saved.task.error = Some("Interrupted attempt reconciled; retry creates a new attempt".into());
+    saved.results_exported = true;
+    ai_sandbox::artifacts::verify_export(&saved).map_err(|e| invalid(id, "artifacts", e))?;
     let store = state.store.clone();
     let copy = saved.clone();
     db(id, move || store.save_sandbox_task(&copy)).await?;
     Ok(Json(saved.task))
+}
+
+/// Download only immutable exported bytes owned by the authorized task and attempt.
+pub async fn get_artifact(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    caller: Caller,
+    Path((key, artifact)): Path<(Uuid, Uuid)>,
+) -> Result<([(axum::http::header::HeaderName, &'static str); 2], Vec<u8>), AppError> {
+    let saved = task(&state, id, key, caller, SandboxPermission::Read).await?;
+    if !saved
+        .task
+        .artifacts
+        .iter()
+        .any(|record| record.id == artifact)
+    {
+        return Err(AppError::not_found(id.0));
+    }
+    let bytes = tokio::task::spawn_blocking(move || ai_sandbox::artifacts::read(&saved, artifact))
+        .await
+        .map_err(|_| AppError::internal(id.0))?
+        .map_err(|e| invalid(id, "artifact", e))?;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "application/octet-stream"),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                "attachment; filename=artifact.bin",
+            ),
+        ],
+        bytes,
+    ))
 }
 /// Apply selected reviewed files only if their original contents still match the task snapshot.
 pub async fn apply_task(

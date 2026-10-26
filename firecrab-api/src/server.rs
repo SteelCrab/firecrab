@@ -857,6 +857,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/ai-sandbox/tasks/{id}/apply",
             post(handlers::ai_sandbox::apply_task),
         )
+        .route(
+            "/api/ai-sandbox/tasks/{id}/artifacts/{artifact}",
+            get(handlers::ai_sandbox::get_artifact),
+        )
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(

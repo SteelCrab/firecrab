@@ -78,6 +78,9 @@ pub fn allowed(path: &str) -> bool {
             ".codex",
             ".claude",
             ".gnupg",
+            ".kube",
+            ".pki",
+            ".terraform",
             "node_modules",
             "target",
             ".venv",
@@ -102,6 +105,8 @@ pub fn allowed(path: &str) -> bool {
             || lower == "credentials.json"
             || lower.ends_with(".pem")
             || lower.ends_with(".key")
+            || lower.ends_with(".p12")
+            || lower.ends_with(".pfx")
             || lower == "auth.json"
             || lower == "id_rsa"
             || lower == "id_ed25519"
@@ -142,6 +147,10 @@ fn preserve_owner(file: &File, owner: &fs::Metadata) -> io::Result<()> {
 }
 
 impl Root {
+    /// Anchor a child process working directory to this opened authority before exec closes the fd.
+    pub fn command_directory(&self) -> PathBuf {
+        PathBuf::from(format!("/proc/self/fd/{}", self.dir.as_raw_fd()))
+    }
     /// Open a trusted, explicit root directory without following its final symlink.
     pub fn open(path: &Path) -> io::Result<Self> {
         let name = cstr(path.to_str().ok_or_else(denied)?)?;

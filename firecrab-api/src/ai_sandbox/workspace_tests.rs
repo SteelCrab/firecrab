@@ -132,3 +132,109 @@ fn configured_private_database_and_sidecars_are_never_copied_into_project_contex
         vec!["main.rs"]
     );
 }
+
+#[test]
+fn pinned_git_ref_skills_and_references_preserve_source_and_filter_credentials() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    fs::create_dir_all(source.path().join(".agents/skills/review")).unwrap();
+    fs::write(source.path().join("main.txt"), "committed source").unwrap();
+    fs::write(
+        source.path().join(".agents/skills/review/SKILL.md"),
+        "Inspect the actual test result",
+    )
+    .unwrap();
+    fs::write(source.path().join("reference.txt"), "reference version one").unwrap();
+    fs::write(source.path().join(".env"), "do-not-copy").unwrap();
+    fs::write(source.path().join("accidental.txt"), "connected-key").unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec!["add", "-f", "."],
+        vec!["commit", "-q", "-m", "initial"],
+    ] {
+        assert!(
+            Command::new("/usr/bin/git")
+                .current_dir(source.path())
+                .args([
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@localhost",
+                    "-c",
+                    "core.hooksPath=/dev/null"
+                ])
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let spec: firecrab_api_types::SandboxProjectSpec = serde_json::from_value(serde_json::json!({
+        "name":"p","sourcePath":source.path(),"vmId":null,"selection":null,
+        "context":{"gitRef":"HEAD","selectedSkills":[".agents/skills/review/SKILL.md"],"references":["reference.txt"]}
+    })).unwrap();
+    let commit = super::super::context::resolve(&spec).unwrap().unwrap();
+    fs::write(source.path().join("main.txt"), "user uncommitted edit").unwrap();
+    fs::write(source.path().join("reference.txt"), "uncommitted reference").unwrap();
+    let attempt = target.path().join("attempt");
+    prepare_from_commit(
+        source.path(),
+        &attempt,
+        Uuid::new_v4(),
+        None,
+        &["connected-key".into()],
+        Some(&commit),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(attempt.join("work/main.txt")).unwrap(),
+        "committed source"
+    );
+    assert_eq!(
+        fs::read_to_string(source.path().join("main.txt")).unwrap(),
+        "user uncommitted edit"
+    );
+    assert!(!attempt.join("work/.env").exists());
+    assert!(!attempt.join("work/accidental.txt").exists());
+    let text = super::super::context::text(&spec, Some(&commit), &[]).unwrap();
+    assert!(text.contains("Inspect the actual test result"));
+    assert!(text.contains("reference version one"));
+    assert!(!text.contains("uncommitted reference"));
+    assert_eq!(
+        super::super::context::resolve(&spec).unwrap().unwrap(),
+        commit
+    );
+}
+
+#[test]
+fn debug_changes_are_inherited_by_test_without_changing_original_source() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    fs::write(source.path().join("main.txt"), "bug").unwrap();
+    let debug = target.path().join("debug");
+    prepare(source.path(), &debug, Uuid::new_v4(), None, &[]).unwrap();
+    Root::open(&debug.join("work"))
+        .unwrap()
+        .write("main.txt", b"known fix")
+        .unwrap();
+    let edits = changes(&debug).unwrap();
+    let test = target.path().join("test");
+    prepare(source.path(), &test, Uuid::new_v4(), None, &[]).unwrap();
+    inherit(&test, &edits).unwrap();
+    inherit(&test, &edits).unwrap();
+    assert_eq!(
+        fs::read_to_string(test.join("work/main.txt")).unwrap(),
+        "known fix"
+    );
+    assert_eq!(
+        fs::read_to_string(source.path().join("main.txt")).unwrap(),
+        "bug"
+    );
+    let mut conflict = edits;
+    conflict[0].after = Some("different fix".into());
+    assert!(inherit(&test, &conflict).is_err());
+    assert_eq!(
+        fs::read_to_string(test.join("work/main.txt")).unwrap(),
+        "known fix"
+    );
+}
