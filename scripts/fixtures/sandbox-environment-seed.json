@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "purpose": "local_qa_fixture",
+  "databaseProtocol": "sqlite_json_tcp_fixture_not_postgresql",
+  "scriptSha256": "b103e38a8239aed1eeb139d09e3333a90fbaeb185e838fdee1ab358de9942e43",
+  "seedSha256": "cbcf0a2e4d8b712314490ec9d08466f3ef25f2a082907f941de03aac3d4f36b1",
+  "seed": {
+    "seed": [
+      [
+        "firecrab-environment-seed-414-v1"
+      ]
+    ],
+    "values": {}
+  },
+  "ports": {
+    "backendHttp": 8080,
+    "databaseTcp": 5432
+  },
+  "autoRoleAssumption": "fresh dedicated IPv4 /24; debug,test,backend,db allocated sequentially at .2,.3,.4,.5"
+}

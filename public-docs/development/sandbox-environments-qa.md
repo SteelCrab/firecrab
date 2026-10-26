@@ -152,5 +152,29 @@ independent writes. Interrupt provisioning after one resource creation, restart
 the API and reconcile. Assert one network/VM/SG per reserved ID and no duplicate
 rows or effects. A rendered policy or fixture does not pass these packet checks.
 
+The optional `scripts/fixtures/sandbox-environment-seed.py` fixture uses Python's
+standard SQLite, JSON/TCP and HTTP libraries. It is explicitly not PostgreSQL.
+Its adjacent JSON records the script checksum and canonical initial seed-data
+checksum. `packaging/sandbox/seed.Dockerfile` prepares one OCI image from an
+operator-recorded Alpine digest. Import and pin its final digest through the
+existing OCI workflow. In a fresh dedicated `/24`, ordered Debug/Test/Backend/DB
+allocation gives `.2/.3/.4/.5`; this QA-only image leaves `.2/.3` idle, runs HTTP
+on `.4`, and runs its fixture DB on `.5`. Production discovery uses manifest
+resource references rather than these fixed offsets.
+
+The fixture's `--init-only` writes the same initial SQLite rows before the image
+is pinned. Two deployments must show the same seed checksum through `/seed`.
+POST `/write` with `{"key":"deployment","value":"first"}` in one deployment
+and a different value in the other. Re-read both through Backend and record
+independent writes and the same immutable image pin. Fixture unit tests prove
+the fixture's behavior only; they do not pass environment isolation acceptance.
+
+The current REST API imports registry references with `POST /api/oci/import`.
+It does not accept a raw local OCI archive or capture an arbitrary VM as an
+image. MicroRegistry registration packages an already installed template. Use
+an explicitly owned local registry/fixture server on the same QA host to serve
+the prepared OCI artifacts. Do not repoint a saved remote registry connection
+or publish the QA image to another remote domain.
+
 Attach live output and final REST inventories to the QA record. Leave every
 unexecuted OS, engine, network or recovery scenario explicitly pending.
