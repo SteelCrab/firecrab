@@ -39,11 +39,16 @@ def contents(data):
 def main():
     assert os.geteuid() == 0 and os.environ.get("FIRECRAB_SANDBOX_GUEST_QA") == "1", "disposable Linux root fixture only"
     source = (ROOT / "firecrab-api/src/ai_sandbox/guest.rs").read_text()
+    capability_script = re.search(r'const CAPABILITIES: &str = r#"(.*?)"#;', source, re.S).group(1)
+    capabilities = subprocess.run(["/bin/sh", "-s"], input=capability_script.encode(),
+                                  capture_output=True, timeout=15)
+    assert capabilities.returncode == 0, capabilities.stderr
+    assert b"execution=true\n" in capabilities.stdout, capabilities.stdout
     shell = re.search(r'const SCRIPT: &str = r#"(.*?)"#;', source, re.S).group(1)
     shell = shell.replace("if command -v setpriv", "if false && command -v setpriv")
     shell = shell.replace("if command -v flock", "if false && command -v flock")
     subprocess.run(["/usr/local/sbin/firecrab-console-resize", "--sandbox-probe"], check=True)
-    checks = []
+    checks = ["actual_capability_tar_probe"]
     with tempfile.TemporaryDirectory(prefix="firecrab-guest-shell-") as temporary:
         directory = Path(temporary)
         directory.chmod(0o755)

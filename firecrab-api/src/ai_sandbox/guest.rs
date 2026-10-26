@@ -892,7 +892,7 @@ unsupported=
 if { command -v setpriv >/dev/null 2>&1 && setpriv --reuid 0 --regid 0 --clear-groups --no-new-privs /bin/true 2>/dev/null; } || { [ -x /usr/local/sbin/firecrab-console-resize ] && /usr/local/sbin/firecrab-console-resize --sandbox-probe; }; then :; else unsupported=missing_trusted_uid_helper; fi
 if [ -n "$unsupported" ]; then :
 elif ! { { command -v flock >/dev/null 2>&1 && flock -w 0 --help >/dev/null 2>&1; } || { [ -x /usr/local/sbin/firecrab-console-resize ] && /usr/local/sbin/firecrab-console-resize --sandbox-probe; }; }; then unsupported=missing_timed_flock
-elif ! { tar --exclude=__firecrab_probe__ --help >/dev/null 2>&1 || { [ -x /etc/firecrab/busybox ] && /etc/firecrab/busybox tar --exclude=__firecrab_probe__ --help >/dev/null 2>&1; }; }; then unsupported=missing_tar_exclude
+elif ! { tar --exclude=null -cf /dev/null -C /dev null >/dev/null 2>&1 || { [ -x /etc/firecrab/busybox ] && /etc/firecrab/busybox tar --exclude=null -cf /dev/null -C /dev null >/dev/null 2>&1; }; }; then unsupported=missing_tar_exclude
 elif ! (ulimit -v 1048576 && ulimit -t 1 && ulimit -n 1024) 2>/dev/null; then unsupported=missing_hard_resource_limits
 elif ! tool timeout --help >/dev/null 2>&1; then unsupported=missing_timeout; fi
 execution=true
@@ -939,8 +939,8 @@ if command -v flock >/dev/null 2>&1 && flock -w 0 --help >/dev/null 2>&1; then l
 elif [ -x /usr/local/sbin/firecrab-console-resize ] && /usr/local/sbin/firecrab-console-resize --sandbox-probe; then lock_program=/usr/local/sbin/firecrab-console-resize
 else exit 80; fi
 lock() { if [ "$lock_program" = /usr/local/sbin/firecrab-console-resize ]; then [ "$1" = -w ] || return 80; "$lock_program" --sandbox-lock "$3" "$2"; else "$lock_program" "$@"; fi; }
-if command -v tar >/dev/null 2>&1 && tar --exclude=__firecrab_probe__ --help >/dev/null 2>&1; then tar_program=$(command -v tar)
-elif [ -x /etc/firecrab/busybox ] && /etc/firecrab/busybox tar --exclude=__firecrab_probe__ --help >/dev/null 2>&1; then tar_program=/etc/firecrab/busybox
+if command -v tar >/dev/null 2>&1 && tar --exclude=null -cf /dev/null -C /dev null >/dev/null 2>&1; then tar_program=$(command -v tar)
+elif [ -x /etc/firecrab/busybox ] && /etc/firecrab/busybox tar --exclude=null -cf /dev/null -C /dev null >/dev/null 2>&1; then tar_program=/etc/firecrab/busybox
 else printf 'Sandbox requires tar with --exclude support. Install GNU tar in the selected development VM.\n' >&2; exit 80; fi
 archive_tar() { if [ "$tar_program" = /etc/firecrab/busybox ]; then "$tar_program" tar "$@"; else "$tar_program" "$@"; fi; }
 [ "$action" != probe ] || exit 0
