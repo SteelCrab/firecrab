@@ -97,8 +97,50 @@ On success, the harness removes its project/source after exporting evidence.
 It preserves the VM/network and the retained-data sentinel. Export the full report
 outside this disposable environment before its operator removes owned resources.
 Review private evidence before publication; it contains model output and paths.
+For a larger validation batch, `--keep-owned-connection` preserves the same QA
+session. The report records retention instead of claiming revocation. Disconnect
+that owned connection after the entire batch; do not start more login flows.
 
 Run `python3 scripts/test-ci-qa-ai-sandbox-recovery.py` for offline ownership,
 listener, admission and evidence guard tests. Linux CI also runs real SSH and
 dedicated-user interruption contracts in its network-isolated root container.
 Neither fixture tests nor the root container alone establish this live gate.
+
+## Verified recovery run — 2026-10-26
+
+The complete live gate passed from 09:43:29 to 09:46:05 UTC using the same
+human-authorized ChatGPT connection, model `gpt-6.1-sol`, and an isolated Ubuntu
+26.04 MicroVM. No additional login flow was started. The deployed API source was
+`68fec554`; later environment, coordination, and Tunnel changes are not covered
+by this run.
+
+| Scenario | Durable task | Observed result |
+| --- | --- | --- |
+| Two-second command timeout | `aac8007e-71cf-41eb-8cb4-6c9218c80c3b` | Result, exit 124 |
+| Cancellation during execution | `b8d1fdb4-aec9-4d3c-b2f9-d7db4a598400` | Cancelled, exit 137 |
+| Unread admission response | `b82bba21-9972-4c14-abc6-cc3197c103f1` | Same admitted task, Result, exit 7 |
+| Controller SIGKILL and reconciliation | `f03c593c-d54c-47ea-af2f-fcc5eef7bcda` | New API PID, no replay, Cancelled, exit 137 |
+| Explicit retry after reconciliation | `6d80567c-729d-4118-82fd-34bcf2fd3a74` | New attempt, Result, exit 7 |
+| Real guest stop/start and reconciliation | `396b8239-3c51-4326-9b0f-2e03409d1e87` | New boot, no replay, Cancelled, unknown exit preserved |
+
+All six tasks retain their attempt IDs and the same VM/runtime references.
+Guest nonces and execution counters establish one command execution per attempt.
+Separate stdout/stderr, changes, model responses, and result exports were retained.
+The unrelated root supervisor injected after reboot was not signalled. The source,
+borrowed VM/network, and retained-data sentinel were preserved. The reboot fixture
+explicitly called `sync`; it does not establish unflushed power-loss durability.
+
+The final private report was exported before project cleanup. Its SHA-256 is
+`2a5ac03614b686dcd502ed1db3dc85df47f2022e8d8cfdd5ea5dbc4d6973b44d`.
+The deployed API SHA-256 is
+`6c523fde5ee4b003d65b11be2309793e5fc7446855a9213e831259b962cc3fcf`.
+The executed harness SHA-256 is
+`2a7521b7eb54273aca66fd39fe6acc965ecf27e36f101c736048c71beac54bac`.
+The connection was deliberately retained with `--keep-owned-connection` for the
+remaining issue #414 validation batch. Remote revocation is not claimed here;
+the operator must disconnect it after that batch.
+
+Local validation also passed 41 Linux Sandbox tests and all three privileged
+guest contracts, including real SSH interruption and recovery. The Python
+recovery guard suite passed 11 tests. These checks complement the real run.
+The Canvas handoff still requires CI acceptance for the submitted commit.
