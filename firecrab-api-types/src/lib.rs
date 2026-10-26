@@ -18,6 +18,8 @@ mod cluster_services;
 pub use cluster_services::*;
 mod ai_sandbox;
 mod block_storage;
+mod sandbox_environment;
+mod sandbox_guest;
 pub use block_storage::*;
 mod micro_services;
 mod pipe_ai;
@@ -35,6 +37,8 @@ pub use pipe_storage::{
     PipeStorageResponse, PipeStorageSpec, StorageCredentialRef, StorageObject, StorageObjectPage,
     StorageServiceRef,
 };
+pub use sandbox_environment::*;
+pub use sandbox_guest::*;
 pub use schedules::*;
 pub use security_groups::*;
 
