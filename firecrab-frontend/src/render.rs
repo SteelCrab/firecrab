@@ -23,10 +23,13 @@ pub enum Icon {
     Edit,
     Delete,
     Close,
+    Key,
+    Sparkles,
+    Connected,
 }
 
 impl Icon {
-    fn svg(&self) -> String {
+    pub(crate) fn svg(&self) -> String {
         let path = match self {
             Self::Add => "M12 5v14M5 12h14",
             Self::Refresh => "M20 7v5h-5M4 17v-5h5m-5 0a8 8 0 0 1 14-6l2 2M4 16l2 2a8 8 0 0 0 14-6",
@@ -39,6 +42,13 @@ impl Icon {
             Self::Edit => "m16 3 5 5M4 20l4-1 13-13a2.8 2.8 0 0 0-4-4L4 15l-1 6Z",
             Self::Delete => "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7",
             Self::Close => "m6 6 12 12M18 6 6 18",
+            Self::Key => {
+                "M21 8a5 5 0 1 1-10 0 5 5 0 0 1 10 0ZM12.5 11.5 3 21H2v-3l3-3h3v-3l4.5-.5M16 7h.01"
+            }
+            Self::Sparkles => {
+                "m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3ZM20 2v4M18 4h4"
+            }
+            Self::Connected => "M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9ZM8 12l3 3 5-6",
         };
         format!(
             "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"{path}\"/></svg>"
@@ -1377,8 +1387,8 @@ fn pipe(app: &App, card: &str) -> String {
             "<p role=\"alert\">{}</p>",
             tr(
                 app,
-                "Reinstall the Firecrab host bundle to restore the Cloudflare connector.",
-                "Cloudflare 연결기를 복구하려면 Firecrab 호스트 번들을 다시 설치한다."
+                "Run firecrab pipe install on the API host to install the Cloudflare connector.",
+                "API 호스트에서 firecrab pipe install을 실행해 Cloudflare 연결기를 설치한다."
             )
         ));
     }
