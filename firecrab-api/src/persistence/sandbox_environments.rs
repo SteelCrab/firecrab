@@ -51,6 +51,15 @@ impl Store {
             return Ok(None);
         };
         let saved = decode(json)?;
+        if saved.roles.len() != saved.spec.roles.len()
+            || saved
+                .roles
+                .iter()
+                .zip(&saved.spec.roles)
+                .any(|(reserved, spec)| reserved.role != spec.name)
+        {
+            return Err(corrupt());
+        }
         if saved.id != id
             || saved.project_id.to_string() != project
             || saved.generation.to_string() != generation

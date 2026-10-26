@@ -305,3 +305,134 @@ async fn failed_export_or_changed_artifact_keeps_environment_resources() {
         SandboxEnvironmentState::Provisioning
     );
 }
+
+#[tokio::test]
+async fn admission_rechecks_actual_policy_address_and_runtime_after_readiness() {
+    let directory = tempfile::tempdir().unwrap();
+    let registry =
+        crate::templates::TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .unwrap();
+    let state = AppState::with_db_file(registry, directory.path().join("state.db"))
+        .await
+        .unwrap();
+    let mut manifest = spec();
+    manifest.roles.truncate(1);
+    manifest.roles[0].depends_on.clear();
+    manifest.allow.clear();
+    let mut environment =
+        reservation(Uuid::new_v4(), Uuid::new_v4(), Caller::default(), manifest).unwrap();
+    let network = MicroNetworkResponse {
+        id: environment.network_id,
+        name: name(&environment, "network"),
+        subnet_cidr: environment.spec.subnet_cidr.clone(),
+        gateway: "10.240.1.1".into(),
+        internet_enabled: false,
+        uplink: None,
+        ipv6_cidr: None,
+        ipv6_gateway: None,
+        ipv6_address_mode: None,
+        ipv6_egress: None,
+    };
+    state.store.insert_micro_network(&network).unwrap();
+    let reserved = &environment.roles[0];
+    let definition = &environment.spec.roles[0];
+    let mut record = crate::handlers::vms::test_support::record(
+        &name(&environment, &reserved.role),
+        reserved.vm_id,
+    );
+    record.template = definition.template.name.clone();
+    record.template_version = definition.template.version.clone();
+    record.template_kernel_sha256 = definition.template.kernel_sha256.clone();
+    record.template_rootfs_sha256 = definition.template.rootfs_sha256.clone();
+    record.template_boot_args_sha256 = definition.template.boot_args_sha256.clone();
+    record.cpu = definition.cpu;
+    record.ram = definition.memory_mib;
+    record.disk_gb = definition.disk_gb;
+    record.micro_network_id = environment.network_id;
+    record.security_group_id = Some(reserved.security_group_id);
+    record.egress_policy = EgressPolicy::Isolated;
+    record.state = VmState::Running;
+    record.last_runtime_id = Some(Uuid::new_v4());
+    state.store.insert(&record).unwrap();
+    state.vms.lock().unwrap().insert(record.id, record.clone());
+    let lease = state
+        .store
+        .allocate_lease(
+            record.id,
+            SubnetSpec::parse(network.id, &network.subnet_cidr).unwrap(),
+        )
+        .unwrap();
+    let group = SecurityGroupResponse {
+        id: reserved.security_group_id,
+        name: name(&environment, &reserved.role),
+        micro_network_id: network.id,
+        rules: vec![],
+    };
+    state.store.insert_security_group(&group).unwrap();
+    environment.roles[0].runtime = Some(SandboxRuntimeRef {
+        vm_id: record.id,
+        runtime_id: record.last_runtime_id.unwrap(),
+    });
+    environment.roles[0].ipv4 = Some(lease.ipv4.to_string());
+    environment.roles[0].agent = SandboxReadiness::Ready;
+    environment.roles[0].network = SandboxReadiness::Ready;
+    environment.roles[0].application = SandboxReadiness::Ready;
+    environment.state = SandboxEnvironmentState::Ready;
+    state
+        .store
+        .reserve_sandbox_environment(&environment)
+        .unwrap();
+    assert!(binding(&state, environment.id, None).is_ok());
+    state
+        .store
+        .replace_security_group_rules(
+            group.id,
+            &[SecurityGroupRule {
+                direction: SecurityGroupDirection::Egress,
+                protocol: PortProtocol::Tcp,
+                port_from: 443,
+                port_to: 443,
+                peer_cidr: "0.0.0.0/0".into(),
+            }],
+        )
+        .unwrap();
+    assert!(
+        binding(&state, environment.id, None)
+            .unwrap_err()
+            .contains("policy changed")
+    );
+    state
+        .store
+        .replace_security_group_rules(group.id, &[])
+        .unwrap();
+    let database = rusqlite::Connection::open(directory.path().join("state.db")).unwrap();
+    database
+        .execute(
+            "UPDATE network_leases SET ipv6='fd00::2' WHERE vm_id=?1 AND released_at IS NULL",
+            [record.id.to_string()],
+        )
+        .unwrap();
+    assert!(
+        binding(&state, environment.id, None)
+            .unwrap_err()
+            .contains("address changed")
+    );
+    database
+        .execute(
+            "UPDATE network_leases SET ipv6=NULL WHERE vm_id=?1 AND released_at IS NULL",
+            [record.id.to_string()],
+        )
+        .unwrap();
+    state
+        .vms
+        .lock()
+        .unwrap()
+        .get_mut(&record.id)
+        .unwrap()
+        .last_runtime_id = Some(Uuid::new_v4());
+    assert!(
+        binding(&state, environment.id, None)
+            .unwrap_err()
+            .contains("runtime or readiness changed")
+    );
+}

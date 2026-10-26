@@ -532,6 +532,52 @@ pub async fn hydrate_workspace(state: &AppState, saved: &mut SavedTask) -> io::R
     Ok(())
 }
 
+/// Flush final model file edits before fencing/export, including file-only Workspace attempts.
+pub async fn flush_workspace(state: &AppState, saved: &mut SavedTask) -> io::Result<()> {
+    if !saved.guest_staged
+        && !matches!(
+            saved.execution_mode,
+            Some(SandboxExecutionMode::PersistentWorkspace)
+        )
+    {
+        return Ok(());
+    }
+    stage_workspace(state, saved, None).await
+}
+
+async fn stage_workspace(
+    state: &AppState,
+    saved: &mut SavedTask,
+    limits: Option<&SandboxGuestLimits>,
+) -> io::Result<()> {
+    super::access::attempt(state, saved).map_err(io::Error::other)?;
+    let binding = saved
+        .guest
+        .ok_or_else(|| io::Error::other("Attempt has no admitted guest runtime"))?;
+    let directory = attempt(saved)?;
+    let work = directory.join("work");
+    let archive = tokio::task::spawn_blocking(move || workspace::archive(&work))
+        .await
+        .map_err(io::Error::other)??;
+    let transport = ssh(state, &binding, &directory)?;
+    saved.guest_pending = true;
+    saved.guest_staged = true;
+    super::save(state, saved).await.map_err(io::Error::other)?;
+    let staged = capture(
+        transport,
+        task_script(saved, "stage", None, &STANDARD.encode(archive), 0, limits)?,
+        65536,
+        Duration::from_secs(60),
+    )
+    .await?;
+    if staged.code != 0 {
+        return Err(io::Error::other(
+            "MicroVM project staging failed; retained data requires reconciliation",
+        ));
+    }
+    Ok(())
+}
+
 async fn execute_bounded(
     state: &AppState,
     saved: &mut SavedTask,
@@ -586,27 +632,7 @@ async fn execute_bounded(
             ));
         }
     }
-    let work = attempt.join("work");
-    let archive = tokio::task::spawn_blocking(move || workspace::archive(&work))
-        .await
-        .map_err(io::Error::other)??;
-    let stage_command = ssh(state, &binding, &attempt)?;
-    super::access::attempt(state, saved).map_err(io::Error::other)?;
-    saved.guest_pending = true;
-    saved.guest_staged = true;
-    super::save(state, saved).await.map_err(io::Error::other)?;
-    let staged = capture(
-        stage_command,
-        task_script(saved, "stage", None, &STANDARD.encode(archive), 0, limits)?,
-        65536,
-        Duration::from_secs(60),
-    )
-    .await?;
-    if staged.code != 0 {
-        return Err(io::Error::other(
-            "MicroVM project staging failed; verify SSH, tar, an unprivileged-user utility and the injected toolbox",
-        ));
-    }
+    stage_workspace(state, saved, limits).await?;
     let invocation = Uuid::new_v4();
     super::access::attempt(state, saved).map_err(io::Error::other)?;
     saved.guest_command = Some(invocation);

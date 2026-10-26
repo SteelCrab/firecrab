@@ -726,6 +726,52 @@ pub fn binding(
     if environment.state != SandboxEnvironmentState::Ready {
         return Err("Environment is not ready; reconcile before dispatch".into());
     }
+    let network = state
+        .store
+        .micro_network(environment.network_id)
+        .map_err(|_| "Cannot read admitted environment network")?
+        .ok_or("Admitted environment network disappeared")?;
+    if network.name != name(&environment, "network")
+        || network.subnet_cidr != environment.spec.subnet_cidr
+        || network.internet_enabled
+        || network.ipv6_cidr.is_some()
+    {
+        return Err(
+            "Environment network identity or IPv4-only isolation changed after readiness".into(),
+        );
+    }
+    for (index, reserved) in environment.roles.iter().enumerate() {
+        let current =
+            vm(state, reserved.vm_id).ok_or("Environment role VM disappeared after readiness")?;
+        verify_vm(state, &environment, index, &current)?;
+        let lease = state
+            .store
+            .active_lease(reserved.vm_id)
+            .map_err(|_| "Cannot read admitted role lease")?
+            .ok_or("Environment role lease disappeared")?;
+        if lease.ipv6.is_some() || reserved.ipv4.as_deref() != Some(lease.ipv4.to_string().as_str())
+        {
+            return Err("Environment role address changed after readiness".into());
+        }
+        let actual = state
+            .store
+            .security_group(reserved.security_group_id)
+            .map_err(|_| "Cannot read admitted role policy")?
+            .ok_or("Environment role policy disappeared")?;
+        if actual.micro_network_id != environment.network_id
+            || actual.name != name(&environment, &reserved.role)
+            || actual.rules != policy(&environment, &reserved.role)?
+        {
+            return Err("Environment role network policy changed after readiness".into());
+        }
+        let runtime = guest::binding(state, reserved.vm_id)
+            .map_err(|_| "Environment role runtime is unavailable")?;
+        if !ready(reserved) || reserved.runtime != Some(runtime) {
+            return Err(
+                "Environment role runtime or readiness changed; reconcile before dispatch".into(),
+            );
+        }
+    }
     let index = match role {
         Some(role) => environment
             .roles
@@ -805,6 +851,11 @@ pub fn service_environment(
                 allow.to.replace('-', "_").to_ascii_uppercase(),
                 service.name.replace('-', "_").to_ascii_uppercase()
             );
+            if values.contains_key(&format!("{prefix}_HOST")) {
+                return Err(
+                    "Environment service names produce an ambiguous discovery variable".into(),
+                );
+            }
             values.insert(format!("{prefix}_HOST"), service.address.clone());
             values.insert(format!("{prefix}_PORT"), service.port.to_string());
         }

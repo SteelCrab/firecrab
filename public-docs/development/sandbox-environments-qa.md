@@ -17,6 +17,17 @@ python3 scripts/test-guest-console.py
 sudo python3 scripts/test-sandbox-user.py
 ```
 
+For a small Linux tooling proof without rebuilding Rust, mount the repository
+read-only into an owned disposable root container. Mount the compiled helper at
+`/usr/local/sbin/firecrab-console-resize` and set
+`FIRECRAB_SANDBOX_GUEST_QA=1`. Run
+`python3 scripts/test-sandbox-guest-shell.py`. It executes the production shell
+with the distribution UID/timed-lock utilities disabled. It verifies actual
+static fallback, separate output/exit, bounded output, scoped signal refusal,
+cancellation, recovery, export, Workspace hydrate/overlay/delete, private
+retention and a final file-tool flush. Its output explicitly identifies it as
+a Linux process fixture and sets `microvmValidated: false`.
+
 The last command compiles and executes the real C helper on Linux. It changes
 UID only in child processes and creates only a private temporary lock file.
 It verifies exact UID/GID, empty supplementary groups, no-new-privileges, separate
