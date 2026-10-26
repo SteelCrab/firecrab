@@ -1427,3 +1427,81 @@ test.describe("Registry automatic Deploy @dashboard", () => {
     await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeEnabled();
   });
 });
+
+test.describe("Service CI Deploy @dashboard", () => {
+  const tokenId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const credential = { id: tokenId, serviceId: ID, name: "GitHub", repository: "ghcr.io/team/orders", createdAt: 1793040000, expiresAt: 1793644800 };
+  const fixtureToken = `fcd_${tokenId.replaceAll("-", "")}_${"a".repeat(43)}`;
+
+  test("issues one-time tokens, copies and hides them, and revokes with icon controls", async ({ page }, testInfo) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: release(RELEASE_A) }));
+    let rows: object[] = [];
+    const writes: any[] = [];
+    await page.route(`**/api/micro-services/${ID}/deploy-tokens{,/**}`, async route => {
+      const method = route.request().method();
+      if (method === "POST") {
+        writes.push(route.request().postDataJSON()); rows = [credential];
+        return route.fulfill({ status: 201, json: { credential, token: fixtureToken } });
+      }
+      if (method === "DELETE") { rows = []; return route.fulfill({ status: 204 }); }
+      return route.fulfill({ json: rows });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await page.getByRole("button", { name: "CI tokens", exact: true }).click();
+    await page.getByLabel("Name", { exact: true }).fill("GitHub");
+    await page.getByLabel("Lifetime", { exact: true }).selectOption("7");
+    const issue = page.getByRole("button", { name: "Token", exact: true });
+    await expect(issue).toHaveText(""); await expect(issue.locator("svg")).toHaveCount(1);
+    await issue.click();
+    await expect(page.locator("#deploy-ci-issued")).toHaveValue(fixtureToken);
+    await expect(page.locator("#deploy-ci-issued")).toHaveAttribute("type", "password");
+    expect(writes).toEqual([{ name: "GitHub", expiresInSeconds: 604800 }]);
+    await page.getByRole("button", { name: "Reveal", exact: true }).click();
+    await expect(page.locator("#deploy-ci-issued")).toHaveAttribute("type", "text");
+    await page.getByRole("button", { name: "Copy", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(fixtureToken);
+    await page.getByRole("button", { name: "Hide", exact: true }).click();
+    await page.setViewportSize({ width: 1280, height: 1100 });
+    await page.locator(".service-panel-body").evaluate(node => { node.scrollTop = 0; });
+    await page.screenshot({ path: testInfo.outputPath("deploy-ci-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 1100 });
+    await page.locator(".service-panel-body").evaluate(node => { node.scrollTop = 0; });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("deploy-ci-mobile.png"), fullPage: true });
+    await page.getByRole("button", { name: "CI tokens", exact: true }).click();
+    await page.getByRole("button", { name: "CI tokens", exact: true }).click();
+    await expect(page.locator("#deploy-ci-issued")).toHaveCount(0);
+    await page.getByRole("button", { name: "Revocation: GitHub", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Revocation: GitHub", exact: true })).toHaveCount(0);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByRole("combobox", { name: "Language", exact: true }).selectOption("ko");
+    await expect(page.getByRole("button", { name: "CI 토큰", exact: true })).toBeVisible();
+  });
+
+  test("closing during issuance cannot restore the one-time value from a late response", async ({ page }) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: release(RELEASE_A) }));
+    let finish!: () => void;
+    let started = false;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    await page.route(`**/api/micro-services/${ID}/deploy-tokens`, async route => {
+      if (route.request().method() === "POST") {
+        started = true; await gate;
+        return route.fulfill({ status: 201, json: { credential, token: fixtureToken } });
+      }
+      return route.fulfill({ json: [] });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await page.getByRole("button", { name: "CI tokens", exact: true }).click();
+    await page.getByLabel("Name", { exact: true }).fill("GitHub");
+    await page.getByRole("button", { name: "Token", exact: true }).click();
+    await expect.poll(() => started).toBe(true);
+    await page.getByRole("button", { name: "CI tokens", exact: true }).click();
+    finish();
+    await page.getByRole("button", { name: "CI tokens", exact: true }).click();
+    await expect(page.locator("#deploy-ci-issued")).toHaveCount(0);
+    expect(await page.content()).not.toContain(fixtureToken);
+  });
+});

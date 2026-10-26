@@ -421,3 +421,18 @@ Keep logs and summaries; see [QA script coverage](qa.md#script-coverage).
   `--caller-template`, and `--output`. The image must answer the configured app
   port and health path. Two deploy/stop cycles check the gateway MAC, the first
   A/AAAA responses within one second, and access to a surviving service.
+
+## Service CI Deploy
+
+- **CID1 — Credential boundary:** run `cargo test -p firecrab-api ci_deploy --locked`.
+  Check hash-only storage, one-time issuance, expiry/revocation, service/repository
+  scope, immutable outcomes, ownership conflicts, redaction and atomic admission.
+- **CID2 — Pipeline outcome:** run `cargo test -p firecrab-cli microservice::ci --locked`
+  and `python3 scripts/test-deploy-ci-client.py`. Check exact operation retries,
+  lost acknowledgements, TLS/redirect boundaries, failure and timeout exit codes.
+- **CID3 — Dashboard:** run the `Service CI Deploy @dashboard` E2E cases. Check
+  icon controls, one-time reveal/copy, delayed responses and desktop/mobile layout.
+- **CID4 — Real Linux/KVM:** on the disposable Installer runner, add `--ci-deploy`
+  to `scripts/ci-qa-deploy.py --disposable-host --report PATH`. Check CLI disconnect,
+  API restart, Action resume, failed health, expiry/revocation and HTTP continuity
+  through private verified TLS and Nginx. Retain `ciDeploy` measurements and cleanup.

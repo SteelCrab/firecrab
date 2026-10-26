@@ -136,6 +136,7 @@ fn update_host(app: &Shared) {
 }
 
 fn render_content(app: &Shared) {
+    deploy::discard_credentials(&mut app.borrow_mut());
     if app.borrow().route == "ai-sandbox" {
         sandbox::render(app);
         return;

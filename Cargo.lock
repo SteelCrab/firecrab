@@ -1104,6 +1104,7 @@ dependencies = [
  "sha2",
  "sqlparser",
  "sqlx",
+ "subtle",
  "tar",
  "tempfile",
  "thiserror 2.0.21",

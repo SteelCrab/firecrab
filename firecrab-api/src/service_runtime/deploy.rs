@@ -172,13 +172,39 @@ pub async fn retry(
         return Ok((StatusCode::ACCEPTED, Json(deployment)));
     }
     deployment.phase = ServicePhase::Queued;
-    let deployment = submit(state.clone(), deployment, claim, request.0).await?;
+    let deployment = submit(state.clone(), deployment, claim, request.0, None).await?;
     Ok((StatusCode::ACCEPTED, Json(deployment)))
 }
 
 enum Writer {
     Stack(Option<Uuid>),
     Tag(Box<crate::persistence::auto_deploy::Watch>),
+    Ci(crate::persistence::ci_deploy::Admission),
+}
+
+/// CI supplies only image and exact release identities; all other fields come from the server.
+pub(crate) async fn from_ci(
+    state: AppState,
+    request: RequestId,
+    id: Uuid,
+    admission: crate::persistence::ci_deploy::Admission,
+) -> Result<MicroServiceDeployment, AppError> {
+    let store = state.store.clone();
+    let current = database(request.0, move || store.service_deployment(id))
+        .await?
+        .ok_or_else(|| AppError::not_found(request.0))?;
+    let mut spec = current.spec;
+    spec.image = admission.request.image.clone();
+    let body = UpdateServiceRequest {
+        operation_id: admission.request.operation_id,
+        expected_release_id: Some(admission.request.expected_release_id),
+        spec,
+        strategy: admission.request.strategy,
+    };
+    accept(state, request, id, body, None, None, Writer::Ci(admission))
+        .await
+        .map(|(_, Json(record))| record)
+        .map_err(AppError::without_fields)
 }
 
 async fn accept(
@@ -198,6 +224,11 @@ async fn accept(
         ));
     }
     let claim = state.service_mutations.clone().lock_owned().await;
+    let ci_token = if let Writer::Ci(admission) = &writer {
+        Some(crate::ci_deploy::authorize(&state, id, admission, request.0).await?)
+    } else {
+        None
+    };
     if let Writer::Stack(operation) = &writer {
         crate::handlers::micro_services::ensure_stack_writer(&state, id, *operation, request.0)
             .await?;
@@ -205,6 +236,20 @@ async fn accept(
     let store = state.store.clone();
     let operation_id = body.operation_id;
     if let Some(saved) = database(request.0, move || store.service_attempt(operation_id)).await? {
+        if let Writer::Ci(admission) = &writer {
+            let store = state.store.clone();
+            let token = admission.token_id;
+            let original =
+                database(request.0, move || store.ci_request(id, token, operation_id)).await?;
+            if saved.service_id == id && original.as_ref() == Some(&admission.request) {
+                return Ok((StatusCode::ACCEPTED, Json(saved)));
+            }
+            return Err(AppError::conflict(
+                "operation_conflict",
+                "operationId already belongs to a different Deploy request",
+                request.0,
+            ));
+        }
         if saved.service_id == id
             && saved.update.as_ref().is_some_and(|update| {
                 update.requested_spec == body.spec
@@ -227,6 +272,20 @@ async fn accept(
     let mut previous = database(request.0, move || store.service_deployment(id))
         .await?
         .ok_or_else(|| AppError::not_found(request.0))?;
+    if let Some(token) = ci_token {
+        if crate::ci_deploy::repository(&previous.spec.image).as_deref()
+            != Some(token.repository.as_str())
+        {
+            return Err(AppError::conflict(
+                "deploy_repository_changed",
+                "The service repository changed; issue a new Deploy token",
+                request.0,
+            ));
+        }
+        let image = body.spec.image.clone();
+        body.spec = previous.spec.clone();
+        body.spec.image = image;
+    }
     if rollback_of.is_some() {
         body.spec.auto_deploy = previous.spec.auto_deploy.clone();
     }
@@ -342,7 +401,9 @@ async fn accept(
         .await
         .map_err(|_| AppError::internal(request.0))?;
     previous.update = None;
-    let message = if matches!(writer, Writer::Tag(_)) {
+    let message = if matches!(writer, Writer::Ci(_)) {
+        "CI Deploy accepted; only the pinned image changes"
+    } else if matches!(writer, Writer::Tag(_)) {
         "Automatic Deploy accepted; verified registry digest is pinned"
     } else if pinned_digest.is_some() {
         "Secret rotation accepted; the current image digest is retained"
@@ -378,7 +439,11 @@ async fn accept(
         internal_route_owned: false,
         error: None,
     };
-    let deployment = submit(state.clone(), deployment, claim, request.0).await?;
+    let admission = match writer {
+        Writer::Ci(admission) => Some(admission),
+        _ => None,
+    };
+    let deployment = submit(state.clone(), deployment, claim, request.0, admission).await?;
     Ok((StatusCode::ACCEPTED, Json(deployment)))
 }
 
@@ -565,12 +630,17 @@ pub(super) async fn submit(
     deployment: MicroServiceDeployment,
     claim: tokio::sync::OwnedMutexGuard<()>,
     request: Uuid,
+    ci: Option<crate::persistence::ci_deploy::Admission>,
 ) -> Result<MicroServiceDeployment, AppError> {
     tokio::spawn(async move {
         let _claim = claim;
         let store = state.store.clone();
         let record = deployment.clone();
-        database(request, move || store.save_service_deployment(&record)).await?;
+        database(request, move || match ci {
+            Some(admission) => store.save_ci_deployment(&record, &admission),
+            None => store.save_service_deployment(&record),
+        })
+        .await?;
         state.service_deploy_changed.notify_waiters();
         resume_worker(state.clone(), deployment.clone());
         Ok::<_, AppError>(deployment)

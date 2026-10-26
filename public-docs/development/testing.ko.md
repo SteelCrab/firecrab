@@ -400,6 +400,9 @@ getfacl -p /dev/kvm; sysctl net.ipv4.ip_forward net.ipv6.conf.all.forwarding # U
 
 ## 관련 문서
 
+서비스별 CI Deploy 검증은 [CID1–CID4](testing.md#service-ci-deploy)를 따른다.
+토큰 범위·만료·폐기, 정확한 작업 결과, 아이콘 화면과 임시 Linux/KVM 정리를 확인한다.
+
 - [CI](ci.md)
 - [과거 검증 기록](validation-history.md)
 - [기여 가이드](../../CONTRIBUTING.md)

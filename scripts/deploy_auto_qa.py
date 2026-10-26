@@ -24,11 +24,43 @@ class MetadataRegistry:
         self.blobs = {key: value for _, _, blobs in fixtures for key, value in blobs.items()}
         self.authenticated = 0
         self.owner = None
+        self.proxies = {}
+        self.proxy_calls = []
+        self.ca_file = None
         registry = self
         expected = "Basic " + base64.b64encode(b"team:local-deploy-qa-only").decode()
 
         class Handler(http.server.BaseHTTPRequestHandler):
+            def proxy(self):
+                host = self.headers.get("Host", "").split(":", 1)[0]
+                port = registry.proxies.get(host)
+                if port is None:
+                    return False
+                length = int(self.headers.get("Content-Length", "0"))
+                assert 0 <= length <= 8192
+                headers = {"Host": host, "Content-Type": "application/json"}
+                if self.headers.get("Authorization"):
+                    headers["Authorization"] = self.headers["Authorization"]
+                with contextlib.closing(http.client.HTTPConnection("127.0.0.1", port, timeout=15)) as connection:
+                    connection.request(self.command, self.path, self.rfile.read(length) if length else None, headers)
+                    response = connection.getresponse()
+                    body = response.read(65537)
+                    assert len(body) <= 65536
+                    self.send_response(response.status)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(body)
+                registry.proxy_calls.append((self.command, self.path))
+                return True
+
+            def do_POST(self):
+                if not self.proxy():
+                    self.send_error(405)
+
             def do_GET(self):
+                if self.proxy():
+                    return
                 if self.headers.get("Authorization") != expected:
                     self.send_response(401)
                     self.send_header("WWW-Authenticate", 'Basic realm="Deploy QA"')
@@ -70,18 +102,20 @@ class MetadataRegistry:
 
 
 @contextlib.contextmanager
-def trusted_registry(fixtures):
+def trusted_registry(fixtures, proxy_hosts=()):
     """Use normal TLS/Auth with a private hosts entry; never contact or publish to GHCR."""
     assert os.geteuid() == 0, "registry trust fixture requires the disposable root QA runner"
+    assert all(host == "ci.example.test" for host in proxy_hosts), "only the private CI QA hostname is allowed"
+    names = ["ghcr.io", *proxy_hosts]
     hosts = Path("/etc/hosts")
-    assert not any("ghcr.io" in line.split("#", 1)[0].split() for line in hosts.read_text().splitlines()), "refusing an existing GHCR hosts mapping"
+    assert not any(set(names).intersection(line.split("#", 1)[0].split()) for line in hosts.read_text().splitlines()), "refusing an existing GHCR hosts mapping"
     environment = subprocess.check_output(["systemctl", "show", "firecrab-api.service", "--property=Environment", "--value"], text=True)
     assert "SSL_CERT_FILE=" not in environment, "refusing an existing custom registry trust file"
     dropin = Path("/run/systemd/system/firecrab-api.service.d/90-deploy-registry-qa.conf")
     assert not dropin.exists(), "refusing an existing registry QA drop-in"
     directory = Path(tempfile.mkdtemp(prefix="qa-registry-", dir="/var/lib/firecrab"))
     directory.chmod(0o755)
-    marker = "127.0.0.1 ghcr.io # firecrab-deploy-qa-" + uuid.uuid4().hex
+    marker = "127.0.0.1 " + " ".join(names) + " # firecrab-deploy-qa-" + uuid.uuid4().hex
     registry = None
     appended = installed = False
     try:
@@ -89,12 +123,13 @@ def trusted_registry(fixtures):
             subprocess.run(["openssl", *args], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=Deploy QA root", "-keyout", str(directory / "ca.key"), "-out", str(directory / "ca.pem"), "-addext", "basicConstraints=critical,CA:TRUE")
         openssl("req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=ghcr.io", "-keyout", str(directory / "leaf.key"), "-out", str(directory / "leaf.csr"))
-        (directory / "extensions").write_text("subjectAltName=DNS:ghcr.io\nbasicConstraints=critical,CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n")
+        (directory / "extensions").write_text("subjectAltName=" + ",".join("DNS:" + host for host in names) + "\nbasicConstraints=critical,CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n")
         openssl("x509", "-req", "-days", "1", "-in", str(directory / "leaf.csr"), "-CA", str(directory / "ca.pem"), "-CAkey", str(directory / "ca.key"), "-CAcreateserial", "-extfile", str(directory / "extensions"), "-out", str(directory / "leaf.pem"))
         (directory / "ca.pem").chmod(0o644)
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls.load_cert_chain(directory / "leaf.pem", directory / "leaf.key")
         registry = MetadataRegistry(fixtures, tls=tls)  # Binding refuses a pre-existing listener.
+        registry.ca_file = directory / "ca.pem"
         with hosts.open("a") as output:
             output.write("\n" + marker + "\n")
         appended = True
