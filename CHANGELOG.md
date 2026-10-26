@@ -34,8 +34,8 @@ Entries land here as work merges, and move under the next version heading when t
 - Saved Sandbox preview bindings retain fixed addresses and immutable execution
   references. Explicit successor bindings retarget the same URL. Helper health,
   public HTTPS/WebSocket verification, local removal and remote retirement are
-  reported separately. Canvas receives shared authorization and reconnect types
-  without adding a second task engine or promising interactive PTY support.
+  reported separately. Canvas work waits for completed Sandbox implementation
+  and direct QA acceptance. Bounded commands do not provide interactive PTY.
 
 - The Deploy queue prioritizes waiting rollbacks and supports cancelling an exact
   queued operation. Cancellation retains the active release and its VMs and routes.
@@ -294,6 +294,10 @@ Entries land here as work merges, and move under the next version heading when t
 - None.
 
 ### Fixed
+
+- Sandbox CLI and MCP artifact downloads reject a task response whose ID differs
+  from the requested task. Artifact ownership and download URLs remain bound to
+  that task and its attempt. Existing output files retain their original bytes.
 
 - Gateway MAC addresses remain stable when MicroVM TAP ports join or leave.
   Stopping a service no longer strands surviving guests' cached gateway
