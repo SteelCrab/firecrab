@@ -27,12 +27,14 @@ class Api:
         self.calls = []
         self.accounts = [{"id": CONNECTION, "name": LABEL}]
         self.vms = [{"id": VM, "name": LABEL, "state": "running", "purpose": "instance", "microNetworkId": NETWORK, "egressPolicy": "isolated"}]
-        self.network = {"id": NETWORK, "name": LABEL, "internetEnabled": False}
+        self.network = {"id": NETWORK, "name": LABEL, "nat": {"enabled": False}, "subnet": {"ipv6Cidr": None}}
         self.projects = []
 
     def request(self, method, path, body=None, allowed=(200,), timeout=360):
         self.calls.append((method, path, body))
         if method == "GET":
+            if path.startswith("/api/ai-sandbox/tasks/"):
+                return 200, {"id": path.rsplit("/", 1)[1]}
             return 200, {"/api/pipe/ai/connections": self.accounts, "/api/vms": self.vms,
                          f"/api/micro-networks/{NETWORK}": self.network, "/api/ai-sandbox/projects": self.projects}[path]
         if method == "PUT":
@@ -44,7 +46,7 @@ def result():
     script = qa.command(RUN, "cancel", 90)
     return {"projectId": PROJECT, "selection": {"connectionId": CONNECTION, "model": "verified"},
             "runtime": {"vmId": VM}, "state": "cancelled",
-            "events": [{"name": "run_command", "input": json.dumps({"command": script}),
+            "events": [{"name": "run_command", "input": json.dumps({"command": script, "timeout_seconds": 120}),
                         "output": f"RECOVERY414:{RUN}:cancel:stdout:{NONCE}\n",
                         "stderr": f"RECOVERY414:{RUN}:cancel:stderr\n", "exitCode": None}],
             "changes": [{"path": "executions.txt", "after": "once\n", "applied": False},
@@ -83,8 +85,8 @@ class RecoveryTests(unittest.TestCase):
             if changed == "network": api.network["name"] = "borrowed"
             if changed == "project": api.projects.append({"id": PROJECT})
             if changed == "egress": api.vms[0]["egressPolicy"] = "internet"
-            if changed == "internet": api.network["internetEnabled"] = True
-            if changed == "ipv6": api.network["ipv6Cidr"] = "fd00::/64"
+            if changed == "internet": api.network["nat"]["enabled"] = True
+            if changed == "ipv6": api.network["subnet"]["ipv6Cidr"] = "fd00::/64"
             with self.subTest(changed=changed), patch.object(qa, "control") as control:
                 with self.assertRaises(qa.qa.QaFailure):
                     qa.owned(api, RUN, CONNECTION, VM)
@@ -147,10 +149,30 @@ class RecoveryTests(unittest.TestCase):
     def test_disconnected_admission_sends_once_and_does_not_read_or_resubmit(self):
         with patch.object(qa.socket, "create_connection") as connect:
             client = connect.return_value.__enter__.return_value
-            qa.disconnected_put(Api(), "/api/owned-task", {"kind": "code"})
+            qa.disconnected_put(Api(), "/api/owned-task", {"kind": "code"}, PROJECT)
             client.sendall.assert_called_once()
             self.assertIn(b"PUT /api/owned-task HTTP/1.1\r\n", client.sendall.call_args.args[0])
             client.recv.assert_not_called()
+
+    def test_batch_retention_preserves_only_the_same_owned_account(self):
+        api = Api()
+        self.assertEqual(qa.finish_connection(api, CONNECTION, LABEL, True), {"retainedForFurtherValidation": True})
+        self.assertTrue(all(method == "GET" for method, _, _ in api.calls))
+        api.accounts[0]["name"] = "another account"
+        with self.assertRaises(qa.qa.QaFailure):
+            qa.finish_connection(api, CONNECTION, LABEL, True)
+
+    def test_default_cleanup_requires_confirmed_remote_revocation(self):
+        api = Api()
+        original = api.request
+        def request(method, path, *args, **kwargs):
+            if method == "DELETE":
+                self.assertEqual(path, f"/api/pipe/ai/connections/{CONNECTION}")
+                return 200, {"deleted": True, "remoteRevocationConfirmed": False}
+            return original(method, path, *args, **kwargs)
+        api.request = request
+        with self.assertRaises(qa.qa.QaFailure):
+            qa.finish_connection(api, CONNECTION, LABEL, False)
 
     def test_provider_failure_retains_owned_source_and_report_without_cleanup_or_faults(self):
         with tempfile.TemporaryDirectory() as temporary:

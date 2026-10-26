@@ -77,7 +77,9 @@ def owned(api, run_id, connection, vm):
     machine = machines[0]
     _, network = api.request("GET", f"/api/micro-networks/{machine['microNetworkId']}")
     qa.require(network["name"] == label, "VM network ownership does not match this run")
-    qa.require(network.get("internetEnabled") is False and not network.get("ipv6Cidr"),
+    qa.require(network.get("nat", {}).get("enabled") is False
+               and network.get("subnet", {}).get("ipv6Cidr") is None
+               and "ipv6Cidr" in network.get("subnet", {}),
                "Recovery VM must have isolated IPv4 and no IPv6 network")
     _, projects = api.request("GET", "/api/ai-sandbox/projects")
     qa.require(not projects, "A shared API with existing projects cannot be crashed by this gate")
@@ -155,14 +157,22 @@ def wait(api, task_id, report, output, condition, seconds=90):
     raise qa.QaFailure(f"Recovery deadline exceeded; inspect task {task_id} before retrying")
 
 
-def disconnected_put(api, path, request):
+def disconnected_put(api, path, request, task_id):
     # Send once, then inspect the known identity. Never repeat an uncertain PUT.
     body = json.dumps(request).encode()
     parsed = urlsplit(api.base)
     with socket.create_connection((parsed.hostname, parsed.port), timeout=10) as client:
         client.sendall((f"PUT {path} HTTP/1.1\r\nHost: {parsed.netloc}\r\nContent-Type: application/json\r\n"
                         f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode() + body)
-        client.shutdown(socket.SHUT_WR)
+        # A half-close before durable admission can legitimately cancel HTTP parsing.
+        # Observe admission over a separate connection, then discard this unread response.
+        deadline = time.monotonic() + 15
+        while True:
+            status, task = api.request("GET", f"/api/ai-sandbox/tasks/{task_id}", allowed=(200, 404), timeout=10)
+            if status == 200:
+                return task
+            qa.require(time.monotonic() < deadline, "Disconnected admission remains uncertain; do not resubmit")
+            time.sleep(0.2)
 
 
 def validate(task, project, vm, selected, script, run_id, label, state, nonce=None):
@@ -172,6 +182,9 @@ def validate(task, project, vm, selected, script, run_id, label, state, nonce=No
     qa.require(len(events) == 1 and events[0]["name"] == "run_command"
                and json.loads(events[0]["input"])["command"] == script, "The authorized command was changed or replayed")
     event = events[0]
+    expected_timeout = 2 if label == "timeout" else 30 if label == "explicitRetry" else 120
+    qa.require(json.loads(event["input"]).get("timeout_seconds") == expected_timeout,
+               "The model changed the authorized command deadline")
     match = re.fullmatch(rf"RECOVERY414:{re.escape(run_id)}:{label}:stdout:([0-9a-f]{{32}})\n", event["output"])
     qa.require(match is not None and (nonce is None or nonce == match.group(1)), "Recovered guest stdout does not match actual execution")
     qa.require(event["stderr"].startswith(f"RECOVERY414:{run_id}:{label}:stderr\n")
@@ -181,6 +194,18 @@ def validate(task, project, vm, selected, script, run_id, label, state, nonce=No
                and changes.get("nonce", {}).get("after") == match.group(1)
                and not any(c.get("applied") for c in changes.values()), "Execution replayed or lost retained changes")
     return match.group(1)
+
+
+def finish_connection(api, connection, label, retain):
+    _, accounts = api.request("GET", "/api/pipe/ai/connections")
+    qa.require(len(accounts) == 1 and accounts[0]["id"] == connection and accounts[0]["name"] == label,
+               "Account ownership changed")
+    if retain:
+        return {"retainedForFurtherValidation": True}
+    _, receipt = api.request("DELETE", f"/api/pipe/ai/connections/{connection}")
+    qa.require(receipt.get("deleted") and receipt.get("remoteRevocationConfirmed"),
+               "QA grant retirement is not confirmed")
+    return receipt
 
 
 def run_gate(args, api):
@@ -215,7 +240,7 @@ def run_gate(args, api):
     try:
         retained = f"/var/lib/firecrab-qa-retained/{run_id}"
         _, retained_nonce = guest.run(f"set -eu\numask 077\nmkdir -p {retained}\n"
-                                      f"od -An -N16 -tx1 /dev/urandom | tr -d ' \\n' >{retained}/keep\ncat {retained}/keep\n")
+                                      f"if [ ! -e {retained}/keep ]; then od -An -N16 -tx1 /dev/urandom | tr -d ' \\n' >{retained}/keep; fi\ncat {retained}/keep\n")
         qa.require(re.fullmatch(r"[0-9a-f]{32}", retained_nonce) is not None, "Cannot establish retained guest data")
         report["retainedDataNonce"] = retained_nonce
         api.request("PUT", f"/api/ai-sandbox/projects/{project}", spec)
@@ -235,14 +260,7 @@ def run_gate(args, api):
             qa.save_report(output, report)
             path = f"/api/ai-sandbox/projects/{project}/tasks/{task_id}"
             if scenario == "reconnect":
-                disconnected_put(api, path, request)
-                deadline = time.monotonic() + 15
-                while True:
-                    status, _ = api.request("GET", f"/api/ai-sandbox/tasks/{task_id}", allowed=(200, 404), timeout=10)
-                    if status == 200:
-                        break
-                    qa.require(time.monotonic() < deadline, "Disconnected admission remains uncertain; do not resubmit")
-                    time.sleep(0.2)
+                disconnected_put(api, path, request, task_id)
             else:
                 api.request("PUT", path, request, (200, 202))
             if scenario in ("timeout", "reconnect"):
@@ -359,11 +377,10 @@ def run_gate(args, api):
         _, kept = guest.run(f"cat {retained}/keep")
         qa.require(kept == retained_nonce, "Owned task cleanup removed retained guest data")
         report["checks"]["retainedDataPreserved"] = "PASS"
-        _, accounts = api.request("GET", "/api/pipe/ai/connections")
-        qa.require(len(accounts) == 1 and accounts[0]["id"] == connection and accounts[0]["name"] == label, "Account ownership changed")
-        _, receipt = api.request("DELETE", f"/api/pipe/ai/connections/{connection}")
-        report["connectionDisconnect"] = receipt
-        qa.require(receipt.get("deleted") and receipt.get("remoteRevocationConfirmed"), "QA grant retirement is not confirmed")
+        receipt = finish_connection(api, connection, label, args.keep_owned_connection)
+        report["connectionCleanup"] = receipt
+        if receipt.get("deleted"):
+            report["connectionDisconnect"] = receipt
         report["checks"]["borrowedResourcesPreserved"] = "PASS"
         report.update(status="PASS", retainedOnFailure=False)
         shutil.rmtree(source)
@@ -387,6 +404,8 @@ def main():
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--allow-owned-faults", action="store_true")
+    parser.add_argument("--keep-owned-connection", action="store_true",
+                        help="Retain this run's QA session for a larger validation batch; disconnect it when that batch finishes")
     args = parser.parse_args()
     if sys.platform != "linux" or os.geteuid() != 0 or not args.live or not args.allow_owned_faults:
         parser.error("Requires root on an owned disposable Linux API host, --live and --allow-owned-faults")
