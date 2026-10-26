@@ -10,9 +10,17 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{Element, HtmlSelectElement};
 
+mod automation;
+
 #[derive(Default)]
 pub struct State {
     service: String,
+    auto_open: bool,
+    auto_request: u64,
+    auto_loading: bool,
+    auto_status: Option<Value>,
+    auto_reference: String,
+    auto_interval: String,
     open: bool,
     releases: Option<Value>,
     loading: bool,
@@ -29,6 +37,12 @@ fn tr<'a>(en: &'a str, ko: &'a str) -> &'a str {
         ko
     } else {
         en
+    }
+}
+
+pub fn refresh_automation(app: &Shared) {
+    if app.borrow().deploy.auto_open {
+        automation::dispatch(app, "deploy-auto-refresh");
     }
 }
 
@@ -226,6 +240,9 @@ pub fn html(app: &App) -> String {
             out.push_str(&action("Reload releases", "deploy-reload", state.loading));
         }
     }
+    if !private {
+        out.push_str(&automation::html(app));
+    }
     out.push_str("</section>");
     out
 }
@@ -340,6 +357,9 @@ fn history(app: &Shared) {
 }
 
 pub fn change(app: &Shared, target: &Element) -> bool {
+    if automation::change(app, target) {
+        return true;
+    }
     if !["deploy-release", "deploy-strategy"].contains(&target.id().as_str()) {
         return false;
     }
@@ -429,6 +449,9 @@ fn cancel(app: &Shared) {
 }
 
 pub fn dispatch(app: &Shared, action_name: &str) -> bool {
+    if automation::dispatch(app, action_name) {
+        return true;
+    }
     if !action_name.starts_with("deploy-") {
         return false;
     }

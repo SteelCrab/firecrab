@@ -107,6 +107,14 @@ impl Store {
             }))
     }
 
+    /// The current opt-in policy authorizes only image automation, never concurrent Stack work.
+    pub(crate) fn stack_service_auto_allowed(
+        &self,
+        service: Uuid,
+    ) -> Result<bool, PersistenceError> {
+        Ok(!self.lock().query_row("SELECT EXISTS(SELECT 1 FROM stack_applies a JOIN stack_bindings b ON a.stack_id=b.stack_id WHERE b.kind='service' AND b.resource_id=?1 AND a.state IN ('queued','running'))", [service.to_string()], |r| r.get::<_, bool>(0))?)
+    }
+
     /// Delete empty metadata atomically. Never release bindings or delete host resources.
     pub fn delete_empty_stack(&self, name: &str, id: Uuid) -> Result<(), PersistenceError> {
         if !logical_name(name) || id.is_nil() {

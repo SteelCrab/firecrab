@@ -526,6 +526,9 @@ impl Form {
                 Ok(body)
             }
             "New MicroService" | "Edit MicroService" | "Deploy update" => {
+                if let Some(policy) = self.base.get("autoDeploy") {
+                    body["autoDeploy"] = policy.clone();
+                }
                 if body["queues"].as_object().is_some_and(|q| q.is_empty()) {
                     body.as_object_mut().unwrap().remove("queues");
                 }

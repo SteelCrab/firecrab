@@ -956,6 +956,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 }
             }
             _ => {
+                if deploy::change(&changed, &target) {
+                    return;
+                }
                 if advanced::cluster::input(&changed, &target) {
                     return;
                 }

@@ -196,6 +196,10 @@ impl Store {
             "DELETE FROM micro_service_deployments WHERE service_id = ?1",
             [id.to_string()],
         )?;
+        tx.execute(
+            "DELETE FROM service_tag_watches WHERE service_id=?1",
+            [id.to_string()],
+        )?;
         let changed = tx.execute("DELETE FROM micro_services WHERE id = ?1", [id.to_string()])?;
         tx.commit()?;
         Ok(changed != 0)
@@ -250,6 +254,7 @@ impl Store {
             ],
         )?;
         super::deploy_queue::save(&tx, deployment)?;
+        super::auto_deploy::deployment(&tx, deployment)?;
         if deployment.phase == firecrab_api_types::ServicePhase::Running
             && deployment.digest.is_some()
             && deployment
@@ -333,6 +338,7 @@ impl Store {
             "UPDATE micro_services SET name = ?2, spec = ?3 WHERE id = ?1",
             params![service.id.to_string(), service.spec.name, encode(&service)?],
         )?;
+        super::auto_deploy::deployment(&tx, failed)?;
         tx.commit()?;
         Ok(())
     }

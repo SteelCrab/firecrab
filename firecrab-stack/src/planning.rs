@@ -264,7 +264,7 @@ pub fn plan(
             )]);
         }
     }
-    let inputs = resolved_inputs(stack, inventory);
+    let inputs = resolved_inputs(stack, record, inventory);
     let mut changes = Vec::new();
     let mut networks = BTreeMap::new();
     for (key, desired) in &stack.micro_networks {
@@ -410,10 +410,19 @@ pub fn plan(
         );
         let (network_id, network_action) = networks[desired.network.as_str()];
         if let Some(current) = current {
+            let config =
+                crate::effective_service_config(&desired.config, current.deployment.as_ref());
+            let current_config =
+                crate::effective_service_config(&current.service.spec, current.deployment.as_ref());
+            difference(
+                &mut change,
+                "config.autoDeploy",
+                desired.config.auto_deploy != current.service.spec.auto_deploy,
+            );
             let desired_fields =
-                serde_json::to_value(&desired.config).expect("service configuration is JSON");
+                serde_json::to_value(&config).expect("service configuration is JSON");
             let current_fields =
-                serde_json::to_value(&current.service.spec).expect("service configuration is JSON");
+                serde_json::to_value(&current_config).expect("service configuration is JSON");
             for (field, value) in desired_fields
                 .as_object()
                 .expect("configuration is an object")
@@ -429,7 +438,7 @@ pub fn plan(
                 &mut change,
                 "deployment",
                 deployed.is_none_or(|d| {
-                    d.spec != desired.config
+                    crate::effective_service_config(&d.spec, Some(d)) != config
                         || d.instances.len() != usize::from(desired.config.replicas)
                 }),
             );
@@ -535,7 +544,7 @@ pub fn fingerprint(stack: &Stack, record: &StackRecord, inventory: &Inventory) -
         &record.name,
         record.revision,
         bindings,
-        resolved_inputs(stack, inventory),
+        resolved_inputs(stack, record, inventory),
         networks,
         vms,
         services,
@@ -544,7 +553,7 @@ pub fn fingerprint(stack: &Stack, record: &StackRecord, inventory: &Inventory) -
     format!("{:x}", Sha256::digest(bytes))
 }
 
-fn resolved_inputs(stack: &Stack, inventory: &Inventory) -> PlanInputs {
+fn resolved_inputs(stack: &Stack, record: &StackRecord, inventory: &Inventory) -> PlanInputs {
     PlanInputs {
         templates: stack
             .micro_vms
@@ -567,8 +576,18 @@ fn resolved_inputs(stack: &Stack, inventory: &Inventory) -> PlanInputs {
             .micro_services
             .iter()
             .filter_map(|(key, service)| {
-                service
-                    .config
+                let current = record
+                    .bindings
+                    .iter()
+                    .find(|b| b.kind == ResourceKind::Service && b.key == *key)
+                    .and_then(|b| {
+                        inventory
+                            .services
+                            .iter()
+                            .find(|s| s.service.id == b.resource_id)
+                    })
+                    .and_then(|s| s.deployment.as_ref());
+                crate::effective_service_config(&service.config, current)
                     .image
                     .split_once('@')
                     .map(|(_, digest)| (key.clone(), digest.to_ascii_lowercase()))

@@ -1367,3 +1367,58 @@ test.describe("Deploy release management @dashboard", () => {
     await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeDisabled();
   });
 });
+
+test.describe("Registry automatic Deploy @dashboard", () => {
+  test("saves a bounded policy, pauses/resumes and disables with icon controls", async ({ page }, testInfo) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    const current = release(RELEASE_A);
+    let status: any = { policy: null, pause: null, observedTag: null, observedDigest: null, nextCheckAt: 0, operationId: null, failures: 0, error: null };
+    const writes: any[] = [];
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: current }));
+    await page.route(`**/api/micro-services/${ID}/auto-deploy{,/**}`, async route => {
+      const request = route.request();
+      const suffix = new URL(request.url()).pathname.split("auto-deploy")[1];
+      if (request.method() === "PUT") {
+        const policy = request.postDataJSON();
+        writes.push(policy);
+        status = { ...status, policy, pause: null };
+      } else if (suffix === "/pause") status = { ...status, pause: "manual" };
+      else if (suffix === "/resume") status = { ...status, pause: null };
+      return route.fulfill({ json: status });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await page.getByRole("button", { name: "Automation", exact: true }).click();
+    await page.getByLabel("Registry source", { exact: true }).fill("ghcr.io/team/orders:v1.*");
+    await page.getByLabel("Interval (seconds)", { exact: true }).fill("59");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("60–3600");
+    expect(writes).toHaveLength(0);
+    await page.getByLabel("Interval (seconds)", { exact: true }).fill("60");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeEnabled();
+    expect(writes).toEqual([{ reference: "ghcr.io/team/orders:v1.*", intervalSeconds: 60 }]);
+    const pause = page.getByRole("button", { name: "Pause", exact: true });
+    await expect(pause.locator("svg")).toHaveCount(1);
+    await expect(pause).toHaveText("");
+    await pause.click();
+    await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeEnabled();
+    await page.screenshot({ path: testInfo.outputPath("deploy-automation-desktop.png"), fullPage: true });
+    await page.getByRole("button", { name: "Resume", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeEnabled();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: testInfo.outputPath("deploy-automation-mobile.png"), fullPage: true });
+    await page.getByRole("button", { name: "Disable", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeDisabled();
+    expect(writes.at(-1)).toBeNull();
+  });
+
+  test("reports API policy errors without altering the running release", async ({ page }) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: release(RELEASE_A) }));
+    await page.route(`**/api/micro-services/${ID}/auto-deploy`, route => route.fulfill({ status: 409, json: { error: { code: "stack_source_managed", message: "Use Git sync to change this policy" } } }));
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await page.getByRole("button", { name: "Automation", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Use Git sync");
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeEnabled();
+  });
+});

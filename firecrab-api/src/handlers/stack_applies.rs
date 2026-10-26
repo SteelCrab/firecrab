@@ -149,7 +149,17 @@ pub(crate) async fn admit(
     let expected = record.clone();
     let queued = status.clone();
     let services = state.service_mutations.lock().await;
+    // A tag observation can enter Deploy while preflight is reading host state.
+    // Recheck the approved inventory under the same service admission lock.
+    let templates = state.templates.clone();
+    let desired = request.stack.clone();
+    let fingerprint = request.expected_fingerprint.clone();
     let (status, fresh) = database(id, move || {
+        if firecrab_stack::fingerprint(&desired, &expected, &inventory(&store, &templates)?)
+            != fingerprint
+        {
+            return Err(crate::persistence::PersistenceError::StaleStackPlan);
+        }
         store.begin_stack_apply(
             &expected,
             &hash,

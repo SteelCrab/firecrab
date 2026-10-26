@@ -223,4 +223,4 @@ fn expect_status(
 
 #[cfg(test)]
 #[path = "registry_transfer_tests.rs"]
-mod tests;
+pub(crate) mod tests;

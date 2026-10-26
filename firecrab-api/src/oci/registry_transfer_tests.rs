@@ -9,9 +9,9 @@ use axum::{
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone)]
-struct Registry {
+pub(crate) struct Registry {
     base: String,
-    manifest: Vec<u8>,
+    pub(crate) manifest: Vec<u8>,
     blobs: HashMap<String, Vec<u8>>,
     token_requests: Arc<AtomicUsize>,
     bearer: bool,
@@ -38,14 +38,14 @@ impl Registry {
         };
         (StatusCode::UNAUTHORIZED, [("www-authenticate", challenge)]).into_response()
     }
-    fn credential(&self) -> Option<RegistryCredential> {
+    pub(crate) fn credential(&self) -> Option<RegistryCredential> {
         Some(RegistryCredential {
             registry: self.base.trim_start_matches("http://").into(),
             username: "AWS".into(),
             secret: "secret".into(),
         })
     }
-    fn reference(&self) -> ImageReference {
+    pub(crate) fn reference(&self) -> ImageReference {
         ImageReference::parse(&format!(
             "{}/team/app:v1",
             self.base.trim_start_matches("http://")
@@ -54,7 +54,7 @@ impl Registry {
     }
 }
 
-async fn fixture(bearer: bool) -> (Registry, tokio::task::JoinHandle<()>) {
+pub(crate) async fn fixture(bearer: bool) -> (Registry, tokio::task::JoinHandle<()>) {
     let config = serde_json::to_vec(&serde_json::json!({
         "architecture": if Architecture::HOST == Architecture::X86_64 { "amd64" } else { "arm64" },
         "os":"linux", "rootfs":{"type":"layers","diff_ids":[]}

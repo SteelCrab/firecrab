@@ -657,7 +657,11 @@ pub fn tick(app: &Shared) {
         .form
         .as_ref()
         .is_some_and(|form| form.title == "Deploy MicroService");
-    if state.busy
+    let auto_editing = crate::document()
+        .active_element()
+        .is_some_and(|element| element.id().starts_with("deploy-auto-"));
+    if auto_editing
+        || state.busy
         || state.form.is_some() && !deploy_form
         || !state.panel_open
         || !["vms", "services"].contains(&state.route.as_str())
@@ -714,6 +718,9 @@ pub fn tick(app: &Shared) {
             crate::advanced::services::sync(&app);
         } else {
             crate::render_detail(&app);
+        }
+        if service {
+            crate::deploy::refresh_automation(&app);
         }
         if logs {
             load_log(app);
