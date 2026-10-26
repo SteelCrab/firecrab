@@ -295,6 +295,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
+- Private Sandbox VM names follow IPAM allocations instead of expiring DHCP
+  leases. A separate DNS hosts file preserves existing VM names through private
+  resolver restart, network changes and service-record refresh. Tracked in
+  [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
 - Sandbox CLI and MCP artifact downloads reject a task response whose ID differs
   from the requested task. Artifact ownership and download URLs remain bound to
   that task and its attempt. Existing output files retain their original bytes.

@@ -6,7 +6,7 @@ acceptance. Existing shared contracts do not authorize Canvas implementation.
 
 ## Source and validation boundary
 
-The live Linux candidate is `027cccc2`. API SHA-256 is
+The earlier actual runs below use Linux candidate `027cccc2`. API SHA-256 is
 `6d149ba24e5b6de500b52b84105e2bcc6e520afc66457842cd9352c0e32d4812`.
 Helper SHA-256 is
 `8c4f1fbfc793b25889f5cfa2d814f70ff911fc2d188d781b594c33f19d527750`.
@@ -32,17 +32,29 @@ small-tmpfs and non-reaping container attempts retain their failures separately.
 The complete successful run uses UID 1001, normal disposable overlay storage,
 the required tools and Docker `--init`. Test assertions were retained.
 
-CI at `eb0b50e2` passes Rust, rustdoc and the Release Build. The macOS hosted
+CI at `eb0b50e2` passes Rust, rustdoc and the Release Build. That macOS hosted
 runner did not acquire capacity and was cancelled before code execution.
-Changed-line coverage is **67.98%** against the unchanged **80%** target.
-Behavior tests were added; coverage acceptance is pending. Follow-up Linux
+Its changed-line coverage was **67.98%** against the unchanged **80%** target.
+At `682ee479`, Rust CI passes. The official native coverage artifact hits
+**6,068/6,986** added executable Rust lines (**86.86%**). This is the native
+LCOV intersection, not the final merged Codecov result. Artifact `12669761490`
+is 1,029,412 bytes with ZIP SHA-256
+`de6202568229895b10adee0cb28a84492bc47c03d6abe19b2d6586428a23d967`.
+Final merged Codecov patch coverage is **86.80%**, above the unchanged **80%**
+target. CI run `40361397156` now has **18 successful jobs and one configured
+skip**. Its single targeted Installer retry `121840115768` passes after the
+upstream stable-kernel metadata becomes consistent. Release Build
+`40361397132` has **25 successful jobs and one configured publication skip**.
+These results apply to `682ee479`; the later private-DNS repair requires its
+own exact-head CI run.
+Follow-up Linux
 Environment tests pass **15/15** and HTTP permission/lifecycle tests pass **6/6**.
 They exercise exact resource reuse, retained Workspace deletion authority,
 cleanup checkpoints across DB reopening, service-discovery scope and failed
 readiness dependencies. Tunnel lifecycle tests pass **28/28**, CLI Sandbox tests
 pass **25/25**, and MCP tests pass **17/17**. CLI/MCP groups overlap and must not
 be summed as distinct tests. API/CLI test clippy passes with warnings denied;
-format, documentation links and diff checks pass. New coverage awaits CI.
+format, documentation links and diff checks pass.
 
 An early integration invocation selected two nonexistent Rust module filters and
 ran zero tests. Those results do not count as validation. The corrected
@@ -169,14 +181,22 @@ counts remain unverified. No listener or address was added to fabricate a contro
 
 ## Remaining gates
 
-- B creation was rejected by automatic approval review before execution. Its
-  exact project/Environment/VM allocation is awaiting the user's approval.
-  B and cross-Environment/independent-write acceptance remain open.
+- B creation was rejected by automatic approval review before execution. The
+  user then explicitly approved the exact B project, Environment and four-role
+  VM allocation on this same private QA manager. One-shot creation reached Ready
+  after 90.5 seconds. Initial seed and eight guest capabilities pass, but the
+  complete A/B verdict fails because A's internal DNS names are unavailable.
+  [The actual DNS record](sandbox-private-dns-qa-2026-10-27.md) preserves the
+  failure and read-only diagnosis. Independent writes and OpenRC tasks are on
+  hold until the repair passes a fresh actual network matrix.
 - Complete actual OpenRC argv/stdin/output/limits/cancellation and result export.
 - Complete the remaining actual results/UI and public preview acceptance.
+  [Retained-results follow-up](sandbox-results-ui-qa-2026-10-27.md) verifies
+  actual Korean/English responsive screens and three artifact byte/hash checks
+  after maintenance. A new non-code conversation and public preview remain open.
 - Live Anthropic requires a manually registered workspace API key. Public Tunnel
   checks require the user's registered connection and explicit test domain.
-- Keep PR #520 Draft while coverage and acceptance remain incomplete. Keep
+- Keep PR #520 Draft while exact-head CI and direct acceptance remain incomplete. Keep
   Canvas implementation on hold.
 
 Earlier actual evidence is retained in the
