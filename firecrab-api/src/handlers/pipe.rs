@@ -21,7 +21,10 @@ pub(super) async fn call(
 ) -> Result<Json<Snapshot>, AppError> {
     let firecrab = matches!(&operation, Operation::ManageFirecrabTunnel { .. });
     client.pipe(operation).await.map(Json).map_err(|error| {
-        tracing::warn!(%error, "pipe helper command failed");
+        tracing::warn!(request_id=%request_id.0, "pipe helper command failed");
+        if let Some(response) = unsupported_cli(&error, request_id.0) {
+            return response;
+        }
         if firecrab && let Some(response) = firecrab_error(&error, request_id.0) {
             return response;
         }
@@ -32,6 +35,25 @@ pub(super) async fn call(
             request_id.0,
         )
     })
+}
+
+/// Recognize only the fixed Clap diagnostic for an installed CLI without Pipe support.
+fn unsupported_cli(error: &NetworkError, request_id: uuid::Uuid) -> Option<AppError> {
+    use firecrab_helper_protocol::network::HelperFailure;
+    let NetworkError::Helper(HelperFailure::Internal { detail }) = error else {
+        return None;
+    };
+    let detail = detail.trim();
+    let detail = detail.strip_prefix("[ERROR] ").unwrap_or(detail);
+    if detail.lines().next()? != "error: unrecognized subcommand 'pipe'" {
+        return None;
+    }
+    Some(AppError::new(
+        StatusCode::NOT_IMPLEMENTED,
+        "pipe_cli_unsupported",
+        "The installed Firecrab CLI does not support Pipe. Update the CLI and helper together.",
+        request_id,
+    ))
 }
 
 /// Raw Pipe writes must not restart or replace a Sandbox-owned preview mapping.
@@ -121,9 +143,10 @@ fn firecrab_error(error: &NetworkError, request_id: uuid::Uuid) -> Option<AppErr
 
 /// Return the persisted manifest and live independent-unit states.
 pub async fn inspect(
+    State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
 ) -> Result<Json<Snapshot>, AppError> {
-    call(&NetworkClient::from_env(), Operation::Inspect, request_id).await
+    call(&state.network, Operation::Inspect, request_id).await
 }
 
 /// Validate manifest and replacement credentials before requesting a privileged apply.
