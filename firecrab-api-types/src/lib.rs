@@ -21,6 +21,8 @@ mod sandbox_tunnel;
 pub use sandbox_tunnel::*;
 mod sandbox_control;
 pub use sandbox_control::*;
+mod sandbox_canvas;
+pub use sandbox_canvas::*;
 mod block_storage;
 mod sandbox_environment;
 mod sandbox_guest;
