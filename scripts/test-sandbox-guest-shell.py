@@ -43,7 +43,11 @@ def main():
     sync_script = re.search(r'const SYNC_FILESYSTEMS: &str = r#"(.*?)"#;', source, re.S).group(1)
     synced = subprocess.run(["/bin/sh", "-s"], input=sync_script.encode(), capture_output=True, timeout=15)
     assert synced.returncode == 0 and synced.stdout == b"firecrab_sync_v1\n", synced
-    failed_sync = subprocess.run(["/bin/sh", "-s"], input=("sync() { return 12; }\n" + sync_script).encode(),
+    # Fault both implementations. A shell function cannot intercept the absolute
+    # BusyBox executable selected by prepared guests.
+    failed_sync_script = sync_script.replace("/etc/firecrab/busybox sync\n", "(exit 12)\n").replace("; then sync\n", "; then (exit 12)\n")
+    assert failed_sync_script != sync_script
+    failed_sync = subprocess.run(["/bin/sh", "-s"], input=failed_sync_script.encode(),
                                  capture_output=True, timeout=15)
     assert failed_sync.returncode != 0 and b"firecrab_sync_v1" not in failed_sync.stdout, failed_sync
     capability_script = re.search(r'const CAPABILITIES: &str = r#"(.*?)"#;', source, re.S).group(1)
