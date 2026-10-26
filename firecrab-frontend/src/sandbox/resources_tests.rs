@@ -97,8 +97,10 @@ fn environment_language_changes_do_not_change_the_submitted_spec() {
         "debug backend 8080\nbackend db 5432".into(),
     );
     e.notes.insert("sb-resource-ttl".into(), "900".into());
-    let mut a = App::default();
-    a.locale = "en".into();
+    let mut a = App {
+        locale: "en".into(),
+        ..App::default()
+    };
     let en = environment_spec(&a, &e).unwrap();
     a.locale = "ko".into();
     assert_eq!(environment_spec(&a, &e).unwrap(), en);
