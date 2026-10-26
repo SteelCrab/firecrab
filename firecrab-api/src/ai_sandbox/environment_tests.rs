@@ -142,6 +142,344 @@ fn reserved() -> SandboxEnvironment {
     reservation(Uuid::new_v4(), Uuid::new_v4(), Caller::default(), spec()).unwrap()
 }
 
+async fn lifecycle_fixture() -> (tempfile::TempDir, AppState, SandboxEnvironment) {
+    let dir = tempfile::tempdir().unwrap();
+    let registry =
+        crate::templates::TemplateRegistry::from_specs(dir.path(), std::iter::empty()).unwrap();
+    let mut state = AppState::with_db_file(registry, dir.path().join("state.db"))
+        .await
+        .unwrap();
+    state.network = crate::network::NetworkClient::with_socket_path(dir.path().join("helper.sock"));
+    let mut environment = reserved();
+    state
+        .store
+        .reserve_sandbox_environment(&environment)
+        .unwrap();
+    state
+        .store
+        .insert_micro_network(&MicroNetworkResponse {
+            dns_mode: environment.dns_mode,
+            id: environment.network_id,
+            name: name(&environment, "network"),
+            subnet_cidr: environment.spec.subnet_cidr.clone(),
+            gateway: "10.240.1.1".into(),
+            internet_enabled: false,
+            uplink: None,
+            ipv6_cidr: None,
+            ipv6_gateway: None,
+            ipv6_address_mode: None,
+            ipv6_egress: None,
+        })
+        .unwrap();
+    for index in 0..environment.roles.len() {
+        let reserved = &environment.roles[index];
+        let role = &environment.spec.roles[index];
+        let mut record =
+            vms::test_support::record(&name(&environment, &reserved.role), reserved.vm_id);
+        record.template = role.template.name.clone();
+        record.template_version = role.template.version.clone();
+        record.template_kernel_sha256 = role.template.kernel_sha256.clone();
+        record.template_rootfs_sha256 = role.template.rootfs_sha256.clone();
+        record.template_boot_args_sha256 = role.template.boot_args_sha256.clone();
+        record.cpu = role.cpu;
+        record.ram = role.memory_mib;
+        record.disk_gb = role.disk_gb;
+        record.micro_network_id = environment.network_id;
+        record.security_group_id = Some(reserved.security_group_id);
+        record.egress_policy = EgressPolicy::Isolated;
+        state.store.insert(&record).unwrap();
+        state.vms.lock().unwrap().insert(record.id, record.clone());
+        let lease = state
+            .store
+            .allocate_lease(
+                record.id,
+                SubnetSpec::parse(environment.network_id, &environment.spec.subnet_cidr).unwrap(),
+            )
+            .unwrap();
+        environment.roles[index].ipv4 = Some(lease.ipv4.to_string());
+    }
+    state.store.save_sandbox_environment(&environment).unwrap();
+    (dir, state, environment)
+}
+
+// This protocol peer records requests and never performs privileged host operations.
+async fn helper(
+    state: &AppState,
+    fail_remove: bool,
+) -> (
+    tokio::task::JoinHandle<()>,
+    Arc<std::sync::Mutex<Vec<firecrab_helper_protocol::network::NetworkRequest>>>,
+) {
+    use firecrab_helper_protocol::{
+        framing::{read_frame, write_frame},
+        network::{NetworkRequest, NetworkRequestEnvelope, NetworkResponseEnvelope},
+    };
+    let socket = state.sandbox.database.parent().unwrap().join("helper.sock");
+    let listener = tokio::net::UnixListener::bind(socket).unwrap();
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = requests.clone();
+    let worker = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let envelope: NetworkRequestEnvelope = read_frame(&mut stream).await.unwrap();
+            assert!(
+                matches!(
+                    envelope.request,
+                    NetworkRequest::CheckPrivateDnsSupport
+                        | NetworkRequest::RemoveVmPolicy { .. }
+                        | NetworkRequest::DeleteTap { .. }
+                        | NetworkRequest::RemoveMicroNetworkBridge { .. }
+                        | NetworkRequest::EnsureFirewall { .. }
+                        | NetworkRequest::SyncDhcpLeases { .. }
+                ),
+                "unexpected host operation: {:?}",
+                envelope.request
+            );
+            let rejected = fail_remove
+                && matches!(
+                    envelope.request,
+                    NetworkRequest::RemoveMicroNetworkBridge { .. }
+                );
+            seen.lock().unwrap().push(envelope.request);
+            if rejected {
+                drop(stream);
+                continue;
+            }
+            write_frame(
+                &mut stream,
+                &NetworkResponseEnvelope {
+                    version: firecrab_helper_protocol::PROTOCOL_VERSION,
+                    request_id: envelope.request_id,
+                    result: Ok(()),
+                    pipe: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+    });
+    (worker, requests)
+}
+
+#[tokio::test]
+async fn provisioning_reuses_reserved_vms_and_installs_exact_policy_before_start() {
+    let (_dir, state, mut environment) = lifecycle_fixture().await;
+    let (worker, requests) = helper(&state, false).await;
+    let before = state.vms.lock().unwrap().clone();
+    provision(&state, &mut environment).await.unwrap();
+    for role in &environment.roles {
+        let group = state
+            .store
+            .security_group(role.security_group_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(group.rules, policy(&environment, &role.role).unwrap());
+        assert_eq!(
+            state
+                .store
+                .active_lease(role.vm_id)
+                .unwrap()
+                .unwrap()
+                .ipv4
+                .to_string(),
+            role.ipv4.as_deref().unwrap()
+        );
+    }
+    provision(&state, &mut environment).await.unwrap();
+    assert_eq!(*state.vms.lock().unwrap(), before);
+    assert_eq!(requests.lock().unwrap().len(), 2);
+    let stopped = set_running(&state, environment.id, false).await.unwrap();
+    assert_eq!(stopped.state, SandboxEnvironmentState::Stopped);
+    assert_eq!(stopped.generation, environment.generation);
+    assert!(
+        stopped
+            .roles
+            .iter()
+            .all(|r| r.services.iter().all(|s| !s.ready))
+    );
+    let exported = export(&state, environment.id).await.unwrap();
+    assert!(exported.task_ids.is_empty());
+    assert_eq!(exported.environment.generation, environment.generation);
+    let deleted = cleanup(&state, environment.id, false).await.unwrap();
+    assert_eq!(deleted.state, SandboxEnvironmentState::Deleted);
+    assert!(state.vms.lock().unwrap().is_empty());
+    for role in &deleted.roles {
+        assert!(state.store.active_lease(role.vm_id).unwrap().is_none());
+        assert!(
+            state
+                .store
+                .security_group(role.security_group_id)
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert!(
+        state
+            .store
+            .micro_network(environment.network_id)
+            .unwrap()
+            .is_none()
+    );
+    worker.abort();
+}
+
+#[tokio::test]
+async fn partial_network_cleanup_keeps_checkpoint_then_restart_cleanup_finishes_owned_resources() {
+    let (dir, state, mut environment) = lifecycle_fixture().await;
+    let (worker, _) = helper(&state, true).await;
+    provision(&state, &mut environment).await.unwrap();
+    let unrelated = vms::test_support::record("unrelated", Uuid::new_v4());
+    state.store.insert(&unrelated).unwrap();
+    state
+        .vms
+        .lock()
+        .unwrap()
+        .insert(unrelated.id, unrelated.clone());
+    assert!(cleanup(&state, environment.id, false).await.is_err());
+    let held = load(&state, environment.id).unwrap();
+    assert_eq!(held.state, SandboxEnvironmentState::CleanupPending);
+    assert!(held.exported_at.is_some());
+    assert!(
+        state
+            .store
+            .micro_network(environment.network_id)
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(vm(&state, unrelated.id), Some(unrelated.clone()));
+    worker.abort();
+    assert!(worker.await.unwrap_err().is_cancelled());
+    std::fs::remove_file(state.sandbox.database.parent().unwrap().join("helper.sock")).unwrap();
+    drop(state);
+    let registry =
+        crate::templates::TemplateRegistry::from_specs(dir.path(), std::iter::empty()).unwrap();
+    let mut state = AppState::with_db_file(registry, dir.path().join("state.db"))
+        .await
+        .unwrap();
+    state.network = crate::network::NetworkClient::with_socket_path(dir.path().join("helper.sock"));
+    let (worker, _) = helper(&state, false).await;
+    reconcile_cleanup(state.clone()).await;
+    assert_eq!(
+        load(&state, environment.id).unwrap().state,
+        SandboxEnvironmentState::Deleted
+    );
+    assert_eq!(vm(&state, unrelated.id), Some(unrelated));
+    worker.abort();
+}
+
+#[tokio::test]
+async fn discovery_exposes_only_allowed_peers_and_rejects_changed_generation_or_unsafe_addresses() {
+    let (_dir, state, mut environment) = lifecycle_fixture().await;
+    for index in 0..environment.roles.len() {
+        environment.roles[index].services = environment.spec.roles[index]
+            .services
+            .iter()
+            .map(|service| SandboxDiscoveredService {
+                name: service.name.clone(),
+                port: service.port,
+                address: environment.roles[index].ipv4.clone().unwrap(),
+                ready: true,
+            })
+            .collect();
+    }
+    state.store.save_sandbox_environment(&environment).unwrap();
+    let mut reference = SandboxEnvironmentRef {
+        id: environment.id,
+        generation: environment.generation,
+        role: "debug".into(),
+    };
+    let debug = service_environment(&state, &reference).unwrap();
+    assert_eq!(debug.len(), 2);
+    assert_eq!(debug["FIRECRAB_SERVICE_BACKEND_HTTP_PORT"], "8080");
+    assert_eq!(
+        debug["FIRECRAB_SERVICE_BACKEND_HTTP_HOST"],
+        environment.roles[2].ipv4.as_deref().unwrap()
+    );
+    assert!(!debug.keys().any(|key| key.contains("DB")));
+    reference.role = "backend".into();
+    let backend = service_environment(&state, &reference).unwrap();
+    assert_eq!(backend.len(), 2);
+    assert_eq!(backend["FIRECRAB_SERVICE_DB_POSTGRES_PORT"], "5432");
+    reference.generation = Uuid::new_v4();
+    assert!(
+        service_environment(&state, &reference)
+            .unwrap_err()
+            .contains("generation")
+    );
+    reference.generation = environment.generation;
+    environment.roles[3].services[0].address = "unexpected.example.invalid".into();
+    state.store.save_sandbox_environment(&environment).unwrap();
+    assert!(
+        service_environment(&state, &reference)
+            .unwrap_err()
+            .contains("address")
+    );
+}
+
+#[tokio::test]
+async fn readiness_reconciliation_does_not_start_dependents_when_authenticated_agent_probe_fails() {
+    let (_dir, state, mut environment) = lifecycle_fixture().await;
+    let (worker, _) = helper(&state, false).await;
+    provision(&state, &mut environment).await.unwrap();
+    // Only the leaf is marked running. Its missing SSH material must keep every dependent stopped.
+    let leaf = environment
+        .roles
+        .iter()
+        .position(|r| r.role == "db")
+        .unwrap();
+    let mut record = vm(&state, environment.roles[leaf].vm_id).unwrap();
+    record.state = VmState::Running;
+    record.last_runtime_id = Some(Uuid::new_v4());
+    state.vms.lock().unwrap().insert(record.id, record.clone());
+    let observed = reconcile(&state, environment.id).await.unwrap();
+    assert_eq!(observed.state, SandboxEnvironmentState::Provisioning);
+    assert_eq!(observed.roles[leaf].agent, SandboxReadiness::Failed);
+    assert_eq!(observed.roles[leaf].network, SandboxReadiness::Ready);
+    assert_eq!(
+        observed.roles[leaf].runtime.unwrap().runtime_id,
+        record.last_runtime_id.unwrap()
+    );
+    for role in observed.roles.iter().filter(|r| r.role != "db") {
+        assert_eq!(role.agent, SandboxReadiness::Pending);
+        assert_eq!(vm(&state, role.vm_id).unwrap().state, VmState::Created);
+    }
+    assert!(binding(&state, environment.id, Some("debug")).is_err());
+    worker.abort();
+}
+
+#[tokio::test]
+async fn provisioning_refuses_changed_network_vm_and_group_ownership() {
+    let (_dir, state, mut environment) = lifecycle_fixture().await;
+    let (worker, _) = helper(&state, false).await;
+    provision(&state, &mut environment).await.unwrap();
+    let id = environment.roles[0].vm_id;
+    state.vms.lock().unwrap().get_mut(&id).unwrap().cpu += 1;
+    let error = reconcile(&state, environment.id).await.unwrap();
+    assert_eq!(error.state, SandboxEnvironmentState::Failed);
+    assert!(error.error.unwrap().contains("ownership"));
+    assert_eq!(
+        state.vms.lock().unwrap().get(&id).unwrap().state,
+        VmState::Created
+    );
+    let group_id = environment.roles[0].security_group_id;
+    let mut group = state.store.security_group(group_id).unwrap().unwrap();
+    group.name = "borrowed-group".into();
+    state
+        .store
+        .rename_security_group(group_id, &group.name)
+        .unwrap();
+    assert!(
+        provision(&state, &mut environment)
+            .await
+            .unwrap_err()
+            .contains("group ownership")
+    );
+    assert_eq!(
+        state.store.security_group(group_id).unwrap().unwrap(),
+        group
+    );
+    worker.abort();
+}
+
 #[test]
 fn dependency_order_is_explicit_and_cycles_are_rejected() {
     let mut manifest = spec();
@@ -155,6 +493,72 @@ fn dependency_order_is_explicit_and_cycles_are_rejected() {
     );
     manifest.roles[3].depends_on = vec!["debug".into()];
     assert!(validate(&manifest).is_err());
+}
+
+#[test]
+fn malformed_manifests_and_mutable_container_sources_fail_before_resource_reservation() {
+    use serde_json::json;
+    for (pointer, value, reason) in [
+        ("/version", json!(2), "version"),
+        ("/roles", json!([]), "1–8 roles"),
+        ("/subnetCidr", json!("10.240.1.0/30"), "14 guest addresses"),
+        ("/roles/0/name", json!("Debug;command"), "role name"),
+        ("/roles/0/memoryMib", json!(257), "memory"),
+        (
+            "/roles/0/template/initrdSha256",
+            json!("A".repeat(64)),
+            "pinned image",
+        ),
+        (
+            "/roles/0/services",
+            json!([{"name":"http","port":0}]),
+            "declared service",
+        ),
+        (
+            "/roles/0/services",
+            json!([{"name":"http","port":80},{"name":"http","port":81}]),
+            "declared service",
+        ),
+        ("/roles/0/dependsOn", json!(["missing"]), "dependency"),
+        (
+            "/roles/0/dependsOn",
+            json!(["backend", "backend"]),
+            "dependency",
+        ),
+        ("/roles/1/name", json!("debug"), "unique"),
+        ("/retention/ttlSeconds", json!(0), "TTL"),
+    ] {
+        let mut manifest = serde_json::to_value(spec()).unwrap();
+        *manifest.pointer_mut(pointer).unwrap() = value;
+        let manifest = serde_json::from_value(manifest).unwrap();
+        let error = validate(&manifest).unwrap_err();
+        assert!(error.contains(reason), "{pointer}: {error}");
+    }
+    for (runtime, image) in [
+        (
+            SandboxContainerRuntime::Docker,
+            format!("-option@sha256:{}", "a".repeat(64)),
+        ),
+        (
+            SandboxContainerRuntime::Docker,
+            format!("bad;name@sha256:{}", "a".repeat(64)),
+        ),
+        (
+            SandboxContainerRuntime::Docker,
+            format!("safe@sha256:{}", "A".repeat(64)),
+        ),
+        (SandboxContainerRuntime::Nspawn, "mutable.tar".into()),
+        (SandboxContainerRuntime::Nspawn, "sha256:short".into()),
+    ] {
+        assert!(validate_mode(&SandboxExecutionMode::AgentSandbox { runtime, image }).is_err());
+    }
+    assert!(
+        validate_mode(&SandboxExecutionMode::AgentSandbox {
+            runtime: SandboxContainerRuntime::Nspawn,
+            image: format!("sha256:{}", "a".repeat(64)),
+        })
+        .is_ok()
+    );
 }
 
 #[test]
