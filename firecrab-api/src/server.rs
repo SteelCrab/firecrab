@@ -777,6 +777,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
 
     // Model verification and explicit guest recovery need longer bounded HTTP waits.
     let sandbox = Router::new()
+        .route(
+            "/api/ai-sandbox/tunnels",
+            get(handlers::sandbox_tunnels::inventory),
+        )
+        .route(
+            "/api/ai-sandbox/tunnels/{id}/retarget",
+            post(handlers::sandbox_tunnels::retarget),
+        )
         .merge(handlers::sandbox_environments::routes())
         .merge(handlers::sandbox_guest::routes())
         .route(

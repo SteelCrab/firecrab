@@ -61,6 +61,15 @@ fn authorize(
     binding: &SandboxTunnelBinding,
     write: bool,
 ) -> Result<(), AppError> {
+    if !write
+        && matches!(
+            binding.state,
+            SandboxTunnelState::Deleted | SandboxTunnelState::Superseded
+        )
+        && caller.operator().is_ok()
+    {
+        return Ok(());
+    }
     if write {
         caller.operator().map_err(|_| denied(id))?;
     }
@@ -348,10 +357,23 @@ fn observe(binding: &mut SandboxTunnelBinding, snapshot: &Snapshot) {
     } else {
         SandboxTunnelState::Connecting
     };
-    binding.error_code = current
-        .error
-        .as_ref()
-        .map(|_| "sandbox_preview_updater_pending".into());
+    binding.error_code = match current.error.as_deref() {
+        Some("The connection token is invalid or revoked") => {
+            binding.state = SandboxTunnelState::NeedsReconciliation;
+            Some("sandbox_preview_token_expired_or_revoked".into())
+        }
+        Some("The Firecrab address is suspended; check the dashboard") => {
+            binding.state = SandboxTunnelState::NeedsReconciliation;
+            Some("sandbox_preview_address_suspended".into())
+        }
+        Some("This subdomain belongs to another host") => {
+            binding.state = SandboxTunnelState::NeedsReconciliation;
+            Some("sandbox_preview_connection_claim_conflict".into())
+        }
+        Some(_) => Some("sandbox_preview_updater_pending".into()),
+        None if !binding.app_ready => Some("sandbox_preview_app_not_ready".into()),
+        None => None,
+    };
 }
 
 /// Available saved addresses contain no registration tokens.
@@ -395,6 +417,19 @@ pub async fn list(
             .collect(),
     ))
 }
+pub async fn inventory(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    caller: Caller,
+) -> Result<Json<Vec<SandboxTunnelBinding>>, AppError> {
+    caller.operator().map_err(|_| denied(id))?;
+    Ok(Json(
+        state
+            .store
+            .sandbox_tunnel_inventory()
+            .map_err(store_error(id))?,
+    ))
+}
 pub async fn get(
     State(state): State<AppState>,
     Path(key): Path<Uuid>,
@@ -415,7 +450,10 @@ pub async fn save(
     caller
         .project(&state, project, SandboxPermission::Execute)
         .map_err(|_| denied(id))?;
-    if key.is_nil() || !firecrab_tunnel::subdomain(&spec.subdomain) {
+    if key.is_nil()
+        || !firecrab_tunnel::subdomain(&spec.subdomain)
+        || serde_json::to_vec(&spec).map_or(true, |v| v.len() > 4096)
+    {
         return Err(failure(id, "sandbox_preview_invalid_target"));
     }
     let _lock = MUTATIONS.lock().await;
@@ -427,7 +465,9 @@ pub async fn save(
                 || old.spec.subdomain != spec.subdomain
                 || matches!(
                     old.state,
-                    SandboxTunnelState::Deleted | SandboxTunnelState::Deleting
+                    SandboxTunnelState::Deleted
+                        | SandboxTunnelState::Deleting
+                        | SandboxTunnelState::Superseded
                 )
             {
                 return Err(failure(id, "sandbox_preview_identity_conflict"));
@@ -489,6 +529,8 @@ pub async fn save(
                 created_at: ai_sandbox::now(),
                 updated_at: ai_sandbox::now(),
                 error_code: None,
+                previous_binding_id: None,
+                successor_binding_id: None,
             }
         };
     if address(&inspect(&state, id).await?, &binding).is_none() {
@@ -555,7 +597,7 @@ pub async fn publish(
     let mut binding = load(&state, id, caller, key, true)?;
     if matches!(
         binding.state,
-        SandboxTunnelState::Deleted | SandboxTunnelState::Deleting
+        SandboxTunnelState::Deleted | SandboxTunnelState::Deleting | SandboxTunnelState::Superseded
     ) {
         return Err(failure(id, "sandbox_preview_deleted"));
     }
@@ -571,14 +613,17 @@ pub async fn reconcile(
 ) -> Result<Json<SandboxTunnelBinding>, AppError> {
     let _lock = MUTATIONS.lock().await;
     let mut binding = load(&state, id, caller, key, true)?;
-    if binding.state == SandboxTunnelState::Deleted {
+    if matches!(
+        binding.state,
+        SandboxTunnelState::Deleted | SandboxTunnelState::Superseded
+    ) {
         return Ok(Json(binding));
     }
     let snapshot = inspect(&state, id).await?;
     let mut runtime_changed = false;
     if !matches!(
         binding.state,
-        SandboxTunnelState::Deleted | SandboxTunnelState::Deleting
+        SandboxTunnelState::Deleted | SandboxTunnelState::Deleting | SandboxTunnelState::Superseded
     ) {
         match target_addresses(&state, id, &binding, &snapshot) {
             Ok((_, addresses)) => binding.app_ready = ready(&addresses).await,
@@ -609,7 +654,7 @@ pub async fn stop(
     let mut binding = load(&state, id, caller, key, true)?;
     if matches!(
         binding.state,
-        SandboxTunnelState::Deleted | SandboxTunnelState::Deleting
+        SandboxTunnelState::Deleted | SandboxTunnelState::Deleting | SandboxTunnelState::Superseded
     ) {
         return Err(failure(id, "sandbox_preview_deleted"));
     }
@@ -658,6 +703,9 @@ pub async fn delete(
 ) -> Result<Json<SandboxTunnelBinding>, AppError> {
     let _lock = MUTATIONS.lock().await;
     let mut binding = load(&state, id, caller, key, true)?;
+    if binding.state == SandboxTunnelState::Superseded {
+        return Err(failure(id, "sandbox_preview_superseded"));
+    }
     if binding.state == SandboxTunnelState::Deleted {
         return Ok(Json(binding));
     }
@@ -690,6 +738,113 @@ pub async fn delete(
     }
     persist(&state, id, &mut binding)?;
     Ok(Json(binding))
+}
+/// Explicitly move the same fixed URL to a new ready task/runtime after restart.
+pub async fn retarget(
+    State(state): State<AppState>,
+    Path(key): Path<Uuid>,
+    Extension(id): Extension<RequestId>,
+    caller: Caller,
+    ValidatedJson(request): ValidatedJson<SandboxTunnelRetarget>,
+) -> Result<Json<SandboxTunnelBinding>, AppError> {
+    let _lock = MUTATIONS.lock().await;
+    caller.operator().map_err(|_| denied(id))?;
+    let mut previous = load(&state, id, caller, key, true)?;
+    if let Some(existing) = state
+        .store
+        .sandbox_tunnel(request.id)
+        .map_err(store_error(id))?
+    {
+        authorize(&state, id, caller, &existing, true)?;
+        if existing.previous_binding_id == Some(key)
+            && existing.task_id == request.task_id
+            && existing.spec.target == request.target
+        {
+            return Ok(Json(existing));
+        }
+        return Err(failure(id, "sandbox_preview_identity_conflict"));
+    }
+    if serde_json::to_vec(&request).map_or(true, |v| v.len() > 4096)
+        || request.id.is_nil()
+        || request.id == key
+        || request.task_id == previous.task_id
+        || matches!(
+            previous.state,
+            SandboxTunnelState::Deleted
+                | SandboxTunnelState::Deleting
+                | SandboxTunnelState::Superseded
+        )
+    {
+        return Err(failure(id, "sandbox_preview_identity_conflict"));
+    }
+    let snapshot = inspect(&state, id).await?;
+    require_applied(&snapshot, &previous, id)?;
+    let task = state
+        .store
+        .sandbox_task(request.task_id)
+        .map_err(store_error(id))?
+        .ok_or_else(|| AppError::not_found(id.0))?;
+    caller
+        .task(&state, &task, SandboxPermission::Execute)
+        .map_err(|_| denied(id))?;
+    if task.task.project_id != previous.project_id {
+        return Err(failure(id, "sandbox_preview_identity_conflict"));
+    }
+    let runtime = task
+        .task
+        .runtime
+        .ok_or_else(|| failure(id, "sandbox_preview_runtime_missing"))?;
+    let _runtime = state.lock_vm(runtime.vm_id).await;
+    let now = ai_sandbox::now();
+    let mut next = SandboxTunnelBinding {
+        id: request.id,
+        project_id: previous.project_id,
+        task_id: task.task.id,
+        attempt_id: task.task.attempt_id,
+        runtime,
+        owner: task.caller.principal,
+        spec: SandboxTunnelSpec {
+            task_id: task.task.id,
+            subdomain: previous.spec.subdomain.clone(),
+            target: request.target,
+        },
+        state: SandboxTunnelState::Waiting,
+        app_ready: false,
+        connector_id: None,
+        applied_target: None,
+        public_url: previous.public_url.clone(),
+        helper_connected: false,
+        public_https: SandboxTunnelVerification::Unverified,
+        web_socket_handshake: SandboxTunnelVerification::Unverified,
+        public_shutdown: SandboxTunnelVerification::Unverified,
+        remote_retirement: SandboxTunnelRetirement::NotRequested,
+        local_removed: false,
+        created_at: now,
+        updated_at: now,
+        error_code: None,
+        previous_binding_id: Some(key),
+        successor_binding_id: None,
+    };
+    let (_, addresses) = target_addresses(&state, id, &next, &snapshot)?;
+    if !ready(&addresses).await {
+        return Err(failure(id, "sandbox_preview_app_not_ready"));
+    }
+    next.app_ready = true;
+    previous.state = SandboxTunnelState::Superseded;
+    previous.successor_binding_id = Some(next.id);
+    previous.helper_connected = false;
+    previous.updated_at = now.max(previous.updated_at.saturating_add(1));
+    state
+        .store
+        .supersede_sandbox_tunnel(&previous, &next)
+        .map_err(store_error(id))?;
+    drop(_runtime);
+    if publish_binding(&state, id, &mut next).await.is_err() {
+        next.state = SandboxTunnelState::NeedsReconciliation;
+        next.error_code = Some("sandbox_preview_retarget_pending".into());
+        persist(&state, id, &mut next)?;
+    }
+    Ok(Json(next))
 }
 
 /// Verify actual TLS HTTP content or the WebSocket handshake. No fixture sets these flags.
@@ -729,12 +884,21 @@ pub async fn verify(
         .build()
         .map_err(|_| AppError::internal(id.0))?;
     let mut check = client.get(url);
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let web_socket_key = STANDARD.encode(Uuid::new_v4().as_bytes());
+    let web_socket_accept = STANDARD.encode(
+        ring::digest::digest(
+            &ring::digest::SHA1_FOR_LEGACY_USE_ONLY,
+            format!("{web_socket_key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11").as_bytes(),
+        )
+        .as_ref(),
+    );
     if request.web_socket {
         check = check
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
-            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==");
+            .header("Sec-WebSocket-Key", web_socket_key);
     } else if request
         .body_sha256
         .as_ref()
@@ -749,7 +913,20 @@ pub async fn verify(
                 && response
                     .headers()
                     .get("sec-websocket-accept")
-                    .is_some_and(|h| h == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="))
+                    .is_some_and(|h| h == web_socket_accept.as_str())
+                && response
+                    .headers()
+                    .get("upgrade")
+                    .and_then(|h| h.to_str().ok())
+                    .is_some_and(|h| h.eq_ignore_ascii_case("websocket"))
+                && response
+                    .headers()
+                    .get("connection")
+                    .and_then(|h| h.to_str().ok())
+                    .is_some_and(|h| {
+                        h.split(',')
+                            .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+                    }))
             .then_some(());
         }
         if !response.status().is_success() {

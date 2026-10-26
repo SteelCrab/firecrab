@@ -48,6 +48,8 @@ pub enum SandboxTunnelState {
     Stopped,
     Deleting,
     Deleted,
+    /// An explicit successor owns the saved address; this record can no longer control it.
+    Superseded,
     NeedsReconciliation,
 }
 
@@ -101,6 +103,19 @@ pub struct SandboxTunnelBinding {
     pub created_at: u64,
     pub updated_at: u64,
     pub error_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_binding_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub successor_binding_id: Option<Uuid>,
+}
+
+/// New client identity and current task/runtime; the original attempt never changes.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxTunnelRetarget {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub target: SandboxTunnelTarget,
 }
 
 /// Explicit public checks against the saved fixed URL; redirects are never followed.

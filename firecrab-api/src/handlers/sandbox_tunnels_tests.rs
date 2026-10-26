@@ -41,6 +41,8 @@ fn binding() -> SandboxTunnelBinding {
         created_at: 1,
         updated_at: 1,
         error_code: None,
+        previous_binding_id: None,
+        successor_binding_id: None,
     }
 }
 fn snapshot(binding: &SandboxTunnelBinding) -> Snapshot {
@@ -92,6 +94,29 @@ fn helper_connection_does_not_fabricate_public_or_websocket_evidence() {
         binding.public_shutdown,
         SandboxTunnelVerification::Unverified
     );
+}
+#[test]
+fn expired_connections_and_cross_host_claims_require_explicit_operator_repair() {
+    for (message, code) in [
+        (
+            "The connection token is invalid or revoked",
+            "sandbox_preview_token_expired_or_revoked",
+        ),
+        (
+            "This subdomain belongs to another host",
+            "sandbox_preview_connection_claim_conflict",
+        ),
+    ] {
+        let mut binding = binding();
+        let mut snapshot = snapshot(&binding);
+        snapshot.firecrab_tunnels[0].connected = false;
+        snapshot.firecrab_tunnels[0].error = Some(message.into());
+        observe(&mut binding, &snapshot);
+        assert_eq!(binding.state, SandboxTunnelState::NeedsReconciliation);
+        assert_eq!(binding.error_code.as_deref(), Some(code));
+        assert!(!binding.helper_connected);
+        assert_eq!(binding.public_https, SandboxTunnelVerification::Unverified);
+    }
 }
 
 #[test]
@@ -355,4 +380,132 @@ async fn active_preview_prevents_project_and_result_cleanup() {
         state.store.sandbox_tunnel(binding.id).unwrap().unwrap(),
         binding
     );
+}
+#[test]
+fn successor_claim_transfer_is_atomic_and_never_rewrites_original_attempt_or_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::persistence::Store::open(&dir.path().join("state.db")).unwrap();
+    let original = binding();
+    store.save_sandbox_tunnel(&original).unwrap();
+    let mut old = original.clone();
+    let mut next = original.clone();
+    next.id = Uuid::new_v4();
+    next.task_id = Uuid::new_v4();
+    next.spec.task_id = next.task_id;
+    next.attempt_id = Uuid::new_v4();
+    next.runtime.runtime_id = Uuid::new_v4();
+    next.previous_binding_id = Some(old.id);
+    old.state = SandboxTunnelState::Superseded;
+    old.successor_binding_id = Some(next.id);
+    old.helper_connected = false;
+    let mut collision = next.clone();
+    collision.spec.subdomain = "unrelated-peer".into();
+    collision.project_id = Uuid::new_v4();
+    collision.previous_binding_id = None;
+    store.save_sandbox_tunnel(&collision).unwrap();
+    assert!(store.supersede_sandbox_tunnel(&old, &next).is_err());
+    assert_eq!(
+        store.sandbox_tunnel_claim(&old.spec.subdomain).unwrap(),
+        Some(original.id)
+    );
+    assert_eq!(
+        store.sandbox_tunnel(old.id).unwrap().unwrap().state,
+        original.state
+    );
+    next.id = Uuid::new_v4();
+    old.successor_binding_id = Some(next.id);
+    store.supersede_sandbox_tunnel(&old, &next).unwrap();
+    assert_eq!(
+        store.sandbox_tunnel_claim(&old.spec.subdomain).unwrap(),
+        Some(next.id)
+    );
+    let saved = store.sandbox_tunnel(old.id).unwrap().unwrap();
+    assert_eq!(saved.runtime, original.runtime);
+    assert_eq!(saved.attempt_id, original.attempt_id);
+    assert_eq!(saved.task_id, original.task_id);
+    assert_eq!(saved.state, SandboxTunnelState::Superseded);
+    assert!(store.save_sandbox_tunnel(&original).is_err());
+    let mut deleted = next.clone();
+    deleted.state = SandboxTunnelState::Deleted;
+    store.save_sandbox_tunnel(&deleted).unwrap();
+    assert!(
+        !store
+            .sandbox_project_has_live_tunnels(original.project_id)
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn only_operator_inventory_retains_retirement_evidence_after_project_deletion() {
+    use axum::{
+        body::{Body, to_bytes},
+        extract::ConnectInfo,
+        http::{Method, Request},
+    };
+    use tower::ServiceExt;
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path()).await;
+    let mut binding = binding();
+    task(&state, &binding);
+    binding.state = SandboxTunnelState::Deleted;
+    binding.local_removed = true;
+    binding.remote_retirement = SandboxTunnelRetirement::OperatorRequired;
+    state.store.save_sandbox_tunnel(&binding).unwrap();
+    state
+        .store
+        .delete_sandbox_project(binding.project_id)
+        .unwrap();
+    assert!(
+        !state
+            .store
+            .sandbox_project_has_live_tunnels(binding.project_id)
+            .unwrap()
+    );
+    let app = crate::server::build_router(
+        state.clone(),
+        &crate::server::HttpConfig {
+            bind_addr: "127.0.0.1:5523".parse().unwrap(),
+            allowed_origins: vec![],
+            max_concurrent_requests: 8,
+            request_timeout: Duration::from_secs(10),
+            static_root: None,
+        },
+    )
+    .layer(Extension(crate::ai_sandbox::access::LocalOperator));
+    for path in [
+        "/api/ai-sandbox/tunnels".into(),
+        format!("/api/ai-sandbox/tunnels/{}", binding.id),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&path)
+                    .header("host", "127.0.0.1:5523")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 65_536).await.unwrap();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(body.contains("operator_required"));
+        assert!(body.contains("unverified"));
+        let mut request = Request::builder()
+            .method(Method::GET)
+            .uri(path)
+            .header("host", "127.0.0.1:5523")
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(crate::tls::AuthenticatedHost {
+                host_id: Uuid::new_v4(),
+            }));
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
 }

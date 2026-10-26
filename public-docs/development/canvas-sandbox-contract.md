@@ -78,6 +78,18 @@ deletion and browser disconnect.
 Tunnel stop retains its saved token and fixed URL. Local deletion does not
 prove remote token/address retirement or public shutdown. The binding reports
 operator actions and keeps public checks unverified until actual checks run.
+The operator-only `GET /api/ai-sandbox/tunnels` inventory retains those warnings
+after project deletion. Ordinary project grants cannot access the inventory.
+
+Runtime restart never changes an admitted attempt. Start a new authorized task
+on the current Environment/runtime, then explicitly call
+`POST /api/ai-sandbox/tunnels/{old}/retarget` with
+`{id: newBindingId, taskId: newTaskId, target}`. The new app must pass readiness.
+The saved subdomain claim transfers atomically to the successor binding. Pipe
+reuses its saved token and fixed URL. The old record becomes `superseded`; it
+cannot stop, delete, publish or reconcile the successor. Inspect the new binding
+after uncertainty and reuse the identical new identity, never another task or
+binding ID. No registration, OAuth flow or pre-created Quick Tunnel is required.
 
 Accept the foundation handoff only after combined real model/MicroVM execution,
 permissions, timeout/cancellation, reconnect, controller crash/guest reboot

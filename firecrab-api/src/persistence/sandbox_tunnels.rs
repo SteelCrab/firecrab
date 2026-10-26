@@ -24,7 +24,64 @@ impl Store {
         &self,
         project: Uuid,
     ) -> Result<bool, PersistenceError> {
-        Ok(self.lock().query_row("SELECT EXISTS(SELECT 1 FROM ai_sandbox_tunnels WHERE project_id=?1 AND json_extract(spec,'$.state')!='deleted')",[project.to_string()],|r|r.get(0))?)
+        Ok(self.lock().query_row("SELECT EXISTS(SELECT 1 FROM ai_sandbox_tunnels WHERE project_id=?1 AND json_extract(spec,'$.state') NOT IN ('deleted','superseded'))",[project.to_string()],|r|r.get(0))?)
+    }
+    /// Operator-only inventory retains remote-retirement evidence after project deletion.
+    pub fn sandbox_tunnel_inventory(&self) -> Result<Vec<SandboxTunnelBinding>, PersistenceError> {
+        self.lock()
+            .prepare("SELECT spec FROM ai_sandbox_tunnels ORDER BY rowid DESC")?
+            .query_map([], |r| r.get(0))?
+            .map(|r| decode(r?))
+            .collect()
+    }
+    /// Transfer the one address claim atomically; neither attempt/runtime identity changes.
+    pub fn supersede_sandbox_tunnel(
+        &self,
+        previous: &SandboxTunnelBinding,
+        next: &SandboxTunnelBinding,
+    ) -> Result<(), PersistenceError> {
+        use firecrab_api_types::SandboxTunnelState;
+        if previous.id == next.id
+            || previous.project_id != next.project_id
+            || previous.spec.subdomain != next.spec.subdomain
+            || previous.state != SandboxTunnelState::Superseded
+            || previous.successor_binding_id != Some(next.id)
+            || next.previous_binding_id != Some(previous.id)
+            || next.task_id != next.spec.task_id
+        {
+            return Err(corrupt());
+        }
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let current: String = tx.query_row(
+            "SELECT spec FROM ai_sandbox_tunnels WHERE id=?1",
+            [previous.id.to_string()],
+            |r| r.get(0),
+        )?;
+        let current = decode(current)?;
+        if matches!(
+            current.state,
+            SandboxTunnelState::Deleted
+                | SandboxTunnelState::Superseded
+                | SandboxTunnelState::Deleting
+        ) || current.project_id != previous.project_id
+            || current.task_id != previous.task_id
+            || current.attempt_id != previous.attempt_id
+            || current.runtime != previous.runtime
+            || current.owner != previous.owner
+            || current.spec != previous.spec
+        {
+            return Err(corrupt());
+        }
+        let old = serde_json::to_string(previous).map_err(|_| corrupt())?;
+        let new = serde_json::to_string(next).map_err(|_| corrupt())?;
+        tx.execute(
+            "UPDATE ai_sandbox_tunnels SET subdomain=NULL,spec=?2 WHERE id=?1",
+            params![previous.id.to_string(), old],
+        )?;
+        tx.execute("INSERT INTO ai_sandbox_tunnels(id,project_id,subdomain,task_id,attempt_id,spec) VALUES(?1,?2,?3,?4,?5,?6)",params![next.id.to_string(),next.project_id.to_string(),next.spec.subdomain,next.task_id.to_string(),next.attempt_id.to_string(),new])?;
+        tx.commit()?;
+        Ok(())
     }
     pub fn sandbox_tunnel(
         &self,
@@ -86,6 +143,14 @@ impl Store {
             .optional()?;
         if let Some(existing) = existing {
             let saved = decode(existing)?;
+            if matches!(
+                saved.state,
+                firecrab_api_types::SandboxTunnelState::Deleted
+                    | firecrab_api_types::SandboxTunnelState::Superseded
+            ) && saved != *binding
+            {
+                return Err(corrupt());
+            }
             if saved.project_id != binding.project_id
                 || saved.spec.subdomain != binding.spec.subdomain
                 || saved.task_id != binding.task_id
@@ -96,8 +161,12 @@ impl Store {
                 return Err(corrupt());
             }
         }
-        let claim = (binding.state != firecrab_api_types::SandboxTunnelState::Deleted)
-            .then_some(&binding.spec.subdomain);
+        let claim = (!matches!(
+            binding.state,
+            firecrab_api_types::SandboxTunnelState::Deleted
+                | firecrab_api_types::SandboxTunnelState::Superseded
+        ))
+        .then_some(&binding.spec.subdomain);
         tx.execute("INSERT INTO ai_sandbox_tunnels(id,project_id,subdomain,task_id,attempt_id,spec) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET subdomain=excluded.subdomain,spec=excluded.spec",
             params![binding.id.to_string(),binding.project_id.to_string(),claim,binding.task_id.to_string(),binding.attempt_id.to_string(),spec])?;
         tx.commit()?;
