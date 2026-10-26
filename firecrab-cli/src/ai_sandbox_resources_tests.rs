@@ -1,7 +1,7 @@
 use super::*;
 fn environment(project: Uuid, id: Uuid) -> Value {
     let spec = json!({"version":1,"subnetCidr":"172.29.80.0/24","roles":[{"name":"backend","template":{"name":"ubuntu","version":"1","kernelSha256":"1".repeat(64),"rootfsSha256":"2".repeat(64),"initrdSha256":null,"bootArgsSha256":"3".repeat(64)},"cpu":1,"memoryMib":512,"diskGb":4,"dependsOn":[],"services":[{"name":"app","port":8080,"readiness":true}],"executionMode":{"kind":"persistent_workspace"}}],"allow":[],"retention":{"ttlSeconds":null}});
-    json!({"id":id,"projectId":project,"owner":"local","generation":Uuid::new_v4(),"spec":spec,"networkId":Uuid::new_v4(),"roles":[],"state":"provisioning","createdAt":1,"updatedAt":1,"expiresAt":null,"exportedAt":null,"error":null})
+    json!({"id":id,"projectId":project,"owner":"local","generation":Uuid::new_v4(),"spec":spec,"networkId":Uuid::new_v4(),"dnsMode":"private_only","roles":[],"state":"provisioning","createdAt":1,"updatedAt":1,"expiresAt":null,"exportedAt":null,"error":null})
 }
 fn tunnel(project: Uuid, id: Uuid) -> Value {
     let runtime = json!({"vmId":Uuid::new_v4(),"runtimeId":Uuid::new_v4()});

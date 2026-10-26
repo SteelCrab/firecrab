@@ -1118,7 +1118,7 @@ mod tests {
             ..sample_network(2, "172.30.2.1", 24)
         };
         let old = render_base_config(&actor.legacy.hosts_path, &[legacy]);
-        let strict = render_base_config(&actor.private.hosts_path, &[private.clone()]);
+        let strict = render_base_config(&actor.private.hosts_path, std::slice::from_ref(&private));
         for option in [
             "no-resolv\n",
             "no-poll\n",
