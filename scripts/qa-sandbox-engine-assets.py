@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import ssl
 import tarfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -142,7 +143,13 @@ def serve(args):
                 self.wfile.write(data)
 
     print(f"Read-only QA registry on 127.0.0.1:{args.port}; stop it after the operator pull", flush=True)
-    ThreadingHTTPServer(("127.0.0.1", args.port), Registry).serve_forever()
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), Registry)
+    if args.tls_cert:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(args.tls_cert, args.tls_key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    server.serve_forever()
 
 
 def main():
@@ -157,9 +164,13 @@ def main():
     server = sub.add_parser("serve")
     server.add_argument("--root", type=Path, required=True)
     server.add_argument("--port", type=int, default=24144)
+    server.add_argument("--tls-cert", type=Path)
+    server.add_argument("--tls-key", type=Path)
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("Use an unprivileged loopback port")
+    if args.command == "serve" and bool(args.tls_cert) != bool(args.tls_key):
+        parser.error("Provide both loopback TLS certificate and key")
     build(args) if args.command == "build" else serve(args)
 
 

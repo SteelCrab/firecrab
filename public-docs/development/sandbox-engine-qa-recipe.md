@@ -1,7 +1,7 @@
 # Docker, nspawn and Workspace QA recipe
 
-Preparation is complete. Real mode execution remains pending the integrated
-runtime deployment signal. Preparation creates no Environment, VM, engine,
+Operator bootstrap and real task trials require the integrated runtime
+deployment signal. Preparation itself creates no Environment, VM, engine,
 registry listener or model task. It changes no existing QA resource or account.
 
 ## Public, offline inputs
@@ -40,6 +40,15 @@ the public key, actual signed InRelease files, image assets and asset builder:
 - Size: `103731200` bytes
 - SHA-256: `5e972f4e6bbbd5ed5198a337d451eda56f33cac037809efd488361a4a698d1b2`
 
+This generic bundle is not an ABI transaction for every installed guest.
+The real Ubuntu base's public dpkg status required seven additional signed
+packages (3,178,310 bytes). Resolve against that status in the separate APT
+state, including reverse version dependencies. The exact resulting transaction
+contains 43 packages/86,556,548 bytes. Its extra-package overlay SHA-256 is
+`fe26d88a7b29989589d5e76326efa18dee183bc02377038a10f65915e6654082`.
+Do not derive the complete transaction from `--print-uris`: it omits cached
+archives. Use the complete simulated `Inst` set and verify every selected deb.
+
 ## Small content-addressed images
 
 `scripts/qa-sandbox-engine-assets.py build` accepts the verified package ledger
@@ -77,7 +86,15 @@ python3 scripts/qa-sandbox-engine-assets.py serve --root ./images --port 24144
 
 Docker documents automatic loopback-registry treatment, but the actual pull is
 still an acceptance check: [dockerd registry rules](https://docs.docker.com/reference/cli/dockerd/#insecure-registries).
-Do not change daemon flags or guest egress to make the test pass. nspawn's
+The observed Docker 29/containerd resolver requested HTTPS even though info
+listed the loopback insecure range. For that version, serve TLS with a fresh
+one-day QA certificate containing IP SAN `127.0.0.1`. Install only its public CA
+at `/etc/docker/certs.d/127.0.0.1:24144/ca.crt` in the new owned guest. The private
+key stays root-only in that guest and is never printed or exported. Pass
+`--tls-cert` and `--tls-key` to `serve`, then stop the listener after the pull.
+This uses Docker's [per-registry certificate configuration](https://docs.docker.com/engine/security/certificates/).
+The repository digest stays unchanged. No daemon flag, public listener or guest
+egress relaxation is required. nspawn's
 rootfs and privilege options follow its [command documentation](https://www.freedesktop.org/software/systemd/man/259/systemd-nspawn.html).
 
 ## Operator bootstrap after the deployment signal
@@ -92,7 +109,12 @@ rootfs and privilege options follow its [command documentation](https://www.free
 3. Verify that VM/runtime ownership, SSH host identity and OS match. Copy the
    SHA-checked offline bundle only to that new owned VM. Simulate the local
    package transaction, then perform operator installation with networking
-   disabled and `apt-get --no-download --no-install-recommends`. Install only
+   disabled and `apt-get --no-download --no-install-recommends`. The observed
+   APT rejected direct local-deb paths with an internal pathname error under
+   `--no-download`. A dedicated root-only `file:` repository and cache containing
+   the verified archives allows package-name installation without network
+   downloads. Its APT configuration uses separate lists/cache/logs and the
+   actual guest package status. Do not edit the guest's external sources. Install only
    bundled, verified packages. Record package versions and engine readiness.
 4. Docker: start the operator's temporary loopback registry in the owned guest,
    pull the exact repository digest, inspect `RepoDigests`, then stop that
