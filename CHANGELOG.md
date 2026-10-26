@@ -36,6 +36,9 @@ Entries land here as work merges, and move under the next version heading when t
   public HTTPS/WebSocket verification, local removal and remote retirement are
   reported separately. Canvas work waits for completed Sandbox implementation
   and direct QA acceptance. Bounded commands do not provide interactive PTY.
+  Explicit shutdown checks require a fresh inactive connector observation and
+  verify the saved HTTPS address without following redirects. Dashboard, CLI
+  and MCP retain the result separately from remote retirement.
 
 - Opt-in registry tag automation submits pinned images through Deploy, with durable rollback/failure pauses, Dashboard controls and YAML/Git image ownership.
 
@@ -296,6 +299,10 @@ Entries land here as work merges, and move under the next version heading when t
 - None.
 
 ### Fixed
+
+- Alpine Sandbox cleanup accepts the owned user's explicit primary-group
+  membership after verifying its durable account records. Foreign or shared
+  membership still blocks cleanup and preserves the attempt for reconciliation.
 
 - Private Sandbox VM names follow IPAM allocations instead of expiring DHCP
   leases. A separate DNS hosts file preserves existing VM names through private

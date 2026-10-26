@@ -7,6 +7,7 @@ container engine, provider, network policy or public preview.
 import base64
 import concurrent.futures
 import fcntl
+import grp
 import io
 import json
 import os
@@ -62,15 +63,21 @@ def main():
     shell = shell.replace("if command -v setpriv", "if false && command -v setpriv")
     shell = shell.replace("if command -v flock", "if false && command -v flock")
     busybox_accounts = os.environ.get("FIRECRAB_SANDBOX_BUSYBOX_ACCOUNTS") == "1"
+    visible_applets = os.environ.get("FIRECRAB_SANDBOX_BUSYBOX_VISIBLE_APPLETS") == "1"
+    assert not visible_applets or busybox_accounts
     if busybox_accounts:
         assert Path("/etc/firecrab/busybox").is_file()
         shell = shell.replace("if command -v useradd", "if false && command -v useradd")
-        shell = shell.replace("elif command -v adduser", "elif false && command -v adduser")
         shell = shell.replace("if command -v userdel", "if false && command -v userdel")
         shell = shell.replace("if command -v groupadd", "if false && command -v groupadd")
-        shell = shell.replace("elif command -v addgroup", "elif false && command -v addgroup")
         shell = shell.replace("if command -v groupdel", "if false && command -v groupdel")
-        shell = shell.replace("elif command -v delgroup", "elif false && command -v delgroup")
+        if visible_applets:
+            for name in ("adduser", "deluser", "addgroup", "delgroup"):
+                applet = Path("/usr/local/sbin") / name
+                assert applet.is_symlink() and applet.resolve() == Path("/etc/firecrab/busybox").resolve()
+        else:
+            for name in ("adduser", "addgroup", "delgroup"):
+                shell = shell.replace(f"elif command -v {name}", f"elif false && command -v {name}")
     subprocess.run(["/usr/local/sbin/firecrab-console-resize", "--sandbox-probe"], check=True)
     checks = ["confirmed_filesystem_sync", "actual_capability_tar_probe"]
     with tempfile.TemporaryDirectory(prefix="firecrab-guest-shell-") as temporary:
@@ -94,8 +101,8 @@ def main():
             if fail_group:
                 text = text.replace('[ "$(id -gn "$user")" = "$user" ] || exit 72', "exit 72")
             if fail_create:
-                create = 'tool adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user"'
-                text = text.replace(create + " || created=false", "{ " + create + "; false; } || created=false")
+                for create in ['tool adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user"', 'adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user"']:
+                    text = text.replace(create + " || created=false", "{ " + create + "; false; } || created=false")
             if fail_before_user:
                 for create in ['useradd -M -g "$user" -d "$work" -s /bin/sh "$user"', 'tool adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user"', 'adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user"']:
                     text = text.replace(create + " || created=false", "created=false")
@@ -110,19 +117,21 @@ def main():
 
         if busybox_accounts:
             bb = "/etc/firecrab/busybox"
-            # Legacy adduser leaves this app UID with an unregistered primary GID.
-            # New task groups must not capture that GID or change its account.
-            assert subprocess.run([bb, "adduser", "-D", "-H", "-h", "/unrelated", "-s", "/bin/sh", "fixture-unrelated"], capture_output=True).returncode == 0
+            if not visible_applets:
+                # With addgroup hidden, legacy adduser leaves an unregistered
+                # primary GID. The visible Alpine applets create that group.
+                assert subprocess.run([bb, "adduser", "-D", "-H", "-h", "/unrelated", "-s", "/bin/sh", "fixture-unrelated"], capture_output=True).returncode == 0
+                unrelated = pwd.getpwnam("fixture-unrelated")
+                assert not any(line.split(":")[2] == str(unrelated.pw_gid) for line in Path("/etc/group").read_text().splitlines())
             original_passwd = Path("/etc/passwd").read_bytes()
             original_group = Path("/etc/group").read_bytes()
-            unrelated = pwd.getpwnam("fixture-unrelated")
-            assert not any(line.split(":")[2] == str(unrelated.pw_gid) for line in original_group.decode().splitlines())
 
             partial, partial_command = uuid.uuid4(), uuid.uuid4()
             run("stage", partial, partial_command, archive({"partial.txt": b"owned"}), expected=72, fail_group=True)
             user = "a" + partial.hex[:30]
             actual = pwd.getpwnam(user)
-            assert actual.pw_gid != unrelated.pw_gid
+            if not visible_applets:
+                assert actual.pw_gid != unrelated.pw_gid
             assert (root / partial.hex / "control/uid").read_text() == str(actual.pw_uid)
             run("cleanup", partial, partial_command)
 
@@ -144,6 +153,100 @@ def main():
             assert original_passwd == Path("/etc/passwd").read_bytes()
             assert original_group == Path("/etc/group").read_bytes()
             checks.append("busybox_explicit_group_partial_uid_checkpoint_preexisting_refusal")
+
+            if visible_applets:
+                owned, command = uuid.uuid4(), uuid.uuid4()
+                run("stage", owned, command, archive({"owned.txt": b"preserve"}))
+                user = "a" + owned.hex[:30]
+                account = pwd.getpwnam(user)
+                group = grp.getgrnam(user)
+                assert group.gr_gid == account.pw_gid and group.gr_mem == [user]
+                result = run("run", owned, command, b"printf owned-out; printf owned-err >&2; exit 7", expected=7)
+                assert result.stdout == b"owned-out" and result.stderr == b"owned-err"
+                exported = run("export", owned, command)
+                assert contents(exported.stdout)["owned.txt"] == b"preserve"
+                control = root / owned.hex / "control"
+                original_uid = (control / "uid").read_bytes()
+                passwd = Path("/etc/passwd").read_bytes()
+                groups = Path("/etc/group").read_bytes()
+
+                def refused_without_account_changes():
+                    before = (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+                    run("cleanup", owned, command, expected=72)
+                    assert before == (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+                    assert (root / owned.hex).is_dir()
+
+                def group_with_members(members):
+                    rows = groups.decode().splitlines()
+                    return "\n".join(":".join(line.split(":")[:3] + [members]) if line.startswith(user + ":") else line for line in rows) + "\n"
+
+                for members in ("root", user + ",root", user + "," + user, "," + user, user + ",", " " + user):
+                    Path("/etc/group").write_text(group_with_members(members))
+                    refused_without_account_changes()
+                Path("/etc/group").write_bytes(groups)
+                own_row = next(line for line in groups.decode().splitlines() if line.startswith(user + ":"))
+                for extra in (own_row, "fixture-shared:x:" + str(account.pw_gid) + ":"):
+                    Path("/etc/group").write_bytes(groups + (extra + "\n").encode())
+                    refused_without_account_changes()
+                Path("/etc/group").write_bytes(groups)
+                changed_gid = str(account.pw_gid + 1)
+                Path("/etc/group").write_text("\n".join(":".join(line.split(":")[:2] + [changed_gid, user]) if line.startswith(user + ":") else line for line in groups.decode().splitlines()) + "\n")
+                refused_without_account_changes()
+                Path("/etc/group").write_bytes(groups)
+                own_passwd = next(line for line in passwd.decode().splitlines() if line.startswith(user + ":"))
+                for extra in (own_passwd, "fixture-foreign:x:31003:" + str(account.pw_gid) + ":fixture:/unrelated:/bin/sh"):
+                    Path("/etc/passwd").write_bytes(passwd + (extra + "\n").encode())
+                    refused_without_account_changes()
+                Path("/etc/passwd").write_bytes(passwd)
+                fields = own_passwd.split(":")
+                for field in (2, 3):
+                    changed = fields.copy()
+                    changed[field] = str(int(changed[field]) + 1)
+                    Path("/etc/passwd").write_text(passwd.decode().replace(own_passwd + "\n", ":".join(changed) + "\n"))
+                    refused_without_account_changes()
+                Path("/etc/passwd").write_bytes(passwd)
+                uid = control / "uid"
+                for owner in ((0, 0, 0o644), (65534, 0, 0o600), (0, 65534, 0o600)):
+                    os.chown(uid, owner[0], owner[1])
+                    uid.chmod(owner[2])
+                    refused_without_account_changes()
+                os.chown(uid, 0, 0)
+                uid.chmod(0o600)
+                saved_uid = directory / "owned-uid-ledger"
+                saved_uid.write_bytes(original_uid)
+                saved_uid.chmod(0o600)
+                for link in ("symlink", "hardlink"):
+                    uid.unlink()
+                    if link == "symlink":
+                        uid.symlink_to(saved_uid)
+                    else:
+                        os.link(saved_uid, uid)
+                    refused_without_account_changes()
+                    assert saved_uid.read_bytes() == original_uid
+                    uid.unlink()
+                    uid.write_bytes(original_uid)
+                    uid.chmod(0o600)
+                assert grp.getgrnam(user).gr_mem == [user]
+                run("cleanup", owned, command)
+                assert not (root / owned.hex).exists()
+                assert not any(line.startswith(user + ":") for line in Path("/etc/passwd").read_text().splitlines())
+                assert not any(line.startswith(user + ":") for line in Path("/etc/group").read_text().splitlines())
+                assert original_passwd == Path("/etc/passwd").read_bytes()
+                assert original_group == Path("/etc/group").read_bytes()
+
+                dangling, dangling_command = uuid.uuid4(), uuid.uuid4()
+                run("stage", dangling, dangling_command, archive({}), expected=72, fail_before_user=True)
+                dangling_user = "a" + dangling.hex[:30]
+                groups = Path("/etc/group").read_bytes()
+                Path("/etc/group").write_text("\n".join(line + dangling_user if line.startswith(dangling_user + ":") else line for line in groups.decode().splitlines()) + "\n")
+                changed = Path("/etc/group").read_bytes()
+                run("cleanup", dangling, dangling_command, expected=72)
+                assert Path("/etc/group").read_bytes() == changed
+                Path("/etc/group").write_bytes(groups)
+                run("cleanup", dangling, dangling_command)
+                assert original_passwd == Path("/etc/passwd").read_bytes()
+                assert original_group == Path("/etc/group").read_bytes()
+                checks.append("visible_busybox_self_member_lifecycle_and_unsafe_group_or_uid_refusal")
 
         baseline = (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
         attempts = [(uuid.uuid4(), uuid.uuid4(), directory / f"parallel-root-{index}")

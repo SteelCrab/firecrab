@@ -55,4 +55,11 @@ docker run --rm --name "$name" --network none --cpus 2 --memory 1g \
       if [ -e "/usr/sbin/$name" ]; then mv "/usr/sbin/$name" "/tmp/hidden-$name"; fi
     done
     FIRECRAB_SANDBOX_BUSYBOX_ACCOUNTS=1 python3 /qa/source/scripts/test-sandbox-guest-shell.py
+    # Alpine exposes the applets too: adduser -G can invoke addgroup by name
+    # and record the user explicitly in its own primary group member list.
+    for name in adduser deluser addgroup delgroup; do
+      ln -s /etc/firecrab/busybox "/usr/local/sbin/$name"
+    done
+    FIRECRAB_SANDBOX_BUSYBOX_ACCOUNTS=1 FIRECRAB_SANDBOX_BUSYBOX_VISIBLE_APPLETS=1 \
+      python3 /qa/source/scripts/test-sandbox-guest-shell.py
   '
