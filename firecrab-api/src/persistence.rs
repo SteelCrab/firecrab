@@ -107,17 +107,18 @@ const CREATE_MICRO_NETWORKS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_
     internet_enabled INTEGER NOT NULL DEFAULT 1,
     uplink TEXT,
     ipv6_cidr TEXT,
-    ipv6_address_mode TEXT
+    ipv6_address_mode TEXT,
+    dns_mode TEXT NOT NULL DEFAULT 'legacy_forward'
 ) STRICT";
 
 /// Selects every column [`Store::list_micro_networks`] needs.
 const SELECT_ALL_MICRO_NETWORKS_SQL: &str = "SELECT id, name, subnet_cidr, internet_enabled, \
-    uplink, ipv6_cidr, ipv6_address_mode FROM micro_networks";
+    uplink, ipv6_cidr, ipv6_address_mode, dns_mode FROM micro_networks";
 
 /// Inserts a new row; fails on a duplicate id.
 const INSERT_MICRO_NETWORK_SQL: &str = "INSERT INTO micro_networks \
-    (id, name, subnet_cidr, internet_enabled, uplink, ipv6_cidr, ipv6_address_mode) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+    (id, name, subnet_cidr, internet_enabled, uplink, ipv6_cidr, ipv6_address_mode, dns_mode) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 
 /// MicroStorage pools (`public-docs/guides/storage.md`).
 const CREATE_MICRO_STORAGES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_storages (
@@ -365,6 +366,20 @@ fn migrate_internet_enabled_column(conn: &Connection) -> Result<(), PersistenceE
     if !has_column {
         conn.execute(
             "ALTER TABLE micro_networks ADD COLUMN internet_enabled INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Keep networks created by older releases on their recorded forwarding behavior.
+fn migrate_dns_mode_column(conn: &Connection) -> Result<(), PersistenceError> {
+    let present = conn
+        .prepare("SELECT 1 FROM pragma_table_info('micro_networks') WHERE name='dns_mode'")?
+        .exists([])?;
+    if !present {
+        conn.execute(
+            "ALTER TABLE micro_networks ADD COLUMN dns_mode TEXT NOT NULL DEFAULT 'legacy_forward'",
             [],
         )?;
     }
@@ -763,6 +778,7 @@ impl Store {
         migrate_internet_enabled_column(&conn)?;
         migrate_uplink_column(&conn)?;
         migrate_ipv6_columns(&conn)?;
+        migrate_dns_mode_column(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute_batch(block_storage::SCHEMA)?;
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
@@ -904,6 +920,7 @@ impl Store {
                 network.uplink,
                 network.ipv6_cidr,
                 network.ipv6_address_mode.map(|mode| mode.id().to_owned()),
+                network.dns_mode.id(),
             ],
         )?;
         Ok(())
@@ -978,7 +995,16 @@ impl Store {
             let ipv6 = ipv6_cidr.as_deref().and_then(|cidr| {
                 SubnetSpec::parse_ipv6(cidr, ipam::protocol_address_mode(ipv6_address_mode))
             });
+            let dns_text: String = row.get(7)?;
+            let dns_mode =
+                firecrab_api_types::MicroNetworkDnsMode::parse(&dns_text).ok_or_else(|| {
+                    PersistenceError::CorruptRecord {
+                        id: id_text,
+                        reason: "invalid DNS mode".into(),
+                    }
+                })?;
             networks.push(MicroNetworkResponse {
+                dns_mode,
                 id,
                 name: row.get(1)?,
                 subnet_cidr,
@@ -2357,6 +2383,10 @@ mod tests {
             "every network was masqueraded before the toggle existed"
         );
 
+        assert_eq!(
+            network.dns_mode,
+            firecrab_api_types::MicroNetworkDnsMode::LegacyForward
+        );
         // And it is writable from here on.
         store.set_micro_network_internet(id, false).unwrap();
         assert!(!store.micro_network(id).unwrap().unwrap().internet_enabled);
@@ -2402,6 +2432,7 @@ mod tests {
         let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
 
         let ula = MicroNetworkResponse {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             id: Uuid::new_v4(),
             name: "ula".to_owned(),
             subnet_cidr: "172.31.0.0/24".to_owned(),
@@ -2517,12 +2548,36 @@ mod tests {
     }
 
     #[test]
+    fn private_dns_round_trips_and_invalid_stored_dns_never_enables_forwarding() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("firecrab.db");
+        let store = Store::open(&path).unwrap();
+        let network: MicroNetworkResponse = serde_json::from_value(serde_json::json!({
+            "id":Uuid::new_v4(), "name":"private", "subnetCidr":"172.31.5.0/24", "gateway":"172.31.5.1",
+            "internetEnabled":false, "dnsMode":"private_only"
+        })).unwrap();
+        store.insert_micro_network(&network).unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.micro_network(network.id).unwrap(), Some(network));
+        store
+            .lock()
+            .execute("UPDATE micro_networks SET dns_mode='typo'", [])
+            .unwrap();
+        assert!(matches!(
+            store.list_micro_networks(),
+            Err(PersistenceError::CorruptRecord { .. })
+        ));
+    }
+
+    #[test]
     fn set_micro_network_uplink_round_trips() {
         let directory = tempdir().unwrap();
         let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
         let id = Uuid::new_v4();
         store
             .insert_micro_network(&MicroNetworkResponse {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 id,
                 name: "prod".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),

@@ -804,6 +804,7 @@ async fn dispatch(
             .map_err(|error| HelperFailure::Internal {
                 detail: error_chain(&error),
             }),
+        NetworkRequest::CheckPrivateDnsSupport => Ok(AfterResponse::Continue),
         NetworkRequest::SyncDhcpLeases {
             revision,
             leases,
@@ -1217,6 +1218,7 @@ mod tests {
 
     fn sample_spec(uplink: Option<&str>) -> MicroNetworkSpec {
         MicroNetworkSpec {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             micro_network_id: Uuid::nil(),
             gateway: "172.31.0.1".parse().unwrap(),
             prefix: 24,

@@ -1,5 +1,5 @@
 //! Single-host Sandbox environments. These records never carry credentials.
-use crate::{SandboxPrincipal, SandboxRuntimeRef};
+use crate::{MicroNetworkDnsMode, SandboxPrincipal, SandboxRuntimeRef};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -222,6 +222,9 @@ pub struct SandboxEnvironment {
     pub spec: SandboxEnvironmentSpec,
     /// Dedicated owned network UUID reserved before creation.
     pub network_id: Uuid,
+    /// Immutable expected DNS posture. Older saved environments retain legacy forwarding.
+    #[serde(default)]
+    pub dns_mode: MicroNetworkDnsMode,
     /// Reserved dedicated role resources and observed readiness.
     pub roles: Vec<SandboxEnvironmentRoleState>,
     /// Desired lifecycle and reconciliation status.

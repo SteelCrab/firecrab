@@ -86,6 +86,12 @@ impl NetworkClient {
         self.call_within(self.timeout, request).await
     }
 
+    /// Reject old helpers before creating a network that needs private DNS.
+    /// The explicit operation cannot be silently ignored as an unknown field.
+    pub async fn require_private_dns(&self) -> Result<(), NetworkError> {
+        self.call(NetworkRequest::CheckPrivateDnsSupport).await
+    }
+
     async fn call_within(
         &self,
         timeout: Duration,
@@ -343,6 +349,7 @@ pub(crate) mod test_support {
     /// sequence rather than each request's full payload.
     fn operation_name(request: &NetworkRequest) -> &'static str {
         match request {
+            NetworkRequest::CheckPrivateDnsSupport => "check_private_dns_support",
             NetworkRequest::Pipe { .. } => "pipe",
             NetworkRequest::EnsureBridge => "ensure_bridge",
             NetworkRequest::EnsureMicroNetworkBridge { .. } => "ensure_micro_network_bridge",

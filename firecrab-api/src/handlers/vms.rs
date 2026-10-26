@@ -1700,6 +1700,13 @@ async fn finish_run_start(
         guest_env.extend(queue_env);
         rootfs::specialize_guest(&rootfs, record.id, &guest_env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
+        let dns_mode = store_for_shells
+            .micro_network(record.micro_network_id)
+            .map_err(|_| "Cannot read guest DNS posture")?
+            .ok_or("Guest MicroNetwork does not exist")?
+            .dns_mode;
+        rootfs::apply_dns_posture(&rootfs, record.id, dns_mode)
+            .map_err(|error| format!("guest DNS specialization failed: {error}"))?;
         let (private_env, private_files) =
             crate::pipe_databases::bindings::guest_inputs(&store_for_shells, record.id)
                 .map_err(|_| "Could not load private database bindings".to_owned())?;
@@ -2335,7 +2342,9 @@ pub(crate) async fn micro_network_specs(state: &AppState) -> Result<Vec<MicroNet
         .into_iter()
         .map(|network| {
             SubnetSpec::from_micro_network(&network)
-                .map(|subnet| subnet.helper_spec(network.internet_enabled, network.uplink))
+                .map(|subnet| {
+                    subnet.helper_spec(network.internet_enabled, network.uplink, network.dns_mode)
+                })
                 .ok_or_else(|| {
                     format!(
                         "micro network {} has an unparseable subnet {:?}",
@@ -4834,6 +4843,7 @@ while True:
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             ValidatedJson(firecrab_api_types::CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "test-net".to_owned(),
                 subnet_cidr: "172.30.0.0/24".to_owned(),
                 internet_enabled: true,
@@ -5225,6 +5235,7 @@ while True:
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             ValidatedJson(firecrab_api_types::CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "prod".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,

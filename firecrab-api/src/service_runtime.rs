@@ -773,6 +773,7 @@ pub(crate) async fn default_network(state: &AppState, request_id: Uuid) -> Resul
         State(state.clone()),
         Extension(RequestId(request_id)),
         ValidatedJson(CreateMicroNetworkRequest {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             name: "services".into(),
             subnet_cidr: cidr,
             internet_enabled: true,

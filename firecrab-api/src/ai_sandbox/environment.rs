@@ -197,6 +197,7 @@ pub fn reservation(
     validate(&spec)?;
     let at = now();
     Ok(SandboxEnvironment {
+        dns_mode: firecrab_api_types::MicroNetworkDnsMode::PrivateOnly,
         id,
         project_id: project,
         owner: caller.principal,
@@ -340,6 +341,13 @@ fn verify_vm(
 }
 
 async fn provision(state: &AppState, environment: &mut SandboxEnvironment) -> Result<(), String> {
+    if environment.dns_mode == firecrab_api_types::MicroNetworkDnsMode::PrivateOnly {
+        state
+            .network
+            .require_private_dns()
+            .await
+            .map_err(|_| "Network helper does not support required private DNS")?;
+    }
     let network_mutation = NETWORK_CREATION.lock().await;
     owns(state, environment, "network", environment.network_id)?;
     let network = state
@@ -351,6 +359,7 @@ async fn provision(state: &AppState, environment: &mut SandboxEnvironment) -> Re
             || network.subnet_cidr != environment.spec.subnet_cidr
             || network.internet_enabled
             || network.ipv6_cidr.is_some()
+            || network.dns_mode != environment.dns_mode
         {
             return Err(
                 "Environment network differs from the reserved IPv4-only isolated manifest".into(),
@@ -361,6 +370,7 @@ async fn provision(state: &AppState, environment: &mut SandboxEnvironment) -> Re
             state.clone(),
             RequestId(Uuid::new_v4()),
             CreateMicroNetworkRequest {
+                dns_mode: environment.dns_mode,
                 name: name(environment, "network"),
                 subnet_cidr: environment.spec.subnet_cidr.clone(),
                 internet_enabled: false,
@@ -764,6 +774,7 @@ pub fn binding(
         || network.subnet_cidr != environment.spec.subnet_cidr
         || network.internet_enabled
         || network.ipv6_cidr.is_some()
+        || network.dns_mode != environment.dns_mode
     {
         return Err(
             "Environment network identity or IPv4-only isolation changed after readiness".into(),
@@ -1160,6 +1171,7 @@ pub async fn cleanup(
             || network.subnet_cidr != environment.spec.subnet_cidr
             || network.internet_enabled
             || network.ipv6_cidr.is_some()
+            || network.dns_mode != environment.dns_mode
         {
             return Err("Refusing cleanup of changed network identity or policy".into());
         }

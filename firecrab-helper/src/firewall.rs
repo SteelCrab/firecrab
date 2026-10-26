@@ -1241,6 +1241,7 @@ mod tests {
 
     fn sample_network(id: u128, gateway: &str, prefix: u8) -> MicroNetworkSpec {
         MicroNetworkSpec {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             micro_network_id: Uuid::from_u128(id),
             gateway: gateway.parse().unwrap(),
             prefix,

@@ -148,6 +148,7 @@ impl Store {
             || previous.owner != saved.owner
             || previous.spec != saved.spec
             || previous.network_id != saved.network_id
+            || previous.dns_mode != saved.dns_mode
             || resources(&previous) != resources(saved)
             || previous.created_at != saved.created_at
             || previous.expires_at != saved.expires_at

@@ -960,10 +960,14 @@ if [ -z "$ipv4" ]; then
   exit 0
 fi
 
+dns_probe=example.com
+if [ -r /etc/firecrab/dns-probe ]; then
+  dns_probe=$($BB cat /etc/firecrab/dns-probe)
+fi
 dns_ok=0
 tries=0
 while [ "$tries" -lt 15 ]; do
-  if $BB nslookup example.com >/dev/null 2>&1; then
+  if $BB nslookup "$dns_probe" >/dev/null 2>&1; then
     dns_ok=1
     break
   fi

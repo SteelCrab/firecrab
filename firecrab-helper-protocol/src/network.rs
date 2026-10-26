@@ -126,6 +126,9 @@ pub const UNIT_CPU_QUOTA_PERCENT: RangeInclusive<u32> = 100..=6_400;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum NetworkRequest {
+    /// Side-effect-free capability acknowledgement. Old helpers reject the
+    /// unknown operation instead of silently ignoring a private DNS field.
+    CheckPrivateDnsSupport,
     /// Fixed pipe controls; no arbitrary command or host paths.
     Pipe { request: crate::pipe::Operation },
     /// Idempotently ensure the shared bridge/subnet/gateway exist.
@@ -304,6 +307,9 @@ pub struct MicroNetworkSpec {
     /// behavior every network had before this field existed.
     #[serde(default = "internet_enabled_default")]
     pub internet_enabled: bool,
+    /// DNS posture. Old API snapshots retain the existing gateway resolver behavior.
+    #[serde(default)]
+    pub dns_mode: firecrab_api_types::MicroNetworkDnsMode,
     /// Host NIC this network should egress through. `None` (absent on the
     /// wire, or explicit null) keeps auto-detect. Not a CIDR and never a
     /// Firecrab-owned `fct*`/`mnb*` name; the helper is the trust boundary.
@@ -716,6 +722,7 @@ mod tests {
                 mac: "02:fc:00:00:00:05".parse().unwrap(),
             }],
             micro_networks: vec![MicroNetworkSpec {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 micro_network_id: Uuid::from_u128(0x1234),
                 gateway: "172.31.0.1".parse().unwrap(),
                 prefix: 24,
@@ -736,6 +743,7 @@ mod tests {
     #[test]
     fn micro_network_spec_derives_its_subnet_from_gateway_and_prefix() {
         let spec = MicroNetworkSpec {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             micro_network_id: Uuid::from_u128(0x1234),
             gateway: "172.31.5.1".parse().unwrap(),
             prefix: 24,

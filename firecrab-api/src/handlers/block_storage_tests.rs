@@ -35,6 +35,7 @@ async fn block_storage_vm_creation_reserves_disks_and_rolls_back_conflicts() {
         State(state.clone()),
         request(),
         ValidatedJson(firecrab_api_types::CreateMicroNetworkRequest {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             name: "volume-network".into(),
             subnet_cidr: "172.30.247.0/24".into(),
             internet_enabled: false,

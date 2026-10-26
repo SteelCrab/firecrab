@@ -256,6 +256,7 @@ impl Session {
             "network_create" => {
                 let a: NetworkCreate = parse(args)?;
                 let spec = CreateMicroNetworkRequest {
+                    dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                     name: resource_name(&a.name, a.operation_id)?,
                     subnet_cidr: a.subnet_cidr,
                     internet_enabled: a.internet_enabled,

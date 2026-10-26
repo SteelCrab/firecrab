@@ -171,8 +171,14 @@ impl SubnetSpec {
     /// `uplink` are the network's stored posture rather than anything
     /// derivable from the CIDR, so they are passed in. `uplink` of `None`
     /// means the helper should use the host default-route iface.
-    pub fn helper_spec(&self, internet_enabled: bool, uplink: Option<String>) -> MicroNetworkSpec {
+    pub fn helper_spec(
+        &self,
+        internet_enabled: bool,
+        uplink: Option<String>,
+        dns_mode: firecrab_api_types::MicroNetworkDnsMode,
+    ) -> MicroNetworkSpec {
         MicroNetworkSpec {
+            dns_mode,
             micro_network_id: self.micro_network_id,
             gateway: self.gateway(),
             prefix: self.prefix,
@@ -625,15 +631,27 @@ mod tests {
     #[test]
     fn helper_spec_threads_internet_and_uplink() {
         let subnet = SubnetSpec::legacy_default_subnet(Uuid::from_u128(1));
-        let auto = subnet.helper_spec(true, None);
+        let auto = subnet.helper_spec(
+            true,
+            None,
+            firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
+        );
         assert!(auto.internet_enabled);
         assert_eq!(auto.uplink, None);
         assert_eq!(auto.gateway, subnet.gateway());
         assert_eq!(auto.prefix, 24);
 
-        let chosen = subnet.helper_spec(false, Some("eth1".to_owned()));
+        let chosen = subnet.helper_spec(
+            false,
+            Some("eth1".to_owned()),
+            firecrab_api_types::MicroNetworkDnsMode::PrivateOnly,
+        );
         assert!(!chosen.internet_enabled);
         assert_eq!(chosen.uplink.as_deref(), Some("eth1"));
+        assert_eq!(
+            chosen.dns_mode,
+            firecrab_api_types::MicroNetworkDnsMode::PrivateOnly
+        );
     }
 
     #[test]

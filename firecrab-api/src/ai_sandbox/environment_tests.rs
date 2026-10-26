@@ -226,6 +226,21 @@ fn reservations_survive_restart_and_cannot_change_owners_generations_or_ids() {
     let store = Store::open(&path).unwrap();
     let reopened = store.sandbox_environment(environment.id).unwrap().unwrap();
     assert_eq!(reopened, environment);
+    assert_eq!(
+        environment.dns_mode,
+        firecrab_api_types::MicroNetworkDnsMode::PrivateOnly
+    );
+    let mut legacy_json = serde_json::to_value(&environment).unwrap();
+    legacy_json.as_object_mut().unwrap().remove("dnsMode");
+    let legacy: SandboxEnvironment = serde_json::from_value(legacy_json).unwrap();
+    assert_eq!(
+        legacy.dns_mode,
+        firecrab_api_types::MicroNetworkDnsMode::LegacyForward
+    );
+    assert_eq!(legacy.spec, environment.spec);
+    let mut changed = environment.clone();
+    changed.dns_mode = firecrab_api_types::MicroNetworkDnsMode::LegacyForward;
+    assert!(store.save_sandbox_environment(&changed).is_err());
     let mut changed = environment.clone();
     changed.roles[0].vm_id = Uuid::new_v4();
     assert!(store.save_sandbox_environment(&changed).is_err());
@@ -394,6 +409,7 @@ async fn admission_rechecks_actual_policy_address_and_runtime_after_readiness() 
     let mut environment =
         reservation(Uuid::new_v4(), Uuid::new_v4(), Caller::default(), manifest).unwrap();
     let network = MicroNetworkResponse {
+        dns_mode: environment.dns_mode,
         id: environment.network_id,
         name: name(&environment, "network"),
         subnet_cidr: environment.spec.subnet_cidr.clone(),
