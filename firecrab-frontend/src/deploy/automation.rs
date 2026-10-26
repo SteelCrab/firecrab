@@ -82,7 +82,7 @@ pub(super) fn html(app: &App) -> String {
         tr("Monitoring", "확인 중")
     };
     out.push_str(&format!(
-        "<p role=\"status\">{} · {} <code>{}</code></p>",
+        "<p role=\"status\" class=\"prop-value wrap\">{} · {} <code>{}</code></p>",
         mode,
         escape(text(status, "observedTag")),
         escape(text(status, "observedDigest"))

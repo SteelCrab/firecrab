@@ -1381,7 +1381,7 @@ test.describe("Registry automatic Deploy @dashboard", () => {
       if (request.method() === "PUT") {
         const policy = request.postDataJSON();
         writes.push(policy);
-        status = { ...status, policy, pause: null };
+        status = { ...status, policy, pause: null, observedTag: policy ? (policy.reference.endsWith("*") ? "v1.1.0" : policy.reference.split(":").at(-1)) : null, observedDigest: policy ? `sha256:${"b".repeat(64)}` : null };
       } else if (suffix === "/pause") status = { ...status, pause: "manual" };
       else if (suffix === "/resume") status = { ...status, pause: null };
       return route.fulfill({ json: status });
@@ -1406,7 +1406,12 @@ test.describe("Registry automatic Deploy @dashboard", () => {
     await page.getByRole("button", { name: "Resume", exact: true }).click();
     await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeEnabled();
     await page.setViewportSize({ width: 390, height: 844 });
+    await expect.poll(() => page.locator("#deploy-panel code").evaluate(node => node.getBoundingClientRect().right <= node.parentElement!.getBoundingClientRect().right + 1)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("deploy-automation-mobile.png"), fullPage: true });
+    await page.getByLabel("Registry source", { exact: true }).fill(`ghcr.io/team/orders:${"r".repeat(128)}`);
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeEnabled();
+    await expect.poll(() => page.locator("#deploy-panel [role=status]").evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
     await page.getByRole("button", { name: "Disable", exact: true }).click();
     await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeDisabled();
     expect(writes.at(-1)).toBeNull();
