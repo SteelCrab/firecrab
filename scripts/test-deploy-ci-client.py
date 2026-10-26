@@ -128,6 +128,14 @@ class ActionClientTests(unittest.TestCase):
             self.assertEqual(client.main(), 0)
         self.assertEqual(operations[0], operations[1])
 
+    def test_loopback_plaintext_never_sends_credentials_to_an_environment_proxy(self):
+        operation, release = str(uuid.uuid4()), str(uuid.uuid4())
+        with server([(200, outcome(operation, release))]) as (url, direct), server([]) as (proxy, proxied), patch.dict(os.environ,
+                {"HTTP_PROXY": proxy, "http_proxy": proxy, "ALL_PROXY": proxy, "all_proxy": proxy, "NO_PROXY": "", "no_proxy": ""}):
+            self.assertTrue(client.deploy(client.Client(url, TOKEN), IMAGE, operation)["succeeded"])
+            self.assertEqual(len(direct), 1)
+            self.assertEqual(proxied, [])
+
 
 if __name__ == "__main__":
     unittest.main()

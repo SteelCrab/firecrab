@@ -79,7 +79,11 @@ class Client:
             raise Failure("Deploy timeout must be 1–86400 seconds")
         self.token = token
         self.deadline = time.monotonic() + timeout
-        self.opener = urllib.request.build_opener(NoRedirect())
+        handlers = [NoRedirect()]
+        # A plaintext loopback exception must not send bearer credentials through an environment proxy.
+        if self.url.startswith("http://"):
+            handlers.append(urllib.request.ProxyHandler({}))
+        self.opener = urllib.request.build_opener(*handlers)
 
     def remaining(self):
         remaining = self.deadline - time.monotonic()

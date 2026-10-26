@@ -338,12 +338,15 @@ pub fn deploy(args: DeployArgs) -> Result<(), Error> {
     authorization.set_sensitive(true);
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(reqwest::header::AUTHORIZATION, authorization);
-    let client = Client::builder()
+    let mut builder = Client::builder()
         .default_headers(headers)
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|_| Error::Unavailable)?;
+        .timeout(Duration::from_secs(15));
+    // Plaintext is a loopback-only exception, including the actual connection destination.
+    if url.starts_with("http://") {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build().map_err(|_| Error::Unavailable)?;
     let operation = args.operation_id.unwrap_or_else(Uuid::new_v4);
     eprintln!("Deploy operation: {operation}");
     let connection = Connection {
