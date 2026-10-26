@@ -221,12 +221,15 @@ fn workspace(a: &App, p: &Value, out: &mut String) {
     let s = &a.sandbox;
     let running = s.tasks.iter().find(|t| active(t));
     let locked = s.busy || running.is_some();
-    let vm = a
-        .vms
-        .iter()
-        .find(|v| v.id == text(&p["spec"], "vmId"))
-        .map(|v| v.name.as_str())
-        .unwrap_or(tr(a, "Conversation workspace", "대화 작업 공간"));
+    let vm = if !text(&p["spec"], "environmentId").is_empty() {
+        tr(a, "Managed environment", "관리형 환경")
+    } else {
+        a.vms
+            .iter()
+            .find(|v| v.id == text(&p["spec"], "vmId"))
+            .map(|v| v.name.as_str())
+            .unwrap_or(tr(a, "Conversation workspace", "대화 작업 공간"))
+    };
     let _ = write!(
         out,
         "<header class=\"sb-workspace-header\"><div class=\"sb-project-heading\">{}<div><h2>{}</h2><span>{}</span></div></div><div class=\"sb-row\">{}{}</div></header><div class=\"sb-tabs\" role=\"tablist\" aria-label=\"{}\">{}{}</div>{}<div class=\"sb-content\" id=\"sb-panel\" role=\"tabpanel\" aria-labelledby=\"sb-{}-tab\">",
