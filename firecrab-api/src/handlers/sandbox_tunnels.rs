@@ -161,10 +161,35 @@ fn target_addresses(
         .active_lease(binding.runtime.vm_id)
         .map_err(store_error(id))?
         .ok_or_else(|| failure(id, "sandbox_preview_no_address"))?;
+    let task = state
+        .store
+        .sandbox_task(binding.task_id)
+        .map_err(store_error(id))?
+        .ok_or_else(|| AppError::not_found(id.0))?;
+    let admitted_environment = task.task.environment.as_ref();
     match &binding.spec.target {
+        SandboxTunnelTarget::EnvironmentService {
+            environment,
+            service,
+        } => {
+            if admitted_environment != Some(environment) {
+                return Err(failure(id, "sandbox_preview_environment_changed"));
+            }
+            let port = environment_port(state, id, binding, environment, Some(service), None)?;
+            let upstreams = vec![SocketAddr::new(lease.ipv4.into(), port)];
+            Ok((
+                SandboxTunnelResolvedTarget::Apps {
+                    upstreams: upstreams.clone(),
+                },
+                upstreams,
+            ))
+        }
         SandboxTunnelTarget::VmApp { runtime, port }
             if *runtime == binding.runtime && *port != 0 =>
         {
+            if let Some(environment) = admitted_environment {
+                environment_port(state, id, binding, environment, None, Some(*port))?;
+            }
             let upstreams = vec![SocketAddr::new(lease.ipv4.into(), *port)];
             Ok((
                 SandboxTunnelResolvedTarget::Apps {
@@ -190,6 +215,11 @@ fn target_addresses(
             {
                 return Err(failure(id, "sandbox_preview_route_not_owned"));
             }
+            if let Some(environment) = admitted_environment {
+                for address in &upstreams {
+                    environment_port(state, id, binding, environment, None, Some(address.port()))?;
+                }
+            }
             Ok((
                 SandboxTunnelResolvedTarget::Nginx { host: host.clone() },
                 upstreams,
@@ -197,6 +227,57 @@ fn target_addresses(
         }
         _ => Err(failure(id, "sandbox_preview_invalid_target")),
     }
+}
+fn environment_port(
+    state: &AppState,
+    id: RequestId,
+    binding: &SandboxTunnelBinding,
+    reference: &SandboxEnvironmentRef,
+    name: Option<&str>,
+    port: Option<u16>,
+) -> Result<u16, AppError> {
+    let environment = state
+        .store
+        .sandbox_environment(reference.id)
+        .map_err(store_error(id))?
+        .ok_or_else(|| failure(id, "sandbox_preview_environment_missing"))?;
+    if environment.project_id != binding.project_id
+        || environment.generation != reference.generation
+        || environment.state != SandboxEnvironmentState::Ready
+    {
+        return Err(failure(id, "sandbox_preview_environment_changed"));
+    }
+    let role = environment
+        .roles
+        .iter()
+        .find(|r| r.role == reference.role && r.runtime == Some(binding.runtime))
+        .ok_or_else(|| failure(id, "sandbox_preview_runtime_changed"))?;
+    if role.agent != SandboxReadiness::Ready
+        || role.network != SandboxReadiness::Ready
+        || role.application != SandboxReadiness::Ready
+    {
+        return Err(failure(id, "sandbox_preview_app_not_ready"));
+    }
+    let declared = environment
+        .spec
+        .roles
+        .iter()
+        .find(|r| r.name == reference.role)
+        .ok_or_else(|| failure(id, "sandbox_preview_environment_changed"))?;
+    let service = role
+        .services
+        .iter()
+        .find(|s| {
+            s.ready
+                && name.is_none_or(|name| s.name == name)
+                && port.is_none_or(|port| s.port == port)
+                && declared
+                    .services
+                    .iter()
+                    .any(|d| d.name == s.name && d.port == s.port)
+        })
+        .ok_or_else(|| failure(id, "sandbox_preview_service_not_ready"))?;
+    Ok(service.port)
 }
 async fn ready(addresses: &[SocketAddr]) -> bool {
     for address in addresses {
@@ -490,6 +571,9 @@ pub async fn reconcile(
 ) -> Result<Json<SandboxTunnelBinding>, AppError> {
     let _lock = MUTATIONS.lock().await;
     let mut binding = load(&state, id, caller, key, true)?;
+    if binding.state == SandboxTunnelState::Deleted {
+        return Ok(Json(binding));
+    }
     let snapshot = inspect(&state, id).await?;
     let mut runtime_changed = false;
     if !matches!(
@@ -504,7 +588,9 @@ pub async fn reconcile(
             }
         }
     }
-    observe(&mut binding, &snapshot);
+    if binding.applied_target.is_some() {
+        observe(&mut binding, &snapshot);
+    }
     if runtime_changed {
         binding.state = SandboxTunnelState::NeedsReconciliation;
         binding.error_code = Some("sandbox_preview_runtime_changed".into());
@@ -521,6 +607,12 @@ pub async fn stop(
 ) -> Result<Json<SandboxTunnelBinding>, AppError> {
     let _lock = MUTATIONS.lock().await;
     let mut binding = load(&state, id, caller, key, true)?;
+    if matches!(
+        binding.state,
+        SandboxTunnelState::Deleted | SandboxTunnelState::Deleting
+    ) {
+        return Err(failure(id, "sandbox_preview_deleted"));
+    }
     if binding.state == SandboxTunnelState::Stopped {
         return Ok(Json(binding));
     }

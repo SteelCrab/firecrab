@@ -9,15 +9,16 @@ fn binding() -> SandboxTunnelBinding {
         vm_id: Uuid::new_v4(),
         runtime_id: Uuid::new_v4(),
     };
+    let task_id = Uuid::new_v4();
     SandboxTunnelBinding {
         id: Uuid::new_v4(),
         project_id: Uuid::new_v4(),
-        task_id: Uuid::new_v4(),
+        task_id,
         attempt_id: Uuid::new_v4(),
         runtime,
         owner: SandboxPrincipal::Local,
         spec: SandboxTunnelSpec {
-            task_id: Uuid::new_v4(),
+            task_id,
             subdomain: "sandbox-preview".into(),
             target: SandboxTunnelTarget::VmApp {
                 runtime,
@@ -185,4 +186,137 @@ fn credential_input_cannot_enter_preview_contract() {
     ] {
         assert!(serde_json::from_value::<SandboxTunnelSpec>(value).is_err());
     }
+}
+
+async fn state(root: &std::path::Path) -> AppState {
+    AppState::with_db_file(
+        crate::templates::TemplateRegistry::from_specs(root, std::iter::empty()).unwrap(),
+        root.join("state.db"),
+    )
+    .await
+    .unwrap()
+}
+fn task(state: &AppState, binding: &SandboxTunnelBinding) {
+    let spec = serde_json::json!({"name":"Preview project","sourcePath":null,"vmId":binding.runtime.vm_id,"selection":null,"instructions":""});
+    let project: SandboxProject = serde_json::from_value(
+        json!({"id":binding.project_id,"owner":"local","spec":spec,"createdAt":1}),
+    )
+    .unwrap();
+    state.store.save_sandbox_project(&project).unwrap();
+    let task:crate::ai_sandbox::SavedTask=serde_json::from_value(json!({"caller":{"principal":"local","operator":true},"project":spec,"workspace":null,"guest":binding.runtime,"guest_pending":false,"guest_staged":false,"task":{"id":binding.task_id,"projectId":binding.project_id,"attemptId":binding.attempt_id,"runtime":binding.runtime,"request":{"kind":"code","input":"App task","selection":null,"retryOf":null},"selection":{"connectionId":Uuid::new_v4(),"model":"fixture"},"state":"result","createdAt":1,"updatedAt":2,"result":"Ready","errorCode":null,"error":null,"events":[],"changes":[]}})).unwrap();
+    state.store.save_sandbox_task(&task).unwrap();
+}
+
+#[tokio::test]
+async fn rest_authorization_is_project_scoped_and_delegates_cannot_publish_or_stop() {
+    use axum::{
+        body::Body,
+        extract::ConnectInfo,
+        http::{Method, Request},
+    };
+    use tower::ServiceExt;
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path()).await;
+    let binding = binding();
+    task(&state, &binding);
+    state.store.save_sandbox_tunnel(&binding).unwrap();
+    let host = Uuid::new_v4();
+    state
+        .store
+        .save_sandbox_access(
+            host,
+            &SandboxAccessPolicy {
+                grants: vec![SandboxResourceGrant {
+                    resource: SandboxResource::Project {
+                        id: binding.project_id,
+                    },
+                    permissions: vec![SandboxPermission::Read, SandboxPermission::Execute],
+                }],
+            },
+        )
+        .unwrap();
+    let router = crate::server::build_router(
+        state.clone(),
+        &crate::server::HttpConfig {
+            bind_addr: "127.0.0.1:5523".parse().unwrap(),
+            allowed_origins: vec![],
+            max_concurrent_requests: 8,
+            request_timeout: Duration::from_secs(10),
+            static_root: None,
+        },
+    );
+    for (method, path, status) in [
+        (
+            Method::GET,
+            format!("/api/ai-sandbox/tunnels/{}", binding.id),
+            StatusCode::OK,
+        ),
+        (
+            Method::POST,
+            format!("/api/ai-sandbox/tunnels/{}/stop", binding.id),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            Method::POST,
+            format!("/api/ai-sandbox/tunnels/{}/publish", binding.id),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            Method::GET,
+            "/api/ai-sandbox/tunnel-addresses".into(),
+            StatusCode::FORBIDDEN,
+        ),
+    ] {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", "127.0.0.1:5523")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(crate::tls::AuthenticatedHost { host_id: host }));
+        assert_eq!(
+            router.clone().oneshot(request).await.unwrap().status(),
+            status
+        );
+    }
+    state
+        .store
+        .save_sandbox_access(host, &SandboxAccessPolicy::default())
+        .unwrap();
+    let caller: Caller =
+        serde_json::from_value(json!({"principal":{"host":host},"operator":false})).unwrap();
+    assert!(authorize(&state, RequestId(Uuid::new_v4()), caller, &binding, false).is_err());
+}
+
+#[tokio::test]
+async fn environment_preview_requires_the_admitted_generation_and_ready_declared_service() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path()).await;
+    let binding = binding();
+    let reference = SandboxEnvironmentRef {
+        id: Uuid::new_v4(),
+        generation: Uuid::new_v4(),
+        role: "backend".into(),
+    };
+    let mut environment:SandboxEnvironment=serde_json::from_value(json!({"id":reference.id,"projectId":binding.project_id,"owner":"local","generation":reference.generation,"spec":{"version":1,"subnetCidr":"172.29.80.0/24","roles":[{"name":"backend","template":{"name":"ubuntu","version":"1","kernelSha256":"1".repeat(64),"rootfsSha256":"2".repeat(64),"initrdSha256":null,"bootArgsSha256":"3".repeat(64)},"cpu":1,"memoryMib":512,"diskGb":4,"services":[{"name":"api","port":8080,"readiness":true}],"executionMode":{"kind":"persistent_workspace"}}]},"networkId":Uuid::new_v4(),"roles":[{"role":"backend","vmId":binding.runtime.vm_id,"securityGroupId":Uuid::new_v4(),"runtime":binding.runtime,"ipv4":"172.29.80.2","agent":"ready","network":"ready","application":"ready","services":[{"name":"api","address":"172.29.80.2","port":8080,"ready":true}],"error":null}],"state":"ready","createdAt":1,"updatedAt":2,"expiresAt":null,"exportedAt":null,"error":null})).unwrap();
+    state
+        .store
+        .reserve_sandbox_environment(&environment)
+        .unwrap();
+    let id = RequestId(Uuid::new_v4());
+    assert_eq!(
+        environment_port(&state, id, &binding, &reference, Some("api"), None).unwrap(),
+        8080
+    );
+    assert!(environment_port(&state, id, &binding, &reference, Some("db"), None).is_err());
+    assert!(environment_port(&state, id, &binding, &reference, None, Some(5432)).is_err());
+    let mut stale = reference.clone();
+    stale.generation = Uuid::new_v4();
+    assert!(environment_port(&state, id, &binding, &stale, Some("api"), None).is_err());
+    environment.roles[0].services[0].ready = false;
+    state.store.save_sandbox_environment(&environment).unwrap();
+    assert!(environment_port(&state, id, &binding, &reference, Some("api"), None).is_err());
 }

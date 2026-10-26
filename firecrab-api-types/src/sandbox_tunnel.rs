@@ -1,5 +1,5 @@
 //! Saved-token preview bindings. Registration credentials are never accepted here.
-use crate::{SandboxPrincipal, SandboxRuntimeRef};
+use crate::{SandboxEnvironmentRef, SandboxPrincipal, SandboxRuntimeRef};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use uuid::Uuid;
@@ -13,6 +13,11 @@ use uuid::Uuid;
     deny_unknown_fields
 )]
 pub enum SandboxTunnelTarget {
+    /// Exact declared service in the environment generation captured by the task.
+    EnvironmentService {
+        environment: SandboxEnvironmentRef,
+        service: String,
+    },
     /// Port on the task's original VM generation; no caller-supplied IP address.
     VmApp {
         runtime: SandboxRuntimeRef,

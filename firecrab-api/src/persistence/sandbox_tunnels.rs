@@ -24,10 +24,7 @@ impl Store {
         &self,
         project: Uuid,
     ) -> Result<bool, PersistenceError> {
-        Ok(self
-            .sandbox_tunnels(project)?
-            .iter()
-            .any(|binding| binding.state != firecrab_api_types::SandboxTunnelState::Deleted))
+        Ok(self.lock().query_row("SELECT EXISTS(SELECT 1 FROM ai_sandbox_tunnels WHERE project_id=?1 AND json_extract(spec,'$.state')!='deleted')",[project.to_string()],|r|r.get(0))?)
     }
     pub fn sandbox_tunnel(
         &self,
@@ -49,7 +46,7 @@ impl Store {
     ) -> Result<Vec<SandboxTunnelBinding>, PersistenceError> {
         let conn = self.lock();
         let mut query = conn.prepare(
-            "SELECT spec FROM ai_sandbox_tunnels WHERE project_id=?1 ORDER BY id LIMIT 256",
+            "SELECT spec FROM ai_sandbox_tunnels WHERE project_id=?1 ORDER BY json_extract(spec,'$.state')='deleted',rowid DESC LIMIT 256",
         )?;
         query
             .query_map([project.to_string()], |r| r.get(0))?
@@ -74,6 +71,9 @@ impl Store {
         &self,
         binding: &SandboxTunnelBinding,
     ) -> Result<(), PersistenceError> {
+        if binding.task_id != binding.spec.task_id {
+            return Err(corrupt());
+        }
         let spec = serde_json::to_string(binding).map_err(|_| corrupt())?;
         let mut conn = self.lock();
         let tx = conn.transaction()?;
