@@ -59,6 +59,17 @@ the BusyBox VM init. No keys or provider credentials are baked into the image.
    cleanup only. One explicit reconciliation cancelled the old attempt. This
    manual cleanup is not automatic staging acceptance.
 
+A subsequent review found that a new group-only creation failure could remain
+blocked before user creation. The follow-up records a root-owned planned GID and
+creation acknowledgement before creating the user. Explicit cleanup can remove
+only the matching confirmed group when no other account uses its GID and no
+members were added. Missing acknowledgements, preexisting groups and changed
+owner/GID/mode/membership remain preserved for operator review. Both GNU account
+tools and BusyBox paths passed real Linux process fixtures, including exact
+unrelated passwd/group byte preservation. This follow-up is fixture validation;
+it is not represented as an additional live MicroVM run or a repair of the
+earlier failed evidence.
+
 The failed v2 environment is `275bee46-d777-482e-b0a7-b3f22cf6ba11`, VM
 `c6d654f2-817b-4ea6-9c1e-74893ff61f08`. Its original OCI manifest is
 `sha256:416fd50d39470da9786d784fc3ec80e6ae240742537358ef367eb6b952d8da24`.

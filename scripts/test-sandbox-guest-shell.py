@@ -11,6 +11,7 @@ import os
 import pwd
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -64,6 +65,10 @@ def main():
         shell = shell.replace("if command -v useradd", "if false && command -v useradd")
         shell = shell.replace("elif command -v adduser", "elif false && command -v adduser")
         shell = shell.replace("if command -v userdel", "if false && command -v userdel")
+        shell = shell.replace("if command -v groupadd", "if false && command -v groupadd")
+        shell = shell.replace("elif command -v addgroup", "elif false && command -v addgroup")
+        shell = shell.replace("if command -v groupdel", "if false && command -v groupdel")
+        shell = shell.replace("elif command -v delgroup", "elif false && command -v delgroup")
     subprocess.run(["/usr/local/sbin/firecrab-console-resize", "--sandbox-probe"], check=True)
     checks = ["confirmed_filesystem_sync", "actual_capability_tar_probe"]
     with tempfile.TemporaryDirectory(prefix="firecrab-guest-shell-") as temporary:
@@ -73,7 +78,7 @@ def main():
         sentinel = directory / "unrelated"
         sentinel.write_text("preserve")
 
-        def program(action, attempt, invocation, payload=b"", seconds=5, persistent=False, workspace=None, mode="direct", output=65536, fail_group=False, fail_create=False, fail_before_user=False):
+        def program(action, attempt, invocation, payload=b"", seconds=5, persistent=False, workspace=None, mode="direct", output=65536, fail_group=False, fail_create=False, fail_before_user=False, fail_before_ack=False):
             values = {"__ID__": attempt.hex, "__COMMAND__": invocation.hex, "__ACTION__": action,
                       "__PAYLOAD__": base64.b64encode(payload).decode(), "__SECONDS__": str(seconds),
                       "__MODE__": mode, "__IMAGE__": "example.invalid/test@sha256:" + "a" * 64,
@@ -90,7 +95,10 @@ def main():
                 create = 'tool adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user"'
                 text = text.replace(create + " || created=false", "{ " + create + "; false; } || created=false")
             if fail_before_user:
-                text = text.replace('tool adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user" || created=false', "created=false")
+                for create in ['useradd -M -g "$user" -d "$work" -s /bin/sh "$user"', 'tool adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user"', 'adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user"']:
+                    text = text.replace(create + " || created=false", "created=false")
+            if fail_before_ack:
+                text = text.replace('printf \'%s\' "$id:$gid:$boot" >"$control/group-created.pending"', "exit 72")
             return text.encode()
 
         def run(action, attempt, invocation, payload=b"", expected=0, **options):
@@ -116,14 +124,6 @@ def main():
             assert (root / partial.hex / "control/uid").read_text() == str(actual.pw_uid)
             run("cleanup", partial, partial_command)
 
-            orphan, orphan_command = uuid.uuid4(), uuid.uuid4()
-            run("stage", orphan, orphan_command, archive({}), expected=72, fail_before_user=True)
-            assert (root / orphan.hex / "control/user-creation").exists()
-            assert not (root / orphan.hex / "control/uid").exists()
-            run("cleanup", orphan, orphan_command, expected=72)
-            # The uncertain group is retained for explicit operator inspection.
-            subprocess.run([bb, "delgroup", "a" + orphan.hex[:30]], check=True)
-
             partial, partial_command = uuid.uuid4(), uuid.uuid4()
             run("stage", partial, partial_command, archive({}), expected=72, fail_create=True)
             assert (root / partial.hex / "control/uid").read_text() == str(pwd.getpwnam("a" + partial.hex[:30]).pw_uid)
@@ -142,6 +142,79 @@ def main():
             assert original_passwd == Path("/etc/passwd").read_bytes()
             assert original_group == Path("/etc/group").read_bytes()
             checks.append("busybox_explicit_group_partial_uid_checkpoint_preexisting_refusal")
+
+        baseline = (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        orphan, orphan_command = uuid.uuid4(), uuid.uuid4()
+        run("stage", orphan, orphan_command, archive({}), expected=72, fail_before_user=True)
+        control = root / orphan.hex / "control"
+        assert (control / "group-created").exists() and not (control / "uid").exists()
+        # A confirmed, unused owned group can be cancelled/exported/cleaned without a user.
+        run("cancel", orphan, orphan_command)
+        run("export", orphan, orphan_command, expected=79)
+        run("cleanup", orphan, orphan_command)
+        assert not (root / orphan.hex).exists()
+        assert baseline == (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        checks.append("confirmed_group_only_failure_cancel_export_cleanup")
+
+        def remove_fixture_group(name):
+            executable = shutil.which("groupdel") or shutil.which("delgroup")
+            command = [executable, name] if executable else ["/etc/firecrab/busybox", "delgroup", name]
+            subprocess.run(command, check=True)
+
+        uncertain, uncertain_command = uuid.uuid4(), uuid.uuid4()
+        run("stage", uncertain, uncertain_command, archive({}), expected=72, fail_before_ack=True)
+        assert not (root / uncertain.hex / "control/group-created").exists()
+        before = (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        run("cancel", uncertain, uncertain_command, expected=72)
+        run("cleanup", uncertain, uncertain_command, expected=72)
+        assert before == (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        remove_fixture_group("a" + uncertain.hex[:30])
+
+        preexisting_group, preexisting_group_command = uuid.uuid4(), uuid.uuid4()
+        group_name = "a" + preexisting_group.hex[:30]
+        create_group = [shutil.which("groupadd"), "-g", "31002", group_name] if shutil.which("groupadd") else ["/etc/firecrab/busybox", "addgroup", "-g", "31002", group_name]
+        subprocess.run(create_group, check=True)
+        before = (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        run("stage", preexisting_group, preexisting_group_command, archive({}), expected=72)
+        run("cleanup", preexisting_group, preexisting_group_command, expected=72)
+        assert before == (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        assert not (root / preexisting_group.hex / "control/group-created").exists()
+        remove_fixture_group(group_name)
+
+        guarded, guarded_command = uuid.uuid4(), uuid.uuid4()
+        run("stage", guarded, guarded_command, archive({}), expected=72, fail_before_user=True)
+        control = root / guarded.hex / "control"
+        acknowledgement = (control / "group-created").read_bytes()
+        original_gid = (control / "gid").read_bytes()
+        (control / "gid").write_text(str(int(original_gid) + 1))
+        before = (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        run("cleanup", guarded, guarded_command, expected=72)
+        assert before == (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        (control / "gid").write_bytes(original_gid)
+        (control / "group-created").write_bytes(b"foreign-owner")
+        before = (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        run("cleanup", guarded, guarded_command, expected=72)
+        assert before == (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        (control / "group-created").write_bytes(acknowledgement)
+        (control / "group-created").chmod(0o644)
+        run("cleanup", guarded, guarded_command, expected=72)
+        (control / "group-created").chmod(0o600)
+        owned_group = "a" + guarded.hex[:30]
+        groups = Path("/etc/group").read_text()
+        Path("/etc/group").write_text("\n".join(line + "root" if line.startswith(owned_group + ":") else line for line in groups.splitlines()) + "\n")
+        changed = Path("/etc/group").read_bytes()
+        run("cleanup", guarded, guarded_command, expected=72)
+        assert Path("/etc/group").read_bytes() == changed
+        Path("/etc/group").write_text(groups)
+        passwd = Path("/etc/passwd").read_text()
+        Path("/etc/passwd").write_text(passwd + "fixture-foreign-primary:x:31003:" + original_gid.decode() + ":fixture:/unrelated:/bin/sh\n")
+        changed = Path("/etc/passwd").read_bytes()
+        run("cleanup", guarded, guarded_command, expected=72)
+        assert Path("/etc/passwd").read_bytes() == changed
+        Path("/etc/passwd").write_text(passwd)
+        run("cleanup", guarded, guarded_command)
+        assert baseline == (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        checks.append("group_creation_unacknowledged_foreign_owner_mode_and_members_preserved")
 
         attempt, invocation = uuid.uuid4(), uuid.uuid4()
         run("stage", attempt, invocation, archive({"main.txt": b"initial"}))

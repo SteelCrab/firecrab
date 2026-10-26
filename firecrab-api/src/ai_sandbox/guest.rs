@@ -993,10 +993,29 @@ chmod 711 "$base"
 if [ -f "$control/owner" ]; then [ "$(cat "$control/owner")" = "$id" ] || exit 70; fi
 printf '%s' "$id" >"$control/owner"
 boot=$(cat /proc/sys/kernel/random/boot_id)
+group_exists() { tool awk -F: -v name="$user" '$1==name {found=1} END {exit !found}' /etc/group; }
+group_registration() {
+  checked_gid=$1
+  tool awk -F: -v name="$user" -v gid="$checked_gid" '$1==name {count++; if ($3!=gid || $4!="") bad=1} $3==gid && $1!=name {bad=1} END {exit (count!=1 || bad)}' /etc/group || return 1
+  tool awk -F: -v name="$user" -v gid="$checked_gid" '$4==gid && $1!=name {bad=1} END {exit bad}' /etc/passwd
+}
+owned_group_gid() {
+  for record in owner gid user-creation group-created; do
+    [ -f "$control/$record" ] && [ ! -L "$control/$record" ] || return 1
+    [ "$(tool stat -c '%u:%g:%a' "$control/$record")" = 0:0:600 ] || return 1
+  done
+  [ "$(cat "$control/owner")" = "$id" ] || return 1
+  recorded_gid=$(cat "$control/gid")
+  case "$recorded_gid" in *[!0-9]*|'') return 1;; esac
+  [ "$recorded_gid" -ge 1000 ] && [ "$recorded_gid" -lt 60000 ] || return 1
+  [ "$(cat "$control/group-created")" = "$id:$recorded_gid:$(cat "$control/user-creation")" ] || return 1
+  group_registration "$recorded_gid" || return 1
+  printf '%s' "$recorded_gid"
+}
 if [ -f "$control/uid" ]; then
   [ "$(id -u "$user" 2>/dev/null || true)" = "$(cat "$control/uid")" ] || exit 72
 elif id -u "$user" >/dev/null 2>&1; then exit 72
-elif [ -f "$control/user-creation" ] && tool awk -F: -v name="$user" '$1==name {found=1} END {exit !found}' /etc/group; then exit 72; fi
+elif group_exists; then owned_group_gid >/dev/null || exit 72; fi
 terminate_user() {
   uid=$(id -u "$user" 2>/dev/null) || return 0
   for status in /proc/[0-9]*/status; do
@@ -1084,16 +1103,25 @@ stage)
   current_complete && ! user_alive || exit 76
   if [ -f "$control/boot" ]; then [ "$(cat "$control/boot")" = "$boot" ] || exit 77; fi
   if ! id -u "$user" >/dev/null 2>&1; then
+    ! group_exists || exit 72
     printf '%s' "$boot" >"$control/user-creation"
+    gid=$(tool awk -F: 'FILENAME==ARGV[1] {used[$4]=1} FILENAME==ARGV[2] {used[$3]=1} END {for (id=1000; id<60000; id++) if (!used[id]) {print id; exit}; exit 1}' /etc/passwd /etc/group) || exit 72
+    printf '%s' "$gid" >"$control/gid.pending"
+    mv "$control/gid.pending" "$control/gid"
+    tool sync || exit 72
+    if command -v groupadd >/dev/null 2>&1; then groupadd -g "$gid" "$user" || exit 72
+    elif command -v addgroup >/dev/null 2>&1; then addgroup -g "$gid" "$user" || exit 72
+    else tool addgroup -g "$gid" "$user" || exit 72; fi
+    group_registration "$gid" || exit 72
+    # Only a successful group operation receives a durable creation acknowledgement.
+    printf '%s' "$id:$gid:$boot" >"$control/group-created.pending"
+    mv "$control/group-created.pending" "$control/group-created"
+    owned_group_gid >/dev/null || exit 72
+    tool sync || exit 72
     created=true
-    if command -v useradd >/dev/null 2>&1; then useradd -M -U -d "$work" -s /bin/sh "$user" || created=false
-    elif command -v adduser >/dev/null 2>&1; then adduser -D -H -h "$work" -s /bin/sh "$user" || created=false
-    else
-      gid=$(tool awk -F: 'FILENAME==ARGV[1] {used[$4]=1} FILENAME==ARGV[2] {used[$3]=1} END {for (id=1000; id<60000; id++) if (!used[id]) {print id; exit}; exit 1}' /etc/passwd /etc/group) || exit 72
-      if tool addgroup -g "$gid" "$user"; then
-        tool adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user" || created=false
-      else created=false; fi
-    fi
+    if command -v useradd >/dev/null 2>&1; then useradd -M -g "$user" -d "$work" -s /bin/sh "$user" || created=false
+    elif command -v adduser >/dev/null 2>&1; then adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user" || created=false
+    else tool adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user" || created=false; fi
     created_uid=$(id -u "$user" 2>/dev/null) || exit 72
     [ "$created_uid" -gt 0 ] || exit 72
     printf '%s' "$created_uid" >"$control/uid.pending"
@@ -1245,7 +1273,18 @@ cancel|cleanup)
   if [ "$action" = cleanup ]; then
     if [ "$persistent" = true ] && [ -d "$work" ]; then chown -hR 0:0 "$work"; chmod 700 "$work"; fi
     if id -u "$user" >/dev/null 2>&1; then
+      if [ -f "$control/group-created" ]; then
+        expected_gid=$(owned_group_gid) || exit 72
+        [ "$(id -g "$user")" = "$expected_gid" ] || exit 72
+      fi
       if command -v userdel >/dev/null 2>&1; then userdel "$user"; else tool deluser "$user"; fi
+    fi
+    if [ -f "$control/group-created" ] && group_exists; then
+      owned_group_gid >/dev/null || exit 72
+      if command -v groupdel >/dev/null 2>&1; then groupdel "$user"
+      elif command -v delgroup >/dev/null 2>&1; then delgroup "$user"
+      else tool delgroup "$user"; fi
+      tool sync || exit 72
     fi
     if [ "$persistent" = true ]; then tool sync || exit 76; fi
     rm -rf "$base"
