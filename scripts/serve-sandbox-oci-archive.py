@@ -7,6 +7,7 @@ fixture has no remote registry connection, upload, authentication or deletion.
 """
 import argparse
 import hashlib
+import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path, PurePosixPath
@@ -54,6 +55,7 @@ class Image:
             config_digest = "sha256:" + hashlib.sha256(config_bytes).hexdigest()
             self.blobs[config_digest] = config_entry.name, config_entry.size
             layers = []
+            diff_ids = []
             for name in image["Layers"]:
                 entry = member(archive, name, 1024 * 1024 * 1024)
                 digest = hashlib.sha256()
@@ -62,8 +64,25 @@ class Image:
                         digest.update(chunk)
                 identity = "sha256:" + digest.hexdigest()
                 self.blobs[identity] = entry.name, entry.size
-                layers.append({"mediaType": LAYER_TYPE, "size": entry.size, "digest": identity})
-            if config.get("rootfs", {}).get("diff_ids") != [layer["digest"] for layer in layers]:
+                with archive.extractfile(entry) as stream:
+                    magic=stream.read(4)
+                media_type=LAYER_TYPE
+                diff_id=identity
+                if magic.startswith(b"\x1f\x8b"):
+                    media_type += "+gzip"
+                    decoded=hashlib.sha256();total=0
+                    with archive.extractfile(entry) as stream:
+                        with gzip.GzipFile(fileobj=stream) as plain:
+                            while chunk:=plain.read(1024*1024):
+                                total+=len(chunk)
+                                if total>1024*1024*1024:raise ValueError("decoded fixture layer exceeds 1 GiB")
+                                decoded.update(chunk)
+                    diff_id="sha256:"+decoded.hexdigest()
+                elif magic==b"\x28\xb5\x2f\xfd":
+                    raise ValueError("zstd Docker-save layers are unsupported by this stdlib fixture; use gzip/plain layers")
+                diff_ids.append(diff_id)
+                layers.append({"mediaType": media_type, "size": entry.size, "digest": identity})
+            if config.get("rootfs", {}).get("diff_ids") != diff_ids:
                 raise ValueError("saved layer bytes do not match the image's uncompressed diff IDs")
             self.manifest = encoded({"schemaVersion": 2, "mediaType": MANIFEST_TYPE,
                                      "config": {"mediaType": CONFIG_TYPE, "size": config_entry.size, "digest": config_digest},
