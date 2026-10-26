@@ -150,28 +150,36 @@ impl Store {
         service: &MicroServiceResponse,
     ) -> Result<(), PersistenceError> {
         let spec = encode(service)?;
-        self.lock()
-            .execute(
-                "INSERT INTO micro_services (id, name, spec) VALUES (?1, ?2, ?3)",
-                params![service.id.to_string(), service.spec.name, spec],
-            )
-            .map_err(|error| write_error(error, &service.spec.name))?;
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO micro_services (id, name, spec) VALUES (?1, ?2, ?3)",
+            params![service.id.to_string(), service.spec.name, spec],
+        )
+        .map_err(|error| write_error(error, &service.spec.name))?;
+        super::auto_deploy::configuration(&tx, service)?;
+        tx.commit()?;
         Ok(())
     }
 
-    /// A single statement replaces all fields, so a failed edit leaves the old spec intact.
+    /// Commit configuration and policy together; a failed edit leaves both unchanged.
     pub fn update_micro_service(
         &self,
         service: &MicroServiceResponse,
     ) -> Result<bool, PersistenceError> {
         let spec = encode(service)?;
-        let changed = self
-            .lock()
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let changed = tx
             .execute(
                 "UPDATE micro_services SET name = ?2, spec = ?3 WHERE id = ?1",
                 params![service.id.to_string(), service.spec.name, spec],
             )
             .map_err(|error| write_error(error, &service.spec.name))?;
+        if changed != 0 {
+            super::auto_deploy::configuration(&tx, service)?;
+        }
+        tx.commit()?;
         Ok(changed != 0)
     }
 

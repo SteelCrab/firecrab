@@ -680,3 +680,42 @@ async fn manual_rollback_preserves_a_policy_even_if_its_source_auth_is_unavailab
     state.store.delete_micro_service(active.service_id).unwrap();
     drop(permit);
 }
+
+#[tokio::test]
+async fn declaration_controls_work_before_initial_deploy_and_follow_stopped_service_edits() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let current = running();
+    let mut service = MicroServiceResponse {
+        id: current.service_id,
+        spec: current.spec.clone(),
+    };
+    state.store.insert_micro_service(&service).unwrap();
+    let request = RequestId(Uuid::new_v4());
+    let _ = pause(
+        State(state.clone()),
+        Extension(request),
+        Path(service.id.to_string()),
+    )
+    .await
+    .unwrap();
+    state.store.save_service_deployment(&current).unwrap();
+    assert_eq!(
+        state
+            .store
+            .tag_watch(service.id)
+            .unwrap()
+            .unwrap()
+            .status
+            .pause,
+        Some(AutoDeployPause::Manual)
+    );
+    service.spec.auto_deploy = None;
+    assert!(state.store.update_micro_service(&service).unwrap());
+    assert!(state.store.tag_watch(service.id).unwrap().is_none());
+    service.spec.auto_deploy = Some(policy());
+    assert!(state.store.update_micro_service(&service).unwrap());
+    let watch = state.store.tag_watch(service.id).unwrap().unwrap();
+    assert!(watch.status.pause.is_none());
+    assert_eq!(watch.status.policy, service.spec.auto_deploy);
+}

@@ -83,6 +83,29 @@ pub(super) fn write(conn: &Connection, id: Uuid, watch: &Watch) -> Result<(), Pe
     Ok(())
 }
 
+/// Stopped-service edits and new declarations must expose the same policy to runtime controls.
+pub(super) fn configuration(
+    conn: &Connection,
+    service: &firecrab_api_types::MicroServiceResponse,
+) -> Result<(), PersistenceError> {
+    match &service.spec.auto_deploy {
+        Some(policy) => {
+            if read(conn, service.id)?
+                .is_none_or(|watch| watch.status.policy.as_ref() != Some(policy))
+            {
+                write(conn, service.id, &Watch::new(policy.clone()))?;
+            }
+        }
+        None => {
+            conn.execute(
+                "DELETE FROM service_tag_watches WHERE service_id=?1",
+                [service.id.to_string()],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Called inside the deployment transaction, including queued rollback admission.
 pub(super) fn deployment(
     conn: &Connection,
