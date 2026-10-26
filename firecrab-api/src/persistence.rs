@@ -33,6 +33,7 @@ mod pipe_auth;
 mod pipe_databases;
 mod pipe_storage;
 mod registries;
+mod sandbox_tunnels;
 mod schedules;
 mod security_groups;
 mod stack_applies;
@@ -772,6 +773,7 @@ impl Store {
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
         conn.execute_batch(ai_sandbox::SCHEMA)?;
+        conn.execute_batch(sandbox_tunnels::SCHEMA)?;
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute_batch(micro_services::HISTORY_SQL)?;
