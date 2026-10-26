@@ -1,0 +1,54 @@
+# Automatic replica recovery
+
+The API probes running host-local MicroServices every five seconds.
+Use matching API, helper, and ingress binaries from the same host bundle.
+Three consecutive failures mark a replica unhealthy. Two successful probes restore readiness.
+The scan can take longer when several probes time out.
+
+Recovery uses the shared Deploy permit. An unhealthy replica is removed from Nginx,
+then restarted. If restart cannot restore readiness, a new VM replaces that replica.
+Healthy replicas keep their VM IDs. The service keeps its release ID, image digest,
+captured encrypted Secret values, network, ports, and configuration.
+Applications must keep persistent data in external storage; replacement creates a fresh disk.
+
+Public and internal routes switch together. Internal-only services use the same recovery flow.
+If every replica is unhealthy, the owned hostnames return HTTP 503.
+Named and Quick Tunnel routing remains configured. Only ready endpoints rejoin Nginx.
+Private listener security-group restrictions remain active while the service is unready.
+Old Nginx workers must finish before a failed VM is stopped or deleted.
+A drain timeout retains the VM and its recovery journal.
+After VM exit, the helper closes its gateway-to-guest TCP connections so Nginx
+can retry requests without waiting for dead upstream sockets. Healthy connections
+and their normal response timeouts remain unchanged.
+An unexpected VM exit can interrupt a response already in progress.
+[Nginx retries eligible requests](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_next_upstream)
+before response bytes reach the client. Applications must handle interrupted responses.
+
+The deployment response includes `recovery.replicas` and `recovery.repair`.
+They show probe counts, retry times, attempt counts, VM IDs, and the next repair step.
+Intent and candidate VM IDs are saved before lifecycle side effects.
+API restart resumes the saved step without creating another candidate.
+No Secret values appear in this status or in release history.
+
+Retries wait 5, 10, 20, then 40 seconds after failed attempts.
+At most five repairs are allowed until a replica stays healthy for 60 seconds.
+Exhausting the budget pauses recovery and keeps unhealthy endpoints out of Nginx.
+Fix the cause and use Deploy, or Stop and deploy again, after recovery pauses.
+Stop removes all recorded source/candidate VMs and prevents automatic resurrection.
+As with other Deploy work, an active repair must finish or pause before Stop is accepted.
+
+Git-managed services retain their pinned inputs and configuration ownership during maintenance.
+The host loop skips controller-owned worker services; cross-host recovery is separate work.
+Records without a valid pinned digest or network require an explicit Deploy.
+
+## Verification
+
+```sh
+cargo test -p firecrab-api service_runtime::recovery --locked
+cargo test -p firecrab-helper-protocol service_routes --locked
+sudo python3 scripts/ci-qa-deploy.py --disposable-host --replica-recovery --report target/qa/replica-recovery.json
+```
+
+Run the last command only on an empty disposable Linux/KVM host.
+It checks VM exit/restart, unhealthy replacement, held requests across API restart,
+all-unready HTTP 503, captured values, unrelated VMs, Stop, and cleanup.

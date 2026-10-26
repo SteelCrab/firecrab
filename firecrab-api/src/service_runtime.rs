@@ -27,6 +27,7 @@ use crate::state::AppState;
 pub(crate) mod deploy;
 mod domain;
 mod internal;
+pub(crate) mod recovery;
 pub(crate) mod secrets;
 
 /// Validate deployment settings, persist a queued snapshot and start background work.
@@ -102,6 +103,7 @@ async fn deploy_with_id(
     domain::preflight(&state, id, &service.spec, request_id.0).await?;
     internal::preflight(&state, id, &service.spec, request_id.0).await?;
     let deployment = MicroServiceDeployment {
+        recovery: None,
         started_at: chrono::Utc::now().timestamp(),
         finished_at: None,
         update: None,
@@ -966,6 +968,7 @@ async fn cleanup(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
         save(state, deployment).await?;
     }
     secrets::remove(state, deployment).await?;
+    deployment.recovery = None;
     Ok(())
 }
 
@@ -995,6 +998,10 @@ pub(crate) async fn recover(state: &AppState) {
             }
             continue;
         }
+        if recovery::pending(&deployment) && deployment.phase.is_busy() {
+            resumable.push(deployment);
+            continue;
+        }
         if deployment.phase.is_busy() {
             deployment.phase = ServicePhase::Failed;
             deployment.error = Some(
@@ -1013,7 +1020,16 @@ pub(crate) async fn recover(state: &AppState) {
         )
     });
     for deployment in resumable {
-        deploy::resume_worker(state.clone(), deployment);
+        if recovery::pending(&deployment)
+            && deployment
+                .update
+                .as_ref()
+                .is_none_or(|update| update.completed)
+        {
+            recovery::resume(state.clone(), deployment);
+        } else {
+            deploy::resume_worker(state.clone(), deployment);
+        }
     }
 }
 

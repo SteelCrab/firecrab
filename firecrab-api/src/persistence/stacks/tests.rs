@@ -198,6 +198,7 @@ fn stacks_missing_and_protected_resources_cannot_be_adopted() {
     };
     store.insert_micro_service(&service).unwrap();
     let mut deployment = MicroServiceDeployment {
+        recovery: None,
         started_at: 0,
         finished_at: None,
         update: None,

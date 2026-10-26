@@ -142,6 +142,7 @@ fn fixture() -> (Stack, StackRecord, Inventory) {
     };
     let service = &stack.micro_services["web"];
     let deployment = MicroServiceDeployment {
+        recovery: None,
         started_at: 0,
         finished_at: None,
         update: None,

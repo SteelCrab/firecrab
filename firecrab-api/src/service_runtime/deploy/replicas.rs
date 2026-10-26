@@ -43,7 +43,7 @@ pub(super) fn template_alias(deployment: &MicroServiceDeployment) -> Result<Stri
         .map_err(|_| "Could not select the release image".into())
 }
 
-pub(super) async fn prepare_template(
+pub(in crate::service_runtime) async fn prepare_template(
     state: &AppState,
     deployment: &mut MicroServiceDeployment,
     restoring: bool,
@@ -136,7 +136,7 @@ pub(super) async fn prepare_template(
     Ok(())
 }
 
-pub(super) async fn check_surge(
+pub(in crate::service_runtime) async fn check_surge(
     state: &AppState,
     spec: &MicroServiceSpec,
     replicas: u16,
@@ -169,7 +169,7 @@ pub(super) async fn check_surge(
     Ok(())
 }
 
-pub(super) async fn start_replica(
+pub(in crate::service_runtime) async fn start_replica(
     state: &AppState,
     deployment: &mut MicroServiceDeployment,
     restoring: bool,

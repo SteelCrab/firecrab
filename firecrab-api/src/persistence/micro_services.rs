@@ -58,6 +58,7 @@ pub(super) fn migrate_history(conn: &rusqlite::Connection) -> Result<(), Persist
                 .is_none_or(|update| update.completed)
         {
             deployment.instances.clear();
+            deployment.recovery = None;
             deployment.update = None;
             deployment.domain_route_owned = false;
             deployment.internal_route_owned = false;
@@ -252,6 +253,7 @@ impl Store {
                 .is_none_or(|update| update.completed)
         {
             let mut release = deployment.clone();
+            release.recovery = None;
             release.update = None;
             // Releases describe reproducible inputs, not ownership of retired VMs.
             release.instances.clear();
@@ -267,7 +269,8 @@ impl Store {
                 "INSERT OR IGNORE INTO micro_service_releases (id, service_id, deployment) VALUES (?1, ?2, ?3)",
                 params![deployment.id.to_string(), deployment.service_id.to_string(), release],
             )?;
-            if deployment.update.is_some() {
+            // Health maintenance keeps the running release, not a new desired configuration.
+            if deployment.update.is_some() && deployment.recovery.is_none() {
                 let service = MicroServiceResponse {
                     id: deployment.service_id,
                     spec: deployment.spec.clone(),

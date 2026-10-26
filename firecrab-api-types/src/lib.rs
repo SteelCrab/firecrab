@@ -29,6 +29,8 @@ mod sandbox_environment;
 mod sandbox_guest;
 pub use block_storage::*;
 mod micro_services;
+mod service_recovery;
+pub use service_recovery::*;
 mod pipe_ai;
 mod pipe_storage;
 mod schedules;
