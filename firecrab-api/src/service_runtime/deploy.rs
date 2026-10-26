@@ -179,6 +179,7 @@ pub async fn retry(
 enum Writer {
     Stack(Option<Uuid>),
     Tag(Box<crate::persistence::auto_deploy::Watch>),
+    /// Authenticated image-only admission; the HTTP client cannot construct arbitrary configuration.
     Ci(crate::persistence::ci_deploy::Admission),
 }
 

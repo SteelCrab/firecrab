@@ -12,40 +12,54 @@ use std::{
 };
 use uuid::Uuid;
 
+/// Public CI inputs do not read or select an operator host/mTLS profile.
 #[derive(Debug, Args)]
 pub struct DeployArgs {
     /// HTTPS service URL ending in /__firecrab/deploy. HTTP is accepted only on loopback.
     #[arg(long)]
     pub url: String,
+    /// Fully qualified SHA-256 pin in the credential's exact repository.
     #[arg(long)]
     pub image: String,
     /// Read the token from this environment variable. Never pass a secret on the command line.
     #[arg(long, default_value = "FIRECRAB_DEPLOY_TOKEN")]
     pub token_env: String,
+    /// Reuse after a lost response; a new UUID is printed when omitted.
     #[arg(long)]
     pub operation_id: Option<Uuid>,
+    /// Reject an active release different from the one reviewed by this pipeline.
     #[arg(long)]
     pub expected_release: Option<Uuid>,
+    /// Choose rolling or blue-green without changing any service configuration.
     #[arg(long,default_value="rolling",value_parser=["rolling","blue_green"])]
     pub strategy: String,
+    /// Total waiting budget; reaching it never cancels accepted work.
     #[arg(long, default_value_t = 1800)]
     pub timeout: u64,
 }
 
+/// Operator-only credential administration through the normal authenticated API.
 #[derive(Debug, Subcommand)]
 pub enum Tokens {
+    /// List safe metadata, including expired credentials that can be revoked.
     List,
+    /// Issue a secret once for the service's current image repository.
     Create {
+        /// Label identifying the pipeline that will hold this credential.
         #[arg(long)]
         name: String,
+        /// Finite lifetime in seconds, defaulting to thirty days.
         #[arg(long,default_value_t=30*86400)]
         expires_in: u32,
     },
+    /// Revoke one credential immediately without cancelling previously accepted work.
     Revoke {
+        /// Public token UUID, not the secret bearer value.
         token: Uuid,
     },
 }
 
+/// Print plaintext only for explicit issuance; list/revoke never retrieve it.
 pub(super) fn tokens(
     client: &crate::api_client::ApiClient,
     id: Uuid,
@@ -70,20 +84,27 @@ pub(super) fn tokens(
     Ok(())
 }
 
+/// Static CI diagnostics intentionally exclude credentials, URLs and upstream body text.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// Input or wire-contract guidance that contains no submitted values.
     #[error("{0}")]
     Invalid(&'static str),
+    /// HTTP category only; the potentially sensitive remote body is discarded.
     #[error("Deploy endpoint returned HTTP {0}")]
     Http(u16),
+    /// Connection/TLS failures can be retried only within the original deadline.
     #[error("Deploy endpoint is temporarily unavailable")]
     Unavailable,
+    /// Waiting expired while the server may still own an accepted deployment.
     #[error("Deploy timed out; accepted work continues. Reuse the operation UUID to inspect it")]
     Timeout,
+    /// The exact attempt failed, regardless of which release is currently serving.
     #[error("Deploy failed or was cancelled; inspect its exact operation with the operator API")]
     Failed,
 }
 
+/// Restrict remote access to HTTPS service paths and forbid credential-bearing URLs.
 fn endpoint(value: &str) -> Result<String, Error> {
     let mut url = reqwest::Url::parse(value)
         .map_err(|_| Error::Invalid("Use an HTTPS service /__firecrab/deploy URL"))?;
@@ -118,6 +139,7 @@ fn endpoint(value: &str) -> Result<String, Error> {
     Ok(url.to_string().trim_end_matches('/').to_string())
 }
 
+/// Reject mutable or control-bearing image references before constructing a request.
 fn pinned(image: &str) -> bool {
     image.len() <= 1024
         && image.rsplit_once("@sha256:").is_some_and(|(repo, digest)| {
@@ -133,22 +155,29 @@ fn pinned(image: &str) -> bool {
         })
 }
 
+/// One no-redirect bearer connection and one deadline shared by all retries.
 struct Connection {
+    /// Client headers are marked sensitive and never logged by this module.
     client: Client,
+    /// Validated service endpoint; suffixes are fixed paths or parsed UUIDs.
     url: String,
+    /// Monotonic deadline that does not restart after a failed request.
     deadline: Instant,
 }
 impl Connection {
+    /// Expiry returns failure without touching the accepted server operation.
     fn remaining(&self) -> Result<Duration, Error> {
         self.deadline
             .checked_duration_since(Instant::now())
             .filter(|d| !d.is_zero())
             .ok_or(Error::Timeout)
     }
+    /// Bound retry spacing by the remaining total waiting budget.
     fn pause(&self) -> Result<(), Error> {
         std::thread::sleep(self.remaining()?.min(Duration::from_secs(2)));
         Ok(())
     }
+    /// Cap response size/time and report remote failures without copying their bodies.
     fn request<T: DeserializeOwned>(
         &self,
         suffix: &str,
@@ -181,6 +210,7 @@ impl Connection {
     }
 }
 
+/// Retry availability/backpressure failures, never authorization or identity conflicts.
 fn transient(error: &Error) -> bool {
     matches!(
         error,
@@ -188,6 +218,7 @@ fn transient(error: &Error) -> bool {
     )
 }
 
+/// Resume the exact attempt before considering submission, keeping one saved request after lost ACKs.
 fn wait(
     connection: &Connection,
     image: &str,
@@ -274,6 +305,7 @@ fn wait(
     }
 }
 
+/// Submit and wait without constructing the operator client or exposing its credentials.
 pub fn deploy(args: DeployArgs) -> Result<(), Error> {
     let url = endpoint(&args.url)?;
     if !pinned(&args.image)

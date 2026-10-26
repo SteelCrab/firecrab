@@ -27,17 +27,20 @@ use uuid::Uuid;
 /// The separate listener has no operator routes. Nginx forwards only the reserved service path.
 pub(crate) const ADDRESS: &str = firecrab_helper_protocol::pipe::CI_DEPLOY_ADDRESS;
 
+/// Normalize the scope using the same OCI parser as execution.
 pub(crate) fn repository(image: &str) -> Option<String> {
     let reference = ImageReference::parse(image).ok()?;
     Some(format!("{}/{}", reference.registry, reference.repository))
 }
 
+/// A CI pin must name its registry explicitly and cannot depend on a mutable tag.
 pub(crate) fn pinned(image: &str) -> bool {
     image.len() <= 1024
         && ImageReference::parse(image).is_ok_and(|r| matches!(r.version, ImageVersion::Digest(_)))
         && repository(image).is_some_and(|repo| image.starts_with(&format!("{repo}@sha256:")))
 }
 
+/// Invalid, missing and expired secrets share one value-free rejection.
 fn unauthorized(id: Uuid) -> AppError {
     AppError::new(
         StatusCode::UNAUTHORIZED,
@@ -48,10 +51,14 @@ fn unauthorized(id: Uuid) -> AppError {
 }
 
 /// Constructed only after a bearer secret has been verified against its saved hash.
-pub(crate) struct Credential(pub DeployToken);
+pub(crate) struct Credential(
+    /// Metadata is trusted only after the incoming secret's hash has matched.
+    pub DeployToken,
+);
 
 impl FromRequestParts<AppState> for Credential {
     type Rejection = AppError;
+    /// Authenticate before reading service or operation state; reject duplicate authorization headers.
     async fn from_request_parts(
         parts: &mut Parts,
         state: &AppState,
@@ -101,6 +108,7 @@ impl FromRequestParts<AppState> for Credential {
 }
 
 impl Credential {
+    /// Bind every scoped route to the credential's immutable service UUID.
     fn service(&self, service: Uuid, request: Uuid) -> Result<(), AppError> {
         if self.0.service_id == service {
             return Ok(());
@@ -114,6 +122,7 @@ impl Credential {
     }
 }
 
+/// Token administration uses verified transport identity, never the CI bearer credential.
 fn operator(caller: Caller, request: Uuid) -> Result<(), AppError> {
     caller.operator().map_err(|_| {
         AppError::new(
@@ -125,6 +134,7 @@ fn operator(caller: Caller, request: Uuid) -> Result<(), AppError> {
     })
 }
 
+/// List metadata for operator revocation without returning any saved secret material.
 pub async fn list_tokens(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -139,6 +149,7 @@ pub async fn list_tokens(
         .map(Json)
 }
 
+/// Issue one finite credential for the current repository of a running, locally managed service.
 pub async fn create_token(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -215,6 +226,7 @@ pub async fn create_token(
     ))
 }
 
+/// Idempotently revoke under the admission lock; accepted work keeps its saved journal.
 pub async fn revoke_token(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -237,6 +249,7 @@ pub async fn revoke_token(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// A local CI credential cannot bypass controller-owned service lifecycle operations.
 pub(crate) async fn ensure_local(
     state: &AppState,
     service: Uuid,
@@ -253,6 +266,7 @@ pub(crate) async fn ensure_local(
     Ok(())
 }
 
+/// Recheck current ownership, expiry and repository scope while the Deploy mutation lock is held.
 pub(crate) async fn authorize(
     state: &AppState,
     service: Uuid,
@@ -283,6 +297,7 @@ pub(crate) async fn authorize(
     Ok(token)
 }
 
+/// Expose only the release comparison inputs needed by this credential's pipeline.
 pub async fn service_status(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -303,6 +318,7 @@ pub async fn service_status(
     }))
 }
 
+/// Admit a pinned image without accepting configuration or revealing the underlying service journal.
 pub async fn submit(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -339,6 +355,7 @@ pub async fn submit(
     ))
 }
 
+/// Read a credential-bound receipt first, so later Stop or rollback cannot rewrite its outcome.
 pub async fn operation_status(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -371,6 +388,7 @@ pub async fn operation_status(
     Ok(Json(outcome(&record, &body)))
 }
 
+/// Project only public progress and the exact request identity into the durable CI receipt.
 pub(crate) fn outcome(record: &MicroServiceDeployment, body: &CiDeployRequest) -> CiDeployStatus {
     let succeeded = matches!(record.phase, ServicePhase::Running | ServicePhase::Degraded)
         && record

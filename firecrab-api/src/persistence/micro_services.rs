@@ -251,6 +251,7 @@ impl Store {
         self.save_deployment_with_ci(deployment, None)
     }
 
+    /// Commit CI authorization/identity and queue intent as one transaction.
     pub(crate) fn save_ci_deployment(
         &self,
         deployment: &MicroServiceDeployment,
@@ -259,6 +260,7 @@ impl Store {
         self.save_deployment_with_ci(deployment, Some(admission))
     }
 
+    /// Ordinary worker snapshots do not re-authorize an already accepted CI credential.
     fn save_deployment_with_ci(
         &self,
         deployment: &MicroServiceDeployment,

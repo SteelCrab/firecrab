@@ -4,6 +4,7 @@ use firecrab_api_types::{CiDeployRequest, CiDeployStatus, DeployToken, MicroServ
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
+/// Credential scope/hash and request/outcome rows share the service lifecycle.
 pub(super) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS service_deploy_tokens(
  id TEXT PRIMARY KEY, service_id TEXT NOT NULL, metadata TEXT NOT NULL, secret_hash BLOB NOT NULL
@@ -14,17 +15,24 @@ CREATE TABLE IF NOT EXISTS service_ci_requests(
 ) STRICT;
 ";
 
+/// Private verifier row; only metadata may leave the persistence boundary.
 pub(crate) struct SavedToken {
+    /// Revocation, scope and lifetime information safe for the operator list.
     pub metadata: DeployToken,
+    /// SHA-256 of the entire random bearer value; never a plaintext secret.
     pub hash: Vec<u8>,
 }
 
+/// Private admission witness constructed after bearer authentication, never from JSON.
 #[derive(Clone)]
 pub(crate) struct Admission {
+    /// Authenticated credential rechecked in the journal transaction.
     pub token_id: Uuid,
+    /// Immutable image, strategy and release comparison used for idempotency.
     pub request: CiDeployRequest,
 }
 
+/// Malformed database records must not disclose their contents through errors.
 fn decode<T: serde::de::DeserializeOwned>(id: Uuid, raw: &str) -> Result<T, PersistenceError> {
     serde_json::from_str(raw).map_err(|_| PersistenceError::CorruptRecord {
         id: id.to_string(),
@@ -32,6 +40,7 @@ fn decode<T: serde::de::DeserializeOwned>(id: Uuid, raw: &str) -> Result<T, Pers
     })
 }
 
+/// Read the verifier from the caller's existing connection or transaction.
 fn token(conn: &Connection, id: Uuid) -> Result<Option<SavedToken>, PersistenceError> {
     let row: Option<(String, Vec<u8>)> = conn
         .query_row(
@@ -136,6 +145,7 @@ pub(super) fn observe(
 }
 
 impl Store {
+    /// Read only the terminal receipt owned by this service and credential.
     pub(crate) fn ci_result(
         &self,
         service: Uuid,
@@ -145,10 +155,12 @@ impl Store {
         let raw:Option<String>=self.lock().query_row("SELECT outcome FROM service_ci_requests WHERE operation_id=?1 AND service_id=?2 AND token_id=?3 AND outcome IS NOT NULL",params![operation.to_string(),service.to_string(),token.to_string()],|r|r.get(0)).optional()?;
         raw.map(|raw| decode(operation, &raw)).transpose()
     }
+    /// Load a private verifier for authentication, including its finite expiry.
     pub(crate) fn deploy_token(&self, id: Uuid) -> Result<Option<SavedToken>, PersistenceError> {
         token(&self.lock(), id)
     }
 
+    /// List metadata in issuance order; hashes are never part of this result.
     pub(crate) fn deploy_tokens(
         &self,
         service: Uuid,
@@ -163,6 +175,7 @@ impl Store {
             .collect()
     }
 
+    /// Enforce the per-service credential limit atomically with insertion.
     pub(crate) fn insert_deploy_token(
         &self,
         metadata: &DeployToken,
@@ -192,6 +205,7 @@ impl Store {
         Ok(())
     }
 
+    /// Delete only the exact service's verifier; repeat revocation remains harmless.
     pub(crate) fn revoke_deploy_token(
         &self,
         service: Uuid,
@@ -204,6 +218,7 @@ impl Store {
         Ok(())
     }
 
+    /// Compare retries against admitted inputs without depending on mutable active configuration.
     pub(crate) fn ci_request(
         &self,
         service: Uuid,
