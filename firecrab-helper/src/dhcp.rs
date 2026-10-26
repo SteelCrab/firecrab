@@ -2,7 +2,8 @@
 //! bridge (`fcbr0`), handing out the exact IP each VM's IPAM lease already
 //! reserved (MAC-keyed static reservations, no dynamic pool). Legacy networks
 //! forward DNS to the host resolver. Private networks use a separate daemon
-//! without upstreams; their local name view is shared within that group.
+//! without upstreams; their local name view is shared within that group. Private
+//! VM names follow IPAM reservations, independently of guest DHCP renewal.
 //! Reservations are rewritten as one full snapshot per `sync_dhcp_leases` call — write, validate, atomically
 //! swap, reload — never edited in place.
 
@@ -21,6 +22,10 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+
+#[cfg(test)]
+#[path = "dhcp_private_dns_tests.rs"]
+mod private_dns_tests;
 
 /// Where the live host-reservation file lives; `sync_dhcp_leases` only ever
 /// replaces it via an atomic rename, never edits it in place.
@@ -201,6 +206,20 @@ fn render_hosts_file(leases: &[DhcpLeaseEntry]) -> String {
     rendered
 }
 
+/// DHCP host declarations enter DNS only after negotiation. Private names must
+/// also survive an expired dynamic lease or a resolver restart without a guest.
+fn render_vm_hosts_file(leases: &[DhcpLeaseEntry]) -> String {
+    let mut rendered = String::new();
+    for lease in leases {
+        let name = guest_hostname(lease.vm_id);
+        rendered.push_str(&format!("{} {name} {name}.internal\n", lease.ipv4));
+        if let Some(ipv6) = lease.ipv6 {
+            rendered.push_str(&format!("{ipv6} {name} {name}.internal\n"));
+        }
+    }
+    rendered
+}
+
 /// Force-releases dnsmasq's active lease for any `(ip, mac)` pair its own
 /// lease database (`active_leases`) has that `current` doesn't — i.e. an IP
 /// whose active lease belongs to a MAC that no longer holds the static
@@ -371,6 +390,11 @@ fn render_base_config(hosts_file: &Path, micro_networks: &[MicroNetworkSpec]) ->
     } else {
         ""
     };
+    let vm_dns = if private {
+        format!("addn-hosts={}\n", vm_hosts_path(hosts_file).display())
+    } else {
+        String::new()
+    };
     format!(
         "{served}\
          {enable_ra}\
@@ -379,6 +403,7 @@ fn render_base_config(hosts_file: &Path, micro_networks: &[MicroNetworkSpec]) ->
          {dns_policy}\
          local=/internal/\n\
          addn-hosts={}\n\
+         {vm_dns}\
          dhcp-hostsfile={}\n\
          dhcp-leasefile={}\n\
          pid-file={}\n\
@@ -430,18 +455,8 @@ async fn sync_pool(
     let mut networks_changed = state.served_networks.as_deref() != Some(micro_networks);
     let dnsmasq_running = owned_child_running(&mut state)?
         || (state.child.is_none() && running_orphan_pid(hosts_path).await.is_some());
-    let (revision, leases) = if !networks_changed
-        && state
-            .applied_revision
-            .is_some_and(|applied| revision < applied)
-    {
-        (
-            state.applied_revision.unwrap(),
-            state.applied_leases.clone(),
-        )
-    } else {
-        (revision, dhcpv6_reservations_only(leases, micro_networks))
-    };
+    let (revision, leases) = snapshot_reservations(&state, revision, leases, micro_networks);
+    let vm_dns_changed = write_vm_dns(actor, &leases, micro_networks).await?;
     // Without a bridge to serve, dnsmasq's config has no `interface=` line,
     // and dnsmasq then answers DNS on every host interface, uplink included.
     // Nothing to serve means nothing runs.
@@ -479,7 +494,7 @@ async fn sync_pool(
     {
         // No new inputs: preserve this group's cache. A changed service file
         // still needs SIGHUP; changed lease/base files take the repair path.
-        if services_changed {
+        if services_changed || vm_dns_changed {
             if let Some(child) = state.child.as_mut() {
                 reload(child)?;
             } else if let Some(pid) = running_orphan_pid(hosts_path).await {
@@ -528,6 +543,19 @@ async fn sync_pool(
     state.applied_revision = Some(revision);
     state.applied_leases = leases;
     Ok(())
+}
+
+/// Network changes still apply, but cannot roll back newer IPAM reservations.
+fn snapshot_reservations(
+    state: &DhcpState,
+    revision: u64,
+    leases: &[DhcpLeaseEntry],
+    networks: &[MicroNetworkSpec],
+) -> (u64, Vec<DhcpLeaseEntry>) {
+    match state.applied_revision {
+        Some(applied) if revision < applied => (applied, state.applied_leases.clone()),
+        _ => (revision, dhcpv6_reservations_only(leases, networks)),
+    }
 }
 
 /// Whether this snapshot can be skipped as stale/duplicate. A changed
@@ -750,7 +778,11 @@ fn runtime_path(hosts: &Path, suffix: &str) -> PathBuf {
     } else {
         "dnsmasq"
     };
-    let separator = if suffix == "services.hosts" { "-" } else { "." };
+    let separator = if matches!(suffix, "services.hosts" | "vms.hosts") {
+        "-"
+    } else {
+        "."
+    };
     hosts.with_file_name(format!("{prefix}{separator}{suffix}"))
 }
 
@@ -771,6 +803,55 @@ fn service_hosts_path(hosts_path: &Path) -> PathBuf {
     runtime_path(hosts_path, "services.hosts")
 }
 
+/// Independent IPAM-backed records, never replaced by a Pipe service refresh.
+fn vm_hosts_path(hosts_path: &Path) -> PathBuf {
+    runtime_path(hosts_path, "vms.hosts")
+}
+
+/// Keep VM records separate from Pipe routes so a service refresh cannot erase
+/// reserved VM names. Legacy forwarding keeps its existing lease-based behavior.
+async fn write_vm_dns(
+    actor: &DhcpPool,
+    leases: &[DhcpLeaseEntry],
+    networks: &[MicroNetworkSpec],
+) -> Result<bool, DhcpError> {
+    if actor.mode != MicroNetworkDnsMode::PrivateOnly {
+        return Ok(false);
+    }
+    // Configuration-only changes can remove a network without advancing the
+    // lease revision. Its retained checkpoint must not keep publishing names.
+    let leases: Vec<_> = leases
+        .iter()
+        .filter(|lease| {
+            networks
+                .iter()
+                .any(|network| network.dns_mode == actor.mode && network.contains(lease.ipv4))
+        })
+        .copied()
+        .collect();
+    write_dns_hosts(
+        &vm_hosts_path(&actor.hosts_path),
+        &render_vm_hosts_file(&leases),
+    )
+    .await
+}
+
+/// Skip identical readable input; otherwise publish a complete atomic snapshot.
+async fn write_dns_hosts(path: &Path, text: &str) -> Result<bool, DhcpError> {
+    if file_matches(path, text).await {
+        return Ok(false);
+    }
+    let candidate = path.with_extension("tmp");
+    write_atomic_candidate(&candidate, text).await?;
+    tokio::fs::rename(candidate, path)
+        .await
+        .map_err(|source| DhcpError::Swap {
+            path: path.to_owned(),
+            source,
+        })?;
+    Ok(true)
+}
+
 async fn write_service_dns(actor: &DhcpPool) -> Result<(bool, bool), DhcpError> {
     use firecrab_helper_protocol::pipe::Config;
     let text = match Config::read(&actor.manifest_path) {
@@ -786,16 +867,8 @@ async fn write_service_dns(actor: &DhcpPool) -> Result<(bool, bool), DhcpError> 
         Err(_) if !actor.manifest_path.exists() => String::new(),
         Err(error) => return Err(DhcpError::ServiceRoutes(error.to_string())),
     };
-    let path = service_hosts_path(&actor.hosts_path);
-    if file_matches(&path, &text).await {
-        return Ok((!text.is_empty(), false));
-    }
-    let candidate = path.with_extension("tmp");
-    write_atomic_candidate(&candidate, &text).await?;
-    tokio::fs::rename(candidate, &path)
-        .await
-        .map_err(|source| DhcpError::Swap { path, source })?;
-    Ok((!text.is_empty(), true))
+    let changed = write_dns_hosts(&service_hosts_path(&actor.hosts_path), &text).await?;
+    Ok((!text.is_empty(), changed))
 }
 
 /// Rebuild DNS from committed routes after a Pipe transaction. SIGHUP also clears

@@ -221,6 +221,15 @@ cache. It uses `no-resolv`, `no-poll`, `no-hosts` and `local=/#/`. DHCP and loca
 Matching legacy resolver inputs and process identity permit adoption after a
 helper restart without clearing its cache.
 
+Private VM short names and `.internal` names follow the current IPAM
+reservations, rather than a guest's dynamic DHCP lease lifetime. The helper
+publishes them through the separate `dnsmasq-private-vms.hosts` input. A service
+route refresh does not replace that file. A newer reservation snapshot or a
+removed private network removes its names; a stale lease revision cannot
+replace a newer checkpoint when the network set changes. Legacy DNS inputs and
+forwarding behavior remain unchanged. The DNS-only regression uses real
+dnsmasq on an owned high loopback port; it does not validate a live MicroVM.
+
 Private networks share their local DNS name view within the private group.
 This is not per-environment DNS name confidentiality. Each environment's
 injected role/service discovery stays scoped to its captured reference and
