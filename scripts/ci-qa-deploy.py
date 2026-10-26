@@ -68,13 +68,13 @@ printf 'release-{label}\\n'
             "holding": "#!/bin/sh\nprintf 'Content-Type: text/plain\\r\\n\\r\\n'\nif [ -f /tmp/deploy-holding ]; then echo holding; else echo idle; fi\n",
             "environment": "#!/bin/sh\nprintf 'Content-Type: text/plain\\r\\n\\r\\n%s:%s\\n' \"$FLEET_SERVICE\" \"$FLEET_RELEASE\"\n",
             "rotation": """#!/bin/sh
-printf 'Content-Type: text/plain\\r\\n\\r\\n'
 case "$PASSWORD" in
-  qa-secret-v0) echo old ;;
-  qa-secret-v1) echo next ;;
-  qa-secret-v2) echo latest ;;
-  *) if [ "$UNRELATED" = 1 ]; then echo unrelated; else echo invalid; fi ;;
+  qa-secret-v0) reply=old ;;
+  qa-secret-v1) reply=next ;;
+  qa-secret-v2) reply=latest ;;
+  *) if [ "$UNRELATED" = 1 ]; then reply=unrelated; else reply=invalid; fi ;;
 esac
+printf 'Content-Type: text/plain\\r\\nContent-Length: %s\\r\\n\\r\\n%s\\n' "$((${#reply} + 1))" "$reply"
 """,
             "rotation-health": """#!/bin/sh
 case "$PASSWORD:$UNRELATED" in

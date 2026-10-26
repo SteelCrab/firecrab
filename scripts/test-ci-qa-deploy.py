@@ -83,7 +83,9 @@ class DeployQaTests(unittest.TestCase):
         for value, label in [("qa-secret-v0", "old"), ("qa-secret-v1", "next"), ("qa-secret-v2", "latest")]:
             env = {"PASSWORD": value}
             response = subprocess.check_output(["/bin/sh", "-c", application], env=env)
-            self.assertTrue(response.endswith((label + "\n").encode()))
+            header, body = response.split(b"\r\n\r\n", 1)
+            self.assertEqual(body, (label + "\n").encode())
+            self.assertIn(f"Content-Length: {len(body)}".encode(), header)
             self.assertNotIn(value.encode(), response)
             self.assertTrue(subprocess.check_output(["/bin/sh", "-c", health], env=env).endswith(b"healthy\n"))
         self.assertTrue(subprocess.check_output(["/bin/sh", "-c", health], env={"PASSWORD": "qa-secret-bad"}).startswith(b"Status: 503"))
