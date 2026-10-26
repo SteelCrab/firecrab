@@ -71,7 +71,7 @@ def main():
 
         attempt, invocation = uuid.uuid4(), uuid.uuid4()
         run("stage", attempt, invocation, archive({"main.txt": b"initial"}))
-        command = b'test "$(id -u)" -ne 0; test "$(awk \'/^NoNewPrivs:/ {print $2}\' /proc/self/status)" = 1; test -z "${OPENAI_API_KEY-}"; echo changed >main.txt; printf stdout; printf stderr >&2; exit 7'
+        command = b'test "$(id -u)" -ne 0; test "$(awk \'/^NoNewPrivs:/ {print $2}\' /proc/self/status)" = 1; test -z "${OPENAI_API_KEY-}"; test "$(ulimit -n)" -eq 1024; test "$(ulimit -Hn)" -eq 1024; echo changed >main.txt; printf stdout; printf stderr >&2; exit 7'
         result = run("run", attempt, invocation, command, expected=7)
         assert result.stdout == b"stdout" and result.stderr == b"stderr"
         assert run("status", attempt, invocation).stdout == b"7"

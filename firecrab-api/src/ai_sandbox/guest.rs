@@ -893,7 +893,7 @@ if { command -v setpriv >/dev/null 2>&1 && setpriv --reuid 0 --regid 0 --clear-g
 if [ -n "$unsupported" ]; then :
 elif ! { { command -v flock >/dev/null 2>&1 && flock -w 0 --help >/dev/null 2>&1; } || { [ -x /usr/local/sbin/firecrab-console-resize ] && /usr/local/sbin/firecrab-console-resize --sandbox-probe; }; }; then unsupported=missing_timed_flock
 elif ! { tar --exclude=__firecrab_probe__ --help >/dev/null 2>&1 || { [ -x /etc/firecrab/busybox ] && /etc/firecrab/busybox tar --exclude=__firecrab_probe__ --help >/dev/null 2>&1; }; }; then unsupported=missing_tar_exclude
-elif ! (ulimit -v 1048576 && ulimit -t 1 && ulimit -n 128) 2>/dev/null; then unsupported=missing_hard_resource_limits
+elif ! (ulimit -v 1048576 && ulimit -t 1 && ulimit -n 1024) 2>/dev/null; then unsupported=missing_hard_resource_limits
 elif ! tool timeout --help >/dev/null 2>&1; then unsupported=missing_timeout; fi
 execution=true
 [ -z "$unsupported" ] || execution=false
@@ -1118,15 +1118,15 @@ FIRECRAB_PAYLOAD
   printf '#!/bin/sh\nset -eu\n' >"$cmd/launch"
   case "$mode" in
   direct)
-    printf 'ulimit -n 128\nulimit -f 65536\nulimit -t __CPU_SECONDS__\nulimit -v __MEMORY_KIB__\n' >>"$cmd/launch"
+    printf 'ulimit -n 1024\nulimit -f 65536\nulimit -t __CPU_SECONDS__\nulimit -v __MEMORY_KIB__\n' >>"$cmd/launch"
     printf 'exec %s --reuid %s --regid %s --clear-groups --no-new-privs env -i HOME=%s PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin /bin/sh %s/start\n' "$drop_program" "$(id -u "$user")" "$(id -g "$user")" "$work" "$cmd" >>"$cmd/launch"
     ;;
   docker)
     command -v docker >/dev/null 2>&1 || fail_run 'unsupported_docker: install Docker inside the managed guest'
     docker image inspect "$image" >/dev/null 2>&1 || fail_run 'unsupported_docker_image: pre-install the exact digest-pinned image'
-    printf '#!/bin/sh\nset -eu\nulimit -n 128\nulimit -f 65536\nulimit -t __CPU_SECONDS__\nulimit -v __MEMORY_KIB__\ncd /workspace\nexec /bin/sh /firecrab/command\n' >"$cmd/container-start"
+    printf '#!/bin/sh\nset -eu\nulimit -n 1024\nulimit -f 65536\nulimit -t __CPU_SECONDS__\nulimit -v __MEMORY_KIB__\ncd /workspace\nexec /bin/sh /firecrab/command\n' >"$cmd/container-start"
     chgrp "$user" "$cmd/container-start"; chmod 640 "$cmd/container-start"
-    printf 'exec docker run --rm --name firecrab-ai-%s-%s --label io.firecrab.attempt=%s --network host --user %s:%s --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory __MEMORY_KIB__k --cpus 1 --ulimit cpu=__CPU_SECONDS__:__CPU_SECONDS__ --ulimit nofile=128:128 --mount type=bind,src=%s,dst=/workspace --mount type=bind,src=%s,dst=/firecrab,readonly --workdir /workspace --env HOME=/workspace --env PATH=/usr/local/bin:/usr/bin:/bin --entrypoint /bin/sh %s /firecrab/container-start\n' "$id" "$invocation" "$id" "$(id -u "$user")" "$(id -g "$user")" "$work" "$cmd" "$image" >>"$cmd/launch"
+    printf 'exec docker run --rm --name firecrab-ai-%s-%s --label io.firecrab.attempt=%s --network host --user %s:%s --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory __MEMORY_KIB__k --cpus 1 --ulimit cpu=__CPU_SECONDS__:__CPU_SECONDS__ --ulimit nofile=1024:1024 --mount type=bind,src=%s,dst=/workspace --mount type=bind,src=%s,dst=/firecrab,readonly --workdir /workspace --env HOME=/workspace --env PATH=/usr/local/bin:/usr/bin:/bin --entrypoint /bin/sh %s /firecrab/container-start\n' "$id" "$invocation" "$id" "$(id -u "$user")" "$(id -g "$user")" "$work" "$cmd" "$image" >>"$cmd/launch"
     ;;
   nspawn)
     command -v systemd-nspawn >/dev/null 2>&1 && [ -d /run/systemd/system ] && [ -f /sys/fs/cgroup/cgroup.controllers ] || fail_run 'unsupported_nspawn: systemd and cgroup v2 are required inside the managed guest'
@@ -1142,7 +1142,7 @@ FIRECRAB_PAYLOAD
     [ -d "$cmd/rootfs/etc" ] && [ ! -L "$cmd/rootfs/etc" ] && [ ! -L "$cmd/rootfs/etc/passwd" ] && [ ! -L "$cmd/rootfs/etc/group" ] || fail_run 'unsupported_nspawn_image: regular account files are required'
     printf '%s:x:%s:%s:Firecrab Sandbox:/workspace:/bin/sh\n' "$user" "$(id -u "$user")" "$(id -g "$user")" >>"$cmd/rootfs/etc/passwd"
     printf '%s:x:%s:\n' "$user" "$(id -g "$user")" >>"$cmd/rootfs/etc/group"
-    printf '#!/bin/sh\nset -eu\nulimit -n 128\nulimit -f 65536\nulimit -t __CPU_SECONDS__\nulimit -v __MEMORY_KIB__\ncd /workspace\nexec /bin/sh /firecrab/command\n' >"$cmd/container-start"
+    printf '#!/bin/sh\nset -eu\nulimit -n 1024\nulimit -f 65536\nulimit -t __CPU_SECONDS__\nulimit -v __MEMORY_KIB__\ncd /workspace\nexec /bin/sh /firecrab/command\n' >"$cmd/container-start"
     chgrp "$user" "$cmd/container-start"; chmod 640 "$cmd/container-start"
     printf 'exec systemd-nspawn --quiet --register=no --directory=%s/rootfs --machine=fcai-%s --user=%s --private-users=no --drop-capability=all --no-new-privileges=yes --property=MemoryMax=__MEMORY_KIB__K --property=TasksMax=128 --property=CPUQuota=100%% --bind=%s:/workspace --bind-ro=%s/command:/firecrab/command --bind-ro=%s/container-start:/firecrab/container-start --chdir=/workspace --setenv=HOME=/workspace --setenv=PATH=/usr/local/bin:/usr/bin:/bin /bin/sh /firecrab/container-start\n' "$cmd" "$invocation" "$user" "$work" "$cmd" "$cmd" >>"$cmd/launch"
     ;;

@@ -61,6 +61,8 @@ async fn local_script(
 
 #[test]
 fn versioned_shell_parses_for_every_execution_mode_and_operation() {
+    assert!(!SCRIPT.contains("ulimit -n 128"));
+    assert!(SCRIPT.contains("--ulimit nofile=1024:1024"));
     let modes = [
         None,
         Some(SandboxExecutionMode::PersistentWorkspace),

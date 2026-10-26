@@ -28,6 +28,7 @@ with no supplementary groups and no-new-privileges enabled.
 | cpuSeconds | 1–120 |
 | memoryMib | 16–65536 address-space limit |
 | outputBytes | 1–65536 per stream |
+| Open files | Fixed at 1024 per process, including direct/Docker/nspawn payloads |
 
 The channel returns stdout and stderr separately. It records the invocation
 identity and confirmed exit status independently of the SSH connection's exit.
