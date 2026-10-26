@@ -410,6 +410,16 @@ fn patch_oci_console(rootfs: &Path) {
         };
         if output.stdout != b"busybox\n" {
             refresh_native_serial_console(rootfs);
+            // Native OCI images use this managed worker too. Refresh it on
+            // the writable VM disk so pinned older images receive boot fixes.
+            if guest_path_exists(rootfs, "/etc/firecrab/rc.boot") {
+                let _ = write_into_image(
+                    rootfs,
+                    "/etc/firecrab/rc.boot",
+                    crate::oci::provision::boot_script_for(false).as_bytes(),
+                );
+                set_guest_file_mode(rootfs, "/etc/firecrab/rc.boot", "0100755");
+            }
             return;
         }
     }
@@ -1953,7 +1963,7 @@ mod tests {
 
     #[test]
     fn specialize_guest_upgrades_old_oci_dhcp_hooks_and_preserves_native_init() {
-        for init in ["busybox", "systemd"] {
+        for init in ["busybox", "systemd", "openrc"] {
             let directory = tempdir().unwrap();
             let rootfs = directory.path().join("rootfs.ext4");
             real_rootfs_with_guest_dirs(&rootfs);
@@ -1975,10 +1985,14 @@ mod tests {
             assert!(!updated.contains("ip addr flush"), "{init}: {updated}");
             let metadata = run_debugfs(&rootfs, &format!("stat {hook}")).unwrap();
             assert!(String::from_utf8_lossy(&metadata.stdout).contains("0755"));
-            if init == "systemd" {
+            if init != "busybox" {
                 assert_eq!(
                     debugfs_cat(&rootfs, "/etc/firecrab/rc.boot"),
-                    "native boot runtime\n"
+                    crate::oci::provision::boot_script_for(false)
+                );
+                assert!(
+                    !guest_path_exists(&rootfs, "/etc/inittab"),
+                    "native init must not receive a BusyBox inittab"
                 );
             }
         }
