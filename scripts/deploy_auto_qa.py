@@ -235,6 +235,7 @@ def run_auto(api, wait_for, traffic, network, spec_a, fixtures, port, evidence):
             metrics["durationSeconds"] = round(time.monotonic() - started, 3)
     assert metrics["requests"] > 20 and not metrics["httpFailures"] and not metrics["monitorErrors"], metrics
     assert metrics["maxLiveVMs"] <= 4 and metrics["maxLiveVCPUs"] <= 4, metrics
+    api.ready()
     assert not api.call("GET", "/api/vms")
     metrics["cleanup"] = "service VMs, policies, private TLS trust, hosts mapping and registry listener removed"
     print(f"PASS authenticated automatic Deploy, rollback/restart pause and resume; {metrics['requests']} HTTP requests, zero errors", flush=True)

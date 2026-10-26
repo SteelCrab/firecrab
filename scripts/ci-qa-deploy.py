@@ -436,6 +436,7 @@ def run(args, evidence):
             except Exception as error:
                 cleanup_errors.append(f"{label}: {error}")
 
+        cleanup("API readiness after fixture restart", api.ready)
         if service: cleanup("service VMs and configuration", stop_service)
         if network: cleanup("network", lambda: api.call("DELETE", "/api/micro-networks/" + network))
         for alias in reversed(aliases):
