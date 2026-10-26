@@ -3,8 +3,10 @@ pub mod access;
 pub mod artifacts;
 pub mod context;
 pub mod coordination;
+pub mod environment;
 pub mod files;
 pub mod guest;
+pub mod guest_protocol;
 pub mod model;
 pub mod workspace;
 

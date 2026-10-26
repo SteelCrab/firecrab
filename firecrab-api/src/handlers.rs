@@ -45,3 +45,5 @@ pub mod pipe_database_maintenance;
 pub mod pipe_databases;
 pub mod pipe_storage;
 pub mod sandbox_tunnels;
+pub mod sandbox_environments;
+pub mod sandbox_guest;
