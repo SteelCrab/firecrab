@@ -5,6 +5,9 @@ pub fn input(app: &Shared, node: &Element) -> bool {
     if !id.starts_with("sb-") {
         return false;
     }
+    if resources::input(app, node) {
+        return true;
+    }
     let value = if let Some(n) = node.dyn_ref::<HtmlTextAreaElement>() {
         n.value()
     } else if let Some(n) = node.dyn_ref::<HtmlInputElement>() {
@@ -15,6 +18,19 @@ pub fn input(app: &Shared, node: &Element) -> bool {
     let mut a = app.borrow_mut();
     if id == "sb-input" {
         a.sandbox.input = value;
+    } else if id == "sb-assigned-agent" || id == "sb-retry-limit" {
+        if !a.sandbox.coordination.is_object() {
+            a.sandbox.coordination = json!({"dependencies":[],"assignedAgent":null,"retryLimit":3});
+        }
+        if id == "sb-assigned-agent" {
+            a.sandbox.coordination["assignedAgent"] = if value.trim().is_empty() {
+                Value::Null
+            } else {
+                json!(value.trim())
+            };
+        } else {
+            a.sandbox.coordination["retryLimit"] = json!(value.parse::<u8>().unwrap_or(3));
+        }
     } else if let Some(e) = &mut a.sandbox.editor {
         match id.as_str() {
             "sb-name" => e.spec["name"] = json!(value),
@@ -26,6 +42,33 @@ pub fn input(app: &Shared, node: &Element) -> bool {
                 }
             }
             "sb-instructions" => e.spec["instructions"] = json!(value),
+            "sb-git-ref" => {
+                if !e.spec["context"].is_object() {
+                    e.spec["context"] = json!({"gitRef":null,"selectedSkills":[],"references":[]});
+                }
+                e.spec["context"]["gitRef"] = if value.trim().is_empty() {
+                    Value::Null
+                } else {
+                    json!(value.trim())
+                };
+            }
+            "sb-skills" | "sb-references" => {
+                if !e.spec["context"].is_object() {
+                    e.spec["context"] = json!({"gitRef":null,"selectedSkills":[],"references":[]});
+                }
+                let key = if id == "sb-skills" {
+                    "selectedSkills"
+                } else {
+                    "references"
+                };
+                e.spec["context"][key] = json!(
+                    value
+                        .lines()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                );
+            }
             "sb-model" => {
                 e.model = value;
                 e.spec["selection"] = list(&e.catalog["models"])
@@ -72,6 +115,9 @@ pub fn change(app: &Shared, node: &Element) -> bool {
     if !id.starts_with("sb-") {
         return false;
     }
+    if resources::input(app, node) {
+        return true;
+    }
     let value = node
         .dyn_ref::<HtmlSelectElement>()
         .map(|n| n.value())
@@ -96,6 +142,7 @@ pub fn change(app: &Shared, node: &Element) -> bool {
         }
         "sb-vm" => {
             if let Some(e) = &mut a.sandbox.editor {
+                e.spec["environmentId"] = Value::Null;
                 e.spec["vmId"] = if value.is_empty() {
                     Value::Null
                 } else {
@@ -103,12 +150,46 @@ pub fn change(app: &Shared, node: &Element) -> bool {
                 };
             }
         }
+        "sb-environment" => {
+            if let Some(e) = &mut a.sandbox.editor {
+                e.spec["environmentId"] = if value.is_empty() {
+                    Value::Null
+                } else {
+                    json!(value)
+                };
+                if !e.spec["environmentId"].is_null() {
+                    e.spec["vmId"] = Value::Null;
+                }
+            }
+        }
+        "sb-task-role" => a.sandbox.environment_role = value,
+        "sb-retry-limit" | "sb-assigned-agent" => {
+            drop(a);
+            return input(app, node);
+        }
+        _ if node.has_attribute("data-sb-dependency") => {
+            if !a.sandbox.coordination.is_object() {
+                a.sandbox.coordination =
+                    json!({"dependencies":[],"assignedAgent":null,"retryLimit":3});
+            }
+            let id = node.get_attribute("data-sb-dependency").unwrap_or_default();
+            let mut ids = list(&a.sandbox.coordination["dependencies"])
+                .iter()
+                .filter(|v| **v != id)
+                .cloned()
+                .collect::<Vec<_>>();
+            if node.clone().unchecked_into::<HtmlInputElement>().checked() {
+                ids.push(json!(id));
+            }
+            a.sandbox.coordination["dependencies"] = json!(ids);
+        }
         "sb-tools" => {
             if let Some(e) = &mut a.sandbox.editor {
                 e.tools = node.clone().unchecked_into::<HtmlInputElement>().checked();
             }
         }
-        "sb-name" | "sb-model" | "sb-source" | "sb-instructions" | "sb-input" => {
+        "sb-name" | "sb-model" | "sb-source" | "sb-instructions" | "sb-input" | "sb-git-ref"
+        | "sb-skills" | "sb-references" => {
             drop(a);
             return input(app, node);
         }
@@ -133,6 +214,7 @@ pub fn submit(app: &Shared, id: &str) -> bool {
     match id {
         "sb-composer" => send(app, None),
         "sb-project-form" => save_project(app),
+        "sb-resource-form" => resources::save(app),
         _ => return false,
     };
     true
@@ -154,12 +236,15 @@ pub fn key(app: &Shared, event: &KeyboardEvent) -> bool {
         return true;
     }
     if event.key() == "Escape"
-        && (app.borrow().sandbox.editor.is_some() || app.borrow().sandbox.review.is_some())
+        && (app.borrow().sandbox.editor.is_some()
+            || app.borrow().sandbox.review.is_some()
+            || app.borrow().sandbox.resource_editor.is_some())
     {
         event.prevent_default();
         let a = app.borrow();
         let locked = a.sandbox.editor.as_ref().is_some_and(|e| e.busy)
-            || a.sandbox.review.as_ref().is_some_and(|r| r.busy);
+            || a.sandbox.review.as_ref().is_some_and(|r| r.busy)
+            || a.sandbox.resource_editor.as_ref().is_some_and(|r| r.busy);
         drop(a);
         if !locked {
             close_dialog(app);
@@ -221,11 +306,20 @@ pub fn action(app: &Shared, name: &str, id: &str) -> bool {
     true
 }
 fn action_impl(app: &Shared, name: &str, id: &str) {
+    if resources::action(app, name, id) {
+        return;
+    }
     match name {
         "sb-new" | "sb-settings" => open_editor(app, name == "sb-settings"),
         "sb-close" => {
             if !app.borrow().sandbox.editor.as_ref().is_some_and(|e| e.busy)
                 && !app.borrow().sandbox.review.as_ref().is_some_and(|r| r.busy)
+                && !app
+                    .borrow()
+                    .sandbox
+                    .resource_editor
+                    .as_ref()
+                    .is_some_and(|r| r.busy)
             {
                 close_dialog(app);
             }
@@ -356,6 +450,13 @@ fn choose_project(app: &Shared, id: &str) {
     s.selection = Value::Null;
     s.pending = None;
     s.review = None;
+    s.resource_editor = None;
+    s.environments.clear();
+    s.previews.clear();
+    s.resources_at = 0.0;
+    s.resources_polling = false;
+    s.coordination = Value::Null;
+    s.environment_role.clear();
     s.context += 1;
     s.polling = false;
     s.since = None;
@@ -620,7 +721,7 @@ fn send(app: &Shared, retry: Option<Value>) {
         r["retryOf"] = task["id"].clone();
         r
     } else {
-        json!({"kind":if a.sandbox.kind=="code"{"code"}else{"chat"},"input":a.sandbox.input.trim(),"selection":a.sandbox.selection,"retryOf":null})
+        json!({"kind":if a.sandbox.kind=="code"{"code"}else{"chat"},"input":a.sandbox.input.trim(),"selection":a.sandbox.selection,"retryOf":null,"coordination":if a.sandbox.coordination.is_object(){a.sandbox.coordination.clone()}else{json!({"dependencies":[],"assignedAgent":null,"retryLimit":3})},"environmentRole":if a.sandbox.environment_role.is_empty(){Value::Null}else{json!(a.sandbox.environment_role)}})
     };
     if text(&request, "input").is_empty() {
         return;
