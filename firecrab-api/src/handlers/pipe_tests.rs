@@ -36,6 +36,14 @@ async fn connection_failures_expose_only_fixed_safe_messages() {
 
 #[tokio::test]
 async fn invalid_config_credentials_and_oversized_requests_fail_before_helper_calls() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = AppState::with_db_file(
+        crate::templates::TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .unwrap(),
+        directory.path().join("state.db"),
+    )
+    .await
+    .unwrap();
     let config =
         json!({"routes":[{"host":"app.example.com","upstreams":["127.0.0.1:9000"]}],"tunnel":null});
     let mut invalid_config = config.clone();
@@ -57,7 +65,7 @@ async fn invalid_config_credentials_and_oversized_requests_fail_before_helper_ca
         let request =
             serde_json::from_value(json!({"config":config,"credentials":credentials})).unwrap();
         let request_id = RequestId(uuid::Uuid::new_v4());
-        let response = apply(Extension(request_id), Json(request))
+        let response = apply(State(state.clone()), Extension(request_id), Json(request))
             .await
             .unwrap_err()
             .into_response();

@@ -34,6 +34,31 @@ pub(super) async fn call(
     })
 }
 
+/// Raw Pipe writes must not restart or replace a Sandbox-owned preview mapping.
+fn require_unclaimed(
+    state: &AppState,
+    id: RequestId,
+    connector: Option<uuid::Uuid>,
+) -> Result<(), AppError> {
+    let claimed = match connector {
+        Some(connector) => state.store.sandbox_tunnel_claims_connector(connector),
+        None => state.store.sandbox_tunnel_has_claims(),
+    }
+    .map_err(|_| AppError::internal(id.0))?;
+    if claimed {
+        return Err(preview_claimed(id));
+    }
+    Ok(())
+}
+fn preview_claimed(id: RequestId) -> AppError {
+    AppError::new(
+        StatusCode::CONFLICT,
+        "sandbox_preview_claimed",
+        "Use the Sandbox preview lifecycle for claimed addresses and connectors. Delete its preview binding before replacing global Pipe settings or registering another token.",
+        id.0,
+    )
+}
+
 // Only fixed, non-secret connection errors may cross the helper boundary.
 // Unrecognized command output retains the generic failure response.
 fn firecrab_error(error: &NetworkError, request_id: uuid::Uuid) -> Option<AppError> {
@@ -102,6 +127,7 @@ pub async fn inspect(
 
 /// Validate manifest and replacement credentials before requesting a privileged apply.
 pub async fn apply(
+    State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     Json(request): Json<ApplyRequest>,
 ) -> Result<Json<Snapshot>, AppError> {
@@ -131,12 +157,9 @@ pub async fn apply(
             request_id.0,
         ));
     }
-    call(
-        &NetworkClient::from_env(),
-        Operation::Apply { request },
-        request_id,
-    )
-    .await
+    let _lock = super::sandbox_tunnels::MUTATIONS.lock().await;
+    require_unclaimed(&state, request_id, None)?;
+    call(&state.network, Operation::Apply { request }, request_id).await
 }
 
 /// Validate anonymous app selection before installing and starting its connector.
@@ -151,6 +174,8 @@ pub async fn connect_quick_tunnel(
             request_id.0,
         )
     })?;
+    let _lock = super::sandbox_tunnels::MUTATIONS.lock().await;
+    require_unclaimed(&state, request_id, None)?;
     call(
         &state.network,
         Operation::ConnectQuickTunnel { request },
@@ -178,6 +203,14 @@ async fn manage_quick_tunnel(
             request_id.0,
         )
     })?;
+    let _lock = super::sandbox_tunnels::MUTATIONS.lock().await;
+    let connector = match &request {
+        QuickTunnelRequest::Save { id, .. } => *id,
+        QuickTunnelRequest::Delete { id } | QuickTunnelRequest::Control { id, .. } => Some(*id),
+    };
+    if let Some(connector) = connector {
+        require_unclaimed(&state, request_id, Some(connector))?;
+    }
     call(
         &state.network,
         Operation::ManageQuickTunnel { request },
@@ -294,6 +327,23 @@ async fn firecrab_request(
             request_id.0,
         )
     })?;
+    let _lock = super::sandbox_tunnels::MUTATIONS.lock().await;
+    use firecrab_helper_protocol::firecrab_tunnel::Request;
+    match &request {
+        // The token's address is intentionally opaque to the API. It cannot be safely
+        // resolved here without performing the very helper mutation being guarded.
+        Request::Connect { .. } => require_unclaimed(&state, request_id, None)?,
+        Request::Save { subdomain, .. } | Request::Delete { subdomain } => {
+            if state
+                .store
+                .sandbox_tunnel_claim(subdomain)
+                .map_err(|_| AppError::internal(request_id.0))?
+                .is_some()
+            {
+                return Err(preview_claimed(request_id));
+            }
+        }
+    }
     call(
         &state.network,
         Operation::ManageFirecrabTunnel { request },
@@ -308,14 +358,19 @@ pub async fn control(
     Extension(request_id): Extension<RequestId>,
     Json(request): Json<ServiceRequest>,
 ) -> Result<Json<Snapshot>, AppError> {
+    let _lock = super::sandbox_tunnels::MUTATIONS.lock().await;
+    require_unclaimed(&state, request_id, None)?;
     call(&state.network, Operation::Control { request }, request_id).await
 }
 
 /// Stop all data-plane units through the helper while retaining configuration.
 pub async fn disable(
+    State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
 ) -> Result<Json<Snapshot>, AppError> {
-    call(&NetworkClient::from_env(), Operation::Disable, request_id).await
+    let _lock = super::sandbox_tunnels::MUTATIONS.lock().await;
+    require_unclaimed(&state, request_id, None)?;
+    call(&state.network, Operation::Disable, request_id).await
 }
 
 #[cfg(test)]

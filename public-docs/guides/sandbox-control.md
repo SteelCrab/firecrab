@@ -88,6 +88,23 @@ claim moves. The old binding becomes `superseded` and cannot control the new
 binding. SQLite transfers the address claim atomically. The same Pipe token and
 fixed URL are reused. Reuse the same new binding ID after uncertainty.
 
+An uncertain handoff reserves both VM addresses, including when the first helper
+inspection fails. Missing `handoffConfirmedAt` on a superseded predecessor means
+that its reservation still needs confirmation. Reconcile the successor, or stop
+its inspected owned connector, before deleting either VM or retargeting again.
+An updated helper address alone is insufficient: its local connector target must
+match, or the previous connector must be confirmed inactive. Graceful ingress with
+unknown or draining workers retains the reservation. Task, attempt and runtime references never
+change during this repair.
+
+While a preview claims an address, use its Sandbox publish/stop/retarget/delete
+actions. Raw Pipe start/restart/edit/delete requests for its connector or address
+return `409 sandbox_preview_claimed`, including after a Sandbox stop. Unrelated
+individual connectors and addresses remain editable. Full Pipe manifests, legacy
+Quick Connect, global Pipe controls and token registration can affect a claimed
+mapping indirectly. Delete preview bindings before using those global actions.
+Status inspection remains available.
+
 `helperConnected` is separate from verified public HTTPS, WebSocket handshake,
 public shutdown and remote retirement. An actual HTTPS check requires the exact
 expected bounded response-body SHA-256. A WebSocket check validates its protocol

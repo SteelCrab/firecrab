@@ -789,6 +789,272 @@ async fn pending_handoff_can_stop_the_verified_predecessor_before_any_new_publis
 }
 
 #[tokio::test]
+async fn stopped_preview_rejects_raw_connector_address_and_global_mutations() {
+    use super::super::pipe;
+    let directory = tempfile::tempdir().unwrap();
+    let mut state = state(directory.path()).await;
+    state.network =
+        crate::network::NetworkClient::with_socket_path(directory.path().join("missing.sock"));
+    let mut binding = binding();
+    binding.state = SandboxTunnelState::Stopped;
+    state.store.save_sandbox_tunnel(&binding).unwrap();
+    let connector = binding.connector_id.unwrap();
+    let id = RequestId(Uuid::new_v4());
+    let target = json!({"type":"apps","upstreams":["172.30.1.2:8080"]});
+    let config =
+        json!({"routes":[{"host":"app.test","upstreams":["172.30.1.2:8080"]}],"tunnel":null});
+    let mut quick_config = config.clone();
+    quick_config["quickTunnel"] = json!({"upstreams":["172.30.1.2:8080"]});
+    let results = [
+        pipe::control_quick_tunnel(
+            State(state.clone()),
+            Path(connector),
+            Extension(id),
+            Json(serde_json::from_value(json!({"action":"start"})).unwrap()),
+        )
+        .await,
+        pipe::control_quick_tunnel(
+            State(state.clone()),
+            Path(connector),
+            Extension(id),
+            Json(serde_json::from_value(json!({"action":"restart"})).unwrap()),
+        )
+        .await,
+        pipe::save_quick_tunnel(
+            State(state.clone()),
+            Extension(id),
+            Json(
+                serde_json::from_value(json!({"id":connector,"name":"Edit","target":target}))
+                    .unwrap(),
+            ),
+        )
+        .await,
+        pipe::delete_quick_tunnel(State(state.clone()), Path(connector), Extension(id)).await,
+        pipe::save_firecrab_tunnel(
+            State(state.clone()),
+            Extension(id),
+            Json(
+                serde_json::from_value(json!({"subdomain":binding.spec.subdomain,"target":target}))
+                    .unwrap(),
+            ),
+        )
+        .await,
+        pipe::delete_firecrab_tunnel(
+            State(state.clone()),
+            Path(binding.spec.subdomain.clone()),
+            Extension(id),
+        )
+        .await,
+        pipe::save_firecrab_tunnel(
+            State(state.clone()),
+            Extension(id),
+            Json(serde_json::from_value(json!({"token":"a".repeat(64),"target":target})).unwrap()),
+        )
+        .await,
+        pipe::apply(
+            State(state.clone()),
+            Extension(id),
+            Json(serde_json::from_value(json!({"config":config,"credentials":null})).unwrap()),
+        )
+        .await,
+        pipe::connect_quick_tunnel(
+            State(state.clone()),
+            Extension(id),
+            Json(serde_json::from_value(json!({"config":quick_config})).unwrap()),
+        )
+        .await,
+        pipe::control(
+            State(state.clone()),
+            Extension(id),
+            Json(serde_json::from_value(json!({"service":"ingress","action":"restart"})).unwrap()),
+        )
+        .await,
+        pipe::disable(State(state.clone()), Extension(id)).await,
+    ];
+    for result in results {
+        assert_eq!(result.unwrap_err().code(), "sandbox_preview_claimed");
+    }
+    assert_eq!(
+        state.store.sandbox_tunnel(binding.id).unwrap().unwrap(),
+        binding
+    );
+    let error = pipe::control_quick_tunnel(
+        State(state.clone()),
+        Path(Uuid::new_v4()),
+        Extension(id),
+        Json(serde_json::from_value(json!({"action":"start"})).unwrap()),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), "pipe_unavailable");
+    binding.state = SandboxTunnelState::Deleted;
+    state.store.save_sandbox_tunnel(&binding).unwrap();
+    assert!(!state.store.sandbox_tunnel_has_claims().unwrap());
+    assert!(
+        !state
+            .store
+            .sandbox_tunnel_claims_connector(connector)
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn raw_start_waits_until_sandbox_stop_has_persisted_its_inactive_snapshot() {
+    use firecrab_helper_protocol::framing::{read_frame, write_frame};
+    use firecrab_helper_protocol::network::{
+        NetworkRequest, NetworkRequestEnvelope, NetworkResponseEnvelope,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("stop-race.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let mut state = state(directory.path()).await;
+    state.network = crate::network::NetworkClient::with_socket_path(socket);
+    let binding = binding();
+    task(&state, &binding);
+    state.store.save_sandbox_tunnel(&binding).unwrap();
+    let connector = binding.connector_id.unwrap();
+    let mut stopped = snapshot(&binding);
+    stopped.firecrab_tunnels[0].connected = false;
+    stopped.quick_tunnels[0].unit.active_state = "inactive".into();
+    stopped.quick_tunnels[0].unit.main_pid = 0;
+    let (seen, observed) = tokio::sync::oneshot::channel();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let helper = tokio::spawn(async move {
+        for (operation, response) in [
+            (Operation::Inspect, snapshot(&binding)),
+            (
+                Operation::ManageQuickTunnel {
+                    request: QuickTunnelRequest::Control {
+                        id: connector,
+                        service_action: ServiceAction::Stop,
+                    },
+                },
+                stopped,
+            ),
+        ] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let envelope: NetworkRequestEnvelope = read_frame(&mut stream).await.unwrap();
+            assert_eq!(
+                envelope.request,
+                NetworkRequest::Pipe {
+                    request: operation.clone()
+                }
+            );
+            if matches!(operation, Operation::ManageQuickTunnel { .. }) {
+                seen.send(()).unwrap();
+                released.await.unwrap();
+                write_frame(
+                    &mut stream,
+                    &NetworkResponseEnvelope {
+                        version: firecrab_helper_protocol::PROTOCOL_VERSION,
+                        request_id: envelope.request_id,
+                        result: Ok(()),
+                        pipe: Some(response),
+                    },
+                )
+                .await
+                .unwrap();
+                break;
+            }
+            write_frame(
+                &mut stream,
+                &NetworkResponseEnvelope {
+                    version: firecrab_helper_protocol::PROTOCOL_VERSION,
+                    request_id: envelope.request_id,
+                    result: Ok(()),
+                    pipe: Some(response),
+                },
+            )
+            .await
+            .unwrap();
+        }
+    });
+    let stop_state = state.clone();
+    let binding_id = state
+        .store
+        .sandbox_tunnel_claim("sandbox-preview")
+        .unwrap()
+        .unwrap();
+    let stopping = tokio::spawn(async move {
+        let caller: Caller =
+            serde_json::from_value(json!({"principal":"local","operator":true})).unwrap();
+        stop(
+            State(stop_state),
+            Path(binding_id),
+            Extension(RequestId(Uuid::new_v4())),
+            caller,
+        )
+        .await
+    });
+    observed.await.unwrap();
+    let raw_state = state.clone();
+    let mut raw = tokio::spawn(async move {
+        super::super::pipe::control_quick_tunnel(
+            State(raw_state),
+            Path(connector),
+            Extension(RequestId(Uuid::new_v4())),
+            Json(serde_json::from_value(json!({"action":"start"})).unwrap()),
+        )
+        .await
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), &mut raw)
+            .await
+            .is_err()
+    );
+    release.send(()).unwrap();
+    let Json(stopped) = stopping.await.unwrap().unwrap();
+    assert_eq!(stopped.state, SandboxTunnelState::Stopped);
+    assert_eq!(
+        raw.await.unwrap().unwrap_err().code(),
+        "sandbox_preview_claimed"
+    );
+    helper.await.unwrap();
+    assert!(
+        !state
+            .store
+            .sandbox_vm_has_live_tunnels(stopped.runtime.vm_id)
+            .unwrap()
+    );
+}
+
+#[test]
+fn historical_connectors_remain_claimed_until_the_current_binding_is_deleted() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = crate::persistence::Store::open(&directory.path().join("state.db")).unwrap();
+    let old = binding();
+    store.save_sandbox_tunnel(&old).unwrap();
+    let mut next = transfer(&store, &old);
+    store.confirm_sandbox_tunnel_handoff(&next).unwrap();
+    next.connector_id = Some(Uuid::new_v4());
+    next.applied_target = old.applied_target.clone();
+    next.state = SandboxTunnelState::Stopped;
+    store.save_sandbox_tunnel(&next).unwrap();
+    assert!(
+        store
+            .sandbox_tunnel_claims_connector(old.connector_id.unwrap())
+            .unwrap()
+    );
+    assert!(
+        store
+            .sandbox_tunnel_claims_connector(next.connector_id.unwrap())
+            .unwrap()
+    );
+    next.state = SandboxTunnelState::Deleted;
+    store.save_sandbox_tunnel(&next).unwrap();
+    assert!(
+        !store
+            .sandbox_tunnel_claims_connector(old.connector_id.unwrap())
+            .unwrap()
+    );
+    assert!(
+        !store
+            .sandbox_tunnel_claims_connector(next.connector_id.unwrap())
+            .unwrap()
+    );
+}
+
+#[tokio::test]
 async fn only_operator_inventory_retains_retirement_evidence_after_project_deletion() {
     use axum::{
         body::{Body, to_bytes},

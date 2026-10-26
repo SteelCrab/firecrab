@@ -20,6 +20,33 @@ fn decode(text: String) -> Result<SandboxTunnelBinding, PersistenceError> {
 }
 
 impl Store {
+    /// Full Pipe manifests and token registration cannot safely edit an address with a claim.
+    pub fn sandbox_tunnel_has_claims(&self) -> Result<bool, PersistenceError> {
+        Ok(self.lock().query_row(
+            "SELECT EXISTS(SELECT 1 FROM ai_sandbox_tunnels WHERE subdomain IS NOT NULL
+             OR (json_extract(spec,'$.successorBindingId') IS NOT NULL
+                 AND json_extract(spec,'$.handoffConfirmedAt') IS NULL))",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+    /// Stopped claims and their handoff ancestors still own the connector's control path.
+    pub fn sandbox_tunnel_claims_connector(
+        &self,
+        connector: Uuid,
+    ) -> Result<bool, PersistenceError> {
+        Ok(self.lock().query_row(
+            "SELECT EXISTS(SELECT 1 FROM ai_sandbox_tunnels b
+             WHERE json_extract(b.spec,'$.connectorId')=?1 AND (
+                b.subdomain IS NOT NULL
+                OR EXISTS(SELECT 1 FROM ai_sandbox_tunnels owner
+                    WHERE owner.subdomain=json_extract(b.spec,'$.spec.subdomain'))
+                OR (json_extract(b.spec,'$.successorBindingId') IS NOT NULL
+                    AND json_extract(b.spec,'$.handoffConfirmedAt') IS NULL)))",
+            [connector.to_string()],
+            |row| row.get(0),
+        )?)
+    }
     /// Unknown helper outcomes keep their VM address reserved until explicitly stopped.
     pub fn sandbox_vm_has_live_tunnels(&self, vm: Uuid) -> Result<bool, PersistenceError> {
         Ok(self.lock().query_row(
