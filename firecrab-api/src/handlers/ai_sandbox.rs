@@ -919,6 +919,7 @@ pub async fn reconcile_task(
     }
     saved.task.state = SandboxTaskState::Cancelled;
     saved.task.updated_at = ai_sandbox::now();
+    saved.task.error_code = None;
     saved.task.error = Some("Interrupted attempt reconciled; retry creates a new attempt".into());
     let store = state.store.clone();
     let copy = saved.clone();

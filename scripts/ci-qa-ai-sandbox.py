@@ -47,12 +47,12 @@ class Api:
         self.base = base.rstrip("/")
         self.http = build_opener(ProxyHandler({}), NoRedirect())
 
-    def request(self, method, path, body=None, allowed=(200,)):
+    def request(self, method, path, body=None, allowed=(200,), timeout=360):
         request = Request(self.base + path, method=method,
                           data=None if body is None else json.dumps(body).encode(),
                           headers={"Content-Type": "application/json"})
         try:
-            response = self.http.open(request, timeout=360)
+            response = self.http.open(request, timeout=timeout)
         except HTTPError as error:
             response = error
         with response:

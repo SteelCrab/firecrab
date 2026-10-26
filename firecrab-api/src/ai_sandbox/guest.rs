@@ -30,6 +30,16 @@ pub struct Output {
     pub code: i32,
 }
 
+/// Retained command evidence; a reboot can leave output without a confirmed exit.
+pub struct RecoveredOutput {
+    /// Bounded bytes written before interruption.
+    pub stdout: Vec<u8>,
+    /// Bounded diagnostic bytes written before interruption.
+    pub stderr: Vec<u8>,
+    /// Confirmed guest exit, absent when the supervisor did not finish.
+    pub code: Option<i32>,
+}
+
 /// Refuse internal, service-owned, stopped or unaddressed VMs before using any SSH key.
 pub fn binding(state: &AppState, id: Uuid) -> io::Result<Binding> {
     let vm = state
@@ -362,6 +372,59 @@ pub async fn cancel(state: &AppState, saved: &SavedTask) -> io::Result<()> {
     Ok(())
 }
 
+/// Read the recorded invocation after confirmed termination, before deleting its logs.
+pub async fn recover(state: &AppState, saved: &SavedTask) -> io::Result<Option<RecoveredOutput>> {
+    let Some(invocation) = saved.guest_command else {
+        return Ok(None);
+    };
+    let binding = saved
+        .guest
+        .as_ref()
+        .ok_or_else(|| io::Error::other("No guest binding"))?;
+    let attempt = attempt(saved)?;
+    let output = capture(
+        ssh(state, binding, &attempt)?,
+        script("recover", saved.task.attempt_id, Some(invocation), "", 0),
+        65536,
+        Duration::from_secs(30),
+    )
+    .await?;
+    if output.code == 79 {
+        return Ok(None);
+    }
+    if output.code != 0 {
+        return Err(io::Error::other("Cannot recover guest command output"));
+    }
+    let status = capture(
+        ssh(state, binding, &attempt)?,
+        script("status", saved.task.attempt_id, Some(invocation), "", 0),
+        1024,
+        Duration::from_secs(30),
+    )
+    .await?;
+    let code = match status.code {
+        0 => Some(
+            String::from_utf8_lossy(&status.stdout)
+                .trim()
+                .parse::<i32>()
+                .ok()
+                .filter(|code| (0..=255).contains(code))
+                .ok_or_else(|| io::Error::other("Invalid retained guest exit status"))?,
+        ),
+        78 => None,
+        _ => {
+            return Err(io::Error::other(
+                "Cannot confirm retained guest exit status",
+            ));
+        }
+    };
+    Ok(Some(RecoveredOutput {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        code,
+    }))
+}
+
 /// Recover a complete bounded workspace from the authenticated guest.
 pub async fn export(state: &AppState, saved: &SavedTask) -> io::Result<()> {
     let binding = saved
@@ -494,6 +557,13 @@ current_complete() {
 drop_user() {
   "$drop_program" --reuid "$(id -u "$user")" --regid "$(id -g "$user")" --clear-groups --no-new-privs env -i HOME="$work" PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin /bin/sh "$1"
 }
+emit_output() {
+  if [ -f "$cmd/stdout" ]; then tool head -c 65536 "$cmd/stdout"; fi
+  if [ -f "$cmd/output-limit" ]; then
+    if [ -f "$cmd/stderr" ]; then tool head -c 65280 "$cmd/stderr" >&2; fi
+    printf '\nSandbox output exceeded 64 KiB per stream; the owned command was stopped.\n' >&2
+  elif [ -f "$cmd/stderr" ]; then tool head -c 65536 "$cmd/stderr" >&2; fi
+}
 case "$action" in
 stage)
   current_complete && ! user_alive || exit 76
@@ -569,11 +639,7 @@ FIRECRAB_PAYLOAD
   if [ -f "$cmd/output-limit" ]; then code=125; fi
   printf '%s' "$code" >"$cmd/exit"
   touch "$cmd/finished"
-  tool head -c 65536 "$cmd/stdout"
-  if [ -f "$cmd/output-limit" ]; then
-    tool head -c 65280 "$cmd/stderr" >&2
-    printf '\nSandbox output exceeded 64 KiB per stream; the owned command was stopped.\n' >&2
-  else tool head -c 65536 "$cmd/stderr" >&2; fi
+  emit_output
   exit "$code"
   ;;
 cancel|cleanup)
@@ -598,6 +664,12 @@ cancel|cleanup)
     fi
     rm -rf "$base"
   fi
+  ;;
+recover)
+  [ -d "$cmd" ] || exit 79
+  [ "$(cat "$control/current" 2>/dev/null || true)" = "$invocation" ] || exit 78
+  ! user_alive || exit 76
+  emit_output
   ;;
 status)
   [ -f "$cmd/finished" ] && ! user_alive || exit 78

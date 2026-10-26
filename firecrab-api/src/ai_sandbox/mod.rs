@@ -267,6 +267,10 @@ pub async fn reconcile_guest(state: &AppState, saved: &mut SavedTask) -> Result<
         guest::export(state, saved)
             .await
             .map_err(|_| "Cannot recover guest project; the workspace is retained")?;
+        let output = guest::recover(state, saved)
+            .await
+            .map_err(|_| "Cannot recover guest command evidence; the workspace is retained")?;
+        checkpoint_recovery(state, saved, output).await?;
     }
     guest::cleanup(state, saved)
         .await
@@ -275,6 +279,42 @@ pub async fn reconcile_guest(state: &AppState, saved: &mut SavedTask) -> Result<
     saved.guest_staged = false;
     Ok(())
 }
+
+/// Persist exported evidence before cleanup, without reporting premature terminal state.
+async fn checkpoint_recovery(
+    state: &AppState,
+    saved: &mut SavedTask,
+    output: Option<guest::RecoveredOutput>,
+) -> Result<(), String> {
+    if let Some(output) = output {
+        let connections = state
+            .store
+            .ai_connections()
+            .map_err(|_| "Cannot redact recovered command evidence")?;
+        let event = saved
+            .task
+            .events
+            .iter_mut()
+            .rev()
+            .find(|event| event.name == "run_command")
+            .ok_or("Missing command event; guest evidence is retained")?;
+        event.output = redact(&connections, &String::from_utf8_lossy(&output.stdout));
+        event.stderr = redact(&connections, &String::from_utf8_lossy(&output.stderr));
+        event.exit_code = output.code;
+    }
+    let mut checkpoint = saved.clone();
+    if checkpoint.task.state != SandboxTaskState::Interrupted {
+        // The worker still owns cleanup. A restart, not this checkpoint, interrupts it.
+        checkpoint.task.state = SandboxTaskState::InProgress;
+        checkpoint.task.error_code = None;
+        checkpoint.task.error = None;
+    }
+    save(state, &checkpoint).await
+}
+
+#[cfg(test)]
+#[path = "recovery_tests.rs"]
+mod recovery_tests;
 
 /// Stable execution failure code and sanitized user-facing explanation.
 type ExecutionError = (String, String);

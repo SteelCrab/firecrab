@@ -30,13 +30,13 @@ cat > "$context/Dockerfile" <<'DOCKERFILE'
 ARG BASE_IMAGE=ubuntu:24.04
 FROM ${BASE_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    coreutils findutils gawk libgcc-s1 passwd procps tar util-linux \
+    coreutils findutils gawk libgcc-s1 openssh-client openssh-server passwd procps tar util-linux \
     && rm -rf /var/lib/apt/lists/*
 DOCKERFILE
 docker build --build-arg "BASE_IMAGE=$base_image" -t "$image" "$context"
 docker run --rm --name "$name" --network none --cpus 2 --memory 1g \
   -v "$binary:/qa/firecrab-api-tests:ro" -v "$profiles:/profiles" \
   -e FIRECRAB_SANDBOX_GUEST_QA=1 -e 'LLVM_PROFILE_FILE=/profiles/guest-%m-%p.profraw' \
-  "$image" /qa/firecrab-api-tests --exact \
-  ai_sandbox::guest::tests::guest_shell_enforces_identity_limits_retention_export_and_cancel \
+  "$image" /qa/firecrab-api-tests \
+  ai_sandbox::guest::tests::guest_ \
   --ignored --nocapture

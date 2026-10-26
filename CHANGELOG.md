@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- An opt-in Sandbox recovery gate verifies real-model command timeouts,
+  cancellation, disconnected admission, controller crashes, explicit retries and
+  guest reboots on a disposable API host. Ownership and socket checks protect
+  other controllers; retained data and borrowed resources survive task cleanup.
+  Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
 - Replicated controller services declare stateless or shared external application
   state and distribute version-pinned PipeSecrets through encrypted deployment
   snapshots. Invalid state, credential references and exclusive work fail before
@@ -283,6 +289,11 @@ Entries land here as work merges, and move under the next version heading when t
   allowing current API sources to compile in the management VM.
 - Sandbox live QA checks API-visible source paths before model usage and accepts
   successful task responses with nullable or textual task-error fields (#414).
+
+- Sandbox reconciliation restores interrupted command output and confirmed exit
+  status before guest cleanup. Unknown exits remain unknown. A failed checkpoint
+  retains guest evidence, and successful reconciliation clears stale restart errors.
+  Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
 
 - OCI guests recreate image-declared `/run` directories with `systemd-tmpfiles`
   before app services on every boot. MariaDB can restart after tmpfs clears
