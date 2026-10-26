@@ -478,7 +478,8 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
             1,
             Option::<String>::None,
             Option::<String>::None,
-            Option::<String>::None
+            Option::<String>::None,
+            firecrab_api_types::MicroNetworkDnsMode::LegacyForward.id(),
         ],
     )?;
     conn.execute(
@@ -2167,6 +2168,16 @@ mod tests {
             crate::model::EgressPolicy::Internet,
             "a column added by migration must default to the pre-existing behavior"
         );
+
+        let promoted = store
+            .micro_network(migrated.micro_network_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            promoted.dns_mode,
+            firecrab_api_types::MicroNetworkDnsMode::LegacyForward
+        );
+        assert_eq!(promoted.subnet_cidr, "172.30.0.0/24");
 
         // And the column is now writable, same as any other field.
         let mut updated = migrated.clone();
