@@ -2,8 +2,12 @@
 """Offline evidence guards. These do not establish a real model/VM run."""
 import copy
 import importlib.util
+import hashlib
+import io
 import json
 from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 import unittest
 
 spec = importlib.util.spec_from_file_location("coordination", Path(__file__).with_name("ci-qa-ai-sandbox-coordination.py"))
@@ -61,6 +65,26 @@ class EvidenceGuards(unittest.TestCase):
         command = qa.invocation("test-independent")
         self.assertIsInstance(command["env"], list)
         self.assertIn("mvn -o -q", command["argv"][-1])
+
+    def test_download_requires_the_actual_junit_case_and_matching_guest_nonce(self):
+        valid_xml = b'<testsuite tests="1" errors="0" failures="0"><testcase classname="io.firecrab.qa.GreetingTest" name="servesConfiguredGreeting"/></testsuite>'
+        for changed in [None, "case", "nonce", "hash", "owner"]:
+            value = task()
+            value.update({"id": "task", "attemptId": "attempt"})
+            xml = valid_xml.replace(b"servesConfiguredGreeting", b"differentTest") if changed == "case" else valid_xml
+            nonce = ("b" if changed == "nonce" else "a") * 32 + "\n"
+            blobs = {"xml": xml, "nonce": nonce.encode()}
+            value["artifacts"] = [{"id": key, "path": path, "taskId": "task", "attemptId": "attempt", "size": len(blobs[key]), "sha256": hashlib.sha256(blobs[key]).hexdigest()}
+                                  for key, path in [("xml", "qa/test-independent.xml"), ("nonce", "qa/test-independent.executed")]]
+            if changed == "hash": value["artifacts"][0]["sha256"] = "0" * 64
+            if changed == "owner": value["artifacts"][0]["taskId"] = "another-task"
+            api = SimpleNamespace(base="http://127.0.0.1:5523", http=SimpleNamespace(open=lambda request, timeout: io.BytesIO(blobs[request.full_url.rsplit("/", 1)[1]])))
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as directory:
+                if changed is None:
+                    qa.download(api, value, Path(directory), "test-independent")
+                else:
+                    with self.assertRaises(qa.qa.QaFailure):
+                        qa.download(api, value, Path(directory), "test-independent")
 
 
 if __name__ == "__main__":
