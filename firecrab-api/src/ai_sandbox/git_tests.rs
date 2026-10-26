@@ -15,6 +15,11 @@ fn git(source: &Path, args: &[&str]) -> Vec<u8> {
             "user.email=fixture@localhost",
             "-c",
             "core.hooksPath=/dev/null",
+            // Fixture construction must finish all writes before adversarial metadata edits.
+            "-c",
+            "maintenance.auto=false",
+            "-c",
+            "gc.auto=0",
         ])
         .args(args)
         .output()
