@@ -132,8 +132,22 @@ The source correction requires bounded, runtime-pinned guest filesystem sync
 before managed Persistent Workspace stop. Both Environment and ordinary VM stop
 reuse this guard. Admission stays blocked until the VM's Stopping claim is
 persisted. Unconfirmed sync retains the VM. Persistent stage/final flush and
-execution checkpoints also sync acknowledged guest state. Deployment and actual
-normal Environment stop/resume retention measurements remain pending.
+execution checkpoints also sync acknowledged guest state.
+
+After deployment, four new role-specific marker files were written immediately
+before normal Environment Stop. No operator `sync` or deliberate flush delay was
+used. The last write completed less than one second before Stop returned. Stop
+and Resume each ran once. All four marker contents and SHA256 values survived.
+Generation, manifest, image pins, network, VM and security-group IDs stayed the
+same. All runtimes changed. Every role reached authenticated SSH readiness using
+the managed bootstrap, including Test without a manual service start.
+
+The evidence is `actual_microvm_environment_stop_resume`, with four fresh
+markers verified. The earlier raw-stop dirty-page failure remains a separate
+negative result. This proves acknowledged filesystem retention through normal
+stop/resume; it does not promise RAM retention or unacknowledged writes after
+power loss. The legacy environment was then stopped normally for resource
+capacity. Its disks, project, manifest and results remain retained.
 
 ### Four-role packet matrix
 
@@ -158,6 +172,9 @@ denied while the DB's own IPv6 listener control succeeded. The initial seed
 checksums read through Debug HTTP, Test HTTP and Backend DB access all matched
 the immutable seed checksum. No guest address or policy was changed for these
 measurements. These operator probes do not create a model/provider task.
+The legacy network gateway still forwarded external DNS. Therefore these
+measurements prove the listed TCP/IPv6 peer policy only; they do not prove a
+complete external-DNS block.
 
 ## Linux process fixtures
 
@@ -172,10 +189,52 @@ These containers used at most one CPU and 512 MiB RAM. Their outputs identify
 them as Linux process fixtures with `microvmValidated=false`. They do not pass
 MicroVM mode, provider or network acceptance.
 
+## Private DNS process fixture
+
+A separate Linux fixture ran the QA dnsmasq 2.91 binary in two owned disposable
+network namespaces. It did not create a MicroVM or change the QA helper. The
+binary SHA256 was
+`8a307feb5fa212ffa5f0d93cbb7015dedc82be296328957fb5c67d3c4539741b`.
+A local counting UDP/TCP upstream supplied synthetic documentation addresses;
+no external DNS server was queried.
+
+Per-interface and per-address `auth-server` prototypes blocked private DHCP.
+They were rejected. Two separate resolver processes preserved DHCP Offer/ACK
+for both networks. The legacy resolver first cached seven external RR types.
+The private resolver then handled every QTYPE from 0 through 65535 over IPv4
+UDP/TCP and IPv6 UDP/TCP: 262144 questions, zero external answers, zero extra
+upstream queries. Another 184 known-type/recursion checks and 12 internal
+service/DHCP-name checks passed. The upstream count stayed 12 across all private
+queries, rose to 13 for a new legacy name, then stayed 13 for its cached repeat.
+
+The full result SHA256 was
+`4739c4e90754b6b0c3fc04e9a29a617bf397b05202e535d42d49b5925654ed91`.
+Both fixture containers and networks were removed by exact owned IDs. This is
+`dnsmasq_2_91_linux_fixture` with `microvmValidated=false`.
+
+The product keeps existing network/Environment DNS posture as `legacy_forward`.
+New managed environments record `private_only` outside their immutable input
+manifest. A new capability operation prevents an old helper from silently
+ignoring this policy. Private DNS has separate PID/config/lease/host files and
+cache. It uses `no-resolv`, `no-poll`, `no-hosts` and `local=/#/`. DHCP and local
+`.internal` names remain available. Readiness probes the VM's own DHCP FQDN.
+Matching legacy resolver inputs and process identity permit adoption after a
+helper restart without clearing its cache.
+
+Private networks share their local DNS name view within the private group.
+This is not per-environment DNS name confidentiality. Each environment's
+injected role/service discovery stays scoped to its captured reference and
+allowed ports. REST resource permissions and IPv4/IPv6 traffic policy remain
+separate. The host input exception permits DNS only to a VM's own gateway;
+other gateway/manager DNS destinations are denied. IPv4-only managed policy
+also drops IPv6 at the VM's Layer 2 boundary. Actual new strict-environment
+DNS, direct-gateway bypass and cross-environment probes remain pending.
+
 ## Pending checks
 
 Two-environment isolation and independent writes remain pending.
 The first API restart preserved all resource identities during incomplete
 readiness. Interruption during actual resource creation remains a separate
-pending scenario. Prepared distroless, Docker and nspawn MicroVM runs and retained
-Workspace lifecycle checks must each retain their own actual evidence.
+pending scenario. Prepared distroless, Docker and nspawn MicroVM runs must
+each retain their own actual evidence. New strict-DNS environments must be
+validated after the operator-controlled helper upgrade.
