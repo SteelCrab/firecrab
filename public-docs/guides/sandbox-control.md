@@ -19,12 +19,12 @@ attempt owner, byte size and SHA-256. CLI downloads create a new file rather
 than replacing an existing file. MCP artifact reads are limited to 64 KiB.
 
 ```sh
-firecrab ai-sandbox project PROJECT_ID
-firecrab ai-sandbox run PROJECT_ID TASK_ID < task.json
-firecrab ai-sandbox wait TASK_ID --timeout-seconds 30
-firecrab ai-sandbox artifact TASK_ID ARTIFACT_ID ./exported-result.bin
-firecrab ai-sandbox guest PROJECT_ID TASK_ID health
-firecrab ai-sandbox guest PROJECT_ID TASK_ID processes
+firecrab sandbox project PROJECT_ID
+firecrab sandbox run PROJECT_ID TASK_ID < task.json
+firecrab sandbox wait TASK_ID --timeout-seconds 30
+firecrab sandbox artifact TASK_ID ARTIFACT_ID ./exported-result.bin
+firecrab sandbox guest PROJECT_ID TASK_ID health
+firecrab sandbox guest PROJECT_ID TASK_ID processes
 ```
 
 Waits accept 1–60 seconds, include their HTTP polling time and return the last
@@ -42,13 +42,13 @@ stay blocked. Export required results before temporary cleanup. Retained
 Workspace disks require explicit final-deletion authorization.
 
 ```sh
-firecrab ai-sandbox environment images PROJECT_ID
-firecrab ai-sandbox environment create PROJECT_ID ENVIRONMENT_ID < environment.json
-firecrab ai-sandbox environment inspect PROJECT_ID ENVIRONMENT_ID
-firecrab ai-sandbox environment reconcile PROJECT_ID ENVIRONMENT_ID
-firecrab ai-sandbox environment export PROJECT_ID ENVIRONMENT_ID
-firecrab ai-sandbox environment stop PROJECT_ID ENVIRONMENT_ID
-firecrab ai-sandbox environment resume PROJECT_ID ENVIRONMENT_ID
+firecrab sandbox environment images PROJECT_ID
+firecrab sandbox environment create PROJECT_ID ENVIRONMENT_ID < environment.json
+firecrab sandbox environment inspect PROJECT_ID ENVIRONMENT_ID
+firecrab sandbox environment reconcile PROJECT_ID ENVIRONMENT_ID
+firecrab sandbox environment export PROJECT_ID ENVIRONMENT_ID
+firecrab sandbox environment stop PROJECT_ID ENVIRONMENT_ID
+firecrab sandbox environment resume PROJECT_ID ENVIRONMENT_ID
 ```
 
 Creation identities reserve resources before side effects. After an uncertain
@@ -65,12 +65,12 @@ upstreams must belong to the admitted task runtime. A pre-created Quick Tunnel
 is not required. Publish waits for local application readiness.
 
 ```sh
-firecrab ai-sandbox tunnel addresses
-firecrab ai-sandbox tunnel save PROJECT_ID BINDING_ID < preview.json
-firecrab ai-sandbox tunnel inspect BINDING_ID
-firecrab ai-sandbox tunnel stop BINDING_ID
-firecrab ai-sandbox tunnel publish BINDING_ID
-firecrab ai-sandbox tunnel inventory
+firecrab sandbox tunnel addresses
+firecrab sandbox tunnel save PROJECT_ID BINDING_ID < preview.json
+firecrab sandbox tunnel inspect BINDING_ID
+firecrab sandbox tunnel stop BINDING_ID
+firecrab sandbox tunnel publish BINDING_ID
+firecrab sandbox tunnel inventory
 ```
 
 Stop preserves the saved token and fixed URL. API restart does not stop Pipe's

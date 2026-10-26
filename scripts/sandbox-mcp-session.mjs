@@ -1,7 +1,8 @@
 // Interactive official MCP SDK client. Each operation is selected by its operator/model.
 // This file never chooses resources, provisions anything automatically, or reads credentials.
 import { createInterface } from "node:readline";
-import { appendFileSync, closeSync, openSync } from "node:fs";
+import { appendFileSync, closeSync, openSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -19,6 +20,7 @@ if (!["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname)
 }
 const output = openSync(resolve(trace), "ax", 0o600);
 const record = value => appendFileSync(output, `${JSON.stringify({ at: new Date().toISOString(), ...value })}\n`);
+record({ binary: resolve(binary), binarySha256: createHash("sha256").update(readFileSync(resolve(binary))).digest("hex") });
 const client = new Client({ name: "firecrab-414-interactive-agent", version: "1.0.0" }, { capabilities: {} });
 const transport = new StdioClientTransport({ command: resolve(binary), args: ["--api", endpoint.origin, "mcp"], stderr: "pipe" });
 const lines = createInterface({ input: process.stdin, terminal: false });
