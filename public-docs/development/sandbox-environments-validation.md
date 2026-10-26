@@ -135,6 +135,30 @@ persisted. Unconfirmed sync retains the VM. Persistent stage/final flush and
 execution checkpoints also sync acknowledged guest state. Deployment and actual
 normal Environment stop/resume retention measurements remain pending.
 
+### Four-role packet matrix
+
+All four roles later reached Ready. Test retained its original runtime: its old
+optional package worker eventually started SSH. No further lifecycle action was
+used to obtain the following actual guest-to-guest measurements.
+
+| Origin | Destination | Result |
+| --- | --- | --- |
+| Debug, Test | Backend TCP 8080 | Connected; HTTP seed read succeeded |
+| Backend | DB TCP 5432 | Connected; fixture seed read succeeded |
+| Debug, Test | DB TCP 5432 | Timed out |
+| Debug → Test, Test → Debug | SSH TCP 22 | Timed out |
+| Backend | DB SSH TCP 22 | Timed out |
+| DB | Backend TCP 8080 | Timed out |
+| Each of four roles | Internet IPv4 TCP 443 | Timed out |
+| Debug, Test, Backend | DB link-local IPv6 SSH TCP 22 | Timed out |
+| DB itself | Its same link-local IPv6 SSH TCP 22 | Connected; positive listener control |
+
+All 13 IPv4 observations matched the manifest. Three IPv6 peer attempts were
+denied while the DB's own IPv6 listener control succeeded. The initial seed
+checksums read through Debug HTTP, Test HTTP and Backend DB access all matched
+the immutable seed checksum. No guest address or policy was changed for these
+measurements. These operator probes do not create a model/provider task.
+
 ## Linux process fixtures
 
 The production shell executed in a disposable Linux container with distribution
@@ -150,8 +174,7 @@ MicroVM mode, provider or network acceptance.
 
 ## Pending checks
 
-Full four-role readiness, the remaining Debug/Test packet matrix,
-two-environment isolation and independent writes remain pending.
+Two-environment isolation and independent writes remain pending.
 The first API restart preserved all resource identities during incomplete
 readiness. Interruption during actual resource creation remains a separate
 pending scenario. Prepared distroless, Docker and nspawn MicroVM runs and retained
