@@ -23,11 +23,18 @@ impl Store {
     /// Unknown helper outcomes keep their VM address reserved until explicitly stopped.
     pub fn sandbox_vm_has_live_tunnels(&self, vm: Uuid) -> Result<bool, PersistenceError> {
         Ok(self.lock().query_row(
-            "SELECT EXISTS(SELECT 1 FROM ai_sandbox_tunnels
-             WHERE json_extract(spec,'$.runtime.vmId')=?1
-             AND json_extract(spec,'$.state') NOT IN ('stopped','deleted','superseded')
-             AND (json_extract(spec,'$.connectorId') IS NOT NULL
-                  OR json_extract(spec,'$.appliedTarget') IS NOT NULL))",
+            "SELECT EXISTS(SELECT 1 FROM ai_sandbox_tunnels b
+             WHERE json_extract(b.spec,'$.runtime.vmId')=?1 AND (
+                (json_extract(b.spec,'$.state') NOT IN ('stopped','deleted','superseded')
+                 AND (json_extract(b.spec,'$.connectorId') IS NOT NULL
+                      OR json_extract(b.spec,'$.appliedTarget') IS NOT NULL))
+                OR (json_extract(b.spec,'$.state')='superseded'
+                    AND json_extract(b.spec,'$.successorBindingId') IS NOT NULL
+                    AND json_extract(b.spec,'$.handoffConfirmedAt') IS NULL)
+                OR EXISTS(SELECT 1 FROM ai_sandbox_tunnels p
+                    WHERE p.id=json_extract(b.spec,'$.previousBindingId')
+                    AND json_extract(p.spec,'$.successorBindingId')=b.id
+                    AND json_extract(p.spec,'$.handoffConfirmedAt') IS NULL)))",
             [vm.to_string()],
             |row| row.get(0),
         )?)
@@ -36,7 +43,44 @@ impl Store {
         &self,
         project: Uuid,
     ) -> Result<bool, PersistenceError> {
-        Ok(self.lock().query_row("SELECT EXISTS(SELECT 1 FROM ai_sandbox_tunnels WHERE project_id=?1 AND json_extract(spec,'$.state') NOT IN ('deleted','superseded'))",[project.to_string()],|r|r.get(0))?)
+        Ok(self.lock().query_row("SELECT EXISTS(SELECT 1 FROM ai_sandbox_tunnels WHERE project_id=?1 AND (json_extract(spec,'$.state') NOT IN ('deleted','superseded') OR (json_extract(spec,'$.successorBindingId') IS NOT NULL AND json_extract(spec,'$.handoffConfirmedAt') IS NULL)))",[project.to_string()],|r|r.get(0))?)
+    }
+    /// Follow only unconfirmed predecessor links, including records written before this guard.
+    pub fn sandbox_tunnel_handoff(
+        &self,
+        binding: &SandboxTunnelBinding,
+    ) -> Result<Vec<SandboxTunnelBinding>, PersistenceError> {
+        pending_predecessors(&self.lock(), binding)
+    }
+    /// Release predecessor VM holds only after the caller has checked actual helper evidence.
+    /// Verify the persisted successor observation before confirming predecessors in one transaction.
+    pub fn confirm_sandbox_tunnel_handoff(
+        &self,
+        binding: &SandboxTunnelBinding,
+    ) -> Result<(), PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let saved: String = tx.query_row(
+            "SELECT spec FROM ai_sandbox_tunnels WHERE id=?1",
+            [binding.id.to_string()],
+            |r| r.get(0),
+        )?;
+        if decode(saved)? != *binding {
+            return Err(corrupt());
+        }
+        for mut previous in pending_predecessors(&tx, binding)? {
+            previous.handoff_confirmed_at = Some(binding.updated_at);
+            previous.updated_at = binding
+                .updated_at
+                .max(previous.updated_at.saturating_add(1));
+            let spec = serde_json::to_string(&previous).map_err(|_| corrupt())?;
+            tx.execute(
+                "UPDATE ai_sandbox_tunnels SET spec=?2 WHERE id=?1",
+                params![previous.id.to_string(), spec],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
     /// Operator-only inventory retains remote-retirement evidence after project deletion.
     pub fn sandbox_tunnel_inventory(&self) -> Result<Vec<SandboxTunnelBinding>, PersistenceError> {
@@ -58,8 +102,10 @@ impl Store {
             || previous.spec.subdomain != next.spec.subdomain
             || previous.state != SandboxTunnelState::Superseded
             || previous.successor_binding_id != Some(next.id)
+            || previous.handoff_confirmed_at.is_some()
             || next.previous_binding_id != Some(previous.id)
             || next.task_id != next.spec.task_id
+            || next.handoff_confirmed_at.is_some()
         {
             return Err(corrupt());
         }
@@ -82,6 +128,7 @@ impl Store {
             || current.runtime != previous.runtime
             || current.owner != previous.owner
             || current.spec != previous.spec
+            || !pending_predecessors(&tx, &current)?.is_empty()
         {
             return Err(corrupt());
         }
@@ -169,6 +216,9 @@ impl Store {
                 || saved.attempt_id != binding.attempt_id
                 || saved.runtime != binding.runtime
                 || saved.owner != binding.owner
+                || saved.previous_binding_id != binding.previous_binding_id
+                || saved.successor_binding_id != binding.successor_binding_id
+                || saved.handoff_confirmed_at != binding.handoff_confirmed_at
             {
                 return Err(corrupt());
             }
@@ -184,4 +234,38 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+}
+
+fn pending_predecessors(
+    conn: &rusqlite::Connection,
+    binding: &SandboxTunnelBinding,
+) -> Result<Vec<SandboxTunnelBinding>, PersistenceError> {
+    let mut next = binding.clone();
+    let mut seen = std::collections::BTreeSet::from([next.id]);
+    let mut pending = Vec::new();
+    while let Some(id) = next.previous_binding_id {
+        if !seen.insert(id) || seen.len() > 256 {
+            return Err(corrupt());
+        }
+        let spec: String = conn.query_row(
+            "SELECT spec FROM ai_sandbox_tunnels WHERE id=?1",
+            [id.to_string()],
+            |r| r.get(0),
+        )?;
+        let previous = decode(spec)?;
+        if previous.id != id
+            || previous.project_id != next.project_id
+            || previous.spec.subdomain != next.spec.subdomain
+            || previous.successor_binding_id != Some(next.id)
+            || previous.state != firecrab_api_types::SandboxTunnelState::Superseded
+        {
+            return Err(corrupt());
+        }
+        if previous.handoff_confirmed_at.is_some() {
+            break;
+        }
+        next = previous.clone();
+        pending.push(previous);
+    }
+    Ok(pending)
 }

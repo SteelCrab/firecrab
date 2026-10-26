@@ -43,6 +43,7 @@ fn binding() -> SandboxTunnelBinding {
         error_code: None,
         previous_binding_id: None,
         successor_binding_id: None,
+        handoff_confirmed_at: None,
     }
 }
 
@@ -141,8 +142,13 @@ fn snapshot(binding: &SandboxTunnelBinding) -> Snapshot {
     snapshot.quick_tunnels.push(QuickTunnelSnapshot {
         id: connector,
         name: "Preview".into(),
-        target: QuickTunnelTarget::Apps {
-            upstreams: vec!["172.30.1.2:8080".parse().unwrap()],
+        target: match binding.applied_target.as_ref().unwrap() {
+            SandboxTunnelResolvedTarget::Apps { upstreams } => QuickTunnelTarget::Apps {
+                upstreams: upstreams.clone(),
+            },
+            SandboxTunnelResolvedTarget::Nginx { host } => {
+                QuickTunnelTarget::Routes { host: host.clone() }
+            }
         },
         unit: UnitStatus {
             unit: quick_tunnel_unit(connector),
@@ -504,12 +510,280 @@ fn successor_claim_transfer_is_atomic_and_never_rewrites_original_attempt_or_run
     assert_eq!(saved.task_id, original.task_id);
     assert_eq!(saved.state, SandboxTunnelState::Superseded);
     assert!(store.save_sandbox_tunnel(&original).is_err());
+    store.confirm_sandbox_tunnel_handoff(&next).unwrap();
     let mut deleted = next.clone();
     deleted.state = SandboxTunnelState::Deleted;
     store.save_sandbox_tunnel(&deleted).unwrap();
     assert!(
         !store
             .sandbox_project_has_live_tunnels(original.project_id)
+            .unwrap()
+    );
+}
+
+fn successor(previous: &SandboxTunnelBinding) -> SandboxTunnelBinding {
+    let mut next = previous.clone();
+    next.id = Uuid::new_v4();
+    next.task_id = Uuid::new_v4();
+    next.spec.task_id = next.task_id;
+    next.attempt_id = Uuid::new_v4();
+    next.runtime = SandboxRuntimeRef {
+        vm_id: Uuid::new_v4(),
+        runtime_id: Uuid::new_v4(),
+    };
+    next.spec.target = SandboxTunnelTarget::VmApp {
+        runtime: next.runtime,
+        port: 8080,
+    };
+    next.previous_binding_id = Some(previous.id);
+    next.successor_binding_id = None;
+    next.handoff_confirmed_at = None;
+    next.connector_id = None;
+    next.applied_target = None;
+    next.state = SandboxTunnelState::Waiting;
+    next
+}
+
+fn transfer(
+    store: &crate::persistence::Store,
+    previous: &SandboxTunnelBinding,
+) -> SandboxTunnelBinding {
+    let next = successor(previous);
+    let mut old = previous.clone();
+    old.state = SandboxTunnelState::Superseded;
+    old.successor_binding_id = Some(next.id);
+    store.supersede_sandbox_tunnel(&old, &next).unwrap();
+    next
+}
+
+#[tokio::test]
+async fn failed_first_handoff_inspection_reserves_both_vms_across_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut state = state(directory.path()).await;
+    state.network =
+        crate::network::NetworkClient::with_socket_path(directory.path().join("missing.sock"));
+    let old = binding();
+    task(&state, &old);
+    state.store.save_sandbox_tunnel(&old).unwrap();
+    let mut next = transfer(&state.store, &old);
+    task(&state, &next);
+    let id = RequestId(Uuid::new_v4());
+    publish_successor(&state, id, &mut next).await.unwrap();
+    assert_eq!(next.state, SandboxTunnelState::NeedsReconciliation);
+    assert!(next.connector_id.is_none() && next.applied_target.is_none());
+    assert_eq!(
+        next.error_code.as_deref(),
+        Some("sandbox_preview_retarget_pending")
+    );
+    drop(state);
+    let state = self::state(directory.path()).await;
+    for vm in [old.runtime.vm_id, next.runtime.vm_id] {
+        assert!(state.store.sandbox_vm_has_live_tunnels(vm).unwrap());
+        for result in [
+            crate::handlers::vms::stop_vm(
+                State(state.clone()),
+                Extension(id),
+                Path(vm.to_string()),
+            )
+            .await
+            .map(|_| ()),
+            crate::handlers::vms::delete_vm(
+                State(state.clone()),
+                Extension(id),
+                Path(vm.to_string()),
+            )
+            .await
+            .map(|_| ()),
+        ] {
+            assert_eq!(result.unwrap_err().code(), "sandbox_preview_in_use");
+        }
+    }
+    let saved = state.store.sandbox_tunnel(old.id).unwrap().unwrap();
+    assert_eq!(
+        (saved.task_id, saved.attempt_id, saved.runtime),
+        (old.task_id, old.attempt_id, old.runtime)
+    );
+    assert!(saved.handoff_confirmed_at.is_none());
+    let caller: Caller =
+        serde_json::from_value(json!({"principal":"local","operator":true})).unwrap();
+    let error = delete(State(state.clone()), Path(next.id), Extension(id), caller)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), "sandbox_preview_reconcile_or_stop_handoff");
+    assert!(
+        state
+            .store
+            .sandbox_project_has_live_tunnels(old.project_id)
+            .unwrap()
+    );
+}
+
+#[test]
+fn helper_target_and_retired_connector_evidence_are_both_required_for_handoff() {
+    let old = binding();
+    let mut next = successor(&old);
+    next.connector_id = old.connector_id;
+    next.applied_target = Some(SandboxTunnelResolvedTarget::Apps {
+        upstreams: vec!["172.30.2.2:8080".parse().unwrap()],
+    });
+    let previous = [old.clone()];
+    let expected = next.applied_target.as_ref();
+    assert!(!handoff_observed(
+        &next,
+        &previous,
+        expected,
+        &snapshot(&old)
+    ));
+    let mut updated = snapshot(&next);
+    updated.quick_tunnels[0].target = snapshot(&old).quick_tunnels[0].target.clone();
+    assert!(!handoff_observed(&next, &previous, expected, &updated));
+    updated.quick_tunnels[0].target = snapshot(&next).quick_tunnels[0].target.clone();
+    assert!(handoff_observed(&next, &previous, expected, &updated));
+    updated.ingress_graceful_drain = true;
+    assert!(!handoff_observed(&next, &previous, expected, &updated));
+    updated.ingress_workers = Some(vec![firecrab_helper_protocol::pipe::IngressWorker {
+        draining: true,
+        pid: 4,
+        start_time: 10,
+        boot_id: Uuid::new_v4().to_string(),
+    }]);
+    assert!(!handoff_observed(&next, &previous, expected, &updated));
+    updated.ingress_workers = Some(vec![]);
+    assert!(handoff_observed(&next, &previous, expected, &updated));
+    next.connector_id = Some(Uuid::new_v4());
+    let mut changed = snapshot(&next);
+    assert!(!handoff_observed(&next, &previous, expected, &changed));
+    changed
+        .quick_tunnels
+        .push(snapshot(&old).quick_tunnels[0].clone());
+    assert!(!handoff_observed(&next, &previous, expected, &changed));
+    changed.quick_tunnels[1].unit.active_state = "inactive".into();
+    changed.quick_tunnels[1].unit.main_pid = 0;
+    assert!(handoff_observed(&next, &previous, expected, &changed));
+}
+
+#[test]
+fn confirmed_handoffs_allow_serial_retarget_without_releasing_the_pending_pair() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("state.db");
+    let store = crate::persistence::Store::open(&path).unwrap();
+    let a = binding();
+    store.save_sandbox_tunnel(&a).unwrap();
+    let b = transfer(&store, &a);
+    let c = successor(&b);
+    let mut unconfirmed = b.clone();
+    unconfirmed.state = SandboxTunnelState::Superseded;
+    unconfirmed.successor_binding_id = Some(c.id);
+    assert!(store.supersede_sandbox_tunnel(&unconfirmed, &c).is_err());
+    assert_eq!(
+        store.sandbox_tunnel_claim(&a.spec.subdomain).unwrap(),
+        Some(b.id)
+    );
+    store.confirm_sandbox_tunnel_handoff(&b).unwrap();
+    let c = transfer(&store, &b);
+    drop(store);
+    let store = crate::persistence::Store::open(&path).unwrap();
+    assert!(!store.sandbox_vm_has_live_tunnels(a.runtime.vm_id).unwrap());
+    assert!(store.sandbox_vm_has_live_tunnels(b.runtime.vm_id).unwrap());
+    assert!(store.sandbox_vm_has_live_tunnels(c.runtime.vm_id).unwrap());
+    for original in [&a, &b] {
+        let saved = store.sandbox_tunnel(original.id).unwrap().unwrap();
+        assert_eq!(
+            (saved.task_id, saved.attempt_id, saved.runtime),
+            (original.task_id, original.attempt_id, original.runtime)
+        );
+    }
+    // Missing fields in older persisted JSON keep the predecessor hold in force.
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection.execute("UPDATE ai_sandbox_tunnels SET spec=json_remove(spec,'$.handoffConfirmedAt') WHERE id=?1", [a.id.to_string()]).unwrap();
+    assert!(store.sandbox_vm_has_live_tunnels(a.runtime.vm_id).unwrap());
+    assert_eq!(store.sandbox_tunnel_handoff(&c).unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn pending_handoff_can_stop_the_verified_predecessor_before_any_new_publish() {
+    use firecrab_helper_protocol::framing::{read_frame, write_frame};
+    use firecrab_helper_protocol::network::{
+        NetworkRequest, NetworkRequestEnvelope, NetworkResponseEnvelope,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("handoff.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let mut state = state(directory.path()).await;
+    state.network = crate::network::NetworkClient::with_socket_path(socket);
+    let old = binding();
+    state.store.save_sandbox_tunnel(&old).unwrap();
+    let next = transfer(&state.store, &old);
+    task(&state, &next);
+    let mut stopped = snapshot(&old);
+    stopped.firecrab_tunnels[0].connected = false;
+    stopped.quick_tunnels[0].unit.active_state = "inactive".into();
+    stopped.quick_tunnels[0].unit.main_pid = 0;
+    let responses = [
+        (Operation::Inspect, snapshot(&old)),
+        (
+            Operation::ManageQuickTunnel {
+                request: QuickTunnelRequest::Control {
+                    id: old.connector_id.unwrap(),
+                    service_action: ServiceAction::Stop,
+                },
+            },
+            stopped,
+        ),
+    ];
+    let helper = tokio::spawn(async move {
+        for (operation, snapshot) in responses {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let envelope: NetworkRequestEnvelope = read_frame(&mut stream).await.unwrap();
+            assert_eq!(
+                envelope.request,
+                NetworkRequest::Pipe { request: operation }
+            );
+            write_frame(
+                &mut stream,
+                &NetworkResponseEnvelope {
+                    version: firecrab_helper_protocol::PROTOCOL_VERSION,
+                    request_id: envelope.request_id,
+                    result: Ok(()),
+                    pipe: Some(snapshot),
+                },
+            )
+            .await
+            .unwrap();
+        }
+    });
+    let caller: Caller =
+        serde_json::from_value(json!({"principal":"local","operator":true})).unwrap();
+    let Json(stopped) = stop(
+        State(state.clone()),
+        Path(next.id),
+        Extension(RequestId(Uuid::new_v4())),
+        caller,
+    )
+    .await
+    .unwrap();
+    helper.await.unwrap();
+    assert_eq!(stopped.state, SandboxTunnelState::Stopped);
+    assert_eq!(stopped.applied_target, old.applied_target);
+    assert!(
+        state
+            .store
+            .sandbox_tunnel(old.id)
+            .unwrap()
+            .unwrap()
+            .handoff_confirmed_at
+            .is_some()
+    );
+    assert!(
+        !state
+            .store
+            .sandbox_vm_has_live_tunnels(old.runtime.vm_id)
+            .unwrap()
+    );
+    assert!(
+        !state
+            .store
+            .sandbox_vm_has_live_tunnels(next.runtime.vm_id)
             .unwrap()
     );
 }

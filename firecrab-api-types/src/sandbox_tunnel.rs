@@ -159,6 +159,10 @@ pub struct SandboxTunnelBinding {
     /// Successor that exclusively owns the address after transfer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub successor_binding_id: Option<Uuid>,
+    /// Helper evidence confirmed that this predecessor no longer forwards to its runtime.
+    /// A missing value keeps both sides of a successor handoff reserved across restarts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_confirmed_at: Option<u64>,
 }
 
 /// New client identity and current task/runtime; the original attempt never changes.

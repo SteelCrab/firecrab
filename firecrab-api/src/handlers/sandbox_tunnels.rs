@@ -22,7 +22,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 // Keep durable claims and helper mutations ordered, including unknown HTTP outcomes.
-static MUTATIONS: Mutex<()> = Mutex::const_new(());
+pub(super) static MUTATIONS: Mutex<()> = Mutex::const_new(());
 
 fn failure(id: RequestId, code: &'static str) -> AppError {
     AppError::new(
@@ -153,6 +153,105 @@ fn require_applied(
         })
     {
         return Err(failure(id, "sandbox_preview_connection_changed"));
+    }
+    Ok(())
+}
+/// An interrupted handoff may still be serving its exact predecessor target.
+/// Inspect that owned mapping before retrying publication or stopping it.
+fn current_mapping(
+    state: &AppState,
+    id: RequestId,
+    binding: &SandboxTunnelBinding,
+    snapshot: &Snapshot,
+) -> Result<SandboxTunnelBinding, AppError> {
+    if require_applied(snapshot, binding, id).is_ok() {
+        return Ok(binding.clone());
+    }
+    for previous in state
+        .store
+        .sandbox_tunnel_handoff(binding)
+        .map_err(store_error(id))?
+    {
+        if require_applied(snapshot, &previous, id).is_ok() {
+            return Ok(previous);
+        }
+    }
+    Err(failure(id, "sandbox_preview_connection_changed"))
+}
+/// Configuration absence is not evidence that an old connector process has stopped.
+fn connector_stopped(snapshot: &Snapshot, connector: Uuid) -> bool {
+    snapshot.quick_tunnels.iter().any(|entry| {
+        entry.id == connector && entry.unit.active_state == "inactive" && entry.unit.main_pid == 0
+    })
+}
+/// Both the fixed address and local connector must describe the new target.
+/// Gracefully draining ingress workers keep the predecessor VM reserved.
+fn handoff_observed(
+    binding: &SandboxTunnelBinding,
+    previous: &[SandboxTunnelBinding],
+    expected: Option<&SandboxTunnelResolvedTarget>,
+    snapshot: &Snapshot,
+) -> bool {
+    if snapshot.ingress_graceful_drain
+        && snapshot
+            .ingress_workers
+            .as_ref()
+            .is_none_or(|workers| workers.iter().any(|worker| worker.draining))
+    {
+        return false;
+    }
+    let new_connector = address(snapshot, binding).filter(|address| {
+        expected.is_some_and(|target| {
+            binding.applied_target.as_ref() == Some(target)
+                && require_applied(snapshot, binding, RequestId(Uuid::nil())).is_ok()
+                && snapshot.quick_tunnels.iter().any(|entry| {
+                    entry.id == address.connector_id
+                        && match (&entry.target, target) {
+                            (
+                                firecrab_helper_protocol::pipe::QuickTunnelTarget::Apps {
+                                    upstreams: actual,
+                                },
+                                SandboxTunnelResolvedTarget::Apps { upstreams },
+                            ) => actual == upstreams,
+                            (
+                                firecrab_helper_protocol::pipe::QuickTunnelTarget::Routes {
+                                    host: actual,
+                                },
+                                SandboxTunnelResolvedTarget::Nginx { host },
+                            ) => actual == host,
+                            _ => false,
+                        }
+                })
+        })
+    });
+    previous.iter().all(|old| {
+        old.connector_id.is_some_and(|connector| {
+            connector_stopped(snapshot, connector)
+                || new_connector.is_some_and(|current| current.connector_id == connector)
+        })
+    })
+}
+fn confirm_handoff(
+    state: &AppState,
+    id: RequestId,
+    binding: &SandboxTunnelBinding,
+    snapshot: &Snapshot,
+) -> Result<(), AppError> {
+    let previous = state
+        .store
+        .sandbox_tunnel_handoff(binding)
+        .map_err(store_error(id))?;
+    if previous.is_empty() {
+        return Ok(());
+    }
+    let expected = target_addresses(state, id, binding, snapshot)
+        .ok()
+        .map(|(target, _)| target);
+    if handoff_observed(binding, &previous, expected.as_ref(), snapshot) {
+        state
+            .store
+            .confirm_sandbox_tunnel_handoff(binding)
+            .map_err(store_error(id))?;
     }
     Ok(())
 }
@@ -531,6 +630,7 @@ pub async fn save(
                 error_code: None,
                 previous_binding_id: None,
                 successor_binding_id: None,
+                handoff_confirmed_at: None,
             }
         };
     if address(&inspect(&state, id).await?, &binding).is_none() {
@@ -550,8 +650,8 @@ async fn publish_binding(
     if address(&snapshot, binding).is_none() {
         return Err(failure(id, "sandbox_preview_register_in_pipe"));
     }
-    if binding.applied_target.is_some() {
-        require_applied(&snapshot, binding, id)?;
+    if binding.applied_target.is_some() || binding.previous_binding_id.is_some() {
+        current_mapping(state, id, binding, &snapshot)?;
     }
     let (target, addresses) = target_addresses(state, id, binding, &snapshot)?;
     binding.app_ready = ready(&addresses).await;
@@ -578,13 +678,30 @@ async fn publish_binding(
     )
     .await;
     match response {
-        Ok(Json(snapshot)) => observe(binding, &snapshot),
+        Ok(Json(snapshot)) => {
+            observe(binding, &snapshot);
+            persist(state, id, binding)?;
+            return confirm_handoff(state, id, binding, &snapshot);
+        }
         Err(_) => {
             binding.state = SandboxTunnelState::NeedsReconciliation;
             binding.error_code = Some("sandbox_preview_publish_uncertain".into());
         }
     }
     persist(state, id, binding)
+}
+/// The durable handoff survives even when its first helper inspection cannot run.
+async fn publish_successor(
+    state: &AppState,
+    id: RequestId,
+    next: &mut SandboxTunnelBinding,
+) -> Result<(), AppError> {
+    if publish_binding(state, id, next).await.is_err() {
+        next.state = SandboxTunnelState::NeedsReconciliation;
+        next.error_code = Some("sandbox_preview_retarget_pending".into());
+        persist(state, id, next)?;
+    }
+    Ok(())
 }
 /// Explicit publish/resume uses saved credentials; it never registers a new token.
 pub async fn publish(
@@ -636,11 +753,38 @@ pub async fn reconcile(
     if binding.applied_target.is_some() {
         observe(&mut binding, &snapshot);
     }
+    if !state
+        .store
+        .sandbox_tunnel_handoff(&binding)
+        .map_err(store_error(id))?
+        .is_empty()
+    {
+        if let Ok(current) = current_mapping(&state, id, &binding, &snapshot)
+            && current.id != binding.id
+        {
+            binding.connector_id = current.connector_id;
+            binding.applied_target = current.applied_target;
+            binding.helper_connected = false;
+            binding.public_https = SandboxTunnelVerification::Unverified;
+            binding.web_socket_handshake = SandboxTunnelVerification::Unverified;
+            if current
+                .connector_id
+                .is_some_and(|connector| connector_stopped(&snapshot, connector))
+            {
+                binding.state = SandboxTunnelState::Stopping;
+                observe(&mut binding, &snapshot);
+            } else {
+                binding.state = SandboxTunnelState::NeedsReconciliation;
+                binding.error_code = Some("sandbox_preview_retarget_pending".into());
+            }
+        }
+    }
     if runtime_changed {
         binding.state = SandboxTunnelState::NeedsReconciliation;
         binding.error_code = Some("sandbox_preview_runtime_changed".into());
     }
     persist(&state, id, &mut binding)?;
+    confirm_handoff(&state, id, &binding, &snapshot)?;
     Ok(Json(binding))
 }
 /// Stop only the binding's exclusive connector, retaining the fixed address and token.
@@ -661,16 +805,23 @@ pub async fn stop(
     if binding.state == SandboxTunnelState::Stopped {
         return Ok(Json(binding));
     }
-    if binding.applied_target.is_none() {
+    let pending = !state
+        .store
+        .sandbox_tunnel_handoff(&binding)
+        .map_err(store_error(id))?
+        .is_empty();
+    if binding.applied_target.is_none() && !pending {
         binding.state = SandboxTunnelState::Stopped;
         persist(&state, id, &mut binding)?;
         return Ok(Json(binding));
     }
     let snapshot = inspect(&state, id).await?;
-    require_applied(&snapshot, &binding, id)?;
-    let connector = binding
+    let current = current_mapping(&state, id, &binding, &snapshot)?;
+    let connector = current
         .connector_id
         .ok_or_else(|| failure(id, "sandbox_preview_connector_missing"))?;
+    binding.connector_id = Some(connector);
+    binding.applied_target = current.applied_target;
     binding.state = SandboxTunnelState::Stopping;
     binding.helper_connected = false;
     binding.public_https = SandboxTunnelVerification::Unverified;
@@ -688,7 +839,12 @@ pub async fn stop(
     )
     .await
     {
-        Ok(Json(snapshot)) => observe(&mut binding, &snapshot),
+        Ok(Json(snapshot)) => {
+            observe(&mut binding, &snapshot);
+            persist(&state, id, &mut binding)?;
+            confirm_handoff(&state, id, &binding, &snapshot)?;
+            return Ok(Json(binding));
+        }
         Err(_) => binding.error_code = Some("sandbox_preview_stop_uncertain".into()),
     }
     persist(&state, id, &mut binding)?;
@@ -708,6 +864,14 @@ pub async fn delete(
     }
     if binding.state == SandboxTunnelState::Deleted {
         return Ok(Json(binding));
+    }
+    if !state
+        .store
+        .sandbox_tunnel_handoff(&binding)
+        .map_err(store_error(id))?
+        .is_empty()
+    {
+        return Err(failure(id, "sandbox_preview_reconcile_or_stop_handoff"));
     }
     if binding.applied_target.is_none() {
         binding.state = SandboxTunnelState::Deleted;
@@ -779,6 +943,14 @@ pub async fn retarget(
     }
     let snapshot = inspect(&state, id).await?;
     require_applied(&snapshot, &previous, id)?;
+    if !state
+        .store
+        .sandbox_tunnel_handoff(&previous)
+        .map_err(store_error(id))?
+        .is_empty()
+    {
+        return Err(failure(id, "sandbox_preview_reconcile_or_stop_handoff"));
+    }
     let task = state
         .store
         .sandbox_task(request.task_id)
@@ -824,6 +996,7 @@ pub async fn retarget(
         error_code: None,
         previous_binding_id: Some(key),
         successor_binding_id: None,
+        handoff_confirmed_at: None,
     };
     let (_, addresses) = target_addresses(&state, id, &next, &snapshot)?;
     if !ready(&addresses).await {
@@ -839,11 +1012,7 @@ pub async fn retarget(
         .supersede_sandbox_tunnel(&previous, &next)
         .map_err(store_error(id))?;
     drop(_runtime);
-    if publish_binding(&state, id, &mut next).await.is_err() {
-        next.state = SandboxTunnelState::NeedsReconciliation;
-        next.error_code = Some("sandbox_preview_retarget_pending".into());
-        persist(&state, id, &mut next)?;
-    }
+    publish_successor(&state, id, &mut next).await?;
     Ok(Json(next))
 }
 
