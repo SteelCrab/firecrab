@@ -91,6 +91,7 @@ jobs:
           python3 scripts/test-sandbox-environment-seed.py
           python3 scripts/test-sandbox-oci-archive.py
           python3 scripts/test-sandbox-oci-startup.py
+          setpriv --no-new-privs python3 scripts/test-qa-sandbox-http-ws.py
 
       - name: Database QA guards and cleanup contract
         run: python3 scripts/test-pipe-databases-qa.py
