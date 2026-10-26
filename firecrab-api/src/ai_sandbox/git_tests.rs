@@ -73,6 +73,40 @@ fn normal_sha1_sha256_and_packed_repositories_use_only_the_private_snapshot() {
 }
 
 #[test]
+fn regular_maintenance_lock_is_unread_advisory_metadata() {
+    let (_fixture, source) = repository("sha1");
+    let lock = source.join(".git/objects/maintenance.lock");
+    let content = b"advisory coordination must never become an object";
+    fs::write(&lock, content).unwrap();
+    fs::set_permissions(&lock, fs::Permissions::from_mode(0o000)).unwrap();
+    let snapshot = Snapshot::open(&source).unwrap();
+    assert_eq!(
+        snapshot
+            .run(&["cat-file", "blob", "HEAD:visible.txt"], 1024)
+            .unwrap(),
+        b"authorized repository"
+    );
+    assert!(!snapshot.path.join("objects/maintenance.lock").exists());
+    assert_eq!(fs::metadata(&lock).unwrap().permissions().mode() & 0o777, 0);
+    fs::set_permissions(&lock, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(fs::read(&lock).unwrap(), content);
+}
+
+#[test]
+fn maintenance_lock_links_directories_and_other_unknown_entries_stay_rejected() {
+    let (_fixture, source) = repository("sha1");
+    let lock = source.join(".git/objects/maintenance.lock");
+    symlink(source.join("visible.txt"), &lock).unwrap();
+    assert!(Snapshot::open(&source).is_err());
+    fs::remove_file(&lock).unwrap();
+    fs::create_dir(&lock).unwrap();
+    assert!(Snapshot::open(&source).is_err());
+    fs::remove_dir(&lock).unwrap();
+    fs::write(source.join(".git/objects/unknown"), b"not an object").unwrap();
+    assert!(Snapshot::open(&source).is_err());
+}
+
+#[test]
 fn registered_linked_worktree_keeps_its_head_and_shared_objects() {
     let (fixture, source) = repository("sha1");
     let linked = fs::canonicalize(fixture.path()).unwrap().join("linked");

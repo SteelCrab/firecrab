@@ -96,6 +96,11 @@ impl Snapshot {
             if name == "info" {
                 continue;
             }
+            // Automatic maintenance can outlive commit; its lock is advisory.
+            // Never open or copy it into the private repository's object authority.
+            if name == "maintenance.lock" && kind.is_file() {
+                continue;
+            }
             if !kind.is_dir() {
                 return Err(unsafe_metadata());
             }
