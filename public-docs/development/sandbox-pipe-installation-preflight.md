@@ -92,6 +92,12 @@ static update. This section records that deployment report separately from the
 independent engine/API checks. The later API update remained on hold for the
 separate guest diagnostic.
 
+![Actual recovered Pipe AI account layout](../assets/sandbox-414-pipe-ai-2026-10-26.png)
+
+The screenshot records the actual local QA browser after reload. The existing
+ChatGPT connection remains connected; no login, token entry or inference was
+performed to capture it.
+
 ## Metadata availability is independent of engines
 
 `firecrab-helper/src/pipe.rs::cli()` looks for a protected root-owned sibling
