@@ -56,6 +56,17 @@ class EvidenceGuards(unittest.TestCase):
             with self.subTest(changed=changed), self.assertRaises(qa.qa.QaFailure):
                 qa.validate(value, "Test", ["test-independent"], [0])
 
+    def test_extra_diagnostics_preserve_required_artifacts_and_reject_duplicates(self):
+        value = task()
+        value["artifacts"].append({"path": "qa/test-independent.log"})
+        qa.validate(value, "Test", ["test-independent"], [0])
+        for artifacts in [value["artifacts"][1:], value["artifacts"] + [value["artifacts"][0]],
+                          value["artifacts"] + [{"path": "unrelated.txt"}]]:
+            rejected = copy.deepcopy(value)
+            rejected["artifacts"] = artifacts
+            with self.assertRaises(qa.qa.QaFailure):
+                qa.validate(rejected, "Test", ["test-independent"], [0])
+
     def test_dependency_admission_uses_distinct_task_and_agent_identity(self):
         value = qa.input_for("Test", "debug-task-id")
         self.assertEqual(value["coordination"]["dependencies"], ["debug-task-id"])
@@ -68,16 +79,18 @@ class EvidenceGuards(unittest.TestCase):
 
     def test_download_requires_the_actual_junit_case_and_matching_guest_nonce(self):
         valid_xml = b'<testsuite tests="1" errors="0" failures="0"><testcase classname="io.firecrab.qa.GreetingTest" name="servesConfiguredGreeting"/></testsuite>'
-        for changed in [None, "case", "nonce", "hash", "owner"]:
+        for changed in [None, "case", "nonce", "hash", "owner", "diagnostic"]:
             value = task()
             value.update({"id": "task", "attemptId": "attempt"})
             xml = valid_xml.replace(b"servesConfiguredGreeting", b"differentTest") if changed == "case" else valid_xml
             nonce = ("b" if changed == "nonce" else "a") * 32 + "\n"
-            blobs = {"xml": xml, "nonce": nonce.encode()}
+            blobs = {"xml": xml, "nonce": nonce.encode(), "log": b"actual offline build log\n"}
+            value["changes"].append({"path": "qa/test-independent.log", "after": "actual offline build log\n"})
             value["artifacts"] = [{"id": key, "path": path, "taskId": "task", "attemptId": "attempt", "size": len(blobs[key]), "sha256": hashlib.sha256(blobs[key]).hexdigest()}
-                                  for key, path in [("xml", "qa/test-independent.xml"), ("nonce", "qa/test-independent.executed")]]
+                                  for key, path in [("xml", "qa/test-independent.xml"), ("nonce", "qa/test-independent.executed"), ("log", "qa/test-independent.log")]]
             if changed == "hash": value["artifacts"][0]["sha256"] = "0" * 64
             if changed == "owner": value["artifacts"][0]["taskId"] = "another-task"
+            if changed == "diagnostic": value["changes"][-1]["after"] = "different build log\n"
             api = SimpleNamespace(base="http://127.0.0.1:5523", http=SimpleNamespace(open=lambda request, timeout: io.BytesIO(blobs[request.full_url.rsplit("/", 1)[1]])))
             with self.subTest(changed=changed), tempfile.TemporaryDirectory() as directory:
                 if changed is None:

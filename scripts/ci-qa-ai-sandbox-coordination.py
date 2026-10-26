@@ -118,9 +118,13 @@ def validate(task, agent, labels, codes):
     for event in events:
         if event["exitCode"] == 0:
             qa.require(any(test["eventSequence"] == event["sequence"] and test["passed"] for test in tests), "Regression record disagrees with the actual guest command")
-    qa.require(len(task["artifacts"]) == 2, "Missing XML/nonce artifact export")
     prefix = "debug-fixed" if agent == "Debug" else "test-independent"
-    qa.require({artifact.get("path") for artifact in task["artifacts"]} == {f"qa/{prefix}.xml", f"qa/{prefix}.executed"}, "Wrong artifact paths cannot establish JUnit/nonce evidence")
+    paths = [artifact.get("path") for artifact in task["artifacts"]]
+    required = {f"qa/{prefix}.xml", f"qa/{prefix}.executed"}
+    diagnostics = {APPLICATION} | {f"qa/{label}.log" for label in labels}
+    qa.require(required.issubset(paths), "Missing XML/nonce artifact export")
+    qa.require(len(set(paths)) == len(paths) and set(paths).issubset(required | diagnostics),
+               "Duplicate or unrelated artifacts cannot establish regression evidence")
     for event in task["events"]:
         if event["name"] in ("write_file", "delete_file"):
             arguments = json.loads(event["input"])
@@ -166,8 +170,12 @@ def download(api, task, results, prefix):
                        and len(cases) == 1 and cases[0].get("classname") == "io.firecrab.qa.GreetingTest"
                        and cases[0].get("name") == "servesConfiguredGreeting" and cases[0].find("failure") is None
                        and cases[0].find("error") is None, "Actual intended JUnit regression did not pass")
+        elif artifact["path"] == f"qa/{prefix}.executed":
+            qa.require(data == (nonce + "\n").encode(), "Nonce artifact does not match the actual command")
         else:
-            qa.require(artifact["path"] == f"qa/{prefix}.executed" and data == (nonce + "\n").encode(), "Nonce artifact does not match the actual command")
+            change = next((change for change in task["changes"] if change["path"] == artifact["path"]), None)
+            qa.require(change is not None and isinstance(change.get("after"), str)
+                       and data == change["after"].encode(), "Diagnostic artifact differs from the retained source/log change")
 
 
 def main():
