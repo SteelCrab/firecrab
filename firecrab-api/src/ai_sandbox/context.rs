@@ -136,7 +136,7 @@ mod tests {
             spec.context.references = vec![path.into()];
             assert!(validate(&spec).is_err(), "{path}");
         }
-        spec.context.references = vec!["docs/design.md".into()];
+        spec.context.references = vec!["project-notes/design.md".into()];
         spec.context.selected_skills = vec![".agents/skills/review/SKILL.md".into()];
         assert!(validate(&spec).is_ok());
         spec.context.git_ref = Some("--exec=anything".into());
