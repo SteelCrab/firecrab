@@ -72,15 +72,9 @@ CPU 2, RAM 4 GiB, one Cargo job, debug information disabled and incremental
 compilation disabled. This is local integration validation, not a new CI verdict
 or execution of this source on the QA manager.
 
-| Focused group | Passed |
-| --- | --- |
-| API Tunnel | 39 |
-| Helper Pipe | 7 |
-| CLI Pipe | 31 |
-| CLI Sandbox | 14 |
-| MCP | 18 |
-| Frontend library | 49 |
-| Total | **158** |
+| API Tunnel | Helper Pipe | CLI Pipe | CLI Sandbox | MCP | Frontend library | Total |
+| --- | --- | --- | --- | --- | --- | --- |
+| 39 | 7 | 31 | 14 | 18 | 49 | **158** |
 
 API/helper/CLI test Clippy and standard frontend library Clippy pass with
 warnings denied. Unrelated frontend test-lint debt is not changed.
@@ -179,8 +173,8 @@ separate receipt.
 All four guests have actual PID 1 `/sbin/init` and successful OpenRC service
 status. Authenticated V1 capabilities report `init=openrc`, execution supported,
 and Docker/nspawn unavailable. This capability inspection alone does not prove
-OpenRC task payloads, limits or cancellation. The later task result below has
-its own incomplete cleanup verdict.
+OpenRC task payloads, limits or cancellation. The later literal task and its
+separate cleanup reconciliation are recorded below.
 
 Direct UI inspection selects the actual A project and expands its environment.
 Debug, Test, Backend and DB each show ready agent/network/application status.
@@ -244,15 +238,32 @@ SHA-256 `b020917d869f2fffe0bec64ca0270c24605080afc93c99eacbdd059af5a29568`.
 This independent-write pass does not replace the earlier failed deployment or
 resume-observer receipts in the [private DNS record](sandbox-private-dns-qa-2026-10-27.md).
 
-## OpenRC task: payload evidence with incomplete cleanup
+## API-only update and OpenRC literal cleanup
+
+The API-only update deploys source `52e1f252921feee99be19f46fdd15350988df57e`.
+API SHA-256 is `e9e72f4c5c964737efe7388ada99debbb655978f7d89d0c24a811f09758555de`.
+API PID is 199899; helper PID remains 138610. All 13 resource references and
+all eight actual guest boot IDs remain unchanged. Helper, CLI, manager and VMs
+are not restarted. The verification receipt is
+`/var/lib/firecrab/qa-artifacts/414-api-only/df746190-5761-40b4-a528-04fc8fc7679a/result/verification.json`,
+SHA-256 `906c8791b65f7ca0874170edd6a1871893fe149b4d96abf228c4f7b6ba3c0dd9`.
 
 Actual task `c8fc16f2-ef45-5aa0-b2c6-dea031cc36c7` invokes one native command
-through the AI task lifecycle. The command returns actual exit code **7** and
-retains an **882-byte** artifact with SHA-256
+through AI, returns actual exit code **7**, and retains an **882-byte** artifact:
 `75935e99e9a0428ef3238a3b037edd19ab392ba5ca66ae63ea8d8184ef45d41d`.
-The task remains **Interrupted** with `cleanup_required`. Resolution is in
-progress. These payload and artifact observations do not complete OpenRC
-acceptance or prove the remaining limit/cancellation/cleanup requirements.
+The original **Interrupted**, `sandbox_guest_cleanup_required` failure is kept.
+One later reconcile POST reaches **Cancelled** without rerunning the command or
+model. Events, result, tests and artifacts remain unchanged. The owned account,
+group, control state and recorded PID tuple are gone. The separate final verdict
+SHA-256 is `830a979accd9adb0d27ffff0756469495ce22cf405584699e8f8398129453084`.
+Reconciled Cancelled is not a new successful Result.
+
+The [OpenRC record](sandbox-openrc-v1-qa-2026-10-27.md) separates actual literal
+argv/env, NUL stdin, separate streams, exit 7, NoNewPrivs/caps/groups/limits and
+cleanup evidence from local regression checks. Memory, wall-time, output-limit
+and actual cancellation tasks remain held. A new memory run is rejected by
+automatic approval review before CreateProcess because the existing approval
+covers only the literal task. Root has requested approval for the four new tasks.
 
 ## Remaining gates
 
@@ -268,8 +279,9 @@ acceptance or prove the remaining limit/cancellation/cleanup requirements.
   384 external-name responses without answers, and six IPv6 peer denials with
   two positive controls. DNS names remain shared within the private resolver.
   The separate independent-write run above passes after that fresh matrix.
-- Resolve the OpenRC task's `cleanup_required` interruption. Complete actual
-  argv/stdin/output/limits/cancellation, cleanup and result-export acceptance.
+- Obtain separate approval for OpenRC memory/wall-time/output-limit/cancellation
+  tasks. Two new TTL environments also await separate approval and host-capacity
+  admission; neither is counted as completed QA.
 - Complete the remaining actual results/UI and public preview acceptance.
   [Retained-results follow-up](sandbox-results-ui-qa-2026-10-27.md) verifies
   actual Korean/English responsive screens and three artifact byte/hash checks

@@ -241,11 +241,35 @@ The [integration record](sandbox-integration-qa-2026-10-27.md) preserves the
 individual test counts and earlier failed setup. Old `682ee479` CI is not
 represented as CI for this integrated head.
 
+## API-only follow-up with unchanged running pair
+
+The API-only update deploys source `52e1f252921feee99be19f46fdd15350988df57e`,
+API SHA-256 `e9e72f4c5c964737efe7388ada99debbb655978f7d89d0c24a811f09758555de`.
+API PID is 199899; helper PID remains 138610. All 13 resource references and
+eight actual guest boot IDs remain unchanged. Helper, CLI, manager and VMs are
+not restarted. This update does not replace the earlier failed DNS deployment
+or resume-observer receipts. Its separate verification receipt is
+`/var/lib/firecrab/qa-artifacts/414-api-only/df746190-5761-40b4-a528-04fc8fc7679a/result/verification.json`,
+SHA-256 `906c8791b65f7ca0874170edd6a1871893fe149b4d96abf228c4f7b6ba3c0dd9`.
+
 Actual OpenRC task `c8fc16f2-ef45-5aa0-b2c6-dea031cc36c7` executes one native
 command through AI, returns exit code **7**, and retains an **882-byte** artifact
 with SHA-256 `75935e99e9a0428ef3238a3b037edd19ab392ba5ca66ae63ea8d8184ef45d41d`.
-It remains **Interrupted** with `cleanup_required`. Resolution is in progress;
-OpenRC acceptance is not complete. Public preview remains a separate gate.
+The original **Interrupted**, `sandbox_guest_cleanup_required` failure remains.
+One later reconcile POST reaches **Cancelled**, preserving all events, result,
+tests and artifacts. No command or model is rerun. The owned account/group,
+control state and recorded PID tuple are gone. The separate final verdict SHA-256
+is `830a979accd9adb0d27ffff0756469495ce22cf405584699e8f8398129453084`.
+Reconciled Cancelled is not a new successful Result.
+
+The [OpenRC record](sandbox-openrc-v1-qa-2026-10-27.md) retains actual literal
+argv/env, NUL stdin, separate output streams, exit 7, NoNewPrivs/caps/groups/limits
+and cleanup evidence. Remaining memory/wall-time/output-limit/cancellation tasks
+are held. Automatic approval review blocks the new memory run before
+CreateProcess because only the literal task was approved. Root has requested
+approval for the four new tasks. Two new TTL environments also await separate
+approval and host-capacity admission. Public preview remains a separate gate.
+The old `682ee479` CI result does not establish CI success for source `52e1f252`.
 
 Keep the failed receipts. Do not remove/recreate environments or manually
 repair resolver/lease files to turn an earlier failed verdict into a pass.
