@@ -19,6 +19,13 @@ receives an empty inherited environment plus HOME, PATH, explicit values and
 authorized environment service-discovery values. It runs as a dedicated UID
 with no supplementary groups and no-new-privileges enabled.
 
+Account creation and cleanup share a guest-global root-owned lock at
+`/run/firecrab-sandbox-accounts.lock`. It must be a root:root mode-0600 regular
+file with one link. Acquisition is bounded to ten seconds. The lock covers
+GID selection, durable creation acknowledgements, UID checkpoints and owned
+account removal. Payloads never inherit its file descriptor. Existing accounts,
+unknown group registrations and unsafe lock files are rejected without adoption.
+
 | Bound | Accepted values |
 | --- | --- |
 | argv | 1–128 arguments; 8192 total bytes |

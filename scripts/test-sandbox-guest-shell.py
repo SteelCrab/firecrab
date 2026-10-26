@@ -5,6 +5,8 @@ This is a process/tooling fixture. It does not validate a MicroVM, init system,
 container engine, provider, network policy or public preview.
 """
 import base64
+import concurrent.futures
+import fcntl
 import io
 import json
 import os
@@ -78,13 +80,13 @@ def main():
         sentinel = directory / "unrelated"
         sentinel.write_text("preserve")
 
-        def program(action, attempt, invocation, payload=b"", seconds=5, persistent=False, workspace=None, mode="direct", output=65536, fail_group=False, fail_create=False, fail_before_user=False, fail_before_ack=False):
+        def program(action, attempt, invocation, payload=b"", seconds=5, persistent=False, workspace=None, mode="direct", output=65536, fail_group=False, fail_create=False, fail_before_user=False, fail_before_ack=False, guest_root=None):
             values = {"__ID__": attempt.hex, "__COMMAND__": invocation.hex, "__ACTION__": action,
                       "__PAYLOAD__": base64.b64encode(payload).decode(), "__SECONDS__": str(seconds),
                       "__MODE__": mode, "__IMAGE__": "example.invalid/test@sha256:" + "a" * 64,
                       "__PERSISTENT__": str(persistent).lower(), "__WORKSPACE__": (workspace or attempt).hex,
                       "__CPU_SECONDS__": "5", "__MEMORY_KIB__": "131072", "__OUTPUT_BYTES__": str(output)}
-            text = shell.replace("/var/lib/firecrab-ai", str(root))
+            text = shell.replace("/var/lib/firecrab-ai", str(guest_root or root))
             for name, value in values.items():
                 text = text.replace(name, value)
             if action == "signal":
@@ -144,6 +146,87 @@ def main():
             checks.append("busybox_explicit_group_partial_uid_checkpoint_preexisting_refusal")
 
         baseline = (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        attempts = [(uuid.uuid4(), uuid.uuid4(), directory / f"parallel-root-{index}")
+                    for index in range(8)]
+
+        def allocate(item):
+            attempt, invocation, guest_root = item
+            run("stage", attempt, invocation, archive({"parallel.txt": b"owned"}),
+                guest_root=guest_root)
+            account = pwd.getpwnam("a" + attempt.hex[:30])
+            return account.pw_uid, account.pw_gid
+
+        def cleanup(item):
+            attempt, invocation, guest_root = item
+            run("cleanup", attempt, invocation, guest_root=guest_root)
+
+        def check_payload(item):
+            attempt, invocation, guest_root = item
+            result = run("run", attempt, invocation,
+                         b"set -e; test ! -e /proc/self/fd/8; printf parallel",
+                         guest_root=guest_root)
+            assert result.stdout == b"parallel"
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            identities = list(pool.map(allocate, attempts[:4]))
+            assert len({uid for uid, _ in identities}) == 4
+            assert len({gid for _, gid in identities}) == 4
+            list(pool.map(check_payload, attempts[:4]))
+            changes = [pool.submit(cleanup, item) for item in attempts[:4]]
+            replacements = [pool.submit(allocate, item) for item in attempts[4:]]
+            for result in changes:
+                result.result()
+            identities = [result.result() for result in replacements]
+            assert len({uid for uid, _ in identities}) == 4
+            assert len({gid for _, gid in identities}) == 4
+            list(pool.map(cleanup, attempts[4:]))
+        assert baseline == (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        checks.append("parallel_independent_roots_allocate_distinct_accounts_and_cleanup")
+
+        account_lock = Path("/run/firecrab-sandbox-accounts.lock")
+        account_lock.write_text("public-lock-canary")
+        held, held_command = uuid.uuid4(), uuid.uuid4()
+        with account_lock.open("r+") as descriptor:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            started = time.monotonic()
+            run("stage", held, held_command, archive({}), expected=81)
+            assert 9 <= time.monotonic() - started < 15
+        run("cleanup", held, held_command)
+        assert account_lock.read_text() == "public-lock-canary"
+        assert baseline == (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        checks.append("guest_global_account_lock_wait_is_bounded_without_account_changes")
+
+        blocked, blocked_command = uuid.uuid4(), uuid.uuid4()
+        account_lock.chmod(0o644)
+        run("stage", blocked, blocked_command, archive({}), expected=70)
+        assert account_lock.stat().st_mode & 0o777 == 0o644
+        account_lock.chmod(0o600)
+        os.chown(account_lock, 65534, 65534)
+        run("stage", blocked, blocked_command, archive({}), expected=70)
+        os.chown(account_lock, 0, 0)
+        saved_lock = directory / "saved-account-lock"
+        account_lock.rename(saved_lock)
+        for kind in ("symlink", "directory", "hardlink", "fifo"):
+            if kind == "symlink":
+                account_lock.symlink_to(sentinel)
+            elif kind == "directory":
+                account_lock.mkdir()
+            elif kind == "hardlink":
+                sentinel.chmod(0o600)
+                os.link(sentinel, account_lock)
+            else:
+                os.mkfifo(account_lock, 0o600)
+            run("stage", blocked, blocked_command, archive({}), expected=70)
+            if kind == "directory":
+                account_lock.rmdir()
+            else:
+                account_lock.unlink()
+            assert sentinel.read_text() == "preserve"
+        saved_lock.rename(account_lock)
+        assert account_lock.read_text() == "public-lock-canary"
+        assert baseline == (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+        checks.append("unsafe_guest_global_account_locks_are_preserved_and_refused")
+
         orphan, orphan_command = uuid.uuid4(), uuid.uuid4()
         run("stage", orphan, orphan_command, archive({}), expected=72, fail_before_user=True)
         control = root / orphan.hex / "control"

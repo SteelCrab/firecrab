@@ -988,6 +988,18 @@ chmod 700 "$meta/locks"
 exec 9>"$meta/locks/$id"
 lock -w 10 9 || exit 81
 case "$action" in stage|run) [ ! -e "$fence" ] || exit 71;; esac
+lock_accounts() {
+  # Account files are guest-global, even when attempts use different workspace roots.
+  account_lock=/run/firecrab-sandbox-accounts.lock
+  [ ! -L "$account_lock" ] || exit 70
+  if [ -e "$account_lock" ]; then
+    [ -f "$account_lock" ] && [ "$(tool stat -c '%u:%g:%a:%h' "$account_lock")" = 0:0:600:1 ] || exit 70
+  fi
+  exec 8>>"$account_lock"
+  [ -f /proc/self/fd/8 ] && [ "$(tool stat -L -c '%u:%g:%a:%h' /proc/self/fd/8)" = 0:0:600:1 ] || exit 70
+  lock -w 10 8 || exit 81
+}
+case "$action" in stage|cleanup) lock_accounts;; esac
 mkdir -p "$control"
 chmod 711 "$base"
 if [ -f "$control/owner" ]; then [ "$(cat "$control/owner")" = "$id" ] || exit 70; fi
@@ -1126,11 +1138,14 @@ stage)
     [ "$created_uid" -gt 0 ] || exit 72
     printf '%s' "$created_uid" >"$control/uid.pending"
     mv "$control/uid.pending" "$control/uid"
+    tool sync || exit 72
     [ "$created" = true ] || exit 72
   fi
   [ "$(id -gn "$user")" = "$user" ] || exit 72
   chgrp "$user" "$control"
   chmod 710 "$control"
+  # Payloads must never inherit or hold the account-allocation lock.
+  exec 8>&-
   mkdir -p "$work"
   if [ "$persistent" = true ]; then
     mkdir -p "$root/.workspaces"
@@ -1284,10 +1299,11 @@ cancel|cleanup)
       if command -v groupdel >/dev/null 2>&1; then groupdel "$user"
       elif command -v delgroup >/dev/null 2>&1; then delgroup "$user"
       else tool delgroup "$user"; fi
-      tool sync || exit 72
     fi
+    tool sync || exit 72
     if [ "$persistent" = true ]; then tool sync || exit 76; fi
     rm -rf "$base"
+    exec 8>&-
   fi
   ;;
 recover)
