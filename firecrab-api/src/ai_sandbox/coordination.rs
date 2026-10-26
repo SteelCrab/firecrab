@@ -6,6 +6,20 @@ use std::{collections::BTreeSet, time::Duration};
 use tokio::sync::watch;
 use uuid::Uuid;
 
+/// Bound durable waiters and active attempts across the controller.
+pub const MAX_PENDING_ATTEMPTS: usize = 16;
+/// Fresh dependency waiters leave one admission slot for an explicit prerequisite retry.
+pub const DEPENDENCY_ADMISSION_LIMIT: usize = MAX_PENDING_ATTEMPTS - 1;
+
+/// A full queue of dependent waiters must still admit the retry that can unblock them.
+pub fn admission_limit(input: &SandboxTaskInput) -> usize {
+    if input.retry_of.is_none() && !input.coordination.dependencies.is_empty() {
+        DEPENDENCY_ADMISSION_LIMIT
+    } else {
+        MAX_PENDING_ATTEMPTS
+    }
+}
+
 /// Validate assignments and retry budgets without accepting caller-provided attempt identities.
 pub fn validate(input: &SandboxTaskInput) -> Result<(), String> {
     let policy = &input.coordination;
@@ -113,7 +127,6 @@ pub fn queued_allowed(
     store: &Store,
     project: Uuid,
     input: &SandboxTaskInput,
-    root: Uuid,
 ) -> Result<bool, String> {
     let busy = store
         .sandbox_busy_tasks(project)
@@ -127,35 +140,11 @@ pub fn queued_allowed(
     if input.retry_of.is_none() {
         return Ok(false);
     }
-    for saved in busy {
-        if saved.task.state != SandboxTaskState::Waiting
-            || saved.guest_pending
-            || saved.guest_staged
-        {
-            return Ok(false);
-        }
-        let mut pending = saved.task.request.coordination.dependencies;
-        let mut seen = BTreeSet::new();
-        let mut found = false;
-        while let Some(id) = pending.pop() {
-            if !seen.insert(id) {
-                continue;
-            }
-            let dependency = store
-                .sandbox_task(id)
-                .map_err(|_| "Cannot read dependency")?
-                .ok_or("Dependency task is unavailable")?;
-            if dependency.task.retry_root.unwrap_or(dependency.task.id) == root {
-                found = true;
-                break;
-            }
-            pending.extend(dependency.task.request.coordination.dependencies);
-        }
-        if !found {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    // Waiting alone holds no execution claim. Unrelated retry chains must not prevent
+    // each other from admitting the prerequisite that can unblock their waiters.
+    Ok(busy.iter().all(|saved| {
+        saved.task.state == SandboxTaskState::Waiting && !saved.guest_pending && !saved.guest_staged
+    }))
 }
 
 enum DependencyState {

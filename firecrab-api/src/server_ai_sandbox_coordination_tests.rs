@@ -1,5 +1,110 @@
 use super::*;
 
+async fn failed_prerequisite(f: &Fixture, project: Uuid, name: &str) -> Uuid {
+    let key = Uuid::new_v4();
+    f.provider
+        .replies
+        .lock()
+        .unwrap()
+        .push_back(json!({"status":"failed","output":[]}));
+    let (status, task) = call(
+        &f.app,
+        "PUT",
+        &format!("/api/ai-sandbox/projects/{project}/tasks/{key}"),
+        json!({"kind":"chat","input":name,"coordination":{"retryLimit":1}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{task}");
+    assert_eq!(finish(f, key).await["state"], "failed");
+    key
+}
+
+async fn dependent(f: &Fixture, project: Uuid, prerequisite: Uuid) -> Uuid {
+    let key = Uuid::new_v4();
+    let (status, task) = call(&f.app, "PUT", &format!("/api/ai-sandbox/projects/{project}/tasks/{key}"),
+        json!({"kind":"chat","input":"Wait for the actual prerequisite result","coordination":{"dependencies":[prerequisite],"retryLimit":0}})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{task}");
+    assert_eq!(task["state"], "waiting");
+    key
+}
+
+async fn explicit_retry(f: &Fixture, project: Uuid, prerequisite: Uuid) -> Uuid {
+    let key = Uuid::new_v4();
+    let (status, task) = call(&f.app, "PUT", &format!("/api/ai-sandbox/projects/{project}/tasks/{key}"),
+        json!({"kind":"chat","input":"Explicitly retry the known failure","retryOf":prerequisite,"coordination":{"retryLimit":1}})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{task}");
+    key
+}
+
+#[tokio::test]
+async fn independent_waiting_chains_do_not_block_each_others_explicit_retries() {
+    let f = fixture().await;
+    let connection = connect(&f, "openai").await;
+    verify(&f, connection, false).await;
+    let project = project(&f, connection, false).await;
+    let first = failed_prerequisite(&f, project, "First prerequisite").await;
+    let second = failed_prerequisite(&f, project, "Independent prerequisite").await;
+    let first_waiter = dependent(&f, project, first).await;
+    let second_waiter = dependent(&f, project, second).await;
+    let first_retry = explicit_retry(&f, project, first).await;
+    assert_eq!(finish(&f, first_retry).await["state"], "result");
+    let result = finish(&f, first_waiter).await;
+    assert_eq!(result["state"], "result");
+    assert_eq!(
+        result["dependencyResults"][0]["taskId"],
+        first_retry.to_string()
+    );
+    assert_eq!(
+        f.state
+            .store
+            .sandbox_task(second_waiter)
+            .unwrap()
+            .unwrap()
+            .task
+            .state,
+        firecrab_api_types::SandboxTaskState::Waiting
+    );
+    let second_retry = explicit_retry(&f, project, second).await;
+    assert_eq!(finish(&f, second_retry).await["state"], "result");
+    let result = finish(&f, second_waiter).await;
+    assert_eq!(result["state"], "result");
+    assert_eq!(
+        result["dependencyResults"][0]["taskId"],
+        second_retry.to_string()
+    );
+    assert_eq!(f.state.store.sandbox_pending_count().unwrap(), 0);
+    assert_eq!(f.provider.requests.lock().unwrap().len(), 7);
+}
+
+#[tokio::test]
+async fn full_dependency_wait_queue_reserves_one_slot_for_its_prerequisite_retry() {
+    let f = fixture().await;
+    let connection = connect(&f, "openai").await;
+    verify(&f, connection, false).await;
+    let project = project(&f, connection, false).await;
+    let prerequisite = failed_prerequisite(&f, project, "Retry needed by all waiters").await;
+    let mut waiters = Vec::new();
+    for _ in 0..crate::ai_sandbox::coordination::DEPENDENCY_ADMISSION_LIMIT {
+        waiters.push(dependent(&f, project, prerequisite).await);
+    }
+    assert_eq!(f.state.store.sandbox_pending_count().unwrap(), 15);
+    let rejected = Uuid::new_v4();
+    let (status, response) = call(&f.app, "PUT", &format!("/api/ai-sandbox/projects/{project}/tasks/{rejected}"),
+        json!({"kind":"chat","input":"Do not occupy the reserved retry slot","coordination":{"dependencies":[prerequisite]}})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{response}");
+    assert!(f.state.store.sandbox_task(rejected).unwrap().is_none());
+    assert_eq!(f.provider.requests.lock().unwrap().len(), 2);
+    let retry = explicit_retry(&f, project, prerequisite).await;
+    assert_eq!(finish(&f, retry).await["state"], "result");
+    for waiter in waiters {
+        let result = finish(&f, waiter).await;
+        assert_eq!(result["state"], "result");
+        assert_eq!(result["dependencyResults"][0]["taskId"], retry.to_string());
+    }
+    assert_eq!(f.state.store.sandbox_pending_count().unwrap(), 0);
+    assert_eq!(f.provider.requests.lock().unwrap().len(), 18);
+}
+
 #[tokio::test]
 async fn bounded_explicit_retry_delivers_latest_debug_result_to_waiting_test_once() {
     let f = fixture().await;

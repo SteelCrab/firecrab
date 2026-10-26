@@ -811,11 +811,12 @@ pub async fn create_task(
     )
     .map_err(|e| invalid(id, "dependencies", e))?;
     let store = state.store.clone();
-    if db(id, move || store.sandbox_pending_count()).await? >= 16 {
+    let admission_limit = ai_sandbox::coordination::admission_limit(&input);
+    if db(id, move || store.sandbox_pending_count()).await? >= admission_limit {
         return Err(error(
             id,
             "sandbox_queue_full",
-            "The controller already has 16 pending attempts; finish or reconcile one before starting another",
+            "Pending attempt limit reached; dependency waiters reserve one slot for an explicit retry",
         ));
     }
     if input.input.is_empty() || input.input.len() > 32768 {
@@ -829,7 +830,7 @@ pub async fn create_task(
             "This project reached its 500-task limit",
         ));
     }
-    if !ai_sandbox::coordination::queued_allowed(&state.store, project_id, &input, retry_root)
+    if !ai_sandbox::coordination::queued_allowed(&state.store, project_id, &input)
         .map_err(|e| invalid(id, "dependencies", e))?
     {
         return Err(error(

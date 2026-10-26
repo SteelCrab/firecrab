@@ -15,6 +15,7 @@ use uuid::Uuid;
 mod tests;
 
 /// Stage a retained copy and a dedicated Git branch without changing the source repository.
+#[cfg(test)]
 pub fn prepare(
     source: &Path,
     attempt: &Path,

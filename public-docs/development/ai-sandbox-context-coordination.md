@@ -48,6 +48,8 @@ A dependent follows the latest task in each dependency's retry chain. A successf
 
 Only one attempt from a project enters execution at a time. Waiting dependents do not take provider permits. API restart marks active and waiting tasks Interrupted. Restart never dispatches them again. Explicit reconciliation and a new task identity are required to continue.
 
+The controller admits at most sixteen pending attempts. New dependency waiters stop at fifteen pending attempts so one slot remains available for an explicit prerequisite retry. Waiting tasks from another dependency chain do not block a settled prerequisite's retry admission. Project and VM claims still serialize execution after admission.
+
 Before Test starts, it records the successful Debug task/attempt IDs, result, tests, changed paths and artifact references in `dependencyResults`. Debug changes are copied into Test's own isolated workspace. Conflicting dependency edits fail safely. The authorized original source stays unchanged until selected-file apply.
 
 ## Tests and artifacts
