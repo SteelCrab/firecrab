@@ -6,7 +6,7 @@ ARG TOOLBOX_IMAGE=busybox@sha256:8d7b1636e974e0adfd8d945955fca609304f0a56c18799d
 FROM ${APP_IMAGE} AS application
 FROM ${TOOLBOX_IMAGE} AS toolbox
 FROM ${SSH_TOOLS_IMAGE} AS prepare
-RUN apk add --no-cache openssh-server openssh-client pax-utils
+RUN apk add --no-cache openssh-server openssh-client lddtree && command -v lddtree
 COPY --from=application / /application/
 COPY --from=toolbox /bin/busybox /overlay/etc/firecrab/busybox
 COPY firecrab-guest-console /overlay/usr/local/sbin/firecrab-console-resize
@@ -17,14 +17,21 @@ RUN set -eu; \
     done; \
     for program in /usr/sbin/sshd /usr/bin/ssh-keygen /usr/lib/ssh/sshd-*; do \
       [ -f "$program" ] || continue; \
-      lddtree -l "$program" | while IFS= read -r dependency; do \
+      lddtree -l "$program" >/tmp/firecrab-ssh-dependencies; \
+      [ -s /tmp/firecrab-ssh-dependencies ]; \
+      while IFS= read -r dependency; do \
+        case "$dependency" in /*) ;; *) exit 1 ;; esac; \
+        [ -f "$dependency" ]; \
         mkdir -p "/overlay/opt/firecrab/ssh-runtime$(dirname "$dependency")"; \
         cp -L "$dependency" "/overlay/opt/firecrab/ssh-runtime$dependency"; \
-      done; \
+      done </tmp/firecrab-ssh-dependencies; \
       mkdir -p "/overlay$(dirname "$program")"; \
       printf '#!/etc/firecrab/busybox sh\nexec /opt/firecrab/ssh-runtime/lib/ld-musl-%s.so.1 --library-path /opt/firecrab/ssh-runtime/lib:/opt/firecrab/ssh-runtime/usr/lib /opt/firecrab/ssh-runtime%s "$@"\n' "$(uname -m)" "$program" >"/overlay$program"; \
       chmod 755 "/overlay$program"; \
     done; \
+    rm /tmp/firecrab-ssh-dependencies; \
+    ssh_runtime=/overlay/opt/firecrab/ssh-runtime; \
+    "$ssh_runtime/lib/ld-musl-$(uname -m).so.1" --library-path "$ssh_runtime/lib:$ssh_runtime/usr/lib" "$ssh_runtime/usr/sbin/sshd" -V; \
     if [ -f /application/etc/passwd ]; then cp /application/etc/passwd /overlay/etc/passwd; else printf 'root:x:0:0:root:/root:/bin/sh\n' >/overlay/etc/passwd; fi; \
     if [ -f /application/etc/group ]; then cp /application/etc/group /overlay/etc/group; else printf 'root:x:0:\n' >/overlay/etc/group; fi; \
     if ! grep -q '^sshd:' /overlay/etc/passwd; then \
