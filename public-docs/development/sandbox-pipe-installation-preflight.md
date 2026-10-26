@@ -1,10 +1,11 @@
 # QA Pipe installation boundary and registration preflight
 
-This is an operator preparation receipt for the existing #414 QA manager. It is
-not an account-registration, engine-installation, service-start or public-preview
-receipt. The investigation changed no remote file, service, VM, Environment,
-network, account or token. Root performs any later installation after checking
-the exact Linux artifacts. The user registers the connection directly.
+This record preserves the original failure, CLI recovery, local bundle build and
+Root's later engine installation on the existing #414 QA manager. It is not an
+account-registration, service-start or public-preview receipt. The independent
+investigation changed no remote file, service, VM, Environment, network, account
+or token. Root performed the installation after reviewing the exact Linux
+artifacts. The user registers the connection directly.
 
 ## Actual failure and read-only receipt
 
@@ -61,6 +62,35 @@ not an architecture check.
 This proves the installed CLI/helper boundary and missing-engine metadata. It
 does not prove ingress/cloudflared installation, token registration, running
 traffic services or a live public preview. Those later receipts remain separate.
+
+### Installed engines and UI follow-up
+
+Root subsequently installed the reviewed ingress bundle and ran the corrected
+Linux CLI's `pipe install`, reporting exit 0. A separate read-only check confirmed
+the installed public executable bytes and local version commands:
+
+| Installed engine | Independently checked result |
+| --- | --- |
+| `/usr/local/lib/firecrab/firecrab-ingress` | root:root 0755, 4,528,096 bytes, SHA-256 `9adc55d5329cae38ec24f868fd03a2bcf9af73f9f951ac3e7e6c751df2a0fd8e` |
+| Ingress `-V` | Exit 0, `nginx/1.30.6 (firecrab-ingress)`, musl-gcc, static linker flag |
+| `/usr/local/lib/firecrab/pipe/cloudflared` | root:root 0755, 37,687,584 bytes, SHA-256 `e6422b9d4f72d3194bc5a38676f13667c06666523217b842a877d72a80b5ac08` |
+| Cloudflared `--version` | Exit 0, `2026.10.0`, build timestamp `2026-10-05-17:37 UTC` |
+
+Both manager-local port 5523 and the existing local QA endpoint at port 24314
+independently returned `GET /api/pipe` HTTP 200, `nginxAvailable:true`,
+`cloudflaredAvailable:true`, `config:null`, zero saved addresses and zero
+connectors. The ingress, tunnel and address-updater units remained `not-found`,
+`inactive`, MainPID 0. This verifies engine preparation without traffic service
+activation. It does not prove a connection registration or public route.
+
+The Pipe AI layout fix was integrated as `fc7c3754`. Its source restores the
+existing ChatGPT icon and the icon/info/status/actions row contract. Its local
+frontend suite passed 43 native tests. Root reports a release WASM build and
+static-asset deployment from that source, with the corrected icon and account
+layout in the actual local UI. Root reports no API/helper/VM restart for that
+static update. This section records that deployment report separately from the
+independent engine/API checks. The later API update remained on hold for the
+separate guest diagnostic.
 
 ## Metadata availability is independent of engines
 
