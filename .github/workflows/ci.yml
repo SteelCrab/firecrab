@@ -83,6 +83,9 @@ jobs:
       - name: Sandbox recovery QA ownership and fault guards
         run: python3 scripts/test-ci-qa-ai-sandbox-recovery.py
 
+      - name: Sandbox coordination QA evidence guards
+        run: python3 scripts/test-ci-qa-ai-sandbox-coordination.py
+
       - name: Database QA guards and cleanup contract
         run: python3 scripts/test-pipe-databases-qa.py
 
