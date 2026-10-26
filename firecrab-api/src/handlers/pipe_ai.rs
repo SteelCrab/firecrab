@@ -1,5 +1,6 @@
 //! Pipe AI has the same REST origin policy as other host operations.
 use crate::{
+    ai_sandbox::access::LocalOperator,
     error::AppError,
     extract::ValidatedJson,
     pipe_ai::{self, Failure, SavedConnection},
@@ -289,6 +290,7 @@ pub async fn login_start(
     Extension(id): Extension<RequestId>,
     Path(key): Path<Uuid>,
     headers: HeaderMap,
+    local: Option<Extension<LocalOperator>>,
     ValidatedJson(input): ValidatedJson<AiLoginRequest>,
 ) -> Result<Json<AiLoginStart>, AppError> {
     let _guard = gate(&state, id)?;
@@ -296,16 +298,22 @@ pub async fn login_start(
         .get("host")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if host != format!("127.0.0.1:{}", state.api_port)
-        && host != format!("localhost:{}", state.api_port)
-    {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            "ai_loopback_required",
-            "ChatGPT login needs the local API through 127.0.0.1 or localhost",
-            id.0,
-        ));
-    }
+    // Only the trusted loopback listener may advertise a forwarded dev port.
+    // Other transports keep the configured API-port restriction.
+    let port = host
+        .parse::<axum::http::uri::Authority>()
+        .ok()
+        .filter(|a| matches!(a.host(), "127.0.0.1" | "localhost") && !host.contains('@'))
+        .and_then(|a| a.port_u16())
+        .filter(|p| *p != 0 && (*p == state.api_port || local.is_some()))
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                "ai_loopback_required",
+                "ChatGPT login needs the local API through 127.0.0.1 or localhost",
+                id.0,
+            )
+        })?;
     let store = state.store.clone();
     let (host_id, registration) = stored(id, move || {
         Ok((store.ai_host_id()?, store.ai_registration(key)?))
@@ -313,7 +321,7 @@ pub async fn login_start(
     .await?;
     let login = state
         .pipe_ai_logins
-        .begin(key, input, host_id, state.api_port, registration.as_ref())
+        .begin(key, input, host_id, port, registration.as_ref())
         .map_err(|e| failed(e, id))?;
     Ok(Json(login))
 }

@@ -76,6 +76,9 @@ jobs:
       - name: Deploy QA guards and OCI fixture contract
         run: python3 scripts/test-ci-qa-deploy.py
 
+      - name: Sandbox live QA evidence and ownership guards
+        run: python3 scripts/test-ci-qa-ai-sandbox.py
+
       - name: Database QA guards and cleanup contract
         run: python3 scripts/test-pipe-databases-qa.py
 
