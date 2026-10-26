@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 import uuid
+import xml.etree.ElementTree as ET
 from urllib.request import Request
 
 _spec = importlib.util.spec_from_file_location("recovery", Path(__file__).with_name("ci-qa-ai-sandbox-recovery.py"))
@@ -24,6 +25,17 @@ qa = recovery.qa
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+APPLICATION = "src/main/java/io/firecrab/qa/Application.java"
+
+
+def application():
+    return (Path(__file__).parent / "fixtures/sandbox-spring-boot" / APPLICATION).read_text()
+
+
+def fixed_application():
+    return application().replace("    public static void main", '    @org.springframework.context.annotation.Bean\n    String greeting() { return "ok"; }\n\n    public static void main', 1)
 
 
 def save(path, report):
@@ -68,7 +80,8 @@ def input_for(agent, dependency=None):
         text = ("Inspect Application.java and GreetingController.java. Reproduce the missing String bean failure by calling run_argv ONCE with exactly this JSON: "
                 + json.dumps(invocation("debug-failure"))
                 + " . Record that actual command with record_test name=missing-bean-reproduction and its returned eventSequence (it must fail). "
-                  "Fix only Application.java by adding @org.springframework.context.annotation.Bean String greeting(){ return \"ok\"; }. "
+                  "Use write_file to replace only src/main/java/io/firecrab/qa/Application.java with exactly this UTF-8 content: "
+                + json.dumps(fixed_application()) + " . "
                   "Then call run_argv ONCE with exactly this JSON: " + json.dumps(invocation("debug-fixed"))
                 + " . Record the actual successful command as debug-regression. Retain qa/debug-fixed.xml and qa/debug-fixed.executed with retain_artifact. "
                   "Do not repeat either command. Finish with the actual failure, fix, test result and unpredictable guest nonce.")
@@ -103,6 +116,17 @@ def validate(task, agent, labels, codes):
     for event in events:
         qa.require(any(test["eventSequence"] == event["sequence"] and test["passed"] == (event["exitCode"] == 0) for test in tests), "Test record disagrees with the actual guest command")
     qa.require(len(task["artifacts"]) == 2, "Missing XML/nonce artifact export")
+    prefix = "debug-fixed" if agent == "Debug" else "test-independent"
+    qa.require({artifact.get("path") for artifact in task["artifacts"]} == {f"qa/{prefix}.xml", f"qa/{prefix}.executed"}, "Wrong artifact paths cannot establish JUnit/nonce evidence")
+    for event in task["events"]:
+        if event["name"] in ("write_file", "delete_file"):
+            arguments = json.loads(event["input"])
+            qa.require(agent == "Debug" and event["name"] == "write_file" and arguments == {"path": APPLICATION, "content": fixed_application()}, "The model changed unauthorized source")
+    allowed = {APPLICATION} | {f"qa/{label}.{suffix}" for label in ["debug-failure", "debug-fixed", "test-independent"] for suffix in ["log", "xml", "executed"]}
+    qa.require(all(change["path"] in allowed for change in task["changes"]), "The build, tests, instructions or other source changed")
+    application_changes = [change for change in task["changes"] if change["path"] == APPLICATION]
+    qa.require(len(application_changes) == 1 and application_changes[0]["before"] == application()
+               and application_changes[0]["after"] == fixed_application() and not application_changes[0]["applied"], "Expected only the exact known Application fix")
     if agent == "Debug":
         qa.require("java.lang.String" in events[0]["output"], "Spring Boot missing-bean failure was not reproduced")
         qa.require(any(change["path"].endswith("Application.java") and "@org.springframework.context.annotation.Bean" in (change.get("after") or "") for change in task["changes"]), "Known fix was not retained as a reviewed change")
@@ -120,7 +144,9 @@ def wait(api, key, report, output):
     raise qa.QaFailure("Task wait deadline expired; inspect the durable attempt without resubmitting")
 
 
-def download(api, task, results):
+def download(api, task, results, prefix):
+    event = next(event for event in commands(task) if json.loads(event["input"]) == invocation(prefix))
+    nonce = re.search(rf"FIRECRAB414:{re.escape(prefix)}:stdout:([0-9a-f]{{32}})\n", event["output"]).group(1)
     for artifact in task["artifacts"]:
         qa.require(artifact["taskId"] == task["id"] and artifact["attemptId"] == task["attemptId"], "Artifact ownership changed")
         request = Request(api.base + f"/api/ai-sandbox/tasks/{task['id']}/artifacts/{artifact['id']}")
@@ -131,7 +157,14 @@ def download(api, task, results):
         path.write_bytes(data)
         path.chmod(0o600)
         if artifact["path"].endswith(".xml"):
-            qa.require(b'tests="1"' in data and b'errors="0"' in data and b'failures="0"' in data, "Actual JUnit report did not pass")
+            suite = ET.fromstring(data)
+            cases = suite.findall("testcase")
+            qa.require(suite.tag == "testsuite" and suite.get("tests") == "1" and suite.get("errors") == "0" and suite.get("failures") == "0"
+                       and len(cases) == 1 and cases[0].get("classname") == "io.firecrab.qa.GreetingTest"
+                       and cases[0].get("name") == "servesConfiguredGreeting" and cases[0].find("failure") is None
+                       and cases[0].find("error") is None, "Actual intended JUnit regression did not pass")
+        else:
+            qa.require(artifact["path"] == f"qa/{prefix}.executed" and data == (nonce + "\n").encode(), "Nonce artifact does not match the actual command")
 
 
 def main():
@@ -200,8 +233,8 @@ def main():
         qa.require(len(dependency) == 1 and dependency[0]["taskId"] == debug and dependency[0]["attemptId"] == saved_debug["attemptId"], "Test did not receive the successful Debug attempt")
         qa.require(saved_debug["runtime"] == saved_test["runtime"] and saved_debug["attemptId"] != saved_test["attemptId"], "Task/attempt/runtime identities are inconsistent")
         report["checks"]["debugToTestHandoff"] = "PASS"
-        for task in [saved_debug, saved_test]:
-            download(api, task, results)
+        for task, prefix in [(saved_debug, "debug-fixed"), (saved_test, "test-independent")]:
+            download(api, task, results, prefix)
             _, reloaded = api.request("GET", f"/api/ai-sandbox/tasks/{task['id']}", timeout=10)
             qa.require(reloaded["tests"] == task["tests"] and reloaded["artifacts"] == task["artifacts"], "Results changed after reload")
         qa.require(digest(app) == original, "Original source was modified")

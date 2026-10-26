@@ -16,13 +16,15 @@ def task():
             "events": [{"name": "run_argv", "sequence": 2, "input": json.dumps(qa.invocation("test-independent")),
                         "output": "FIRECRAB414:test-independent:stdout:" + "a" * 32 + "\n",
                         "stderr": "FIRECRAB414:test-independent:exit:0\n", "exitCode": 0}],
-            "tests": [{"eventSequence": 2, "passed": True}], "artifacts": [{}, {}]}
+            "tests": [{"eventSequence": 2, "passed": True}],
+            "changes": [{"path": qa.APPLICATION, "before": qa.application(), "after": qa.fixed_application(), "applied": False}],
+            "artifacts": [{"path": "qa/test-independent.xml"}, {"path": "qa/test-independent.executed"}]}
 
 
 class EvidenceGuards(unittest.TestCase):
     def test_results_require_completed_guest_commands_and_test_provenance(self):
         qa.validate(task(), "Test", ["test-independent"], [0])
-        for field in ["exit", "stderr", "nonce", "modelReceipt", "provenance", "passed", "artifact", "state"]:
+        for field in ["exit", "stderr", "nonce", "modelReceipt", "provenance", "passed", "artifact", "wrongArtifacts", "testTampering", "changedFix", "testWrites", "state"]:
             value = task()
             if field == "exit": value["events"][0]["exitCode"] = None
             if field == "stderr": value["events"][0]["stderr"] = ""
@@ -31,6 +33,10 @@ class EvidenceGuards(unittest.TestCase):
             if field == "provenance": value["tests"][0]["eventSequence"] = 1
             if field == "passed": value["tests"][0]["passed"] = False
             if field == "artifact": value["artifacts"] = []
+            if field == "wrongArtifacts": value["artifacts"] = [{"path": "a.txt"}, {"path": "b.txt"}]
+            if field == "testTampering": value["changes"].append({"path": "pom.xml"})
+            if field == "changedFix": value["changes"][0]["after"] += "// extra mutation\n"
+            if field == "testWrites": value["events"].append({"name": "write_file", "input": json.dumps({"path": qa.APPLICATION, "content": qa.fixed_application()})})
             if field == "state": value["state"] = "failed"
             with self.subTest(field=field), self.assertRaises(qa.qa.QaFailure):
                 qa.validate(value, "Test", ["test-independent"], [0])
