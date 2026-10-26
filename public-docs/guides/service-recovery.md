@@ -17,6 +17,9 @@ Named and Quick Tunnel routing remains configured. Only ready endpoints rejoin N
 Private listener security-group restrictions remain active while the service is unready.
 Old Nginx workers must finish before a failed VM is stopped or deleted.
 A drain timeout retains the VM and its recovery journal.
+After VM exit, the helper closes its gateway-to-guest TCP connections so Nginx
+can retry requests without waiting for dead upstream sockets. Healthy connections
+and their normal response timeouts remain unchanged.
 An unexpected VM exit can interrupt a response already in progress.
 [Nginx retries eligible requests](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_next_upstream)
 before response bytes reach the client. Applications must handle interrupted responses.

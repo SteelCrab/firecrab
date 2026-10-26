@@ -29,6 +29,8 @@ mod security_groups;
 mod self_update;
 /// Per-VM TAP device lifecycle.
 mod tap;
+/// Reset host TCP connections to a VM after its runtime exits.
+mod vm_connections;
 /// Per-VM systemd units that run the VM shim.
 mod vm_unit;
 /// WSL2 TCP listeners for Windows localhost forwarding.
