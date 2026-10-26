@@ -167,12 +167,17 @@ jobs:
       - name: Reset dead sockets with the helper's network capability
         run: |
           helper_test_binary=$(cargo test -p firecrab-helper --no-run --message-format=json | python3 -c 'import json,sys; entries=[json.loads(line) for line in sys.stdin]; print(next(item["executable"] for item in entries if item.get("reason") == "compiler-artifact" and item.get("profile", {}).get("test") and item.get("target", {}).get("name") == "firecrab-helper" and item.get("executable")))')
+          socket_qa_dir=$(mktemp -d /var/tmp/firecrab-socket-qa.XXXXXX)
+          trap 'sudo rm -rf "$socket_qa_dir"' EXIT
+          sudo chown root:root "$socket_qa_dir"
+          sudo install -m 0755 "$helper_test_binary" "$socket_qa_dir/helper-tests"
+          sudo install -m 0755 target/ingress/firecrab-ingress "$socket_qa_dir/ingress"
           sudo systemd-run --quiet --wait --pipe --collect \
             -p CapabilityBoundingSet=CAP_NET_ADMIN -p NoNewPrivileges=yes \
             --setenv=FIRECRAB_SOCKET_RESET_QA=1 \
-            --setenv=FIRECRAB_TEST_INGRESS="$PWD/target/ingress/firecrab-ingress" \
-            --working-directory="$PWD" \
-            "$helper_test_binary" --ignored --exact \
+            --setenv=FIRECRAB_TEST_INGRESS="$socket_qa_dir/ingress" \
+            --working-directory="$socket_qa_dir" \
+            "$socket_qa_dir/helper-tests" --ignored --exact \
             vm_connections::tests::reset_dead_upstream_retries_without_cutting_healthy_requests \
             --test-threads=1
 

@@ -216,11 +216,25 @@ async fn reset_dead_upstream_retries_without_cutting_healthy_requests() {
         .await
         .unwrap()
         .unwrap();
+    let sockets = Command::new("ss")
+        .args(["-Hnt", "src", &source.to_string(), "dst", &dead.to_string()])
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        sockets.status.success() && !sockets.stdout.is_empty(),
+        "missing gateway-to-guest test connection"
+    );
     let started = std::time::Instant::now();
     close(source, dead).await.unwrap();
     let response = tokio::time::timeout(Duration::from_secs(2), failed)
         .await
-        .expect("dead upstream was not retried")
+        .unwrap_or_else(|error| {
+            panic!(
+                "dead upstream was not retried: {error}; {}",
+                std::fs::read_to_string(directory.path().join("nginx.log")).unwrap()
+            )
+        })
         .unwrap()
         .unwrap();
     assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n") && response.ends_with(b"old"));
