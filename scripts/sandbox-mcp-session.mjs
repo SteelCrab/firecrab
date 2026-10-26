@@ -23,6 +23,9 @@ const record = value => appendFileSync(output, `${JSON.stringify({ at: new Date(
 record({ binary: resolve(binary), binarySha256: createHash("sha256").update(readFileSync(resolve(binary))).digest("hex") });
 const client = new Client({ name: "firecrab-414-interactive-agent", version: "1.0.0" }, { capabilities: {} });
 const transport = new StdioClientTransport({ command: resolve(binary), args: ["--api", endpoint.origin, "mcp"], stderr: "pipe" });
+// macOS canonical terminals truncate long JSON lines; readline owns framing here.
+const rawTerminal = process.stdin.isTTY === true;
+if (rawTerminal) process.stdin.setRawMode(true);
 const lines = createInterface({ input: process.stdin, terminal: false });
 try {
   await client.connect(transport);
@@ -51,6 +54,7 @@ try {
 } finally {
   await client.close();
   lines.close();
+  if (rawTerminal) process.stdin.setRawMode(false);
   record({ closed: true });
   closeSync(output);
 }
