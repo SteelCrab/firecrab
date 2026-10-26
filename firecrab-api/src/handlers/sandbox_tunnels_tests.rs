@@ -45,6 +45,85 @@ fn binding() -> SandboxTunnelBinding {
         successor_binding_id: None,
     }
 }
+
+#[test]
+fn preview_mapping_reserves_only_its_vm_until_confirmed_stop() {
+    use SandboxTunnelState::*;
+    for (status, connector, target, blocked) in [
+        (Waiting, true, false, true),
+        (Connecting, true, true, true),
+        (Connected, true, true, true),
+        (Stopping, true, true, true),
+        (Deleting, false, true, true),
+        (NeedsReconciliation, true, false, true),
+        (NeedsReconciliation, false, true, true),
+        (Waiting, false, false, false),
+        (Stopped, true, true, false),
+        (Deleted, true, true, false),
+        (Superseded, true, true, false),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.db");
+        let store = crate::persistence::Store::open(&path).unwrap();
+        let mut row = binding();
+        row.state = status;
+        if !connector {
+            row.connector_id = None;
+        }
+        if !target {
+            row.applied_target = None;
+        }
+        store.save_sandbox_tunnel(&row).unwrap();
+        drop(store);
+        let store = crate::persistence::Store::open(&path).unwrap();
+        assert_eq!(
+            store
+                .sandbox_vm_has_live_tunnels(row.runtime.vm_id)
+                .unwrap(),
+            blocked,
+            "{status:?} connector={connector} target={target}",
+        );
+        assert!(!store.sandbox_vm_has_live_tunnels(Uuid::new_v4()).unwrap());
+    }
+}
+
+#[tokio::test]
+async fn preview_mapping_blocks_vm_stop_and_delete_before_resource_mutation() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = state(directory.path()).await;
+    let mut row = binding();
+    row.state = SandboxTunnelState::NeedsReconciliation;
+    row.helper_connected = false;
+    state.store.save_sandbox_tunnel(&row).unwrap();
+    let request = RequestId(Uuid::new_v4());
+    let error = crate::handlers::vms::stop_vm(
+        State(state.clone()),
+        Extension(request),
+        Path(row.runtime.vm_id.to_string()),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), "sandbox_preview_in_use");
+    let error = crate::handlers::vms::delete_vm(
+        State(state.clone()),
+        Extension(request),
+        Path(row.runtime.vm_id.to_string()),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), "sandbox_preview_in_use");
+    assert_eq!(state.store.sandbox_tunnel(row.id).unwrap().unwrap(), row);
+    row.state = SandboxTunnelState::Stopped;
+    state.store.save_sandbox_tunnel(&row).unwrap();
+    let error = crate::handlers::vms::delete_vm(
+        State(state),
+        Extension(request),
+        Path(row.runtime.vm_id.to_string()),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), "not_found");
+}
 fn snapshot(binding: &SandboxTunnelBinding) -> Snapshot {
     let connector = binding.connector_id.unwrap();
     let mut snapshot: Snapshot = serde_json::from_value(

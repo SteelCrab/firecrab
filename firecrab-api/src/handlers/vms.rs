@@ -1295,6 +1295,7 @@ async fn stop_vm_inner(
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
     let guard = state.lock_vm(id).await;
+    ensure_no_active_sandbox_previews(&state, id, request_id.0)?;
     let workspace_claim = crate::ai_sandbox::environment::quiesce_for_vm_stop(&state, id)
         .await
         .map_err(|reason| {
@@ -1363,6 +1364,7 @@ pub async fn delete_vm(
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
     let _guard = state.lock_vm(id).await;
+    ensure_no_active_sandbox_previews(&state, id, request_id.0)?;
     if state
         .store
         .managed_database_rabbitmq()
@@ -1478,6 +1480,25 @@ pub async fn delete_vm(
     }
     tracing::info!(request_id = %request_id.0, vm_id = %id, "vm deleted");
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn ensure_no_active_sandbox_previews(
+    state: &AppState,
+    vm: Uuid,
+    request: Uuid,
+) -> Result<(), AppError> {
+    if state
+        .store
+        .sandbox_vm_has_live_tunnels(vm)
+        .map_err(|_| AppError::internal(request))?
+    {
+        return Err(AppError::conflict(
+            "sandbox_preview_in_use",
+            "Stop or reconcile this VM's Sandbox previews before stopping or deleting the VM",
+            request,
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn parse_id(id: &str, request_id: Uuid) -> Result<Uuid, AppError> {

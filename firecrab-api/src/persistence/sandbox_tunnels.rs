@@ -20,6 +20,18 @@ fn decode(text: String) -> Result<SandboxTunnelBinding, PersistenceError> {
 }
 
 impl Store {
+    /// Unknown helper outcomes keep their VM address reserved until explicitly stopped.
+    pub fn sandbox_vm_has_live_tunnels(&self, vm: Uuid) -> Result<bool, PersistenceError> {
+        Ok(self.lock().query_row(
+            "SELECT EXISTS(SELECT 1 FROM ai_sandbox_tunnels
+             WHERE json_extract(spec,'$.runtime.vmId')=?1
+             AND json_extract(spec,'$.state') NOT IN ('stopped','deleted','superseded')
+             AND (json_extract(spec,'$.connectorId') IS NOT NULL
+                  OR json_extract(spec,'$.appliedTarget') IS NOT NULL))",
+            [vm.to_string()],
+            |row| row.get(0),
+        )?)
+    }
     pub fn sandbox_project_has_live_tunnels(
         &self,
         project: Uuid,

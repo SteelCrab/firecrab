@@ -1091,6 +1091,16 @@ pub async fn cleanup(
     {
         return Err("Explicit authorization is required to delete retained Workspace data".into());
     }
+    // VM stop/delete repeat this check under their lifecycle lock to fence new publishes.
+    for role in &environment.roles {
+        if state
+            .store
+            .sandbox_vm_has_live_tunnels(role.vm_id)
+            .map_err(|_| "Cannot inspect active Sandbox previews")?
+        {
+            return Err("Stop or reconcile Sandbox previews before environment cleanup; owned resources retained".into());
+        }
+    }
     let admission = state.sandbox.admission.lock().await;
     verify_export(state, &environment)?;
     if state
