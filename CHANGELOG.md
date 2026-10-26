@@ -23,6 +23,20 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- AI Sandbox gains pinned, role-based environments, separate readiness checks,
+  scoped service discovery, Docker/nspawn execution and retained Workspaces.
+  Projects accept local Git refs, selected skills and reference files. Assigned
+  agents share dependency results through the existing task engine with bounded
+  explicit retries. Command-backed tests and downloadable artifacts retain their
+  task/attempt identities. Dashboard, CLI and local stdio MCP share these REST
+  contracts. Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
+- Saved Sandbox preview bindings retain fixed addresses and immutable execution
+  references. Explicit successor bindings retarget the same URL. Helper health,
+  public HTTPS/WebSocket verification, local removal and remote retirement are
+  reported separately. Canvas receives shared authorization and reconnect types
+  without adding a second task engine or promising interactive PTY support.
+
 - MicroServices publish private `<name>.internal` DNS and network-scoped ingress
   after app health succeeds. Internal-only deployments need no host ports.
   DNS and routes retain deployment ownership through restart and cleanup retries.

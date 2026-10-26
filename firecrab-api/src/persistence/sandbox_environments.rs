@@ -32,7 +32,8 @@ fn decode(value: String) -> Result<SandboxEnvironment, PersistenceError> {
 impl Store {
     /// Managed VM UUIDs cannot be rebound through the borrowed-VM project entry point.
     pub fn sandbox_environment_owns_vm(&self, id: Uuid) -> Result<bool, PersistenceError> {
-        self.sandbox_environment_for_vm(id).map(|owner| owner.is_some())
+        self.sandbox_environment_for_vm(id)
+            .map(|owner| owner.is_some())
     }
     /// Find the immutable environment ledger entry for a managed VM.
     pub fn sandbox_environment_for_vm(&self, id: Uuid) -> Result<Option<Uuid>, PersistenceError> {
