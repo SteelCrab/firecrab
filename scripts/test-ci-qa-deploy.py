@@ -12,6 +12,7 @@ import select
 import shlex
 import tarfile
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -26,6 +27,12 @@ module.loader.exec_module(qa)
 
 
 class DeployQaTests(unittest.TestCase):
+    def test_queue_acceptance_requires_a_report_before_runtime_access(self):
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name("ci-qa-deploy.py")),
+                                 "--disposable-host", "--queue-controls"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("extended acceptance requires --report", result.stderr)
+
     def test_internal_call_commits_a_response_only_after_its_upstream_finishes(self):
         fixture = qa.image_fixture(b"static-toolbox-fixture", "A")
         manifest = json.loads(fixture[1])

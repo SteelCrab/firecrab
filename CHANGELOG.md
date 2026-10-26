@@ -37,6 +37,11 @@ Entries land here as work merges, and move under the next version heading when t
   reported separately. Canvas receives shared authorization and reconnect types
   without adding a second task engine or promising interactive PTY support.
 
+- The Deploy queue prioritizes waiting rollbacks and supports cancelling an exact
+  queued operation. Cancellation retains the active release and its VMs and routes.
+  Saved ordering and cancelled outcomes survive API restart. Dashboard actions
+  use the existing icon controls. Tracked in [#521](https://github.com/SteelCrab/firecrab/issues/521).
+
 - MicroServices periodically check replica health and restart or replace failed
   VMs through Deploy. Pinned inputs, encrypted environments, healthy replicas,
   bounded retries, and recovery ownership survive API restart. An all-unready

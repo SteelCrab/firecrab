@@ -53,6 +53,28 @@ Use `--expected-release UUID` to reject an update if the active release changed.
 `--no-wait` returns after acceptance.
 A client timeout does not cancel an accepted operation.
 
+## Queue and cancellation
+
+Deploy, YAML apply, Secrets rotation, rollback, and replica recovery share one
+host-local worker permit. A waiting rollback runs before waiting ordinary Deploy
+work. Requests in the same priority class keep their saved acceptance order.
+An operation that has already started keeps its permit until it finishes or pauses.
+After API restart, interrupted updates and replica repairs resume before waiting
+work. Queued initial deployments also resume.
+
+Use the **Cancel** icon while an operation is queued. The API also accepts
+`POST /api/micro-services/{id}/deployments/{operationId}/cancel` without a body.
+Repeat cancellation with the same operation UUID after a lost response.
+The recorded attempt becomes `cancelled`. Cancelling an update restores the
+previous active release without stopping its VMs or changing its Nginx routes.
+An initial queued cancellation creates no VM. A later Deploy uses a new operation UUID.
+
+Cancellation returns `409` after the worker claims execution. Inspect the operation
+before choosing Retry or Stop for work that has already started.
+Direct cancellation cannot change Git/Stack or controller-owned service intent.
+
+## Dashboard
+
 In the dashboard, open a service and choose **Deploy update**.
 The guided form offers the same configuration and strategy choices.
 **Release history** lists successful releases and offers **Roll back**.
@@ -98,6 +120,7 @@ Deploy keeps owned resources and reports the reason instead of discarding the re
 | `POST` | `/api/micro-services/{id}/rollback` | `{operationId, expectedReleaseId?, releaseId, strategy?}`; `202` |
 | `POST` | `/api/micro-services/{id}/deployment/retry` | `{operationId}`; `202` |
 | `GET` | `/api/micro-services/{id}/deployments/{operationId}` | Exact recorded attempt, including failed attempts |
+| `POST` | `/api/micro-services/{id}/deployments/{operationId}/cancel` | No body; cancel an exact queued operation and retain its terminal outcome |
 
 `spec` is a complete [MicroService configuration](microservices.md#fields).
 `strategy` is `rolling` or `blue_green`.

@@ -150,7 +150,13 @@ async fn reconcile(state: &AppState, now: u64) -> Result<usize, String> {
             }
             Change::Changed(_) => {
                 // Give admitted/manual work priority and do not spend retry budget on its drain.
-                if state.service_deploy_permits.available_permits() == 0 {
+                let store = state.store.clone();
+                let waiting = database(observation.deployment.id, move || {
+                    store.service_deploy_waiting()
+                })
+                .await
+                .map_err(|_| "Could not inspect Deploy queue")?;
+                if state.service_deploy_permits.available_permits() == 0 || waiting {
                     continue;
                 }
                 match reserve(state, &observation, now).await? {

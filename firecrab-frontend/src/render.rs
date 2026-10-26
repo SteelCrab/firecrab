@@ -866,6 +866,7 @@ pub fn deployment(value: Option<&Value>) -> String {
         "running" => "Running",
         "stopped" => "Stopped",
         "failed" => "Deployment failed",
+        "cancelled" => "Cancelled",
         "queued" => "Queued",
         "switching_traffic" => "Switching Nginx traffic",
         "draining" => "Draining previous requests",

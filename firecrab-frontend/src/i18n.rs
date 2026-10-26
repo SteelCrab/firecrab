@@ -200,6 +200,8 @@ pub fn t(value: &str) -> &str {
         "Delete" => "삭제",
         "Close" => "닫기",
         "Cancel" => "취소",
+        "Cancelled" => "취소됨",
+        "Queued" => "대기",
         "Save" => "저장",
         "Refresh" => "새로 고침",
         "Copy" => "복사",
