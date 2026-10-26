@@ -60,7 +60,9 @@ nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n')
 printf '%s\\n' "$nonce" >qa/{label}.executed
 /opt/firecrab/qa/maven/bin/mvn -o -q -Dmaven.repo.local=/opt/firecrab/qa/m2 '-DargLine=-Xmx128m -XX:+UseSerialGC -XX:MaxMetaspaceSize=96m -XX:CompressedClassSpaceSize=32m -XX:ReservedCodeCacheSize=32m -Xss256k' test >qa/{label}.log 2>&1
 code=$?
-cat qa/{label}.log
+printf 'Maven log bytes: '; wc -c <qa/{label}.log
+printf 'Last 24576 log bytes follow; the full log remains in qa/{label}.log\\n'
+tail -c 24576 qa/{label}.log
 test ! -f target/surefire-reports/TEST-io.firecrab.qa.GreetingTest.xml || cp target/surefire-reports/TEST-io.firecrab.qa.GreetingTest.xml qa/{label}.xml
 printf 'FIRECRAB414:{label}:stdout:%s\\n' "$nonce"
 printf 'FIRECRAB414:{label}:exit:%s\\n' "$code" >&2
