@@ -245,6 +245,14 @@ impl NetworkClient {
         leases: Vec<DhcpLeaseEntry>,
         micro_networks: Vec<MicroNetworkSpec>,
     ) -> Result<(), NetworkError> {
+        // VM create/delete also sends snapshots directly, outside full network
+        // reconciliation. Never let an older helper ignore this DNS posture.
+        if micro_networks
+            .iter()
+            .any(|network| network.dns_mode == firecrab_api_types::MicroNetworkDnsMode::PrivateOnly)
+        {
+            self.require_private_dns().await?;
+        }
         self.call(NetworkRequest::SyncDhcpLeases {
             revision,
             leases,
@@ -552,6 +560,34 @@ mod tests {
                 .await
                 .expect("write response");
         });
+    }
+
+    #[tokio::test]
+    async fn private_dns_direct_snapshot_is_rejected_before_a_legacy_helper_can_ignore_the_field() {
+        let dir = short_tempdir();
+        let path = dir.path().join("legacy-helper.sock");
+        let (_helper, calls) =
+            super::test_support::spawn_recording_helper(&path, Some("check_private_dns_support"));
+        let client = client(&path, HELPER_TIMEOUT);
+        let mut network: MicroNetworkSpec = serde_json::from_value(serde_json::json!({
+            "micro_network_id":Uuid::new_v4(),"gateway":"172.30.4.1","prefix":24,"dns_mode":"private_only"
+        })).unwrap();
+        assert!(
+            client
+                .sync_dhcp_leases(1, vec![], vec![network.clone()])
+                .await
+                .is_err()
+        );
+        assert_eq!(*calls.lock().unwrap(), vec!["check_private_dns_support"]);
+        network.dns_mode = firecrab_api_types::MicroNetworkDnsMode::LegacyForward;
+        client
+            .sync_dhcp_leases(2, vec![], vec![network])
+            .await
+            .unwrap();
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["check_private_dns_support", "sync_dhcp_leases"]
+        );
     }
 
     #[tokio::test]
