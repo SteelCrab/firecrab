@@ -4,6 +4,9 @@ use firecrab_helper_protocol::pipe::{
 };
 use serde_json::json;
 
+#[path = "sandbox_tunnels_lifecycle_tests.rs"]
+mod lifecycle;
+
 fn binding() -> SandboxTunnelBinding {
     let runtime = SandboxRuntimeRef {
         vm_id: Uuid::new_v4(),
