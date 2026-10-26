@@ -288,10 +288,14 @@ async fn accept(
             request.0,
         ));
     }
-    if snapshot
-        .ingress_workers
-        .as_ref()
-        .is_some_and(|workers| workers.iter().any(|worker| worker.draining))
+    let store = state.store.clone();
+    let waiting = database(request.0, move || store.service_deploy_waiting()).await?;
+    let host_busy = state.service_deploy_permits.available_permits() == 0 || waiting;
+    if !host_busy
+        && snapshot
+            .ingress_workers
+            .as_ref()
+            .is_some_and(|workers| workers.iter().any(|worker| worker.draining))
     {
         return Err(AppError::unavailable(
             "An earlier Nginx reload is still draining. Wait for its existing connections before starting Deploy.",
@@ -378,36 +382,20 @@ async fn rotate(
 }
 
 pub(super) fn resume_worker(state: AppState, deployment: MicroServiceDeployment) {
+    let fresh = crate::persistence::deploy_queue::cancellable(&deployment);
     let cancelled = deployment
         .update
         .as_ref()
         .is_some_and(|update| update.cancelled);
-    // Reserve before spawning: task scheduling must not reorder recovery.
-    let reserved = if cancelled {
-        None
-    } else {
-        state
-            .service_deploy_permits
-            .clone()
-            .try_acquire_owned()
-            .ok()
-    };
     tokio::spawn(async move {
-        let _permit = if cancelled {
-            None
-        } else if reserved.is_some() {
-            reserved
+        let (_permit, deployment) = if cancelled {
+            (None, deployment)
         } else {
-            state
-                .service_deploy_permits
-                .clone()
-                .acquire_owned()
-                .await
-                .ok()
+            let Some((permit, current)) = queue::admit(&state, &deployment).await else {
+                return;
+            };
+            (Some(permit), current)
         };
-        if !cancelled && _permit.is_none() {
-            return;
-        }
         let service = deployment.service_id;
         let store = state.store.clone();
         let Ok(Some(current)) =
@@ -437,6 +425,10 @@ pub(super) fn resume_worker(state: AppState, deployment: MicroServiceDeployment)
             return;
         }
         let mut deployment = deployment;
+        if fresh && let Err(error) = fresh_ingress(&state, &deployment).await {
+            retain_failure(&state, &mut deployment, error).await;
+            return;
+        }
         if deployment
             .update
             .as_ref()
@@ -475,6 +467,29 @@ pub(super) fn resume_worker(state: AppState, deployment: MicroServiceDeployment)
     });
 }
 
+/// Queued admission may outlive another Deploy's drain or an external Pipe edit.
+async fn fresh_ingress(
+    state: &AppState,
+    deployment: &MicroServiceDeployment,
+) -> Result<(), String> {
+    let snapshot = inspect(state).await?;
+    if !snapshot.ingress_graceful_drain {
+        return Err("Apply the current Pipe configuration before retrying Deploy".into());
+    }
+    let workers = snapshot
+        .ingress_workers
+        .as_ref()
+        .filter(|workers| !workers.is_empty())
+        .ok_or("Cannot verify Nginx workers before Deploy; retry after starting ingress")?;
+    if workers.iter().any(|worker| worker.draining) {
+        return Err(
+            "An earlier Nginx reload is still draining; retry after its requests finish".into(),
+        );
+    }
+    current_route(&snapshot, deployment)?;
+    Ok(())
+}
+
 /// The commit and worker dispatch outlive a cancelled HTTP request. Keep the
 /// mutation claim in the task so another request cannot publish a second owner.
 pub(super) async fn submit(
@@ -485,13 +500,15 @@ pub(super) async fn submit(
 ) -> Result<MicroServiceDeployment, AppError> {
     tokio::spawn(async move {
         let _claim = claim;
-        save(&state, &deployment).await?;
+        let store = state.store.clone();
+        let record = deployment.clone();
+        database(request, move || store.save_service_deployment(&record)).await?;
+        state.service_deploy_changed.notify_waiters();
         resume_worker(state.clone(), deployment.clone());
-        Ok::<_, String>(deployment)
+        Ok::<_, AppError>(deployment)
     })
     .await
     .map_err(|_| AppError::internal(request))?
-    .map_err(|_| AppError::internal(request))
 }
 
 async fn retain_failure(state: &AppState, deployment: &mut MicroServiceDeployment, error: String) {

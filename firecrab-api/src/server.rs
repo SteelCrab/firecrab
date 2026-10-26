@@ -309,6 +309,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(crate::service_runtime::deploy::operation),
         )
         .route(
+            "/api/micro-services/{id}/deployments/{operation_id}/cancel",
+            post(crate::service_runtime::queue::cancel),
+        )
+        .route(
             "/api/micro-services/{id}/deployment/check",
             post(crate::service_runtime::check),
         )

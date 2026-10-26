@@ -47,6 +47,7 @@ The Firecrab API host is native Linux or managed Debian on macOS/Windows.
 | `firecrab-e2e` `test:secrets:live` | SEC9–SEC14; Chromium, actual API processes, encrypted vaults, and local providers |
 | `scripts/ci-qa-secrets.py` | Secrets unit tests, lint/types/builds, SEC1–SEC14; JSON/Markdown report, SEC16 manual warning |
 | `scripts/test-ci-qa-secrets.py` | Failure aggregation, missing-case reporting, manual warnings, and stale-build prevention |
+| `scripts/ci-qa-deploy.py --queue-controls` | Real Nginx/MicroVM queued cancellation, rollback priority, retained traffic, API restart, and cleanup |
 
 See [PIPE database E2E and QA](pipe-databases-qa.md) for the case matrix,
 fixture-only browser commands, live database prerequisites and cloud acceptance limits.
@@ -59,6 +60,21 @@ nginx is a separate pass using `nginx:1.27-alpine`.
 
 R4f helper migration requires `FIRECRAB_QA_HELPER_UPGRADE=1` on a disposable Linux CI host.
 Manual cases outside Ubuntu CI include I2/I3/I4/I7/I10/U1.
+
+## Deploy queue QA
+
+```sh
+sudo python3 scripts/ci-qa-deploy.py --disposable-host --queue-controls --report target/qa/deploy-queue.json
+```
+
+Use an empty disposable Linux/KVM host with at least four CPUs.
+This pass holds an active Deploy in drain, cancels queued initial/update attempts,
+and restarts the API with a rollback behind an ordinary Deploy.
+The active drain must finish first. The rollback must then drain before the
+ordinary Deploy starts. HTTP requests keep the five-second deadline and must
+finish without errors. The JSON report records request counts, operation IDs,
+the four-VM/vCPU limit, and cleanup results. Local OCI fixtures do not validate
+an external registry or public DNS/TLS.
 
 ## PipeSecrets QA
 

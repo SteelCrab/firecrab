@@ -11,18 +11,9 @@ pub(in crate::service_runtime) fn resume(state: AppState, record: MicroServiceDe
         return;
     };
     let operation = repair.id;
-    let reserved = state
-        .service_deploy_permits
-        .clone()
-        .try_acquire_owned()
-        .ok();
     tokio::spawn(async move {
-        let _permit = match reserved {
-            Some(permit) => permit,
-            None => match state.service_deploy_permits.clone().acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => return,
-            },
+        let Some((_permit, record)) = queue::admit(&state, &record).await else {
+            return;
         };
         let store = state.store.clone();
         let id = record.service_id;
