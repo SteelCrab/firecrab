@@ -979,14 +979,20 @@ echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
 
 {prepare_runtime}
 
-# The image carries its application dependencies. Start it before optional
-# operational tools, which may be unavailable on an isolated network.
+# The image carries its application dependencies. Preinstalled SSH must also
+# work on an isolated network, before optional package downloads complete.
 $BB mkdir -p /run/firecrab
+prestarted_sshd_pid=""
 for service in {services}/*; do
   [ -x "$service" ] || continue
   name=${{service##*/}}
-  [ "$name" = app ] || continue
+  case "$name" in
+    app) ;;
+    sshd) [ -x /usr/sbin/sshd ] || continue ;;
+    *) continue ;;
+  esac
   $BB setsid "$service" >/dev/console 2>&1 &
+  [ "$name" != sshd ] || prestarted_sshd_pid=$!
   echo $! > /run/firecrab/$name.pid
   [ "$name" = app ] && echo $! > /run/firecrab-app.pid
 done
@@ -998,11 +1004,14 @@ done
 
 {prepare_runtime}
 
-# SSH and other operational services need the packages installed above.
+# A missing or failed SSH service can now use the installed packages.
 for service in {services}/*; do
   [ -x "$service" ] || continue
   name=${{service##*/}}
   [ "$name" != app ] || continue
+  if [ "$name" = sshd ] && [ -n "$prestarted_sshd_pid" ] && $BB kill -0 "$prestarted_sshd_pid" 2>/dev/null; then
+    continue
+  fi
   $BB setsid "$service" >/dev/console 2>&1 &
   echo $! > /run/firecrab/$name.pid
 done
