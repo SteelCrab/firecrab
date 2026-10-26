@@ -181,6 +181,10 @@ impl Store {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         tx.execute(
+            "DELETE FROM service_deploy_queue WHERE service_id = ?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
             "DELETE FROM micro_service_attempts WHERE service_id = ?1",
             [id.to_string()],
         )?;
@@ -245,6 +249,7 @@ impl Store {
                 text
             ],
         )?;
+        super::deploy_queue::save(&tx, deployment)?;
         if deployment.phase == firecrab_api_types::ServicePhase::Running
             && deployment.digest.is_some()
             && deployment
@@ -304,6 +309,10 @@ impl Store {
         let restored_text = serialize(restored)?;
         let mut conn = self.lock();
         let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM service_deploy_queue WHERE operation_id = ?1",
+            [failed.id.to_string()],
+        )?;
         tx.execute(
             "UPDATE micro_service_attempts SET deployment = ?2 WHERE id = ?1",
             params![failed.id.to_string(), failed_text],

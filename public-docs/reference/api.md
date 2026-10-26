@@ -163,7 +163,7 @@ See [immutable inputs and controller ownership](../guides/stack-git-source.md#im
 | Update | GET / POST `/api/update`, GET `/api/update/progress` |
 
 See [MicroService](../guides/microservices.md) for configuration fields, validation, and deployment behavior.
-See [Deploy](../guides/deploy.md#rest) for running updates, release history, rollback, retry, and exact operation status.
+See [Deploy](../guides/deploy.md#rest) for running updates, release history, rollback, queued cancellation, retry, and exact operation status.
 
 ## Host
 

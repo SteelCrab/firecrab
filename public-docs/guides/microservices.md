@@ -9,7 +9,7 @@ Services without a domain can optionally expose one host TCP port per replica.
 The deployment record and owned VM identifiers survive API restarts.
 PipeSecrets values are injected into every replica without appearing in VM or deployment responses.
 [Deploy](deploy.md) adds running updates, rollback, and interrupted-operation recovery for domain services.
-Automatic replacement of a replica that fails after a completed deployment remains separate work.
+[Automatic replica recovery](service-recovery.md) restarts or replaces failed replicas after deployment.
 
 ## Fields
 

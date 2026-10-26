@@ -213,6 +213,11 @@ pub(crate) async fn database<T: Send + 'static>(
         .await
         .map_err(|_| AppError::internal(request_id))?
         .map_err(|error| match error {
+            PersistenceError::DeployQueueIdentity => AppError::conflict(
+                "operation_conflict",
+                "operationId is already reserved by another Deploy operation",
+                request_id,
+            ),
             PersistenceError::DuplicateMicroServiceName { .. } => AppError::validation(
                 BTreeMap::from([("name".to_owned(), "is already registered".to_owned())]),
                 request_id,

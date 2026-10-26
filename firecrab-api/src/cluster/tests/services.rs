@@ -663,7 +663,27 @@ async fn local_service_apis_use_reserved_ids_and_recover_interrupted_create_and_
         assert_eq!(d.service_id, initial.id);
         assert_eq!(d.phase, ServicePhase::Queued);
         assert_eq!(host.state.store.list_micro_services().unwrap().len(), 1);
+        // Model an admitted create interrupted by the old API, not an unstarted
+        // request that the durable queue must preserve across restart.
+        let crate::persistence::deploy_queue::Claim::Admitted(interrupted) = host
+            .state
+            .store
+            .claim_service_deployment(initial.id, d.id, d.id)
+            .unwrap()
+        else {
+            panic!("initial create was not durably admitted");
+        };
+        assert_eq!(interrupted.phase, ServicePhase::Importing);
         crate::service_runtime::recover(&host.state).await;
+        assert_eq!(
+            host.state
+                .store
+                .service_deployment(initial.id)
+                .unwrap()
+                .unwrap()
+                .phase,
+            ServicePhase::Failed
+        );
     }
     let mut next = initial.spec.clone();
     next.service.image = format!("ghcr.io/team/web@sha256:{}", "b".repeat(64));

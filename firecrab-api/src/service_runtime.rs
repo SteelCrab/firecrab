@@ -27,6 +27,7 @@ use crate::state::AppState;
 pub(crate) mod deploy;
 mod domain;
 mod internal;
+pub(crate) mod queue;
 pub(crate) mod recovery;
 pub(crate) mod secrets;
 
@@ -81,7 +82,7 @@ async fn deploy_with_id(
     controller_credentials: bool,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let request_id = RequestId(request_id);
-    let _claim = state.service_mutations.lock().await;
+    let claim = state.service_mutations.clone().lock_owned().await;
     crate::handlers::micro_services::ensure_stack_writer(&state, id, operation, request_id.0)
         .await?;
     ensure_editable(&state, id, request_id.0).await?;
@@ -119,15 +120,32 @@ async fn deploy_with_id(
         log: vec!["Deployment queued".into()],
         error: None,
     };
-    save(&state, &deployment)
-        .await
-        .map_err(|_| AppError::internal(request_id.0))?;
-    let task_state = state.clone();
-    let task_deployment = deployment.clone();
-    tokio::spawn(async move {
-        run_deploy(task_state, task_deployment).await;
-    });
+    let deployment = submit_initial(state, deployment, claim, request_id.0).await?;
     Ok((StatusCode::ACCEPTED, Json(deployment)))
+}
+
+/// Acceptance and dispatch continue even if the HTTP waiter disappears during SQLite work.
+async fn submit_initial(
+    state: AppState,
+    deployment: MicroServiceDeployment,
+    claim: tokio::sync::OwnedMutexGuard<()>,
+    request: Uuid,
+) -> Result<MicroServiceDeployment, AppError> {
+    tokio::spawn(async move {
+        let _claim = claim;
+        let store = state.store.clone();
+        let record = deployment.clone();
+        database(request, move || store.save_service_deployment(&record)).await?;
+        state.service_deploy_changed.notify_waiters();
+        let task_state = state.clone();
+        let task_deployment = deployment.clone();
+        tokio::spawn(async move {
+            run_deploy(task_state, task_deployment).await;
+        });
+        Ok::<_, AppError>(deployment)
+    })
+    .await
+    .map_err(|_| AppError::internal(request))?
 }
 
 fn validate_database_bindings(
@@ -435,7 +453,11 @@ async fn save(state: &AppState, deployment: &MicroServiceDeployment) -> Result<(
         store.save_service_deployment(&record)
     })
     .await
-    .map_err(|_| "Could not save deployment state".to_owned())
+    .map_err(|_| "Could not save deployment state".to_owned())?;
+    if deployment.phase == ServicePhase::Queued || !deployment.phase.is_busy() {
+        state.service_deploy_changed.notify_waiters();
+    }
+    Ok(())
 }
 
 /// Record a phase transition and progress message, retaining the latest 128 entries.
@@ -461,8 +483,8 @@ async fn phase(
 }
 
 /// Run under the deployment permit and clean up owned VMs if deployment fails.
-async fn run_deploy(state: AppState, mut deployment: MicroServiceDeployment) {
-    let Ok(_permit) = state.service_deploy_permits.acquire().await else {
+async fn run_deploy(state: AppState, deployment: MicroServiceDeployment) {
+    let Some((_permit, mut deployment)) = queue::admit(&state, &deployment).await else {
         return;
     };
     let result = async {
@@ -1001,6 +1023,10 @@ pub(crate) async fn recover(state: &AppState) {
             resumable.push(deployment);
             continue;
         }
+        if crate::persistence::deploy_queue::cancellable(&deployment) {
+            resumable.push(deployment);
+            continue;
+        }
         if deployment.phase.is_busy() {
             deployment.phase = ServicePhase::Failed;
             deployment.error = Some(
@@ -1018,6 +1044,20 @@ pub(crate) async fn recover(state: &AppState) {
             deployment.id,
         )
     });
+    // Restore every priority/ordinal before dispatch: task polling order is not admission order.
+    for deployment in &resumable {
+        let store = state.store.clone();
+        let saved = deployment.clone();
+        if database(saved.id, move || {
+            store.enqueue_service_deployment(&saved, true)
+        })
+        .await
+        .is_err()
+        {
+            tracing::error!(service_id = %deployment.service_id, "Could not restore Deploy queue");
+            return;
+        }
+    }
     for deployment in resumable {
         if recovery::pending(&deployment)
             && deployment
@@ -1026,8 +1066,13 @@ pub(crate) async fn recover(state: &AppState) {
                 .is_none_or(|update| update.completed)
         {
             recovery::resume(state.clone(), deployment);
-        } else {
+        } else if deployment.update.is_some() {
             deploy::resume_worker(state.clone(), deployment);
+        } else {
+            let task_state = state.clone();
+            tokio::spawn(async move {
+                run_deploy(task_state, deployment).await;
+            });
         }
     }
 }

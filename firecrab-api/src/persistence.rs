@@ -27,6 +27,7 @@ pub(crate) use cluster::ClusterError;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod ai_sandbox;
 mod deploy_images;
+pub(crate) mod deploy_queue;
 mod micro_services;
 mod pipe_ai;
 mod pipe_auth;
@@ -542,6 +543,9 @@ pub enum PersistenceError {
     InvalidStackResource,
     #[error("MicroService name {name} is already registered")]
     DuplicateMicroServiceName { name: String },
+    /// An operation ID is already reserved by another durable Deploy queue owner.
+    #[error("Deploy queue operation identity conflicts")]
+    DeployQueueIdentity,
     /// Couldn't create the database's parent directory.
     #[error("failed to create VM data directory {path}: {source}")]
     CreateDirectory {
@@ -775,6 +779,7 @@ impl Store {
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute_batch(micro_services::HISTORY_SQL)?;
+        conn.execute_batch(deploy_queue::SCHEMA)?;
         conn.execute(deploy_images::SCHEMA, [])?;
         micro_services::migrate_history(&conn)?;
         conn.execute_batch(stacks::SCHEMA_SQL)?;

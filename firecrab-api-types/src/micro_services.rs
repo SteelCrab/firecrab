@@ -117,6 +117,8 @@ pub enum ServicePhase {
     Stopping,
     /// All owned VMs have been removed.
     Stopped,
+    /// A waiting operation was cancelled before admission or resource changes.
+    Cancelled,
     /// Deployment or cleanup failed; remaining instances can be removed with Stop.
     Failed,
 }

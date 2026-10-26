@@ -62,11 +62,39 @@ fn action(label: &str, action: &str, disabled: bool) -> String {
     )
 }
 
+fn cancellation_blocked(app: &App) -> bool {
+    app.busy
+        || app.detail_loading
+        || app.form.as_ref().is_some_and(|form| {
+            form.title != "Deploy MicroService" || form.base["policyError"] == true
+        })
+}
+
+fn cancellable(deployment: &Value) -> bool {
+    let update = &deployment["update"];
+    text(deployment, "phase") == "queued"
+        && !text(deployment, "id").is_empty()
+        && !text(deployment, "serviceId").is_empty()
+        && list(&deployment["instances"]).is_empty()
+        && deployment["domainRouteOwned"] != true
+        && deployment["internalRouteOwned"] != true
+        && deployment["recovery"]["repair"].is_null()
+        && (update.is_null()
+            || update.is_object()
+                && update["completed"] != true
+                && update["cancelled"] != true
+                && update["restoring"] != true
+                && update["routedNew"] != true
+                && update["transition"].is_null()
+                && list(&update["retiring"]).is_empty())
+}
+
 pub fn html(app: &App) -> String {
     let Some(deployment) = &app.service_deployment else {
         return String::new();
     };
-    if text(&deployment["spec"], "domain").is_empty() {
+    let private = text(&deployment["spec"], "domain").is_empty();
+    if private && !cancellable(deployment) {
         return String::new();
     }
     let state = &app.deploy;
@@ -74,13 +102,27 @@ pub fn html(app: &App) -> String {
     let disabled = app.busy || busy(deployment);
     let can_update =
         !recovering(deployment) && matches!(text(deployment, "phase"), "running" | "degraded");
-    let mut out = format!(
-        "<section aria-label=\"Deploy\"><h3>Deploy</h3><p>{}</p><div class=\"wasm-actions\">",
-        tr(
+    let mut out = "<section aria-label=\"Deploy\"><h3>Deploy</h3>".to_owned();
+    if !private {
+        out.push_str(&format!("<p>{}</p>", tr(
             "Update this app through the existing Nginx route. The service address stays the same.",
             "기존 Nginx 경로로 앱을 업데이트한다. 서비스 주소는 유지한다."
-        )
-    );
+        )));
+    }
+    out.push_str("<div class=\"wasm-actions\">");
+    if cancellable(deployment) {
+        out.push_str(
+            &crate::render::icon_button("Cancel", "deploy-cancel", "", crate::render::Icon::Close)
+                .replace(
+                    "type=\"button\"",
+                    if cancellation_blocked(app) {
+                        "type=\"button\" id=\"deploy-cancel\" disabled"
+                    } else {
+                        "type=\"button\" id=\"deploy-cancel\""
+                    },
+                ),
+        );
+    }
     if can_update {
         out.push_str(&action(
             tr("Deploy update", "업데이트 배포"),
@@ -95,17 +137,19 @@ pub fn html(app: &App) -> String {
             disabled,
         ));
     }
-    out.push_str(
-        &action(
-            tr("Release history", "릴리스 이력"),
-            "deploy-history",
-            false,
-        )
-        .replace(
-            "type=\"button\"",
-            &format!("type=\"button\" aria-expanded=\"{visible}\""),
-        ),
-    );
+    if !private {
+        out.push_str(
+            &action(
+                tr("Release history", "릴리스 이력"),
+                "deploy-history",
+                false,
+            )
+            .replace(
+                "type=\"button\"",
+                &format!("type=\"button\" aria-expanded=\"{visible}\""),
+            ),
+        );
+    }
     out.push_str("</div>");
     if recovering(deployment) {
         let strategy = if deployment["update"]["strategy"] == "blue_green" {
@@ -312,11 +356,84 @@ pub fn change(app: &Shared, target: &Element) -> bool {
     true
 }
 
+fn cancel(app: &Shared) {
+    let mut state = app.borrow_mut();
+    let Some(current) = state.service_deployment.as_ref() else {
+        return;
+    };
+    let service = text(current, "serviceId").to_owned();
+    let operation = text(current, "id").to_owned();
+    if cancellation_blocked(&state)
+        || state.route != "services"
+        || !cancellable(current)
+        || service.is_empty()
+        || operation.is_empty()
+        || state
+            .detail
+            .as_ref()
+            .is_none_or(|detail| text(detail, "id") != service)
+    {
+        return;
+    }
+    state.busy = true;
+    state.refreshing = false;
+    state.error.clear();
+    state.notice.clear();
+    // A pending status poll must not overwrite the post-cancellation refresh.
+    state.generation += 1;
+    state.detail_generation += 1;
+    state.detail_polling = None;
+    let generation = state.generation;
+    let detail_generation = state.detail_generation;
+    drop(state);
+    crate::render_editor(app);
+    let app = app.clone();
+    spawn_local(async move {
+        let path = format!("/api/micro-services/{}", api::encode(&service));
+        let cancelled = api::request(
+            "POST",
+            &format!("{path}/deployments/{}/cancel", api::encode(&operation)),
+            None,
+        )
+        .await;
+        // A cancelled update leaves its previous release serving.
+        let current = api::request("GET", &format!("{path}/deployment"), None).await;
+        let mut state = app.borrow_mut();
+        if state.generation != generation {
+            return;
+        }
+        state.busy = false;
+        if state.detail_generation != detail_generation {
+            drop(state);
+            crate::render_messages(&app);
+            return;
+        }
+        match cancelled {
+            Ok(record) => {
+                state.service_deployment = Some(record);
+                state.notice = crate::i18n::t("Cancelled").into();
+                state.deploy.pending = None;
+                state.deploy.update_request = None;
+            }
+            Err(error) => state.error = failure(error),
+        }
+        match current {
+            Ok(record) => state.service_deployment = Some(record),
+            Err(error) if state.error.is_empty() => state.error = failure(error),
+            Err(_) => {}
+        }
+        drop(state);
+        crate::render_editor(&app);
+        crate::render_messages(&app);
+    });
+}
+
 pub fn dispatch(app: &Shared, action_name: &str) -> bool {
     if !action_name.starts_with("deploy-") {
         return false;
     }
     match action_name {
+        "deploy-cancel" => cancel(app),
         "deploy-history" => {
             if app.borrow().deploy.open {
                 app.borrow_mut().deploy.open = false;
@@ -432,4 +549,77 @@ pub fn dispatch(app: &Shared, action_name: &str) -> bool {
         _ => {}
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_is_queued_only_for_public_and_private_services() {
+        for domain in [Value::Null, json!("orders.example.test")] {
+            let mut app = App {
+                service_deployment: Some(json!({
+                    "id": "operation", "serviceId": "service", "phase": "queued", "spec": {"domain": domain}
+                })),
+                ..App::default()
+            };
+            assert!(html(&app).contains("id=\"deploy-cancel\""));
+            app.busy = true;
+            assert!(html(&app).contains("id=\"deploy-cancel\" disabled"));
+            app.busy = false;
+            let mut form = crate::forms::Form::new(
+                "Deploy MicroService",
+                String::new(),
+                "POST",
+                vec![],
+                "services",
+            );
+            form.base["policyError"] = json!(true);
+            app.form = Some(form);
+            assert!(html(&app).contains("id=\"deploy-cancel\" disabled"));
+            app.form = None;
+            for phase in ["importing", "starting", "running", "failed", "cancelled"] {
+                app.service_deployment.as_mut().unwrap()["phase"] = json!(phase);
+                assert!(!html(&app).contains("id=\"deploy-cancel\""), "{phase}");
+            }
+        }
+    }
+
+    #[test]
+    fn cancelled_initial_deploy_is_terminal_without_owned_resources() {
+        let cancelled = json!({"phase": "cancelled", "instances": [], "spec": {"domain": null}});
+        assert!(!busy(&cancelled));
+        assert!(!crate::advanced::services::owns_resources(&cancelled));
+        assert!(crate::render::deployment(Some(&cancelled)).contains("Cancelled"));
+    }
+
+    #[test]
+    fn queued_repairs_and_owned_retries_cannot_be_cancelled() {
+        let queued =
+            json!({"id":"operation", "serviceId":"service", "phase":"queued", "instances":[]});
+        assert!(cancellable(&queued));
+        for effects in [
+            json!({"instances":[{"vmId":"candidate"}]}),
+            json!({"domainRouteOwned":true}),
+            json!({"internalRouteOwned":true}),
+            json!({"recovery":{"repair":{"vmId":"victim"}}}),
+            json!({"update":{"completed":true}}),
+            json!({"update":{"cancelled":true}}),
+            json!({"update":{"restoring":true}}),
+            json!({"update":{"routedNew":true}}),
+            json!({"update":{"transition":{"confirmed":false}}}),
+            json!({"update":{"retiring":["retired-vm"]}}),
+        ] {
+            let mut owned = queued.clone();
+            owned
+                .as_object_mut()
+                .unwrap()
+                .extend(effects.as_object().unwrap().clone());
+            assert!(!cancellable(&owned), "{effects}");
+        }
+        let mut update = queued;
+        update["update"] = json!({"previous":{"instances":[{"vmId":"serving-vm"}]}});
+        assert!(cancellable(&update));
+    }
 }
