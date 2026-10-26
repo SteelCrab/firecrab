@@ -2,6 +2,8 @@ use super::*;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
+#[path = "ai_sandbox_resources_tests.rs"]
+mod resources;
 
 fn reply(
     method: &str,
@@ -106,16 +108,14 @@ fn sandbox_cli_preserves_ids_overrides_and_explicit_review_paths_on_the_wire() {
     let project = Uuid::new_v4();
     let connection = Uuid::new_v4();
     let selection = json!({"connectionId":connection,"model":"configured-model"});
-    let spec = json!({"name":"Project","sourcePath":"/project","vmId":null,"selection":selection,"instructions":"Keep changes small"});
+    let spec = json!({"name":"Project","sourcePath":"/project","vmId":null,"selection":selection,"instructions":"Keep changes small","environmentId":null,"context":{"gitRef":"main","selectedSkills":["skills/review/SKILL.md"],"references":["README.md"]}});
     let project_row = json!({"id":project,"owner":"local","spec":spec,"createdAt":1});
-    let input = json!({"kind":"code","input":"Check the build","selection":selection,"retryOf":Uuid::new_v4()});
-    let task = json!({"id":id,"projectId":project,"attemptId":Uuid::new_v4(),"runtime":null,"request":input,"selection":selection,"state":"interrupted","createdAt":1,"updatedAt":2,"result":"","errorCode":"sandbox_restart","error":"Reconcile first","events":[],"changes":[]});
-    let mut summary = task.clone();
-    summary.as_object_mut().unwrap().remove("events");
-    summary.as_object_mut().unwrap().remove("changes");
-    summary["eventCount"] = json!(0);
-    summary["changeCount"] = json!(0);
-    summary["lastTool"] = Value::Null;
+    let input = json!({"kind":"code","input":"Check the build","selection":selection,"retryOf":Uuid::new_v4(),"coordination":{"dependencies":[],"assignedAgent":"debug","retryLimit":2},"environmentRole":null});
+    let task = json!({"id":id,"projectId":project,"attemptId":Uuid::new_v4(),"runtime":null,"request":input,"selection":selection,"state":"interrupted","createdAt":1,"updatedAt":2,"result":"","errorCode":"sandbox_restart","error":"Reconcile first","events":[],"changes":[],"gitCommit":null,"retryRoot":null,"retryNumber":0,"dependencyResults":[],"tests":[],"artifacts":[],"environment":null});
+    let summary = serde_json::to_value(SandboxTaskSummary::from(
+        &serde_json::from_value::<SandboxTask>(task.clone()).unwrap(),
+    ))
+    .unwrap();
     let model = json!({"id":"configured-model","name":"Configured model","verified":true,"toolsVerified":true});
     let catalog = json!({"models":[model],"discoveryAvailable":false});
     let base = "/api/ai-sandbox";
@@ -258,7 +258,7 @@ fn sandbox_cli_bounds_stdin_and_rejects_credentials_before_contacting_the_server
 #[test]
 fn sandbox_cli_reports_api_rejection_without_retrying_admission() {
     let id = Uuid::new_v4();
-    let input = json!({"kind":"chat","input":"hello","selection":null,"retryOf":null});
+    let input = json!({"kind":"chat","input":"hello","selection":null,"retryOf":null,"coordination":{"dependencies":[],"assignedAgent":null,"retryLimit":3},"environmentRole":null});
     let (client, server) = reply(
         "PUT",
         format!("/api/ai-sandbox/projects/{id}/tasks/{id}"),

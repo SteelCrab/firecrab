@@ -3,7 +3,10 @@ use crate::api_client::ApiClient;
 use clap::Subcommand;
 use firecrab_api_types::*;
 use std::io::{self, Read};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
+mod resources;
+pub use resources::{EnvironmentCommand, TunnelCommand};
 
 /// Thin commands over the shared Sandbox REST lifecycle.
 #[derive(Debug, Subcommand)]
@@ -16,6 +19,33 @@ pub enum Command {
     RevokeAccess { principal: Uuid },
     /// List saved Sandbox projects as JSON.
     Projects,
+    /// Inspect one project's context, environment and defaults.
+    Project { id: Uuid },
+    /// Delete project metadata only after active work and previews are settled.
+    DeleteProject { id: Uuid },
+    /// Export one retained artifact to a new local file, checking its size and SHA-256.
+    Artifact {
+        id: Uuid,
+        artifact: Uuid,
+        output: std::path::PathBuf,
+    },
+    /// Inspect and signal only the admitted task's owned guest processes.
+    Guest {
+        project: Uuid,
+        id: Uuid,
+        #[command(subcommand)]
+        command: resources::GuestCommand,
+    },
+    /// Manage owned environments through the same REST contract.
+    Environment {
+        #[command(subcommand)]
+        command: EnvironmentCommand,
+    },
+    /// Bind a saved Pipe address to a ready task application.
+    Tunnel {
+        #[command(subcommand)]
+        command: TunnelCommand,
+    },
     /// Save explicit settings from JSON on stdin. Source paths refer to the API host.
     SaveProject { id: Uuid },
     /// Inspect a project's durable conversations and code attempts.
@@ -24,6 +54,12 @@ pub enum Command {
     Run { project: Uuid, id: Uuid },
     /// Inspect state, actual tool output and reviewable changes.
     Inspect { id: Uuid },
+    /// Wait 1–60 seconds for a final result; interruption requires explicit reconciliation.
+    Wait {
+        id: Uuid,
+        #[arg(long, default_value_t = 30)]
+        timeout_seconds: u64,
+    },
     /// Request cancellation; inspect until termination is confirmed.
     Cancel { id: Uuid },
     /// Recover an interrupted attempt without rerunning its commands.
@@ -88,6 +124,41 @@ fn request(
         Command::Projects => {
             serde_json::to_value(client.get::<Vec<SandboxProject>>(&format!("{base}/projects"))?)?
         }
+        Command::Project { id } => {
+            serde_json::to_value(client.get::<SandboxProject>(&format!("{base}/projects/{id}"))?)?
+        }
+        Command::DeleteProject { id } => {
+            client.delete(&format!("{base}/projects/{id}"))?;
+            serde_json::json!({"deleted":id})
+        }
+        Command::Artifact {
+            id,
+            artifact,
+            output,
+        } => {
+            use std::io::Write;
+            let (metadata, bytes) = artifact_bytes(client, id, artifact, 16 * 1024 * 1024)?;
+            let parent = output
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(std::path::Path::new("."));
+            let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+            temporary.write_all(&bytes)?;
+            temporary.as_file().sync_all()?;
+            temporary.persist_noclobber(&output)?;
+            serde_json::to_value(metadata)?
+        }
+        Command::Guest {
+            project,
+            id,
+            command,
+        } => resources::guest(client, project, id, command, input)?,
+        Command::Environment { command } => resources::environment(client, command, input)?,
+        Command::Tunnel { command } => resources::tunnel(client, command, input)?,
+        Command::Wait {
+            id,
+            timeout_seconds,
+        } => serde_json::to_value(wait_for_task(client, id, timeout_seconds)?)?,
         Command::SaveProject { id } => serde_json::to_value(client.put::<_, SandboxProject>(
             &format!("{base}/projects/{id}"),
             &read_input::<SandboxProjectSpec>(input)?,
@@ -130,6 +201,75 @@ fn request(
         )?)?,
     };
     Ok(result)
+}
+
+pub(crate) fn artifact_bytes(
+    client: &ApiClient,
+    task: Uuid,
+    artifact: Uuid,
+    limit: usize,
+) -> Result<(SandboxArtifact, Vec<u8>), Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+    let task: SandboxTask = client.get(&format!("/api/ai-sandbox/tasks/{task}"))?;
+    let metadata = task
+        .artifacts
+        .iter()
+        .find(|a| a.id == artifact && a.task_id == task.id && a.attempt_id == task.attempt_id)
+        .ok_or("Artifact does not belong to this task attempt")?
+        .clone();
+    if metadata.size > limit {
+        return Err("Artifact exceeds this client's download bound".into());
+    }
+    let bytes = client.get_bytes_bounded(
+        &format!("/api/ai-sandbox/tasks/{}/artifacts/{artifact}", task.id),
+        limit,
+    )?;
+    if bytes.len() != metadata.size || format!("{:x}", Sha256::digest(&bytes)) != metadata.sha256 {
+        return Err("Artifact size or SHA-256 did not match the retained result".into());
+    }
+    Ok((metadata, bytes))
+}
+
+pub(crate) fn wait_for_task(
+    client: &ApiClient,
+    id: Uuid,
+    timeout_seconds: u64,
+) -> Result<SandboxTaskWaitResult, Box<dyn std::error::Error>> {
+    if !(1..=60).contains(&timeout_seconds) {
+        return Err("timeoutSeconds must be between 1 and 60".into());
+    }
+    let deadline = Instant::now() + Duration::from_secs(timeout_seconds);
+    let mut last = None;
+    loop {
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(1));
+        let task: SandboxTask =
+            match client.get_with_timeout(&format!("/api/ai-sandbox/tasks/{id}"), remaining) {
+                Ok(task) => task,
+                Err(_) if Instant::now() >= deadline && last.is_some() => {
+                    return Ok(SandboxTaskWaitResult {
+                        reached: false,
+                        task: last.unwrap(),
+                    });
+                }
+                Err(error) => return Err(error.into()),
+            };
+        let reached = matches!(
+            task.state,
+            SandboxTaskState::Result
+                | SandboxTaskState::Merged
+                | SandboxTaskState::Failed
+                | SandboxTaskState::Cancelled
+        );
+        if reached || task.state == SandboxTaskState::Interrupted || Instant::now() >= deadline {
+            return Ok(SandboxTaskWaitResult { reached, task });
+        }
+        last = Some(task);
+        std::thread::sleep(
+            Duration::from_millis(250).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
 }
 
 #[cfg(test)]

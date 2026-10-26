@@ -6,6 +6,32 @@ use std::{
 };
 
 #[test]
+fn sandbox_resource_creation_defaults_to_no_internet_and_preserves_explicit_policy() {
+    let operation = Uuid::new_v4();
+    let network = json!({"operationId":operation,"name":"test","subnetCidr":"172.31.0.0/24"});
+    assert!(
+        !parse::<NetworkCreate>(network.clone())
+            .unwrap()
+            .internet_enabled
+    );
+    let mut explicit = network;
+    explicit["internetEnabled"] = json!(true);
+    assert!(parse::<NetworkCreate>(explicit).unwrap().internet_enabled);
+    let mut vm = json!({"operationId":operation,"name":"test","template":"ubuntu","microNetworkId":Uuid::new_v4(),"cpu":1,"ram":512,"diskGb":2});
+    assert_eq!(
+        parse::<VmCreate>(vm.clone()).unwrap().egress_policy,
+        EgressPolicy::Isolated
+    );
+    vm["egressPolicy"] = json!("internet");
+    assert_eq!(
+        parse::<VmCreate>(vm.clone()).unwrap().egress_policy,
+        EgressPolicy::Internet
+    );
+    vm["egressPolicy"] = json!("invalid");
+    assert!(parse::<VmCreate>(vm).is_err());
+}
+
+#[test]
 fn sandbox_access_mcp_exposes_operator_only_grants_without_self_elevation() {
     let id = Uuid::new_v4();
     let policy = json!({"grants":[{"resource":{"kind":"vm","id":Uuid::new_v4()},"permissions":["execute"]}]});
@@ -161,6 +187,11 @@ fn only_confirmed_session_resources_can_be_deleted_and_retries_do_not_create_dup
         ("POST /api/micro-networks ", 201, row.clone()),
         ("GET /api/micro-networks ", 200, json!([row.clone()])),
         ("DELETE /api/micro-networks/", 204, Value::Null),
+        (
+            "GET /api/micro-networks/",
+            404,
+            json!({"error":"not_found"}),
+        ),
     ]);
     let mut session = Session::default();
     assert!(
@@ -303,7 +334,7 @@ fn sandbox_mcp_lists_saves_and_recovers_without_creating_a_new_attempt() {
     let project = Uuid::new_v4();
     let connection = Uuid::new_v4();
     let selection = json!({"connectionId":connection,"model":"configured-model"});
-    let spec = json!({"name":"Project","sourcePath":null,"vmId":null,"selection":selection,"instructions":"Be concise"});
+    let spec = json!({"name":"Project","sourcePath":null,"vmId":null,"selection":selection,"instructions":"Be concise","context":{"gitRef":null,"selectedSkills":[],"references":[]},"environmentId":null});
     let project_row = json!({"id":project,"owner":"local","spec":spec,"createdAt":1});
     let model =
         json!({"id":"configured-model","name":"Configured","verified":true,"toolsVerified":true});
@@ -410,4 +441,92 @@ fn sandbox_mcp_rejects_credentials_and_unknown_fields_before_any_http_request() 
         );
         assert!(!error.contains("private"));
     }
+}
+
+#[test]
+fn sandbox_catalog_advertises_typed_results_and_rejects_unknown_resource_inputs() {
+    let client = ApiClient::new("http://127.0.0.1:1".into());
+    let mut session = Session::default();
+    let id = Uuid::new_v4();
+    for tool in catalog()
+        .iter()
+        .filter(|t| t["name"].as_str().unwrap().starts_with("sandbox_"))
+    {
+        assert!(
+            tool["outputSchema"]["properties"].is_object(),
+            "{} has no typed result",
+            tool["name"]
+        );
+    }
+    for (name, args) in [
+        (
+            "sandbox_environment_get",
+            json!({"projectId":id,"id":id,"token":"private"}),
+        ),
+        (
+            "sandbox_environment_delete",
+            json!({"projectId":id,"id":id,"force":true}),
+        ),
+        (
+            "sandbox_tunnel_save",
+            json!({"projectId":id,"id":id,"spec":{"taskId":id,"subdomain":"preview","target":{"kind":"nginx","host":"app.example"},"token":"private"}}),
+        ),
+        (
+            "sandbox_tunnel_verify",
+            json!({"id":id,"request":{"path":"/","endpoint":"https://other.example"}}),
+        ),
+        (
+            "sandbox_guest_signal",
+            json!({"projectId":id,"id":id,"request":{"process":{"pid":42,"startTicks":1,"bootId":"boot","state":"S"},"signal":"terminate","shell":"private"}}),
+        ),
+    ] {
+        assert!(
+            session
+                .call(&client, name, args)
+                .unwrap_err()
+                .starts_with("Invalid tool arguments"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn sandbox_project_cleanup_checks_final_rest_absence() {
+    let id = Uuid::new_v4();
+    let (client, server) = mock(vec![
+        ("DELETE /api/ai-sandbox/projects/", 204, Value::Null),
+        (
+            "GET /api/ai-sandbox/projects/",
+            404,
+            json!({"error":"not found"}),
+        ),
+    ]);
+    assert_eq!(
+        Session::default()
+            .call(&client, "sandbox_project_delete", json!({"id":id}))
+            .unwrap(),
+        json!({"id":id,"deleteAccepted":true,"confirmedAbsent":true})
+    );
+    server.join().unwrap();
+}
+
+#[test]
+fn owned_cleanup_retains_ownership_until_final_rest_absence_is_confirmed() {
+    let id = Uuid::new_v4();
+    let operation = Uuid::new_v4();
+    let row = network(id, operation);
+    let (client, server) = mock(vec![
+        ("DELETE /api/micro-networks/", 202, Value::Null),
+        ("GET /api/micro-networks/", 200, row),
+    ]);
+    let mut session = Session::default();
+    session.owned.insert(("/api/micro-networks".into(), id));
+    let result = session
+        .call(&client, "network_delete", json!({"id":id}))
+        .unwrap();
+    assert_eq!(result["confirmedAbsent"], false);
+    assert!(result["deleted"].is_null());
+    assert_eq!(result["owned"], true);
+    assert!(session.owned.contains(&("/api/micro-networks".into(), id)));
+    server.join().unwrap();
 }
