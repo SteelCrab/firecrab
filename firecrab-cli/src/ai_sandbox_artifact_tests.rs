@@ -50,11 +50,15 @@ fn artifact_export_is_binary_exact_atomic_and_never_overwrites_an_existing_file(
     let attempt = Uuid::new_v4();
     let artifact = Uuid::new_v4();
     let bytes = b"owned\0binary\n";
+    let sentinel = b"existing\0\xffsentinel\n";
     let metadata = json!({"id":artifact,"taskId":id,"attemptId":attempt,"path":"result.bin","size":bytes.len(),"sha256":format!("{:x}",Sha256::digest(bytes))});
     let row = task(id, attempt, json!([metadata]), "result");
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("result.bin");
     for exists in [false, true] {
+        if exists {
+            std::fs::write(&output, sentinel).unwrap();
+        }
         let (client, worker) = reads(
             vec![
                 (
@@ -84,7 +88,14 @@ fn artifact_export_is_binary_exact_atomic_and_never_overwrites_an_existing_file(
             assert_eq!(result.unwrap(), metadata);
         }
         worker.join().unwrap();
-        assert_eq!(std::fs::read(&output).unwrap(), bytes);
+        assert_eq!(
+            std::fs::read(&output).unwrap(),
+            if exists {
+                sentinel.as_slice()
+            } else {
+                bytes.as_slice()
+            }
+        );
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 }
