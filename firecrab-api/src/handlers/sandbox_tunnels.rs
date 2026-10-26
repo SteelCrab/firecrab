@@ -758,25 +758,23 @@ pub async fn reconcile(
         .sandbox_tunnel_handoff(&binding)
         .map_err(store_error(id))?
         .is_empty()
+        && let Ok(current) = current_mapping(&state, id, &binding, &snapshot)
+        && current.id != binding.id
     {
-        if let Ok(current) = current_mapping(&state, id, &binding, &snapshot)
-            && current.id != binding.id
+        binding.connector_id = current.connector_id;
+        binding.applied_target = current.applied_target;
+        binding.helper_connected = false;
+        binding.public_https = SandboxTunnelVerification::Unverified;
+        binding.web_socket_handshake = SandboxTunnelVerification::Unverified;
+        if current
+            .connector_id
+            .is_some_and(|connector| connector_stopped(&snapshot, connector))
         {
-            binding.connector_id = current.connector_id;
-            binding.applied_target = current.applied_target;
-            binding.helper_connected = false;
-            binding.public_https = SandboxTunnelVerification::Unverified;
-            binding.web_socket_handshake = SandboxTunnelVerification::Unverified;
-            if current
-                .connector_id
-                .is_some_and(|connector| connector_stopped(&snapshot, connector))
-            {
-                binding.state = SandboxTunnelState::Stopping;
-                observe(&mut binding, &snapshot);
-            } else {
-                binding.state = SandboxTunnelState::NeedsReconciliation;
-                binding.error_code = Some("sandbox_preview_retarget_pending".into());
-            }
+            binding.state = SandboxTunnelState::Stopping;
+            observe(&mut binding, &snapshot);
+        } else {
+            binding.state = SandboxTunnelState::NeedsReconciliation;
+            binding.error_code = Some("sandbox_preview_retarget_pending".into());
         }
     }
     if runtime_changed {
