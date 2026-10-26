@@ -147,10 +147,67 @@ It confirms the original failed deployment receipt is unchanged and never marks
 that deployment verified. Independent review accepts a separate manual
 maintenance disposition only at this all-stopped boundary. Dynamic DHCP rows,
 DNS PIDs and cache preservation are explicitly not claimed across the helper
-restart. Resume and subsequent network/data validation require separate receipts.
+restart. Manual disposition SHA-256 is
+`b8463bbe6b3c8b3a43437d2423ccdfba98baae006af1256c6c75dcba69c0af9e`.
 
-Keep the failed receipts. Diagnose the maintenance failure and verify private
-names before any VM resume or fresh actual A/B network matrix. Independent
-fixture writes, OpenRC model tasks and public preview setup remain on hold.
+## One-shot resume and fresh read-only baseline
+
+The operator sends one resume POST per Environment. Both return HTTP 200 and
+reach Ready with eight new runtime IDs. The five older VMs remain stopped.
+No VM, disk, allocation, generation, network, security-group rule, image pin,
+project spec, saved connection or retained task is replaced.
+
+The first observer incorrectly requires public host keys to be owned by root.
+The actual regular 0644 public files belong to the API service, UID 995 and
+GID 989. A later read-only observer also uses a child-local FD path that is
+unsuitable for OpenSSH. Both observer failures remain separate receipts; no
+resume request is repeated. A narrow, pinned parent-FD channel check succeeds.
+
+The corrected read-only completion captures **eight distinct actual guest boot
+IDs**, confirms OpenRC PID 1 and reads the unchanged initial seed **ten times**.
+Public resource metadata and service identities stay equal throughout. The
+completion SHA-256 is
+`88a924a2daeca8f4cd5ea21466aa8ea884e3d2b1e676f249d5d031ae43abed85`.
+This is a fresh baseline for the running matrix, not that matrix's verdict.
+
+## Fresh actual running matrix
+
+The separate read-only run `596dcb25-cb3c-4c41-85a0-ca7d6a4bb213` passes at
+source `34a45b95`. It freezes the new runtimes and actual boots, the full public
+reference snapshot, all five original project specs, network/security-group
+rules and original resource identities. Every guest payload has runtime/boot
+fences. The full snapshot and stable DNS process/configuration inputs match
+before and after the run. Dynamic DHCP observations remain separate.
+
+| Observation | Actual result |
+| --- | --- |
+| Eight guests | OpenRC PID 1 and authenticated V1 capabilities pass. |
+| Initial SQLite fixture | Both deployments keep the same initial seed and empty values. |
+| IPv4 role/egress policy | All 122 allowed/denied observations match the manifest. |
+| Cross-Environment IPv4 | 96 connections denied; 48 have independently reachable listener controls. |
+| Own short/FQDN DNS | All 32 UDP/TCP replies contain the exact expected IPv4 address. |
+| Shared private DNS view | All 16 peer-name replies match the peer DB address; DNS-name isolation is not claimed. |
+| External names | 384 validated own-gateway DNS responses contain no answer records. |
+| Gateway bypass | 32 legacy/other-private-gateway DNS attempts time out, with listener controls. |
+| Same-Environment IPv6 | Two DB self-listener controls succeed; six peer connections are denied. |
+
+The DNS parser validates peer, question, ID, compression, truncation and address
+RDATA. A header-only or malformed reply cannot pass. The offline parser/scope
+suite passes 17 cases. A changed SG rule before collection is rejected against
+the frozen full snapshot rather than accepted as a new baseline.
+
+The raw event SHA-256 is
+`a861efe2fcf1d96999f281502962bdbd7f7ea4b35153af24196b552284908b93`.
+The independent verdict receipt SHA-256 is
+`91d8db648fb04c9fc51fb61168c94337aaa9e3e23849ce7beeac47762a86c029`.
+Cross-link IPv6 failures are not counted as firewall-drop proof. General SLAAC
+AAAA end-to-end behavior and upstream packet counts remain unmeasured. Sixteen
+manager-address DNS timeouts have no positive listener control, so they are not
+claimed as a separate policy proof. The earlier failed matrix and maintenance
+lease-preservation failure remain unchanged.
+
+Keep the failed receipts. Independent fixture writes need a separate one-shot
+Root release after this fresh pass. OpenRC model tasks and public preview setup
+remain on hold.
 Do not remove/recreate environments or manually repair resolver/lease files to
 turn this verdict into a pass. Canvas implementation remains on hold.

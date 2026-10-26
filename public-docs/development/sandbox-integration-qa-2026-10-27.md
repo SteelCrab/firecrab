@@ -185,10 +185,14 @@ counts remain unverified. No listener or address was added to fabricate a contro
   user then explicitly approved the exact B project, Environment and four-role
   VM allocation on this same private QA manager. One-shot creation reached Ready
   after 90.5 seconds. Initial seed and eight guest capabilities pass, but the
-  complete A/B verdict fails because A's internal DNS names are unavailable.
-  [The actual DNS record](sandbox-private-dns-qa-2026-10-27.md) preserves the
-  failure and read-only diagnosis. Independent writes and OpenRC tasks are on
-  hold until the repair passes a fresh actual network matrix.
+  initial A/B verdict fails because A's internal DNS names are unavailable.
+  [The actual DNS record](sandbox-private-dns-qa-2026-10-27.md) preserves that
+  failure, the guarded maintenance failure and the separate manual disposition.
+  The repaired source `34a45b95` passes a fresh running A/B matrix: exact own
+  addresses in 32 DNS replies, 96 denied cross-Environment IPv4 connections,
+  384 external-name responses without answers, and six IPv6 peer denials with
+  two positive controls. DNS names remain shared within the private resolver.
+  Independent writes and OpenRC tasks still need their separate Root releases.
 - Complete actual OpenRC argv/stdin/output/limits/cancellation and result export.
 - Complete the remaining actual results/UI and public preview acceptance.
   [Retained-results follow-up](sandbox-results-ui-qa-2026-10-27.md) verifies
