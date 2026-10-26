@@ -6,64 +6,97 @@ pub(super) use schemas::{context_schema, coordination_schema, output_schema};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Require both the project grant and the environment or task identity for scoped reads.
 struct Scope {
+    /// Project included in the REST path, never inferred from a caller-supplied VM.
     project_id: Uuid,
+    /// Environment or task identity selected by the dispatched endpoint.
     id: Uuid,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Create or inspect one immutable environment using a stable caller-chosen identity.
 struct EnvironmentSave {
+    /// Owning project whose permissions and resource ledger the server checks.
     project_id: Uuid,
+    /// Identity to inspect after uncertainty instead of choosing new resource IDs.
     id: Uuid,
+    /// Versioned role, template-pin, network and retention declaration.
     spec: SandboxEnvironmentSpec,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Request owned cleanup with retained-disk consent distinct from the environment ID.
 struct EnvironmentDelete {
+    /// Owning project required by the cleanup endpoint.
     project_id: Uuid,
+    /// Environment whose generation-bound exports gate deletion.
     id: Uuid,
+    /// False by default; true explicitly permits destroying retained Workspace disks.
     #[serde(default)]
     authorize_workspace_deletion: bool,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Bind an existing saved Pipe address to one admitted task target without credentials.
 struct TunnelSave {
+    /// Project that must own the target task.
     project_id: Uuid,
+    /// Stable binding identity whose task, runtime and address become immutable.
     id: Uuid,
+    /// Saved subdomain and authorized VM port, service or Nginx route.
     spec: SandboxTunnelSpec,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Probe an existing fixed URL and record HTTPS or WebSocket evidence separately.
 struct TunnelVerify {
+    /// Binding whose saved public URL constrains the probe destination.
     id: Uuid,
+    /// Bounded path and expected content hash or WebSocket handshake request.
     request: SandboxTunnelVerify,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Transfer the address claim to a successor while preserving the original attempt identity.
 struct TunnelRetarget {
+    /// Previous binding that currently owns the fixed-address claim.
     id: Uuid,
+    /// New binding identity, current task and explicit successor target.
     request: SandboxTunnelRetarget,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Bound a read-only wait without resubmitting an interrupted or uncertain task.
 struct TaskWait {
+    /// Existing task whose durable state is polled.
     id: Uuid,
+    /// Requested wait budget, validated by the shared waiter to one through sixty seconds.
     timeout_seconds: u64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Read retained bytes only after matching the task, attempt, size and SHA-256.
 struct ArtifactRead {
+    /// Task that owns the retained artifact metadata.
     id: Uuid,
+    /// Artifact identity within that task; arbitrary host paths are not accepted.
     artifact: Uuid,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Signal one process using its boot and start-time identity, not a bare PID.
 struct GuestSignal {
+    /// Project grant checked before accessing the admitted task runtime.
     project_id: Uuid,
+    /// Task whose dedicated guest process ownership constrains the signal.
     id: Uuid,
+    /// Exact process reference and the explicit terminate or kill action.
     request: SandboxGuestSignalRequest,
 }
 
+/// Parse strict tool inputs and use the existing REST authorization and ownership checks.
+/// Artifact reads are bounded to 64 KiB; signal receipts do not assert process termination.
 pub(super) fn call(client: &ApiClient, name: &str, args: Value) -> Result<Value, String> {
     let base = "/api/ai-sandbox";
     match name {
@@ -237,6 +270,8 @@ pub(super) fn call(client: &ApiClient, name: &str, args: Value) -> Result<Value,
     }
 }
 
+/// Advertise typed inputs, output envelopes and advisory MCP read/destructive annotations.
+/// These descriptions and annotations do not grant permission to publish or delete resources.
 pub(super) fn catalog() -> Vec<Value> {
     let uuid = json!({"type":"string","format":"uuid"});
     let id = schema(json!({"id":uuid}), &["id"]);
