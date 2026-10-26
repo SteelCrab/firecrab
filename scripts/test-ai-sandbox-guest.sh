@@ -33,14 +33,22 @@ cat > "$context/Dockerfile" <<'DOCKERFILE'
 ARG BASE_IMAGE=ubuntu:24.04
 FROM ${BASE_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    coreutils findutils gawk libgcc-s1 openssh-client openssh-server passwd procps tar util-linux \
+    build-essential busybox-static coreutils findutils gawk libgcc-s1 \
+    openssh-client openssh-server passwd procps python3 tar util-linux \
     && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /etc/firecrab && ln -s /bin/busybox /etc/firecrab/busybox
 DOCKERFILE
 docker build --build-arg "BASE_IMAGE=$base_image" -t "$image" "$context"
 docker run --rm --name "$name" --network none --cpus 2 --memory 1g \
   -v "$binary:/qa/firecrab-api-tests:ro" -v "$profiles:/profiles" \
+  -v "$repo_root:/qa/source:ro" \
   -v "$guest_helper:/usr/local/sbin/firecrab-console-resize:ro" \
   -e FIRECRAB_SANDBOX_GUEST_QA=1 -e 'LLVM_PROFILE_FILE=/profiles/guest-%m-%p.profraw' \
-  "$image" /qa/firecrab-api-tests \
-  ai_sandbox::guest::tests::guest_ \
-  --ignored --nocapture
+  "$image" /bin/sh -eu -c '
+    /qa/firecrab-api-tests ai_sandbox::guest::tests::guest_ --ignored --nocapture
+    # The prepared-guest path must work without host account applet links.
+    for name in addgroup delgroup; do
+      if [ -e "/usr/sbin/$name" ]; then mv "/usr/sbin/$name" "/tmp/hidden-$name"; fi
+    done
+    FIRECRAB_SANDBOX_BUSYBOX_ACCOUNTS=1 python3 /qa/source/scripts/test-sandbox-guest-shell.py
+  '
