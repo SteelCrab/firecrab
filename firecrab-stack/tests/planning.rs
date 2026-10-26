@@ -576,3 +576,21 @@ fn automatic_images_are_pinned_in_plans_without_overriding_yaml_configuration() 
     let config = firecrab_stack::effective_service_config(&declared, None);
     assert_eq!(config.image, declared.image);
 }
+
+#[test]
+fn a_failed_initial_image_does_not_override_a_corrected_bootstrap_pin() {
+    let (mut stack, _, inventory) = fixture();
+    let desired = &mut stack.micro_services.get_mut("web").unwrap().config;
+    desired.auto_deploy = Some(firecrab_api_types::AutoDeployPolicy {
+        reference: "ghcr.io/team/app:stable".into(),
+        interval_seconds: 60,
+    });
+    desired.image = format!("ghcr.io/team/app@sha256:{}", "c".repeat(64));
+    let mut failed = inventory.services[0].deployment.clone().unwrap();
+    failed.phase = ServicePhase::Failed;
+    failed.digest = Some(format!("sha256:{}", "a".repeat(64)));
+    assert_eq!(
+        firecrab_stack::effective_service_config(desired, Some(&failed)).image,
+        desired.image
+    );
+}

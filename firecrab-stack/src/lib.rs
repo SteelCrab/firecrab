@@ -533,6 +533,10 @@ pub fn effective_service_config(
     let mut effective = desired.clone();
     if desired.auto_deploy.is_some()
         && let Some(current) = current
+        && matches!(
+            current.phase,
+            firecrab_api_types::ServicePhase::Running | firecrab_api_types::ServicePhase::Degraded
+        )
         && let Some(digest) = &current.digest
     {
         let image = current

@@ -620,3 +620,63 @@ async fn a_manual_release_change_discards_unaccepted_intent_without_pausing_the_
         replacement.id
     );
 }
+
+#[tokio::test]
+async fn manual_rollback_preserves_a_policy_even_if_its_source_auth_is_unavailable() {
+    let root = crate::firecracker::test_support::short_tempdir();
+    let mut state = state(root.path()).await;
+    let mut journal = crate::service_runtime::deploy::tests::journal();
+    let original = (*journal.update.as_ref().unwrap().previous).clone();
+    let mut active = original.clone();
+    active.id = Uuid::new_v4();
+    active.spec.auto_deploy = Some(AutoDeployPolicy {
+        reference: "ghcr.io/disconnected/app:stable".into(),
+        interval_seconds: 60,
+    });
+    active.spec.image = format!("ghcr.io/team/app@{}", digest('b'));
+    active.digest = Some(digest('b'));
+    active.request.host_port = 0;
+    journal.update.as_mut().unwrap().previous = Box::new(active.clone());
+    let helper = crate::service_runtime::deploy::tests::helper(root.path(), &journal).await;
+    state.network = helper.client.clone();
+    state
+        .store
+        .insert_micro_service(&MicroServiceResponse {
+            id: active.service_id,
+            spec: active.spec.clone(),
+        })
+        .unwrap();
+    state.store.save_service_deployment(&original).unwrap();
+    state.store.save_service_deployment(&active).unwrap();
+    let permit = state.service_deploy_permits.acquire().await.unwrap();
+    let (_, Json(rollback)) = deploy::rollback(
+        State(state.clone()),
+        Extension(RequestId(Uuid::new_v4())),
+        Path(active.service_id.to_string()),
+        ValidatedJson(firecrab_api_types::RollbackServiceRequest {
+            expected_release_id: Some(active.id),
+            operation_id: Uuid::new_v4(),
+            release_id: original.id,
+            strategy: DeployStrategy::Rolling,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(rollback.spec.auto_deploy, active.spec.auto_deploy);
+    assert_eq!(
+        rollback.spec.image,
+        format!("ghcr.io/team/app@{}", digest('a'))
+    );
+    assert_eq!(
+        state
+            .store
+            .tag_watch(active.service_id)
+            .unwrap()
+            .unwrap()
+            .status
+            .pause,
+        Some(AutoDeployPause::Rollback)
+    );
+    state.store.delete_micro_service(active.service_id).unwrap();
+    drop(permit);
+}

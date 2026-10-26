@@ -234,7 +234,9 @@ async fn accept(
         super::auto_deploy::authorize(&state, &previous, &body.spec, watch, body.operation_id)
             .await?;
     }
-    if let Some(policy) = &body.spec.auto_deploy {
+    if body.spec.auto_deploy != previous.spec.auto_deploy
+        && let Some(policy) = &body.spec.auto_deploy
+    {
         super::auto_deploy::validate_auth(&state, policy, request.0).await?;
     }
     if body
