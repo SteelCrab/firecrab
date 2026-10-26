@@ -261,7 +261,7 @@ async fn helper(
 }
 
 #[tokio::test]
-async fn provisioning_reuses_reserved_vms_and_installs_exact_policy_before_start() {
+async fn provisioning_reuses_reserved_vms_and_saves_exact_policy_without_starting_them() {
     let (_dir, state, mut environment) = lifecycle_fixture().await;
     let (worker, requests) = helper(&state, false).await;
     let before = state.vms.lock().unwrap().clone();
@@ -356,12 +356,44 @@ async fn partial_network_cleanup_keeps_checkpoint_then_restart_cleanup_finishes_
         .await
         .unwrap();
     state.network = crate::network::NetworkClient::with_socket_path(dir.path().join("helper.sock"));
-    let (worker, _) = helper(&state, false).await;
+    let (worker, requests) = helper(&state, false).await;
     reconcile_cleanup(state.clone()).await;
     assert_eq!(
         load(&state, environment.id).unwrap().state,
         SandboxEnvironmentState::Deleted
     );
+    assert!(
+        state
+            .store
+            .micro_network(environment.network_id)
+            .unwrap()
+            .is_none()
+    );
+    let persisted_vms = state.store.load_all().unwrap();
+    for role in &environment.roles {
+        assert!(vm(&state, role.vm_id).is_none());
+        assert!(!persisted_vms.contains_key(&role.vm_id));
+        assert!(
+            state
+                .store
+                .security_group(role.security_group_id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(state.store.active_lease(role.vm_id).unwrap().is_none());
+    }
+    let removed: Vec<_> = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|request| match request {
+            firecrab_helper_protocol::network::NetworkRequest::RemoveMicroNetworkBridge {
+                micro_network_id,
+            } => Some(*micro_network_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(removed, vec![environment.network_id]);
     assert_eq!(vm(&state, unrelated.id), Some(unrelated));
     worker.abort();
 }

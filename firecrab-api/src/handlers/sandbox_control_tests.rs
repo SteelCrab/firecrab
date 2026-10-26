@@ -307,7 +307,11 @@ async fn environment_http_scopes_reads_and_rejects_delegate_lifecycle_writes() {
             &SandboxAccessPolicy {
                 grants: vec![SandboxResourceGrant {
                     resource: SandboxResource::Project { id: project },
-                    permissions: vec![SandboxPermission::Read],
+                    permissions: vec![
+                        SandboxPermission::Read,
+                        SandboxPermission::Write,
+                        SandboxPermission::Execute,
+                    ],
                 }],
             },
         )
@@ -332,44 +336,29 @@ async fn environment_http_scopes_reads_and_rejects_delegate_lifecycle_writes() {
             .0,
         StatusCode::OK
     );
-    for suffix in ["reconcile", "stop", "resume", "export"] {
+    let mut mutations: Vec<_> = ["reconcile", "stop", "resume", "export"]
+        .into_iter()
+        .map(|suffix| (Method::POST, format!("{path}/{suffix}"), json!({})))
+        .collect();
+    mutations.push((
+        Method::PUT,
+        path.clone(),
+        serde_json::to_value(&environment.spec).unwrap(),
+    ));
+    mutations.push((
+        Method::DELETE,
+        path.clone(),
+        json!({"authorizeWorkspaceDeletion":true}),
+    ));
+    for (method, target, body) in mutations {
+        let (status, error) = request(&state, method, &target, body, Some(host)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{target}: {error}");
+        assert_eq!(error["error"]["code"], "validation_failed");
         assert_eq!(
-            request(
-                &state,
-                Method::POST,
-                &format!("{path}/{suffix}"),
-                json!({}),
-                Some(host)
-            )
-            .await
-            .0,
-            StatusCode::BAD_REQUEST
+            error["error"]["fields"]["environment"],
+            "Only the controller operator can manage Sandbox grants"
         );
     }
-    assert_eq!(
-        request(
-            &state,
-            Method::PUT,
-            &path,
-            serde_json::to_value(&environment.spec).unwrap(),
-            Some(host)
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        request(
-            &state,
-            Method::DELETE,
-            &path,
-            json!({"authorizeWorkspaceDeletion":true}),
-            Some(host)
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
     assert_eq!(
         state
             .store
