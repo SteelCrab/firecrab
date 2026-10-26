@@ -10,20 +10,32 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxCanvasRole {
+    /// Read authorized task and result projections.
     Viewer,
+    /// Edit shared content; execution still needs explicit grants.
     Editor,
+    /// Manage Canvas sharing within the caller's existing authority.
     Owner,
 }
+/// Proposed Canvas operation whose resource rights must be checked by the server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxCanvasAction {
+    /// Read an existing Sandbox task.
     ViewTask,
+    /// Add text to the Canvas shared conversation.
     WriteSharedChat,
+    /// Request the terminal input-control lease.
     AcquireTerminalControl,
+    /// Send terminal input while holding its control lease.
     InputTerminal,
+    /// Start an agent through the existing Sandbox admission API.
     RunAgent,
+    /// Request cancellation of the referenced agent attempt.
     CancelAgent,
+    /// Apply reviewed project changes through Sandbox.
     ApplyChanges,
+    /// Change Canvas membership or sharing settings.
     ManageSharing,
 }
 impl SandboxCanvasAction {
@@ -70,35 +82,52 @@ impl SandboxCanvasRole {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxCanvasTaskRef {
+    /// Project whose current permissions authorize access.
     pub project_id: Uuid,
+    /// Authoritative Sandbox task identity.
     pub task_id: Uuid,
+    /// Immutable execution attempt; reconnect cannot select another attempt.
     pub attempt_id: Uuid,
+    /// Admitted VM generation, absent for tasks that do not execute in a guest.
     pub runtime: Option<SandboxRuntimeRef>,
+    /// Managed environment generation and role captured at admission.
     pub environment: Option<SandboxEnvironmentRef>,
 }
 /// Results remain owned by Sandbox; Canvas stores references and authorized projections.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxCanvasResultRef {
+    /// Task that owns the result.
     pub task_id: Uuid,
+    /// Attempt that produced the result and its artifacts.
     pub attempt_id: Uuid,
+    /// Current Sandbox lifecycle state, independent of individual test outcomes.
     pub state: SandboxTaskState,
+    /// Last authoritative task update in Unix milliseconds.
     pub updated_at: u64,
+    /// Artifact metadata; downloads remain subject to Sandbox authorization.
     pub artifacts: Vec<SandboxArtifact>,
 }
 /// A cursor identifies an attempt and ordered persisted Sandbox events, never another shell.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxCanvasEventCursor {
+    /// Task whose persisted event stream is being observed.
     pub task_id: Uuid,
+    /// Attempt that owns the cursor's sequence numbers.
     pub attempt_id: Uuid,
+    /// Last observed event, absent when no events have been retained.
     pub sequence: Option<usize>,
+    /// Task revision timestamp in Unix milliseconds.
     pub updated_at: u64,
 }
+/// Reconnect to persisted task history without creating or re-executing work.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxCanvasReconnect {
+    /// Exact authorized attempt to reconnect.
     pub task: SandboxCanvasTaskRef,
+    /// Last event projection known to the client.
     pub after: SandboxCanvasEventCursor,
     /// Refetch the authoritative task when a requested replay range is no longer retained.
     pub replay_reset_required: bool,
@@ -107,9 +136,12 @@ pub struct SandboxCanvasReconnect {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxCanvasCancelRef {
+    /// Task to cancel through Sandbox's existing lifecycle.
     pub task_id: Uuid,
+    /// Expected attempt, checked before cancellation.
     pub attempt_id: Uuid,
 }
+/// Explicit policy for agent observation when a Canvas client disconnects.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxCanvasDisconnectPolicy {
@@ -123,24 +155,38 @@ pub enum SandboxCanvasDisconnectPolicy {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Resource ownership and export requirements carried into the Canvas projection.
 pub struct SandboxCanvasRetention {
+    /// Environment that owns managed execution resources, when present.
     pub environment: Option<SandboxEnvironmentRef>,
+    /// Captured guest execution and persistence mode.
     pub execution_mode: Option<SandboxExecutionMode>,
+    /// Artifacts that must be exported before temporary resource cleanup.
     pub required_artifact_ids: Vec<Uuid>,
+    /// Cleanup must first confirm durable export of required results.
     pub export_required: bool,
+    /// The runtime is borrowed and must survive task or Canvas deletion.
     pub borrowed_runtime: bool,
+    /// Final retained data deletion needs explicit user authorization.
     pub workspace_deletion_requires_authorization: bool,
+    /// Disconnect behavior; defaults to observation without mutation.
     pub disconnect_policy: SandboxCanvasDisconnectPolicy,
 }
 /// Read-only handoff snapshot. There is no second admission or task state machine.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxCanvasHandoff {
+    /// Contract version; currently 1.
     pub version: u16,
+    /// Immutable authoritative task, attempt and runtime references.
     pub task: SandboxCanvasTaskRef,
+    /// Authorized result projection from the same attempt.
     pub result: SandboxCanvasResultRef,
+    /// Cursor and replay-reset guidance for reconnecting clients.
     pub reconnect: SandboxCanvasReconnect,
+    /// Cancellation target; does not authorize resource deletion.
     pub cancellation: SandboxCanvasCancelRef,
+    /// Export, ownership and data retention boundaries.
     pub retention: SandboxCanvasRetention,
 }
 impl SandboxCanvasHandoff {

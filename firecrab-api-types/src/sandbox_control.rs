@@ -2,6 +2,7 @@
 use crate::SandboxTask;
 use serde::{Deserialize, Serialize};
 
+/// Last observed task and whether bounded waiting reached a final state.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxTaskWaitResult {
