@@ -39,6 +39,29 @@ No provider DB, process environment block, connection-token file or private-key
 content was read. The existing pinned management key was referenced only by
 `ssh -i`. Public executable bytes were read only for ELF metadata and SHA-256.
 
+### Corrected CLI and independent HTTP 200 check
+
+Root replaced only `/usr/local/bin/firecrab` with the verified Linux AArch64 CLI.
+Its SHA-256 is
+`e73ea85b09e48620cd3b72764cb1030faf4f0d41486f16dbb11fc8fdeb31ca6d`.
+A separate read-only SSH check confirmed those installed bytes, `pipe --help`
+exit 0 and actual `GET http://127.0.0.1:5523/api/pipe` HTTP 200. The response
+reported both engine flags false, `config:null`, no saved addresses and both
+uninstalled traffic units inactive with MainPID 0. No API/helper/VM restart was
+needed. The internal `inspect` command is hidden from help, so its absence in a
+help listing does not override the successful API inspection.
+
+Root reported that a native macOS Mach-O CLI was briefly copied during recovery
+and immediately replaced with the preserved original. That file was not accepted
+as the Linux artifact. The final hash above belongs to the independently checked
+Linux replacement. This is why the procedure below checks the ELF class/machine,
+source and target before copying a file; a filename or successful local build is
+not an architecture check.
+
+This proves the installed CLI/helper boundary and missing-engine metadata. It
+does not prove ingress/cloudflared installation, token registration, running
+traffic services or a live public preview. Those later receipts remain separate.
+
 ## Metadata availability is independent of engines
 
 `firecrab-helper/src/pipe.rs::cli()` looks for a protected root-owned sibling
@@ -59,8 +82,8 @@ install an engine, start a unit, register a token or perform a remote heartbeat.
 A compatible CLI plus working systemd inspection and an absent/valid manifest
 must therefore return HTTP 200 metadata even with both engines absent. An invalid
 manifest or a systemctl execution failure is a separate operational error. The
-read-only receipt above predates CLI replacement, so it does not claim that the
-live 200 check has already passed.
+original 503 receipt and the later successful read-only 200 check are both
+preserved above.
 
 API changes `e793c357` and `d6982138` classify only the exact first Clap error line
 as `501 pipe_cli_unsupported` with static guidance to update the CLI and helper
@@ -132,6 +155,48 @@ Root's staged sequence, after installation authorization, is:
 Do not install a distro-wide nginx service or start a default public port 80
 listener to satisfy this preflight. Managed ingress is rendered and controlled
 through its own fixed unit when the approved connection is created.
+
+### Locally built exact ingress bundle
+
+Root authorized a separate local Docker build after the CLI boundary was fixed.
+It completed with exit 0 under the existing `desktop-linux` context, using
+`rust@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97`
+(Linux arm64), two CPUs, 1 GiB memory, 128 processes and a 900-second deadline.
+Only integration `scripts/` and `packaging/` were mounted read-only; one private
+output directory was writable. No Cargo directory/cache was mounted or cleaned.
+The disposable `--rm` container is gone. Host disk remained above 16 GiB free.
+
+The base already supplied GCC/make/Python/binutils/coreutils/file/tar/gzip/curl.
+The container installed musl/musl-dev/musl-tools 1.2.3-1 and updated its public CA
+package. This added about 3.9 MiB to the disposable container. The compiler was
+GCC 12.2.0; no toolchain or package was installed on the QA manager.
+The existing builder verified the exact pinned nginx/PCRE2 archive digests and
+ran the resulting executable's `-V` successfully. Independent header parsing
+confirmed ELF64 little-endian AArch64, no PT_INTERP and no PT_DYNAMIC; readelf
+reported no dynamic section.
+
+| Local artifact | Actual result |
+| --- | --- |
+| Binary | 4,528,096 bytes; SHA-256 `9adc55d5329cae38ec24f868fd03a2bcf9af73f9f951ac3e7e6c751df2a0fd8e` |
+| Version | `nginx/1.30.6 (firecrab-ingress)`, musl-gcc and `-static` |
+| Tar bundle | 1,981,838 bytes; SHA-256 `ae5c7a282dc91cb515225c0afc9e7fd6ea48242f8d35e4c7a20b0040b047bc7d` |
+| Bundle path | `/private/tmp/firecrab-414-ingress-yvwbdjrp/firecrab-ingress-linux-aarch64-414.tar.gz` |
+| Private receipt | `/private/tmp/firecrab-414-ingress-yvwbdjrp/receipt.json`, mode 0600 |
+| Receipt SHA-256 | `ddc93a0304ef770e697de556cff84d5687e1f0436ac52c0f96e956ac3086416c` |
+
+The tar contains root-owned 0755 `firecrab-ingress`, the four 0644 `ingress/`
+notice/source files, `SHA256SUMS` and `build-receipt.json`. Every tar entry was
+read back and compared with its actual source bytes. Root should validate the
+tar hash, then `sha256sum --check SHA256SUMS` inside a new isolated staging
+directory before copying only these files to the standard paths above. Use an
+atomic replacement for the binary and root ownership on every installed file.
+Run the matching CLI's `pipe install` only after this ingress review/install.
+
+This is a local build/static-executable receipt. It is not a live manager engine
+installation, systemd start, connection registration or public-routing receipt.
+The earlier estimate was 3–6 minutes with warm tools or 5–12 minutes including
+preparation; actual completion within the 900-second bound supersedes that
+planning estimate. No repeated build is needed before Root reviews this bundle.
 
 ## Before the user registers the test connection
 
