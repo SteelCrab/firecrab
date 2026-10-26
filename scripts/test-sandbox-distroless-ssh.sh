@@ -25,9 +25,8 @@ for device in 'null 1 3' 'zero 1 5' 'random 1 8' 'urandom 1 9'; do
     set -- $device
     [ -e "$root/dev/$1" ] || mknod -m 666 "$root/dev/$1" c "$2" "$3"
 done
-# This is the same root-shell preparation performed by OCI specialization.
-awk -F: 'BEGIN {OFS=":"} $1=="root" {$7="/bin/sh"} {print}' "$root/etc/passwd" >"$root/etc/passwd.new"
-mv "$root/etc/passwd.new" "$root/etc/passwd"
+root_shell=$(awk -F: '$1=="root" {print $7}' "$root/etc/passwd")
+[ "$root_shell" = /bin/sh ] || { echo 'The prepared image must supply the operator root shell.' >&2; exit 79; }
 cp "$keys/client.pub" "$root/root/.ssh/authorized_keys"
 cp "$keys/ssh_host_ed25519_key" "$root/etc/ssh/ssh_host_ed25519_key"
 chmod 700 "$root/root" "$root/root/.ssh"

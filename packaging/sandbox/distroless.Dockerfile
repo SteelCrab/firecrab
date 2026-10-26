@@ -34,6 +34,8 @@ RUN set -eu; \
     "$ssh_runtime/lib/ld-musl-$(uname -m).so.1" --library-path "$ssh_runtime/lib:$ssh_runtime/usr/lib" "$ssh_runtime/usr/sbin/sshd" -V; \
     if [ -f /application/etc/passwd ]; then cp /application/etc/passwd /overlay/etc/passwd; else printf 'root:x:0:0:root:/root:/bin/sh\n' >/overlay/etc/passwd; fi; \
     if [ -f /application/etc/group ]; then cp /application/etc/group /overlay/etc/group; else printf 'root:x:0:\n' >/overlay/etc/group; fi; \
+    awk -F: 'BEGIN {OFS=":"} $1=="root" {if ($3!=0 || $4!=0) exit 1; $7="/bin/sh"; roots++} {print} END {if (roots!=1) exit 1}' /overlay/etc/passwd >/overlay/etc/passwd.prepared; \
+    mv /overlay/etc/passwd.prepared /overlay/etc/passwd; \
     if ! grep -q '^sshd:' /overlay/etc/passwd; then \
       ssh_uid=65530; \
       while awk -F: -v uid="$ssh_uid" '$3==uid {found=1} END {exit !found}' /overlay/etc/passwd; do ssh_uid=$((ssh_uid-1)); [ "$ssh_uid" -gt 64500 ]; done; \

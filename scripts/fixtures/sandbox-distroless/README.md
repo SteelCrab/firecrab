@@ -9,6 +9,10 @@ The prepared image adds BusyBox shell tools, key-only SSH dependencies and the
 static guest helper through `packaging/sandbox/distroless.Dockerfile`. It has no
 package manager, OpenRC or systemd. Normal VM specialization generates the
 unique operator and host keys; none belong in the build context.
+The preparation changes only root's login shell to the supplied `/bin/sh`.
+Other passwd entries, the application user and password fields remain unchanged.
+The SSH service continues to disable password authentication. A distroless root
+entry pointing to absent `/sbin/nologin` cannot authenticate even with a valid key.
 
 ## Build and record
 
@@ -46,8 +50,9 @@ rootfs archive and keys read-only. Provide newly generated `client`,
 `client.pub`, `ssh_host_ed25519_key` and a `known_hosts` entry pinned to
 `[127.0.0.1]:2222`. Never use an account or existing VM key.
 
-The script extracts only inside its disposable container, prepares the normal
-root shell and runtime-only server keys, then uses the container's loopback.
+The script extracts only inside its disposable container and supplies runtime-only
+server keys, then uses the container's loopback. It requires the prepared root
+shell without changing it, so a missing-shell preparation error fails the smoke.
 Preserve server logs proving `sshd-auth`, `sshd-session` and accepted public-key
 authentication, plus actual command output and exit 7. Its report explicitly
 sets MicroVM and V1-channel validation to false. Remove these disposable private
