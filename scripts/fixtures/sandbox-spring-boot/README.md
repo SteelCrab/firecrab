@@ -3,6 +3,8 @@
 This offline QA project deliberately fails application startup because
 `GreetingController` requires a `String` bean that the application does not define.
 It is not a production application or a dependency recommendation.
+It uses a real Spring HTTP server and JUnit test. Mockito is excluded because
+the fixture has no mocks and does not need dynamic JVM agent attachment.
 
 Provision Java 17 or newer, Maven, and a complete dependency cache outside the
 project copy before disabling network access. Use bounded commands:

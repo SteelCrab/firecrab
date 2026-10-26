@@ -185,6 +185,9 @@ def main():
     qa.require(machine["name"] == f"sandbox-recovery-{run_id}" and machine["state"] == "running" and machine["egressPolicy"] == "isolated", "Expected the retained isolated QA VM")
     _, accounts = api.request("GET", "/api/pipe/ai/connections", timeout=10)
     qa.require(any(account["id"] == args.connection and account["name"] == machine["name"] for account in accounts), "Expected the same human-authorized QA connection")
+    _, projects = api.request("GET", "/api/ai-sandbox/projects", timeout=10)
+    qa.require(not any(project["spec"].get("vmId") == args.vm for project in projects),
+               "Export and explicitly clean up the previous owned project before borrowing this VM again")
     fixture = Path(args.fixture).resolve()
     qa.require(fixture.is_dir() and not fixture.is_symlink(), "Expected the checked-in Spring Boot fixture")
     results = Path(args.results_dir)
@@ -193,7 +196,7 @@ def main():
     shutil.copytree(fixture, source)
     skill = source / "skills/qa/SKILL.md"
     skill.parent.mkdir(parents=True)
-    skill.write_text("# Offline regression\nUse the prepared Java/Maven cache. Preserve the original source and record actual guest command results.\n")
+    skill.write_text("# Offline regression\nUse the prepared Java/Maven cache. Edit the isolated task copy. Firecrab preserves the API-host source. Record actual guest command results.\n")
     git_env = {"PATH": "/usr/bin:/bin", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"}
     for git_args in [["init", "-q"], ["add", "."], ["-c", "user.name=Firecrab QA", "-c", "user.email=qa@localhost", "commit", "-qm", "seed offline regression"]]:
         subprocess.run(["/usr/bin/git", *git_args], cwd=source, env=git_env, capture_output=True, check=True)
@@ -216,7 +219,7 @@ def main():
     save(output, report)
     try:
         selection = {"connectionId": str(uuid.UUID(args.connection)), "model": args.model}
-        spec = {"name": f"coordination-{run_id}", "sourcePath": str(source), "vmId": args.vm,
+        spec = {"name": "Spring Boot Debug and Test", "sourcePath": str(source), "vmId": args.vm,
                 "selection": selection, "instructions": "Use only the authorized offline fixture. Never request credentials, external network, or host execution.",
                 "context": {"gitRef": "HEAD", "selectedSkills": ["skills/qa/SKILL.md"], "references": ["README.md"]}}
         api.request("PUT", f"/api/ai-sandbox/projects/{project}", spec, (200, 201), timeout=15)
