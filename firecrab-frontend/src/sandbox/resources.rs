@@ -342,7 +342,7 @@ fn open(app: &Shared, kind: Kind, reference: &str) {
     });
 }
 
-fn environment_spec(e: &Editor) -> Result<Value, String> {
+fn environment_spec(a: &App, e: &Editor) -> Result<Value, String> {
     let mut spec = e.spec.clone();
     for index in 0..list(&spec["roles"]).len() {
         let depends = e
@@ -361,14 +361,19 @@ fn environment_spec(e: &Editor) -> Result<Value, String> {
             .map(str::trim)
             .filter(|l| !l.is_empty())
         {
-            let (name, port) = line
-                .split_once(':')
-                .ok_or("Services use name:port, one per line")?;
-            let port: u16 = port
-                .parse()
-                .map_err(|_| "Service ports must be between 1 and 65535")?;
+            let (name, port) = line.split_once(':').ok_or(tr(
+                a,
+                "Services use name:port, one per line",
+                "서비스는 이름:포트 형식으로 한 줄에 하나씩 입력한다",
+            ))?;
+            let port_error = tr(
+                a,
+                "Service ports must be between 1 and 65535",
+                "서비스 포트는 1부터 65535 사이여야 한다",
+            );
+            let port: u16 = port.parse().map_err(|_| port_error)?;
             if port == 0 {
-                return Err("Service ports must be between 1 and 65535".into());
+                return Err(port_error.into());
             }
             services.push(json!({"name":name.trim(),"port":port,"readiness":true}));
         }
@@ -385,13 +390,21 @@ fn environment_spec(e: &Editor) -> Result<Value, String> {
     {
         let words = line.split_whitespace().collect::<Vec<_>>();
         if words.len() != 3 {
-            return Err("Allowed connections use: source destination port".into());
+            return Err(tr(
+                a,
+                "Allowed connections use: source destination port",
+                "허용할 연결은 출발역할 도착역할 포트 형식으로 입력한다",
+            )
+            .into());
         }
-        let port: u16 = words[2]
-            .parse()
-            .map_err(|_| "Allowed connection ports must be between 1 and 65535")?;
+        let port_error = tr(
+            a,
+            "Allowed connection ports must be between 1 and 65535",
+            "허용할 연결의 포트는 1부터 65535 사이여야 한다",
+        );
+        let port: u16 = words[2].parse().map_err(|_| port_error)?;
         if port == 0 {
-            return Err("Allowed connection ports must be between 1 and 65535".into());
+            return Err(port_error.into());
         }
         allow.push(json!({"from":words[0],"to":words[1],"port":port}));
     }
@@ -405,26 +418,30 @@ fn environment_spec(e: &Editor) -> Result<Value, String> {
     spec["retention"]["ttlSeconds"] = if ttl.is_empty() {
         Value::Null
     } else {
-        json!(
-            ttl.parse::<u64>()
-                .map_err(|_| "Lifetime must be a positive number of seconds")?
-        )
+        json!(ttl.parse::<u64>().map_err(|_| tr(
+            a,
+            "Lifetime must be a positive number of seconds",
+            "보존 시간은 양의 정수(초)로 입력한다",
+        ))?)
     };
     Ok(spec)
 }
 pub(super) fn save(app: &Shared) {
     let mut a = app.borrow_mut();
     let generation = a.generation;
-    let Some(e) = &mut a.sandbox.resource_editor else {
+    let Some(e) = &a.sandbox.resource_editor else {
         return;
     };
     if e.busy || e.loading || e.uncertain {
         return;
     }
     let spec = if e.kind == Kind::Environment {
-        environment_spec(e)
+        environment_spec(&a, e)
     } else {
         Ok(e.spec.clone())
+    };
+    let Some(e) = &mut a.sandbox.resource_editor else {
+        return;
     };
     let spec = match spec {
         Ok(v) => v,
@@ -1590,3 +1607,7 @@ fn preview_editor(a: &App, e: &Editor, out: &mut String) {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "resources_tests.rs"]
+mod tests;
