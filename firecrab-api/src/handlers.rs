@@ -44,6 +44,8 @@ pub mod pipe_database_events;
 pub mod pipe_database_maintenance;
 pub mod pipe_databases;
 pub mod pipe_storage;
+#[cfg(test)]
+mod sandbox_control_tests;
 pub mod sandbox_environments;
 pub mod sandbox_guest;
 pub mod sandbox_tunnels;
