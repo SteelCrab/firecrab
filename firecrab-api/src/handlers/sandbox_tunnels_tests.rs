@@ -320,3 +320,39 @@ async fn environment_preview_requires_the_admitted_generation_and_ready_declared
     state.store.save_sandbox_environment(&environment).unwrap();
     assert!(environment_port(&state, id, &binding, &reference, Some("api"), None).is_err());
 }
+
+#[tokio::test]
+async fn active_preview_prevents_project_and_result_cleanup() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path()).await;
+    let binding = binding();
+    task(&state, &binding);
+    state.store.save_sandbox_tunnel(&binding).unwrap();
+    let retained = state.sandbox.root.join(binding.project_id.to_string());
+    std::fs::create_dir_all(&retained).unwrap();
+    std::fs::write(retained.join("result"), "exported evidence").unwrap();
+    let result = crate::handlers::ai_sandbox::delete_project(
+        State(state.clone()),
+        Extension(RequestId(Uuid::new_v4())),
+        Caller::default(),
+        Path(binding.project_id),
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(
+        state
+            .store
+            .sandbox_project(binding.project_id)
+            .unwrap()
+            .is_some()
+    );
+    assert!(state.store.sandbox_task(binding.task_id).unwrap().is_some());
+    assert_eq!(
+        std::fs::read_to_string(retained.join("result")).unwrap(),
+        "exported evidence"
+    );
+    assert_eq!(
+        state.store.sandbox_tunnel(binding.id).unwrap().unwrap(),
+        binding
+    );
+}

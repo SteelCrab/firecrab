@@ -479,6 +479,17 @@ pub async fn delete_project(
             "Delete owned Environments explicitly before deleting their project",
         ));
     }
+    if state
+        .store
+        .sandbox_project_has_live_tunnels(key)
+        .map_err(|_| AppError::internal(id.0))?
+    {
+        return Err(error(
+            id,
+            "sandbox_tunnel_retained",
+            "Stop and delete active preview bindings before deleting their project",
+        ));
+    }
     let owned = state.sandbox.root.join(key.to_string());
     if owned.exists() {
         tokio::task::spawn_blocking(move || std::fs::remove_dir_all(owned))
