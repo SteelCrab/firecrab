@@ -12,8 +12,12 @@ pub(super) async fn fixture() -> (tempfile::TempDir, AppState, SavedTask) {
         runtime_id: Uuid::new_v4(),
     };
     let saved = SavedTask {
+        results_exported: false,
+        execution_mode: None,
         caller: Default::default(),
         project: SandboxProjectSpec {
+            context: Default::default(),
+            environment_id: None,
             name: "Recovery checkpoint".into(),
             source_path: None,
             vm_id: Some(runtime.vm_id),
@@ -26,11 +30,20 @@ pub(super) async fn fixture() -> (tempfile::TempDir, AppState, SavedTask) {
         guest_command: Some(Uuid::new_v4()),
         guest_staged: true,
         task: SandboxTask {
+            git_commit: None,
+            retry_root: None,
+            retry_number: 0,
+            dependency_results: vec![],
+            tests: vec![],
+            artifacts: vec![],
+            environment: None,
             id: Uuid::new_v4(),
             project_id: Uuid::new_v4(),
             attempt_id: Uuid::new_v4(),
             runtime: Some(runtime),
             request: SandboxTaskInput {
+                coordination: Default::default(),
+                environment_role: None,
                 kind: SandboxTaskKind::Code,
                 input: "Run once".into(),
                 selection: None,

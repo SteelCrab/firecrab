@@ -815,6 +815,13 @@ pub async fn create_task(
     let saved = SavedTask {
         caller,
         task: SandboxTask {
+            git_commit: None,
+            retry_root: None,
+            retry_number: 0,
+            dependency_results: vec![],
+            tests: vec![],
+            artifacts: vec![],
+            environment: None,
             id: key,
             project_id,
             attempt_id: Uuid::new_v4(),
@@ -836,6 +843,8 @@ pub async fn create_task(
         guest_pending: false,
         guest_command: None,
         guest_staged: false,
+        results_exported: false,
+        execution_mode: None,
     };
     caller
         .task(&state, &saved, SandboxPermission::Execute)

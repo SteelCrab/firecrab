@@ -87,6 +87,54 @@ pub struct SandboxProjectSpec {
     /// Project instructions sent with each conversation or code task.
     #[serde(default)]
     pub instructions: String,
+    /// Source-contained Git, skill and reference context. No host-global paths are accepted.
+    #[serde(default)]
+    pub context: SandboxProjectContext,
+    /// Optional managed Environment; borrowed vmId remains supported.
+    #[serde(default)]
+    pub environment_id: Option<Uuid>,
+}
+
+/// Explicit project context, resolved locally without fetching remote repositories.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SandboxProjectContext {
+    /// Local Git ref or commit. Omission snapshots the current source files.
+    pub git_ref: Option<String>,
+    /// Source-relative SKILL.md files selected by the user.
+    #[serde(default)]
+    pub selected_skills: Vec<String>,
+    /// Source-relative UTF-8 files supplied as reference material.
+    #[serde(default)]
+    pub references: Vec<String>,
+}
+
+/// Bounded explicit retry policy. Retrying always creates a separate retained task/attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SandboxTaskCoordination {
+    /// Existing task identities in this project. Their latest retry must succeed before dispatch.
+    #[serde(default)]
+    pub dependencies: Vec<Uuid>,
+    /// User-selected agent label, executed through the same verified model adapter.
+    pub assigned_agent: Option<String>,
+    /// Maximum explicit retries after the initial attempt, capped at three by the server.
+    #[serde(default = "default_retry_limit")]
+    pub retry_limit: u8,
+}
+
+fn default_retry_limit() -> u8 {
+    3
+}
+
+impl Default for SandboxTaskCoordination {
+    fn default() -> Self {
+        Self {
+            dependencies: Vec::new(),
+            assigned_agent: None,
+            retry_limit: default_retry_limit(),
+        }
+    }
 }
 
 /// Saved project identity and configuration.
@@ -155,6 +203,62 @@ pub struct SandboxTaskInput {
     pub selection: Option<AiModelSelection>,
     /// Optional failed/cancelled attempt this task explicitly retries.
     pub retry_of: Option<Uuid>,
+    /// Dependencies, agent assignment and bounded explicit retries.
+    #[serde(default)]
+    pub coordination: SandboxTaskCoordination,
+    /// Managed Environment role; required when the Environment has multiple roles.
+    #[serde(default)]
+    pub environment_role: Option<String>,
+}
+
+/// A declared test is backed by one retained guest-command event, never a model assertion.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxTestResult {
+    /// Human-readable test name.
+    pub name: String,
+    /// Actual run_command event in this task/attempt.
+    pub event_sequence: usize,
+    /// Derived from the command exit status.
+    pub passed: bool,
+}
+
+/// Immutable exported file retained independently of temporary guest resources.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxArtifact {
+    /// Download identity under this task's artifact endpoint.
+    pub id: Uuid,
+    /// Owning task.
+    pub task_id: Uuid,
+    /// Owning immutable attempt.
+    pub attempt_id: Uuid,
+    /// Original source-relative workspace path.
+    pub path: String,
+    /// Exported byte count.
+    pub size: usize,
+    /// SHA-256 digest checked before download and Environment cleanup.
+    pub sha256: String,
+}
+
+/// Successful dependency evidence fixed before this attempt starts external work.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxDependencyResult {
+    /// Latest successful retry task identity.
+    pub task_id: Uuid,
+    /// Immutable attempt that produced this evidence.
+    pub attempt_id: Uuid,
+    /// Agent that produced the result.
+    pub assigned_agent: Option<String>,
+    /// Bounded, redacted assistant result.
+    pub result: String,
+    /// Paths inherited into this task's isolated workspace.
+    pub changed_paths: Vec<String>,
+    /// Actual test evidence retained with the source attempt.
+    pub tests: Vec<SandboxTestResult>,
+    /// Artifacts remain owned by the producing attempt.
+    pub artifacts: Vec<SandboxArtifact>,
 }
 
 /// One redacted tool invocation with its actual execution result.
@@ -228,6 +332,27 @@ pub struct SandboxTask {
     pub events: Vec<SandboxEvent>,
     /// Reviewable modifications to the isolated project copy.
     pub changes: Vec<SandboxFileChange>,
+    /// Git commit fixed at admission when the project selects a local ref.
+    #[serde(default)]
+    pub git_commit: Option<String>,
+    /// First task in this bounded explicit retry chain.
+    #[serde(default)]
+    pub retry_root: Option<Uuid>,
+    /// Zero for the initial attempt; never exceeds the initial retry policy.
+    #[serde(default)]
+    pub retry_number: u8,
+    /// Successful dependency evidence delivered before execution.
+    #[serde(default)]
+    pub dependency_results: Vec<SandboxDependencyResult>,
+    /// Test declarations tied to actual command results.
+    #[serde(default)]
+    pub tests: Vec<SandboxTestResult>,
+    /// Immutable exported files available after temporary guest cleanup.
+    #[serde(default)]
+    pub artifacts: Vec<SandboxArtifact>,
+    /// Managed Environment generation and role fixed at admission.
+    #[serde(default)]
+    pub environment: Option<crate::SandboxEnvironmentRef>,
 }
 
 /// Provider catalogue entries are distinct from verified inference permissions.
@@ -307,6 +432,18 @@ pub struct SandboxTaskSummary {
     pub change_count: usize,
     /// Most recent tool name for execution feedback.
     pub last_tool: Option<String>,
+    /// First task in this bounded explicit retry chain.
+    #[serde(default)]
+    pub retry_root: Option<Uuid>,
+    /// Retry position, starting at zero.
+    #[serde(default)]
+    pub retry_number: u8,
+    /// Retained test count.
+    #[serde(default)]
+    pub test_count: usize,
+    /// Exported artifact count.
+    #[serde(default)]
+    pub artifact_count: usize,
 }
 
 impl From<&SandboxTask> for SandboxTaskSummary {
@@ -327,6 +464,10 @@ impl From<&SandboxTask> for SandboxTaskSummary {
             event_count: task.events.len(),
             change_count: task.changes.len(),
             last_tool: task.events.last().map(|e| e.name.clone()),
+            retry_root: task.retry_root,
+            retry_number: task.retry_number,
+            test_count: task.tests.len(),
+            artifact_count: task.artifacts.len(),
         }
     }
 }

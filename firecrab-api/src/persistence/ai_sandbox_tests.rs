@@ -5,6 +5,8 @@ fn saved(project: Uuid, index: u64) -> SavedTask {
     SavedTask {
         caller: Default::default(),
         project: SandboxProjectSpec {
+            context: Default::default(),
+            environment_id: None,
             name: "Project".into(),
             source_path: None,
             vm_id: None,
@@ -16,12 +18,23 @@ fn saved(project: Uuid, index: u64) -> SavedTask {
         guest_pending: false,
         guest_command: None,
         guest_staged: false,
+        results_exported: false,
+        execution_mode: None,
         task: SandboxTask {
+            git_commit: None,
+            retry_root: None,
+            retry_number: 0,
+            dependency_results: vec![],
+            tests: vec![],
+            artifacts: vec![],
+            environment: None,
             id: Uuid::new_v4(),
             project_id: project,
             attempt_id: Uuid::new_v4(),
             runtime: None,
             request: SandboxTaskInput {
+                coordination: Default::default(),
+                environment_role: None,
                 kind: SandboxTaskKind::Chat,
                 input: format!("input {index}"),
                 selection: None,
