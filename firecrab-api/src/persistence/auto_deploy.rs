@@ -24,6 +24,8 @@ pub(crate) struct Watch {
     pub handled: Option<String>,
     pub blocked: Option<String>,
     pub pending: Option<Pending>,
+    #[serde(default)]
+    pub rollback_operation: Option<Uuid>,
 }
 
 impl Watch {
@@ -43,6 +45,7 @@ impl Watch {
             handled: None,
             blocked: None,
             pending: None,
+            rollback_operation: None,
         }
     }
 
@@ -111,6 +114,7 @@ pub(super) fn deployment(
         return Ok(());
     };
     if record.phase == ServicePhase::Queued
+        && watch.rollback_operation != Some(record.id)
         && record
             .update
             .as_ref()
@@ -122,6 +126,7 @@ pub(super) fn deployment(
                 .as_ref()
                 .and_then(|u| u.previous.digest.clone())
         });
+        watch.rollback_operation = Some(record.id);
         watch.pause(AutoDeployPause::Rollback, blocked.clone());
         watch.handled = blocked;
         watch.pending = None;

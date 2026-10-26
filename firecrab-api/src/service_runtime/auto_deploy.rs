@@ -26,6 +26,10 @@ fn ready(record: &MicroServiceDeployment) -> bool {
     matches!(record.phase, ServicePhase::Running | ServicePhase::Degraded)
         && !record.instances.is_empty()
         && record.domain_route_owned
+        && record
+            .recovery
+            .as_ref()
+            .is_none_or(|health| health.repair.is_none())
         && record.update.as_ref().is_none_or(|u| u.completed)
 }
 
@@ -189,8 +193,13 @@ async fn dispatch(
     let id = record.service_id;
     let operation = pending.operation;
     let store = state.store.clone();
-    let (saved, accepted) = database(operation, move || {
-        Ok((store.tag_watch(id)?, store.service_attempt(operation)?))
+    let (saved, accepted, current, allowed) = database(operation, move || {
+        Ok((
+            store.tag_watch(id)?,
+            store.service_attempt(operation)?,
+            store.service_deployment(id)?,
+            store.stack_service_auto_allowed(id)?,
+        ))
     })
     .await?;
     let Some(mut saved) = saved else {
@@ -201,6 +210,14 @@ async fn dispatch(
         return Ok(());
     }
     saved.pending = None;
+    if !allowed
+        || current.as_ref().is_none_or(|current| {
+            current.id != pending.previous || current.spec != record.spec || !ready(current)
+        })
+    {
+        saved.status.operation_id = None;
+        return persist(state, id, saved).await;
+    }
     saved.handled = Some(pending.digest.clone());
     saved.pause(AutoDeployPause::Failed, Some(pending.digest.clone()));
     saved.status.error = Some(
@@ -254,6 +271,7 @@ pub(super) async fn authorize(
             spec.image == format!("{repository}@{}", pending.digest)
         });
     if !valid
+        || !ready(previous)
         || !pinned
         || !allowed
         || owned

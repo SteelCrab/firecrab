@@ -164,6 +164,28 @@ async fn watch_journal_survives_restart_and_tracks_exact_success_failure_and_rol
     let watch = state.store.tag_watch(current.service_id).unwrap().unwrap();
     assert_eq!(watch.status.pause, Some(AutoDeployPause::Rollback));
     assert_eq!(watch.blocked, Some(digest('b')));
+    let mut manual = watch.clone();
+    manual.pause(AutoDeployPause::Manual, None);
+    state
+        .store
+        .save_tag_watch(current.service_id, &manual)
+        .unwrap();
+    // API restart can journal the same rollback as queued again. It cannot override Manual pause.
+    state.store.save_service_deployment(&rollback).unwrap();
+    assert_eq!(
+        state
+            .store
+            .tag_watch(current.service_id)
+            .unwrap()
+            .unwrap()
+            .status
+            .pause,
+        Some(AutoDeployPause::Manual)
+    );
+    state
+        .store
+        .save_tag_watch(current.service_id, &watch)
+        .unwrap();
     rollback.phase = ServicePhase::Failed;
     rollback.update.as_mut().unwrap().completed = true;
     state
@@ -565,4 +587,36 @@ async fn staged_digest_enters_the_existing_queue_once_and_survives_lost_acknowle
         .delete_micro_service(previous.service_id)
         .unwrap();
     drop(permit);
+}
+
+#[tokio::test]
+async fn a_manual_release_change_discards_unaccepted_intent_without_pausing_the_policy() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let current = running();
+    insert(&state, &current);
+    let mut watch = Watch::new(policy());
+    observe(&mut watch, &current, Ok(("stable".into(), digest('b'))), 1);
+    state
+        .store
+        .save_tag_watch(current.service_id, &watch)
+        .unwrap();
+    let mut replacement = current.clone();
+    replacement.id = Uuid::new_v4();
+    replacement.digest = Some(digest('c'));
+    state.store.save_service_deployment(&replacement).unwrap();
+    dispatch(&state, &current, watch).await.unwrap();
+    let saved = state.store.tag_watch(current.service_id).unwrap().unwrap();
+    assert!(saved.pending.is_none());
+    assert!(saved.status.pause.is_none());
+    assert!(saved.status.operation_id.is_none());
+    assert_eq!(
+        state
+            .store
+            .service_deployment(current.service_id)
+            .unwrap()
+            .unwrap()
+            .id,
+        replacement.id
+    );
 }
