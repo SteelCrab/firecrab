@@ -1,8 +1,8 @@
 # Docker, nspawn and Workspace QA recipe
 
-Operator bootstrap and real task trials require the integrated runtime
-deployment signal. Preparation itself creates no Environment, VM, engine,
-registry listener or model task. It changes no existing QA resource or account.
+This recipe separates operator preparation from actual model execution.
+Preparation alone creates no Environment, VM, engine, registry listener or model
+task. Record each real mode outcome separately, including failed attempts.
 
 ## Public, offline inputs
 
@@ -96,6 +96,35 @@ This uses Docker's [per-registry certificate configuration](https://docs.docker.
 The repository digest stays unchanged. No daemon flag, public listener or guest
 egress relaxation is required. nspawn's
 rootfs and privilege options follow its [command documentation](https://www.freedesktop.org/software/systemd/man/259/systemd-nspawn.html).
+
+### nspawn user lookup
+
+The first real nspawn task with the BusyBox-only `01a1ffd6…` archive failed:
+`Failed to resolve user …`, exit 1. Preserve that attempt and its failed test.
+Systemd 259 runs the container's `getent passwd` and `getent initgroups` before
+switching to a non-root user. Numeric non-root IDs also use this path. See
+[the upstream implementation](https://github.com/systemd/systemd/blob/v259/src/nspawn/nspawn-setuid.c).
+
+Build a new immutable image with the optional `--getent-deb` and `--libc-deb`
+arguments. Both packages must match the signed bundle metadata. The image adds
+Ubuntu's actual getent, libc and loader, plus a files-only NSS configuration.
+It does not substitute a mock user lookup or change engine privilege flags.
+
+- `libc-bin 2.43-2ubuntu2.4`, arm64, deb SHA-256
+  `7dae6f6c5b11fb6a8acf9f8e6cba29a06a034759a9849ba96bd340ac40400545`.
+- `libc6 2.43-2ubuntu2.4`, arm64, deb SHA-256
+  `1652597c8c3419b298d8a87dd3d8eea1fdc5a1abd9bccb5a66b928f92ec463c9`.
+- New nspawn archive, reproduced in two builds:
+  `sha256:0044c4c1159dd6882276707f9f40a87e388addecc80cfd004ea312940e817fee`.
+
+The container root directory must be mode 0755 after extraction. The command
+supervisor's umask is 077; a plain mkdir would leave the root at 0700 and cause
+`execv(/bin/sh) failed: Permission denied` after user switching. Keep the outer
+command directory private and command mounts read-only. An operator preflight
+with the new image and mode 0755 produced UID 65532, CapEff 0 and NoNewPrivs 1.
+This preflight is separate from pending model execution with the fixed runtime.
+Environment readiness checks engine availability and archive identity; it does
+not prove that an image's internal user lookup works.
 
 ## Operator bootstrap after the deployment signal
 

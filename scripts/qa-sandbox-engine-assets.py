@@ -40,6 +40,26 @@ def build(args):
         binary = archive.extractfile(member).read()
     if binary[:6] != b"\x7fELF\x02\x01" or binary[18:20] != b"\xb7\x00":
         raise ValueError("The rootfs requires a Linux AArch64 ELF executable")
+    nss_files = {}
+    if bool(args.getent_deb) != bool(args.libc_deb):
+        raise ValueError("Supply both verified libc-bin and libc6 packages for nspawn user lookup")
+    for name, source, paths in [
+        ("libc-bin", args.getent_deb, {"usr/bin/getent"}),
+        ("libc6", args.libc_deb, {"usr/lib/aarch64-linux-gnu/libc.so.6", "usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"}),
+    ]:
+        if source is None:
+            continue
+        record = next(p for p in manifest["packages"] if p["package"] == name)
+        if record["architecture"] != "arm64" or digest(source.read_bytes()) != record["sha256"]:
+            raise ValueError(f"The exact arm64 {name} package must match the verified bundle")
+        payload = subprocess.check_output(["dpkg-deb", "--fsys-tarfile", str(source)])
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+            for member in archive:
+                path = member.name.removeprefix("./")
+                if path in paths and member.isfile():
+                    nss_files[path] = archive.extractfile(member).read()
+        if not paths.issubset(nss_files):
+            raise ValueError(f"The verified {name} package lacks the expected regular payloads")
     args.output.mkdir(mode=0o700)
     rootfs = io.BytesIO()
     with tarfile.open(fileobj=rootfs, mode="w:", format=tarfile.USTAR_FORMAT) as archive:
@@ -61,6 +81,13 @@ def build(args):
         add("etc/os-release", b'ID=firecrab-qa\nPRETTY_NAME="Firecrab QA BusyBox"\nVERSION_ID=1\n')
         add("etc/machine-id")
         add("etc/resolv.conf")
+        if nss_files:
+            for name in ["lib", "usr/lib", "usr/lib/aarch64-linux-gnu"]:
+                add(name, mode=0o755, kind=tarfile.DIRTYPE)
+            for name, payload in sorted(nss_files.items()):
+                add(name, payload, 0o755)
+            add("lib/ld-linux-aarch64.so.1", nss_files["usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"], 0o755)
+            add("etc/nsswitch.conf", b"passwd: files\ngroup: files\ninitgroups: files\n")
     layer = rootfs.getvalue()
     root_digest = digest(layer)
     root_path = args.output / f"{root_digest}.tar"
@@ -98,6 +125,8 @@ def build(args):
         "dockerImage": f"127.0.0.1:{args.port}/sandbox414/busybox@sha256:{image_digest}",
         "dockerManifestSha256": image_digest, "routes": routes,
     }
+    if nss_files:
+        result["userLookupPackages"] = [p for p in manifest["packages"] if p["package"] in ("libc6", "libc-bin")]
     (args.output / "images.json").write_bytes(encoded(result) + b"\n")
     print(json.dumps({k: v for k, v in result.items() if k != "routes"}, indent=2))
 
@@ -159,6 +188,8 @@ def main():
     builder = sub.add_parser("build")
     builder.add_argument("--bundle", type=Path, required=True)
     builder.add_argument("--deb", type=Path, required=True)
+    builder.add_argument("--getent-deb", type=Path)
+    builder.add_argument("--libc-deb", type=Path)
     builder.add_argument("--output", type=Path, required=True)
     builder.add_argument("--port", type=int, default=24144)
     server = sub.add_parser("serve")
