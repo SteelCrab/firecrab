@@ -26,6 +26,7 @@ mod queues;
 pub(crate) use cluster::ClusterError;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod ai_sandbox;
+pub(crate) mod auto_deploy;
 mod deploy_images;
 pub(crate) mod deploy_queue;
 mod micro_services;
@@ -779,6 +780,7 @@ impl Store {
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute_batch(micro_services::HISTORY_SQL)?;
+        conn.execute(auto_deploy::SCHEMA, [])?;
         conn.execute_batch(deploy_queue::SCHEMA)?;
         conn.execute(deploy_images::SCHEMA, [])?;
         micro_services::migrate_history(&conn)?;

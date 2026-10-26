@@ -103,6 +103,9 @@ pub(super) async fn preflight(
             {
                 let desired = &stack.micro_services[&change.key];
                 micro_services::validate(&desired.config, id)?;
+                if let Some(policy) = &desired.config.auto_deploy {
+                    crate::service_runtime::auto_deploy::validate_auth(state, policy, id).await?;
+                }
                 let request = DeployMicroServiceRequest {
                     micro_network_id: Some(networks[desired.network.as_str()]),
                     host_port: desired.host_port,
@@ -343,7 +346,12 @@ async fn execute(
             }
         }
         (ResourceKind::Service, Action::Create | Action::Update | Action::Deploy) => {
-            let desired = &stack.micro_services[&change.key];
+            let declared = &stack.micro_services[&change.key];
+            let store = state.store.clone();
+            let current = database(id, move || store.service_deployment(resource_id)).await?;
+            let mut desired = declared.clone();
+            desired.config =
+                firecrab_stack::effective_service_config(&declared.config, current.as_ref());
             if change.action == Action::Create {
                 let _ = micro_services::create_with_id(
                     state.clone(),

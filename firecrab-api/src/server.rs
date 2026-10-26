@@ -289,6 +289,19 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(crate::service_runtime::get).post(crate::service_runtime::deploy),
         )
         .route(
+            "/api/micro-services/{id}/auto-deploy",
+            get(crate::service_runtime::auto_deploy::get)
+                .put(crate::service_runtime::auto_deploy::configure),
+        )
+        .route(
+            "/api/micro-services/{id}/auto-deploy/pause",
+            post(crate::service_runtime::auto_deploy::pause),
+        )
+        .route(
+            "/api/micro-services/{id}/auto-deploy/resume",
+            post(crate::service_runtime::auto_deploy::resume),
+        )
+        .route(
             "/api/micro-services/{id}/updates",
             post(crate::service_runtime::deploy::update),
         )

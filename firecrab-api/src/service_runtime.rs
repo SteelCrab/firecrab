@@ -24,6 +24,7 @@ use crate::oci::{self, ImageReference, ImageVersion, Sha256Digest};
 use crate::server::RequestId;
 use crate::state::AppState;
 
+pub(crate) mod auto_deploy;
 pub(crate) mod deploy;
 mod domain;
 mod internal;

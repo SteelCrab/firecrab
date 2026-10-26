@@ -19,6 +19,9 @@ pub enum ServiceRuntime {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MicroServiceSpec {
+    /// Optional registry tag policy. A running image remains pinned in release history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_deploy: Option<crate::AutoDeployPolicy>,
     /// Unique DNS label; deployed services resolve as `<name>.internal`.
     pub name: String,
     /// OCI image reference (tag or sha256 digest). Resolved only during deployment.

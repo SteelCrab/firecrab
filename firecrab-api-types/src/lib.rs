@@ -19,6 +19,8 @@ pub use cluster_services::*;
 mod ai_sandbox;
 mod block_storage;
 pub use block_storage::*;
+mod auto_deploy;
+pub use auto_deploy::{AutoDeployPause, AutoDeployPolicy, AutoDeployStatus};
 mod micro_services;
 mod service_recovery;
 pub use service_recovery::*;

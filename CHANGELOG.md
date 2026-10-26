@@ -23,6 +23,8 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Opt-in registry tag automation submits pinned images through Deploy, with durable rollback/failure pauses, Dashboard controls and YAML/Git image ownership.
+
 - The Deploy queue prioritizes waiting rollbacks and supports cancelling an exact
   queued operation. Cancellation retains the active release and its VMs and routes.
   Saved ordering and cancelled outcomes survive API restart. Dashboard actions

@@ -110,7 +110,7 @@ pub struct Vm {
     pub env: BTreeMap<String, String>,
 }
 
-/// Host-port service declaration, reusing the existing API configuration type.
+/// Service declaration, reusing the existing API configuration type.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Service {
@@ -118,7 +118,8 @@ pub struct Service {
     pub config: MicroServiceSpec,
     /// Logical key in `microNetworks`.
     pub network: String,
-    /// First host TCP port; replicas use consecutive ports.
+    /// First host TCP port; use zero for an Nginx-backed domain.
+    #[serde(default)]
     pub host_port: u16,
 }
 
@@ -329,13 +330,45 @@ pub fn validate(stack: &Stack) -> Result<(), Vec<Diagnostic>> {
                 "must be an absolute ASCII HTTP path without query or fragment, at most 2048 bytes",
             ));
         }
-        if config.domain.is_some() || !config.secrets.is_empty() {
+        if let Some(domain) = &config.domain {
+            if domain.len() > 253
+                || domain.ends_with(".internal")
+                || domain.parse::<std::net::IpAddr>().is_ok()
+                || !domain.split('.').all(logical_name)
+            {
+                errors.push(diagnostic(
+                    &format!("{config_path}.domain"),
+                    "must be a valid public DNS hostname",
+                ));
+            }
+            if service.host_port != 0 {
+                errors.push(diagnostic(
+                    &format!("{path}.hostPort"),
+                    "must be zero for a domain service",
+                ));
+            }
+        }
+        if config.secrets.values().any(uuid::Uuid::is_nil)
+            || config
+                .secrets
+                .keys()
+                .any(|key| config.env.contains_key(key))
+            || config.env.len() + config.secrets.len() > 64
+        {
+            errors.push(diagnostic(&format!("{config_path}.secrets"), "use non-nil Secret IDs and distinct environment names, at most 64 combined entries"));
+        }
+        if let Some(policy) = &config.auto_deploy
+            && (policy.validation_error().is_some() || config.domain.is_none())
+        {
             errors.push(diagnostic(
-                &config_path,
-                "domain and secrets are not supported by the current host-port deployment",
+                &format!("{config_path}.autoDeploy"),
+                "requires a domain, a tagged registry source and a 60-3600 second interval",
             ));
         }
         let end = u32::from(service.host_port) + u32::from(config.replicas);
+        if config.domain.is_some() {
+            continue;
+        }
         if service.host_port == 0 || end > 65536 {
             errors.push(diagnostic(
                 &format!("{path}.hostPort"),
@@ -489,4 +522,34 @@ fn health_path(path: &str) -> bool {
                 && !b.is_ascii_whitespace()
                 && !matches!(b, b'?' | b'#' | b'\\')
         })
+}
+
+/// Image automation owns the running digest; YAML continues to own every other field.
+/// A fresh service still starts from its explicitly approved bootstrap digest.
+pub fn effective_service_config(
+    desired: &MicroServiceSpec,
+    current: Option<&firecrab_api_types::MicroServiceDeployment>,
+) -> MicroServiceSpec {
+    let mut effective = desired.clone();
+    if desired.auto_deploy.is_some()
+        && let Some(current) = current
+        && matches!(
+            current.phase,
+            firecrab_api_types::ServicePhase::Running | firecrab_api_types::ServicePhase::Degraded
+        )
+        && let Some(digest) = &current.digest
+    {
+        let image = current
+            .spec
+            .image
+            .split('@')
+            .next()
+            .unwrap_or(&current.spec.image);
+        let repository = image
+            .rsplit_once(':')
+            .filter(|(_, tail)| !tail.contains('/'))
+            .map_or(image, |(head, _)| head);
+        effective.image = format!("{repository}@{digest}");
+    }
+    effective
 }
