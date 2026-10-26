@@ -31,12 +31,16 @@ cleanup() {
 trap cleanup EXIT
 cat > "$context/Dockerfile" <<'DOCKERFILE'
 ARG BASE_IMAGE=ubuntu:24.04
+FROM busybox@sha256:8d7b1636e974e0adfd8d945955fca609304f0a56c18799dfd032d6e661382d84 AS toolbox
 FROM ${BASE_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential busybox-static coreutils findutils gawk libgcc-s1 \
+    build-essential coreutils findutils gawk libgcc-s1 \
     openssh-client openssh-server passwd procps python3 tar util-linux \
     && rm -rf /var/lib/apt/lists/*
-RUN mkdir -p /etc/firecrab && ln -s /bin/busybox /etc/firecrab/busybox
+# The distribution's busybox-static may omit account applets. Use the exact
+# multi-architecture toolbox from the prepared distroless recipe instead.
+COPY --from=toolbox /bin/busybox /etc/firecrab/busybox
+RUN /etc/firecrab/busybox --list | grep -x adduser
 DOCKERFILE
 docker build --build-arg "BASE_IMAGE=$base_image" -t "$image" "$context"
 docker run --rm --name "$name" --network none --cpus 2 --memory 1g \
