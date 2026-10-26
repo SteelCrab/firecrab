@@ -95,3 +95,8 @@ Tunnel retirement were not exercised. Saved credentials were not used to
 publish a preview. These remain separate acceptance work after an explicit
 target/domain authorization. Canvas here is only the shared identity,
 permission, event/reconnect, cancellation and retention contract for #496.
+
+Canvas implementation remains on hold until AI Sandbox implementation and
+direct UI/MicroVM QA are complete and accepted. The earlier foundation-only
+handoff is insufficient. Existing shared types do not authorize Canvas work.
+Issues #414 and #496 record this delivery order.
