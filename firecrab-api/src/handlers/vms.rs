@@ -3147,6 +3147,23 @@ pub(crate) mod test_support {
     }
 
     pub(crate) fn seed_vm(state: &AppState, vm: &VmRecord) {
+        // A VM with a lease must also belong to a real persisted network.
+        // Keep unknown-network failure fixtures explicit rather than weakening
+        // the production DNS-posture lookup during VM specialization.
+        let legacy = SubnetSpec::legacy_default_subnet(Uuid::from_u128(1));
+        if vm.micro_network_id == legacy.micro_network_id
+            && state
+                .store
+                .micro_network(legacy.micro_network_id)
+                .unwrap()
+                .is_none()
+        {
+            let network: firecrab_api_types::MicroNetworkResponse = serde_json::from_value(serde_json::json!({
+                "id":legacy.micro_network_id,"name":"fixture-default","subnetCidr":"172.30.0.0/24",
+                "gateway":legacy.gateway(),"internetEnabled":true,"dnsMode":"legacy_forward"
+            })).unwrap();
+            state.store.insert_micro_network(&network).unwrap();
+        }
         state.store.insert(vm).unwrap();
         state.vms.lock().unwrap().insert(vm.id, vm.clone());
         state
