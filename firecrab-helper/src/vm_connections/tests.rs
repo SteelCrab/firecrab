@@ -165,13 +165,17 @@ async fn reset_dead_upstream_retries_without_cutting_healthy_requests() {
             {"host":"held.example.test", "upstreams":[healthy_address.to_string()]}
         ]
     })).unwrap();
-    let configuration = config
-        .nginx()
-        .replace("worker_processes auto;", "worker_processes 1;")
-        .replace(
-            "/run/firecrab-ingress/status.sock",
-            &directory.path().join("status.sock").display().to_string(),
-        );
+    // Keep test-owned temp files at this UID; the test grants only NET_ADMIN.
+    let configuration = format!(
+        "user root;\n{}",
+        config
+            .nginx()
+            .replace("worker_processes auto;", "worker_processes 1;")
+            .replace(
+                "/run/firecrab-ingress/status.sock",
+                &directory.path().join("status.sock").display().to_string(),
+            )
+    );
     std::fs::write(directory.path().join("nginx.conf"), configuration).unwrap();
     let log = std::fs::File::create(directory.path().join("nginx.log")).unwrap();
     let mut ingress = Command::new(nginx)
