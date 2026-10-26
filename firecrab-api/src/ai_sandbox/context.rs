@@ -2,12 +2,7 @@
 use super::{files, redact};
 use crate::pipe_ai::SavedConnection;
 use firecrab_api_types::SandboxProjectSpec;
-use std::{
-    collections::BTreeSet,
-    io::{self, Read},
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{collections::BTreeSet, io, path::Path};
 
 /// Validate bounded source-relative context before persisting project settings.
 pub fn validate(spec: &SandboxProjectSpec) -> Result<(), String> {
@@ -52,15 +47,6 @@ pub fn resolve(spec: &SandboxProjectSpec) -> io::Result<Option<String>> {
             .as_deref()
             .ok_or_else(|| io::Error::other("Git context requires a source"))?,
     );
-    let top = git(source, &["rev-parse", "--show-toplevel"], 4096)?;
-    let top = std::str::from_utf8(&top)
-        .map_err(|_| io::Error::other("Invalid Git source"))?
-        .trim();
-    if std::fs::canonicalize(top)? != std::fs::canonicalize(source)? {
-        return Err(io::Error::other(
-            "Select the Git repository root as the source directory",
-        ));
-    }
     let object = format!("{reference}^{{commit}}");
     let bytes = git(
         source,
@@ -78,45 +64,7 @@ pub fn resolve(spec: &SandboxProjectSpec) -> io::Result<Option<String>> {
 
 /// Run read-only Git with no inherited credentials, hooks, external configuration or protocols.
 pub fn git(source: &Path, args: &[&str], limit: usize) -> io::Result<Vec<u8>> {
-    let source = files::Root::open(source)?;
-    let mut child = Command::new("/usr/bin/git")
-        .current_dir(source.command_directory())
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ALLOW_PROTOCOL", "")
-        .env("GIT_NO_REPLACE_OBJECTS", "1")
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "core.fsmonitor=false",
-        ])
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| io::Error::other("Cannot run /usr/bin/git"))?;
-    let mut bytes = Vec::new();
-    let read = child
-        .stdout
-        .take()
-        .ok_or_else(|| io::Error::other("Missing Git output"))?
-        .take((limit + 1) as u64)
-        .read_to_end(&mut bytes);
-    if read.is_err() || bytes.len() > limit {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(io::Error::other(
-            "Git source exceeds the context or snapshot limit",
-        ));
-    }
-    if !child.wait()?.success() {
-        return Err(io::Error::other("Cannot read the selected local Git ref"));
-    }
-    Ok(bytes)
+    super::git::Snapshot::open(source)?.run(args, limit)
 }
 
 /// Load selected skills and references with the same path and credential boundaries as file tools.
@@ -131,18 +79,23 @@ pub fn text(
     };
     let source = Path::new(source);
     let root = files::Root::open(source)?;
+    let repository = commit
+        .map(|_| super::git::Snapshot::open(source))
+        .transpose()?;
     for (label, paths) in [
         ("Selected skill", &spec.context.selected_skills),
         ("Reference data", &spec.context.references),
     ] {
         for path in paths {
             let bytes = if let Some(commit) = commit {
-                let entry = git(source, &["ls-tree", commit, "--", path], 2048)?;
+                let repository = repository
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("Git context snapshot is unavailable"))?;
+                let entry = repository.run(&["ls-tree", commit, "--", path], 2048)?;
                 if !entry.starts_with(b"100644 blob ") && !entry.starts_with(b"100755 blob ") {
                     return Err(io::Error::other("Git context must select a regular file"));
                 }
-                git(
-                    source,
+                repository.run(
                     &["cat-file", "blob", &format!("{commit}:{path}")],
                     32 * 1024,
                 )?

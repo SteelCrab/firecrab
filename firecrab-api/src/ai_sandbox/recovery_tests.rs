@@ -1,6 +1,19 @@
 use super::*;
 
 #[test]
+fn initial_runtime_canonicalizes_existing_parent_aliases_before_no_follow_access() {
+    let fixture = tempfile::tempdir().unwrap();
+    let real = std::fs::canonicalize(fixture.path()).unwrap().join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::fs::write(real.join("state.db"), b"fixture").unwrap();
+    let alias = std::fs::canonicalize(fixture.path()).unwrap().join("alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let runtime = Runtime::new(alias.join("state.sandbox"), alias.join("state.db"));
+    assert_eq!(runtime.root, real.join("state.sandbox"));
+    assert_eq!(runtime.database, real.join("state.db"));
+}
+
+#[test]
 fn native_argv_keeps_literal_arguments_and_rejects_duplicate_environment_names() {
     let input = json!({"version":1,"argv":["printf","%s","$(do-not-execute)"],"cwd":"","env":[{"name":"VALUE","value":"literal;data"}],"stdin":"input\n","limits":{"wallSeconds":5,"cpuSeconds":5,"memoryMib":128,"outputBytes":1024}});
     let args: ArgvArgs = serde_json::from_value(input.clone()).unwrap();

@@ -238,3 +238,63 @@ fn debug_changes_are_inherited_by_test_without_changing_original_source() {
         "known fix"
     );
 }
+
+#[test]
+fn replacing_an_authorized_sources_ancestor_cannot_redirect_read_snapshot_apply_or_git() {
+    use std::os::unix::fs::symlink;
+    let fixture = tempfile::tempdir().unwrap();
+    let fixture_path = fs::canonicalize(fixture.path()).unwrap();
+    let authorized_parent = fixture_path.join("authorized");
+    let private_parent = fixture_path.join("private");
+    let source = authorized_parent.join("data");
+    let private = private_parent.join("data");
+    for (path, text) in [(&source, "authorized"), (&private, "private")] {
+        fs::create_dir_all(path).unwrap();
+        fs::write(path.join("main.txt"), text).unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["add", "."],
+            vec!["commit", "-qm", "fixture"],
+        ] {
+            assert!(
+                Command::new("/usr/bin/git")
+                    .current_dir(path)
+                    .args([
+                        "-c",
+                        "user.name=Fixture",
+                        "-c",
+                        "user.email=fixture@localhost",
+                        "-c",
+                        "core.hooksPath=/dev/null"
+                    ])
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+    }
+    let anchored = Root::open(&source).unwrap();
+    fs::rename(&authorized_parent, fixture_path.join("original-authorized")).unwrap();
+    symlink(&private_parent, &authorized_parent).unwrap();
+    assert_eq!(anchored.read("main.txt").unwrap(), b"authorized");
+    assert!(Root::open(&source).is_err());
+    let snapshot = fixture_path.join("snapshot");
+    fs::create_dir(&snapshot).unwrap();
+    assert!(files::snapshot(&source, &snapshot).is_err());
+    assert!(!snapshot.join("main.txt").exists());
+    let mut changes = vec![SandboxFileChange {
+        path: "main.txt".into(),
+        before: Some("private".into()),
+        after: Some("unauthorized write".into()),
+        before_mode: Some(0o644),
+        after_mode: Some(0o644),
+        applied: false,
+    }];
+    assert!(apply(&source, &mut changes, &["main.txt".into()]).is_err());
+    assert_eq!(
+        fs::read_to_string(private.join("main.txt")).unwrap(),
+        "private"
+    );
+    assert!(super::super::context::git(&source, &["rev-parse", "HEAD"], 128).is_err());
+}

@@ -5,6 +5,7 @@ pub mod context;
 pub mod coordination;
 pub mod environment;
 pub mod files;
+mod git;
 pub mod guest;
 pub mod guest_protocol;
 pub mod model;
@@ -48,6 +49,18 @@ impl Runtime {
     /// Construct controller-local coordination without creating or deleting resources.
     pub fn new(root: PathBuf, database: PathBuf) -> Self {
         let root = std::path::absolute(&root).unwrap_or(root);
+        // New roots may not exist yet. Canonicalize their existing parent at startup,
+        // including macOS /var aliases, before later no-follow authority opens.
+        let root = std::fs::canonicalize(&root).unwrap_or_else(|_| {
+            match (
+                root.parent()
+                    .and_then(|parent| std::fs::canonicalize(parent).ok()),
+                root.file_name(),
+            ) {
+                (Some(parent), Some(name)) => parent.join(name),
+                _ => root.clone(),
+            }
+        });
         Self {
             root,
             database: std::fs::canonicalize(&database)
