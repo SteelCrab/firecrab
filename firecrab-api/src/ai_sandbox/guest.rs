@@ -1008,8 +1008,9 @@ boot=$(cat /proc/sys/kernel/random/boot_id)
 group_exists() { tool awk -F: -v name="$user" '$1==name {found=1} END {exit !found}' /etc/group; }
 group_registration() {
   checked_gid=$1
-  tool awk -F: -v name="$user" -v gid="$checked_gid" '$1==name {count++; if ($3!=gid || $4!="") bad=1} $3==gid && $1!=name {bad=1} END {exit (count!=1 || bad)}' /etc/group || return 1
-  tool awk -F: -v name="$user" -v gid="$checked_gid" '$4==gid && $1!=name {bad=1} END {exit bad}' /etc/passwd
+  checked_uid=${2-}
+  tool awk -F: -v name="$user" -v gid="$checked_gid" -v uid="$checked_uid" '$1==name {count++; if (NF!=4 || $3!=gid || ($4!="" && (uid=="" || $4!=name))) bad=1} $3==gid && $1!=name {bad=1} END {exit (count!=1 || bad)}' /etc/group || return 1
+  tool awk -F: -v name="$user" -v gid="$checked_gid" -v uid="$checked_uid" '$1==name {count++; if (NF!=7 || uid=="" || $3!=uid || $4!=gid) bad=1} $4==gid && $1!=name {bad=1} END {exit (bad || count!=(uid=="" ? 0 : 1))}' /etc/passwd
 }
 owned_group_gid() {
   for record in owner gid user-creation group-created; do
@@ -1021,7 +1022,21 @@ owned_group_gid() {
   case "$recorded_gid" in *[!0-9]*|'') return 1;; esac
   [ "$recorded_gid" -ge 1000 ] && [ "$recorded_gid" -lt 60000 ] || return 1
   [ "$(cat "$control/group-created")" = "$id:$recorded_gid:$(cat "$control/user-creation")" ] || return 1
-  group_registration "$recorded_gid" || return 1
+  registered_uid=
+  if [ -e "$control/uid" ] || [ -L "$control/uid" ]; then
+    [ -f "$control/uid" ] && [ ! -L "$control/uid" ] || return 1
+    [ "$(tool stat -c '%u:%g:%a:%h' "$control/uid")" = 0:0:600:1 ] || return 1
+    recorded_uid=$(cat "$control/uid")
+    case "$recorded_uid" in *[!0-9]*|'') return 1;; esac
+    [ "$recorded_uid" -gt 0 ] || return 1
+    if actual_uid=$(id -u "$user" 2>/dev/null); then
+      [ "$actual_uid" = "$recorded_uid" ] && [ "$(id -g "$user")" = "$recorded_gid" ] || return 1
+      registered_uid=$recorded_uid
+    fi
+  fi
+  # BusyBox may list the owned user in its primary group. Group-only recovery
+  # still requires empty membership before user creation and after user deletion.
+  group_registration "$recorded_gid" "$registered_uid" || return 1
   printf '%s' "$recorded_gid"
 }
 if [ -f "$control/uid" ]; then
