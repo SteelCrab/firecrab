@@ -49,7 +49,7 @@ async function open(page: Page, options: { locale?: "en" | "ko"; empty?: boolean
       if (method === "DELETE") { projects = projects.filter(p => p.id !== id); tasks = []; return respond({ deleted: true }); }
       const saved = { id, spec: route.request().postDataJSON(), createdAt: 1 }; saves.push(id); projects = [...projects.filter(p => p.id !== id), saved]; if (options.failSaveOnce && !saveFailed) { saveFailed = true; return route.abort("failed"); } return respond(saved);
     }
-    if (/\/projects\/[^/]+\/tasks$/.test(path)) return respond(tasks.map(t => ({ ...t, changes: undefined, events: undefined, changeCount: t.changes.length, eventCount: t.events.length, lastTool: t.events.at(-1)?.name ?? null })));
+    if (/\/projects\/[^/]+\/tasks$/.test(path)) return respond(tasks.map(t => ({ ...t, changes: undefined, events: undefined, tests:undefined,artifacts:undefined,environment:undefined, changeCount: t.changes.length, eventCount: t.events.length, testCount:t.tests?.length??0,failedTestCount:t.tests?.filter(test=>!test.passed).length??0,artifactCount:t.artifacts?.length??0,lastTool: t.events.at(-1)?.name ?? null })));
     if (/\/projects\/[^/]+\/tasks\/[^/]+$/.test(path)) {
       const input = route.request().postDataJSON() as TaskInput; starts.push(input);
       const t: SandboxTask = { id: path.split("/").at(-1)!, projectId: projects[0].id, attemptId: crypto.randomUUID(), request: input, selection: input.selection ?? selection, state: options.hold ? "in_progress" : "result", createdAt: Date.now(), updatedAt: Date.now(), result: options.hold ? "" : input.kind === "code" ? "Added the health endpoint.\nValidation: 4 tests passed." : "Start with a small health endpoint. Then add a regression test.", error: null, errorCode: null, events: input.kind === "code" ? [{ sequence: 0, at: 1, name: "run_command", input: '{"command":"npm test","timeout_seconds":120}', output: "4 tests passed", stderr: "", exitCode: 0 }] : [], changes: input.kind === "code" ? [{ path: "src/health.ts", before: "export const health = () => null;", after: 'export const health = () => ({ status: "ok" });', beforeMode: 420, afterMode: 420, applied: false }] : [] };
@@ -191,4 +191,36 @@ test.describe("Sandbox resource contracts @dashboard",()=>{
     await page.locator("#sb-resources > summary").click();await expect(page.locator(".sb-resource-card").getByRole("link",{name:/qa-preview.firecrab.dev/})).toBeVisible();
     await expect(page.locator(".sb-resource-card").getByText(/HTTPS: Unverified/i)).toBeVisible();await page.screenshot({path:info.outputPath("sandbox-retained-preview.png"),fullPage:true});
   });
+});
+
+for (const locale of ["en", "ko"] as const) test(`${locale} completed task keeps failed tests separate on mobile`, async ({ page }, info) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.setViewportSize({ width: 390, height: 900 });
+  const mock = await open(page, { locale }), ko = locale === "ko";
+  await page.locator("#sb-task-options > summary").click();
+  await page.getByRole("textbox", { name: ko ? "담당 에이전트" : "Assigned agent", exact: true }).fill("Test");
+  await page.getByRole("combobox", { name: ko ? "실행 모드" : "Execution mode", exact: true }).selectOption("code");
+  await page.getByRole("textbox", { name: ko ? "대화 또는 작업 내용" : "Message or task", exact: true }).fill("Inspect failed regression tests");
+  await page.getByRole("button", { name: ko ? "코드 작업 실행" : "Run code task", exact: true }).click();
+  await expect(page.locator(".sb-task-card")).toHaveCount(1);
+  mock.tasks[0].tests = [{ name: "first", eventSequence: 0, passed: false }, { name: "second", eventSequence: 0, passed: false }];
+  await page.reload();
+  await page.getByRole("tab", { name: ko ? /^작업/ : /^Tasks/ }).click();
+  const card = page.locator(".sb-task-card");
+  await expect(card.locator(".sb-task-state.result")).toHaveText(ko ? "결과" : "Result");
+  await expect(card).toContainText(ko ? "에이전트: Test" : "Agent: Test");
+  await expect(card).toContainText(ko ? "파일 결과: 1" : "Artifacts: 1");
+  await expect(card.locator(".sb-card-tests.failed")).toHaveText(ko ? "테스트 실패 2/2" : "Tests failed 2/2");
+  await card.locator(".sb-card-tests.failed").scrollIntoViewIfNeeded();
+  await expect(card.locator(".sb-card-tests.failed")).toBeVisible();
+  await expect(card.locator(".sb-card-tests.passed")).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath(`sandbox-failed-tests-${locale}-390.png`), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  mock.tasks[0].tests = [];
+  await page.reload();
+  await page.getByRole("tab", { name: ko ? /^작업/ : /^Tasks/ }).click();
+  await expect(page.locator(".sb-card-tests.none")).toHaveText(ko ? "기록된 테스트 없음" : "No tests recorded");
+  await expect(page.locator(".sb-card-tests.passed")).toHaveCount(0);
+  expect(errors).toEqual([]);
 });

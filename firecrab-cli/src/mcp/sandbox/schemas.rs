@@ -92,6 +92,7 @@ fn task(summary: bool) -> Value {
         fields["eventCount"] = integer();
         fields["changeCount"] = integer();
         fields["testCount"] = integer();
+        fields["failedTestCount"] = integer();
         fields["artifactCount"] = integer();
         fields["lastTool"] = nullable(string());
     } else {

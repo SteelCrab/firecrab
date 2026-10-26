@@ -191,6 +191,16 @@ fn summary(mut task: Value) -> Value {
             task[count] = json!(list(&task[field]).len());
         }
     }
+    if task.get("tests").is_some() {
+        task["failedTestCount"] = json!(
+            list(&task["tests"])
+                .iter()
+                .filter(|test| test["passed"] == false)
+                .count()
+        );
+    } else if task.get("events").is_some() {
+        task["failedTestCount"] = json!(0);
+    }
     if let Some(o) = task.as_object_mut() {
         o.remove("events");
         o.remove("changes");
@@ -226,6 +236,11 @@ fn update_task(a: &mut App, task: Value) {
     {
         r.task = Some(task);
     }
+}
+fn render_after_event(app: &Shared) {
+    // Removing a focused input can emit change again before the current closure returns.
+    let app = app.clone();
+    spawn_local(async move { render(&app) });
 }
 /// Render preserves editing focus, selection and scroll positions across asynchronous updates.
 pub(super) fn render(app: &Shared) {

@@ -69,7 +69,9 @@
 .sb-task-card > strong { font-size: 12px; font-weight: 500; line-height: 1.8; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; }
 .sb-task-state { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-3); }
 .sb-task-state svg { width: 13px; height: 13px; }
-.sb-task-state.result, .sb-task-state.merged, .sb-verified, .sb-exit.ok { color: var(--green-ink); }
+.sb-task-state.merged, .sb-verified, .sb-exit.ok, .sb-card-tests.passed { color: var(--green-ink); }
+.sb-card-tests { font-size: 10px; color: var(--text-3); }
+.sb-card-tests.failed { color: var(--red-ink); }
 .sb-task-state.failed, .sb-task-state.interrupted, .sb-error-text, .sb-exit.error { color: var(--red-ink); }
 .sb-task-state.in_progress { color: var(--amber-ink); }
 .sb-card-meta { display: flex; justify-content: space-between; gap: 6px; font-size: 9px; color: var(--text-3); flex-wrap: wrap; }

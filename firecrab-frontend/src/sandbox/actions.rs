@@ -136,7 +136,7 @@ pub fn change(app: &Shared, node: &Element) -> bool {
                 e.revision += 1;
             }
             drop(a);
-            render(app);
+            render_after_event(app);
             load_catalog(app, false);
             return true;
         }
@@ -207,7 +207,7 @@ pub fn change(app: &Shared, node: &Element) -> bool {
     }
     dirty(&mut a);
     drop(a);
-    render(app);
+    render_after_event(app);
     true
 }
 pub fn submit(app: &Shared, id: &str) -> bool {
@@ -544,7 +544,7 @@ fn load_catalog(app: &Shared, discover: bool) {
     e.revision += 1;
     let (connection, id, revision) = (e.connection.clone(), e.id.clone(), e.revision);
     drop(a);
-    render(app);
+    render_after_event(app);
     let app = app.clone();
     spawn_local(async move {
         let result = api::request(

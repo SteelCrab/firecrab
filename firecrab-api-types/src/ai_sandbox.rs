@@ -441,6 +441,9 @@ pub struct SandboxTaskSummary {
     /// Retained test count.
     #[serde(default)]
     pub test_count: usize,
+    /// Retained tests whose actual command result failed.
+    #[serde(default)]
+    pub failed_test_count: usize,
     /// Exported artifact count.
     #[serde(default)]
     pub artifact_count: usize,
@@ -467,6 +470,7 @@ impl From<&SandboxTask> for SandboxTaskSummary {
             retry_root: task.retry_root,
             retry_number: task.retry_number,
             test_count: task.tests.len(),
+            failed_test_count: task.tests.iter().filter(|test| !test.passed).count(),
             artifact_count: task.artifacts.len(),
         }
     }

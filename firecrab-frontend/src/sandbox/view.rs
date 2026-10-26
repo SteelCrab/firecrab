@@ -563,22 +563,58 @@ fn board(a: &App, out: &mut String) {
             );
         }
         for t in tasks {
+            let tests = t["testCount"].as_u64().unwrap_or(0);
+            let failed = t["failedTestCount"].as_u64();
+            let agent = text(&t["request"]["coordination"], "assignedAgent");
+            let test_label = if tests == 0 {
+                tr(a, "No tests recorded", "기록된 테스트 없음").into()
+            } else if failed.is_some_and(|failed| failed > 0) {
+                format!(
+                    "{} {}/{tests}",
+                    tr(a, "Tests failed", "테스트 실패"),
+                    failed.unwrap()
+                )
+            } else if failed == Some(0) {
+                format!("{} {tests}", tr(a, "Tests passed", "테스트 통과"))
+            } else {
+                format!("{} {tests}", tr(a, "Tests recorded", "기록된 테스트"))
+            };
             let _ = write!(
                 out,
-                "<button type=\"button\" id=\"sb-card-{}\" class=\"sb-task-card\" data-action=\"sb-review\" data-id=\"{}\"><span class=\"sb-task-state {}\">{}{}</span><strong>{}</strong><span class=\"sb-card-meta\">{}<span>{} {}</span></span><span class=\"sb-error-text\">{}</span></button>",
+                "<button type=\"button\" id=\"sb-card-{}\" class=\"sb-task-card\" data-action=\"sb-review\" data-id=\"{}\"><span class=\"sb-task-state {}\">{}{}</span><strong>{}</strong><span class=\"sb-card-meta\">{}<span>{} {}</span></span><span class=\"sb-card-meta\"><span>{}: {}</span><span>{}: {}</span></span><span class=\"sb-card-tests {}\">{}</span><span class=\"sb-error-text\">{}</span></button>",
                 escape(text(t, "id")),
                 escape(text(t, "id")),
                 escape(text(t, "state")),
                 icon(if matches!(text(t, "state"), "failed" | "interrupted") {
                     "circle-x"
-                } else {
+                } else if text(t, "state") == "result" {
+                    "diff"
+                } else if text(t, "state") == "merged" {
                     "circle-check"
+                } else {
+                    "refresh"
                 }),
                 state_label(a, t),
                 escape(text(&t["request"], "input")),
                 escape(text(&t["selection"], "model")),
                 t["changeCount"].as_u64().unwrap_or(0),
                 tr(a, "files", "개 파일"),
+                tr(a, "Agent", "에이전트"),
+                if agent.is_empty() {
+                    tr(a, "Unassigned", "미지정").into()
+                } else {
+                    escape(agent)
+                },
+                tr(a, "Artifacts", "파일 결과"),
+                t["artifactCount"].as_u64().unwrap_or(0),
+                if failed.is_some_and(|failed| failed > 0) {
+                    "failed"
+                } else if tests > 0 && failed == Some(0) {
+                    "passed"
+                } else {
+                    "none"
+                },
+                test_label,
                 escape(text(t, "error"))
             );
         }

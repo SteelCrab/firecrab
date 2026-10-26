@@ -10,11 +10,21 @@ fn full_task_projection_matches_the_authoritative_rest_summary_contract() {
     ] {
         let mut value = task();
         value["runtime"] = runtime;
+        value["tests"] = json!([{"name":"passed","eventSequence":0,"passed":true},{"name":"failed","eventSequence":1,"passed":false}]);
         let typed: firecrab_api_types::SandboxTask = serde_json::from_value(value.clone()).unwrap();
         let wire =
             serde_json::to_value(firecrab_api_types::SandboxTaskSummary::from(&typed)).unwrap();
         assert_eq!(summary(value), wire);
     }
+    let mut a = ready();
+    let mut legacy = summary(task());
+    legacy["testCount"] = json!(2);
+    legacy.as_object_mut().unwrap().remove("failedTestCount");
+    a.sandbox.tab = "tasks".into();
+    a.sandbox.tasks.push(legacy);
+    let html = content(&a);
+    assert!(html.contains("Tests recorded 2"));
+    assert!(!html.contains("Tests passed"));
 }
 #[test]
 fn late_poll_does_not_erase_a_newer_mutation_or_older_loaded_history() {

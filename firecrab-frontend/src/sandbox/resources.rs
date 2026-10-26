@@ -193,7 +193,7 @@ pub(super) fn input(app: &Shared, node: &Element) -> bool {
     dirty(&mut a);
     drop(a);
     if node.dyn_ref::<HtmlSelectElement>().is_some() {
-        render(app);
+        render_after_event(app);
     }
     true
 }
