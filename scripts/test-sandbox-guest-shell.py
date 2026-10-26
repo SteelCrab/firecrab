@@ -148,6 +148,26 @@ def main():
         assert (root / ".workspaces" / workspace.hex / "main.txt").read_bytes() == b"final-file-tool\n"
         assert sentinel.read_text() == "preserve"
         checks.append("workspace_hydrate_overlay_delete_private_retention_final_flush")
+
+        build_workspace, build_attempt = uuid.uuid4(), uuid.uuid4()
+        first_build, second_build = uuid.uuid4(), uuid.uuid4()
+        build_options = {"persistent": True, "workspace": build_workspace}
+        sources = {"Makefile": b"target/main: src/main.c\n\tmkdir -p target\n\tcc src/main.c -o target/main\n",
+                   "src/main.c": b'#include <stdio.h>\nint main(void) { puts("first"); return 0; }\n'}
+        run("stage", build_attempt, first_build, archive(sources), **build_options)
+        build = b"set -eu; make -s target/main >/dev/null; ./target/main"
+        assert run("run", build_attempt, first_build, build, **build_options).stdout == b"first\n"
+        binary = root / ".workspaces" / build_workspace.hex / "target/main"
+        first_binary_mtime = binary.stat().st_mtime_ns
+        sources["src/main.c"] = b'#include <stdio.h>\nint main(void) { puts("second"); return 0; }\n'
+        # archive() produces zero mtimes, exactly like the host file-tool snapshot.
+        run("stage", build_attempt, second_build, archive(sources), **build_options)
+        source_path = binary.parent.parent / "src/main.c"
+        rebuilt = run("run", build_attempt, second_build, build, **build_options).stdout
+        assert rebuilt == b"second\n", rebuilt
+        assert source_path.stat().st_mtime_ns > first_binary_mtime
+        run("cleanup", build_attempt, second_build, **build_options)
+        checks.append("host_file_edit_invalidates_existing_incremental_build")
     print(json.dumps({"kind": "linux_process_fixture", "microvmValidated": False, "checks": checks, "status": "passed"}, indent=2))
 
 

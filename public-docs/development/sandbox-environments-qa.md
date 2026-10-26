@@ -27,6 +27,10 @@ static fallback, separate output/exit, bounded output, scoped signal refusal,
 cancellation, recovery, export, Workspace hydrate/overlay/delete, private
 retention and a final file-tool flush. Its output explicitly identifies it as
 a Linux process fixture and sets `microvmValidated: false`.
+It also compiles an initial source into a retained build cache, applies an
+epoch-mtime host file-tool edit and verifies that the same incremental build
+prints the new value. Guest source extraction uses `tar -m` so source freshness
+uses guest extraction time instead of an omitted archive timestamp or host clock.
 
 The last command compiles and executes the real C helper on Linux. It changes
 UID only in child processes and creates only a private temporary lock file.

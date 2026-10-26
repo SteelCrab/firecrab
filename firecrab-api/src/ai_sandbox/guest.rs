@@ -1112,7 +1112,9 @@ tool() { if [ -x /etc/firecrab/busybox ]; then /etc/firecrab/busybox "\$@"; else
 while IFS= read -r file; do
   if ! tool grep -Fqx -- "\$file" "\$control/next-files"; then rm -f -- "\$work/\$file"; fi
 done <"\$control/previous-files"
-tool tar -xf "\$control/project.tar" -C "\$work"
+# Host snapshots intentionally omit mtimes. Extraction time must invalidate
+# guest build outputs even when the serialized archive carries epoch zero.
+tool tar -xmf "\$control/project.tar" -C "\$work"
 FIRECRAB_REFRESH
   chgrp "$user" "$control/project.tar" "$control/previous-files" "$control/next-files" "$control/refresh"
   chmod 640 "$control/project.tar" "$control/previous-files" "$control/next-files" "$control/refresh"
