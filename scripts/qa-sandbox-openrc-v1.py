@@ -28,7 +28,7 @@ def baseline(project, environment):
     if (project.get("id") != PROJECT or environment.get("id") != ENVIRONMENT
             or environment.get("projectId") != PROJECT
             or project.get("owner") is None or project.get("owner") != environment.get("owner")
-            or project["spec"].get("environmentId") != ENVIRONMENT
+            or project["spec"].get("environmentId") not in (None, ENVIRONMENT)
             or project["spec"].get("vmId") is not None
             or not re.search(r"no[\s_-]*model", project["spec"].get("instructions", ""), re.I)
             or environment.get("state") != "ready" or environment.get("dnsMode") != "private_only"):
@@ -41,6 +41,8 @@ def baseline(project, environment):
     if not uuid.UUID(generation).int or not all(uuid.UUID(role["runtime"][key]).int for key in ("vmId", "runtimeId")):
         raise ValueError("Nil generation/runtime is not evidence")
     return {"projectSpecSha256": digest(project["spec"]), "projectBefore": project,
+            "originalEnvironmentId": project["spec"].get("environmentId"),
+            "requiredExecutionEnvironmentId": ENVIRONMENT,
             "environmentBeforeSha256": digest(environment), "runtime": role["runtime"],
             "environment": {"id": ENVIRONMENT, "generation": generation, "role": ROLE}}
 
@@ -96,6 +98,7 @@ def plan(run_id, frozen=None):
             "rootGates": {"strictPairBaselineRecoveredAndExported": False,
                           "coreDeployFaultRecoveryNetworkChecksComplete": False,
                           "originalNoModelSpecBackedUp": False,
+                          "explicitEnvironmentBindingToAReviewed": False,
                           "explicitSourceInstructionsSelectionReview": False,
                           "debugRuntimeAndGuestHealthOpenrcRechecked": False},
             "taskWaitSeconds": 180, "pollRequestTimeoutSeconds": 10,

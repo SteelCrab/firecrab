@@ -27,6 +27,9 @@ does not authorize overriding them or submitting an inference request.
 2. Export the original project and Environment DTOs privately, including the
    complete NoModel instructions, selection, source/context, generation, role
    mode, VM/runtime, ownership and strict DNS posture. Record their byte hashes.
+   The original project may have `environmentId:null` or already select A.
+   Reject another Environment binding. Preserve the complete original DTO and
+   its original spec hash without inserting A into that saved baseline.
    Require the exact project/Environment/role, private_only DNS, ready agent and
    network, and the current debug VM/runtime. Do not assume a runtime survives a
    reboot. Do not change Docker/nspawn/Workspace mode or a pin to make QA pass.
@@ -37,8 +40,12 @@ does not authorize overriding them or submitting an inference request.
    retain that result instead of provisioning silently or using a shell fallback.
 4. Root explicitly reviews source binding and any project selection/instruction
    change after the baseline. Save both the original NoModel spec and the exact
-   approved replacement. Preserve all unrelated fields and environmentId;
-   keep vmId null for this managed Environment. Re-read the saved DTO and compare
+   approved replacement. Preserve all unrelated fields. Set the execution spec's
+   `environmentId` explicitly to A (`4b9b2c97-bff6-4623-aa30-df7e9812c141`),
+   even when the original binding was null. Keep vmId null for this managed
+   Environment. Root must release `explicitEnvironmentBindingToAReviewed`
+   separately; accepting an unbound baseline does not authorize that PUT.
+   Re-read the saved DTO and compare
    its full spec before admission. The preparer creates no project PUT payload.
 5. Check the saved connection/model proof through the existing Sandbox contract.
    Only Root may request an allowed real verification/inference later. Use the
@@ -63,8 +70,8 @@ python3 -B scripts/qa-sandbox-openrc-v1.py \
 ```
 
 After the gates, Root may also pass `--project-json` and `--environment-json`
-with the preserved original NoModel DTOs. The offline guard freezes their spec
-hash, ownership, strict DNS, generation and debug runtime without changing them.
+with the preserved original NoModel DTOs. The offline guard freezes their original
+spec hash, ownership, strict DNS, generation and debug runtime without changing them.
 All `rootGates` remain false in the prepared plan; no file is a claim that the
 live gates passed. The `admission()` helper validates exported task identities
 against that frozen record and rejects changed attempts, requests or runtimes.

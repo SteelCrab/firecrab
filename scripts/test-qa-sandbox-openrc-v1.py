@@ -22,7 +22,7 @@ GENERATION = "399122a6-939a-4c2d-8751-d6df845b15af"
 
 
 def exported_baseline():
-    return ({"id": qa.PROJECT, "owner": "local", "spec": {"environmentId": qa.ENVIRONMENT,
+    return ({"id": qa.PROJECT, "owner": "local", "spec": {"environmentId": None,
              "vmId": None, "sourcePath": None, "selection": None, "instructions": "NoModel: retain strict seed baseline"}},
             {"id": qa.ENVIRONMENT, "projectId": qa.PROJECT, "owner": "local", "state": "ready",
              "generation": GENERATION, "dnsMode": "private_only", "roles": [{"role": "debug",
@@ -57,6 +57,7 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(planned["selection"], qa.SELECTION)
         self.assertTrue(planned["remoteSourcePath"].startswith("/srv/firecrab-qa/openrc-v1-414-"))
         self.assertIsNone(planned["frozenBaseline"])
+        self.assertIs(planned["rootGates"]["explicitEnvironmentBindingToAReviewed"], False)
 
     def test_no_model_baseline_and_owned_strict_runtime_are_frozen_without_changes(self):
         project, environment = exported_baseline()
@@ -64,6 +65,17 @@ class OfflineTests(unittest.TestCase):
         frozen = qa.baseline(project, environment)
         self.assertEqual((project, environment), original)
         self.assertEqual(frozen["projectSpecSha256"], qa.digest(project["spec"]))
+        self.assertIsNone(frozen["projectBefore"]["spec"]["environmentId"])
+        self.assertIsNone(frozen["originalEnvironmentId"])
+        self.assertEqual(frozen["requiredExecutionEnvironmentId"], qa.ENVIRONMENT)
+        bound = copy.deepcopy(project)
+        bound["spec"]["environmentId"] = qa.ENVIRONMENT
+        bound_before = copy.deepcopy(bound)
+        bound_frozen = qa.baseline(bound, environment)
+        self.assertEqual(bound, bound_before)
+        self.assertEqual(bound_frozen["projectSpecSha256"], qa.digest(bound_before["spec"]))
+        self.assertEqual(bound_frozen["originalEnvironmentId"], qa.ENVIRONMENT)
+        self.assertEqual((project, environment), original)
         for changed in ("project", "environment", "owner", "noModel", "binding", "dns", "state", "runtime", "agent"):
             p, e = copy.deepcopy(original)
             if changed == "project": p["id"] = str(uuid.uuid4())
