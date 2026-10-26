@@ -13,6 +13,7 @@ fn socket_targets_exclude_unknown_networks_host_gateways_and_foreign_ipv6() {
         gateway: "172.30.0.1".parse().unwrap(),
         prefix: 24,
         internet_enabled: true,
+        dns_mode: firecrab_helper_protocol::network::MicroNetworkDnsMode::LegacyForward,
         uplink: None,
         ipv6: Some(MicroNetworkIpv6Spec {
             gateway: "fd00:516::1".parse().unwrap(),
