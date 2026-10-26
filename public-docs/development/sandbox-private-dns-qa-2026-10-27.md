@@ -206,8 +206,47 @@ manager-address DNS timeouts have no positive listener control, so they are not
 claimed as a separate policy proof. The earlier failed matrix and maintenance
 lease-preservation failure remain unchanged.
 
-Keep the failed receipts. Independent fixture writes need a separate one-shot
-Root release after this fresh pass. OpenRC model tasks and public preview setup
-remain on hold.
-Do not remove/recreate environments or manually repair resolver/lease files to
-turn this verdict into a pass. Canvas implementation remains on hold.
+## Independent fixture writes after the fresh pass
+
+The separately released run `39518d16-3304-431c-a453-a8b7fc7f1be9` completes with
+phase `independent_writes_verified`. It sends exactly **one A POST and one B
+POST**, through each Environment's own Debug → Backend TCP 8080 → DB TCP 5432
+path. Both fixtures start with their initial values. After A's request, only A
+changes. After B's request, A remains unchanged and B has a different value.
+Root seed and old values remain unchanged.
+
+| Canonical final fixture | SHA-256 |
+| --- | --- |
+| A | `71f85e35deacbd4afce77d774f3abdfea9f7a9a0e51625c94116a0d55607761d` |
+| B | `1bec571bcf84658cbdeef44013ab5fbb27883b029121e0faea82e6e402e37f2c` |
+
+The receipt is
+`/var/lib/firecrab/qa-artifacts/414-independent-writes/results/39518d16-3304-431c-a453-a8b7fc7f1be9/writes.json`,
+SHA-256 `b020917d869f2fffe0bec64ca0270c24605080afc93c99eacbdd059af5a29568`.
+It follows the successful fresh matrix above. It does not replace the failed
+network matrix, failed deployment preservation condition or failed resume
+observers. All original receipts remain intact.
+
+## Separate integration and OpenRC gates
+
+Exact integrated source `8694175f318a1287ed276cfe06d94e803948a462` passes **158**
+focused Linux tests and warnings-denied API/helper/CLI test Clippy plus standard
+frontend library Clippy. Its ordinary API run records **1,539 passed, 2 failed
+and 18 ignored**. A missing default route and private-log umask account for the
+two failures. The fastfetch permission test separately passes with standard
+umask `022`; full-suite success is not claimed. The local validation receipt is
+`/private/tmp/firecrab-414-integrated-8694175f/validation.json`, SHA-256
+`7c1300c0ceeaf893cd2dae53d68cc2245cd9e8bafd57d7e072d19014e672370e`.
+The [integration record](sandbox-integration-qa-2026-10-27.md) preserves the
+individual test counts and earlier failed setup. Old `682ee479` CI is not
+represented as CI for this integrated head.
+
+Actual OpenRC task `c8fc16f2-ef45-5aa0-b2c6-dea031cc36c7` executes one native
+command through AI, returns exit code **7**, and retains an **882-byte** artifact
+with SHA-256 `75935e99e9a0428ef3238a3b037edd19ab392ba5ca66ae63ea8d8184ef45d41d`.
+It remains **Interrupted** with `cleanup_required`. Resolution is in progress;
+OpenRC acceptance is not complete. Public preview remains a separate gate.
+
+Keep the failed receipts. Do not remove/recreate environments or manually
+repair resolver/lease files to turn an earlier failed verdict into a pass.
+Canvas implementation remains on hold.

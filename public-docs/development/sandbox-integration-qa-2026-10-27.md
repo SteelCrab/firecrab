@@ -62,6 +62,47 @@ ran zero tests. Those results do not count as validation. The corrected
 28-test and 17-test results above. A separate image preflight lacked rustfmt;
 formatting was checked with the installed native toolchain instead.
 
+### Exact integrated Rust validation
+
+A separate disposable Linux run verifies the exact integrated source
+`8694175f318a1287ed276cfe06d94e803948a462`, with tree
+`aad5d856002c28dc14dea8c97ddb163d0ab85579`. The source remains unchanged and
+clean throughout validation. Rust 1.97.1 runs offline with no container network,
+CPU 2, RAM 4 GiB, one Cargo job, debug information disabled and incremental
+compilation disabled. This is local integration validation, not a new CI verdict
+or execution of this source on the QA manager.
+
+| Focused group | Passed |
+| --- | --- |
+| API Tunnel | 39 |
+| Helper Pipe | 7 |
+| CLI Pipe | 31 |
+| CLI Sandbox | 14 |
+| MCP | 18 |
+| Frontend library | 49 |
+| Total | **158** |
+
+API/helper/CLI test Clippy and standard frontend library Clippy pass with
+warnings denied. Unrelated frontend test-lint debt is not changed.
+
+The ordinary API suite records **1,539 passed, 2 failed and 18 ignored**.
+`read_uplink_resolves_a_real_default_route_interface` requires an IPv4 default
+route that the network-disabled container does not have.
+`extract_lifts_the_usr_bin_fastfetch_member` inherits the private-log umask
+`077`, which removes group/other executable bits. The same test binary passes
+that one test with the standard umask `022`; this separate focused pass does not
+turn the full run into a full-suite pass. The earlier attempt with filesystem
+tools missing from PATH also remains recorded as **1,329 passed, 212 failed and
+18 ignored**. Only PATH is corrected for the later full run; assertions and
+source are unchanged.
+
+The private validation receipt is
+`/private/tmp/firecrab-414-integrated-8694175f/validation.json`, SHA-256
+`7c1300c0ceeaf893cd2dae53d68cc2245cd9e8bafd57d7e072d19014e672370e`.
+It preserves the exact source/archive/toolchain/image hashes and all logs.
+The earlier `682ee479` CI and coverage results remain attributed to that head.
+Exact integrated-head CI remains a separate gate.
+
 ## Corrected defects
 
 - Git 2.55 asynchronous maintenance created an advisory `objects/maintenance.lock`.
@@ -137,8 +178,9 @@ separate receipt.
 
 All four guests have actual PID 1 `/sbin/init` and successful OpenRC service
 status. Authenticated V1 capabilities report `init=openrc`, execution supported,
-and Docker/nspawn unavailable. This is not yet an OpenRC task-payload or
-limit/cancellation execution result.
+and Docker/nspawn unavailable. This capability inspection alone does not prove
+OpenRC task payloads, limits or cancellation. The later task result below has
+its own incomplete cleanup verdict.
 
 Direct UI inspection selects the actual A project and expands its environment.
 Debug, Test, Backend and DB each show ready agent/network/application status.
@@ -175,9 +217,42 @@ The first inspection assumed JSON output from BusyBox `ip`; that fixture failure
 is preserved. A read-only `/proc/net/if_inet6` decoder supplied the actual DB
 link-local address without changing guest files or network configuration.
 
-The host bridge has IPv6 disabled and no IPv6 DNS listener. Host-listener IPv6 DNS
-bypass, cross-Environment traffic, independent writes and actual upstream packet
-counts remain unverified. No listener or address was added to fabricate a control.
+The host bridge has IPv6 disabled and no IPv6 DNS listener. At this A-only
+checkpoint, host-listener IPv6 DNS bypass, cross-Environment traffic, independent
+writes and actual upstream packet counts remain unverified. Later A/B evidence
+is recorded separately below. No listener or address was added to fabricate a
+control.
+
+## Independent A/B fixture writes
+
+After the fresh read-only matrix `596dcb25-cb3c-4c41-85a0-ca7d6a4bb213` passes,
+the separate run `39518d16-3304-431c-a453-a8b7fc7f1be9` completes with phase
+`independent_writes_verified`. It sends exactly one A POST and one B POST.
+Each request follows its own Debug → Backend TCP 8080 → DB TCP 5432 path.
+Before the requests, both fixtures have their initial values. After A's request,
+only A changes. After B's request, A remains unchanged and B has a different
+value. Root seed and old values remain unchanged.
+
+| Canonical final fixture | SHA-256 |
+| --- | --- |
+| A | `71f85e35deacbd4afce77d774f3abdfea9f7a9a0e51625c94116a0d55607761d` |
+| B | `1bec571bcf84658cbdeef44013ab5fbb27883b029121e0faea82e6e402e37f2c` |
+
+The retained receipt is
+`/var/lib/firecrab/qa-artifacts/414-independent-writes/results/39518d16-3304-431c-a453-a8b7fc7f1be9/writes.json`,
+SHA-256 `b020917d869f2fffe0bec64ca0270c24605080afc93c99eacbdd059af5a29568`.
+This independent-write pass does not replace the earlier failed deployment or
+resume-observer receipts in the [private DNS record](sandbox-private-dns-qa-2026-10-27.md).
+
+## OpenRC task: payload evidence with incomplete cleanup
+
+Actual task `c8fc16f2-ef45-5aa0-b2c6-dea031cc36c7` invokes one native command
+through the AI task lifecycle. The command returns actual exit code **7** and
+retains an **882-byte** artifact with SHA-256
+`75935e99e9a0428ef3238a3b037edd19ab392ba5ca66ae63ea8d8184ef45d41d`.
+The task remains **Interrupted** with `cleanup_required`. Resolution is in
+progress. These payload and artifact observations do not complete OpenRC
+acceptance or prove the remaining limit/cancellation/cleanup requirements.
 
 ## Remaining gates
 
@@ -192,8 +267,9 @@ counts remain unverified. No listener or address was added to fabricate a contro
   addresses in 32 DNS replies, 96 denied cross-Environment IPv4 connections,
   384 external-name responses without answers, and six IPv6 peer denials with
   two positive controls. DNS names remain shared within the private resolver.
-  Independent writes and OpenRC tasks still need their separate Root releases.
-- Complete actual OpenRC argv/stdin/output/limits/cancellation and result export.
+  The separate independent-write run above passes after that fresh matrix.
+- Resolve the OpenRC task's `cleanup_required` interruption. Complete actual
+  argv/stdin/output/limits/cancellation, cleanup and result-export acceptance.
 - Complete the remaining actual results/UI and public preview acceptance.
   [Retained-results follow-up](sandbox-results-ui-qa-2026-10-27.md) verifies
   actual Korean/English responsive screens and three artifact byte/hash checks
