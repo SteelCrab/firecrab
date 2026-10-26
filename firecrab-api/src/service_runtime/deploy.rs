@@ -11,9 +11,9 @@ use firecrab_helper_protocol::pipe::{
 use std::net::SocketAddr;
 
 pub(crate) mod cache;
-mod replicas;
+pub(super) mod replicas;
 pub(crate) mod rotation;
-mod routes;
+pub(super) mod routes;
 use replicas::*;
 use routes::*;
 
@@ -315,6 +315,7 @@ async fn accept(
         "Deploy accepted; previous release continues serving"
     };
     let deployment = MicroServiceDeployment {
+        recovery: None,
         started_at: chrono::Utc::now().timestamp(),
         finished_at: None,
         update: Some(Box::new(ServiceUpdate {
@@ -747,4 +748,4 @@ async fn restore(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

@@ -28,6 +28,7 @@ import uuid
 
 from deploy_fleet_qa import host_evidence, run_fleet
 from deploy_rotation_qa import run_rotation
+from deploy_recovery_qa import run_recovery
 
 
 def digest(data):
@@ -67,19 +68,28 @@ printf 'release-{label}\\n'
             "holding": "#!/bin/sh\nprintf 'Content-Type: text/plain\\r\\n\\r\\n'\nif [ -f /tmp/deploy-holding ]; then echo holding; else echo idle; fi\n",
             "environment": "#!/bin/sh\nprintf 'Content-Type: text/plain\\r\\n\\r\\n%s:%s\\n' \"$FLEET_SERVICE\" \"$FLEET_RELEASE\"\n",
             "rotation": """#!/bin/sh
-printf 'Content-Type: text/plain\\r\\n\\r\\n'
 case "$PASSWORD" in
-  qa-secret-v0) echo old ;;
-  qa-secret-v1) echo next ;;
-  qa-secret-v2) echo latest ;;
-  *) if [ "$UNRELATED" = 1 ]; then echo unrelated; else echo invalid; fi ;;
+  qa-secret-v0) reply=old ;;
+  qa-secret-v1) reply=next ;;
+  qa-secret-v2) reply=latest ;;
+  *) if [ "$UNRELATED" = 1 ]; then reply=unrelated; else reply=invalid; fi ;;
 esac
+printf 'Content-Type: text/plain\\r\\nContent-Length: %s\\r\\n\\r\\n%s\\n' "$((${#reply} + 1))" "$reply"
 """,
             "rotation-health": """#!/bin/sh
 case "$PASSWORD:$UNRELATED" in
   qa-secret-v0:*|qa-secret-v1:*|qa-secret-v2:*|:1) printf 'Content-Type: text/plain\\r\\n\\r\\nhealthy\\n' ;;
   *) printf 'Status: 503 Service Unavailable\\r\\nContent-Type: text/plain\\r\\n\\r\\nunhealthy\\n' ;;
 esac
+""",
+            "recovery-health": "#!/bin/sh\nif [ -f /unhealthy ]; then printf 'Status: 503 Service Unavailable\\r\\n'; fi\nprintf 'Content-Type: text/plain\\r\\n\\r\\nhealth\\n'\n",
+            "fail-health": "#!/bin/sh\n/bin/busybox touch /unhealthy\nprintf 'Content-Type: text/plain\\r\\n\\r\\ninjected\\n'\n",
+            "internal-call": """#!/bin/sh
+reply=$(/bin/busybox wget -q -O - "http://$SELF_INTERNAL/cgi-bin/rotation") || {
+  printf 'Status: 502 Bad Gateway\\r\\nContent-Type: text/plain\\r\\n\\r\\nunavailable\\n'
+  exit 0
+}
+printf 'Content-Type: text/plain\\r\\n\\r\\n%s\\n' "$reply"
 """,
         }
         for name, script in scripts.items():
@@ -169,9 +179,15 @@ class Api:
 
 def traffic(host, port, domain, path="/"):
     with contextlib.closing(http.client.HTTPConnection(host, port, timeout=120 if path == "/cgi-bin/hold" else 5)) as connection:
-        connection.request("GET", path, headers={"Host": domain})
-        response = connection.getresponse()
-        return response.status, response.read().decode().strip()
+        stage = "request"
+        try:
+            connection.request("GET", path, headers={"Host": domain})
+            stage = "response headers"
+            response = connection.getresponse()
+            stage = "response body"
+            return response.status, response.read().decode().strip()
+        except TimeoutError as error:
+            raise TimeoutError(f"{stage} timed out") from error
 
 
 def atomic_json(path, value):
@@ -193,7 +209,7 @@ def require_empty_host(api):
 
 def run(args, evidence):
     assert args.disposable_host and os.geteuid() == 0 and Path("/dev/kvm").exists()
-    required_cpus = 4 if args.secret_rotation else 3
+    required_cpus = 4 if args.secret_rotation or args.replica_recovery else 3
     assert int(subprocess.check_output(["nproc"], text=True)) >= required_cpus, f"{required_cpus} CPUs required for the selected rolling-surge acceptance"
     if args.fifteen_services:
         evidence["host"] = host_evidence(args.images)
@@ -201,7 +217,7 @@ def run(args, evidence):
     api = Api(args.api)
     api.ready()
     require_empty_host(api)
-    if args.secret_rotation:
+    if args.secret_rotation or args.replica_recovery:
         assert not api.call("GET", "/api/secrets"), "refusing existing Secrets"
         assert not api.call("GET", "/api/secrets/connections"), "refusing existing Secret connections"
     unit = "firecrab-ingress.service"
@@ -385,15 +401,17 @@ def run(args, evidence):
         assert len(samples) > 20 and not failures, {"samples": len(samples), "failures": failures[:10]}
         print(f"PASS unhealthy candidate stays out of traffic; {len(samples)} continuous HTTP requests, zero errors", flush=True)
         evidence["coreRequests"] = len(samples)
-        if args.fifteen_services or args.secret_rotation:
+        if args.fifteen_services or args.secret_rotation or args.replica_recovery:
             stop.set()
             loader.join(timeout=10)
             stop_service()
             service = None
             if args.secret_rotation:
                 run_rotation(api, wait_for, traffic, network, spec_a, ingress_port, evidence)
-            else:
+            elif args.fifteen_services:
                 run_fleet(api, wait_for, traffic, network, spec_a, fixtures[1][0], ingress_port, evidence)
+            if args.replica_recovery:
+                run_recovery(api, wait_for, traffic, network, spec_a, ingress_port, evidence)
     finally:
         stop.set()
         if loader: loader.join(timeout=10)
@@ -439,9 +457,10 @@ if __name__ == "__main__":
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--fifteen-services", action="store_true", help="require 16 CPUs and run the live 15-service acceptance")
     modes.add_argument("--secret-rotation", action="store_true", help="require four CPUs and run live shared-Secret rotation acceptance")
+    parser.add_argument("--replica-recovery", action="store_true", help="run live replica restart/replacement and API recovery acceptance")
     parser.add_argument("--report", type=Path, help="write measured evidence even when acceptance fails")
     args = parser.parse_args()
-    if (args.fifteen_services or args.secret_rotation) and not args.report:
+    if (args.fifteen_services or args.secret_rotation or args.replica_recovery) and not args.report:
         parser.error("extended acceptance requires --report")
     evidence = {"status": "failed", "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}
     try:

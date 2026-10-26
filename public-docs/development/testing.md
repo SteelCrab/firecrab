@@ -275,6 +275,15 @@ Run `scripts/ci-qa-lifetime.sh [OCI reference]` for the automated lifetime pass.
 
 ## nginx combined scenario
 
+Service recovery uses an empty disposable Linux/KVM host:
+`sudo python3 scripts/ci-qa-deploy.py --disposable-host --replica-recovery --report target/qa/replica-recovery.json`.
+
+- [ ] **SR1 — Replica restart:** stop one VM and verify automatic restart, pinned inputs, and healthy/unrelated VM continuity.
+- [ ] **SR2 — Application replacement:** fail one health endpoint and verify withdrawal, restart, replacement, and captured Secret retention.
+- [ ] **SR3 — Durable drain:** hold a request, restart the API during recovery drain, then verify exact candidate ownership and request completion.
+- [ ] **SR4 — Empty and stopped service:** verify HTTP 503 with retained hostname, recovery to a ready VM, Stop, no resurrection, and complete cleanup.
+
+
 Run `scripts/ci-qa-nginx.sh nginx:1.27-alpine`.
 Use `QA_NGINX=ci`, a pinned POSIX shell, and TCP `18080 → 80`; update env to `QA_NGINX=two`.
 Check `/etc/firecrab/vm.env` and executable `/var/lib/firecrab/shells/00.sh` over SSH.

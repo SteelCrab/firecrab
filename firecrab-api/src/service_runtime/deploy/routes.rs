@@ -59,7 +59,7 @@ pub(super) fn current_route<'a>(
     }
     Ok(route)
 }
-pub(super) fn worker_key(worker: &IngressWorker) -> String {
+pub(in crate::service_runtime) fn worker_key(worker: &IngressWorker) -> String {
     format!("{}:{}:{}", worker.boot_id, worker.pid, worker.start_time)
 }
 
@@ -346,6 +346,7 @@ pub(super) async fn finish_stop(
     }
     deployment.update.as_mut().expect("journal").completed = true;
     deployment.update.as_mut().expect("journal").transition = None;
+    deployment.recovery = None;
     deployment.error = None;
     phase(
         state,
@@ -356,7 +357,7 @@ pub(super) async fn finish_stop(
     .await
 }
 
-pub(super) async fn wait_workers(
+pub(in crate::service_runtime) async fn wait_workers(
     state: &AppState,
     previous: &[String],
     timeout: u32,

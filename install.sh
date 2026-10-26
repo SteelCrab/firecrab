@@ -383,6 +383,7 @@ report_ufw() {
 ensure_runtime_deps() {
     local failed=0
     ensure ip iproute2   || failed=1
+    ensure ss iproute2   || failed=1
     ensure nft nftables  || failed=1
     ensure conntrack conntrack || warn "conntrack is required when using security groups"
     ensure dnsmasq dnsmasq || failed=1

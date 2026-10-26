@@ -23,6 +23,13 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- MicroServices periodically check replica health and restart or replace failed
+  VMs through Deploy. Pinned inputs, encrypted environments, healthy replicas,
+  bounded retries, and recovery ownership survive API restart. An all-unready
+  service keeps its hostname with HTTP 503. Tracked in [#516](https://github.com/SteelCrab/firecrab/issues/516).
+  VM teardown resets only its gateway-to-guest TCP connections, allowing ingress
+  to retry stalled requests without shortening healthy response timeouts.
+
 - MicroServices publish private `<name>.internal` DNS and network-scoped ingress
   after app health succeeds. Internal-only deployments need no host ports.
   DNS and routes retain deployment ownership through restart and cleanup retries.

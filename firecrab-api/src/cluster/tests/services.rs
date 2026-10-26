@@ -26,6 +26,7 @@ fn create(store: &Store, spec: ClusterServiceSpec) -> ClusterService {
 }
 fn stopped(id: Uuid, intent: &ServiceWorkerIntent) -> MicroServiceDeployment {
     MicroServiceDeployment {
+        recovery: None,
         id: intent.deployment_id,
         service_id: id,
         started_at: 0,

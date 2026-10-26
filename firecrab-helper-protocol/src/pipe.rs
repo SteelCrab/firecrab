@@ -53,6 +53,9 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Route {
+    /// App port retained for private ingress policy while every replica is unready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_port: Option<u16>,
     /// Destination ingress rules for a private service. An empty group denies all peers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security_group: Option<crate::security_group::SecurityGroupPolicySpec>,
@@ -261,7 +264,10 @@ impl Config {
                     format!("duplicate route: {} {}", route.host, route.path_prefix).into(),
                 );
             }
-            validate_upstreams(&route.upstreams, Some(self.listen), &route.host)?;
+            // An owned service keeps its hostname while every endpoint is unready.
+            if !route.upstreams.is_empty() || route.owner.is_none() {
+                validate_upstreams(&route.upstreams, Some(self.listen), &route.host)?;
+            }
         }
         self.validate_service_routes()?;
         let mut ids = BTreeSet::new();
@@ -330,6 +336,7 @@ impl Config {
             .quick_tunnel
             .as_ref()
             .map(|quick| Route {
+                service_port: None,
                 security_group: None,
                 network: None,
                 owner: None,
@@ -343,6 +350,7 @@ impl Config {
             let host = quick_tunnel_host(entry.id);
             match &entry.target {
                 QuickTunnelTarget::Apps { upstreams } => quick_routes.push(Route {
+                    service_port: None,
                     security_group: None,
                     network: None,
                     owner: None,
@@ -366,15 +374,17 @@ impl Config {
         let mut hosts: BTreeMap<(SocketAddr, &str), Vec<(usize, &Route)>> = BTreeMap::new();
         let mut listeners = BTreeSet::from([self.listen]);
         for (index, route) in self.routes.iter().chain(quick_routes.iter()).enumerate() {
-            text.push_str(&format!(
-                "  upstream fc_route_{index} {{\n    zone fc_route_{index} 64k;\n"
-            ));
-            for address in &route.upstreams {
+            if !route.upstreams.is_empty() {
                 text.push_str(&format!(
-                    "    server {address} max_fails=1 fail_timeout=30s;\n"
+                    "  upstream fc_route_{index} {{\n    zone fc_route_{index} 64k;\n"
                 ));
+                for address in &route.upstreams {
+                    text.push_str(&format!(
+                        "    server {address} max_fails=1 fail_timeout=30s;\n"
+                    ));
+                }
+                text.push_str("    keepalive 16;\n  }\n");
             }
-            text.push_str("    keepalive 16;\n  }\n");
             let listen = route.network.as_ref().map_or(self.listen, |network| {
                 SocketAddr::new(network.gateway.into(), 80)
             });
@@ -427,6 +437,11 @@ impl Config {
                     vec![format!("= \"{prefix}\""), format!("^~ \"{prefix}/\"")]
                 };
                 for location in locations {
+                    if route.upstreams.is_empty() {
+                        // try_files runs after access checks; this non-directory root cannot serve content.
+                        text.push_str(&format!("    location {location} {{ root /dev/null; try_files /unready =503; }}\n"));
+                        continue;
+                    }
                     text.push_str(&format!("    location {location} {{\n      proxy_pass http://fc_route_{index};\n      proxy_http_version 1.1;\n      proxy_set_header Host {proxy_host};\n      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n      proxy_set_header X-Forwarded-Proto {proto};\n      proxy_set_header Upgrade $http_upgrade;\n      proxy_set_header Connection $fc_connection;\n      proxy_connect_timeout 2s;\n      proxy_read_timeout 30s;\n      proxy_next_upstream error timeout http_500 http_502 http_503 http_504;\n      proxy_next_upstream_timeout 3s;\n    }}\n"));
                 }
             }
