@@ -929,16 +929,79 @@ pub async fn set_running(
             continue;
         };
         verify_vm(state, &environment, index, &record)?;
-        stop(state, &record).await?;
+        if let Err(reason) = stop(state, &record).await {
+            environment.error = Some(format!("Stop incomplete; guest retained: {reason}"));
+            environment.roles[index].agent = SandboxReadiness::Failed;
+            environment.roles[index].error = environment.error.clone();
+            save(state, &mut environment)?;
+            return Err(reason);
+        }
         environment.roles[index].agent = SandboxReadiness::Pending;
         environment.roles[index].network = SandboxReadiness::Pending;
         environment.roles[index].application = SandboxReadiness::Pending;
+        environment.roles[index].error = None;
         for service in &mut environment.roles[index].services {
             service.ready = false;
         }
     }
+    environment.error = None;
     save(state, &mut environment)?;
     Ok(environment)
+}
+
+/// Caller holds the VM lifecycle lock and keeps this claim until Stopping is persisted.
+/// Do not take the environment lock: EnvironmentStop already holds it when reusing VM stop.
+pub async fn quiesce_for_vm_stop(
+    state: &AppState,
+    id: Uuid,
+) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, String> {
+    let Some(environment_id) = state
+        .store
+        .sandbox_environment_for_vm(id)
+        .map_err(|_| "Cannot inspect retained VM ownership")?
+    else {
+        return Ok(None);
+    };
+    let environment = load(state, environment_id)?;
+    let index = environment
+        .roles
+        .iter()
+        .position(|role| role.vm_id == id)
+        .ok_or("Retained VM is missing from its environment")?;
+    if environment.spec.roles[index].execution_mode != SandboxExecutionMode::PersistentWorkspace
+        || matches!(
+            environment.state,
+            SandboxEnvironmentState::CleanupPending | SandboxEnvironmentState::Deleted
+        )
+    {
+        return Ok(None);
+    }
+    let admission = state.sandbox.admission.clone().lock_owned().await;
+    if state
+        .store
+        .sandbox_project_busy(environment.project_id)
+        .map_err(|_| "Cannot inspect active Workspace tasks")?
+    {
+        return Err("Cancel or reconcile active tasks before stopping their Workspace".into());
+    }
+    let record = vm(state, id).ok_or("Retained VM disappeared before stop")?;
+    verify_vm(state, &environment, index, &record)?;
+    if record.state != VmState::Running {
+        return Err("Workspace must be running before a confirmed durable stop".into());
+    }
+    let binding =
+        guest::binding(state, id).map_err(|_| "Cannot authenticate the Workspace before stop")?;
+    let directory = state
+        .sandbox
+        .root
+        .join("environments")
+        .join(environment.id.to_string())
+        .join(&environment.roles[index].role);
+    std::fs::create_dir_all(&directory).map_err(|_| "Cannot prepare the Workspace sync channel")?;
+    guest::sync_filesystems(state, &binding, &directory)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Some(admission))
 }
 
 async fn stop(state: &AppState, record: &VmRecord) -> Result<(), String> {

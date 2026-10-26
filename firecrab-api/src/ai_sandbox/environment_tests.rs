@@ -1,6 +1,78 @@
 use super::*;
 use crate::persistence::Store;
 
+#[tokio::test]
+async fn retained_stop_refuses_to_power_cut_an_unconfirmed_guest() {
+    let directory = tempfile::tempdir().unwrap();
+    let registry =
+        crate::templates::TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .unwrap();
+    let state = AppState::with_db_file(registry, directory.path().join("state.db"))
+        .await
+        .unwrap();
+    let mut manifest = spec();
+    manifest.roles.truncate(1);
+    manifest.roles[0].depends_on.clear();
+    manifest.roles[0].execution_mode = SandboxExecutionMode::PersistentWorkspace;
+    manifest.retention.ttl_seconds = None;
+    manifest.allow.clear();
+    let environment =
+        reservation(Uuid::new_v4(), Uuid::new_v4(), Caller::default(), manifest).unwrap();
+    state
+        .store
+        .reserve_sandbox_environment(&environment)
+        .unwrap();
+    let reserved = &environment.roles[0];
+    let role = &environment.spec.roles[0];
+    let mut record = crate::handlers::vms::test_support::record(
+        &name(&environment, &reserved.role),
+        reserved.vm_id,
+    );
+    record.template = role.template.name.clone();
+    record.template_version = role.template.version.clone();
+    record.template_kernel_sha256 = role.template.kernel_sha256.clone();
+    record.template_rootfs_sha256 = role.template.rootfs_sha256.clone();
+    record.template_boot_args_sha256 = role.template.boot_args_sha256.clone();
+    record.cpu = role.cpu;
+    record.ram = role.memory_mib;
+    record.disk_gb = role.disk_gb;
+    record.micro_network_id = environment.network_id;
+    record.security_group_id = Some(reserved.security_group_id);
+    record.egress_policy = EgressPolicy::Isolated;
+    record.state = VmState::Running;
+    record.last_runtime_id = Some(Uuid::new_v4());
+    state.store.insert(&record).unwrap();
+    state.vms.lock().unwrap().insert(record.id, record.clone());
+
+    let error = vms::stop_vm(
+        State(state.clone()),
+        Extension(RequestId(Uuid::new_v4())),
+        Path(record.id.to_string()),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), "workspace_sync_unconfirmed");
+    assert_eq!(vm(&state, record.id).unwrap().state, VmState::Running);
+    assert_eq!(
+        load(&state, environment.id).unwrap().state,
+        SandboxEnvironmentState::Provisioning
+    );
+
+    let error = set_running(&state, environment.id, false)
+        .await
+        .unwrap_err();
+    assert!(error.contains("workspace_sync_unconfirmed"), "{error}");
+    assert_eq!(vm(&state, record.id).unwrap().state, VmState::Running);
+    assert_eq!(
+        load(&state, environment.id).unwrap().state,
+        SandboxEnvironmentState::Stopped
+    );
+    let held = load(&state, environment.id).unwrap();
+    assert!(held.error.unwrap().contains("guest retained"));
+    assert_eq!(held.roles[0].agent, SandboxReadiness::Failed);
+    assert!(binding(&state, environment.id, None).is_err());
+}
+
 fn role(name: &str, services: Vec<(&str, u16)>) -> SandboxEnvironmentRole {
     SandboxEnvironmentRole {
         name: name.into(),

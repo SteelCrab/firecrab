@@ -677,6 +677,7 @@ pub(crate) const PATH_APPLETS: &[&str] = &[
     "rm",
     "sed",
     "sleep",
+    "sync",
     "tar",
     "timeout",
     "touch",

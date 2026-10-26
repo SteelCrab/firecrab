@@ -64,6 +64,12 @@ fixtures, not live MicroVM acceptance.
    attempt, verify the same disk data, then edit `main.txt` and delete
    `config/tool.conf` through model tools before the first command. Verify the
    guest receives those changes and preserves the excluded package/config files.
+   Write a unique file immediately before normal stop. Verify its exact bytes
+   after resume. Managed Persistent Workspace stop must confirm bounded guest
+   filesystem sync before terminating its VMM. A failed or unreachable sync must
+   retain the running VM and return an explicit error. Check both Environment
+   and ordinary VM stop routes. A process kill or power loss is a separate fault
+   test and does not promise preservation of unacknowledged dirty guest pages.
 6. Restart the API. Reconcile the environment and recorded attempts. Assert that
    the reservation and VM UUIDs are unchanged. Export, then show that DELETE
    without `authorizeWorkspaceDeletion` refuses. Delete only after explicit

@@ -369,6 +369,32 @@ pub async fn capabilities(
     super::guest_protocol::capabilities(&output.stdout)
 }
 
+/// Confirm guest writes reached its disks before a retained environment is stopped.
+pub async fn sync_filesystems(
+    state: &AppState,
+    binding: &Binding,
+    directory: &Path,
+) -> io::Result<()> {
+    let output = capture(
+        ssh(state, binding, directory)?,
+        SYNC_FILESYSTEMS.as_bytes().to_vec(),
+        4096,
+        Duration::from_secs(15),
+    )
+    .await?;
+    if output.code != 0 || output.stdout != b"firecrab_sync_v1\n" {
+        return Err(io::Error::other(
+            "Guest filesystem sync was not confirmed; retain the Workspace and retry stop",
+        ));
+    }
+    if self::binding(state, binding.vm_id)? != *binding {
+        return Err(io::Error::other(
+            "Guest runtime changed during filesystem sync; retain the Workspace",
+        ));
+    }
+    Ok(())
+}
+
 /// Confirm the selected immutable image without pulling or mutating a shared base.
 pub async fn mode_supported(
     state: &AppState,
@@ -880,6 +906,16 @@ pub async fn signal(
     Ok(())
 }
 
+const SYNC_FILESYSTEMS: &str = r#"set -eu
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+[ "$(id -u)" = 0 ] || exit 80
+if [ -x /etc/firecrab/busybox ]; then /etc/firecrab/busybox sync
+elif command -v sync >/dev/null 2>&1; then sync
+else printf 'unsupported_filesystem_sync\n' >&2; exit 80; fi
+printf 'firecrab_sync_v1\n'
+"#;
+
 const CAPABILITIES: &str = r#"set -u
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
@@ -893,6 +929,7 @@ if { command -v setpriv >/dev/null 2>&1 && setpriv --reuid 0 --regid 0 --clear-g
 if [ -n "$unsupported" ]; then :
 elif ! { { command -v flock >/dev/null 2>&1 && flock -w 0 --help >/dev/null 2>&1; } || { [ -x /usr/local/sbin/firecrab-console-resize ] && /usr/local/sbin/firecrab-console-resize --sandbox-probe; }; }; then unsupported=missing_timed_flock
 elif ! { tar --exclude=null -cf /dev/null -C /dev null >/dev/null 2>&1 || { [ -x /etc/firecrab/busybox ] && /etc/firecrab/busybox tar --exclude=null -cf /dev/null -C /dev null >/dev/null 2>&1; }; }; then unsupported=missing_tar_exclude
+elif ! { command -v sync >/dev/null 2>&1 || { [ -x /etc/firecrab/busybox ] && /etc/firecrab/busybox --list | /etc/firecrab/busybox grep -qx sync; }; }; then unsupported=missing_filesystem_sync
 elif ! (ulimit -v 1048576 && ulimit -t 1 && ulimit -n 1024) 2>/dev/null; then unsupported=missing_hard_resource_limits
 elif ! tool timeout --help >/dev/null 2>&1; then unsupported=missing_timeout; fi
 execution=true
@@ -1087,6 +1124,7 @@ FIRECRAB_REFRESH
   rm -f "$control/project.tar"
   printf '%s' "$boot" >"$control/boot"
   touch "$control/staged"
+  if [ "$persistent" = true ]; then tool sync; fi
   ;;
 run)
   [ -f "$control/staged" ] || exit 79
@@ -1149,6 +1187,7 @@ FIRECRAB_PAYLOAD
   *) fail_run 'unsupported_execution_mode';;
   esac
   tool mkfifo "$cmd/outpipe" "$cmd/errpipe"
+  if [ "$persistent" = true ]; then tool sync || exit 76; fi
   exec 9>&-
   ( tool head -c "$((output_limit + 1))" <"$cmd/outpipe" >"$cmd/stdout"; count=$(tool wc -c <"$cmd/stdout"); if [ "$count" -gt "$output_limit" ]; then touch "$cmd/output-limit"; terminate_user; fi ) & out_reader=$!
   ( tool head -c "$((output_limit + 1))" <"$cmd/errpipe" >"$cmd/stderr"; count=$(tool wc -c <"$cmd/stderr"); if [ "$count" -gt "$output_limit" ]; then touch "$cmd/output-limit"; terminate_user; fi ) & err_reader=$!
@@ -1163,6 +1202,10 @@ FIRECRAB_PAYLOAD
   if [ -f "$cmd/output-limit" ]; then code=125; fi
   printf '%s' "$code" >"$cmd/exit"
   touch "$cmd/finished"
+  if [ "$persistent" = true ] && ! tool sync; then
+    rm -f "$cmd/finished"
+    exit 76
+  fi
   emit_output
   exit "$code"
   ;;
@@ -1188,6 +1231,7 @@ cancel|cleanup)
     if id -u "$user" >/dev/null 2>&1; then
       if command -v userdel >/dev/null 2>&1; then userdel "$user"; else tool deluser "$user"; fi
     fi
+    if [ "$persistent" = true ]; then tool sync || exit 76; fi
     rm -rf "$base"
   fi
   ;;

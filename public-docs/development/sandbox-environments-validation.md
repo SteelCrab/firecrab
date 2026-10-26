@@ -86,11 +86,17 @@ failed with `Network unreachable`; this measures missing routing, not a peer
 link-local firewall drop. A link-local IPv6 address existed on guest eth0.
 
 Automatic maintenance observed DB readiness and started Backend afterward.
-Before the operator-controlled API restart, DB and Backend were running while
-Debug and Test were created. Backend encountered the same legacy SSH delay.
+An initial predeployment snapshot had DB and Backend running while Debug and
+Test were created. Backend encountered the same legacy SSH delay.
 All four VM, security group and network reservations were retained in a full
 snapshot before restart. No explicit reconcile request was sent during this
 capture.
+
+While deployment was pending, the old Backend package worker eventually started
+SSH. The old controller then started Debug and Test. The first GET after API
+replacement already contained their running runtime identities. Both guests
+still had the old bootstrap hash and zero early-SSH markers. They are not
+evidence of successful first startup under the new code.
 
 The running Backend connected to DB TCP 5432 and read the same seed. Backend
 connections to DB TCP 22 and Internet TCP 443 timed out after two seconds.
@@ -104,6 +110,30 @@ Environment export returned 200 with an empty task list. DELETE with
 This proves the explicit Workspace deletion guard for an environment without
 tasks; it does not prove required task artifact export. Final deletion was not
 performed.
+
+### Bootstrap upgrade and dirty-page failure
+
+The operator replaced only the API binary. Manifest, generation, network and
+all VM/security-group reservation identities stayed unchanged. The approved
+existing Backend was stopped and started once. It then reached authenticated
+SSH readiness without manual service correction. Its managed bootstrap hash
+was `6182770a100c59cb9a093a9dc2ea47d557f47d5585797beb978904b83f9a685c`
+with three early-SSH markers. Native PID1 and the image pin remained unchanged.
+
+A later approved Debug upgrade wrote a unique file through the operator console
+immediately before raw VM stop. The write and its checksum succeeded. After
+restart the new bootstrap and SSH worked, but the file was absent. The original
+failure is retained. The VM still had one disk generation; source inspection
+confirmed reuse of existing disks. The existing raw VM stop terminated the VMM
+without flushing guest dirty pages. Test's further lifecycle was held at this
+point. This is not recorded as successful Workspace retention.
+
+The source correction requires bounded, runtime-pinned guest filesystem sync
+before managed Persistent Workspace stop. Both Environment and ordinary VM stop
+reuse this guard. Admission stays blocked until the VM's Stopping claim is
+persisted. Unconfirmed sync retains the VM. Persistent stage/final flush and
+execution checkpoints also sync acknowledged guest state. Deployment and actual
+normal Environment stop/resume retention measurements remain pending.
 
 ## Linux process fixtures
 
@@ -122,6 +152,7 @@ MicroVM mode, provider or network acceptance.
 
 Full four-role readiness, the remaining Debug/Test packet matrix,
 two-environment isolation and independent writes remain pending.
-API restart and partial-provisioning recovery require the operator-controlled
-deployment. Prepared distroless, Docker and nspawn MicroVM runs and retained
+The first API restart preserved all resource identities during incomplete
+readiness. Interruption during actual resource creation remains a separate
+pending scenario. Prepared distroless, Docker and nspawn MicroVM runs and retained
 Workspace lifecycle checks must each retain their own actual evidence.

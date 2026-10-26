@@ -1295,6 +1295,16 @@ async fn stop_vm_inner(
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
     let guard = state.lock_vm(id).await;
+    let workspace_claim = crate::ai_sandbox::environment::quiesce_for_vm_stop(&state, id)
+        .await
+        .map_err(|reason| {
+            tracing::warn!(vm_id = %id, error = %reason, "Workspace stop retained the running guest");
+            AppError::conflict(
+                "workspace_sync_unconfirmed",
+                "Restore guest sync and finish or reconcile tasks before retrying Workspace stop; VM retained",
+                request_id.0,
+            )
+        })?;
     let (claimed, previous) = claim_transition(&state, id, VmState::Stopping, request_id.0)?;
     if let Err(error) = persist_update(&state, &claimed, request_id.0).await {
         set_memory_state(&state, id, previous);
@@ -1303,6 +1313,7 @@ async fn stop_vm_inner(
 
     // The exit monitor takes this lock before signaling completion. Stopping
     // rejects other lifecycle requests while we wait without the lock.
+    drop(workspace_claim);
     drop(guard);
     let entry = state
         .processes
