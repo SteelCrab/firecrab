@@ -154,9 +154,17 @@ fn vm_claim_is_global_and_uncertain_guest_work_blocks_other_attempts_after_resta
     task.project.vm_id = Some(vm);
     task.guest = Some(runtime);
     task.task.state = SandboxTaskState::InProgress;
+    task.execution_mode = Some(SandboxExecutionMode::PersistentWorkspace);
+    task.task.git_commit = Some("a".repeat(40));
     {
         let store = Store::open(&path).unwrap();
         store.save_sandbox_task(&task).unwrap();
+        let origin = store.sandbox_workspace_origin(vm).unwrap().unwrap();
+        assert_eq!(origin.task.id, task.task.id);
+        assert_eq!(
+            origin.task.git_commit.as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
         assert!(!store.sandbox_runtime_busy(vm, task.task.id).unwrap());
         assert!(store.sandbox_runtime_busy(vm, Uuid::new_v4()).unwrap());
         task.task.state = SandboxTaskState::Interrupted;

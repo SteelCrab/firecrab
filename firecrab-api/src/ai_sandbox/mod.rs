@@ -436,15 +436,43 @@ async fn execute(
                 Some(&database),
                 &credentials,
                 commit.as_deref(),
-            )?;
-            for changes in dependency_changes {
-                workspace::inherit(&attempt, &changes)?;
-            }
-            Ok::<_, std::io::Error>(())
+            )
         })
         .await
         .map_err(execution_error)?
         .map_err(execution_error)?;
+        if matches!(
+            saved.execution_mode,
+            Some(SandboxExecutionMode::PersistentWorkspace)
+        ) {
+            interruptible(
+                async {
+                    guest::hydrate_workspace(state, saved)
+                        .await
+                        .map_err(execution_error)
+                },
+                cancel,
+                deadline,
+            )
+            .await?;
+            saved.guest_pending = false;
+            save(state, saved).await.map_err(execution_error)?;
+        }
+        if !dependency_changes.is_empty() {
+            let attempt = saved
+                .workspace
+                .clone()
+                .ok_or_else(|| execution_error("Task workspace is unavailable"))?;
+            tokio::task::spawn_blocking(move || {
+                for changes in dependency_changes {
+                    workspace::inherit(&attempt, &changes)?;
+                }
+                Ok::<_, std::io::Error>(())
+            })
+            .await
+            .map_err(execution_error)?
+            .map_err(execution_error)?;
+        }
     }
     let previous = state
         .store
@@ -584,6 +612,20 @@ async fn execute(
         if turn.calls.is_empty() {
             if text.trim().is_empty() {
                 return Err(provider_error(Failure::NoText));
+            }
+            if code {
+                interruptible(
+                    async {
+                        guest::flush_workspace(state, saved)
+                            .await
+                            .map_err(execution_error)
+                    },
+                    cancel,
+                    deadline,
+                )
+                .await?;
+                saved.guest_pending = false;
+                save(state, saved).await.map_err(execution_error)?;
             }
             saved.task.result = text;
             saved.task.state = SandboxTaskState::Result;

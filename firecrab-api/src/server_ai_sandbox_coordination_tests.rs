@@ -256,7 +256,42 @@ async fn managed_environment_admission_pins_role_runtime_and_blocks_project_dele
     vm.disk_gb = definition.disk_gb;
     vm.egress_policy = EgressPolicy::Isolated;
     vm.env.clear();
-    crate::handlers::vms::test_support::seed_vm(&f.state, &vm);
+    f.state
+        .store
+        .insert_micro_network(&MicroNetworkResponse {
+            id: environment.network_id,
+            name: format!("ase-{}-network", &environment.id.simple().to_string()[..12]),
+            subnet_cidr: environment.spec.subnet_cidr.clone(),
+            gateway: "10.241.33.1".into(),
+            internet_enabled: false,
+            uplink: None,
+            ipv6_cidr: None,
+            ipv6_gateway: None,
+            ipv6_address_mode: None,
+            ipv6_egress: None,
+        })
+        .unwrap();
+    f.state
+        .store
+        .insert_security_group(&SecurityGroupResponse {
+            id: role.security_group_id,
+            name: vm.name.clone(),
+            micro_network_id: environment.network_id,
+            rules: vec![],
+        })
+        .unwrap();
+    f.state.store.insert(&vm).unwrap();
+    f.state.vms.lock().unwrap().insert(vm.id, vm.clone());
+    let lease = f
+        .state
+        .store
+        .allocate_lease(
+            vm.id,
+            crate::ipam::SubnetSpec::parse(environment.network_id, &environment.spec.subnet_cidr)
+                .unwrap(),
+        )
+        .unwrap();
+    role.ipv4 = Some(lease.ipv4.to_string());
     f.state
         .store
         .save_sandbox_environment(&environment)

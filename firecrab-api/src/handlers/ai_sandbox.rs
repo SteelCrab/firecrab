@@ -918,6 +918,23 @@ pub async fn create_task(
         .await
         .map_err(|_| AppError::internal(id.0))?
         .map_err(|e| invalid(id, "gitRef", e))?;
+    if matches!(
+        execution_mode,
+        Some(SandboxExecutionMode::PersistentWorkspace)
+    ) && let Some(runtime) = runtime
+        && let Some(origin) = state
+            .store
+            .sandbox_workspace_origin(runtime.vm_id)
+            .map_err(|_| AppError::internal(id.0))?
+        && (origin.project.source_path != captured_project.source_path
+            || origin.task.git_commit != git_commit)
+    {
+        return Err(error(
+            id,
+            "sandbox_workspace_source_changed",
+            "Retained Workspace source or Git base changed. Restore its original source/ref or explicitly select a new Environment.",
+        ));
+    }
     let saved = SavedTask {
         caller,
         task: SandboxTask {

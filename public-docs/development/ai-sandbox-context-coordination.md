@@ -21,6 +21,8 @@ The source must be the authorized local Git repository root when `gitRef` is sup
 
 Without `gitRef`, the existing current-source snapshot behavior remains available. Selected skills and references use permitted source-relative regular files. Absolute paths, traversal, links, private account/configuration directories and credential file names remain denied. Skills must select `SKILL.md`. The limit is eight skills, sixteen references, 32 KiB per context file and 64 KiB of combined context. Reference files are supplied to the model as untrusted data. All connected provider credentials are redacted before provider requests.
 
+A Persistent Workspace is bound to its first admitted source directory and resolved Git base. A later source/ref change cannot silently replace retained code or expose a previous source to a different source grant. Admission requires restoring the original source/base or explicitly selecting a new Environment. Retained code is hydrated before model context and file edits. Later edits and deletions are flushed back before a successful result; package and configuration caches remain retained.
+
 ## Dependencies and bounded explicit retries
 
 Task requests can add:

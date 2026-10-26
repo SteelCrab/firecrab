@@ -23,6 +23,7 @@ CREATE TRIGGER IF NOT EXISTS ai_sandbox_index_delete AFTER DELETE ON ai_sandbox_
 CREATE TABLE IF NOT EXISTS ai_sandbox_models (connection_id TEXT NOT NULL, model TEXT NOT NULL, spec TEXT NOT NULL, PRIMARY KEY(connection_id,model)) STRICT;
 CREATE TABLE IF NOT EXISTS ai_sandbox_access (principal TEXT PRIMARY KEY, spec TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS ai_sandbox_attempts (task_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, attempt_id TEXT NOT NULL UNIQUE, vm_id TEXT, runtime_id TEXT, caller TEXT NOT NULL, source_path TEXT, CHECK ((vm_id IS NULL) = (runtime_id IS NULL))) STRICT;
+CREATE INDEX IF NOT EXISTS ai_sandbox_attempt_vm ON ai_sandbox_attempts(vm_id);
 CREATE TABLE IF NOT EXISTS ai_sandbox_admissions (task_id TEXT PRIMARY KEY, identity TEXT NOT NULL) STRICT;
 ";
 
@@ -295,6 +296,18 @@ impl Store {
     pub fn sandbox_runtime_busy(&self, vm: Uuid, except: Uuid) -> Result<bool, PersistenceError> {
         Ok(self.lock().query_row("SELECT EXISTS(SELECT 1 FROM ai_sandbox_task_index i JOIN ai_sandbox_attempts a ON a.task_id=i.id JOIN ai_sandbox_tasks t ON t.id=i.id WHERE a.vm_id=?1 AND i.id!=?2 AND i.busy=1 AND (json_extract(i.summary,'$.state')!='waiting' OR json_extract(t.spec,'$.guest_pending')=1 OR json_extract(t.spec,'$.guest_staged')=1))",
             params![vm.to_string(),except.to_string()], |row| row.get(0))?)
+    }
+    /// Retained code stays bound to the source and Git base of its first admitted Workspace task.
+    pub fn sandbox_workspace_origin(
+        &self,
+        vm: Uuid,
+    ) -> Result<Option<SavedTask>, PersistenceError> {
+        let id: Option<String> = self.lock().query_row("SELECT t.id FROM ai_sandbox_attempts a JOIN ai_sandbox_tasks t ON t.id=a.task_id WHERE a.vm_id=?1 AND json_extract(t.spec,'$.execution_mode.kind')='persistent_workspace' ORDER BY t.rowid LIMIT 1", [vm.to_string()], |row| row.get(0)).optional()?;
+        id.map(|id| {
+            self.sandbox_task(Uuid::parse_str(&id).map_err(|_| corrupt())?)?
+                .ok_or_else(corrupt)
+        })
+        .transpose()
     }
     /// Retry chains retain every task/attempt; the latest ordinal is the authoritative outcome.
     pub fn sandbox_retry_tasks(&self, root: Uuid) -> Result<Vec<SavedTask>, PersistenceError> {
