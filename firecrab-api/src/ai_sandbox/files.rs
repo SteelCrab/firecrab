@@ -93,6 +93,8 @@ pub fn allowed(path: &str) -> bool {
             ".npm",
             ".pnpm-store",
             ".rustup",
+            ".m2",
+            ".gradle",
             "__pycache__",
             ".pytest_cache",
             ".mypy_cache",

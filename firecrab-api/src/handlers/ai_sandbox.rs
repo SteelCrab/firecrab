@@ -322,6 +322,37 @@ pub async fn save_project(
         spec.source_path = None;
     }
     ai_sandbox::context::validate(&spec).map_err(|e| invalid(id, "context", e))?;
+    if let Some(environment_id) = spec.environment_id {
+        if spec.vm_id.is_some() {
+            return Err(invalid(
+                id,
+                "environmentId",
+                "Select a managed Environment or a borrowed MicroVM",
+            ));
+        }
+        let environment = state
+            .store
+            .sandbox_environment(environment_id)
+            .map_err(|_| AppError::internal(id.0))?
+            .filter(|environment| environment.project_id == key)
+            .ok_or_else(|| {
+                invalid(
+                    id,
+                    "environmentId",
+                    "Environment must belong to this project",
+                )
+            })?;
+        if matches!(
+            environment.state,
+            SandboxEnvironmentState::Deleted | SandboxEnvironmentState::CleanupPending
+        ) {
+            return Err(invalid(
+                id,
+                "environmentId",
+                "Select an Environment that is not being deleted",
+            ));
+        }
+    }
     caller.settings(&state, &spec).map_err(|e| denied(id, e))?;
     if let Some(selection) = &spec.selection {
         pipe_ai::validate_model(&selection.model).map_err(|e| provider(id, e))?;
@@ -342,6 +373,17 @@ pub async fn save_project(
         ));
     }
     if let Some(vm) = spec.vm_id {
+        if state
+            .store
+            .sandbox_environment_owns_vm(vm)
+            .map_err(|_| AppError::internal(id.0))?
+        {
+            return Err(invalid(
+                id,
+                "vmId",
+                "Managed Environment VMs must use their owning Environment binding",
+            ));
+        }
         if state
             .store
             .cluster_worker(vm)
@@ -422,6 +464,19 @@ pub async fn delete_project(
             id,
             "sandbox_busy",
             "Cancel active work and reconcile guest resources before deleting this project",
+        ));
+    }
+    if state
+        .store
+        .sandbox_environments(key)
+        .map_err(|_| AppError::internal(id.0))?
+        .iter()
+        .any(|environment| environment.state != SandboxEnvironmentState::Deleted)
+    {
+        return Err(error(
+            id,
+            "sandbox_environment_retained",
+            "Delete owned Environments explicitly before deleting their project",
         ));
     }
     let owned = state.sandbox.root.join(key.to_string());
@@ -795,6 +850,18 @@ pub async fn create_task(
     ai_sandbox::proof(&state, &selection, input.kind == SandboxTaskKind::Code)
         .map_err(|e| invalid(id, "selection", e))?;
     let mut runtime = None;
+    let mut environment_ref = None;
+    let mut execution_mode = None;
+    let mut captured_project = project.spec.clone();
+    if input.environment_role.is_some()
+        && (input.kind != SandboxTaskKind::Code || project.spec.environment_id.is_none())
+    {
+        return Err(invalid(
+            id,
+            "environmentRole",
+            "An Environment role requires a code task bound to a managed Environment",
+        ));
+    }
     if input.kind == SandboxTaskKind::Code {
         caller
             .settings(&state, &project.spec)
@@ -806,11 +873,44 @@ pub async fn create_task(
                 "Select a project source directory for code tasks",
             ));
         }
-        let vm = project
-            .spec
-            .vm_id
-            .ok_or_else(|| invalid(id, "vmId", "Select a MicroVM for code tasks"))?;
-        runtime = Some(ai_sandbox::guest::binding(&state, vm).map_err(|e| invalid(id, "vmId", e))?);
+        if let Some(environment_id) = project.spec.environment_id {
+            let environment = state
+                .store
+                .sandbox_environment(environment_id)
+                .map_err(|_| AppError::internal(id.0))?
+                .filter(|environment| environment.project_id == project_id)
+                .ok_or_else(|| {
+                    invalid(
+                        id,
+                        "environmentId",
+                        "Environment must belong to this project",
+                    )
+                })?;
+            let (reference, binding, mode) = ai_sandbox::environment::binding(
+                &state,
+                environment.id,
+                input.environment_role.as_deref(),
+            )
+            .map_err(|e| invalid(id, "environmentId", e))?;
+            caller
+                .require(
+                    &state,
+                    &SandboxResource::Vm { id: binding.vm_id },
+                    SandboxPermission::Execute,
+                )
+                .map_err(|e| denied(id, e))?;
+            captured_project.vm_id = Some(binding.vm_id);
+            runtime = Some(binding);
+            environment_ref = Some(reference);
+            execution_mode = Some(mode);
+        } else {
+            let vm = project
+                .spec
+                .vm_id
+                .ok_or_else(|| invalid(id, "vmId", "Select a MicroVM for code tasks"))?;
+            runtime =
+                Some(ai_sandbox::guest::binding(&state, vm).map_err(|e| invalid(id, "vmId", e))?);
+        }
     }
     let timestamp = ai_sandbox::now();
     let spec = project.spec.clone();
@@ -827,7 +927,7 @@ pub async fn create_task(
             dependency_results: vec![],
             tests: vec![],
             artifacts: vec![],
-            environment: None,
+            environment: environment_ref,
             id: key,
             project_id,
             attempt_id: Uuid::new_v4(),
@@ -843,14 +943,14 @@ pub async fn create_task(
             events: vec![],
             changes: vec![],
         },
-        project: project.spec,
+        project: captured_project,
         workspace: None,
         guest: runtime,
         guest_pending: false,
         guest_command: None,
         guest_staged: false,
         results_exported: false,
-        execution_mode: None,
+        execution_mode,
     };
     caller
         .task(&state, &saved, SandboxPermission::Execute)

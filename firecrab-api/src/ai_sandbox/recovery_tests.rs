@@ -1,5 +1,20 @@
 use super::*;
 
+#[test]
+fn native_argv_keeps_literal_arguments_and_rejects_duplicate_environment_names() {
+    let input = json!({"version":1,"argv":["printf","%s","$(do-not-execute)"],"cwd":"","env":[{"name":"VALUE","value":"literal;data"}],"stdin":"input\n","limits":{"wallSeconds":5,"cpuSeconds":5,"memoryMib":128,"outputBytes":1024}});
+    let args: ArgvArgs = serde_json::from_value(input.clone()).unwrap();
+    let command = args.request().unwrap();
+    assert_eq!(command.argv[2], "$(do-not-execute)");
+    assert_eq!(command.env["VALUE"], "literal;data");
+    guest_protocol::validate(&command).unwrap();
+    let mut duplicate = input;
+    duplicate["env"] =
+        json!([{"name":"VALUE","value":"first"},{"name":"VALUE","value":"override"}]);
+    let args: ArgvArgs = serde_json::from_value(duplicate).unwrap();
+    assert!(args.request().is_err());
+}
+
 pub(super) async fn fixture() -> (tempfile::TempDir, AppState, SavedTask) {
     let dir = tempfile::tempdir().unwrap();
     let registry =

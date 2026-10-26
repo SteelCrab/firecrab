@@ -291,25 +291,15 @@ impl Store {
             })
             .collect()
     }
+    /// A retained Workspace VM admits one active or uncertain attempt across every project.
+    pub fn sandbox_runtime_busy(&self, vm: Uuid, except: Uuid) -> Result<bool, PersistenceError> {
+        Ok(self.lock().query_row("SELECT EXISTS(SELECT 1 FROM ai_sandbox_task_index i JOIN ai_sandbox_attempts a ON a.task_id=i.id JOIN ai_sandbox_tasks t ON t.id=i.id WHERE a.vm_id=?1 AND i.id!=?2 AND i.busy=1 AND (json_extract(i.summary,'$.state')!='waiting' OR json_extract(t.spec,'$.guest_pending')=1 OR json_extract(t.spec,'$.guest_staged')=1))",
+            params![vm.to_string(),except.to_string()], |row| row.get(0))?)
+    }
     /// Retry chains retain every task/attempt; the latest ordinal is the authoritative outcome.
     pub fn sandbox_retry_tasks(&self, root: Uuid) -> Result<Vec<SavedTask>, PersistenceError> {
         let ids: Vec<String> = self.lock().prepare("SELECT id FROM ai_sandbox_task_index WHERE id=?1 OR json_extract(summary,'$.retryRoot')=?1 ORDER BY ordinal")?
             .query_map([root.to_string()], |row| row.get(0))?.collect::<Result<_,_>>()?;
-        ids.into_iter()
-            .map(|id| {
-                self.sandbox_task(Uuid::parse_str(&id).map_err(|_| corrupt())?)?
-                    .ok_or_else(corrupt)
-            })
-            .collect()
-    }
-    /// Inspect retained Environment attempts without loading unrelated project results.
-    pub fn sandbox_environment_tasks(
-        &self,
-        environment: Uuid,
-        generation: Uuid,
-    ) -> Result<Vec<SavedTask>, PersistenceError> {
-        let ids: Vec<String> = self.lock().prepare("SELECT id FROM ai_sandbox_tasks WHERE json_extract(spec,'$.task.environment.id')=?1 AND json_extract(spec,'$.task.environment.generation')=?2 ORDER BY rowid")?
-            .query_map(params![environment.to_string(),generation.to_string()], |row| row.get(0))?.collect::<Result<_,_>>()?;
         ids.into_iter()
             .map(|id| {
                 self.sandbox_task(Uuid::parse_str(&id).map_err(|_| corrupt())?)?

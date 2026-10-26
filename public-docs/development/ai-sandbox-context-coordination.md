@@ -50,6 +50,8 @@ Before Test starts, it records the successful Debug task/attempt IDs, result, te
 
 ## Tests and artifacts
 
+The `run_argv` native tool exposes the V1 guest contract with literal argv, cwd, stdin and hard limits. Its `env` input is an array of `{name,value}` entries so native strict tool schemas remain closed objects. Duplicate names are rejected. The guest REST contract keeps its typed environment object. Existing `run_command` remains available. Both command types produce actual event sequences and can back test records. Managed Environment service variables are injected by the server.
+
 The `record_test` native tool accepts `{name,event_sequence}`. The sequence must identify an actual completed guest-command event. Pass/fail comes from its exit status. A model assertion or file-tool event cannot create a test result. A task retains at most 64 test records.
 
 The `retain_artifact` native tool accepts `{path}` for a permitted workspace file. It copies bytes into private task/attempt storage and records the task ID, attempt ID, original relative path, byte count and SHA-256. Files containing connected provider credentials are rejected. The limit is sixteen files, 1 MiB per file and 8 MiB total. Required binary outputs can be exported, then removed from the editable workspace before the existing UTF-8 change-review step.

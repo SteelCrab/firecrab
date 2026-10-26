@@ -318,7 +318,7 @@ async fn checkpoint_recovery(
             .events
             .iter_mut()
             .rev()
-            .find(|event| event.name == "run_command")
+            .find(|event| matches!(event.name.as_str(), "run_command" | "run_argv"))
             .ok_or("Missing command event; guest evidence is retained")?;
         event.output = redact(&connections, &String::from_utf8_lossy(&output.stdout));
         event.stderr = redact(&connections, &String::from_utf8_lossy(&output.stderr));
@@ -451,6 +451,14 @@ async fn execute(
         .sandbox_history_for_source(saved.task.project_id, saved.project.source_path.as_deref())
         .map_err(|_| execution_error("Cannot read conversation history"))?;
     let mut history = Vec::new();
+    if let Some(mode) = &saved.execution_mode {
+        let services = if let Some(reference) = &saved.task.environment {
+            environment::service_environment(state, reference).map_err(execution_error)?
+        } else {
+            std::collections::BTreeMap::new()
+        };
+        history.push(json!({"role":"user","content":format!("Captured guest execution target and permitted service discovery:\n{}", json!({"environment":saved.task.environment,"executionMode":mode,"services":services}))}));
+    }
     let connections = state
         .store
         .ai_connections()
@@ -616,7 +624,7 @@ async fn execute(
                 exit_code: None,
             });
             save(state, saved).await.map_err(execution_error)?;
-            let outcome = if call.name == "run_command" {
+            let outcome = if matches!(call.name.as_str(), "run_command" | "run_argv") {
                 interruptible(
                     async { Ok(tool(state, saved, &call).await) },
                     cancel,
@@ -706,6 +714,43 @@ struct TestArgs {
     event_sequence: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArgvArgs {
+    version: u16,
+    argv: Vec<String>,
+    cwd: String,
+    env: Vec<EnvArg>,
+    stdin: String,
+    limits: SandboxGuestLimits,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnvArg {
+    name: String,
+    value: String,
+}
+
+impl ArgvArgs {
+    fn request(self) -> Result<SandboxGuestCommand, String> {
+        let mut env = std::collections::BTreeMap::new();
+        for entry in self.env {
+            if env.insert(entry.name, entry.value).is_some() {
+                return Err("Guest environment names must be distinct".into());
+            }
+        }
+        Ok(SandboxGuestCommand {
+            version: self.version,
+            argv: self.argv,
+            cwd: self.cwd,
+            env,
+            stdin: self.stdin,
+            limits: self.limits,
+        })
+    }
+}
+
 /// Dispatch a fixed tool set; only run_command can reach the captured guest.
 async fn tool(
     state: &AppState,
@@ -758,12 +803,18 @@ async fn tool(
         .as_ref()
         .ok_or("Task workspace is unavailable")?
         .join("work");
-    if call.name == "run_command" {
-        let args: CommandArgs = serde_json::from_value(call.arguments.clone())
-            .map_err(|_| "Invalid command arguments")?;
-        let result = guest::execute(state, saved, &args.command, args.timeout_seconds)
-            .await
-            .map_err(|e| e.to_string())?;
+    if matches!(call.name.as_str(), "run_command" | "run_argv") {
+        let result = if call.name == "run_argv" {
+            let args: ArgvArgs = serde_json::from_value(call.arguments.clone())
+                .map_err(|_| "Invalid versioned command arguments")?;
+            let args = args.request()?;
+            guest::execute_request(state, saved, &args).await
+        } else {
+            let args: CommandArgs = serde_json::from_value(call.arguments.clone())
+                .map_err(|_| "Invalid command arguments")?;
+            guest::execute(state, saved, &args.command, args.timeout_seconds).await
+        }
+        .map_err(|e| e.to_string())?;
         saved.guest_pending = false;
         return Ok((
             String::from_utf8_lossy(&result.stdout).into_owned(),

@@ -883,39 +883,9 @@ pub fn verify_export(
                     .into(),
             );
         }
-        // The artifact module performs the content/identity check after its integration.
-        verify_result_artifacts(state, &saved)?;
+        super::artifacts::verify_export(&saved)?;
     }
     Ok(ids)
-}
-
-fn verify_result_artifacts(_state: &AppState, saved: &super::SavedTask) -> Result<(), String> {
-    for artifact in &saved.task.artifacts {
-        if artifact.task_id != saved.task.id || artifact.attempt_id != saved.task.attempt_id {
-            return Err("Exported artifact ownership changed".into());
-        }
-        let root = saved
-            .workspace
-            .as_ref()
-            .ok_or("Exported artifact workspace is unavailable")?;
-        let path = root.join("artifacts").join(artifact.id.to_string());
-        let metadata = std::fs::symlink_metadata(&path)
-            .map_err(|_| "Required exported artifact is missing")?;
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err("Required exported artifact is not an owned regular file".into());
-        }
-        use sha2::{Digest, Sha256};
-        let mut file =
-            std::fs::File::open(path).map_err(|_| "Cannot verify exported artifact bytes")?;
-        let mut checksum = Sha256::new();
-        std::io::copy(&mut file, &mut checksum)
-            .map_err(|_| "Cannot verify exported artifact bytes")?;
-        let checksum = format!("{:x}", checksum.finalize());
-        if artifact.sha256 != checksum || artifact.size as u64 != metadata.len() {
-            return Err("Required exported artifact checksum or size changed".into());
-        }
-    }
-    Ok(())
 }
 
 pub async fn export(state: &AppState, id: Uuid) -> Result<SandboxEnvironmentExport, String> {

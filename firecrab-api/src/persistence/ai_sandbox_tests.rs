@@ -90,6 +90,19 @@ fn attempt_references_are_immutable_and_duplicate_attempts_roll_back() {
     let mut changed = original.clone();
     changed.task.id = Uuid::new_v4();
     variants.push(changed);
+    let mut changed = original.clone();
+    changed.task.request.coordination.retry_limit = 0;
+    variants.push(changed);
+    let mut changed = original.clone();
+    changed
+        .project
+        .context
+        .references
+        .push("other-context.md".into());
+    variants.push(changed);
+    let mut changed = original.clone();
+    changed.task.selection.model = "another-model".into();
+    variants.push(changed);
     for changed in variants {
         assert!(store.save_sandbox_task(&changed).is_err());
     }
@@ -124,6 +137,41 @@ fn attempt_references_are_immutable_and_duplicate_attempts_roll_back() {
     code.task.runtime = Some(runtime);
     code.guest.as_mut().unwrap().vm_id = Uuid::new_v4();
     assert!(store.save_sandbox_task(&code).is_err());
+}
+
+#[test]
+fn vm_claim_is_global_and_uncertain_guest_work_blocks_other_attempts_after_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("fixture.db");
+    let vm = Uuid::new_v4();
+    let mut task = saved(Uuid::new_v4(), 1);
+    let runtime = SandboxRuntimeRef {
+        vm_id: vm,
+        runtime_id: Uuid::new_v4(),
+    };
+    task.task.runtime = Some(runtime);
+    task.task.request.kind = SandboxTaskKind::Code;
+    task.project.vm_id = Some(vm);
+    task.guest = Some(runtime);
+    task.task.state = SandboxTaskState::InProgress;
+    {
+        let store = Store::open(&path).unwrap();
+        store.save_sandbox_task(&task).unwrap();
+        assert!(!store.sandbox_runtime_busy(vm, task.task.id).unwrap());
+        assert!(store.sandbox_runtime_busy(vm, Uuid::new_v4()).unwrap());
+        task.task.state = SandboxTaskState::Interrupted;
+        task.guest_pending = true;
+        store.save_sandbox_task(&task).unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert!(store.sandbox_runtime_busy(vm, Uuid::new_v4()).unwrap());
+    task.task.state = SandboxTaskState::Cancelled;
+    task.guest_pending = false;
+    store.save_sandbox_task(&task).unwrap();
+    assert!(!store.sandbox_runtime_busy(vm, Uuid::new_v4()).unwrap());
+    task.results_exported = true;
+    task.task.state = SandboxTaskState::InProgress;
+    assert!(store.save_sandbox_task(&task).is_err());
 }
 
 #[test]

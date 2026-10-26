@@ -255,6 +255,20 @@ async fn failed_export_or_changed_artifact_keeps_environment_resources() {
         .store
         .reserve_sandbox_environment(&environment)
         .unwrap();
+    // Admission fixes the Environment identity. Rebuild this synthetic fixture before
+    // its first Environment checkpoint instead of mutating an already admitted task.
+    state
+        .store
+        .delete_sandbox_project(saved.task.project_id)
+        .unwrap();
+    saved.project.environment_id = Some(environment.id);
+    let runtime = SandboxRuntimeRef {
+        vm_id: environment.roles[0].vm_id,
+        runtime_id: saved.task.runtime.unwrap().runtime_id,
+    };
+    saved.project.vm_id = Some(runtime.vm_id);
+    saved.task.runtime = Some(runtime);
+    saved.guest = Some(runtime);
     saved.task.environment = Some(SandboxEnvironmentRef {
         id: environment.id,
         generation: environment.generation,

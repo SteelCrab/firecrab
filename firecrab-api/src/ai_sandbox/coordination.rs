@@ -19,9 +19,7 @@ pub fn validate(input: &SandboxTaskInput) -> Result<(), String> {
                 .chars()
                 .all(|c| c.is_alphanumeric() || " _-.".contains(c))
     }) {
-        return Err(
-            "Use an agent label up to 64 characters without control or path characters".into(),
-        );
+        return Err("Use an agent label up to 64 bytes without control or path characters".into());
     }
     if policy.dependencies.iter().any(Uuid::is_nil)
         || policy.dependencies.iter().collect::<BTreeSet<_>>().len() != policy.dependencies.len()
@@ -249,6 +247,16 @@ pub async fn wait(
                         .store
                         .sandbox_busy_tasks(saved.task.project_id)
                         .map_err(|_| super::execution_error("Cannot inspect project execution"))?;
+                    let runtime_busy = if let Some(runtime) = saved.task.runtime {
+                        state
+                            .store
+                            .sandbox_runtime_busy(runtime.vm_id, saved.task.id)
+                            .map_err(|_| {
+                                super::execution_error("Cannot inspect VM execution ownership")
+                            })?
+                    } else {
+                        false
+                    };
                     if !busy.iter().any(|task| {
                         task.task.id != saved.task.id
                             && (matches!(
@@ -256,7 +264,8 @@ pub async fn wait(
                                 SandboxTaskState::Accepted | SandboxTaskState::InProgress
                             ) || task.guest_pending
                                 || task.guest_staged)
-                    }) {
+                    }) && !runtime_busy
+                    {
                         saved.task.dependency_results = dependencies
                             .iter()
                             .map(|task| SandboxDependencyResult {

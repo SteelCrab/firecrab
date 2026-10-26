@@ -30,6 +30,10 @@ fn decode(value: String) -> Result<SandboxEnvironment, PersistenceError> {
 }
 
 impl Store {
+    /// Managed VM UUIDs cannot be rebound through the borrowed-VM project entry point.
+    pub fn sandbox_environment_owns_vm(&self, id: Uuid) -> Result<bool, PersistenceError> {
+        Ok(self.lock().query_row("SELECT EXISTS(SELECT 1 FROM ai_sandbox_environment_resources WHERE id=?1 AND kind='vm')", [id.to_string()], |row| row.get(0))?)
+    }
     /// Read a manifest and check every reserved resource against its ownership ledger.
     pub fn sandbox_environment(
         &self,
