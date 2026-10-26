@@ -84,7 +84,7 @@ assistant reply alone is not evidence. Native tool environment values use the
 | `--memory` | wall 10, CPU 3, memory 32 MiB, output 2048 | Allocation refused with ENOMEM, exit 42 |
 | `--cpu` | wall 10, CPU 1, memory 64 MiB, output 2048 | Actual CPU termination before the wall deadline; no owned process remains |
 | `--overflow` | wall 10, CPU 3, memory 64 MiB, output 16 | Exit 125, at most 16 bytes per stream; no owned process remains |
-| `--sleep` | wall 2, CPU 3, memory 64 MiB, output 2048 | Ready marker, actual timeout exit 124; no owned process remains |
+| `--sleep` | wall 2, CPU 3, memory 64 MiB, output 2048 | Ready marker, measured bounded duration and native hard-KILL exit 137 on BusyBox; no owned process remains |
 | `--sleep` | wall 120, CPU 3, memory 64 MiB, output 2048 | Inspect the live exact boot/PID/start tuple; reject a modified tuple; cancel through the task API and verify no owned process remains |
 
 For `--report`, set both `QA_NONCE` and `QA_LITERAL`. Provide stdin, including a
@@ -92,6 +92,12 @@ literal newline or NUL if testing that bound. Every byte-valued field is hex to
 avoid ambiguous escaping. Parse actual values instead of matching prose.
 Exit 7 and 42 are intentional probe outcomes; do not record them as successful
 exit-zero tests through `record_test`.
+Preserve native signal exits. The actual BusyBox deadline returned 137 and an
+explicitly cancelled task retained 143. Do not convert these values to 124 or
+classify a termination from the number alone. Use the requested bounds, measured
+elapsed time, explicit cancellation action and exact process identity together.
+Observe live processes through the scoped API and `/proc` command identity.
+A bounded stdout reader may not flush a short ready line until the command ends.
 
 Prove static UID/timed-lock fallback independently. Confirm that `setpriv` is
 absent and any injected BusyBox `flock` lacks timed `-w`, then run the shipped

@@ -37,6 +37,11 @@ requires reconciliation. It never silently repeats a command. Reconciliation
 recovers bounded output and a known exit when available before guest cleanup.
 A guest reboot may leave partial output without a confirmed exit.
 
+Native signal exits are preserved. For example, BusyBox hard-KILL deadlines can
+return 137 and confirmed cancellation can retain 143. An exit number alone does
+not identify its cause. Check the requested limits, observed duration, explicit
+cancellation action and exact process identity together.
+
 ## Scoped controls
 
 The following endpoints resolve an already-admitted task under
