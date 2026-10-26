@@ -1,4 +1,6 @@
 use super::*;
+#[path = "mcp_sandbox_tests.rs"]
+mod sandbox_resources;
 use std::{
     io::{BufReader, Read},
     net::TcpListener,

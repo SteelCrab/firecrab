@@ -2,6 +2,8 @@ use super::*;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
+#[path = "ai_sandbox_artifact_tests.rs"]
+mod artifact_limits;
 #[path = "ai_sandbox_resources_tests.rs"]
 mod resources;
 

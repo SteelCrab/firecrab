@@ -1,4 +1,68 @@
 use super::*;
+
+#[test]
+fn discovery_and_guest_cli_return_actual_readiness_and_unsupported_metadata() {
+    let project = Uuid::new_v4();
+    let id = Uuid::new_v4();
+    let env = environment(project, id);
+    let binding = tunnel(project, id);
+    let health = json!({"version":1,"init":"openrc","execution":false,"docker":false,"nspawn":false,"unsupported":"missing supervisor"});
+    let process = json!({"pid":42,"startTicks":100,"bootId":"boot-1","state":"S"});
+    let address = json!({"subdomain":"test-preview","publicUrl":binding["publicUrl"],"connected":false,"claimedBy":id});
+    let cases = vec![
+        (
+            Command::Environment {
+                command: EnvironmentCommand::Images { project },
+            },
+            format!("/api/ai-sandbox/projects/{project}/environment-images"),
+            json!([]),
+        ),
+        (
+            Command::Environment {
+                command: EnvironmentCommand::List { project },
+            },
+            format!("/api/ai-sandbox/projects/{project}/environments"),
+            json!([env]),
+        ),
+        (
+            Command::Tunnel {
+                command: TunnelCommand::Addresses,
+            },
+            "/api/ai-sandbox/tunnel-addresses".into(),
+            json!([address]),
+        ),
+        (
+            Command::Tunnel {
+                command: TunnelCommand::List { project },
+            },
+            format!("/api/ai-sandbox/projects/{project}/tunnels"),
+            json!([binding]),
+        ),
+        (
+            Command::Guest {
+                project,
+                id,
+                command: super::super::resources::GuestCommand::Health,
+            },
+            format!("/api/ai-sandbox/projects/{project}/tasks/{id}/guest/health"),
+            health,
+        ),
+        (
+            Command::Guest {
+                project,
+                id,
+                command: super::super::resources::GuestCommand::Processes,
+            },
+            format!("/api/ai-sandbox/projects/{project}/tasks/{id}/guest/processes"),
+            json!([process]),
+        ),
+    ];
+    for (command, path, row) in cases {
+        let (client, worker) = reply("GET", path, Value::Null, 200, row.clone());
+        assert_eq!(request(&client, command, [].as_slice()).unwrap(), row);
+        worker.join().unwrap();
+    }
+}
 fn environment(project: Uuid, id: Uuid) -> Value {
     let spec = json!({"version":1,"subnetCidr":"172.29.80.0/24","roles":[{"name":"backend","template":{"name":"ubuntu","version":"1","kernelSha256":"1".repeat(64),"rootfsSha256":"2".repeat(64),"initrdSha256":null,"bootArgsSha256":"3".repeat(64)},"cpu":1,"memoryMib":512,"diskGb":4,"dependsOn":[],"services":[{"name":"app","port":8080,"readiness":true}],"executionMode":{"kind":"persistent_workspace"}}],"allow":[],"retention":{"ttlSeconds":null}});
     json!({"id":id,"projectId":project,"owner":"local","generation":Uuid::new_v4(),"spec":spec,"networkId":Uuid::new_v4(),"dnsMode":"private_only","roles":[],"state":"provisioning","createdAt":1,"updatedAt":1,"expiresAt":null,"exportedAt":null,"error":null})
