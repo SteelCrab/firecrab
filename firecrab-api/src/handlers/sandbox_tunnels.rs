@@ -192,11 +192,10 @@ fn handoff_observed(
     expected: Option<&SandboxTunnelResolvedTarget>,
     snapshot: &Snapshot,
 ) -> bool {
-    if snapshot.ingress_graceful_drain
-        && snapshot
-            .ingress_workers
-            .as_ref()
-            .is_none_or(|workers| workers.iter().any(|worker| worker.draining))
+    if snapshot
+        .ingress_workers
+        .as_ref()
+        .is_none_or(|workers| workers.iter().any(|worker| worker.draining))
     {
         return false;
     }
@@ -231,6 +230,7 @@ fn handoff_observed(
         })
     })
 }
+/// Keep both runtime holds unless a persisted observation proves predecessor retirement.
 fn confirm_handoff(
     state: &AppState,
     id: RequestId,

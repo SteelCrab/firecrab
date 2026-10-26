@@ -93,8 +93,8 @@ inspection fails. Missing `handoffConfirmedAt` on a superseded predecessor means
 that its reservation still needs confirmation. Reconcile the successor, or stop
 its inspected owned connector, before deleting either VM or retargeting again.
 An updated helper address alone is insufficient: its local connector target must
-match, or the previous connector must be confirmed inactive. Graceful ingress with
-unknown or draining workers retains the reservation. Task, attempt and runtime references never
+match, or the previous connector must be confirmed inactive. Unknown or draining
+ingress workers retain the reservation. Task, attempt and runtime references never
 change during this repair.
 
 While a preview claims an address, use its Sandbox publish/stop/retarget/delete

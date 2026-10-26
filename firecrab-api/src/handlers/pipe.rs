@@ -50,6 +50,7 @@ fn require_unclaimed(
     }
     Ok(())
 }
+/// Direct callers to the lifecycle that owns the saved preview claim.
 fn preview_claimed(id: RequestId) -> AppError {
     AppError::new(
         StatusCode::CONFLICT,

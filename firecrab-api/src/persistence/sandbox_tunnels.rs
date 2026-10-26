@@ -263,6 +263,7 @@ impl Store {
     }
 }
 
+/// Validate every pending edge before using historical bindings as control authority.
 fn pending_predecessors(
     conn: &rusqlite::Connection,
     binding: &SandboxTunnelBinding,

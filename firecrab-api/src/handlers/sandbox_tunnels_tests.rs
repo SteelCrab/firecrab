@@ -638,8 +638,11 @@ fn helper_target_and_retired_connector_evidence_are_both_required_for_handoff() 
     updated.quick_tunnels[0].target = snapshot(&old).quick_tunnels[0].target.clone();
     assert!(!handoff_observed(&next, &previous, expected, &updated));
     updated.quick_tunnels[0].target = snapshot(&next).quick_tunnels[0].target.clone();
+    assert!(!handoff_observed(&next, &previous, expected, &updated));
+    updated.ingress_workers = Some(vec![]);
     assert!(handoff_observed(&next, &previous, expected, &updated));
     updated.ingress_graceful_drain = true;
+    updated.ingress_workers = None;
     assert!(!handoff_observed(&next, &previous, expected, &updated));
     updated.ingress_workers = Some(vec![firecrab_helper_protocol::pipe::IngressWorker {
         draining: true,
@@ -652,6 +655,7 @@ fn helper_target_and_retired_connector_evidence_are_both_required_for_handoff() 
     assert!(handoff_observed(&next, &previous, expected, &updated));
     next.connector_id = Some(Uuid::new_v4());
     let mut changed = snapshot(&next);
+    changed.ingress_workers = Some(vec![]);
     assert!(!handoff_observed(&next, &previous, expected, &changed));
     changed
         .quick_tunnels
@@ -716,6 +720,7 @@ async fn pending_handoff_can_stop_the_verified_predecessor_before_any_new_publis
     let next = transfer(&state.store, &old);
     task(&state, &next);
     let mut stopped = snapshot(&old);
+    stopped.ingress_workers = Some(vec![]);
     stopped.firecrab_tunnels[0].connected = false;
     stopped.quick_tunnels[0].unit.active_state = "inactive".into();
     stopped.quick_tunnels[0].unit.main_pid = 0;
