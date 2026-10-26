@@ -739,3 +739,54 @@ async fn an_active_deploy_allows_queueing_during_drain_but_worker_rechecks_befor
             .unwrap()
     );
 }
+
+#[tokio::test]
+async fn clean_queued_initial_deploy_survives_database_reopen_and_startup_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let original = state(root.path()).await;
+    let record = deployment(Uuid::new_v4());
+    insert(&original, &record);
+    drop(original);
+    let restarted = state(root.path()).await;
+    let held = restarted
+        .service_deploy_permits
+        .clone()
+        .acquire_owned()
+        .await
+        .unwrap();
+    recover(&restarted).await;
+    assert_eq!(
+        restarted
+            .store
+            .service_deployment(record.service_id)
+            .unwrap()
+            .unwrap(),
+        record
+    );
+    assert_eq!(
+        restarted.store.service_deploy_turn(record.id).unwrap(),
+        (true, true)
+    );
+    restarted
+        .store
+        .delete_pipe_auth(crate::pipe_auth::Provider::Github)
+        .unwrap();
+    drop(held);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let current = restarted
+                .store
+                .service_deployment(record.service_id)
+                .unwrap()
+                .unwrap();
+            if current.phase == ServicePhase::Failed {
+                assert_eq!(current.id, record.id);
+                assert!(current.error.unwrap().contains("no longer connected"));
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
