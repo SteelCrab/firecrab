@@ -175,11 +175,11 @@ impl Store {
         self.sandbox_task(id)
     }
 
-    /// Only incomplete provisioning is resumed automatically; failures need explicit reconciliation.
+    /// Desired-running environments refresh readiness; failures need explicit reconciliation.
     pub fn sandbox_environment_provisioning_ids(&self) -> Result<Vec<Uuid>, PersistenceError> {
         self.lock()
             .prepare(
-                "SELECT id FROM ai_sandbox_environments WHERE state='provisioning' ORDER BY rowid",
+                "SELECT id FROM ai_sandbox_environments WHERE state IN ('provisioning','ready') ORDER BY rowid",
             )?
             .query_map([], |r| r.get::<_, String>(0))?
             .map(|r| Uuid::parse_str(&r?).map_err(|_| corrupt()))

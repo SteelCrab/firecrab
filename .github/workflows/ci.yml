@@ -46,6 +46,7 @@ jobs:
           ./scripts/build-ingress.sh target/ingress
           ./scripts/build-guest-console.sh target/ingress
           python3 scripts/test-guest-console.py
+          sudo python3 scripts/test-sandbox-user.py
 
       - name: Verify bundled ingress installation
         run: sudo bash scripts/test-ingress-install.sh target/ingress

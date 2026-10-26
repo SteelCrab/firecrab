@@ -201,6 +201,18 @@ pub async fn put(
         SandboxPermission::Write,
         request.0,
     )?;
+    let serialized = serde_json::to_string(&spec).map_err(|_| AppError::internal(request.0))?;
+    let accounts = state
+        .store
+        .ai_connections()
+        .map_err(|_| AppError::internal(request.0))?;
+    if crate::ai_sandbox::redact(&accounts, &serialized) != serialized {
+        return Err(AppError::conflict(
+            "sandbox_environment_secret_rejected",
+            "Environment manifests cannot contain connected account credentials",
+            request.0,
+        ));
+    }
     let _guard = state.lock_vm(environment_id).await;
     if let Some(saved) = state
         .store

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #define _GNU_SOURCE
 #include "resize.h"
+#include "user.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/vm_sockets.h>
@@ -12,6 +13,9 @@
 #include <unistd.h>
 
 int main(int argc, char **argv) {
+    if (argc > 1 && (!strcmp(argv[1], "--sandbox-probe") || !strcmp(argv[1], "--sandbox-lock") || !strcmp(argv[1], "--reuid"))) {
+        return firecrab_sandbox_user(argc, argv);
+    }
     if (argc == 2 && !strcmp(argv[1], "--version")) {
         puts("firecrab-guest-console 1");
         return 0;

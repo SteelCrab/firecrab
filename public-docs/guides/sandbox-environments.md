@@ -106,6 +106,12 @@ deletion. Final deletion requires an explicit request body:
 {"authorizeWorkspaceDeletion":true}
 ```
 
+Before the first model/file tool of a new Workspace attempt, the controller
+hydrates retained allowed files into the isolated task copy. It records only
+the host-validated allowed baseline. Subsequent staging applies explicit edits
+and deletions. Excluded user packages and private configuration remain in the
+guest and are never added to the deletion baseline.
+
 Temporary environments may set `retention.ttlSeconds` between 60 and 604800.
 Cleanup refuses active or uncertain attempts, missing export checkpoints, and
 missing or changed artifact bytes. Export failure retains resources. Cleanup

@@ -24,6 +24,10 @@ use uuid::Uuid;
 #[path = "environment_tests.rs"]
 mod tests;
 
+// The existing network API acquires network_mutations during service resync.
+// Serialize environment reservations separately rather than recursively taking that lock.
+static NETWORK_CREATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn valid_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 24
@@ -336,6 +340,7 @@ fn verify_vm(
 }
 
 async fn provision(state: &AppState, environment: &mut SandboxEnvironment) -> Result<(), String> {
+    let network_mutation = NETWORK_CREATION.lock().await;
     owns(state, environment, "network", environment.network_id)?;
     let network = state
         .store
@@ -368,7 +373,9 @@ async fn provision(state: &AppState, environment: &mut SandboxEnvironment) -> Re
         .await
         .map_err(|e| e.redacted().description())?;
     }
+    drop(network_mutation);
     for index in 0..environment.roles.len() {
+        let network_mutation = state.network_mutations.lock().await;
         let reserved = &environment.roles[index];
         owns(
             state,
@@ -397,6 +404,7 @@ async fn provision(state: &AppState, environment: &mut SandboxEnvironment) -> Re
                 })
                 .map_err(|_| "Cannot reserve environment security group")?;
         }
+        drop(network_mutation);
         if let Some(current) = vm(state, reserved.vm_id) {
             verify_vm(state, environment, index, &current)?;
         } else {
@@ -439,6 +447,7 @@ async fn provision(state: &AppState, environment: &mut SandboxEnvironment) -> Re
     }
     // Leases exist before rules are installed. No role is started with a permissive policy.
     for index in 0..environment.roles.len() {
+        let _network_mutation = state.network_mutations.lock().await;
         let reserved = &environment.roles[index];
         let expected = policy(environment, &reserved.role)?;
         let current = state
@@ -518,7 +527,9 @@ pub async fn reconcile(state: &AppState, id: Uuid) -> Result<SandboxEnvironment,
     ) {
         return Ok(environment);
     }
-    environment.state = SandboxEnvironmentState::Provisioning;
+    if environment.state != SandboxEnvironmentState::Ready {
+        environment.state = SandboxEnvironmentState::Provisioning;
+    }
     environment.error = None;
     save(state, &mut environment)?;
     let result = reconcile_roles(state, &mut environment).await;
@@ -527,6 +538,8 @@ pub async fn reconcile(state: &AppState, id: Uuid) -> Result<SandboxEnvironment,
         environment.error = Some(error.chars().take(512).collect());
     } else if environment.roles.iter().all(ready) {
         environment.state = SandboxEnvironmentState::Ready;
+    } else {
+        environment.state = SandboxEnvironmentState::Provisioning;
     }
     save(state, &mut environment)?;
     Ok(environment)
@@ -547,6 +560,13 @@ async fn reconcile_roles(
                 .any(|r| r.role == *dependency && ready(r))
         });
         if !dependencies_ready {
+            let role = &mut environment.roles[index];
+            role.agent = SandboxReadiness::Pending;
+            role.network = SandboxReadiness::Pending;
+            role.application = SandboxReadiness::Pending;
+            for service in &mut role.services {
+                service.ready = false;
+            }
             continue;
         }
         let mut record =
@@ -697,6 +717,12 @@ pub fn binding(
     String,
 > {
     let environment = load(state, id)?;
+    if environment
+        .expires_at
+        .is_some_and(|expires| expires <= now())
+    {
+        return Err("Environment lifetime expired; export results before owned cleanup".into());
+    }
     if environment.state != SandboxEnvironmentState::Ready {
         return Err("Environment is not ready; reconcile before dispatch".into());
     }
@@ -916,7 +942,10 @@ pub async fn cleanup(
     if environment.state == SandboxEnvironmentState::Deleted {
         return Ok(environment);
     }
-    if retained(&environment.spec) && !authorize_workspace_deletion {
+    if retained(&environment.spec)
+        && !authorize_workspace_deletion
+        && environment.state != SandboxEnvironmentState::CleanupPending
+    {
         return Err("Explicit authorization is required to delete retained Workspace data".into());
     }
     let admission = state.sandbox.admission.lock().await;
@@ -1022,6 +1051,20 @@ pub fn start_maintenance(state: AppState) {
             interval.tick().await;
             if let Ok(ids) = state.store.sandbox_environment_provisioning_ids() {
                 for id in ids {
+                    let Ok(environment) = load(&state, id) else {
+                        continue;
+                    };
+                    if environment
+                        .expires_at
+                        .is_some_and(|expires| expires <= now())
+                        || (environment.state == SandboxEnvironmentState::Ready
+                            && state
+                                .store
+                                .sandbox_project_busy(environment.project_id)
+                                .unwrap_or(true))
+                    {
+                        continue;
+                    }
                     if let Err(error) = reconcile(&state, id).await {
                         tracing::warn!(environment_id=%id,%error,"Cannot resume environment provisioning");
                     }

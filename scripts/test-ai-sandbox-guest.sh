@@ -7,6 +7,9 @@ if [[ $# != 2 ]]; then
   exit 2
 fi
 binary="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+guest_helper=${FIRECRAB_GUEST_CONSOLE_BIN:-$repo_root/target/ingress/firecrab-guest-console}
+[[ -f "$guest_helper" ]] || { echo "Build the trusted static guest helper with scripts/build-guest-console.sh first" >&2; exit 2; }
 [[ -f "$binary" ]] || { echo "API test binary is missing" >&2; exit 2; }
 mkdir -p "$2"
 profiles=$(cd "$2" && pwd)
@@ -36,6 +39,7 @@ DOCKERFILE
 docker build --build-arg "BASE_IMAGE=$base_image" -t "$image" "$context"
 docker run --rm --name "$name" --network none --cpus 2 --memory 1g \
   -v "$binary:/qa/firecrab-api-tests:ro" -v "$profiles:/profiles" \
+  -v "$guest_helper:/usr/local/sbin/firecrab-console-resize:ro" \
   -e FIRECRAB_SANDBOX_GUEST_QA=1 -e 'LLVM_PROFILE_FILE=/profiles/guest-%m-%p.profraw' \
   "$image" /qa/firecrab-api-tests \
   ai_sandbox::guest::tests::guest_ \

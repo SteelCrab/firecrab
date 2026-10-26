@@ -56,11 +56,15 @@ removing the exact container. It never removes an image or unrelated container.
 ## Guest capabilities
 
 The V1 execution transport requires a shell, operator SSH, Linux `/proc`,
-util-linux setpriv, timed flock, tar with excludes, timeout and hard ulimit
-support. These are probed before staging. systemd and OpenRC init detection are
-reported separately from execution support. A distroless guest without the
-required tools reports unsupported execution. An init name alone is never proof
-that execution, Docker or nspawn works. Docker/nspawn also require cgroup v2.
+tar with excludes, timeout and hard ulimit support. UID switching and timed
+locking use util-linux or the shipped static helper. The helper is never setuid.
+It rejects non-root supervisors, root task identities and unbounded lock waits.
+These capabilities are probed before staging. systemd and OpenRC init detection
+are separate from execution support. Prepared distroless images use the static
+helper, injected BusyBox applets and key-only SSH overlay described in the
+[acceptance recipe](../development/sandbox-environments-qa.md). Missing tools
+report unsupported execution. An init name alone never proves support.
+Docker/nspawn also require cgroup v2.
 
 V1 provides bounded command execution and scoped process controls. Persistent
 interactive PTY create/attach/input/output/resize/reconnect belongs to Runtime

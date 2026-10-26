@@ -431,6 +431,14 @@ pub async fn execute_request(
     request: &SandboxGuestCommand,
 ) -> io::Result<Output> {
     super::guest_protocol::validate(request)?;
+    let serialized = serde_json::to_string(request).map_err(io::Error::other)?;
+    let accounts = state.store.ai_connections().map_err(io::Error::other)?;
+    if super::redact(&accounts, &serialized) != serialized {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Guest requests cannot contain connected account credentials",
+        ));
+    }
     let mut request = request.clone();
     if let Some(reference) = &saved.task.environment {
         for (key, value) in
@@ -456,6 +464,74 @@ pub async fn execute_request(
     .await
 }
 
+/// Hydrate retained code before the first model/file tool of a Workspace attempt.
+/// Subsequent stage calls refresh that snapshot, including explicit local edits and deletions.
+pub async fn hydrate_workspace(state: &AppState, saved: &mut SavedTask) -> io::Result<()> {
+    if !matches!(
+        saved.execution_mode,
+        Some(SandboxExecutionMode::PersistentWorkspace)
+    ) {
+        return Ok(());
+    }
+    super::access::attempt(state, saved).map_err(io::Error::other)?;
+    let runtime = saved
+        .guest
+        .ok_or_else(|| io::Error::other("Workspace attempt has no admitted runtime"))?;
+    let directory = attempt(saved)?;
+    let transport = ssh(state, &runtime, &directory)?;
+    saved.guest_pending = true;
+    saved.guest_staged = true;
+    super::save(state, saved).await.map_err(io::Error::other)?;
+    let output = capture(
+        transport,
+        task_script(saved, "hydrate", None, "", 0, None)?,
+        super::files::TREE_LIMIT + 4 * 1024 * 1024,
+        Duration::from_secs(60),
+    )
+    .await?;
+    if output.code == 79 {
+        return Ok(());
+    }
+    if output.code != 0 {
+        return Err(io::Error::other(
+            "Cannot hydrate retained Workspace data; the guest data was retained",
+        ));
+    }
+    let work = directory.join("work");
+    let baseline = tokio::task::spawn_blocking(move || {
+        workspace::import(&work, &output.stdout)?;
+        super::files::Root::open(&work)?.files().map(|files| {
+            if files.is_empty() {
+                String::new()
+            } else {
+                files.join("\n") + "\n"
+            }
+        })
+    })
+    .await
+    .map_err(io::Error::other)??;
+    let output = capture(
+        ssh(state, &runtime, &directory)?,
+        task_script(
+            saved,
+            "hydrate_baseline",
+            None,
+            &STANDARD.encode(baseline),
+            0,
+            None,
+        )?,
+        4096,
+        Duration::from_secs(10),
+    )
+    .await?;
+    if output.code != 0 {
+        return Err(io::Error::other(
+            "Cannot checkpoint retained Workspace baseline; no model work was dispatched",
+        ));
+    }
+    Ok(())
+}
+
 async fn execute_bounded(
     state: &AppState,
     saved: &mut SavedTask,
@@ -464,6 +540,13 @@ async fn execute_bounded(
     limits: Option<&SandboxGuestLimits>,
 ) -> io::Result<Output> {
     super::access::attempt(state, saved).map_err(io::Error::other)?;
+    let accounts = state.store.ai_connections().map_err(io::Error::other)?;
+    if super::redact(&accounts, command) != command {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Guest commands cannot contain connected account credentials",
+        ));
+    }
     if command.trim().is_empty()
         || command.len() > if limits.is_some() { 131072 } else { 8192 }
         || command.contains('\0')
@@ -780,8 +863,9 @@ init=distroless
 if [ -d /run/systemd/system ]; then init=systemd
 elif [ -x /sbin/openrc-run ] || [ -d /run/openrc ]; then init=openrc; fi
 unsupported=
-if ! command -v setpriv >/dev/null 2>&1 || ! setpriv --reuid 0 --regid 0 --clear-groups --no-new-privs /bin/true 2>/dev/null; then unsupported=missing_util_linux_setpriv
-elif ! command -v flock >/dev/null 2>&1 || ! flock -w 0 --help >/dev/null 2>&1; then unsupported=missing_timed_flock
+if { command -v setpriv >/dev/null 2>&1 && setpriv --reuid 0 --regid 0 --clear-groups --no-new-privs /bin/true 2>/dev/null; } || { [ -x /usr/local/sbin/firecrab-console-resize ] && /usr/local/sbin/firecrab-console-resize --sandbox-probe; }; then :; else unsupported=missing_trusted_uid_helper; fi
+if [ -n "$unsupported" ]; then :
+elif ! { { command -v flock >/dev/null 2>&1 && flock -w 0 --help >/dev/null 2>&1; } || { [ -x /usr/local/sbin/firecrab-console-resize ] && /usr/local/sbin/firecrab-console-resize --sandbox-probe; }; }; then unsupported=missing_timed_flock
 elif ! { tar --exclude=__firecrab_probe__ --help >/dev/null 2>&1 || { [ -x /etc/firecrab/busybox ] && /etc/firecrab/busybox tar --exclude=__firecrab_probe__ --help >/dev/null 2>&1; }; }; then unsupported=missing_tar_exclude
 elif ! (ulimit -v 1048576 && ulimit -t 1 && ulimit -n 128) 2>/dev/null; then unsupported=missing_hard_resource_limits
 elif ! tool timeout --help >/dev/null 2>&1; then unsupported=missing_timeout; fi
@@ -823,11 +907,12 @@ tool() { if [ -x /etc/firecrab/busybox ]; then /etc/firecrab/busybox "$@"; else 
 [ "$(id -u)" = 0 ] || exit 80
 if command -v setpriv >/dev/null 2>&1 && setpriv --reuid 0 --regid 0 --clear-groups --no-new-privs /bin/true 2>/dev/null; then
   drop_program=$(command -v setpriv)
-else printf 'Sandbox requires util-linux setpriv with direct UID switching and no-new-privileges. Install util-linux in the selected development VM.\n' >&2; exit 80; fi
-if command -v flock >/dev/null 2>&1; then lock_program=$(command -v flock)
-else lock_program=/etc/firecrab/busybox; fi
-lock() { if [ "$lock_program" = /etc/firecrab/busybox ]; then "$lock_program" flock "$@"; else "$lock_program" "$@"; fi; }
-lock -w 0 --help >/dev/null 2>&1 || exit 80
+elif [ -x /usr/local/sbin/firecrab-console-resize ] && /usr/local/sbin/firecrab-console-resize --sandbox-probe; then drop_program=/usr/local/sbin/firecrab-console-resize
+else printf 'Sandbox requires the bundled trusted UID helper or util-linux setpriv. Rebuild the guest runtime or install util-linux in the selected development VM.\n' >&2; exit 80; fi
+if command -v flock >/dev/null 2>&1 && flock -w 0 --help >/dev/null 2>&1; then lock_program=$(command -v flock)
+elif [ -x /usr/local/sbin/firecrab-console-resize ] && /usr/local/sbin/firecrab-console-resize --sandbox-probe; then lock_program=/usr/local/sbin/firecrab-console-resize
+else exit 80; fi
+lock() { if [ "$lock_program" = /usr/local/sbin/firecrab-console-resize ]; then [ "$1" = -w ] || return 80; "$lock_program" --sandbox-lock "$3" "$2"; else "$lock_program" "$@"; fi; }
 if command -v tar >/dev/null 2>&1 && tar --exclude=__firecrab_probe__ --help >/dev/null 2>&1; then tar_program=$(command -v tar)
 elif [ -x /etc/firecrab/busybox ] && /etc/firecrab/busybox tar --exclude=__firecrab_probe__ --help >/dev/null 2>&1; then tar_program=/etc/firecrab/busybox
 else printf 'Sandbox requires tar with --exclude support. Install GNU tar in the selected development VM.\n' >&2; exit 80; fi
@@ -911,7 +996,25 @@ emit_output() {
     if [ -f "$cmd/stderr" ]; then tool head -c "$output_limit" "$cmd/stderr" >&2; fi
   elif [ -f "$cmd/stderr" ]; then tool head -c "$output_limit" "$cmd/stderr" >&2; fi
 }
+archive_workspace() {
+  archive_tar -cf "$1" --exclude=.local --exclude=.config --exclude=.docker --exclude=.gnupg --exclude=.kube --exclude=.pki --exclude=.terraform --exclude=.m2 --exclude=.gradle --exclude='*.p12' --exclude='*.pfx' --exclude=node_modules --exclude=target --exclude=.git --exclude=.venv --exclude=venv --exclude=.next --exclude=dist --exclude=coverage --exclude=.coverage --exclude=.cache --exclude=.npm --exclude=.pnpm-store --exclude=.rustup --exclude=__pycache__ --exclude=.pytest_cache --exclude=.mypy_cache --exclude=.ruff_cache --exclude='.cargo/registry' --exclude='.cargo/git' --exclude='.yarn/cache' --exclude=.ssh --exclude=.aws --exclude=.codex --exclude=.claude --exclude='.env*' --exclude='*.key' --exclude='*.pem' -C "$work" .
+}
 case "$action" in
+hydrate)
+  [ "$persistent" = true ] && [ -f "$root/.workspaces/$workspace_id.initialized" ] || exit 79
+  [ -d "$work" ] || exit 74
+  archive_workspace "$control/hydrate.tar"
+  printf '%s' "$boot" >"$control/boot"
+  touch "$control/staged"
+  cat "$control/hydrate.tar"
+  rm -f "$control/hydrate.tar"
+  ;;
+hydrate_baseline)
+  [ "$persistent" = true ] && [ -f "$control/staged" ] || exit 79
+  tool base64 -d >"$control/previous-files" <<'FIRECRAB_PAYLOAD'
+__PAYLOAD__
+FIRECRAB_PAYLOAD
+  ;;
 stage)
   current_complete && ! user_alive || exit 76
   if [ -f "$control/boot" ]; then [ "$(cat "$control/boot")" = "$boot" ] || exit 77; fi
@@ -931,9 +1034,6 @@ stage)
     if [ -f "$root/.workspaces/$workspace_id.initialized" ]; then
       chown -hR "$user:$user" "$work"
       chmod 700 "$work"
-      printf '%s' "$boot" >"$control/boot"
-      touch "$control/staged"
-      exit 0
     fi
   fi
   tool base64 -d >"$control/project.tar" <<'FIRECRAB_PAYLOAD'
@@ -989,17 +1089,18 @@ FIRECRAB_PAYLOAD
   }
   trap 'stop_container; terminate_user' HUP INT TERM
   trap 'stop_container; terminate_user' EXIT
-  printf '#!/bin/sh\nset -eu\nulimit -n 128\nulimit -f 65536\nulimit -t __CPU_SECONDS__\nulimit -v __MEMORY_KIB__\n' >"$cmd/launch"
+  printf '#!/bin/sh\nset -eu\n' >"$cmd/launch"
   case "$mode" in
   direct)
+    printf 'ulimit -n 128\nulimit -f 65536\nulimit -t __CPU_SECONDS__\nulimit -v __MEMORY_KIB__\n' >>"$cmd/launch"
     printf 'exec %s --reuid %s --regid %s --clear-groups --no-new-privs env -i HOME=%s PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin /bin/sh %s/start\n' "$drop_program" "$(id -u "$user")" "$(id -g "$user")" "$work" "$cmd" >>"$cmd/launch"
     ;;
   docker)
     command -v docker >/dev/null 2>&1 || fail_run 'unsupported_docker: install Docker inside the managed guest'
     docker image inspect "$image" >/dev/null 2>&1 || fail_run 'unsupported_docker_image: pre-install the exact digest-pinned image'
-    printf '#!/bin/sh\nset -eu\ncd /workspace\nexec /bin/sh /firecrab/command\n' >"$cmd/container-start"
+    printf '#!/bin/sh\nset -eu\nulimit -n 128\nulimit -f 65536\nulimit -t __CPU_SECONDS__\nulimit -v __MEMORY_KIB__\ncd /workspace\nexec /bin/sh /firecrab/command\n' >"$cmd/container-start"
     chgrp "$user" "$cmd/container-start"; chmod 640 "$cmd/container-start"
-    printf 'exec docker run --rm --name firecrab-ai-%s-%s --label io.firecrab.attempt=%s --network host --user %s:%s --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory __MEMORY_KIB__k --cpus 1 --ulimit cpu=__CPU_SECONDS__:__CPU_SECONDS__ --ulimit nofile=128:128 --mount type=bind,src=%s,dst=/workspace --mount type=bind,src=%s,dst=/firecrab,readonly --workdir /workspace --env HOME=/workspace --env PATH=/usr/local/bin:/usr/bin:/bin %s /bin/sh /firecrab/container-start\n' "$id" "$invocation" "$id" "$(id -u "$user")" "$(id -g "$user")" "$work" "$cmd" "$image" >>"$cmd/launch"
+    printf 'exec docker run --rm --name firecrab-ai-%s-%s --label io.firecrab.attempt=%s --network host --user %s:%s --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory __MEMORY_KIB__k --cpus 1 --ulimit cpu=__CPU_SECONDS__:__CPU_SECONDS__ --ulimit nofile=128:128 --mount type=bind,src=%s,dst=/workspace --mount type=bind,src=%s,dst=/firecrab,readonly --workdir /workspace --env HOME=/workspace --env PATH=/usr/local/bin:/usr/bin:/bin --entrypoint /bin/sh %s /firecrab/container-start\n' "$id" "$invocation" "$id" "$(id -u "$user")" "$(id -g "$user")" "$work" "$cmd" "$image" >>"$cmd/launch"
     ;;
   nspawn)
     command -v systemd-nspawn >/dev/null 2>&1 && [ -d /run/systemd/system ] && [ -f /sys/fs/cgroup/cgroup.controllers ] || fail_run 'unsupported_nspawn: systemd and cgroup v2 are required inside the managed guest'
@@ -1015,7 +1116,7 @@ FIRECRAB_PAYLOAD
     [ -d "$cmd/rootfs/etc" ] && [ ! -L "$cmd/rootfs/etc" ] && [ ! -L "$cmd/rootfs/etc/passwd" ] && [ ! -L "$cmd/rootfs/etc/group" ] || fail_run 'unsupported_nspawn_image: regular account files are required'
     printf '%s:x:%s:%s:Firecrab Sandbox:/workspace:/bin/sh\n' "$user" "$(id -u "$user")" "$(id -g "$user")" >>"$cmd/rootfs/etc/passwd"
     printf '%s:x:%s:\n' "$user" "$(id -g "$user")" >>"$cmd/rootfs/etc/group"
-    printf '#!/bin/sh\nset -eu\ncd /workspace\nexec /bin/sh /firecrab/command\n' >"$cmd/container-start"
+    printf '#!/bin/sh\nset -eu\nulimit -n 128\nulimit -f 65536\nulimit -t __CPU_SECONDS__\nulimit -v __MEMORY_KIB__\ncd /workspace\nexec /bin/sh /firecrab/command\n' >"$cmd/container-start"
     chgrp "$user" "$cmd/container-start"; chmod 640 "$cmd/container-start"
     printf 'exec systemd-nspawn --quiet --register=no --directory=%s/rootfs --machine=fcai-%s --user=%s --private-users=no --drop-capability=all --no-new-privileges=yes --property=MemoryMax=__MEMORY_KIB__K --property=TasksMax=128 --property=CPUQuota=100%% --bind=%s:/workspace --bind-ro=%s/command:/firecrab/command --bind-ro=%s/container-start:/firecrab/container-start --chdir=/workspace --setenv=HOME=/workspace --setenv=PATH=/usr/local/bin:/usr/bin:/bin /bin/sh /firecrab/container-start\n' "$cmd" "$invocation" "$user" "$work" "$cmd" "$cmd" >>"$cmd/launch"
     ;;
@@ -1078,7 +1179,7 @@ export)
   [ -f "$control/staged" ] || exit 79
   { [ "$(cat "$control/boot")" != "$boot" ] || current_complete; } && ! user_alive || exit 76
   [ -d "$work" ] || exit 74
-  archive_tar -cf - --exclude=.firecrab-workspace-initialized --exclude=node_modules --exclude=target --exclude=.git --exclude=.venv --exclude=venv --exclude=.next --exclude=dist --exclude=coverage --exclude=.coverage --exclude=.cache --exclude=.npm --exclude=.pnpm-store --exclude=.rustup --exclude=__pycache__ --exclude=.pytest_cache --exclude=.mypy_cache --exclude=.ruff_cache --exclude='.cargo/registry' --exclude='.cargo/git' --exclude='.yarn/cache' --exclude=.ssh --exclude=.aws --exclude=.codex --exclude=.claude --exclude='.env*' --exclude='*.key' --exclude='*.pem' -C "$work" .
+  archive_workspace -
   ;;
 processes)
   [ -f "$control/boot" ] && [ "$(cat "$control/boot")" = "$boot" ] || exit 77
