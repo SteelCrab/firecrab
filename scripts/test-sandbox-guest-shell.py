@@ -8,6 +8,7 @@ import base64
 import io
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import subprocess
@@ -53,6 +54,12 @@ def main():
     shell = re.search(r'const SCRIPT: &str = r#"(.*?)"#;', source, re.S).group(1)
     shell = shell.replace("if command -v setpriv", "if false && command -v setpriv")
     shell = shell.replace("if command -v flock", "if false && command -v flock")
+    busybox_accounts = os.environ.get("FIRECRAB_SANDBOX_BUSYBOX_ACCOUNTS") == "1"
+    if busybox_accounts:
+        assert Path("/etc/firecrab/busybox").is_file()
+        shell = shell.replace("if command -v useradd", "if false && command -v useradd")
+        shell = shell.replace("elif command -v adduser", "elif false && command -v adduser")
+        shell = shell.replace("if command -v userdel", "if false && command -v userdel")
     subprocess.run(["/usr/local/sbin/firecrab-console-resize", "--sandbox-probe"], check=True)
     checks = ["confirmed_filesystem_sync", "actual_capability_tar_probe"]
     with tempfile.TemporaryDirectory(prefix="firecrab-guest-shell-") as temporary:
@@ -62,7 +69,7 @@ def main():
         sentinel = directory / "unrelated"
         sentinel.write_text("preserve")
 
-        def program(action, attempt, invocation, payload=b"", seconds=5, persistent=False, workspace=None, mode="direct", output=65536):
+        def program(action, attempt, invocation, payload=b"", seconds=5, persistent=False, workspace=None, mode="direct", output=65536, fail_group=False, fail_create=False, fail_before_user=False):
             values = {"__ID__": attempt.hex, "__COMMAND__": invocation.hex, "__ACTION__": action,
                       "__PAYLOAD__": base64.b64encode(payload).decode(), "__SECONDS__": str(seconds),
                       "__MODE__": mode, "__IMAGE__": "example.invalid/test@sha256:" + "a" * 64,
@@ -73,12 +80,64 @@ def main():
                 text = text.replace(name, value)
             if action == "signal":
                 text = text.replace(base64.b64encode(payload).decode(), payload.decode())
+            if fail_group:
+                text = text.replace('[ "$(id -gn "$user")" = "$user" ] || exit 72', "exit 72")
+            if fail_create:
+                create = 'tool adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user"'
+                text = text.replace(create + " || created=false", "{ " + create + "; false; } || created=false")
+            if fail_before_user:
+                text = text.replace('tool adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user" || created=false', "created=false")
             return text.encode()
 
         def run(action, attempt, invocation, payload=b"", expected=0, **options):
             result = subprocess.run(["/bin/sh", "-s"], input=program(action, attempt, invocation, payload, **options), capture_output=True, timeout=65)
             assert result.returncode == expected, (action, result.returncode, result.stderr.decode(errors="replace"))
             return result
+
+        if busybox_accounts:
+            bb = "/etc/firecrab/busybox"
+            # Legacy adduser leaves this app UID with an unregistered primary GID.
+            # New task groups must not capture that GID or change its account.
+            assert subprocess.run([bb, "adduser", "-D", "-H", "-h", "/unrelated", "-s", "/bin/sh", "fixture-unrelated"], capture_output=True).returncode == 0
+            original_passwd = Path("/etc/passwd").read_bytes()
+            original_group = Path("/etc/group").read_bytes()
+            unrelated = pwd.getpwnam("fixture-unrelated")
+            assert not any(line.split(":")[2] == str(unrelated.pw_gid) for line in original_group.decode().splitlines())
+
+            partial, partial_command = uuid.uuid4(), uuid.uuid4()
+            run("stage", partial, partial_command, archive({"partial.txt": b"owned"}), expected=72, fail_group=True)
+            user = "a" + partial.hex[:30]
+            actual = pwd.getpwnam(user)
+            assert actual.pw_gid != unrelated.pw_gid
+            assert (root / partial.hex / "control/uid").read_text() == str(actual.pw_uid)
+            run("cleanup", partial, partial_command)
+
+            orphan, orphan_command = uuid.uuid4(), uuid.uuid4()
+            run("stage", orphan, orphan_command, archive({}), expected=72, fail_before_user=True)
+            assert (root / orphan.hex / "control/user-creation").exists()
+            assert not (root / orphan.hex / "control/uid").exists()
+            run("cleanup", orphan, orphan_command, expected=72)
+            # The uncertain group is retained for explicit operator inspection.
+            subprocess.run([bb, "delgroup", "a" + orphan.hex[:30]], check=True)
+
+            partial, partial_command = uuid.uuid4(), uuid.uuid4()
+            run("stage", partial, partial_command, archive({}), expected=72, fail_create=True)
+            assert (root / partial.hex / "control/uid").read_text() == str(pwd.getpwnam("a" + partial.hex[:30]).pw_uid)
+            run("cleanup", partial, partial_command)
+
+            preexisting, preexisting_command = uuid.uuid4(), uuid.uuid4()
+            user = "a" + preexisting.hex[:30]
+            subprocess.run([bb, "addgroup", "-g", "31001", user], check=True)
+            subprocess.run([bb, "adduser", "-D", "-H", "-G", user, user], check=True)
+            before = (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+            run("stage", preexisting, preexisting_command, archive({}), expected=72)
+            run("cleanup", preexisting, preexisting_command, expected=72)
+            assert before == (Path("/etc/passwd").read_bytes(), Path("/etc/group").read_bytes())
+            assert not (root / preexisting.hex / "control/uid").exists()
+            subprocess.run([bb, "deluser", user], check=True, capture_output=True)
+            assert original_passwd == Path("/etc/passwd").read_bytes()
+            assert original_group == Path("/etc/group").read_bytes()
+            checks.append("busybox_explicit_group_partial_uid_checkpoint_preexisting_refusal")
 
         attempt, invocation = uuid.uuid4(), uuid.uuid4()
         run("stage", attempt, invocation, archive({"main.txt": b"initial"}))
@@ -184,6 +243,10 @@ def main():
         assert traversed.returncode == 0 and traversed.stdout == b"traversable", traversed
         assert private_root.stat().st_uid == 0 and private_root.stat().st_mode & 0o777 == 0o755
         checks.append("nspawn_private_root_traversable_by_actual_payload_uid")
+        if busybox_accounts:
+            assert original_passwd == Path("/etc/passwd").read_bytes()
+            assert original_group == Path("/etc/group").read_bytes()
+            checks.append("busybox_accounts_cleanup_preserves_unrelated_app_uid_and_groups")
     print(json.dumps({"kind": "linux_process_fixture", "microvmValidated": False, "checks": checks, "status": "passed"}, indent=2))
 
 

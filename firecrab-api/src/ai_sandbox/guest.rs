@@ -597,9 +597,10 @@ async fn stage_workspace(
     )
     .await?;
     if staged.code != 0 {
-        return Err(io::Error::other(
-            "MicroVM project staging failed; retained data requires reconciliation",
-        ));
+        return Err(io::Error::other(format!(
+            "MicroVM project staging failed (exit {}); retained data requires reconciliation",
+            staged.code
+        )));
     }
     Ok(())
 }
@@ -994,7 +995,8 @@ printf '%s' "$id" >"$control/owner"
 boot=$(cat /proc/sys/kernel/random/boot_id)
 if [ -f "$control/uid" ]; then
   [ "$(id -u "$user" 2>/dev/null || true)" = "$(cat "$control/uid")" ] || exit 72
-elif id -u "$user" >/dev/null 2>&1; then exit 72; fi
+elif id -u "$user" >/dev/null 2>&1; then exit 72
+elif [ -f "$control/user-creation" ] && tool awk -F: -v name="$user" '$1==name {found=1} END {exit !found}' /etc/group; then exit 72; fi
 terminate_user() {
   uid=$(id -u "$user" 2>/dev/null) || return 0
   for status in /proc/[0-9]*/status; do
@@ -1082,12 +1084,23 @@ stage)
   current_complete && ! user_alive || exit 76
   if [ -f "$control/boot" ]; then [ "$(cat "$control/boot")" = "$boot" ] || exit 77; fi
   if ! id -u "$user" >/dev/null 2>&1; then
-    if command -v useradd >/dev/null 2>&1; then useradd -M -U -d "$work" -s /bin/sh "$user"
-    elif command -v adduser >/dev/null 2>&1; then adduser -D -H -h "$work" -s /bin/sh "$user"
-    else tool adduser -D -H -h "$work" -s /bin/sh "$user"; fi
+    printf '%s' "$boot" >"$control/user-creation"
+    created=true
+    if command -v useradd >/dev/null 2>&1; then useradd -M -U -d "$work" -s /bin/sh "$user" || created=false
+    elif command -v adduser >/dev/null 2>&1; then adduser -D -H -h "$work" -s /bin/sh "$user" || created=false
+    else
+      gid=$(tool awk -F: 'FILENAME==ARGV[1] {used[$4]=1} FILENAME==ARGV[2] {used[$3]=1} END {for (id=1000; id<60000; id++) if (!used[id]) {print id; exit}; exit 1}' /etc/passwd /etc/group) || exit 72
+      if tool addgroup -g "$gid" "$user"; then
+        tool adduser -D -H -G "$user" -h "$work" -s /bin/sh "$user" || created=false
+      else created=false; fi
+    fi
+    created_uid=$(id -u "$user" 2>/dev/null) || exit 72
+    [ "$created_uid" -gt 0 ] || exit 72
+    printf '%s' "$created_uid" >"$control/uid.pending"
+    mv "$control/uid.pending" "$control/uid"
+    [ "$created" = true ] || exit 72
   fi
   [ "$(id -gn "$user")" = "$user" ] || exit 72
-  id -u "$user" >"$control/uid"
   chgrp "$user" "$control"
   chmod 710 "$control"
   mkdir -p "$work"
