@@ -37,6 +37,22 @@ distinct from the Docker image ID and archive checksum. Use the manifest digest
 for the owned loopback registry reference. Preserve the original source pin,
 preparation Dockerfile, helper, app and registry-script checksums alongside it.
 
+For a key-only SSH image smoke, export the prepared rootfs from an owned stopped
+container. Run `scripts/test-sandbox-distroless-ssh.sh ROOTFS_ARCHIVE
+EPHEMERAL_KEYS OUTPUT_DIRECTORY` inside an owned Linux Docker container with
+`FIRECRAB_DISTROLESS_DOCKER_SMOKE=1`, CPU 1, memory 512 MiB and `--network none`.
+Use the pinned preparation tools stage, which contains the SSH client. Mount the
+rootfs archive and keys read-only. Provide newly generated `client`,
+`client.pub`, `ssh_host_ed25519_key` and a `known_hosts` entry pinned to
+`[127.0.0.1]:2222`. Never use an account or existing VM key.
+
+The script extracts only inside its disposable container, prepares the normal
+root shell and runtime-only server keys, then uses the container's loopback.
+Preserve server logs proving `sshd-auth`, `sshd-session` and accepted public-key
+authentication, plus actual command output and exit 7. Its report explicitly
+sets MicroVM and V1-channel validation to false. Remove these disposable private
+keys after the smoke; retain public fingerprints and evidence hashes.
+
 ## Actual guest checks
 
 Image-build and container smoke results do not validate a MicroVM or an
