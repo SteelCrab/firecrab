@@ -97,7 +97,7 @@ test("isolated dashboards keep private API/resource routes and stop independentl
     await symlink(join(repository, "firecrab-frontend/node_modules"), join(frontend, "node_modules"), "junction");
     // An older source checkout still points to the primary API and permits any
     // Host. The embedded launcher must override it for a private instance.
-    await writeFile(join(frontend, "vite.config.js"), `export default {server:{allowedHosts:true,proxy:{'/api':'http://127.0.0.1:5523','/ws':{target:'ws://127.0.0.1:5523',ws:true}}}};`);
+    await writeFile(join(frontend, "vite.config.js"), `export default {server:{allowedHosts:true,proxy:{'/api':'http://127.0.0.1:5523','/auth/callback':'http://127.0.0.1:5523','/ws':{target:'ws://127.0.0.1:5523',ws:true}}}};`);
     const api_port = await backend(`${name}-api`);
     const resource_port = await backend(`${name}-resources`);
     const reservation = net.createServer();
@@ -146,6 +146,11 @@ test("isolated dashboards keep private API/resource routes and stop independentl
     assert.equal(api.identity, `${instance.name}-api`);
     assert.equal(api.host, instance.url.slice("http://".length));
     assert.equal(api.origin, instance.url);
+    const callbackPath = "/auth/callback?state=fixture-state&code=fixture-code";
+    const callback = await (await fetch(`${instance.url}${callbackPath}`)).json();
+    assert.equal(callback.identity, `${instance.name}-api`);
+    assert.equal(callback.host, instance.url.slice("http://".length));
+    assert.equal(callback.path, callbackPath);
     assert.equal((await fetch(`${instance.url}/api/host`, { headers: { Origin: "https://evil.example" } })).status, 403);
     const resources = await (await fetch(`${instance.url}/__firecrab_resources/api/service/resources`, { headers })).json();
     assert.equal(resources.identity, `${instance.name}-resources`);
@@ -177,11 +182,12 @@ test("development API proxy preserves the dashboard origin on a custom port", { 
   const frontend = fileURLToPath(new URL("../firecrab-frontend/", import.meta.url));
   const require = createRequire(resolve(frontend, "package.json"));
   const { createServer, loadConfigFromFile } = await import(pathToFileURL(require.resolve("vite")).href);
-  const { config } = await loadConfigFromFile({ command: "serve", mode: "test" }, resolve(frontend, "vite.config.js"));
   // Match the API's same-origin policy without a VM or a listener on port 5523.
+  const callbacks = [];
   const upstream = http.createServer((request, response) => {
     const { host, origin } = request.headers;
-    response.writeHead(origin === `http://${host}` ? 200 : 403, {
+    if (request.url.startsWith("/auth/callback")) callbacks.push(request.url);
+    response.writeHead(!origin || origin === `http://${host}` ? 200 : 403, {
       "Content-Type": "application/json", "Connection": "close",
     });
     response.end(JSON.stringify({ host, origin, method: request.method }));
@@ -189,22 +195,31 @@ test("development API proxy preserves the dashboard origin on a custom port", { 
   await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise(resolve => upstream.close(resolve)));
   const target = `http://127.0.0.1:${upstream.address().port}`;
-  const proxy = config.server.proxy["/api"];
+  const previousPort = process.env.FIRECRAB_DEV_API_PORT;
+  process.env.FIRECRAB_DEV_API_PORT = String(upstream.address().port);
+  let config;
+  try {
+    ({ config } = await loadConfigFromFile({ command: "serve", mode: "test" }, resolve(frontend, "vite.config.js")));
+  } finally {
+    if (previousPort === undefined) delete process.env.FIRECRAB_DEV_API_PORT;
+    else process.env.FIRECRAB_DEV_API_PORT = previousPort;
+  }
+  assert.equal(config.server.proxy["/api"].target, target);
+  assert.equal(config.server.proxy["/auth/callback"].target, target);
   const server = await createServer({
     ...config, configFile: false, root: frontend,
     server: {
       ...config.server, host: "127.0.0.1", port: 0, strictPort: true,
-      proxy: { ...config.server.proxy, "/api": typeof proxy === "string" ? target : { ...proxy, target } },
     },
   });
   t.after(() => server.close());
   await server.listen();
   const port = server.httpServer.address().port;
-  const request = async (method, host, origin) => {
+  const request = async (method, host, origin, path = "/api/proxy-origin") => {
     const response = await new Promise((resolve, reject) => {
       const pending = http.request({
-        hostname: "127.0.0.1", port, path: "/api/proxy-origin", method,
-        headers: { Host: host, Origin: origin },
+        hostname: "127.0.0.1", port, path, method,
+        headers: { Host: host, ...(origin ? { Origin: origin } : {}) },
       }, resolve);
       pending.on("error", reject);
       pending.end();
@@ -220,10 +235,14 @@ test("development API proxy preserves the dashboard origin on a custom port", { 
       assert.equal(response.status, 200, `${method} from http://${host}`);
       assert.deepEqual(JSON.parse(response.body), { host, origin: `http://${host}`, method });
     }
+    const callback = await request("GET", host, undefined, "/auth/callback?state=fixture-state&code=fixture-code");
+    assert.equal(callback.status, 200);
+    assert.deepEqual(JSON.parse(callback.body), { host, method: "GET" });
     for (const origin of ["https://evil.example", `http://${hostname}:${port + 1}`]) {
       assert.equal((await request("POST", host, origin)).status, 403, origin);
     }
   }
+  assert.deepEqual(callbacks, Array(2).fill("/auth/callback?state=fixture-state&code=fixture-code"));
   const untrustedHost = `evil.example:${port}`;
   assert.equal((await request("POST", untrustedHost, `http://${untrustedHost}`)).status, 403);
 });

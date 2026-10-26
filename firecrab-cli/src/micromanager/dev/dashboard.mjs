@@ -18,6 +18,7 @@ for (const value of [port, api_port, resource_port]) {
 const resourcePrefix = "/__firecrab_resources";
 const proxy = {
   "/api": { target: `http://127.0.0.1:${api_port}`, changeOrigin: false },
+  "/auth/callback": { target: `http://127.0.0.1:${api_port}`, changeOrigin: false },
   "/ws": { target: `ws://127.0.0.1:${api_port}`, changeOrigin: false, ws: true },
   [resourcePrefix]: {
     target: `http://127.0.0.1:${resource_port}`, changeOrigin: true,
