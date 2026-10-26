@@ -5,7 +5,7 @@ unit fixtures and the operator image-preparation preflight.
 
 ## Runtime and boundary
 
-- API source `ec67bf6f`, binary SHA-256
+- Initial Docker/failed-image API source `ec67bf6f`, binary SHA-256
   `ae54f26552c2d79dc9b38aaad852f6a386f8fd9398e545d0b50f45970e62c63a`.
 - CLI source `5bdbb4f2`, binary SHA-256
   `13d96e1a79631b1328eaa972a13cb0db888799ca019a9f0443a8a3df6e0ba9ec`.
@@ -102,21 +102,170 @@ A new immutable rootfs with Ubuntu's verified getent/libc/loader reproduces
 `sha256:0044c4c1159dd6882276707f9f40a87e388addecc80cfd004ea312940e817fee`.
 An operator preflight also found that the container root must be mode 0755;
 0700 prevents non-root exec after lookup. Correcting only that separate
-preflight root yielded UID 65532, NoNewPrivs 1, CapEff 0 and exit 0. Model
-acceptance with the product fix remains pending the next API deployment.
+preflight root yielded UID 65532, NoNewPrivs 1, CapEff 0 and exit 0.
 
-## Preservation and remaining work
+## nspawn: corrected image and stream contract
 
-After both cleanup paths, borrowed recovery VM
+The corrected-image trial used Environment
+`c79c7ebd-755c-468b-977e-ecddc981e1ec`, generation
+`348659da-ef2d-4a93-b96d-9f8970dc7c6d`, project
+`43f3c1d1-f8f5-42dd-ad42-6fcc4cb4d8ac` and VM
+`4e2d4dd7-477e-4c63-a0dd-a23723e5f0a3` on isolated `172.30.223.0/24`.
+The image remained pinned to `0044c4c1…` throughout this trial.
+
+API `bfa6e847`, SHA-256
+`8e10745328d995ee798fbb40689831ae2601d474a02ab4f66ffe2dbe516a4b1d`,
+ran these actual model tasks on runtime `be82d41b-0de1-4359-a0f2-f5224740cc0f`:
+
+| Case | Task / attempt | Actual result |
+| --- | --- | --- |
+| Non-root command | `65d49ed3-8e70-4a69-8199-41a3fbfbd57e` / `feaf1dfd-8385-4065-8a4d-337ab750fd9c` | UID 1000, NoNewPrivs 1, CapEff 0, no socket, wrapper not writable, intentional exit 7. Default nspawn PTY merged stderr into CRLF stdout, so the stream contract failed. The original output remains preserved. |
+| Timeout | `ba732adb-b200-4407-ae30-d5b64d68a635` / `f6eb4538-39eb-41eb-a075-ea1ac1bac443` | Sleep 30 with wall limit 2 ended at exit 124. Only the 64-byte started artifact exists, SHA-256 `8842c3be8695251943d1056658eb73aea0247c2550e985b8ecdd618d34436261`. |
+| Cancel | `f129df27-cd36-4200-bc91-69a13f9d2963` / `410294b5-875f-4d3f-9c49-ceba743d20fa` | PIDs 9664/9677 with start ticks 41864/41912 were observed running. Cancellation reached cancelled, exit 1, with nspawn's KILL diagnostic. The started file was exported; no finished file exists. Both exact process identities were absent afterward on the same guest boot. |
+
+All results were exported before a normal Environment stop. The next API source
+`2ff12235`, SHA-256
+`fd449a22cd8337409d7cddc77a9de208803a1327d1e2f80780c76eecb6e26a44`,
+adds `--console=pipe`. Resuming the same VM produced runtime
+`d264de12-1edb-4dff-80f3-cc0a5332be51`. The previous three complete task JSON
+records, including immutable runtime references, remained equal as parsed JSON
+after both API and guest restart.
+
+New model task `6becb49a-88a0-46b3-9a36-5ae86fae9ff6`, attempt
+`503d7fa1-3346-4e54-b0fe-bf72c3a50882`, executed the exact supplied invocation
+once. It produced UID 1000, NoNewPrivs 1, CapEff 0 and intentional exit 7.
+Stdout was exactly 222 bytes with no CRLF; stderr was exactly 56 bytes:
+`NSPAWN414:stderr:2917317b1aad2a4bfd701e4687f4126e:exit7` followed by LF.
+The stderr marker was absent from stdout. The model preserved the two streams
+separately and recorded the command's failed test accurately.
+
+MCP downloaded artifact `0a6bbde8-4ee8-4f18-9d36-fdfe13d21a8f`, 222 bytes,
+SHA-256 `be1a241a93f82bcf0744ed062497c47d8d812cd67f3ebc235705dc30b7681aa3`.
+All four tasks were exported before Environment and project deletion. Actual
+REST returned 404 for this VM, network `41dc1fbf-83fa-4099-a2e4-61a42dd0aefc`
+and security group `08af5b7e-a7b5-4d4b-852e-eec770029eaa`. The borrowed recovery
+VM still returned running/200.
+
+## Workspace: normal stop/resume persistence
+
+The Workspace trial used the same `2ff12235` API and existing saved model
+connection. Project `ffb94657-6936-4278-9152-a35972c58dbe` owned Environment
+`d3e8f5a0-f6c8-45fa-b302-31879f5f500d`, generation
+`a09f33d9-8953-4cc3-9db9-ef70da45ee4a`, VM
+`aef30a99-28cb-4ab5-85d2-ea6241431b45`, network
+`2dd4dcea-cd7e-4eda-a526-aaeb942750be` on `172.30.224.0/24`, and security group
+`8084752a-bf1b-4000-bf5e-ea9e4437c38b`. The role was explicitly
+`persistent_workspace`, with no TTL.
+
+The operator installed only verified offline Python/BusyBox packages in this
+guest. Model task `2ecaa19e-3e49-46ad-b454-18070d918723`, attempt
+`48e7e8b9-1689-4b83-86c6-370cb3e36ca1`, ran one exact supplied command and
+returned exit 0 on runtime `41e1b0ef-a309-49c4-b9e7-f0ce273cc70c`.
+It created a tiny Python user distribution and metadata under `.local`, a
+public nonce/config under `.config`, and nonce markers under `.cache` and
+`.venv`. Python imported the distribution and read its installed version.
+The command observed UID 1000, NoNewPrivs 1 and CapEff 0.
+
+After that command, the model used `write_file` for `workspace-file-only.txt`.
+The edit contains nonce `a35243a0c5c2684c6e0c0f2d2fadcae6`. No command followed
+this file-only edit. The task's exported changes contained only the normal
+evidence JSON and file-only edit, not the excluded package/config/cache trees.
+Actual MCP artifact `5064d78a-a65e-48f8-ae18-2c85d5d871fc` is 719 bytes,
+SHA-256 `96928b18e6e95805bd52e857f44e3aff85107cf1b317292d4c71fde455615088`.
+
+Environment export succeeded, then the normal Environment Stop endpoint
+returned stopped with no error. REST also confirmed the VM stopped. No raw VM
+stop or power cut substituted for this check. Resume kept the same VM/disks
+and Environment generation, but admitted a new runtime
+`7533be2b-773e-4930-8175-71c3ee501954`. Actual guest boot ID changed from
+`4ad72eb2-721b-458e-9864-92bd0acc0434` to
+`b1f7b5da-bdae-4523-808d-f790cf41d6a8`.
+
+The first read-only probe, task `4ab80ea2-70f6-4ee8-bc9c-36731824b43e`,
+attempt `1a53d274-bd5b-41df-afb5-423d4e618862`, failed at its OS-package text
+comparison. The operator had double-escaped the expected separator. Package,
+config, cache, venv, nonce, boot and file-only assertions before that line had
+passed. Preserve this exit 1, its failed test and the diagnostic; it is a QA
+expectation error, not a successful command or a product persistence failure.
+
+A new task `33897dea-50b1-46d7-b6b7-8758cd11f586`, attempt
+`2dabc4fd-5ef0-455b-9c9d-3072125269e8`, reads the original 719-byte evidence
+file only after checking its original SHA. It uses those exact bytes as its
+expectation, avoiding a manually re-escaped string. It recreated or repaired
+none of the persisted data. The actual exact invocation returned exit 0 and
+verified all of the following:
+
+- Automatic Python user-package import and distribution version `1.0.0`.
+- Python `3.14.4`, `python3=3.14.3-0ubuntu2` and
+  `busybox-static=1:1.37.0-7ubuntu1`.
+- Package SHA `5cd15fed802de8c876a558eafa4826d20151a402bad8b7ebd62c805f60071699`.
+- Config SHA `366c5005f203427706e50d79863c1286fcbfc3d9da1c8ff6bcafe5732aac4d7a`.
+- Cache and venv marker SHA
+  `a1db4f3bff5ca1d04a9316d1957e6f2232f03a0b2a340f19c59ad9c860619469`.
+- The exact final file-only edit and unchanged public source probe.
+- Changed guest boot, UID 1000, NoNewPrivs 1 and CapEff 0.
+
+Its passed test is separate from the earlier preserved failed test. MCP
+downloaded artifact `d69ec45a-cee1-410d-9160-f20d6ba68dca`, 879 bytes,
+SHA-256 `16ea9170dc47505b17c66af71928c0880552920322a5e2cb1511eaea599d3744`.
+All three Workspace tasks were exported. Eleven total mode task JSON exports
+have private byte-size/SHA receipts in `all-task-json-export.json`; each file
+was rehashed before cleanup permission was considered.
+
+### Retained-data refusal and authorized final deletion
+
+The other agent's authorized cross-VM SSH checkpoint completed before any
+Workspace lifecycle change. The owner then rechecked the exact project,
+Environment generation, VM, network and security-group IDs listed above.
+DELETE with `authorizeWorkspaceDeletion:false` returned HTTP 400,
+`validation_failed`, with `Explicit authorization is required to delete
+retained Workspace data`. It did not stop the VM. Actual Environment/VM/
+network/security-group GETs all returned 200; the VM remained running.
+
+An operator read of only the public QA package/config/cache/venv fixtures
+confirmed that their four hashes and the file-only edit remained unchanged
+after the refusal. No guest data was reconstructed. Root explicitly authorized
+final deletion of this exact owned QA Workspace, conditional on the verified
+read-only result, complete exports, refusal/data preservation, settled tasks,
+completed SSH checkpoint and exact-ID recheck. All conditions were met.
+
+DELETE with `authorizeWorkspaceDeletion:true` then returned deleted. Project
+DELETE confirmed absence. Final REST returned 404 for this project, VM,
+network and security group. The owned VM artifact directory was absent.
+
+## Final preservation and scope
+
+After the initial cleanup paths, borrowed recovery VM
 `65124348-da4f-424a-975c-1e32efe23467` still returned running/200. Actual shared
 Ubuntu rootfs and kernel SHA-256 remained, respectively:
 
 - `c5700031e35f10bcb68e73c28b1f3740602bffc4f55417a27034681982f5247a`
 - `d171d906729b5548b7400f12de09cb3dd08a06a6e2b74075c8b9e9482e720aa1`
 
-The corrected nspawn model cases and Workspace stop/resume, excluded
-package/config preservation and final explicit deletion remain pending. A raw
-VM stop does not count as a confirmed durable Workspace stop. Workspace final
-deletion requires a rejected unauthorized request and explicit authorization
-for that exact owned QA Environment. Public HTTPS/Tunnel publication and
+Root separately stopped the borrowed recovery VM after its own sync/settled
+checks. After the final Workspace cleanup, that VM still returned 200/stopped
+with its original ID and 2 GiB disk declaration. Its actual VM directory and
+`d/0360e0b3d68f4bd498b2a7d5de7ca8a1.ext4` disk remained, with size
+2,147,483,648 bytes. No borrowed disk content or key bytes were read. Both
+actual shared Ubuntu image hashes above were verified again unchanged.
+
+No owned mode VM, network, security group or project remains. Original source
+fixtures, private exports/traces and verified offline preparation materials are
+preserved for review. Public HTTPS/Tunnel publication and
 Canvas runtime integration are outside this validation.
+
+## Separate OCI startup process regression
+
+The production OCI worker's Python fixture was also run in `python:3.12-slim`,
+with network none, CPU 2 and RAM 2 GiB. The original fixture failed because its
+BusyBox stand-in used external `exec kill`, but slim supplies only the shell's
+kill builtin. That made an alive prestarted SSH service appear dead and start
+twice. The actual BusyBox applet did not have this fixture defect.
+
+The corrected fixture preserves builtin kill, holds its simulated SSH service
+until explicit release, and waits for the complete background package worker
+before checking the start count. Both missing-SSH and preinstalled-SSH paths
+passed. A temporary copy with the production liveness guard forced false was
+rejected for a duplicate start. Disposable containers were removed and no
+Cargo cache was created. This is a Linux process fixture and does not claim
+an additional OCI MicroVM validation.
