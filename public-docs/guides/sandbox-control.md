@@ -114,6 +114,31 @@ operator action in the connection dashboard. Operator-only `tunnel inventory`
 retains these warnings after project deletion. Ordinary project grants cannot
 access that inventory or mutate Tunnel connections.
 
+To verify public shutdown after stopping or deleting a binding, explicitly send
+`{"mode":"shutdown","path":"/"}` to the same
+`POST /api/ai-sandbox/tunnels/{id}/verify` endpoint. The CLI accepts that JSON on
+stdin with `firecrab sandbox tunnel verify BINDING_ID`; stdio MCP exposes the
+same request through `sandbox_tunnel_verify`. The stopped/deleted preview card
+also has **Verify public shutdown**. This action makes a public request; it is
+never automatic.
+
+Shutdown mode rejects body hashes and WebSocket checks. Before and after the
+probe, the API checks that the exact connector is inactive or removed, no
+successor handoff is pending, and no other binding has claimed the address.
+Deleted tombstones remain verifiable by an operator after project deletion.
+The probe uses only the saved `https://SUBDOMAIN.firecrab.dev` origin, verifies
+TLS, follows no redirects, and permits at most 10 seconds and 64 KiB. Only the
+registration gateway's exact JSON/status pairs count: `404 unknown_address`,
+`503 target_offline`, or `503 target_no_longer_allowed`. Generic 404/503 pages,
+other error codes, malformed bodies, and DNS/TLS/timeouts remain unverified.
+
+`shutdownProof` retains the path, optional status, allowlisted gateway error and
+Unix-millisecond observation time. Failed transport has no status or gateway
+error. Response bodies and credentials are never retained. This is an observation
+at that time; a later address claim can serve a new application. Even
+`unknown_address` does not verify token retirement: complete the separate
+operator dashboard action indicated by `remoteRetirement`.
+
 ## Local stdio MCP
 
 Run `firecrab --api http://127.0.0.1:PORT mcp` from an official MCP client.

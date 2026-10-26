@@ -24,6 +24,9 @@ use uuid::Uuid;
 // Keep durable claims and helper mutations ordered, including unknown HTTP outcomes.
 pub(super) static MUTATIONS: Mutex<()> = Mutex::const_new(());
 
+#[path = "sandbox_tunnels_shutdown.rs"]
+mod shutdown;
+
 fn failure(id: RequestId, code: &'static str) -> AppError {
     AppError::new(
         StatusCode::CONFLICT,
@@ -581,6 +584,8 @@ pub async fn save(
             old.spec = spec;
             old.public_https = SandboxTunnelVerification::Unverified;
             old.web_socket_handshake = SandboxTunnelVerification::Unverified;
+            old.public_shutdown = SandboxTunnelVerification::Unverified;
+            old.shutdown_proof = None;
             old
         } else {
             if state
@@ -623,6 +628,7 @@ pub async fn save(
                 public_https: SandboxTunnelVerification::Unverified,
                 web_socket_handshake: SandboxTunnelVerification::Unverified,
                 public_shutdown: SandboxTunnelVerification::Unverified,
+                shutdown_proof: None,
                 remote_retirement: SandboxTunnelRetirement::NotRequested,
                 local_removed: false,
                 created_at: ai_sandbox::now(),
@@ -662,6 +668,8 @@ async fn publish_binding(
         return Ok(());
     }
     binding.state = SandboxTunnelState::Connecting;
+    binding.public_shutdown = SandboxTunnelVerification::Unverified;
+    binding.shutdown_proof = None;
     binding.applied_target = Some(target.clone());
     binding.connector_id = None;
     binding.error_code = None;
@@ -987,6 +995,7 @@ pub async fn retarget(
         public_https: SandboxTunnelVerification::Unverified,
         web_socket_handshake: SandboxTunnelVerification::Unverified,
         public_shutdown: SandboxTunnelVerification::Unverified,
+        shutdown_proof: None,
         remote_retirement: SandboxTunnelRetirement::NotRequested,
         local_removed: false,
         created_at: now,
@@ -1014,7 +1023,30 @@ pub async fn retarget(
     Ok(Json(next))
 }
 
-/// Verify actual TLS HTTP content or the WebSocket handshake. No fixture sets these flags.
+fn verification_url(
+    binding: &SandboxTunnelBinding,
+    path: &str,
+    id: RequestId,
+) -> Result<String, AppError> {
+    if !firecrab_tunnel::subdomain(&binding.spec.subdomain)
+        || !path.starts_with('/')
+        || path.starts_with("//")
+        || path.len() > 1024
+        || path
+            .bytes()
+            .any(|b| !b.is_ascii_graphic() || matches!(b, b'\\' | b'#'))
+    {
+        return Err(failure(id, "sandbox_preview_invalid_verification"));
+    }
+    Ok(format!(
+        "https://{}.{}/{}",
+        binding.spec.subdomain,
+        firecrab_tunnel::DOMAIN,
+        path.trim_start_matches('/')
+    ))
+}
+
+/// Verify public application content, WebSocket upgrade, or explicit gateway shutdown.
 pub async fn verify(
     State(state): State<AppState>,
     Path(key): Path<Uuid>,
@@ -1023,26 +1055,16 @@ pub async fn verify(
     ValidatedJson(request): ValidatedJson<SandboxTunnelVerify>,
 ) -> Result<Json<SandboxTunnelBinding>, AppError> {
     let _lock = MUTATIONS.lock().await;
+    if request.mode == SandboxTunnelVerifyMode::Shutdown {
+        return shutdown::verify(&state, id, caller, key, &request, shutdown::probe).await;
+    }
     let mut binding = load(&state, id, caller, key, true)?;
     let snapshot = inspect(&state, id).await?;
     require_applied(&snapshot, &binding, id)?;
-    if binding.state != SandboxTunnelState::Connected
-        || !request.path.starts_with('/')
-        || request.path.starts_with("//")
-        || request.path.len() > 1024
-        || request
-            .path
-            .bytes()
-            .any(|b| !b.is_ascii_graphic() || matches!(b, b'\\' | b'#'))
-    {
+    if binding.state != SandboxTunnelState::Connected {
         return Err(failure(id, "sandbox_preview_invalid_verification"));
     }
-    let url = format!(
-        "https://{}.{}/{}",
-        binding.spec.subdomain,
-        firecrab_tunnel::DOMAIN,
-        request.path.trim_start_matches('/')
-    );
+    let url = verification_url(&binding, &request.path, id)?;
     let client = reqwest::Client::builder()
         .http1_only()
         .redirect(reqwest::redirect::Policy::none())

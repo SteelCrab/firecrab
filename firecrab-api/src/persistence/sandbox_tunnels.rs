@@ -209,6 +209,58 @@ impl Store {
             .map(|v| Uuid::parse_str(&v).map_err(|_| corrupt()))
             .transpose()
     }
+    /// Update shutdown evidence without reopening a deleted binding or changing its claim.
+    pub fn save_sandbox_tunnel_shutdown(
+        &self,
+        previous: &SandboxTunnelBinding,
+        observed: &SandboxTunnelBinding,
+    ) -> Result<(), PersistenceError> {
+        use firecrab_api_types::SandboxTunnelState;
+        if !matches!(
+            previous.state,
+            SandboxTunnelState::Stopped | SandboxTunnelState::Deleted
+        ) || observed.shutdown_proof.is_none()
+            || observed.updated_at <= previous.updated_at
+        {
+            return Err(corrupt());
+        }
+        let mut permitted = previous.clone();
+        permitted.public_shutdown = observed.public_shutdown;
+        permitted.shutdown_proof = observed.shutdown_proof.clone();
+        permitted.error_code = observed.error_code.clone();
+        permitted.updated_at = observed.updated_at;
+        if permitted != *observed {
+            return Err(corrupt());
+        }
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let current: String = tx.query_row(
+            "SELECT spec FROM ai_sandbox_tunnels WHERE id=?1",
+            [previous.id.to_string()],
+            |r| r.get(0),
+        )?;
+        let claim: Option<String> = tx
+            .query_row(
+                "SELECT id FROM ai_sandbox_tunnels WHERE subdomain=?1",
+                [&previous.spec.subdomain],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let expected_claim =
+            (previous.state == SandboxTunnelState::Stopped).then(|| previous.id.to_string());
+        if decode(current)? != *previous || claim != expected_claim {
+            return Err(corrupt());
+        }
+        tx.execute(
+            "UPDATE ai_sandbox_tunnels SET spec=?2 WHERE id=?1",
+            params![
+                previous.id.to_string(),
+                serde_json::to_string(observed).map_err(|_| corrupt())?
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
     /// Identity columns never change when the binding's observable state changes.
     pub fn save_sandbox_tunnel(
         &self,

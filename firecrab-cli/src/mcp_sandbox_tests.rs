@@ -195,7 +195,7 @@ fn tunnel_mcp_keeps_uncertain_and_remote_retirement_receipts_separate_from_publi
     let base = format!("/api/ai-sandbox/tunnels/{id}");
     let retarget =
         json!({"id":Uuid::new_v4(),"taskId":Uuid::new_v4(),"target":row["spec"]["target"]});
-    let check = json!({"path":"/health","bodySha256":null,"webSocket":true});
+    let check = json!({"mode":"application","path":"/health","bodySha256":null,"webSocket":true});
     let address = json!({"subdomain":"saved-preview","publicUrl":row["publicUrl"],"connected":false,"claimedBy":id});
     let mut cases = vec![
         (
@@ -283,6 +283,47 @@ fn tunnel_mcp_keeps_uncertain_and_remote_retirement_receipts_separate_from_publi
         );
     }
     worker.join().unwrap();
+}
+
+#[test]
+fn tunnel_mcp_advertises_and_preserves_shutdown_evidence_without_claiming_token_retirement() {
+    let id = Uuid::new_v4();
+    let mut row = tunnel(Uuid::new_v4(), id);
+    row["state"] = json!("deleted");
+    row["localRemoved"] = json!(true);
+    row["publicShutdown"] = json!("verified");
+    row["shutdownProof"] =
+        json!({"path":"/","status":503,"errorCode":"target_offline","checkedAt":123});
+    let (client, worker) = exchange(vec![response(
+        "POST",
+        format!("/api/ai-sandbox/tunnels/{id}/verify"),
+        json!({"mode":"shutdown","path":"/","bodySha256":null,"webSocket":false}),
+        row.clone(),
+    )]);
+    let mut session = Session::default();
+    assert_eq!(
+        session
+            .call(
+                &client,
+                "sandbox_tunnel_verify",
+                json!({"id":id,"request":{"mode":"shutdown","path":"/"}})
+            )
+            .unwrap(),
+        row
+    );
+    worker.join().unwrap();
+    let tools = catalog();
+    let tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "sandbox_tunnel_verify")
+        .unwrap();
+    assert_eq!(
+        tool["inputSchema"]["properties"]["request"]["properties"]["mode"]["enum"],
+        json!(["application", "shutdown"])
+    );
+    assert!(
+        tool["outputSchema"]["properties"]["shutdownProof"]["properties"]["checkedAt"].is_object()
+    );
 }
 
 #[test]

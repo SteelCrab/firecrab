@@ -518,7 +518,8 @@ fn mutate(app: &Shared, kind: Kind, id: &str, operation: &str) {
         return;
     }
     let project = a.sandbox.project.clone();
-    let mut body = None;
+    let mut body = (kind == Kind::Preview && operation == "verify-shutdown")
+        .then(|| json!({"mode":"shutdown","path":"/"}));
     if operation == "delete" {
         let workspace = kind == Kind::Environment
             && a.sandbox
@@ -567,6 +568,8 @@ fn mutate(app: &Shared, kind: Kind, id: &str, operation: &str) {
         };
         let path = if operation == "delete" {
             base
+        } else if operation == "verify-shutdown" {
+            format!("{base}/verify")
         } else {
             format!("{base}/{operation}")
         };
@@ -940,7 +943,7 @@ fn preview_card(a: &App, p: &Value, out: &mut String) {
     }
     let _ = write!(
         out,
-        "<p class=\"sb-hint\">{}: {} · HTTPS: {} · WebSocket: {}</p>",
+        "<p class=\"sb-hint\">{}: {} · HTTPS: {} · WebSocket: {} · {}: {}</p>",
         tr(a, "Connector", "연결기"),
         if p["helperConnected"] == true {
             tr(a, "Connected", "연결됨")
@@ -948,20 +951,20 @@ fn preview_card(a: &App, p: &Value, out: &mut String) {
             tr(a, "Disconnected", "연결되지 않음")
         },
         escape(status(a, text(p, "publicHttps"))),
-        escape(status(a, text(p, "webSocketHandshake")))
+        escape(status(a, text(p, "webSocketHandshake"))),
+        tr(a, "Public shutdown", "공개 종료"),
+        escape(status(a, text(p, "publicShutdown")))
     );
     if p["remoteRetirement"] == "operator_required" {
         let _ = write!(
             out,
-            "<p class=\"sb-hint\">{} <a href=\"https://console.firecrab.dev/\" target=\"_blank\" rel=\"noopener noreferrer\">{}</a> · {}: {}</p>",
+            "<p class=\"sb-hint\">{} <a href=\"https://console.firecrab.dev/\" target=\"_blank\" rel=\"noopener noreferrer\">{}</a></p>",
             tr(
                 a,
                 "Retire the token in the connection dashboard.",
                 "연결 대시보드에서 토큰을 폐기한다."
             ),
-            tr(a, "Connection dashboard", "연결 대시보드"),
-            tr(a, "Public shutdown", "공개 종료"),
-            escape(status(a, text(p, "publicShutdown")))
+            tr(a, "Connection dashboard", "연결 대시보드")
         );
     }
     if let Some(code) = p["errorCode"].as_str() {
@@ -987,6 +990,16 @@ fn preview_card(a: &App, p: &Value, out: &mut String) {
             glyph,
             "btn quiet",
             a.sandbox.busy || deleted,
+        ));
+    }
+    if matches!(text(p, "state"), "stopped" | "deleted") {
+        out.push_str(&btn(
+            tr(a, "Verify public shutdown", "공개 종료 검증"),
+            "sb-preview-verify-shutdown",
+            id,
+            "shield",
+            "btn quiet",
+            a.sandbox.busy,
         ));
     }
     out.push_str("</div></article>");

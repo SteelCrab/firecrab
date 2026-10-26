@@ -172,7 +172,7 @@ fn tunnel_cli_keeps_task_runtime_fixed_and_uses_distinct_stop_delete_and_verific
     let id = Uuid::new_v4();
     let row = tunnel(project, id);
     let base = format!("/api/ai-sandbox/tunnels/{id}");
-    let check = json!({"path":"/health","bodySha256":"0".repeat(64),"webSocket":false});
+    let check = json!({"mode":"application","path":"/health","bodySha256":"0".repeat(64),"webSocket":false});
     for (command, method, path, body, input) in [
         (
             TunnelCommand::Save { project, id },
@@ -231,6 +231,40 @@ fn tunnel_cli_keeps_task_runtime_fixed_and_uses_distinct_stop_delete_and_verific
         );
         server.join().unwrap();
     }
+}
+
+#[test]
+fn tunnel_cli_preserves_explicit_shutdown_proof_and_operator_retirement_on_a_tombstone() {
+    let project = Uuid::new_v4();
+    let id = Uuid::new_v4();
+    let mut row = tunnel(project, id);
+    row["state"] = json!("deleted");
+    row["localRemoved"] = json!(true);
+    row["helperConnected"] = json!(false);
+    row["publicShutdown"] = json!("verified");
+    row["remoteRetirement"] = json!("operator_required");
+    row["shutdownProof"] =
+        json!({"path":"/","status":404,"errorCode":"unknown_address","checkedAt":123});
+    let (client, server) = reply(
+        "POST",
+        format!("/api/ai-sandbox/tunnels/{id}/verify"),
+        json!({"mode":"shutdown","path":"/","bodySha256":null,"webSocket":false}),
+        200,
+        row.clone(),
+    );
+    let input = br#"{"mode":"shutdown","path":"/"}"#;
+    assert_eq!(
+        request(
+            &client,
+            Command::Tunnel {
+                command: TunnelCommand::Verify { id }
+            },
+            input.as_slice()
+        )
+        .unwrap(),
+        row
+    );
+    server.join().unwrap();
 }
 #[test]
 fn guest_signal_acceptance_does_not_claim_process_termination() {

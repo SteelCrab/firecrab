@@ -121,3 +121,33 @@ fn environment_language_changes_do_not_change_the_submitted_spec() {
     );
     assert_eq!(en["retention"]["ttlSeconds"], 900);
 }
+
+#[test]
+fn public_shutdown_action_remains_available_on_deleted_records_in_both_languages() {
+    for locale in ["en", "ko"] {
+        let a = App {
+            locale: locale.into(),
+            ..App::default()
+        };
+        for state in ["stopped", "deleted", "connected", "superseded"] {
+            let row = json!({"id":"binding","state":state,"spec":{"subdomain":"saved-preview"},"helperConnected":false,"publicHttps":"verified","webSocketHandshake":"unverified","publicShutdown":"verified","remoteRetirement":"operator_required"});
+            let mut html = String::new();
+            preview_card(&a, &row, &mut html);
+            assert_eq!(
+                html.contains("data-action=\"sb-preview-verify-shutdown\""),
+                matches!(state, "stopped" | "deleted")
+            );
+            assert!(html.contains(if locale == "ko" {
+                "공개 종료: 검증됨"
+            } else {
+                "Public shutdown: Verified"
+            }));
+            assert!(html.contains(if locale == "ko" {
+                "연결 대시보드에서 토큰을 폐기한다"
+            } else {
+                "Retire the token in the connection dashboard"
+            }));
+            assert!(!html.contains("href=\"https://saved-preview.firecrab.dev\""));
+        }
+    }
+}

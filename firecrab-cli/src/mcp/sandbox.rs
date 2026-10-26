@@ -455,9 +455,9 @@ pub(super) fn catalog() -> Vec<Value> {
         ),
         (
             "sandbox_tunnel_verify",
-            "Make an actual fixed-URL TLS content-hash or WebSocket-upgrade probe; handshake success alone does not prove application frames.",
+            "Probe only the saved fixed HTTPS URL. Default mode application checks exact content or WebSocket upgrade. Mode shutdown requires a stopped/deleted owned binding and an exact gateway-unavailable response; TLS/network failure never proves shutdown or remote token retirement.",
             schema(
-                json!({"id":uuid,"request":schema(json!({"path":{"type":"string","maxLength":1024},"bodySha256":{"type":["string","null"]},"webSocket":{"type":"boolean"}}),&["path"])}),
+                json!({"id":uuid,"request":schema(json!({"mode":{"type":"string","enum":["application","shutdown"],"default":"application"},"path":{"type":"string","maxLength":1024},"bodySha256":{"type":["string","null"]},"webSocket":{"type":"boolean"}}),&["path"])}),
                 &["id", "request"],
             ),
             false,

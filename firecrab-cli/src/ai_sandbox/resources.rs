@@ -151,7 +151,7 @@ pub enum TunnelCommand {
         /// Binding whose local connection is removed after ownership verification.
         id: Uuid,
     },
-    /// Check actual public HTTPS content or WebSocket upgrade using JSON from stdin.
+    /// Check public app content/upgrade, or explicit stopped-gateway evidence with mode shutdown.
     Verify {
         /// Fixed-URL binding to probe using the path and expectations from stdin.
         id: Uuid,

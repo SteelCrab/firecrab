@@ -45,7 +45,7 @@ async fn address_discovery_returns_saved_claim_without_registration_credentials(
     );
 }
 
-async fn helper(
+pub(super) async fn helper(
     state: &mut AppState,
     root: &std::path::Path,
     replies: Vec<(Operation, Option<Snapshot>)>,
@@ -528,6 +528,7 @@ async fn public_verification_rejects_unsafe_paths_and_missing_hash_without_outbo
             Extension(RequestId(Uuid::new_v4())),
             Caller::default(),
             ValidatedJson(SandboxTunnelVerify {
+                mode: SandboxTunnelVerifyMode::Application,
                 path: path.into(),
                 body_sha256: Some("0".repeat(64)),
                 web_socket: false,
@@ -544,6 +545,7 @@ async fn public_verification_rejects_unsafe_paths_and_missing_hash_without_outbo
             Extension(RequestId(Uuid::new_v4())),
             Caller::default(),
             ValidatedJson(SandboxTunnelVerify {
+                mode: SandboxTunnelVerifyMode::Application,
                 path: "/health".into(),
                 body_sha256: digest,
                 web_socket: false,

@@ -81,6 +81,31 @@ pub enum SandboxTunnelVerification {
     Verified,
 }
 
+/// Select the public observation to record at the binding's fixed HTTPS origin.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxTunnelVerifyMode {
+    /// Verify the application's exact HTTP body or WebSocket upgrade.
+    #[default]
+    Application,
+    /// Verify a stopped binding's explicit gateway-unavailable response.
+    Shutdown,
+}
+
+/// Bounded public shutdown observation; contains no response body or credentials.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxTunnelShutdownProof {
+    /// Literal path checked at the saved address, without redirects.
+    pub path: String,
+    /// HTTP status from a TLS-authenticated response; absent on transport failure.
+    pub status: Option<u16>,
+    /// Allowlisted gateway code whose exact HTTP status also matched.
+    pub error_code: Option<String>,
+    /// Observation time in Unix milliseconds; not a promise of continued shutdown.
+    pub checked_at: u64,
+}
+
 /// Remote reservations stay under the registration dashboard's authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -143,6 +168,9 @@ pub struct SandboxTunnelBinding {
     pub web_socket_handshake: SandboxTunnelVerification,
     /// Verification that public forwarding stopped after local shutdown.
     pub public_shutdown: SandboxTunnelVerification,
+    /// Last explicit shutdown observation, retained across deletion and API restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shutdown_proof: Option<SandboxTunnelShutdownProof>,
     /// Separate status of remote token and address retirement.
     pub remote_retirement: SandboxTunnelRetirement,
     /// Local metadata and connector removal have been confirmed.
@@ -181,6 +209,9 @@ pub struct SandboxTunnelRetarget {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxTunnelVerify {
+    /// Application checks remain the default for older clients.
+    #[serde(default)]
+    pub mode: SandboxTunnelVerifyMode,
     /// Literal application path; no alternate origins or credentials.
     pub path: String,
     /// Exact SHA-256 of the expected bounded HTTP body.

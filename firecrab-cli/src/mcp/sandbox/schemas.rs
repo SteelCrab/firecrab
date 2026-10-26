@@ -230,8 +230,12 @@ pub(super) fn tunnel_spec() -> Value {
 /// Keep helper connectivity separate from public HTTPS, WebSocket and retirement evidence.
 fn tunnel() -> Value {
     let verification = json!({"enum":["unverified","verified"]});
+    let shutdown_proof = schema(
+        json!({"path":string(),"status":nullable(integer()),"errorCode":nullable(string()),"checkedAt":integer()}),
+        &["path", "status", "errorCode", "checkedAt"],
+    );
     record(
-        json!({"id":uuid(),"projectId":uuid(),"taskId":uuid(),"attemptId":uuid(),"runtime":runtime(),"spec":tunnel_spec(),"state":{"enum":["waiting","connecting","connected","stopping","stopped","deleting","deleted","superseded","needs_reconciliation"]},"appReady":boolean(),"connectorId":nullable(uuid()),"publicUrl":nullable(string()),"helperConnected":boolean(),"publicHttps":verification,"webSocketHandshake":verification,"publicShutdown":verification,"remoteRetirement":{"enum":["not_requested","operator_required"]},"localRemoved":boolean(),"createdAt":integer(),"updatedAt":integer(),"errorCode":nullable(string())}),
+        json!({"id":uuid(),"projectId":uuid(),"taskId":uuid(),"attemptId":uuid(),"runtime":runtime(),"spec":tunnel_spec(),"state":{"enum":["waiting","connecting","connected","stopping","stopped","deleting","deleted","superseded","needs_reconciliation"]},"appReady":boolean(),"connectorId":nullable(uuid()),"publicUrl":nullable(string()),"helperConnected":boolean(),"publicHttps":verification,"webSocketHandshake":verification,"publicShutdown":verification,"shutdownProof":shutdown_proof,"remoteRetirement":{"enum":["not_requested","operator_required"]},"localRemoved":boolean(),"createdAt":integer(),"updatedAt":integer(),"errorCode":nullable(string())}),
         &[
             "id",
             "projectId",
