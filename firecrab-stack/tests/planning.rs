@@ -516,3 +516,81 @@ fn template_pin_validation_is_bounded_and_never_echoes_submitted_hashes() {
             .contains("DO-NOT-PRINT")
     );
 }
+
+#[test]
+fn automatic_images_are_pinned_in_plans_without_overriding_yaml_configuration() {
+    let (mut stack, record, mut inventory) = fixture();
+    let key = stack.micro_services.keys().next().unwrap().clone();
+    let desired = stack.micro_services.get_mut(&key).unwrap();
+    desired.host_port = 0;
+    desired.config.domain = Some("web.example.test".into());
+    desired.config.auto_deploy = Some(firecrab_api_types::AutoDeployPolicy {
+        reference: "ghcr.io/team/app:v1.*".into(),
+        interval_seconds: 60,
+    });
+    let declared = desired.config.clone();
+    let digest = format!("sha256:{}", "b".repeat(64));
+    let active = inventory.services[0].deployment.as_mut().unwrap();
+    active.spec = declared.clone();
+    active.spec.image = format!("ghcr.io/team/app@{digest}");
+    active.digest = Some(digest.clone());
+    active.request.host_port = 0;
+    inventory.services[0].service.spec = active.spec.clone();
+    let planned = plan(&stack, &record, &inventory).unwrap();
+    assert!(
+        planned
+            .changes
+            .iter()
+            .filter(|c| c.kind == ResourceKind::Service)
+            .all(|c| c.action == Action::Noop)
+    );
+    assert_eq!(planned.inputs.service_digests[&key], digest);
+    stack.micro_services.get_mut(&key).unwrap().config.ram *= 2;
+    let planned = plan(&stack, &record, &inventory).unwrap();
+    assert!(
+        planned
+            .changes
+            .iter()
+            .any(|c| c.kind == ResourceKind::Service && c.action == Action::Update)
+    );
+    let config = firecrab_stack::effective_service_config(
+        &stack.micro_services[&key].config,
+        inventory.services[0].deployment.as_ref(),
+    );
+    assert!(config.image.ends_with(&digest));
+    assert_eq!(config.ram, declared.ram * 2);
+    stack
+        .micro_services
+        .get_mut(&key)
+        .unwrap()
+        .config
+        .auto_deploy = None;
+    assert!(
+        plan(&stack, &record, &inventory)
+            .unwrap()
+            .changes
+            .iter()
+            .any(|c| c.kind == ResourceKind::Service
+                && c.fields.iter().any(|f| f == "config.autoDeploy"))
+    );
+    let config = firecrab_stack::effective_service_config(&declared, None);
+    assert_eq!(config.image, declared.image);
+}
+
+#[test]
+fn a_failed_initial_image_does_not_override_a_corrected_bootstrap_pin() {
+    let (mut stack, _, inventory) = fixture();
+    let desired = &mut stack.micro_services.get_mut("web").unwrap().config;
+    desired.auto_deploy = Some(firecrab_api_types::AutoDeployPolicy {
+        reference: "ghcr.io/team/app:stable".into(),
+        interval_seconds: 60,
+    });
+    desired.image = format!("ghcr.io/team/app@sha256:{}", "c".repeat(64));
+    let mut failed = inventory.services[0].deployment.clone().unwrap();
+    failed.phase = ServicePhase::Failed;
+    failed.digest = Some(format!("sha256:{}", "a".repeat(64)));
+    assert_eq!(
+        firecrab_stack::effective_service_config(desired, Some(&failed)).image,
+        desired.image
+    );
+}

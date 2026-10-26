@@ -70,7 +70,16 @@ pub(crate) async fn update_from_stack(
     body: UpdateServiceRequest,
     operation: Option<Uuid>,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
-    accept(state, request, id, body, None, None, operation).await
+    accept(
+        state,
+        request,
+        id,
+        body,
+        None,
+        None,
+        Writer::Stack(operation),
+    )
+    .await
 }
 
 /// Rollback chooses immutable inputs from a successful release of the same service.
@@ -128,7 +137,7 @@ pub async fn rollback(
         },
         Some(release_id),
         None,
-        None,
+        Writer::Stack(None),
     )
     .await
 }
@@ -167,14 +176,19 @@ pub async fn retry(
     Ok((StatusCode::ACCEPTED, Json(deployment)))
 }
 
+enum Writer {
+    Stack(Option<Uuid>),
+    Tag(Box<crate::persistence::auto_deploy::Watch>),
+}
+
 async fn accept(
     state: AppState,
     request: RequestId,
     id: Uuid,
-    body: UpdateServiceRequest,
+    mut body: UpdateServiceRequest,
     rollback_of: Option<Uuid>,
     pinned_digest: Option<String>,
-    operation: Option<Uuid>,
+    writer: Writer,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     crate::handlers::micro_services::validate(&body.spec, request.0)?;
     if body.operation_id.is_nil() {
@@ -184,7 +198,10 @@ async fn accept(
         ));
     }
     let claim = state.service_mutations.clone().lock_owned().await;
-    crate::handlers::micro_services::ensure_stack_writer(&state, id, operation, request.0).await?;
+    if let Writer::Stack(operation) = &writer {
+        crate::handlers::micro_services::ensure_stack_writer(&state, id, *operation, request.0)
+            .await?;
+    }
     let store = state.store.clone();
     let operation_id = body.operation_id;
     if let Some(saved) = database(request.0, move || store.service_attempt(operation_id)).await? {
@@ -210,6 +227,18 @@ async fn accept(
     let mut previous = database(request.0, move || store.service_deployment(id))
         .await?
         .ok_or_else(|| AppError::not_found(request.0))?;
+    if rollback_of.is_some() {
+        body.spec.auto_deploy = previous.spec.auto_deploy.clone();
+    }
+    if let Writer::Tag(watch) = &writer {
+        super::auto_deploy::authorize(&state, &previous, &body.spec, watch, body.operation_id)
+            .await?;
+    }
+    if body.spec.auto_deploy != previous.spec.auto_deploy
+        && let Some(policy) = &body.spec.auto_deploy
+    {
+        super::auto_deploy::validate_auth(&state, policy, request.0).await?;
+    }
     if body
         .expected_release_id
         .is_some_and(|expected| expected != previous.id)
@@ -313,7 +342,9 @@ async fn accept(
         .await
         .map_err(|_| AppError::internal(request.0))?;
     previous.update = None;
-    let message = if pinned_digest.is_some() {
+    let message = if matches!(writer, Writer::Tag(_)) {
+        "Automatic Deploy accepted; verified registry digest is pinned"
+    } else if pinned_digest.is_some() {
         "Secret rotation accepted; the current image digest is retained"
     } else {
         "Deploy accepted; previous release continues serving"
@@ -351,6 +382,43 @@ async fn accept(
     Ok((StatusCode::ACCEPTED, Json(deployment)))
 }
 
+pub(super) async fn automatic(
+    state: AppState,
+    previous: &MicroServiceDeployment,
+    watch: &crate::persistence::auto_deploy::Watch,
+) -> Result<MicroServiceDeployment, AppError> {
+    let pending = watch
+        .pending
+        .as_ref()
+        .ok_or_else(|| AppError::internal(previous.id))?;
+    let policy = watch
+        .status
+        .policy
+        .as_ref()
+        .ok_or_else(|| AppError::internal(previous.id))?;
+    let (repository, _) = policy
+        .source()
+        .ok_or_else(|| AppError::internal(previous.id))?;
+    let mut spec = previous.spec.clone();
+    spec.image = format!("{repository}@{}", pending.digest);
+    accept(
+        state,
+        RequestId(pending.operation),
+        previous.service_id,
+        UpdateServiceRequest {
+            expected_release_id: Some(pending.previous),
+            operation_id: pending.operation,
+            spec,
+            strategy: DeployStrategy::Rolling,
+        },
+        None,
+        None,
+        Writer::Tag(Box::new(watch.clone())),
+    )
+    .await
+    .map(|(_, Json(record))| record)
+}
+
 /// Rotate private inputs without resolving a mutable image tag or changing service configuration.
 async fn rotate(
     state: AppState,
@@ -375,7 +443,7 @@ async fn rotate(
         },
         None,
         previous.digest.clone(),
-        None,
+        Writer::Stack(None),
     )
     .await
     .map(|(_, Json(record))| record)

@@ -73,6 +73,47 @@ Cancellation returns `409` after the worker claims execution. Inspect the operat
 before choosing Retry or Stop for work that has already started.
 Direct cancellation cannot change Git/Stack or controller-owned service intent.
 
+## Automatic registry Deploy
+
+Open **Automation** in the service's Deploy panel. Save an explicitly tagged
+source such as `ghcr.io/team/app:stable` or `ghcr.io/team/app:v1.*`.
+The connected Auth account must own that namespace or ECR registry.
+Polling is opt-in, every 60–3600 seconds (default 300). Registry reads use normal
+TLS verification, including installed system CA roots for private registry trust.
+
+Exact tags follow their changed manifest digest. Version rules `*`, `v*`, `1.*`,
+`v1.*`, `1.2.*` and `v1.2.*` select the highest matching stable semantic version.
+Prereleases are excluded. Each scan reads at most ten pages and 1000 tags.
+Metadata reads have a 30-second deadline. Errors back off up to one hour.
+The selected host-platform digest enters the existing serial Deploy queue.
+A lost acknowledgement or API restart keeps the same recorded operation UUID.
+
+Rollback keeps the current policy and pauses its observed digest. A different
+digest resumes monitoring. **Resume** explicitly permits the same digest again.
+A failed or cancelled automatic operation uses the same pause rule. Interrupted
+work that still owns resources must finish recovery first. **Pause** requires an
+explicit Resume; a new digest cannot override it. Pause does not cancel a queued
+operation. Use its Cancel icon separately. **Disable** removes monitoring.
+
+Use `GET` or `PUT /api/micro-services/{id}/auto-deploy` to inspect or configure it:
+
+```json
+{"reference":"ghcr.io/team/app:v1.*","intervalSeconds":60}
+```
+
+Send JSON `null` with PUT to disable. Bodyless POST to `/auto-deploy/pause` or
+`/auto-deploy/resume` changes monitoring. Status contains the last verified tag,
+digest, pause reason, operation UUID, failure count and next check time. It never
+contains registry credentials or remote response bodies.
+
+YAML services can declare the same object under `config.autoDeploy`, a domain,
+`hostPort: 0`, and an initial digest-pinned `config.image`. That image bootstraps a
+new service. Reapplying YAML or Git preserves an automated running digest while
+reconciling other declared settings. Removing the policy returns image ownership
+to the declared pin. Git-owned policy edits still require Git sync; local runtime
+pause/resume remains available. Active Stack work excludes automatic admission.
+Controller-owned multi-host services are excluded.
+
 ## Dashboard
 
 In the dashboard, open a service and choose **Deploy update**.

@@ -460,7 +460,7 @@ async fn operation_identity_rejects_conflicting_retries_and_other_services() {
         body.clone(),
         None,
         None,
-        None,
+        Writer::Stack(None),
     )
     .await
     .unwrap();
@@ -475,7 +475,7 @@ async fn operation_identity_rejects_conflicting_retries_and_other_services() {
         changed,
         None,
         None,
-        None,
+        Writer::Stack(None),
     )
     .await
     .unwrap_err();
@@ -487,7 +487,7 @@ async fn operation_identity_rejects_conflicting_retries_and_other_services() {
         body,
         None,
         None,
-        None,
+        Writer::Stack(None),
     )
     .await
     .unwrap_err();
@@ -759,7 +759,7 @@ async fn direct_port_updates_fail_before_mutating_a_live_release() {
         body,
         None,
         None,
-        None,
+        Writer::Stack(None),
     )
     .await
     .unwrap_err();
@@ -860,7 +860,7 @@ async fn stale_release_and_stale_retry_do_not_mutate_the_active_operation() {
         },
         None,
         None,
-        None,
+        Writer::Stack(None),
     )
     .await
     .unwrap_err();

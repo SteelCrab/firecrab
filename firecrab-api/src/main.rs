@@ -175,6 +175,7 @@ async fn run() -> Result<(), StartupError> {
     ai_sandbox::environment::start_maintenance(state.clone());
     service_runtime::recovery::start(state.clone());
     service_runtime::deploy::rotation::start(state.clone());
+    service_runtime::auto_deploy::start(state.clone());
     // Fetch the shared bootstrap builder source now, in the background, so
     // the request that needs it doesn't have to — see spawn_warmup.
     microboot::spawn_warmup(state.clone());

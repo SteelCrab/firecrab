@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validate Deploy live-QA safety guards and OCI fixture content without KVM."""
 
+import base64
 import gzip
 import http.client
 import importlib.util
@@ -18,6 +19,7 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
+import deploy_auto_qa as automatic
 import deploy_fleet_qa as fleet
 import deploy_recovery_qa as recovery
 
@@ -27,6 +29,40 @@ module.loader.exec_module(qa)
 
 
 class DeployQaTests(unittest.TestCase):
+    def test_automatic_acceptance_requires_report_before_runtime_access(self):
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name("ci-qa-deploy.py")), "--automatic-deploy", "--disposable-host"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("extended acceptance requires --report", result.stderr)
+
+    def test_registry_trust_refuses_non_root_before_reading_host_files(self):
+        with patch.object(automatic.os, "geteuid", return_value=1000), patch.object(Path, "read_text") as read:
+            with self.assertRaisesRegex(AssertionError, "disposable root"):
+                with automatic.trusted_registry([]):
+                    self.fail("must not enter fixture")
+            read.assert_not_called()
+
+    def test_authenticated_metadata_fixture_follows_mutable_tags_without_exposing_secrets(self):
+        fixtures = [qa.image_fixture(b"static-toolbox", label) for label in ["A", "B", "bad", "C"]]
+        registry = automatic.MetadataRegistry(fixtures, address=("127.0.0.1", 0))
+        self.addCleanup(registry.close)
+        connection = http.client.HTTPConnection("127.0.0.1", registry.server.server_port)
+        self.addCleanup(connection.close)
+        connection.request("GET", "/v2/team/deploy-qa/manifests/stable")
+        response = connection.getresponse()
+        self.assertEqual(response.status, 401)
+        self.assertEqual(response.read(), b"")
+        headers = {"Authorization": "Basic " + base64.b64encode(b"team:local-deploy-qa-only").decode()}
+        for index in [0, 1, 3]:
+            registry.tags["stable"] = fixtures[index][0]
+            connection.request("GET", "/v2/team/deploy-qa/manifests/stable", headers=headers)
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.read(), fixtures[index][1])
+        connection.request("GET", "/v2/team/deploy-qa/tags/list?n=100", headers=headers)
+        response = connection.getresponse()
+        self.assertEqual(json.loads(response.read())["tags"], sorted(registry.tags))
+        self.assertEqual(registry.authenticated, 4)
+
     def test_queue_acceptance_requires_a_report_before_runtime_access(self):
         result = subprocess.run([sys.executable, str(Path(__file__).with_name("ci-qa-deploy.py")),
                                  "--disposable-host", "--queue-controls"], capture_output=True, text=True)
