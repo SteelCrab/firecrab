@@ -19,7 +19,7 @@ pub enum ServiceRuntime {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MicroServiceSpec {
-    /// Unique DNS label; also usable as the future `<name>.internal` address.
+    /// Unique DNS label; deployed services resolve as `<name>.internal`.
     pub name: String,
     /// OCI image reference (tag or sha256 digest). Resolved only during deployment.
     pub image: String,
@@ -83,8 +83,8 @@ pub struct DeployMicroServiceRequest {
     /// Existing guest network; omission selects or creates the `services` network.
     #[serde(default)]
     pub micro_network_id: Option<Uuid>,
-    /// First replica's host TCP port. Required without a domain; omitted for domain routing.
-    /// Zero means no host port and is accepted only when the service has a domain.
+    /// Optional first replica's host TCP port. Zero keeps the service private
+    /// unless a public domain is configured; internal routing needs no host port.
     #[serde(default)]
     pub host_port: u16,
 }
@@ -189,6 +189,9 @@ pub struct MicroServiceDeployment {
     /// Persisted before the helper call so interrupted publication remains owned.
     #[serde(default)]
     pub domain_route_owned: bool,
+    /// Internal DNS/routing publication remains owned until withdrawal succeeds.
+    #[serde(default)]
+    pub internal_route_owned: bool,
     /// Failure description, if deployment or cleanup failed.
     pub error: Option<String>,
 }

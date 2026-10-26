@@ -76,6 +76,8 @@ pub(super) async fn helper(root: &std::path::Path, deployment: &MicroServiceDepl
     let mut initial: Config =
         serde_json::from_value(serde_json::json!({"routes":[], "tunnel":null})).unwrap();
     initial.routes.push(Route {
+        network: None,
+        security_group: None,
         host: previous.spec.domain.clone().unwrap(),
         path_prefix: "/".into(),
         upstreams: endpoints(previous).unwrap(),
@@ -84,6 +86,17 @@ pub(super) async fn helper(root: &std::path::Path, deployment: &MicroServiceDepl
             deployment_id: previous.id,
         }),
     });
+    if previous.internal_route_owned {
+        let mut private = initial.routes[0].clone();
+        private.host = format!("{}.internal", previous.spec.name);
+        private.network = Some(
+            serde_json::from_value(serde_json::json!({
+                "micro_network_id": Uuid::new_v4(), "gateway": "172.30.0.1", "prefix": 24
+            }))
+            .unwrap(),
+        );
+        initial.routes.push(private);
+    }
     let config = Arc::new(Mutex::new(initial));
     let workers = Arc::new(Mutex::new(vec![IngressWorker {
         draining: false,
@@ -156,6 +169,85 @@ pub(super) async fn helper(root: &std::path::Path, deployment: &MicroServiceDepl
         auto_drain,
         task,
     }
+}
+
+#[tokio::test]
+async fn internal_routes_follow_update_rollback_and_stop_ownership() {
+    let root = crate::firecracker::test_support::short_tempdir();
+    let mut state = state(root.path()).await;
+    let mut record = journal();
+    record.internal_route_owned = false;
+    record
+        .update
+        .as_mut()
+        .unwrap()
+        .previous
+        .internal_route_owned = true;
+    let helper = helper(root.path(), &record).await;
+    helper.auto_drain.store(true, Ordering::SeqCst);
+    state.network = helper.client.clone();
+
+    let next = endpoints(&record).unwrap();
+    begin_transition(&state, &mut record, next.clone(), vec![], false)
+        .await
+        .unwrap();
+    finish_transition(&state, &mut record).await.unwrap();
+    assert!(record.internal_route_owned);
+    assert!(
+        !record
+            .update
+            .as_ref()
+            .unwrap()
+            .previous
+            .internal_route_owned
+    );
+    for route in &helper.config.lock().unwrap().routes {
+        assert_eq!(route.owner.as_ref().unwrap().deployment_id, record.id);
+        assert_eq!(route.upstreams, next);
+    }
+
+    let previous = &record.update.as_ref().unwrap().previous;
+    let restored = endpoints(previous).unwrap();
+    let previous_id = previous.id;
+    begin_transition(&state, &mut record, restored.clone(), vec![], true)
+        .await
+        .unwrap();
+    finish_transition(&state, &mut record).await.unwrap();
+    assert!(!record.internal_route_owned);
+    assert!(
+        record
+            .update
+            .as_ref()
+            .unwrap()
+            .previous
+            .internal_route_owned
+    );
+    for route in &helper.config.lock().unwrap().routes {
+        assert_eq!(route.owner.as_ref().unwrap().deployment_id, previous_id);
+        assert_eq!(route.upstreams, restored);
+    }
+
+    finish_stop(&state, &mut record).await.unwrap();
+    assert!(helper.config.lock().unwrap().routes.is_empty());
+    assert!(!record.internal_route_owned);
+    assert!(
+        !record
+            .update
+            .as_ref()
+            .unwrap()
+            .previous
+            .internal_route_owned
+    );
+    assert!(record.instances.is_empty());
+    assert!(
+        record
+            .update
+            .as_ref()
+            .unwrap()
+            .previous
+            .instances
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -401,6 +493,12 @@ async fn releases_stay_immutable_after_stop_and_ownership_covers_both_generation
     let root = tempfile::tempdir().unwrap();
     let state = state(root.path()).await;
     let mut record = journal();
+    record
+        .update
+        .as_mut()
+        .unwrap()
+        .previous
+        .internal_route_owned = true;
     let old = (*record.update.as_ref().unwrap().previous).clone();
     state
         .store
@@ -445,6 +543,7 @@ async fn releases_stay_immutable_after_stop_and_ownership_covers_both_generation
     assert_eq!(releases[0].spec, old.spec);
     assert!(releases[0].instances.is_empty());
     assert!(!releases[0].domain_route_owned);
+    assert!(!releases[0].internal_route_owned);
     assert!(!format!("{releases:?}").contains("test-only-secret"));
 }
 

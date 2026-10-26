@@ -295,6 +295,7 @@ pub(super) fn deployment(id: Uuid) -> MicroServiceDeployment {
         service_id: id,
         phase: ServicePhase::Queued,
         domain_route_owned: false,
+        internal_route_owned: false,
         spec: spec(),
         request: DeployMicroServiceRequest {
             micro_network_id: None,
@@ -322,7 +323,18 @@ fn deployments_accept_secret_references_and_reject_port_overflow_before_claiming
     spec.domain = None;
     assert!(!fields.contains_key("secrets"));
     spec.replicas = 2;
-    for port in [0, 80, 5522, 5523, 65535] {
+    assert!(
+        deployment_fields(
+            &spec,
+            &DeployMicroServiceRequest {
+                host_port: 0,
+                ..request.clone()
+            },
+            5523
+        )
+        .is_empty()
+    );
+    for port in [80, 5522, 5523, 65535] {
         assert!(
             deployment_fields(
                 &spec,
@@ -352,7 +364,9 @@ fn deployments_reserve_the_bound_api_port_across_the_replica_range() {
 #[tokio::test]
 async fn queued_deployment_blocks_duplicate_deploy_edit_delete_and_stop() {
     let root = tempfile::tempdir().unwrap();
-    let state = state(root.path()).await;
+    let mut state = state(root.path()).await;
+    let (helper, _, _) = domain_helper(root.path(), false).await;
+    state.network = helper;
     let id = Uuid::new_v4();
     state
         .store
@@ -1144,7 +1158,9 @@ async fn service_runtime_auth_rejects_unowned_saved_images_before_queuing() {
 async fn service_runtime_auth_rechecks_revoked_and_replaced_accounts_after_queueing() {
     for replacement in [None, Some("other")] {
         let root = tempfile::tempdir().unwrap();
-        let state = state(root.path()).await;
+        let mut state = state(root.path()).await;
+        let (helper, _, _) = domain_helper(root.path(), false).await;
+        state.network = helper;
         let id = Uuid::new_v4();
         state
             .store
@@ -1259,7 +1275,11 @@ pub(super) async fn domain_helper(
                                 Err(detail) => result = Err(HelperFailure::Internal { detail }),
                             }
                             if fail_after_publish
-                                && matches!(request, ServiceRouteRequest::Publish { .. })
+                                && matches!(
+                                    request,
+                                    ServiceRouteRequest::Publish { .. }
+                                        | ServiceRouteRequest::PublishInternal { .. }
+                                )
                             {
                                 result = Err(HelperFailure::Internal {
                                     detail: "response lost after publication".into(),
@@ -1394,6 +1414,87 @@ async fn domain_publication_is_durable_and_cleanup_retries_without_abandoning_in
             .unwrap()
             .domain_route_owned
     );
+}
+
+#[tokio::test]
+async fn internal_routing_retains_ownership_after_lost_publication_and_failed_cleanup() {
+    let root = crate::firecracker::test_support::short_tempdir();
+    let mut state = state(root.path()).await;
+    let (helper, config, reject_remove) = domain_helper(root.path(), true).await;
+    state.network = helper;
+    let network: firecrab_api_types::MicroNetworkResponse =
+        serde_json::from_value(serde_json::json!({
+            "id":Uuid::new_v4(),"name":"services","subnetCidr":"172.30.0.0/24",
+            "gateway":"172.30.0.1","internetEnabled":true,"uplink":null,
+            "ipv6Cidr":null,"ipv6Gateway":null,"ipv6AddressMode":null,"ipv6Egress":null
+        }))
+        .unwrap();
+    state.store.insert_micro_network(&network).unwrap();
+    let id = Uuid::new_v4();
+    let mut record = deployment(id);
+    record.request = DeployMicroServiceRequest {
+        micro_network_id: Some(network.id),
+        host_port: 0,
+    };
+    record.instances = ["172.30.0.2", "172.30.0.3"]
+        .into_iter()
+        .map(|ip| ServiceInstance {
+            vm_id: Uuid::new_v4(),
+            ipv4: ip.into(),
+            host_port: 0,
+            state: VmState::Running,
+            healthy: true,
+        })
+        .collect();
+    state
+        .store
+        .insert_micro_service(&MicroServiceResponse {
+            id,
+            spec: record.spec.clone(),
+        })
+        .unwrap();
+    let _ = check(
+        State(state.clone()),
+        Extension(RequestId(id)),
+        Path(id.to_string()),
+        ValidatedJson(serde_json::from_value(serde_json::json!({})).unwrap()),
+    )
+    .await
+    .unwrap();
+    assert!(internal::publish(&state, &mut record).await.is_err());
+    assert!(
+        state
+            .store
+            .service_deployment(id)
+            .unwrap()
+            .unwrap()
+            .internal_route_owned
+    );
+    assert!(!record.domain_route_owned);
+    assert_eq!(
+        config.lock().unwrap().internal_dns_hosts(),
+        "172.30.0.1 web.internal\n"
+    );
+    assert_eq!(config.lock().unwrap().routes[0].upstreams.len(), 2);
+    recover(&state).await;
+    assert_eq!(
+        state.store.service_deployment(id).unwrap().unwrap().phase,
+        ServicePhase::Failed
+    );
+    record = state.store.service_deployment(id).unwrap().unwrap();
+    reject_remove.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(cleanup(&state, &mut record).await.is_err());
+    assert_eq!(record.instances.len(), 2);
+    assert!(record.internal_route_owned);
+    assert!(ensure_editable(&state, id, id).await.is_err());
+    reject_remove.store(false, std::sync::atomic::Ordering::SeqCst);
+    cleanup(&state, &mut record).await.unwrap();
+    assert!(record.instances.is_empty());
+    assert!(!record.internal_route_owned);
+    assert!(config.lock().unwrap().internal_dns_hosts().is_empty());
+    let saved = state.store.service_deployment(id).unwrap().unwrap();
+    assert!(!saved.internal_route_owned);
+    ensure_editable(&state, id, id).await.unwrap();
 }
 
 /// Return scripted publication failures through the real framed helper transport.

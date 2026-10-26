@@ -880,6 +880,9 @@ pub fn deployment(value: Option<&Value>) -> String {
         ));
     }
     out.push_str("</div>");
+    if value["internalRouteOwned"] == true && ["running", "degraded"].contains(&phase) {
+        out.push_str(&format!("<p><code>http://{}.internal</code></p><p>Available to apps in the same MicroNetwork.</p>", escape(text(&value["spec"], "name"))));
+    }
     if value["domainRouteOwned"] == true
         && ["running", "degraded"].contains(&phase)
         && !text(&value["spec"], "domain").is_empty()

@@ -4,7 +4,8 @@ MicroService stores the desired configuration of an OCI service on a MicroVM.
 Configurations survive API restarts in the existing SQLite database.
 Deploy imports the OCI image by digest, creates MicroVM replicas, and waits for HTTP app health.
 Services with a domain use PipeIngress to reach guest app ports directly.
-Services without a domain expose one host TCP port per replica.
+Every newly deployed service has a private `http://<name>.internal` address.
+Services without a domain can optionally expose one host TCP port per replica.
 The deployment record and owned VM identifiers survive API restarts.
 PipeSecrets values are injected into every replica without appearing in VM or deployment responses.
 [Deploy](deploy.md) adds running updates, rollback, and interrupted-operation recovery for domain services.
@@ -69,10 +70,8 @@ Create, update, and deploy require a matching **Pipe Auth** connection:
 - AWS: the exact private ECR registry for the connected account and region.
   Other account IDs, regions, public ECR, and lookalike hosts are rejected.
 
-A standalone registry login does not satisfy this policy. Invalid ownership
-returns `400` with an `image` field error before saving or queuing a deployment.
-Saving checks account scope without contacting the registry; the worker resolves
-the requested tag or digest with that account's credentials when deploying.
+A standalone registry login does not satisfy this policy. Invalid ownership returns `400` with an `image` field error before saving or queuing a deployment.
+Saving checks account scope without contacting the registry; the worker resolves the requested tag or digest with that account's credentials when deploying.
 Reading, stopping, and deleting existing services do not require the connection.
 
 Example `web.json` using an image published to the connected GitHub account
@@ -102,15 +101,11 @@ The commands work on Linux, macOS, and Windows.
 They use the normal `--api`, `--host`, and `FIRECRAB_API` endpoint selection.
 
 ```sh
-firecrab microservice create --file web.json
-firecrab microservice list
-firecrab microservice list --json
-firecrab microservice get SERVICE_UUID
-firecrab microservice deploy SERVICE_UUID --host-port 30100
-firecrab microservice status SERVICE_UUID
-firecrab microservice stop SERVICE_UUID
-firecrab microservice update SERVICE_UUID --file web.json
-firecrab microservice delete SERVICE_UUID
+firecrab microservice create --file web.json firecrab microservice list firecrab microservice list --json firecrab microservice get SERVICE_UUID
+firecrab microservice deploy SERVICE_UUID
+# Optional direct access through one host port per replica:
+firecrab microservice deploy SERVICE_UUID --host-port 30100 firecrab microservice status SERVICE_UUID firecrab microservice stop SERVICE_UUID
+firecrab microservice update SERVICE_UUID --file web.json firecrab microservice delete SERVICE_UUID
 ```
 
 Create, get, and update print JSON.
@@ -129,8 +124,7 @@ Select **New MicroService** to follow four setup steps:
 4. **Review** — check the summary, return to any section to change it, then save.
 
 Going back keeps the values entered in the form.
-Switching accounts clears the selected app. The wizard checks the connected
-account again before leaving App and before saving. If the account is disconnected
+Switching accounts clears the selected app. The wizard checks the connected account again before leaving App and before saving. If the account is disconnected
 or replaced during setup, select an app from a connected account again.
 The API enforces the same ownership rule for dashboard, CLI, and REST requests.
 Saving opens deployment management but does not start any MicroVMs.
@@ -165,6 +159,12 @@ request failure offers **Retry AUTH check**. Reconnecting the matching account
 allows deployment again. For AWS, the account and region must both match.
 **Stop service** removes the owned MicroVMs, even when Auth is disconnected.
 
+## Internal service addresses
+
+Every deployed service has `http://<name>.internal` access from its MicroNetwork.
+See [internal service routing](internal-service-routing.md) for DNS, security
+rules, restart recovery and host upgrade requirements.
+
 ## Connect a domain
 
 1. Set **Domain** when creating or editing a MicroService. A hostname such as
@@ -180,7 +180,7 @@ For public HTTPS, use the existing **Pipe → Named Tunnel** setup with this dom
 If a named tunnel is already configured, point the domain's proxied Cloudflare
 CNAME to `<tunnel-id>.cfargotunnel.com`; the deployment panel shows that target.
 DNS and public TLS remain external. A prepared local route does not prove that
-public DNS, TLS, or the connector is working. This deployment does not modify DNS.
+public DNS, TLS, or the connector is working. Deployment updates only private service DNS.
 
 The domain owns all paths for that hostname. Existing manual routes or another
 service on the hostname cause a field error before image import. Service routes

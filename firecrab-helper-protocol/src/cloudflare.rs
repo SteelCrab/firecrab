@@ -102,7 +102,7 @@ impl ConnectRequest {
             .config
             .routes
             .iter()
-            .any(|route| route.host == self.hostname)
+            .any(|route| route.host == self.hostname && route.network.is_none())
         {
             return Err("Add an app route for the public hostname before connecting".into());
         }
