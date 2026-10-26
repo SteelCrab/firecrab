@@ -369,6 +369,7 @@ async fn managed_environment_admission_pins_role_runtime_and_blocks_project_dele
             subnet_cidr: environment.spec.subnet_cidr.clone(),
             gateway: "10.241.33.1".into(),
             internet_enabled: false,
+            dns_mode: environment.dns_mode,
             uplink: None,
             ipv6_cidr: None,
             ipv6_gateway: None,
