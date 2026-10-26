@@ -168,6 +168,22 @@ def main():
         assert source_path.stat().st_mtime_ns > first_binary_mtime
         run("cleanup", build_attempt, second_build, **build_options)
         checks.append("host_file_edit_invalidates_existing_incremental_build")
+
+        # Exercise the production directory creation, then traverse it as a real
+        # non-root UID. This is a filesystem proof, not an nspawn engine mock.
+        nspawn_parent = directory / "nspawn-root-mode"
+        nspawn_parent.mkdir(mode=0o755)
+        create_root = re.search(r'^\s+mkdir(?: -m 755)? "\$cmd/rootfs"$', shell, re.M).group(0)
+        subprocess.run(["/bin/sh", "-c", 'umask 077; cmd="$1"; ' + create_root,
+                        "root-permission-probe", str(nspawn_parent)], check=True)
+        private_root = nspawn_parent / "rootfs"
+        traversed = subprocess.run(["/usr/local/sbin/firecrab-console-resize", "--reuid", "65534",
+                                   "--regid", "65534", "--clear-groups", "--no-new-privs", "/bin/sh", "-c",
+                                   'set -eu; test "$(id -u)" = 65534; CDPATH= cd -- "$1"; printf traversable',
+                                   "root-permission-probe", str(private_root)], capture_output=True, timeout=5)
+        assert traversed.returncode == 0 and traversed.stdout == b"traversable", traversed
+        assert private_root.stat().st_uid == 0 and private_root.stat().st_mode & 0o777 == 0o755
+        checks.append("nspawn_private_root_traversable_by_actual_payload_uid")
     print(json.dumps({"kind": "linux_process_fixture", "microvmValidated": False, "checks": checks, "status": "passed"}, indent=2))
 
 

@@ -1175,8 +1175,9 @@ FIRECRAB_PAYLOAD
     [ -f "$source" ] && [ ! -L "$source" ] || fail_run 'unsupported_nspawn_image: pre-install the exact content-addressed root archive'
     actual=$(tool sha256sum "$source"); actual=${actual%% *}
     [ "$actual" = "$digest" ] || fail_run 'nspawn_image_digest_mismatch'
-    mkdir "$cmd/rootfs"
+    mkdir -m 755 "$cmd/rootfs"
     archive_tar -xf "$source" -C "$cmd/rootfs" || fail_run 'unsupported_nspawn_image: root archive extraction failed'
+    chmod 755 "$cmd/rootfs"
     [ -x "$cmd/rootfs/bin/sh" ] || fail_run 'unsupported_nspawn_image: V1 requires /bin/sh in the container image'
     mkdir -p "$cmd/rootfs/firecrab"
     [ -d "$cmd/rootfs/etc" ] && [ ! -L "$cmd/rootfs/etc" ] && [ ! -L "$cmd/rootfs/etc/passwd" ] && [ ! -L "$cmd/rootfs/etc/group" ] || fail_run 'unsupported_nspawn_image: regular account files are required'

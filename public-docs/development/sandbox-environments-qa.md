@@ -135,6 +135,12 @@ install the root-owned regular file at
 extracts a private attempt copy, creates the attempt account in that private
 copy, and applies nspawn resource/capability restrictions. The shared archive is
 never modified or removed.
+The private container root must remain mode 0755 so the payload UID can traverse
+it after chroot. Its outer attempt control directory stays private. Recent
+systemd versions also require a working guest `getent` with its libc/NSS runtime
+to resolve non-root users and groups. A static BusyBox tree alone does not prove
+that this user lookup is supported. Check it in the prepared archive before
+claiming an nspawn image is executable.
 
 For each engine, repeat execution, separate streams, exit, output overflow,
 cancellation, required artifact export and TTL cleanup. Fail one required export
