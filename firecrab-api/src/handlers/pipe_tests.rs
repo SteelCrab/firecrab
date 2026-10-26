@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 #[tokio::test]
 async fn old_cli_stderr_has_a_static_rest_error_and_unknown_details_stay_private() {
+    use tracing::instrument::WithSubscriber;
     for (detail, status, code) in [
         (
             "error: unrecognized subcommand 'pipe'\n\nUsage: firecrab [OPTIONS] <COMMAND>\nprivate-stderr-canary",
@@ -30,7 +31,17 @@ async fn old_cli_stderr_has_a_static_rest_error_and_unknown_details_stay_private
         let result = Err(firecrab_helper_protocol::network::HelperFailure::Internal {
             detail: detail.into(),
         });
-        let response = pipe_inspect_response(result).await;
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || CapturedLog(writer.clone()))
+            .finish();
+        let response = pipe_inspect_response(result)
+            .with_subscriber(subscriber)
+            .await;
         assert_eq!(response.status(), status);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let body: Value = serde_json::from_slice(&bytes).unwrap();
@@ -43,6 +54,28 @@ async fn old_cli_stderr_has_a_static_rest_error_and_unknown_details_stay_private
         }
         assert!(!String::from_utf8_lossy(&bytes).contains("private-stderr-canary"));
         assert!(!String::from_utf8_lossy(&bytes).contains("Usage:"));
+        let log = String::from_utf8(log.lock().unwrap().clone()).unwrap();
+        assert!(log.contains("pipe helper command failed"));
+        assert!(log.contains("request_id="));
+        assert!(
+            log.contains(&format!("failure_code=\"{code}\""))
+                || log.contains(&format!("failure_code={code}"))
+        );
+        assert!(!log.contains("private-stderr-canary"));
+        assert!(!log.contains("Usage:"));
+        assert!(!log.contains("unrecognized subcommand"));
+    }
+}
+
+/// Capture only this fixture's tracing events without changing the global subscriber.
+struct CapturedLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+impl std::io::Write for CapturedLog {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

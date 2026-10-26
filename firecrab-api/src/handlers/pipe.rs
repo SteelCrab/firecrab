@@ -21,19 +21,20 @@ pub(super) async fn call(
 ) -> Result<Json<Snapshot>, AppError> {
     let firecrab = matches!(&operation, Operation::ManageFirecrabTunnel { .. });
     client.pipe(operation).await.map(Json).map_err(|error| {
-        tracing::warn!(request_id=%request_id.0, "pipe helper command failed");
-        if let Some(response) = unsupported_cli(&error, request_id.0) {
-            return response;
+        let mut response = unsupported_cli(&error, request_id.0);
+        if response.is_none() && firecrab {
+            response = firecrab_error(&error, request_id.0);
         }
-        if firecrab && let Some(response) = firecrab_error(&error, request_id.0) {
-            return response;
-        }
-        AppError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "pipe_unavailable",
-            "Pipe operation failed; check the helper and installed engines",
-            request_id.0,
-        )
+        let response = response.unwrap_or_else(|| {
+            AppError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "pipe_unavailable",
+                "Pipe operation failed; check the helper and installed engines",
+                request_id.0,
+            )
+        });
+        tracing::warn!(request_id=%request_id.0, failure_code=response.code(), "pipe helper command failed");
+        response
     })
 }
 
