@@ -356,25 +356,42 @@ fn artifact_mcp_checks_attempt_size_digest_and_stream_bound_before_returning_byt
     for case in [
         "valid",
         "foreign-attempt",
+        "wrong-response-task",
+        "wrong-artifact-task",
         "declared-oversize",
         "wrong-digest",
         "stream-oversize",
     ] {
         let mut entry = metadata.clone();
+        let (response_task, response_attempt) = if case == "wrong-response-task" {
+            let task = Uuid::new_v4();
+            let attempt = Uuid::new_v4();
+            entry["taskId"] = json!(task);
+            entry["attemptId"] = json!(attempt);
+            (task, attempt)
+        } else {
+            (id, attempt)
+        };
+        if case == "wrong-artifact-task" {
+            entry["taskId"] = json!(Uuid::new_v4());
+        }
         if case == "foreign-attempt" {
             entry["attemptId"] = json!(Uuid::new_v4());
         }
         if case == "declared-oversize" {
             entry["size"] = json!(65_537);
         }
-        let row = task(id, attempt, json!([entry]), "result");
+        let row = task(response_task, response_attempt, json!([entry]), "result");
         let mut replies = vec![response(
             "GET",
             format!("/api/ai-sandbox/tasks/{id}"),
             Value::Null,
             row,
         )];
-        if !matches!(case, "foreign-attempt" | "declared-oversize") {
+        if !matches!(
+            case,
+            "foreign-attempt" | "wrong-response-task" | "wrong-artifact-task" | "declared-oversize"
+        ) {
             let mut bytes = response(
                 "GET",
                 format!("/api/ai-sandbox/tasks/{id}/artifacts/{artifact}"),
@@ -403,7 +420,8 @@ fn artifact_mcp_checks_attempt_size_digest_and_stream_bound_before_returning_byt
             let error = result.unwrap_err();
             assert!(
                 error.contains(match case {
-                    "foreign-attempt" => "does not belong",
+                    "wrong-response-task" => "does not match the requested task",
+                    "foreign-attempt" | "wrong-artifact-task" => "does not belong",
                     "declared-oversize" | "stream-oversize" => "bound",
                     _ => "SHA-256",
                 }),

@@ -205,23 +205,28 @@ fn request(
 
 pub(crate) fn artifact_bytes(
     client: &ApiClient,
-    task: Uuid,
+    requested_task: Uuid,
     artifact: Uuid,
     limit: usize,
 ) -> Result<(SandboxArtifact, Vec<u8>), Box<dyn std::error::Error>> {
     use sha2::{Digest, Sha256};
-    let task: SandboxTask = client.get(&format!("/api/ai-sandbox/tasks/{task}"))?;
+    let task: SandboxTask = client.get(&format!("/api/ai-sandbox/tasks/{requested_task}"))?;
+    if task.id != requested_task {
+        return Err("Artifact response does not match the requested task".into());
+    }
     let metadata = task
         .artifacts
         .iter()
-        .find(|a| a.id == artifact && a.task_id == task.id && a.attempt_id == task.attempt_id)
+        .find(|a| {
+            a.id == artifact && a.task_id == requested_task && a.attempt_id == task.attempt_id
+        })
         .ok_or("Artifact does not belong to this task attempt")?
         .clone();
     if metadata.size > limit {
         return Err("Artifact exceeds this client's download bound".into());
     }
     let bytes = client.get_bytes_bounded(
-        &format!("/api/ai-sandbox/tasks/{}/artifacts/{artifact}", task.id),
+        &format!("/api/ai-sandbox/tasks/{requested_task}/artifacts/{artifact}"),
         limit,
     )?;
     if bytes.len() != metadata.size || format!("{:x}", Sha256::digest(&bytes)) != metadata.sha256 {

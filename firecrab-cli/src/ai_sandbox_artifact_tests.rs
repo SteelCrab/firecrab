@@ -95,15 +95,34 @@ fn artifact_export_rejects_foreign_attempt_oversize_and_corrupt_bytes_without_cr
     let attempt = Uuid::new_v4();
     let artifact = Uuid::new_v4();
     let bytes = b"owned";
-    for case in ["foreign", "oversize", "corrupt", "short"] {
+    for case in [
+        "foreign",
+        "wrong-response-task",
+        "wrong-artifact-task",
+        "oversize",
+        "corrupt",
+        "short",
+    ] {
         let mut metadata = json!({"id":artifact,"taskId":id,"attemptId":attempt,"path":"result.bin","size":bytes.len(),"sha256":format!("{:x}",Sha256::digest(bytes))});
+        let (response_task, response_attempt) = if case == "wrong-response-task" {
+            let task = Uuid::new_v4();
+            let attempt = Uuid::new_v4();
+            metadata["taskId"] = json!(task);
+            metadata["attemptId"] = json!(attempt);
+            (task, attempt)
+        } else {
+            (id, attempt)
+        };
+        if case == "wrong-artifact-task" {
+            metadata["taskId"] = json!(Uuid::new_v4());
+        }
         if case == "foreign" {
             metadata["attemptId"] = json!(Uuid::new_v4());
         }
         if case == "oversize" {
             metadata["size"] = json!(16 * 1024 * 1024 + 1);
         }
-        let row = task(id, attempt, json!([metadata]), "result");
+        let row = task(response_task, response_attempt, json!([metadata]), "result");
         let mut replies = vec![(
             format!("/api/ai-sandbox/tasks/{id}"),
             row.to_string().into_bytes(),
@@ -134,7 +153,8 @@ fn artifact_export_rejects_foreign_attempt_oversize_and_corrupt_bytes_without_cr
         .to_string();
         assert!(
             error.contains(match case {
-                "foreign" => "does not belong",
+                "wrong-response-task" => "does not match the requested task",
+                "foreign" | "wrong-artifact-task" => "does not belong",
                 "oversize" => "bound",
                 _ => "SHA-256",
             }),
