@@ -67,6 +67,7 @@ fn require_retired(
     id: RequestId,
     binding: &SandboxTunnelBinding,
     snapshot: &Snapshot,
+    unit_snapshot: &Snapshot,
 ) -> Result<(), AppError> {
     let saved = state
         .store
@@ -90,11 +91,22 @@ fn require_retired(
     let connector = binding
         .connector_id
         .ok_or_else(|| failure(id, "sandbox_preview_shutdown_unconfirmed"))?;
+    let unit_name = firecrab_helper_protocol::pipe::quick_tunnel_unit(connector);
+    let confirmed_stopped = match unit_snapshot.units.as_slice() {
+        [unit] => {
+            unit.unit == unit_name
+                && matches!(unit.load_state.as_str(), "loaded" | "not-found")
+                && unit.active_state == "inactive"
+                && unit.sub_state == "dead"
+                && unit.main_pid == 0
+        }
+        _ => false,
+    };
     let retired = match binding.state {
         SandboxTunnelState::Stopped => {
             require_applied(snapshot, binding, id)?;
             claim == Some(binding.id)
-                && connector_stopped(snapshot, connector)
+                && confirmed_stopped
                 && address(snapshot, binding).is_some_and(|a| !a.connected)
         }
         SandboxTunnelState::Deleted => {
@@ -105,8 +117,7 @@ fn require_retired(
                     .firecrab_tunnels
                     .iter()
                     .any(|a| a.connector_id == connector)
-                && (connector_stopped(snapshot, connector)
-                    || !snapshot.quick_tunnels.iter().any(|c| c.id == connector))
+                && confirmed_stopped
         }
         _ => false,
     };
@@ -114,6 +125,30 @@ fn require_retired(
         return Err(failure(id, "sandbox_preview_shutdown_unconfirmed"));
     }
     Ok(())
+}
+
+/// Manifest-only snapshots omit orphaned units. Query this exact saved UUID directly.
+async fn inspect_retired(
+    state: &AppState,
+    id: RequestId,
+    binding: &SandboxTunnelBinding,
+) -> Result<(), AppError> {
+    let connector = binding
+        .connector_id
+        .ok_or_else(|| failure(id, "sandbox_preview_shutdown_unconfirmed"))?;
+    // The legacy singleton may use the global named unit instead of a UUID unit.
+    if connector.is_nil() || connector == firecrab_helper_protocol::pipe::LEGACY_QUICK_TUNNEL_ID {
+        return Err(failure(id, "sandbox_preview_shutdown_unconfirmed"));
+    }
+    let snapshot = inspect(state, id).await?;
+    let unit = super::super::pipe::call(
+        &state.network,
+        Operation::InspectQuickTunnel { id: connector },
+        id,
+    )
+    .await?
+    .0;
+    require_retired(state, id, binding, &snapshot, &unit)
 }
 
 /// A private probe callback lets fixtures exercise lifecycle fences without public requests.
@@ -148,9 +183,9 @@ where
         return Err(failure(id, "sandbox_preview_invalid_verification"));
     }
     let url = verification_url(&binding, &request.path, id)?;
-    require_retired(state, id, &binding, &inspect(state, id).await?)?;
+    inspect_retired(state, id, &binding).await?;
     let observation = probe(url).await;
-    require_retired(state, id, &binding, &inspect(state, id).await?)?;
+    inspect_retired(state, id, &binding).await?;
     let previous = binding.clone();
     binding.public_shutdown = if observation.error_code.is_some() {
         SandboxTunnelVerification::Verified

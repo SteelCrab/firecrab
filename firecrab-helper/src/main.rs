@@ -673,7 +673,11 @@ async fn dispatch(
 ) -> Result<AfterResponse, HelperFailure> {
     match request {
         NetworkRequest::Pipe { request } => {
-            let changed = !matches!(request, firecrab_helper_protocol::pipe::Operation::Inspect);
+            let changed = !matches!(
+                request,
+                firecrab_helper_protocol::pipe::Operation::Inspect
+                    | firecrab_helper_protocol::pipe::Operation::InspectQuickTunnel { .. }
+            );
             let result = pipe::run(request).await;
             if changed {
                 // A failed Pipe transaction may have rolled back a manifest seen

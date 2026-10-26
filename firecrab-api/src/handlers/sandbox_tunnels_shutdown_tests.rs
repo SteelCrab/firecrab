@@ -1,5 +1,5 @@
 use super::super::shutdown;
-use super::lifecycle::helper;
+use super::lifecycle::helper as pipe_helper;
 use super::*;
 
 fn request() -> SandboxTunnelVerify {
@@ -17,6 +17,7 @@ fn inactive(row: &SandboxTunnelBinding) -> Snapshot {
     observed.quick_tunnels[0].unit.active_state = "inactive".into();
     observed.quick_tunnels[0].unit.sub_state = "dead".into();
     observed.quick_tunnels[0].unit.main_pid = 0;
+    observed.units.push(observed.quick_tunnels[0].unit.clone());
     observed
 }
 
@@ -24,7 +25,37 @@ fn removed(row: &SandboxTunnelBinding) -> Snapshot {
     let mut observed = inactive(row);
     observed.firecrab_tunnels.clear();
     observed.quick_tunnels.clear();
+    observed.units[0].load_state = "not-found".into();
     observed
+}
+
+async fn helper(
+    state: &mut AppState,
+    root: &std::path::Path,
+    connector: Uuid,
+    replies: Vec<(Operation, Option<Snapshot>)>,
+) -> tokio::task::JoinHandle<()> {
+    let mut expanded = Vec::new();
+    for (operation, snapshot) in replies {
+        assert_eq!(operation, Operation::Inspect);
+        let mut manifest_snapshot = snapshot.clone();
+        if let Some(manifest) = &mut manifest_snapshot {
+            // Normal snapshots do not inspect a connector missing from the manifest.
+            manifest.units.clear();
+        }
+        expanded.push((operation, manifest_snapshot));
+        if let Some(mut direct) = snapshot {
+            direct.config = None;
+            direct.firecrab_tunnels.clear();
+            direct.quick_tunnels.clear();
+            direct.quick_tunnel = None;
+            expanded.push((
+                Operation::InspectQuickTunnel { id: connector },
+                Some(direct),
+            ));
+        }
+    }
+    pipe_helper(state, root, expanded).await
 }
 
 #[tokio::test]
@@ -53,6 +84,7 @@ async fn stopped_and_deleted_shutdown_proof_survives_restart_without_remote_reti
         let worker = helper(
             &mut state,
             dir.path(),
+            row.connector_id.unwrap(),
             vec![
                 (Operation::Inspect, Some(observed.clone())),
                 (Operation::Inspect, Some(observed)),
@@ -154,6 +186,7 @@ async fn active_or_uncertain_local_connector_cannot_be_mistaken_for_public_shutd
         let worker = helper(
             &mut state,
             dir.path(),
+            row.connector_id.unwrap(),
             vec![(Operation::Inspect, Some(observed))],
         )
         .await;
@@ -195,6 +228,7 @@ async fn reclaimed_address_is_rejected_before_and_after_the_public_observation()
         let worker = helper(
             &mut state,
             dir.path(),
+            old.connector_id.unwrap(),
             vec![(Operation::Inspect, Some(removed(&old))); observations],
         )
         .await;
@@ -242,6 +276,7 @@ async fn local_connector_restart_after_probe_prevents_verified_shutdown() {
     let worker = helper(
         &mut state,
         dir.path(),
+        row.connector_id.unwrap(),
         vec![
             (Operation::Inspect, Some(inactive(&row))),
             (Operation::Inspect, Some(snapshot(&row))),
@@ -276,6 +311,7 @@ async fn failed_public_probe_clears_earlier_shutdown_success_without_retaining_r
     let worker = helper(
         &mut state,
         dir.path(),
+        row.connector_id.unwrap(),
         vec![(Operation::Inspect, Some(inactive(&row))); 4],
     )
     .await;
@@ -434,4 +470,178 @@ async fn shutdown_proof_update_cannot_reopen_or_retarget_a_tombstone_or_replace_
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn missing_manifest_never_hides_an_active_or_uncertain_orphan_unit_before_or_after_probe() {
+    for invalid in [
+        "active",
+        "failed",
+        "activating",
+        "pid",
+        "load-error",
+        "substate",
+        "missing",
+        "foreign-unit",
+        "duplicate",
+    ] {
+        for fail_after_probe in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut state = state(dir.path()).await;
+            let mut row = binding();
+            task(&state, &row);
+            row.state = SandboxTunnelState::Deleted;
+            row.local_removed = true;
+            state.store.save_sandbox_tunnel(&row).unwrap();
+            let stopped = removed(&row);
+            let mut uncertain = stopped.clone();
+            let unit = &mut uncertain.units[0];
+            match invalid {
+                "active" => {
+                    unit.load_state = "loaded".into();
+                    unit.active_state = "active".into();
+                    unit.sub_state = "running".into();
+                    unit.main_pid = 42;
+                }
+                "failed" => {
+                    unit.load_state = "loaded".into();
+                    unit.active_state = "failed".into();
+                    unit.sub_state = "failed".into();
+                }
+                "activating" => {
+                    unit.load_state = "loaded".into();
+                    unit.active_state = "activating".into();
+                    unit.sub_state = "start".into();
+                }
+                "pid" => unit.main_pid = 42,
+                "load-error" => unit.load_state = "error".into(),
+                "substate" => unit.sub_state = "unknown".into(),
+                "foreign-unit" => unit.unit = quick_tunnel_unit(Uuid::new_v4()),
+                "missing" => uncertain.units.clear(),
+                "duplicate" => {
+                    let mut peer = unit.clone();
+                    peer.active_state = "active".into();
+                    uncertain.units.push(peer);
+                }
+                _ => unreachable!(),
+            }
+            assert!(uncertain.quick_tunnels.is_empty() && uncertain.config.is_none());
+            let observations = if fail_after_probe {
+                vec![stopped, uncertain]
+            } else {
+                vec![uncertain]
+            };
+            let worker = helper(
+                &mut state,
+                dir.path(),
+                row.connector_id.unwrap(),
+                observations
+                    .into_iter()
+                    .map(|snapshot| (Operation::Inspect, Some(snapshot)))
+                    .collect(),
+            )
+            .await;
+            let error = shutdown::verify(
+                &state,
+                RequestId(Uuid::new_v4()),
+                Caller::default(),
+                row.id,
+                &request(),
+                |_| async {
+                    assert!(
+                        fail_after_probe,
+                        "{invalid} must fail before the public callback"
+                    );
+                    shutdown::classify(503, br#"{"error":"target_offline"}"#)
+                },
+            )
+            .await
+            .unwrap_err();
+            worker.await.unwrap();
+            assert_eq!(
+                error.code(),
+                "sandbox_preview_shutdown_unconfirmed",
+                "{invalid}"
+            );
+            assert_eq!(state.store.sandbox_tunnel(row.id).unwrap(), Some(row));
+        }
+    }
+}
+
+#[tokio::test]
+async fn unsupported_or_failed_direct_unit_lookup_cannot_verify_shutdown() {
+    for fail_after_probe in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state(dir.path()).await;
+        let mut row = binding();
+        task(&state, &row);
+        row.state = SandboxTunnelState::Deleted;
+        row.local_removed = true;
+        state.store.save_sandbox_tunnel(&row).unwrap();
+        let observed = removed(&row);
+        let unit = Operation::InspectQuickTunnel {
+            id: row.connector_id.unwrap(),
+        };
+        let mut replies = vec![];
+        if fail_after_probe {
+            replies.extend([
+                (Operation::Inspect, Some(observed.clone())),
+                (unit.clone(), Some(observed.clone())),
+            ]);
+        }
+        replies.extend([(Operation::Inspect, Some(observed)), (unit, None)]);
+        let worker = pipe_helper(&mut state, dir.path(), replies).await;
+        assert!(
+            shutdown::verify(
+                &state,
+                RequestId(Uuid::new_v4()),
+                Caller::default(),
+                row.id,
+                &request(),
+                |_| async {
+                    assert!(
+                        fail_after_probe,
+                        "failed lookup cannot make a public request"
+                    );
+                    shutdown::classify(503, br#"{"error":"target_offline"}"#)
+                }
+            )
+            .await
+            .is_err()
+        );
+        worker.await.unwrap();
+        assert_eq!(state.store.sandbox_tunnel(row.id).unwrap(), Some(row));
+    }
+}
+
+#[tokio::test]
+async fn reserved_legacy_or_empty_connector_id_cannot_be_proved_stopped_by_a_missing_uuid_unit() {
+    for connector in [
+        Uuid::nil(),
+        firecrab_helper_protocol::pipe::LEGACY_QUICK_TUNNEL_ID,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path()).await;
+        let mut row = binding();
+        task(&state, &row);
+        row.state = SandboxTunnelState::Deleted;
+        row.local_removed = true;
+        row.connector_id = Some(connector);
+        state.store.save_sandbox_tunnel(&row).unwrap();
+        assert_eq!(
+            shutdown::verify(
+                &state,
+                RequestId(Uuid::new_v4()),
+                Caller::default(),
+                row.id,
+                &request(),
+                |_| async { panic!("legacy or empty ID cannot start a public probe") }
+            )
+            .await
+            .unwrap_err()
+            .code(),
+            "sandbox_preview_shutdown_unconfirmed"
+        );
+        assert_eq!(state.store.sandbox_tunnel(row.id).unwrap(), Some(row));
+    }
 }

@@ -570,6 +570,11 @@ pub enum Operation {
     },
     /// Read persisted configuration, engine availability and systemd state.
     Inspect,
+    /// Read one fixed UUID connector unit even when its manifest entry is absent.
+    InspectQuickTunnel {
+        /// Saved connector identity; never an arbitrary systemd unit name.
+        id: Uuid,
+    },
     /// Apply a complete configuration with rollback on verification failure.
     Apply {
         /// Manifest and optional replacement tunnel credentials.

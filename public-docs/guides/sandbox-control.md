@@ -123,8 +123,12 @@ also has **Verify public shutdown**. This action makes a public request; it is
 never automatic.
 
 Shutdown mode rejects body hashes and WebSocket checks. Before and after the
-probe, the API checks that the exact connector is inactive or removed, no
-successor handoff is pending, and no other binding has claimed the address.
+probe, the API directly inspects the exact connector UUID's fixed systemd unit,
+independently of the manifest. It requires `loaded` or explicit `not-found`,
+`inactive`/`dead`, and MainPID zero. Missing manifest metadata is not evidence
+that an orphan unit stopped. Incomplete/failed unit lookups or an older helper/CLI
+without this read-only operation cannot verify shutdown. The API also checks
+that no successor handoff is pending and no other binding has claimed the address.
 Deleted tombstones remain verifiable by an operator after project deletion.
 The probe uses only the saved `https://SUBDOMAIN.firecrab.dev` origin, verifies
 TLS, follows no redirects, and permits at most 10 seconds and 64 KiB. Only the
