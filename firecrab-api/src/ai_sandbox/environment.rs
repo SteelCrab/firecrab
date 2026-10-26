@@ -551,6 +551,35 @@ async fn reconcile_roles(
 ) -> Result<(), String> {
     let order = validate(&environment.spec)?;
     provision(state, environment).await?;
+    // Startup can run before the helper is available. Retry the existing Runtime recovery
+    // only for recorded failures; no task command or VM restart is repeated here.
+    let running: BTreeSet<_> = state
+        .vms
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .values()
+        .filter(|vm| vm.state == VmState::Running)
+        .map(|vm| vm.id)
+        .collect();
+    let network_failed = {
+        let observed = state
+            .reconciliation
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        environment.roles.iter().any(|role| {
+            running.contains(&role.vm_id)
+                && (role.network == SandboxReadiness::Failed
+                    || role.agent == SandboxReadiness::Failed
+                    || observed.get(&role.vm_id).is_some_and(|result| {
+                        result.outcome == VmReconciliationOutcome::NetworkFailed
+                    }))
+        })
+    };
+    if network_failed {
+        crate::reconcile::retry_networks(state)
+            .await
+            .map_err(|_| "Environment host network recovery failed; retry reconciliation")?;
+    }
     for index in order {
         let role = &environment.spec.roles[index];
         let dependencies_ready = role.depends_on.iter().all(|dependency| {
