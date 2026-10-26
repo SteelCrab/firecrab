@@ -636,7 +636,7 @@ async fn manual_rollback_preserves_a_policy_even_if_its_source_auth_is_unavailab
     active.spec.image = format!("ghcr.io/team/app@{}", digest('b'));
     active.digest = Some(digest('b'));
     active.request.host_port = 0;
-    journal.update.as_mut().unwrap().previous = Box::new(active.clone());
+    *journal.update.as_mut().unwrap().previous = active.clone();
     let helper = crate::service_runtime::deploy::tests::helper(root.path(), &journal).await;
     state.network = helper.client.clone();
     state
