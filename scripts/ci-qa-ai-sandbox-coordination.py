@@ -79,7 +79,7 @@ def input_for(agent, dependency=None):
     if agent == "Debug":
         text = ("Inspect Application.java and GreetingController.java. Reproduce the missing String bean failure by calling run_argv ONCE with exactly this JSON: "
                 + json.dumps(invocation("debug-failure"))
-                + " . Record that actual command with record_test name=missing-bean-reproduction and its returned eventSequence (it must fail). "
+                + " . Keep its actual missing-bean failure and exit 1 as command evidence. The regression test is recorded after the fix. "
                   "Use write_file to replace only src/main/java/io/firecrab/qa/Application.java with exactly this UTF-8 content: "
                 + json.dumps(fixed_application()) + " . "
                   "Then call run_argv ONCE with exactly this JSON: " + json.dumps(invocation("debug-fixed"))
@@ -112,9 +112,10 @@ def validate(task, agent, labels, codes):
         if code == 0:
             qa.require(nonce.group(1) in task.get("result", ""), "Model did not return the successful guest nonce")
     tests = task["tests"]
-    qa.require(len(tests) == len(events), "Missing command-backed test records")
+    qa.require(len(tests) == codes.count(0), "Missing command-backed regression test records")
     for event in events:
-        qa.require(any(test["eventSequence"] == event["sequence"] and test["passed"] == (event["exitCode"] == 0) for test in tests), "Test record disagrees with the actual guest command")
+        if event["exitCode"] == 0:
+            qa.require(any(test["eventSequence"] == event["sequence"] and test["passed"] for test in tests), "Regression record disagrees with the actual guest command")
     qa.require(len(task["artifacts"]) == 2, "Missing XML/nonce artifact export")
     prefix = "debug-fixed" if agent == "Debug" else "test-independent"
     qa.require({artifact.get("path") for artifact in task["artifacts"]} == {f"qa/{prefix}.xml", f"qa/{prefix}.executed"}, "Wrong artifact paths cannot establish JUnit/nonce evidence")
