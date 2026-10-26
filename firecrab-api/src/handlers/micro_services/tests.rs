@@ -10,9 +10,12 @@ use crate::templates::TemplateRegistry;
 
 async fn state(root: &std::path::Path) -> AppState {
     let templates = TemplateRegistry::from_specs(root, std::iter::empty()).unwrap();
+    let socket = root.join(format!("ingress-{}.sock", Uuid::new_v4()));
+    let _ = crate::network::test_support::spawn_recording_helper(&socket, None);
     AppState::with_db_file(templates, root.join("state.db"))
         .await
         .unwrap()
+        .with_test_network(crate::network::NetworkClient::with_socket_path(socket))
 }
 
 async fn app(root: &std::path::Path) -> Router {

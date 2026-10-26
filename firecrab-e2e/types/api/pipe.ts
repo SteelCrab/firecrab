@@ -1,5 +1,5 @@
 // API fixtures for browser tests. No application runtime code.
-export interface PipeRoute { host: string; pathPrefix: string; upstreams: string[] }
+export interface PipeRoute { host: string; pathPrefix: string; upstreams: string[]; network?: { micro_network_id: string; gateway: string; prefix: number } | null; owner?: { serviceId: string; deploymentId: string } | null }
 
 export interface PipeConfig {
   listen: string;

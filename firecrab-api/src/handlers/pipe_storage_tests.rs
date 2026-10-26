@@ -167,6 +167,7 @@ async fn services_block_disconnect_and_credential_values_stay_out_of_persisted_s
         }],
         log: vec![],
         domain_route_owned: false,
+        internal_route_owned: false,
         error: None,
     };
     state.store.save_service_deployment(&deployment).unwrap();
@@ -385,6 +386,7 @@ async fn guest_credentials_fail_closed_when_bindings_are_lost_and_resolve_rotate
             }],
             log: vec![],
             domain_route_owned: false,
+            internal_route_owned: false,
             error: None,
         })
         .unwrap();

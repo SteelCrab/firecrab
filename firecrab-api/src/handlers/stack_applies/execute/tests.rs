@@ -33,6 +33,7 @@ async fn fixture() -> (tempfile::TempDir, AppState, MicroServiceDeployment) {
         },
         phase: ServicePhase::Queued,
         domain_route_owned: false,
+        internal_route_owned: false,
         digest: None,
         instances: vec![],
         log: vec![],

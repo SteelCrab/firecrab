@@ -50,6 +50,7 @@ cd "$work/nginx-$nginx_version"
     --http-client-body-temp-path=body \
     --http-proxy-temp-path=proxy \
     --with-pcre="$work/pcre2-$pcre_version" \
+    --with-http_v2_module \
     --without-http_gzip_module \
     --without-http_fastcgi_module \
     --without-http_uwsgi_module \

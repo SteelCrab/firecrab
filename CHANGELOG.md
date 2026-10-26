@@ -23,6 +23,13 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- MicroServices publish private `<name>.internal` DNS and network-scoped ingress
+  after app health succeeds. Internal-only deployments need no host ports.
+  DNS and routes retain deployment ownership through restart and cleanup retries.
+  Private listeners support HTTP/1.1, HTTP/2 and WebSockets, preserve source and
+  destination security-group rules, and stay outside public tunnel configuration.
+  The bundled ingress gains HTTP/2 and the port-binding capability.
+
 - Replicated controller services declare stateless or shared external application
   state and distribute version-pinned PipeSecrets through encrypted deployment
   snapshots. Invalid state, credential references and exclusive work fail before
@@ -255,6 +262,10 @@ Entries land here as work merges, and move under the next version heading when t
 - None.
 
 ### Fixed
+
+- Gateway MAC addresses remain stable when MicroVM TAP ports join or leave.
+  Stopping a service no longer strands surviving guests' cached gateway
+  neighbors or delays their internal DNS requests.
 
 - Worktree development cleanup retains the selected dashboard checkout and port.
   Private start/restart requires that saved selection before changing the backend.

@@ -15,6 +15,16 @@ pub(super) async fn preflight(
     let Some(host) = &spec.domain else {
         return Ok(());
     };
+    preflight_route(state, service_id, host, "domain", request_id).await
+}
+
+pub(super) async fn preflight_route(
+    state: &AppState,
+    service_id: Uuid,
+    host: &str,
+    field: &str,
+    request_id: Uuid,
+) -> Result<(), AppError> {
     let snapshot = state
         .network
         .pipe(Operation::Inspect)
@@ -24,17 +34,17 @@ pub(super) async fn preflight(
             AppError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "pipe_unavailable",
-                "Cannot check domain routing. Check the Firecrab helper and ingress engine.",
+                "Cannot check service routing. Check the Firecrab helper and ingress engine.",
                 request_id,
             )
         })?;
     let message = if !snapshot.nginx_available {
         Some(
-            "Install the ingress engine before deploying a domain. Reinstall the Firecrab host bundle.",
+            "Install the ingress engine before deploying a service. Reinstall the Firecrab host bundle.",
         )
     } else if snapshot.config.as_ref().is_some_and(|config| {
         config.routes.iter().any(|route| {
-            route.host == *host
+            route.host == host
                 && route
                     .owner
                     .as_ref()
@@ -47,7 +57,7 @@ pub(super) async fn preflight(
     };
     if let Some(message) = message {
         return Err(AppError::validation(
-            BTreeMap::from([("domain".into(), message.into())]),
+            BTreeMap::from([(field.into(), message.into())]),
             request_id,
         ));
     }
@@ -94,6 +104,15 @@ pub(super) async fn publish(
         host,
         upstreams,
     };
+    apply(state, request, deployment.service_id).await
+}
+
+/// Retry only bounded Pipe transaction contention for deployment-owned routes.
+pub(super) async fn apply(
+    state: &AppState,
+    request: ServiceRouteRequest,
+    service_id: Uuid,
+) -> Result<(), String> {
     let mut retries = 0;
     loop {
         match state
@@ -116,9 +135,9 @@ pub(super) async fn publish(
                 tokio::time::sleep(Duration::from_secs(retries)).await;
             }
             Err(error) => {
-                tracing::warn!(%error, service_id = %deployment.service_id, "could not publish service domain");
+                tracing::warn!(%error, %service_id, "could not publish service route");
                 return Err(
-                    "Could not confirm domain routing. Check Pipe ingress and domain conflicts."
+                    "Could not confirm service routing. Check Pipe ingress and route conflicts."
                         .to_owned(),
                 );
             }

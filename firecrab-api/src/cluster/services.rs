@@ -110,6 +110,7 @@ fn host_satisfied(host: &ClusterServiceHost, id: Uuid) -> bool {
                 && d.phase == ServicePhase::Stopped
                 && d.instances.is_empty()
                 && !d.domain_route_owned
+                && !d.internal_route_owned
         }),
         ClusterServiceDesired::Running => host.deployment.as_ref().is_some_and(|d| {
             d.service_id == id

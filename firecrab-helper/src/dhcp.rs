@@ -32,6 +32,9 @@ const DNSMASQ_READABLE_MODE: u32 = 0o644;
 /// Failure modes for syncing DHCP reservations or (re)starting dnsmasq.
 #[derive(Debug, Error)]
 pub enum DhcpError {
+    /// The persisted Pipe manifest cannot supply a valid internal DNS snapshot.
+    #[error("failed to read internal service routes: {0}")]
+    ServiceRoutes(String),
     /// Couldn't write the candidate hosts file.
     #[error("failed to write DHCP hosts file {path}")]
     Write {
@@ -78,6 +81,8 @@ pub struct DhcpActor {
     /// All runtime files, including the PID used to signal orphaned dnsmasq,
     /// belong to this instance. Tests use a private temporary directory.
     hosts_path: PathBuf,
+    /// Authoritative deployment-owned routes, independent of the API process.
+    manifest_path: PathBuf,
 }
 
 #[derive(Debug, Default)]
@@ -102,6 +107,10 @@ impl DhcpActor {
         Self {
             state: Mutex::default(),
             hosts_path: PathBuf::from(HOSTS_FILE),
+            manifest_path: PathBuf::from(
+                std::env::var_os("CONFDIR").unwrap_or_else(|| "/etc/firecrab".into()),
+            )
+            .join("pipe/manifest.json"),
         }
     }
 }
@@ -334,10 +343,13 @@ fn render_base_config(hosts_file: &Path, micro_networks: &[MicroNetworkSpec]) ->
          {enable_ra}\
          bind-dynamic\n\
          except-interface=lo\n\
+         local=/internal/\n\
+         addn-hosts={}\n\
          dhcp-hostsfile={}\n\
          dhcp-leasefile={}\n\
          pid-file={}\n\
          log-dhcp\n",
+        service_hosts_path(hosts_file).display(),
         hosts_file.display(),
         hosts_file.with_file_name("dnsmasq.leases").display(),
         hosts_file.with_file_name("dnsmasq.pid").display(),
@@ -356,6 +368,7 @@ pub async fn sync_dhcp_leases(
     micro_networks: &[MicroNetworkSpec],
 ) -> Result<(), DhcpError> {
     let mut state = actor.state.lock().await;
+    write_service_dns(actor).await?;
     let hosts_path = actor.hosts_path.as_path();
     let networks_changed = state.served_networks.as_deref() != Some(micro_networks);
     let dnsmasq_running = owned_child_running(&mut state)?
@@ -666,6 +679,50 @@ fn base_config_path(hosts_path: &Path) -> PathBuf {
     hosts_path.with_file_name("dnsmasq.conf")
 }
 
+fn service_hosts_path(hosts_path: &Path) -> PathBuf {
+    hosts_path.with_file_name("dnsmasq-services.hosts")
+}
+
+async fn write_service_dns(actor: &DhcpActor) -> Result<bool, DhcpError> {
+    use firecrab_helper_protocol::pipe::Config;
+    let text = match Config::read(&actor.manifest_path) {
+        Ok(config) => config.internal_dns_hosts(),
+        Err(_) if !actor.manifest_path.exists() => String::new(),
+        Err(error) => return Err(DhcpError::ServiceRoutes(error.to_string())),
+    };
+    let path = service_hosts_path(&actor.hosts_path);
+    let candidate = path.with_extension("tmp");
+    write_atomic_candidate(&candidate, &text).await?;
+    tokio::fs::rename(candidate, &path)
+        .await
+        .map_err(|source| DhcpError::Swap { path, source })?;
+    Ok(!text.is_empty())
+}
+
+/// Rebuild DNS from committed routes after a Pipe transaction. SIGHUP also clears
+/// cached negative answers, so a newly published service resolves immediately.
+pub async fn refresh_service_dns(actor: &DhcpActor) -> Result<(), DhcpError> {
+    let mut state = actor.state.lock().await;
+    let has_services = write_service_dns(actor).await?;
+    if owned_child_running(&mut state)? {
+        reload(state.child.as_mut().expect("live dnsmasq child"))?;
+    } else if let Some(pid) = running_orphan_pid(&actor.hosts_path).await {
+        reload_pid(pid)?;
+    } else if let Some(networks) = state
+        .served_networks
+        .clone()
+        .filter(|networks| !networks.is_empty())
+    {
+        state.child = Some(spawn_dnsmasq(&actor.hosts_path, &networks).await?);
+    } else if has_services {
+        return Err(DhcpError::ServiceRoutes(
+            "DNS is not running; reconcile the MicroNetworks before publishing internal routes"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Starts dnsmasq bound to the live hosts file, in the foreground so this
 /// process supervises it directly (matching how Firecracker's own child
 /// processes are supervised, rather than a separately-managed systemd
@@ -728,7 +785,71 @@ mod tests {
         DhcpActor {
             state: Mutex::default(),
             hosts_path: dir.path().join("dnsmasq-hosts.conf"),
+            manifest_path: dir.path().join("pipe.json"),
         }
+    }
+
+    #[tokio::test]
+    async fn service_dns_rebuilds_from_durable_routes_and_refuses_damaged_manifests() {
+        use firecrab_helper_protocol::pipe::{Config, ServiceRouteRequest};
+        let dir = tempfile::tempdir().unwrap();
+        let actor = isolated_actor(&dir);
+        let config: Config =
+            serde_json::from_value(serde_json::json!({"routes":[],"tunnel":null})).unwrap();
+        let publish: ServiceRouteRequest = serde_json::from_value(serde_json::json!({
+            "action":"publish_internal", "owner":{"serviceId":Uuid::from_u128(1),"deploymentId":Uuid::from_u128(2)},
+            "name":"api", "network":{"micro_network_id":Uuid::from_u128(3),"gateway":"172.30.0.1","prefix":24},
+            "upstreams":["172.30.0.2:8080"]
+        })).unwrap();
+        let next = publish.updated_config(&config).unwrap();
+        tokio::fs::write(&actor.manifest_path, serde_json::to_vec(&next).unwrap())
+            .await
+            .unwrap();
+        assert!(write_service_dns(&actor).await.unwrap());
+        assert!(
+            refresh_service_dns(&actor).await.is_err(),
+            "an absent DNS runtime must not confirm publication"
+        );
+        let path = service_hosts_path(&actor.hosts_path);
+        assert_eq!(
+            tokio::fs::read_to_string(&path).await.unwrap(),
+            "172.30.0.1 api.internal\n"
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        tokio::fs::write(&path, "203.0.113.1 api.internal\n")
+            .await
+            .unwrap();
+        write_service_dns(&actor).await.unwrap();
+        assert_eq!(
+            tokio::fs::read_to_string(&path).await.unwrap(),
+            next.internal_dns_hosts()
+        );
+        // The next helper lifetime repairs DNS using the same persisted routes.
+        let reopened = isolated_actor(&dir);
+        write_service_dns(&reopened).await.unwrap();
+        assert_eq!(
+            tokio::fs::read_to_string(&path).await.unwrap(),
+            next.internal_dns_hosts()
+        );
+        tokio::fs::write(&actor.manifest_path, "invalid")
+            .await
+            .unwrap();
+        assert!(refresh_service_dns(&actor).await.is_err());
+        assert_eq!(
+            tokio::fs::read_to_string(&path).await.unwrap(),
+            next.internal_dns_hosts()
+        );
+        tokio::fs::write(&actor.manifest_path, serde_json::to_vec(&config).unwrap())
+            .await
+            .unwrap();
+        refresh_service_dns(&actor).await.unwrap();
+        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), "");
+        let base = render_base_config(&actor.hosts_path, &[]);
+        assert!(base.contains("local=/internal/\n"));
+        assert!(base.contains(&format!("addn-hosts={}\n", path.display())));
     }
 
     fn lease(vm_id: u128, ipv4: &str, mac: &str) -> DhcpLeaseEntry {

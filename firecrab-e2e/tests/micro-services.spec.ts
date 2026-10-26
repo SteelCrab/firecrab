@@ -162,6 +162,42 @@ async function openServices(
 }
 
 test.describe("MicroService configuration @dashboard", () => {
+  test("deploys privately with an empty host port and shows its internal address", async ({ page }) => {
+    const service = { ...INITIAL, domain: null, replicas: 2 };
+    await openServices(page, [service]);
+    let deployment: object | null = null;
+    await page.route(`**/api/micro-services/${ID}/deployment`, async route => {
+      if (route.request().method() === "POST") {
+        expect(route.request().postDataJSON()).toEqual({ hostPort: 0, microNetworkId: null });
+        deployment = { id: SECRET, serviceId: ID, spec: service, phase: "running", request: { hostPort: 0 },
+          digest: null, internalRouteOwned: true, domainRouteOwned: false, error: null, log: [],
+          instances: [{ vmId: SECRET, ipv4: "172.30.0.2", hostPort: 0, state: "running", healthy: true }] };
+        return route.fulfill({ status: 202, json: deployment });
+      }
+      return route.fulfill({ json: deployment });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await page.getByLabel("First host port (optional)", { exact: true }).fill("");
+    await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
+    await expect(page.getByText("Available to apps in the same MicroNetwork.", { exact: true })).toBeVisible();
+    await expect(page.locator("code").filter({ hasText: "http://orders.internal" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open app", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeEnabled();
+  });
+
+  test("retains Stop after uncertain internal routing cleanup without replicas", async ({ page }) => {
+    await openServices(page, [{ ...INITIAL, domain: null }]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: {
+      id: SECRET, serviceId: ID, spec: { ...INITIAL, domain: null }, phase: "failed", request: { hostPort: 0 }, digest: null,
+      internalRouteOwned: true, instances: [], log: [], error: "Could not withdraw internal DNS and routing; retry Stop."
+    } }));
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeHidden();
+    await expect(page.getByText("Available to apps in the same MicroNetwork.", { exact: true })).toHaveCount(0);
+  });
+
+
   test("keeps long image references compact and exposes row actions by keyboard", async ({ page }) => {
     const image = `118167167440.dkr.ecr.ap-northeast-2.amazonaws.com/ecr/nginx@sha256:${"a".repeat(64)}`;
     await openServices(page, [{ ...INITIAL, image }]);
@@ -527,11 +563,11 @@ test.describe("MicroService configuration @dashboard", () => {
 
     await expect(
       page.getByText(
-        "Each replica uses one host port, starting at 30100. App port: 9090.",
+        "Leave the host port empty for internal access. App port: 9090.",
         { exact: true },
       ),
     ).toBeVisible();
-    await expect(page.getByLabel("First host port")).toHaveAttribute(
+    await expect(page.getByLabel("First host port (optional)")).toHaveAttribute(
       "max",
       "65533",
     );
@@ -777,7 +813,7 @@ test("domain deployment inherits the security-group network and shows DNS guidan
   );
   await page.getByRole("button", { name: "Open orders", exact: true }).click();
   await expect(page.getByRole("status")).toHaveText("Not deployed");
-  await expect(page.getByLabel("First host port")).toHaveCount(0);
+  await expect(page.getByLabel("First host port (optional)")).toHaveCount(0);
   await expect(page.getByLabel("Network", { exact: true })).not.toBeVisible();
   await page.getByText("Advanced settings", { exact: true }).click();
   await expect(page.getByLabel("Network", { exact: true })).toHaveValue(ID);
@@ -972,7 +1008,7 @@ test("AUTH recovery restores deployment choices without automatically deploying"
   });
   await page.getByRole("button", { name: "Open orders", exact: true }).click();
   await page.getByLabel("Network", { exact: true }).selectOption(STORAGE);
-  await page.getByLabel("First host port", { exact: true }).fill("31234");
+  await page.getByLabel("First host port (optional)", { exact: true }).fill("31234");
   await expect(
     page.getByRole("button", { name: "Deploy and run", exact: true }),
   ).toBeDisabled();
@@ -983,7 +1019,7 @@ test("AUTH recovery restores deployment choices without automatically deploying"
   await page.getByLabel("Token", { exact: true }).fill("fixture-only-token");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page).toHaveURL(/#\/services$/);
-  await expect(page.getByLabel("First host port", { exact: true })).toHaveValue(
+  await expect(page.getByLabel("First host port (optional)", { exact: true })).toHaveValue(
     "31234",
   );
   await expect(page.getByLabel("Network", { exact: true })).toHaveValue(
@@ -1049,9 +1085,9 @@ test("placement ignores an older port result and checks the final request again"
   await expect(
     page.getByRole("button", { name: "Deploy and run", exact: true }),
   ).toBeEnabled();
-  await page.getByLabel("First host port", { exact: true }).fill("31234");
+  await page.getByLabel("First host port (optional)", { exact: true }).fill("31234");
   await expect.poll(() => delayed).toBe(true);
-  await page.getByLabel("First host port", { exact: true }).fill("32000");
+  await page.getByLabel("First host port (optional)", { exact: true }).fill("32000");
   await expect(
     page.getByRole("button", { name: "Deploy and run", exact: true }),
   ).toBeEnabled();
