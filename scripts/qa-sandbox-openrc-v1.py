@@ -140,7 +140,8 @@ def artifact(saved, planned, item, metadata, payload):
     memory = 64 if label == "memory" else 96
     if (value.get("runId") != uuid.UUID(planned["runId"]).hex or value.get("case") != label
             or not re.fullmatch(r"[0-9a-f]{32}", nonce)
-            or value.get("uid", 0) == 0 or value.get("euid", 0) == 0
+            or value.get("uid", 0) <= 0 or value.get("euid") != value.get("uid")
+            or value.get("gid", 0) <= 0 or value.get("egid") != value.get("gid")
             or value.get("groups") != [] or value.get("noNewPrivs") != 1
             or int(value.get("capEff", "1"), 16) != 0 or value.get("cwdName") != "qa cwd"
             or value.get("pid", 0) <= 1 or value.get("startTicks", 0) <= 0

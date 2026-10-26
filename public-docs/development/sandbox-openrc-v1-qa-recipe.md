@@ -99,8 +99,8 @@ syntax, wildcards, a newline and an empty argument. None may be interpolated.
 Only stdin contains an embedded NUL; argv and env NUL remain invalid by contract.
 The public probe checks the exact stdin bytes and records their hex/digest.
 
-Every executed case generates a guest nonce, records non-root real/effective UID,
-GID, empty supplementary groups, NoNewPrivs=1, CapEff=0, own PID/boot/start ticks,
+Every executed case generates a guest nonce, checks matching non-root real/effective
+UID and GID, empty supplementary groups, NoNewPrivs=1, CapEff=0, own PID/boot/start ticks,
 cwd, OpenRC file/state evidence and actual memory/CPU/nofile hard limits. It
 checks sensitive environment-name presence without printing any value. Receipts
 are created exclusively, so a replay cannot truncate earlier evidence. The

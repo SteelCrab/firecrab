@@ -139,7 +139,7 @@ class OfflineTests(unittest.TestCase):
         planned = qa.plan(RUN, qa.baseline(project, environment));item = planned["tasks"][0]
         nonce = "d" * 32
         value = {"runId": RUN.hex, "case": "literal", "nonce": nonce, "uid": 1000,
-                 "euid": 1000, "groups": [], "noNewPrivs": 1, "capEff": "0000",
+                 "euid": 1000, "gid": 2000, "egid": 2000, "groups": [], "noNewPrivs": 1, "capEff": "0000",
                  "pid": 123, "startTicks": 456, "bootId": str(uuid.uuid4()),
                  "cwdName": "qa cwd", "addressSpaceLimit": [96 * 1024 * 1024] * 2,
                  "cpuLimit": [3, 3], "nofileLimit": [1024, 1024], "argv": qa.LITERAL_ARGS,
@@ -158,7 +158,8 @@ class OfflineTests(unittest.TestCase):
         saved["artifacts"] = [metadata]
         report = qa.artifact(saved, planned, item, metadata, payload)
         self.assertEqual(report["rawExitCodes"], [7]);self.assertFalse(report["liveQaAccepted"])
-        for changed in ("bytes", "owner", "nonce", "exit", "stderr", "passed", "replay", "edit", "source", "result"):
+        for changed in ("bytes", "owner", "nonce", "exit", "stderr", "passed", "replay", "edit", "source", "result",
+                        "rootGid", "effectiveGid", "missingGid", "effectiveUid"):
             task = copy.deepcopy(saved);meta = copy.deepcopy(metadata);body = payload
             if changed == "bytes": body += b" "
             if changed == "owner": meta["attemptId"] = str(uuid.uuid4())
@@ -170,6 +171,17 @@ class OfflineTests(unittest.TestCase):
             if changed == "edit": task["events"].append({"name": "write_file"})
             if changed == "source": task["changes"] = [{"path": "qa cwd/probe.py", "after": "fake probe"}]
             if changed == "result": task["result"] = "No actual nonce"
+            if changed in ("rootGid", "effectiveGid", "missingGid", "effectiveUid"):
+                value_changed = copy.deepcopy(value)
+                if changed == "rootGid": value_changed.update(gid=0, egid=0)
+                if changed == "effectiveGid": value_changed["egid"] = 1001
+                if changed == "missingGid":
+                    del value_changed["gid"]
+                    del value_changed["egid"]
+                if changed == "effectiveUid": value_changed["euid"] = 1001
+                body = (json.dumps(value_changed) + "\n").encode()
+                meta.update(size=len(body), sha256=hashlib.sha256(body).hexdigest())
+                task["artifacts"] = [meta]
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 qa.artifact(task, planned, item, meta, body)
 

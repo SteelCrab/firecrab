@@ -41,7 +41,8 @@ def main():
     if case not in CASES or not re.fullmatch(r"[0-9a-f]{32}", run_id):
         raise ValueError("Invalid public QA case/run identity")
     result = evidence(case, run_id)
-    if (result["uid"] == 0 or result["euid"] == 0 or result["groups"]
+    if (result["uid"] <= 0 or result["euid"] != result["uid"]
+            or result["gid"] <= 0 or result["egid"] != result["gid"] or result["groups"]
             or result["noNewPrivs"] != 1 or int(result["capEff"], 16)
             or result["cwdName"] != "qa cwd"
             or not (result["openrcRunPresent"] or result["openrcStatePresent"])):
