@@ -31,6 +31,7 @@ from deploy_rotation_qa import run_rotation
 from deploy_auto_qa import run_auto
 from deploy_recovery_qa import run_recovery
 from deploy_queue_qa import run_queue
+from deploy_ci_qa import run_ci
 
 
 def digest(data):
@@ -214,7 +215,7 @@ def require_empty_host(api):
 
 def run(args, evidence):
     assert args.disposable_host and os.geteuid() == 0 and Path("/dev/kvm").exists()
-    required_cpus = 4 if args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy else 3
+    required_cpus = 4 if args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy else 3
     assert int(subprocess.check_output(["nproc"], text=True)) >= required_cpus, f"{required_cpus} CPUs required for the selected rolling-surge acceptance"
     if args.fifteen_services:
         evidence["host"] = host_evidence(args.images)
@@ -406,7 +407,7 @@ def run(args, evidence):
         assert len(samples) > 20 and not failures, {"samples": len(samples), "failures": failures[:10]}
         print(f"PASS unhealthy candidate stays out of traffic; {len(samples)} continuous HTTP requests, zero errors", flush=True)
         evidence["coreRequests"] = len(samples)
-        if args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy:
+        if args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy:
             stop.set()
             loader.join(timeout=10)
             stop_service()
@@ -421,6 +422,8 @@ def run(args, evidence):
                 run_queue(api, wait_for, traffic, network, spec_a, fixtures[1][0], ingress_port, evidence)
             if args.automatic_deploy:
                 run_auto(api, wait_for, traffic, network, spec_a, fixtures, ingress_port, evidence)
+            if args.ci_deploy:
+                run_ci(api, wait_for, traffic, network, spec_a, fixtures, ingress_port, evidence)
     finally:
         stop.set()
         if loader: loader.join(timeout=10)
@@ -470,9 +473,10 @@ if __name__ == "__main__":
     parser.add_argument("--replica-recovery", action="store_true", help="run live replica restart/replacement and API recovery acceptance")
     parser.add_argument("--automatic-deploy", action="store_true", help="run authenticated tag monitoring and rollback/restart acceptance with private TLS trust")
     parser.add_argument("--queue-controls", action="store_true", help="run live queued cancellation, rollback priority and API restart acceptance")
+    parser.add_argument("--ci-deploy", action="store_true", help="run scoped CLI/Action acceptance through private verified TLS and Nginx")
     parser.add_argument("--report", type=Path, help="write measured evidence even when acceptance fails")
     args = parser.parse_args()
-    if (args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy) and not args.report:
+    if (args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy) and not args.report:
         parser.error("extended acceptance requires --report")
     evidence = {"status": "failed", "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}
     try:

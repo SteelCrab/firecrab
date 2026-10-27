@@ -23,6 +23,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Service-scoped CI Deploy tokens, image-only Nginx endpoints, CLI and GitHub Action
+  preserve exact operation outcomes, with expiry/revocation and one-time Dashboard controls.
+
 - Opt-in registry tag automation submits pinned images through Deploy, with durable rollback/failure pauses, Dashboard controls and YAML/Git image ownership.
 
 - The Deploy queue prioritizes waiting rollbacks and supports cancelling an exact

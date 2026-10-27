@@ -116,6 +116,9 @@ Controller-owned multi-host services are excluded.
 
 ## Dashboard
 
+Use [Service CI Deploy](ci-deploy.md) for image-only CLI/GitHub Action deployment
+with expiring service/repository tokens and exact pipeline outcomes.
+
 In the dashboard, open a service and choose **Deploy update**.
 The guided form offers the same configuration and strategy choices.
 **Release history** lists successful releases and offers **Roll back**.

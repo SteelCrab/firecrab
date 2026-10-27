@@ -20,7 +20,7 @@ firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
 firecrab-stack = { path = "../firecrab-stack" }
 fs2 = "0.4"
 futures-util = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots", "blocking", "json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

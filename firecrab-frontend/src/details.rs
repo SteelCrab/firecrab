@@ -657,9 +657,9 @@ pub fn tick(app: &Shared) {
         .form
         .as_ref()
         .is_some_and(|form| form.title == "Deploy MicroService");
-    let auto_editing = crate::document()
-        .active_element()
-        .is_some_and(|element| element.id().starts_with("deploy-auto-"));
+    let auto_editing = crate::document().active_element().is_some_and(|element| {
+        element.id().starts_with("deploy-auto-") || element.id().starts_with("deploy-ci-")
+    });
     if auto_editing
         || state.busy
         || state.form.is_some() && !deploy_form
