@@ -32,6 +32,7 @@ from deploy_auto_qa import run_auto
 from deploy_recovery_qa import run_recovery
 from deploy_queue_qa import run_queue
 from deploy_ci_qa import run_ci
+from deploy_observation_qa import run_observation
 
 
 def digest(data):
@@ -46,12 +47,13 @@ def image_fixture(busybox, label, healthy=True):
             entry.type = tarfile.DIRTYPE
             entry.mode = 0o755
             archive.addfile(entry)
-        files = {"bin/busybox": busybox, "www/index.html": f"release-{label}\n".encode()}
+        files = {"bin/busybox": busybox, "www/index.html": f"release-{label}\n".encode(),
+                 "bin/observed-init": b'#!/bin/sh\nprintf "fixture-stdout-%s\\n" "$OBS_ID"\nprintf "fixture-stderr-%s\\n" "$OBS_ID" >&2\nexec /bin/busybox httpd -f -p 8080 -h /www\n'}
         if healthy:
             files["www/health"] = b"healthy\n"
         for path, data in files.items():
             entry = tarfile.TarInfo(path)
-            entry.mode = 0o755 if path == "bin/busybox" else 0o644
+            entry.mode = 0o755 if path.startswith("bin/") else 0o644
             entry.size = len(data)
             archive.addfile(entry, io.BytesIO(data))
         shell = tarfile.TarInfo("bin/sh")
@@ -87,6 +89,13 @@ esac
 """,
             "recovery-health": "#!/bin/sh\nif [ -f /unhealthy ]; then printf 'Status: 503 Service Unavailable\\r\\n'; fi\nprintf 'Content-Type: text/plain\\r\\n\\r\\nhealth\\n'\n",
             "fail-health": "#!/bin/sh\n/bin/busybox touch /unhealthy\nprintf 'Content-Type: text/plain\\r\\n\\r\\ninjected\\n'\n",
+            "observation": """#!/bin/sh
+printf 'fixture-cgi-%s\\n' "$OBS_ID" >&2
+printf 'Content-Type: text/plain\\r\\n\\r\\nobserved\\n'
+""",
+            "otel-environment": """#!/bin/sh
+printf 'Content-Type: text/plain\\r\\n\\r\\n%s|%s|%s\\n' "$OTEL_EXPORTER_OTLP_ENDPOINT" "$OTEL_EXPORTER_OTLP_PROTOCOL" "$OTEL_SERVICE_NAME"
+""",
             "internal-call": """#!/bin/sh
 reply=$(/bin/busybox wget -q -O - "http://$SELF_INTERNAL/cgi-bin/rotation") || {
   printf 'Status: 502 Bad Gateway\\r\\nContent-Type: text/plain\\r\\n\\r\\nunavailable\\n'
@@ -105,7 +114,7 @@ printf 'Content-Type: text/plain\\r\\n\\r\\n%s\\n' "$reply"
     compressed = gzip.compress(raw, mtime=0)
     architecture = "arm64" if platform.machine() in ["aarch64", "arm64"] else "amd64"
     config = json.dumps({"architecture": architecture, "os": "linux", "rootfs": {"type": "layers", "diff_ids": [digest(raw)]},
-        "config": {"Env": ["PATH=/bin"], "Entrypoint": ["/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/www"]}}, separators=(",", ":")).encode()
+        "config": {"Env": ["PATH=/bin"], "Entrypoint": ["/bin/sh", "/bin/observed-init"]}}, separators=(",", ":")).encode()
     manifest = json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
         "config": {"mediaType": "application/vnd.oci.image.config.v1+json", "digest": digest(config), "size": len(config)},
         "layers": [{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": digest(compressed), "size": len(compressed)}]}, separators=(",", ":")).encode()
@@ -215,7 +224,7 @@ def require_empty_host(api):
 
 def run(args, evidence):
     assert args.disposable_host and os.geteuid() == 0 and Path("/dev/kvm").exists()
-    required_cpus = 4 if args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy else 3
+    required_cpus = 4 if args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability else 3
     assert int(subprocess.check_output(["nproc"], text=True)) >= required_cpus, f"{required_cpus} CPUs required for the selected rolling-surge acceptance"
     if args.fifteen_services:
         evidence["host"] = host_evidence(args.images)
@@ -407,7 +416,7 @@ def run(args, evidence):
         assert len(samples) > 20 and not failures, {"samples": len(samples), "failures": failures[:10]}
         print(f"PASS unhealthy candidate stays out of traffic; {len(samples)} continuous HTTP requests, zero errors", flush=True)
         evidence["coreRequests"] = len(samples)
-        if args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy:
+        if args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability:
             stop.set()
             loader.join(timeout=10)
             stop_service()
@@ -424,6 +433,8 @@ def run(args, evidence):
                 run_auto(api, wait_for, traffic, network, spec_a, fixtures, ingress_port, evidence)
             if args.ci_deploy:
                 run_ci(api, wait_for, traffic, network, spec_a, fixtures, ingress_port, evidence)
+            if args.observability:
+                run_observation(api, wait_for, traffic, network, spec_a, ingress_port, evidence)
     finally:
         stop.set()
         if loader: loader.join(timeout=10)
@@ -474,9 +485,10 @@ if __name__ == "__main__":
     parser.add_argument("--automatic-deploy", action="store_true", help="run authenticated tag monitoring and rollback/restart acceptance with private TLS trust")
     parser.add_argument("--queue-controls", action="store_true", help="run live queued cancellation, rollback priority and API restart acceptance")
     parser.add_argument("--ci-deploy", action="store_true", help="run scoped CLI/Action acceptance through private verified TLS and Nginx")
+    parser.add_argument("--observability", action="store_true", help="run isolated app logs, API restart, events and OTLP acceptance")
     parser.add_argument("--report", type=Path, help="write measured evidence even when acceptance fails")
     args = parser.parse_args()
-    if (args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy) and not args.report:
+    if (args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability) and not args.report:
         parser.error("extended acceptance requires --report")
     evidence = {"status": "failed", "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}
     try:

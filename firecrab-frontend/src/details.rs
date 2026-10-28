@@ -227,12 +227,13 @@ pub fn panel(app: &App) -> String {
 fn service_panel(app: &App) -> String {
     let data = app.detail.as_ref().unwrap_or(&Value::Null);
     let mut out = format!(
-        "<section role=\"region\" aria-label=\"Detail\" class=\"service-panel\"><header class=\"service-panel-head\"><div><span class=\"service-eyebrow\">MicroService</span><h2 title=\"{}\">{}</h2></div>{}</header><div class=\"service-panel-body\"><div id=\"service-status\">{}</div><div id=\"deploy-panel\">{}</div>",
+        "<section role=\"region\" aria-label=\"Detail\" class=\"service-panel\"><header class=\"service-panel-head\"><div><span class=\"service-eyebrow\">MicroService</span><h2 title=\"{}\">{}</h2></div>{}</header><div class=\"service-panel-body\"><div id=\"service-status\">{}</div><div id=\"deploy-panel\">{}</div>{}",
         escape(text(data, "name")),
         escape(text(data, "name")),
         button("Close", "close-detail", ""),
         render::deployment(app.service_deployment.as_ref()),
-        crate::deploy::html(app)
+        crate::deploy::html(app),
+        crate::observability::html(app)
     );
     if let Some(form) = &app.form {
         out.push_str(&crate::advanced::services::html(app, form));
@@ -658,7 +659,9 @@ pub fn tick(app: &Shared) {
         .as_ref()
         .is_some_and(|form| form.title == "Deploy MicroService");
     let auto_editing = crate::document().active_element().is_some_and(|element| {
-        element.id().starts_with("deploy-auto-") || element.id().starts_with("deploy-ci-")
+        element.id().starts_with("deploy-auto-")
+            || element.id().starts_with("deploy-ci-")
+            || element.id() == "service-observe-endpoint"
     });
     if auto_editing
         || state.busy

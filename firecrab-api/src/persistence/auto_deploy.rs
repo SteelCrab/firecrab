@@ -209,6 +209,8 @@ impl Store {
             ],
         )?;
         if let Some(deployment) = deployment {
+            let previous = super::service_observation::previous(&tx, service.id)?;
+            super::service_observation::observe(&tx, previous.as_ref(), deployment)?;
             let raw = serde_json::to_string(deployment).map_err(|error| {
                 PersistenceError::CorruptRecord {
                     id: service.id.to_string(),

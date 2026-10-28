@@ -151,6 +151,9 @@ pub(crate) async fn serve(
             return Err(error);
         }
     };
+    // App logs have their own per-VM vsock and never consume serial-console bytes.
+    // A missing helper or an unavailable log sink must not prevent VM startup.
+    let app_logs = super::app_log::start(runtime);
     tracing::info!(vm_id = %config.vm_id, vmm_pid, "vm shim serving");
 
     let stdin = child.stdin.take().expect("stdin was piped");
@@ -222,6 +225,9 @@ pub(crate) async fn serve(
             Ok(Some(chunk)) => shim.on_output(chunk).await,
             Ok(None) | Err(_) => output_open = false,
         }
+    }
+    if let Some(app_logs) = app_logs {
+        app_logs.finish().await;
     }
     let _ = shim.log.flush().await;
     let exit = ShimExit {

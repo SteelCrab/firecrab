@@ -906,6 +906,22 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             enforce_limits,
         ));
 
+    let observability = Router::new()
+        .route(
+            "/api/micro-services/{id}/observability",
+            get(crate::service_observation::get),
+        )
+        .route(
+            "/api/micro-services/{id}/observability/otlp",
+            axum::routing::put(crate::service_observation::configure),
+        )
+        .layer(cors.clone())
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn_with_state(
+            limits.clone(),
+            enforce_limits,
+        ))
+        .layer(middleware::from_fn(handlers::secrets::no_store));
     let ci_tokens = Router::new()
         .route(
             "/api/micro-services/{id}/deploy-tokens",
@@ -952,6 +968,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         ));
     let app = rest
         .merge(ci_tokens)
+        .merge(observability)
         .merge(cluster)
         .merge(sandbox)
         .merge(recovery)

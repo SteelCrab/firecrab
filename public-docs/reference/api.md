@@ -151,6 +151,7 @@ Git VM declarations require `templatePin`; direct apply and service mutations re
 See [immutable inputs and controller ownership](../guides/stack-git-source.md#immutable-inputs-and-controller-ownership).
 | MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/deployment/check`, `POST /api/micro-services/{id}/stop` |
 | Service CI Deploy | Operator: `GET, POST /api/micro-services/{id}/deploy-tokens`, `DELETE /api/micro-services/{id}/deploy-tokens/{tokenId}`. Scoped CI: `GET, POST /__firecrab/deploy`, `GET /__firecrab/deploy/{operationId}` on the service domain; see [CI Deploy](../guides/ci-deploy.md) |
+| Service observations | Operator: `GET /api/micro-services/{id}/observability` and `PUT /api/micro-services/{id}/observability/otlp`; see [OTLP export](../guides/otlp.md) |
 | MicroNetwork | `/api/micro-networks`, `/{id}` |
 | Security group | `GET, POST /api/security-groups`, `GET, PUT, DELETE /api/security-groups/{id}`, `PUT /api/security-groups/{id}/rules` |
 | Storage | `/api/storage`, `/api/storage/devices`, `/api/micro-storages` |

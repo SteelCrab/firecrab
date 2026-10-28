@@ -1390,6 +1390,26 @@ pub async fn delete_vm(
             request_id.0,
         ));
     }
+    if !vm.state.can_delete() {
+        return Err(AppError::invalid_state(vm.state, request_id.0));
+    }
+    // Capture the final buffered application output before removing artifacts.
+    // A damaged log buffer must never prevent VM cleanup.
+    if !matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::service_log_collection::drain_vm(&state, id),
+        )
+        .await,
+        Ok(Ok(()))
+    ) {
+        tracing::warn!(vm_id = %id, "Could not finish application log collection before VM deletion");
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            crate::service_log_collection::mark_loss(&state, id),
+        )
+        .await;
+    }
     let removed = {
         let mut vms = state
             .vms
@@ -1668,6 +1688,29 @@ async fn finish_run_start(
         guest_env.extend(queue_env);
         rootfs::specialize_guest(&rootfs, record.id, &guest_env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
+        // Only deployment-owned VMs get the isolated app log channel. A log
+        // setup failure must not stop a running service from being replaced.
+        let mut app_log_failed = false;
+        let candidate = match store_for_shells.vm_has_service_owner(record.id) {
+            Ok(true) => Some(Uuid::new_v4().simple().to_string()),
+            Ok(false) => None,
+            Err(_) => {
+                app_log_failed = true;
+                None
+            }
+        };
+        let app_log_key =
+            match crate::guest_console::configure_app_log(&rootfs, candidate.as_deref()) {
+                Ok(true) => candidate,
+                Ok(false) => None,
+                _ => {
+                    app_log_failed = true;
+                    None
+                }
+            };
+        if app_log_failed {
+            tracing::warn!(vm_id = %record.id, "Could not prepare app log collection");
+        }
         let (private_env, private_files) =
             crate::pipe_databases::bindings::guest_inputs(&store_for_shells, record.id)
                 .map_err(|_| "Could not load private database bindings".to_owned())?;
@@ -1712,6 +1755,13 @@ async fn finish_run_start(
         let runtime = paths
             .create_runtime(runtime_id)
             .map_err(|error| format!("runtime directory failed: {error}"))?;
+        if app_log_failed
+            || app_log_key
+                .as_ref()
+                .is_some_and(|key| crate::vm_shim::app_log::prepare(&runtime, key).is_err())
+        {
+            crate::vm_shim::app_log::mark_error(&runtime);
+        }
         let kernel = templates.artifact_path(&template.kernel);
         let initrd = template
             .initrd
@@ -1739,6 +1789,23 @@ async fn finish_run_start(
     let (generation, runtime_id) = prep;
     // Persist generation + last runtime so log/delete resolve host paths
     // without storing absolute paths.
+    if vm.last_runtime_id.is_some()
+        && !matches!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                crate::service_log_collection::drain_vm(state, vm.id),
+            )
+            .await,
+            Ok(Ok(()))
+        )
+    {
+        tracing::warn!(vm_id = %vm.id, "Could not finish application log collection before VM restart");
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            crate::service_log_collection::mark_loss(state, vm.id),
+        )
+        .await;
+    }
     {
         let mut vms = state
             .vms

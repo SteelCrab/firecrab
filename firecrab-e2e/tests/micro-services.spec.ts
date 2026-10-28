@@ -1505,3 +1505,209 @@ test.describe("Service CI Deploy @dashboard", () => {
     expect(await page.content()).not.toContain(fixtureToken);
   });
 });
+
+test.describe("Service observations @dashboard", () => {
+  const snapshot = () => ({
+    logsStatus: "active",
+    logs: [{ timestamp: "2026-10-27T01:02:03Z", stream: "stdout", instanceId: SECRET, message: "<img src=x onerror=alert(1)>" }],
+    events: [{ timestamp: "2026-10-27T01:02:04Z", kind: "deploy", severity: "info", message: "Deployment completed" }],
+    alerts: [{ timestamp: "2026-10-27T01:02:05Z", kind: "health", active: true, message: "Replica unavailable" }],
+    otlp: { endpoint: null as string | null, status: "disabled", queuePersistent: false,
+      queued: 0, inFlight: 0, delivered: 0, dropped: 0, rejected: 0, failedBatches: 0 },
+  });
+
+  test("shows escaped observations and each collection state with icon controls", async ({ page }, testInfo) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: release(RELEASE_A) }));
+    const data = snapshot();
+    await page.route(`**/api/micro-services/${ID}/observability`, route => route.fulfill({ json: data }));
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    const panel = page.locator("#service-observability");
+    for (const name of ["Logs", "Events", "Alerts", "OTLP"]) {
+      const button = panel.getByRole("button", { name, exact: true });
+      await expect(button).toHaveText("");
+      await expect(button.locator("svg")).toHaveCount(1);
+    }
+    await panel.getByRole("button", { name: "Logs", exact: true }).click();
+    await expect(panel.getByText("<img src=x onerror=alert(1)>", { exact: true })).toBeVisible();
+    await expect(panel.locator("img")).toHaveCount(0);
+    for (const [status, label] of [
+      ["waiting", "Waiting for logs."],
+      ["unavailable", "Log collection is unavailable. Start a new VM or redeploy."],
+      ["truncated", "Some logs were lost."],
+      ["error", "Log collection failed."],
+      ["active", "Collecting logs."],
+    ]) {
+      data.logsStatus = status;
+      await panel.getByRole("button", { name: "Refresh", exact: true }).click();
+      await expect(panel.getByText(label, { exact: true })).toBeVisible();
+    }
+    await panel.getByRole("button", { name: "Events", exact: true }).click();
+    await expect(panel.getByText("Deployment completed", { exact: true })).toBeVisible();
+    await panel.getByRole("button", { name: "Alerts", exact: true }).click();
+    await expect(panel.getByText("Replica unavailable", { exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 1280, height: 1100 });
+    await page.screenshot({ path: testInfo.outputPath("service-observations-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 1100 });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("service-observations-mobile.png"), fullPage: true });
+  });
+
+  test("saves and disables OTLP without allowing credentials or losing an edited endpoint", async ({ page }) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: release(RELEASE_A) }));
+    const data = snapshot();
+    data.otlp.dropped = 2;
+    data.otlp.rejected = 1;
+    data.otlp.failedBatches = 3;
+    const writes: unknown[] = [];
+    await page.route(`**/api/micro-services/${ID}/observability{,/otlp}`, route => {
+      if (route.request().method() === "PUT") {
+        const body = route.request().postDataJSON() as { endpoint: string | null };
+        writes.push(body);
+        data.otlp = { ...data.otlp, endpoint: body.endpoint, status: body.endpoint ? "configured" : "disabled" };
+        return route.fulfill({ json: data.otlp });
+      }
+      return route.fulfill({ json: data });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    const panel = page.locator("#service-observability");
+    await panel.getByRole("button", { name: "OTLP", exact: true }).click();
+    const endpoint = panel.getByLabel("Collector base URL", { exact: true });
+    await expect(endpoint).toBeVisible();
+    await expect(panel).toContainText("Saving sends platform logs and events to this collector. App logs can contain sensitive values.");
+    await expect(panel).toContainText("Queued data is lost on API restart or when the endpoint is changed or disabled.");
+    await expect(panel.locator(".service-otlp-metrics")).toContainText("Dropped2");
+    await expect(panel.locator(".service-otlp-metrics")).toContainText("Rejected1");
+    await expect(panel.locator(".service-otlp-metrics")).toContainText("Failed batches3");
+    await endpoint.fill("https://user:secret@collector.example.test");
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(panel.getByRole("alert")).toContainText("without credentials");
+    expect(writes).toEqual([]);
+    await endpoint.fill("https://collector.example.test");
+    await endpoint.focus();
+    await page.waitForTimeout(3500);
+    await expect(endpoint).toBeFocused();
+    await expect(endpoint).toHaveValue("https://collector.example.test");
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.poll(() => writes.length).toBe(1);
+    expect(writes[0]).toEqual({ endpoint: "https://collector.example.test" });
+    await expect(panel.getByRole("status")).toContainText("configured");
+    await endpoint.fill("");
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.poll(() => writes.length).toBe(2);
+    expect(writes[1]).toEqual({ endpoint: null });
+    await expect(panel.getByRole("status")).toContainText("disabled");
+  });
+
+  test("keeps errors distinct from an empty result and retries", async ({ page }) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: release(RELEASE_A) }));
+    let failing = true;
+    await page.route(`**/api/micro-services/${ID}/observability`, route => failing
+      ? route.fulfill({ status: 503, json: { error: { message: "collector secret" } } })
+      : route.fulfill({ json: { ...snapshot(), logs: [], logsStatus: "waiting" } }));
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    const panel = page.locator("#service-observability");
+    await panel.getByRole("button", { name: "Logs", exact: true }).click();
+    await expect(panel.getByRole("alert")).toHaveText("Could not load observations.");
+    await expect(panel).not.toContainText("collector secret");
+    await expect(panel).not.toContainText("No logs.");
+    failing = false;
+    await panel.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(panel).toContainText("Waiting for logs.");
+    await expect(panel).toContainText("No logs.");
+  });
+
+  test("preserves a save when a background observation read is still in flight", async ({ page }) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: release(RELEASE_A) }));
+    const data = snapshot();
+    let holdRead = false, readStarted = false;
+    let finishRead!: () => void;
+    const gate = new Promise<void>(resolve => { finishRead = resolve; });
+    const writes: unknown[] = [];
+    await page.route(`**/api/micro-services/${ID}/observability{,/otlp}`, async route => {
+      if (route.request().method() === "PUT") {
+        const body = route.request().postDataJSON() as { endpoint: string | null };
+        writes.push(body);
+        data.otlp = { ...data.otlp, endpoint: body.endpoint, status: "configured" };
+        return route.fulfill({ json: data.otlp });
+      }
+      const response = structuredClone(data);
+      if (holdRead && !readStarted) { readStarted = true; await gate; }
+      return route.fulfill({ json: response });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    const panel = page.locator("#service-observability");
+    await panel.getByRole("button", { name: "OTLP", exact: true }).click();
+    const endpoint = panel.getByLabel("Collector base URL", { exact: true });
+    await expect(endpoint).toBeVisible();
+    holdRead = true;
+    await expect.poll(() => readStarted).toBe(true);
+    await endpoint.fill("https://collector.example.test");
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.poll(() => writes.length).toBe(1);
+    await expect(panel.getByRole("status")).toContainText("configured");
+    const staleResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/micro-services/${ID}/observability`);
+    finishRead();
+    await staleResponse;
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    await expect(endpoint).toHaveValue("https://collector.example.test");
+    await expect(panel.getByRole("status")).toContainText("configured");
+    expect(writes).toEqual([{ endpoint: "https://collector.example.test" }]);
+  });
+
+  test("preserves disclosure and focus when observation polling changes the log", async ({ page }) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: release(RELEASE_A) }));
+    const data = snapshot();
+    let reads = 0;
+    await page.route(`**/api/micro-services/${ID}/observability`, route => { reads++; return route.fulfill({ json: data }); });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    const panel = page.locator("#service-observability");
+    const logs = panel.getByRole("button", { name: "Logs", exact: true });
+    await logs.click();
+    await expect(panel).toContainText("<img src=x onerror=alert(1)>");
+    await page.locator("#service-configuration-toggle").click();
+    await expect(page.locator("#service-configuration")).toHaveAttribute("open");
+    await logs.focus();
+    const previous = reads;
+    data.logs[0].message = "Updated log";
+    await expect.poll(() => reads).toBeGreaterThan(previous);
+    await expect(panel).toContainText("Updated log");
+    await expect(logs).toBeFocused();
+    await expect(page.locator("#service-configuration")).toHaveAttribute("open");
+  });
+
+  test("ignores a late observation response after selecting another service", async ({ page }) => {
+    const reports = { ...DEPLOY_SPEC, id: STORAGE, name: "reports" };
+    await openServices(page, [DEPLOY_SPEC, reports]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: release(RELEASE_A) }));
+    await page.route(`**/api/micro-services/${STORAGE}`, route => route.fulfill({ json: reports }));
+    await page.route(`**/api/micro-services/${STORAGE}/deployment`, route => route.fulfill({ json: null }));
+    let releaseFirst!: () => void;
+    let firstStarted = false;
+    const gate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    await page.route(`**/api/micro-services/${ID}/observability`, async route => {
+      firstStarted = true;
+      await gate;
+      return route.fulfill({ json: { ...snapshot(), logs: [{ timestamp: "", stream: "stdout", instanceId: "", message: "old service" }] } });
+    });
+    await page.route(`**/api/micro-services/${STORAGE}/observability`, route => route.fulfill({ json: { ...snapshot(), logs: [{ timestamp: "", stream: "stdout", instanceId: "", message: "new service" }] } }));
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await page.locator("#service-observability").getByRole("button", { name: "Logs", exact: true }).click();
+    await expect.poll(() => firstStarted).toBe(true);
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByRole("button", { name: "Open reports", exact: true }).click();
+    const panel = page.locator("#service-observability");
+    await panel.getByRole("button", { name: "Logs", exact: true }).click();
+    await expect(panel).toContainText("new service");
+    const oldResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/micro-services/${ID}/observability`);
+    releaseFirst();
+    await oldResponse;
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    await expect(panel).toContainText("new service");
+    await expect(panel).not.toContainText("old service");
+  });
+});
