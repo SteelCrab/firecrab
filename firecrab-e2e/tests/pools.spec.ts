@@ -149,7 +149,7 @@ test("shows a pool create form with image, network, capacity and lease settings"
   page,
 }) => {
   await openEnglish(page, "/#/pools");
-  await page.locator('[data-action="create"][data-id="pools"]').click();
+  await page.locator(".screen-header").getByRole("button", { name: "New pool", exact: true }).click();
   await page.locator("#editor").getByText("Advanced settings", { exact: true }).click();
   for (const field of [
     "name",
@@ -180,7 +180,7 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
 
   await openEnglish(page, "/#/pools");
   const panel = poolsPanel(page);
-  await page.locator('[data-action="create"][data-id="pools"]').click();
+  await page.locator(".screen-header").getByRole("button", { name: "New pool", exact: true }).click();
   await expect(
     page.locator(`#field-template option[value="${alias}"]`),
   ).toHaveCount(1, {
