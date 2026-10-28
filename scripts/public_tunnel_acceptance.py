@@ -195,39 +195,89 @@ def limited(check):
     return poll
 
 
-def restart_api(api, wait_for, credentials, expected):
+def restart_api(api, wait_for, credentials, expected, evidence):
+    """Measure real request intervals for both addresses across an API restart."""
+    release = threading.Event()
     stop = threading.Event()
-    results = []
+    baseline_done = [threading.Event() for _ in credentials]
+    samples = {credential.label: [] for credential in credentials}
+    evidence.update({"clock": "monotonic_seconds", "requests": samples,
+                     "restartStarted": None, "restartFinished": None})
 
-    def monitor():
-        while not stop.is_set():
-            try:
-                for credential, body in zip(credentials, expected):
-                    probe.check_https(probe.validate_host(credential.label), "/app", body,
-                                      ssl.create_default_context())
-                results.append(True)
-            except probe.CheckError:
-                results.append(False)
-            # Public accounts have request quotas. Keep monitoring bounded.
-            stop.wait(2)
+    def sample(credential, body, context):
+        host = probe.validate_host(credential.label)
+        started = time.monotonic()
+        success = False
+        try:
+            probe.check_https(host, "/app", body, context)
+            success = True
+        except (probe.CheckError, OSError):
+            pass
+        finally:
+            samples[credential.label].append({"started": started, "finished": time.monotonic(),
+                                              "success": success})
 
-    worker = threading.Thread(target=monitor, daemon=True)
-    worker.start()
+    def monitor(index, credential, body):
+        try:
+            context = ssl.create_default_context()
+            sample(credential, body, context)
+        except Exception:
+            samples[credential.label].append({"started": time.monotonic(),
+                                              "finished": time.monotonic(), "success": False})
+            return
+        finally:
+            baseline_done[index].set()
+        release.wait()
+        if not stop.is_set():
+            sample(credential, body, context)
+
+    workers = [threading.Thread(target=monitor, args=(index, credential, body), daemon=True)
+               for index, (credential, body) in enumerate(zip(credentials, expected))]
+    for worker in workers:
+        worker.start()
     try:
-        wait_for(lambda: len(results) >= 1, timeout=30, message="restart traffic monitor did not start")
-        if not all(results):
+        wait_for(lambda: all(event.is_set() for event in baseline_done), timeout=30,
+                 message="restart traffic monitor did not start")
+        if any(not samples[credential.label] or not samples[credential.label][0]["success"]
+               for credential in credentials):
             raise AcceptanceError("public traffic failed before API restart")
-        subprocess.run(["systemctl", "restart", "firecrab-api.service"], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
-        api.ready()
-        observed = len(results)
-        wait_for(lambda: len(results) > observed, timeout=30, message="restart traffic monitor did not continue")
+        evidence["restartStartedUnix"] = time.time()
+        evidence["restartStarted"] = time.monotonic()
+        try:
+            process = subprocess.Popen(["systemctl", "restart", "firecrab-api.service"],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            release.set()
+            try:
+                status = process.wait(timeout=120)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+                raise
+            if status:
+                raise AcceptanceError("API restart command failed")
+            api.ready()
+        finally:
+            evidence["restartFinished"] = time.monotonic()
+            evidence["restartFinishedUnix"] = time.time()
     finally:
         stop.set()
-        worker.join(timeout=35)
-    if worker.is_alive() or not results or not all(results):
-        raise AcceptanceError("public traffic failed during API restart")
-    return len(results)
+        release.set()
+        for worker in workers:
+            worker.join(timeout=20)
+    if any(worker.is_alive() for worker in workers):
+        raise AcceptanceError("restart traffic monitor did not finish")
+    overlaps = {}
+    for credential in credentials:
+        rows = samples[credential.label]
+        if not rows or not all(row["success"] for row in rows):
+            raise AcceptanceError("public traffic failed during API restart")
+        overlaps[credential.label] = sum(
+            row["success"] and row["started"] < evidence["restartFinished"]
+            and row["finished"] > evidence["restartStarted"] for row in rows
+        )
+    evidence["overlappingSuccessfulRequests"] = overlaps
+    if not all(overlaps.values()):
+        raise AcceptanceError("both addresses need a successful request overlapping the API restart")
 
 
 def run_public(api, wait_for, service_a, service_b, credentials, evidence):
@@ -269,7 +319,8 @@ def run_public(api, wait_for, service_a, service_b, credentials, evidence):
         ready(wait_for, primary, b"fixture-A")
         metrics["stages"].append("retarget to saved Nginx route and back without disturbing peer")
 
-        metrics["restartSamples"] = restart_api(api, wait_for, credentials, (b"fixture-A", b"fixture-B"))
+        metrics["restart"] = {}
+        restart_api(api, wait_for, credentials, (b"fixture-A", b"fixture-B"), metrics["restart"])
         for credential, body in zip(credentials, (b"fixture-A", b"fixture-B")):
             ready(wait_for, credential, body)
         metrics["stages"].append("HTTPS continuity across API restart and WebSocket echo afterward")

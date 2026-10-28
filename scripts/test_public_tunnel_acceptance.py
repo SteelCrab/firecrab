@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -188,6 +190,86 @@ class OfflineResponseTest(unittest.TestCase):
                 with patch.object(acceptance.http.client, "HTTPSConnection", return_value=connection):
                     self.assertEqual(acceptance.public_offline(credential), expected)
                 connection.request.assert_called_once_with("GET", "/app", headers={"Cache-Control": "no-cache"})
+
+
+class RestartTimingTest(unittest.TestCase):
+    def setUp(self):
+        self.credentials = [Credential("qa-test-a", "/private/a", "a" * 64),
+                            Credential("qa-test-b", "/private/b", "b" * 64)]
+        self.calls = {credential.label: 0 for credential in self.credentials}
+        self.lock = threading.Lock()
+        self.evidence = {}
+
+    @staticmethod
+    def wait_for(check, timeout, message):
+        deadline = time.monotonic() + min(timeout, 3)
+        while time.monotonic() < deadline:
+            if check():
+                return True
+            time.sleep(.005)
+        raise AssertionError(message)
+
+    def test_each_address_has_a_successful_request_overlapping_restart(self):
+        started = {credential.label: threading.Event() for credential in self.credentials}
+        release = threading.Event()
+
+        def check(host, path, body, context):
+            with self.lock:
+                self.calls[host] += 1
+                count = self.calls[host]
+            if count == 2:
+                started[host].set()
+                if not release.wait(2):
+                    raise RuntimeError("test restart did not release request")
+
+        class Process:
+            def wait(self, timeout=None):
+                if not all(event.wait(2) for event in started.values()):
+                    raise RuntimeError("both requests did not start")
+                release.set()
+                return 0
+
+        api = MagicMock()
+        with patch.object(acceptance.probe, "validate_host", side_effect=lambda label: label), \
+                patch.object(acceptance.probe, "check_https", side_effect=check), \
+                patch.object(acceptance.ssl, "create_default_context", return_value=object()), \
+                patch.object(acceptance.subprocess, "Popen", return_value=Process()):
+            acceptance.restart_api(api, self.wait_for, self.credentials, (b"a", b"b"), self.evidence)
+        self.assertEqual(self.evidence["overlappingSuccessfulRequests"], {"qa-test-a": 1, "qa-test-b": 1})
+        self.assertLess(self.evidence["restartStarted"], self.evidence["restartFinished"])
+        for credential in self.credentials:
+            rows = self.evidence["requests"][credential.label]
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row["success"] and row["started"] <= row["finished"] for row in rows))
+
+    def test_fast_restart_without_overlapping_requests_fails(self):
+        gate = threading.Event()
+        validations = {credential.label: 0 for credential in self.credentials}
+
+        def host(label):
+            with self.lock:
+                validations[label] += 1
+                count = validations[label]
+            if count == 2 and not gate.wait(2):
+                raise RuntimeError("test did not release late request")
+            return label
+
+        class Process:
+            def wait(self, timeout=None):
+                return 0
+
+        class Api:
+            def ready(self):
+                timer = threading.Timer(.05, gate.set)
+                timer.start()
+
+        with patch.object(acceptance.probe, "validate_host", side_effect=host), \
+                patch.object(acceptance.probe, "check_https"), \
+                patch.object(acceptance.ssl, "create_default_context", return_value=object()), \
+                patch.object(acceptance.subprocess, "Popen", return_value=Process()):
+            with self.assertRaisesRegex(acceptance.AcceptanceError, "overlapping"):
+                acceptance.restart_api(Api(), self.wait_for, self.credentials, (b"a", b"b"), self.evidence)
+        self.assertEqual(self.evidence["overlappingSuccessfulRequests"], {"qa-test-a": 0, "qa-test-b": 0})
 
 
 class HostGuardTest(unittest.TestCase):
