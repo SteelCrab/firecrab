@@ -264,11 +264,13 @@ Reconciled Cancelled is not a new successful Result.
 
 The [OpenRC record](sandbox-openrc-v1-qa-2026-10-27.md) retains actual literal
 argv/env, NUL stdin, separate output streams, exit 7, NoNewPrivs/caps/groups/limits
-and cleanup evidence. Remaining memory/wall-time/output-limit/cancellation tasks
-are held. Automatic approval review blocks the new memory run before
-CreateProcess because only the literal task was approved. Root has requested
-approval for the four new tasks. Two new TTL environments also await separate
-approval and host-capacity admission. Public preview remains a separate gate.
+and cleanup evidence. Later memory, wall-time and output checks enforce limits,
+with raw exits 1, 137 and 125 and failed test records. Independent guest proof
+confirms cleanup. The earlier pre-process memory rejection remains preserved.
+The separate non-code Chat completes with a 119-character Result, zero guest/file
+tool events and null runtime/environment. Live cancellation and two TTL Environment
+checks are approved but not executed. TTL creation remains subject to host-capacity
+admission. Public preview remains a separate gate.
 The old `682ee479` CI result does not establish CI success for source `52e1f252`.
 
 Keep the failed receipts. Do not remove/recreate environments or manually

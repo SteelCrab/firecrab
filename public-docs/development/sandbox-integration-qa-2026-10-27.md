@@ -260,10 +260,10 @@ Reconciled Cancelled is not a new successful Result.
 
 The [OpenRC record](sandbox-openrc-v1-qa-2026-10-27.md) separates actual literal
 argv/env, NUL stdin, separate streams, exit 7, NoNewPrivs/caps/groups/limits and
-cleanup evidence from local regression checks. Memory, wall-time, output-limit
-and actual cancellation tasks remain held. A new memory run is rejected by
-automatic approval review before CreateProcess because the existing approval
-covers only the literal task. Root has requested approval for the four new tasks.
+cleanup evidence from local regression checks. Later memory, wall-time and output
+checks enforce limits, with raw exits 1, 137 and 125. Their test records remain failed.
+Independent guest proof confirms cleanup. The earlier pre-process memory
+rejection is preserved. Live cancellation and two TTL checks remain unexecuted.
 
 ## Remaining gates
 
@@ -279,13 +279,13 @@ covers only the literal task. Root has requested approval for the four new tasks
   384 external-name responses without answers, and six IPv6 peer denials with
   two positive controls. DNS names remain shared within the private resolver.
   The separate independent-write run above passes after that fresh matrix.
-- Obtain separate approval for OpenRC memory/wall-time/output-limit/cancellation
-  tasks. Two new TTL environments also await separate approval and host-capacity
-  admission; neither is counted as completed QA.
-- Complete the remaining actual results/UI and public preview acceptance.
-  [Retained-results follow-up](sandbox-results-ui-qa-2026-10-27.md) verifies
-  actual Korean/English responsive screens and three artifact byte/hash checks
-  after maintenance. A new non-code conversation and public preview remain open.
+- Execute the approved live OpenRC cancellation and two new TTL Environment checks.
+  TTL creation remains subject to host-capacity admission. These cases are
+  unexecuted and are not counted as completed QA.
+- Complete remaining results/UI and public preview acceptance. After maintenance, the
+  [retained-results record](sandbox-results-ui-qa-2026-10-27.md) verifies Korean/English responsive screens and three artifact byte/hash checks.
+  The [OpenRC record](sandbox-openrc-v1-qa-2026-10-27.md) confirms non-code Chat: 119-character Result,
+  zero guest/file tool events and null runtime/environment.
 - Live Anthropic requires a manually registered workspace API key. Public Tunnel
   checks require the user's registered connection and explicit test domain.
 - Keep PR #520 Draft while exact-head CI and direct acceptance remain incomplete. Keep

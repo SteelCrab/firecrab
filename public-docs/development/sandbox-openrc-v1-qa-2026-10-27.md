@@ -2,12 +2,17 @@
 
 ## Scope and current verdict
 
-This record covers the actual OpenRC literal task and cleanup repair for #414.
+This record covers the actual OpenRC literal task, cleanup repair, resource-limit
+checks and a separate non-code Chat task for #414.
 The repair source is `52e1f252921feee99be19f46fdd15350988df57e`.
 Before the repair, the actual task retained its command result and artifact,
 but cleanup failed. A later API-only application and one reconciliation of the
-same task confirm cleanup acceptance. The task becomes `cancelled`.
+same task confirm cleanup acceptance. The literal task becomes `cancelled`
+after cleanup reconciliation.
 The original failure is not reclassified as a passing Result.
+Later memory, wall-time and output checks enforce their configured limits.
+Their nonzero test records remain failed. Live cancellation and the two TTL
+checks are approved but not executed.
 
 ## Actual task and failure cause
 
@@ -114,10 +119,14 @@ Account, group and control-path cleanup proof also passes.
 This accepts owned-resource cleanup. It does not change the original exit 7 or
 `passed=false`.
 
-An additional memory check is blocked by automatic approval review for
+An earlier additional memory attempt is blocked by automatic approval review for
 insufficient authorization before process creation. Its remote execution count
-is 0. The additional 4 OpenRC checks and 2 separate TTL environments remain
-pending user approval. No account login or consent is automated.
+is 0. The later executed memory, wall-time and output checks are recorded below
+as separate evidence. The original rejection record is preserved.
+No account login or consent is automated.
+
+Cleanup reconciliation of the literal task does not verify the live cancellation
+case. Live cancellation and 2 separate TTL checks are approved but not executed.
 Completion of the full OpenRC set or TTL validation is not claimed.
 
 The operator retains the following remote receipt SHA-256 values.
@@ -130,6 +139,48 @@ Original failure records are not overwritten.
 | `root-reconcile-literal-v2` receipt | `cf6588cccb7d86e0b0c2e8dbdda98084036ccf5dd99bfecc4b80a43a68615c3d` |
 | `final-verdict.json` | `830a979accd9adb0d27ffff0756469495ce22cf405584699e8f8398129453084` |
 | Read-only guest proof | `ffd5343958868de34f870b1437bcf929c92a2701e9e4c93cb06e776304a02f4c` |
+
+## Actual memory, wall-time and output limits
+
+Three later actual OpenRC checks confirm resource-limit enforcement.
+Each check retains its actual nonzero command result and required artifact.
+
+| Check | Task | Configured bound | Actual result |
+| --- | --- | --- | --- |
+| Memory | `fc20f0bf-a482-5b78-9b3f-2f27b56e1f8c` | 64 MiB | `MemoryError`, exit 1 |
+| Wall-time | `d18fa6a3-3114-534a-93d8-e9417225e643` | 2 seconds | Raw exit 137 |
+| Output | `dc2090fb-9af3-5cfc-8e11-70527f3f43d7` | 256 bytes per stream | Retained stdout and stderr within the bound, raw exit 125 |
+
+The nonzero `record_test` results are marked failed.
+Limit enforcement acceptance does not make these passing test records.
+The wall-time result preserves the observed exit 137.
+The output result preserves the observed exit 125.
+
+Each check has independent post-cleanup guest proof.
+The proof uses the original boot and process identity.
+The original process, owned account and owned group are absent after cleanup.
+These checks do not establish live cancellation or TTL acceptance.
+
+The operator retains the following remote evidence SHA-256 values.
+
+| Check | Required artifact SHA-256 | Independent root verdict SHA-256 |
+| --- | --- | --- |
+| Memory | `65e8bd588aa96841a8dc776d04c191266dd5b714f3e006fd2ef06426c92e846a` | `32ad71858261aee69f839c3a0e07eef54382c729a62bc4aca25389558400b9b6` |
+| Wall-time | `1ce747e03f7c145d065809f1cd35d5b86c57420c55a65154c56e36c9f3256d9a` | `67aa0d9e06ba20a2e50e0052dba2c5b4349b09ae8eb2da32afe0eebd1c66221a` |
+| Output | `6fd62ace6bc1389eec8dd05964728a16809fa206ce6685d2048b669ea5a00b23` | `4a3ad87d880503df7289f7308f30aec54ce0c2dd87c09d23b6b518e8148c8958` |
+
+## Actual non-code Chat result
+
+The separate text-only Chat task is
+`42bb9d47-d5cc-5527-bc26-4245b20fb963`.
+It completes with a Result containing 119 characters.
+It has 0 guest-tool events and 0 file-tool events.
+Its runtime and environment fields are both `null`.
+This confirms a non-code Chat completion without a guest runtime or environment.
+It does not establish public-preview acceptance.
+
+The independent verdict SHA-256 is
+`16dcb8586d8a13865ac39ccacba13e79069475836e52aaa0d4058d0b4bebc551`.
 
 ## Frozen evidence
 
