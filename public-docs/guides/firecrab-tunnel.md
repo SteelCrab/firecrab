@@ -158,6 +158,32 @@ It checks Console HTTPS, the protocol-2 registration endpoint, and wildcard
 DNS/TLS for a random unregistered address. It uses no token and does not create
 or change a connection. A pass does not establish public application access.
 
+For an approved public acceptance, use two newly issued, disposable `qa-` address
+labels and a disposable host. Each test app must return a unique, non-secret body
+over HTTPS and echo a WebSocket text message. This probe checks the exact body,
+validates TLS and the WebSocket upgrade, and sends a random echo message:
+
+```sh
+python3 scripts/check-public-tunnel-app.py qa-example --http-path /app --ws-path /ws --expect fixture-a
+```
+
+Replace `qa-example` with the owned test address label and use the actual fixture
+paths and body. The body is an exact match, including whitespace. The probe takes
+no token, does not follow redirects, and does not create or remove resources.
+Run it for both addresses after initial connection, target changes, and API
+restart. Use different bodies to detect traffic reaching the wrong app. After
+disconnecting or revoking one address, confirm it no longer serves its fixture
+and the other address still passes. A failed probe alone does not prove that
+revocation succeeded; inspect the dashboard state and test that the updater
+cannot restore access.
+
+Record the test host, address labels, stages, results, and cleanup outcome without
+credentials. Keep tokens in private files and never in command arguments, reports,
+or logs. Remove only the test-owned local connections. Revoke the test tokens in
+the dashboard and confirm the public addresses no longer serve test traffic.
+Check and remove test-owned dashboard reservations separately if permitted;
+local disconnect does not remove them. Always report any unfinished cleanup.
+
 Verify dashboard issuance, masking/copy, refresh behavior and revocation. Connect
 both targets, switch between them, restart the API, stop/start the source and
 delete one connection while retaining a peer. Verify token omission in API
