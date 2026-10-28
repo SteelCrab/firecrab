@@ -43,7 +43,7 @@ test("IPv6 defaults to IPv4-only and supports SLAAC or DHCPv6", async ({
   page,
 }) => {
   await openEnglish(page, "/#/networks");
-  await page.locator('[data-action="create"][data-id="networks"]').click();
+  await page.locator('.screen-header [data-action="create"][data-id="networks"]').click();
   const mode = page.getByRole("radiogroup", { name: "IPv6 address mode", exact: true });
   await expect(mode.getByRole("radio", { name: "Default", exact: true })).toBeChecked();
   await expect(page.locator("#field-ipv6Cidr")).toHaveValue("");

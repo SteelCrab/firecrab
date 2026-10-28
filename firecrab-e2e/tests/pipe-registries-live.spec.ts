@@ -50,10 +50,10 @@ test.describe("Pipe registries against the API", () => {
   }) => {
     const { rows } = await connections();
     const pipe = await openCards(page);
-    await expect(pipe.locator("a.wasm-card")).toHaveCount(9);
-    await expect(pipe.getByRole("link", { name: /^Account/ })).toBeVisible();
-    await expect(pipe.getByRole("link", { name: /^Pipe AI/ })).toBeVisible();
-    const card = pipe.getByRole("link", { name: /^Registry/ });
+    await expect(pipe.locator("a.pipe-row")).toHaveCount(9);
+    await expect(pipe.locator("a.pipe-row", { hasText: /^Account/ })).toBeVisible();
+    await expect(pipe.locator("a.pipe-row", { hasText: /^Pipe AI/ })).toBeVisible();
+    const card = pipe.locator("a.pipe-row", { hasText: /^Registry/ });
     await card.click();
     await expect(page).toHaveURL(/#\/pipe\/registry$/);
     const panel = page.locator("#content");
@@ -71,7 +71,7 @@ test.describe("Pipe registries against the API", () => {
     page,
   }) => {
     const pipe = await openCards(page);
-    await pipe.getByRole("link", { name: /^Registry/ }).click();
+    await pipe.locator("a.pipe-row", { hasText: /^Registry/ }).click();
     const panel = page.locator("#content");
     await panel.getByRole("button", { name: "Connect registry" }).click();
     await page.getByLabel("Registry host", { exact: true }).fill(HOST);
