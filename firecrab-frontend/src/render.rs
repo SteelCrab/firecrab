@@ -16,6 +16,8 @@ pub fn button(label: &str, action: &str, id: &str) -> String {
 }
 
 pub enum Icon {
+    Key,
+    Copy,
     Save,
     Play,
     Pause,
@@ -34,6 +36,10 @@ pub enum Icon {
 impl Icon {
     pub(crate) fn svg(&self) -> String {
         let path = match self {
+            Self::Key => {
+                "M21 2l-2 2m-7.6 7.6a5.5 5.5 0 1 1-7.8 7.8 5.5 5.5 0 0 1 7.8-7.8ZM11.4 11.6 19 4m-3 3 3 3 3-3-3-3"
+            }
+            Self::Copy => "M9 9h12v12H9zM5 15H3V3h12v2",
             Self::Save => {
                 "M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12l4 4v12a2 2 0 0 1-2 2ZM7 3v6h10V3M7 21v-8h10v8"
             }

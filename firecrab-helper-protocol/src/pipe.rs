@@ -26,6 +26,8 @@ pub const STATUS_SOCKET: &str = "/run/firecrab-ingress/status.sock";
 pub const TUNNEL_UNIT: &str = "firecrab-tunnel.service";
 /// Internal Host header used only by the anonymous Cloudflare connector.
 pub const QUICK_TUNNEL_HOST: &str = "quick.firecrab.internal";
+/// Image-only, bearer-authenticated CI listener; never contains operator API routes.
+pub const CI_DEPLOY_ADDRESS: &str = "127.0.0.1:5525";
 
 /// Validation and manifest IO errors shared by CLI and helper callers.
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -429,6 +431,21 @@ impl Config {
                 "$fc_proto"
             };
             let has_fallback = routes.iter().any(|(_, route)| route.path_prefix == "/");
+            // The public service owns this fixed mapping. No caller-selected API path or service UUID is forwarded.
+            if internal.is_none()
+                && let Some(owner) = routes.iter().find_map(|(_, route)| route.owner.as_ref())
+            {
+                let target = format!(
+                    "http://{CI_DEPLOY_ADDRESS}/api/ci/services/{}/deployments",
+                    owner.service_id
+                );
+                for (location, upstream) in [
+                    ("= /__firecrab/deploy", target.clone()),
+                    ("^~ /__firecrab/deploy/", format!("{target}/")),
+                ] {
+                    text.push_str(&format!("    location {location} {{\n      limit_except GET POST {{ deny all; }}\n      client_max_body_size 8k;\n      proxy_pass {upstream};\n      proxy_http_version 1.1;\n      proxy_set_header Host localhost;\n      proxy_set_header Authorization $http_authorization;\n      proxy_set_header Cookie \"\";\n      proxy_set_header Connection \"\";\n      proxy_connect_timeout 2s;\n      proxy_read_timeout 15s;\n      proxy_next_upstream off;\n      add_header Cache-Control \"no-store\" always;\n    }}\n"));
+                }
+            }
             for (index, route) in routes {
                 let prefix = route.path_prefix.trim_end_matches('/');
                 let locations = if prefix.is_empty() {
@@ -704,6 +721,35 @@ mod tests {
                 .get("quickTunnel")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn ci_paths_bind_public_owned_routes_to_one_service_without_operator_proxying() {
+        let mut config = config();
+        assert!(!config.nginx().contains("/__firecrab/deploy"));
+        config.routes.truncate(1);
+        let service = Uuid::from_u128(1);
+        config.routes[0].owner = Some(ServiceRouteOwner {
+            service_id: service,
+            deployment_id: Uuid::from_u128(2),
+        });
+        config.validate().unwrap();
+        let text = config.nginx();
+        assert!(text.contains(&format!(
+            "proxy_pass http://{CI_DEPLOY_ADDRESS}/api/ci/services/{service}/deployments;"
+        )));
+        assert!(text.contains("location = /__firecrab/deploy"));
+        assert!(text.contains("location ^~ /__firecrab/deploy/"));
+        assert!(text.contains("proxy_next_upstream off;"));
+        assert!(!text.contains("127.0.0.1:5523"));
+        config.routes[0].host = "app.internal".into();
+        config.routes[0].network = Some(
+            serde_json::from_value(
+                json!({"micro_network_id":Uuid::from_u128(3),"gateway":"172.30.0.1","prefix":24}),
+            )
+            .unwrap(),
+        );
+        assert!(!config.nginx().contains("/__firecrab/deploy"));
     }
 
     #[test]

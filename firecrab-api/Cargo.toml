@@ -25,6 +25,7 @@ quick-xml = { version = "0.38", features = ["serialize"] }
 libc = "0.2.186"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots", "stream", "json"] }
 semver = "1"
+subtle = "2"
 ring = "0.17.14"
 rusqlite = { version = "0.39", features = ["bundled"] }
 lapin = { version = "4.12.3", default-features = false, features = ["tokio", "rustls--ring", "rustls-webpki-roots-certs"] }

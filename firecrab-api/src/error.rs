@@ -47,6 +47,12 @@ impl AppError {
         self
     }
 
+    /// Scoped CI callers cannot see private service field names either.
+    pub(crate) fn without_fields(mut self) -> Self {
+        self.fields.clear();
+        self
+    }
+
     /// Concise operation failure suitable for a durable task result.
     pub(crate) fn description(&self) -> String {
         let mut text = format!("{}: {}", self.code, self.message);

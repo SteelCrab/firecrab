@@ -69,6 +69,16 @@ class DeployQaTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("extended acceptance requires --report", result.stderr)
 
+    def test_ci_acceptance_requires_report_and_rejects_extra_tls_hosts(self):
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name("ci-qa-deploy.py")),
+                                 "--disposable-host", "--ci-deploy"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("extended acceptance requires --report", result.stderr)
+        with patch.object(automatic.os, "geteuid", return_value=0):
+            with self.assertRaisesRegex(AssertionError, "private CI QA hostname"):
+                with automatic.trusted_registry([], proxy_hosts=("production.example.com",)):
+                    self.fail("must refuse other hosts before access")
+
     def test_internal_call_commits_a_response_only_after_its_upstream_finishes(self):
         fixture = qa.image_fixture(b"static-toolbox-fixture", "A")
         manifest = json.loads(fixture[1])

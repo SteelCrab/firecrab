@@ -208,6 +208,14 @@ impl Store {
             "DELETE FROM service_tag_watches WHERE service_id=?1",
             [id.to_string()],
         )?;
+        tx.execute(
+            "DELETE FROM service_deploy_tokens WHERE service_id=?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM service_ci_requests WHERE service_id=?1",
+            [id.to_string()],
+        )?;
         let changed = tx.execute("DELETE FROM micro_services WHERE id = ?1", [id.to_string()])?;
         tx.commit()?;
         Ok(changed != 0)
@@ -240,6 +248,24 @@ impl Store {
         &self,
         deployment: &MicroServiceDeployment,
     ) -> Result<(), PersistenceError> {
+        self.save_deployment_with_ci(deployment, None)
+    }
+
+    /// Commit CI authorization/identity and queue intent as one transaction.
+    pub(crate) fn save_ci_deployment(
+        &self,
+        deployment: &MicroServiceDeployment,
+        admission: &super::ci_deploy::Admission,
+    ) -> Result<(), PersistenceError> {
+        self.save_deployment_with_ci(deployment, Some(admission))
+    }
+
+    /// Ordinary worker snapshots do not re-authorize an already accepted CI credential.
+    fn save_deployment_with_ci(
+        &self,
+        deployment: &MicroServiceDeployment,
+        admission: Option<&super::ci_deploy::Admission>,
+    ) -> Result<(), PersistenceError> {
         let text =
             serde_json::to_string(deployment).map_err(|error| PersistenceError::CorruptRecord {
                 id: deployment.id.to_string(),
@@ -247,6 +273,9 @@ impl Store {
             })?;
         let mut conn = self.lock();
         let tx = conn.transaction()?;
+        if let Some(admission) = admission {
+            super::ci_deploy::admit(&tx, deployment, admission)?;
+        }
         tx.execute(
             "INSERT INTO micro_service_deployments (service_id, deployment) VALUES (?1, ?2)
              ON CONFLICT(service_id) DO UPDATE SET deployment = excluded.deployment",
@@ -263,6 +292,7 @@ impl Store {
         )?;
         super::deploy_queue::save(&tx, deployment)?;
         super::auto_deploy::deployment(&tx, deployment)?;
+        super::ci_deploy::observe(&tx, deployment)?;
         if deployment.phase == firecrab_api_types::ServicePhase::Running
             && deployment.digest.is_some()
             && deployment
@@ -347,6 +377,7 @@ impl Store {
             params![service.id.to_string(), service.spec.name, encode(&service)?],
         )?;
         super::auto_deploy::deployment(&tx, failed)?;
+        super::ci_deploy::observe(&tx, failed)?;
         tx.commit()?;
         Ok(())
     }

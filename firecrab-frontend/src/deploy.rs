@@ -11,9 +11,11 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{Element, HtmlSelectElement};
 
 mod automation;
+mod ci;
 
 #[derive(Default)]
 pub struct State {
+    ci: ci::State,
     service: String,
     auto_open: bool,
     auto_request: u64,
@@ -44,6 +46,10 @@ pub fn refresh_automation(app: &Shared) {
     if app.borrow().deploy.auto_open {
         automation::dispatch(app, "deploy-auto-refresh");
     }
+}
+
+pub fn discard_credentials(app: &mut App) {
+    ci::clear(app);
 }
 
 pub fn busy(deployment: &Value) -> bool {
@@ -242,6 +248,7 @@ pub fn html(app: &App) -> String {
     }
     if !private {
         out.push_str(&automation::html(app));
+        out.push_str(&ci::html(app));
     }
     out.push_str("</section>");
     out
@@ -357,6 +364,9 @@ fn history(app: &Shared) {
 }
 
 pub fn change(app: &Shared, target: &Element) -> bool {
+    if ci::change(app, target) {
+        return true;
+    }
     if automation::change(app, target) {
         return true;
     }
@@ -449,6 +459,9 @@ fn cancel(app: &Shared) {
 }
 
 pub fn dispatch(app: &Shared, action_name: &str) -> bool {
+    if ci::dispatch(app, action_name) {
+        return true;
+    }
     if automation::dispatch(app, action_name) {
         return true;
     }

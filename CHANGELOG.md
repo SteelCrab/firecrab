@@ -40,6 +40,9 @@ Entries land here as work merges, and move under the next version heading when t
   verify the saved HTTPS address without following redirects. Dashboard, CLI
   and MCP retain the result separately from remote retirement.
 
+- Service-scoped CI Deploy tokens, image-only Nginx endpoints, CLI and GitHub Action
+  preserve exact operation outcomes, with expiry/revocation and one-time Dashboard controls.
+
 - Opt-in registry tag automation submits pinned images through Deploy, with durable rollback/failure pauses, Dashboard controls and YAML/Git image ownership.
 
 - The Deploy queue prioritizes waiting rollbacks and supports cancelling an exact

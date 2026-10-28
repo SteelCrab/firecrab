@@ -345,7 +345,8 @@ pub(crate) async fn stop_from_stack(
         update.transition = None;
         deployment.phase = ServicePhase::Stopping;
         deployment.finished_at = None;
-        let deployment = deploy::submit(state.clone(), deployment, claim, request_id.0).await?;
+        let deployment =
+            deploy::submit(state.clone(), deployment, claim, request_id.0, None).await?;
         return Ok((StatusCode::ACCEPTED, Json(deployment)));
     }
     deployment.phase = ServicePhase::Stopping;
@@ -436,11 +437,12 @@ pub(crate) fn deployment_fields(
         && (request.host_port < 1024
             || end > 65535
             || (u32::from(request.host_port)..=end).contains(&5523)
+            || (u32::from(request.host_port)..=end).contains(&5525)
             || (u32::from(request.host_port)..=end).contains(&u32::from(api_port)))
     {
         fields.insert(
             "hostPort".into(),
-            "replicas need consecutive host ports from 1024 to 65535; port 5523 is reserved".into(),
+            "replicas need consecutive host ports from 1024 to 65535; ports 5523 and 5525 are reserved".into(),
         );
     }
     fields

@@ -219,6 +219,17 @@ pub(crate) async fn database<T: Send + 'static>(
         .await
         .map_err(|_| AppError::internal(request_id))?
         .map_err(|error| match error {
+            PersistenceError::CiDeployUnauthorized => AppError::new(
+                StatusCode::UNAUTHORIZED,
+                "deploy_token_required",
+                "CI Deploy authorization is no longer valid",
+                request_id,
+            ),
+            PersistenceError::CiTokenLimit => AppError::conflict(
+                "deploy_token_limit",
+                "Revoke an old token before creating another; each service permits twenty tokens",
+                request_id,
+            ),
             PersistenceError::DeployQueueIdentity => AppError::conflict(
                 "operation_conflict",
                 "operationId is already reserved by another Deploy operation",
