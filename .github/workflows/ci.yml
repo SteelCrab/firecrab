@@ -83,6 +83,13 @@ jobs:
       - name: Public Tunnel app probe contract
         run: python3 scripts/test-check-public-tunnel-app.py
 
+      - name: Public Tunnel acceptance safety contracts
+        run: |
+          python3 scripts/test_public_tunnel_credentials.py
+          python3 scripts/test_public_tunnel_fixture.py
+          python3 scripts/test_public_tunnel_setup.py
+          python3 scripts/test_public_tunnel_acceptance.py
+
       - name: CI Deploy Action client contract
         run: python3 scripts/test-deploy-ci-client.py
 
