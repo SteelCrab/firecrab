@@ -33,7 +33,7 @@ test("SEC9: CRUD survives an API restart and leaves only encrypted values on dis
   await expect(page.getByLabel("qa-DB_PASSWORD value", { exact: true })).toHaveText(value);
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete qa-DB_PASSWORD", exact: true }).click();
-  await expect(page.getByText("No secrets yet.", { exact: false })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "No secrets yet", exact: true })).toBeVisible();
   await local.restart();
   expect(await local.rows()).toEqual([]);
 });
@@ -65,7 +65,7 @@ test("SEC10: import applies a captured snapshot and keeps local copies after dis
   await remote.stop();
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete connection qa-remote", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "qa-remote", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Import from qa-remote", exact: true })).toHaveCount(0);
   await local.restart();
   expect(await local.rows()).toEqual(imported);
   expect(await local.reveal(imported[1].id)).toBe("qa-new-snapshot");
@@ -144,15 +144,15 @@ test("SEC13: Firecrab proxy credentials survive edits and restarts; provider fai
     await openSecrets(page, local);
     await page.getByRole("tab", { name: /External connections/ }).click();
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
-    await page.getByLabel("Provider", { exact: true }).selectOption("firecrab");
+    await page.getByRole("radiogroup", { name: "Provider", exact: true }).getByRole("radio", { name: "Firecrab · PipeSecrets", exact: true }).check();
     await page.getByLabel("Connection name", { exact: true }).fill("qa-proxy");
     await page.getByLabel("Base URL", { exact: true }).fill(`http://127.0.0.1:${address.port}`);
-    await page.getByLabel("Bearer token (optional)", { exact: true }).fill("qa-private-credential");
+    await page.getByLabel("Bearer token", { exact: true }).fill("qa-private-credential");
     await page.getByRole("button", { name: "Save connection", exact: true }).click();
     await page.getByRole("button", { name: "Edit connection qa-proxy", exact: true }).click();
-    await expect(page.getByLabel("Bearer token (optional)", { exact: true })).toHaveValue("");
+    await expect(page.getByLabel("Bearer token", { exact: true })).toHaveValue("");
     await page.getByRole("button", { name: "Save connection", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Edit connection: qa-proxy", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Edit connection", exact: true })).toHaveCount(0);
     expect(JSON.stringify((await local.request("GET", "/connections")).body)).not.toContain("qa-private-credential");
     expect((await readFile(path.join(local.vault, "vault.bin"))).includes(Buffer.from("qa-private-credential"))).toBe(false);
     await local.restart();
