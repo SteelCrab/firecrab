@@ -113,7 +113,7 @@ pub fn content(app: &App) -> String {
         out.push_str("</form>");
     }
     if !rows.is_empty() {
-        out.push_str(&format!("<div class=\"panel pipe-ai-accounts\" aria-label=\"{}\"><div class=\"pipe-ai-section-head\"><h3>{}{}</h3><span class=\"pipe-ai-count\">{}</span></div><ul class=\"pipe-ai-connections\">",tr("AI connections","AI 연결 목록"),Icon::Key.svg(),tr("Connected accounts","연결한 계정"),rows.len()));
+        out.push_str(&format!("<div class=\"panel pipe-ai-accounts\" aria-label=\"{}\"><div class=\"pipe-ai-section-head\"><h3>{}{}</h3><span class=\"pipe-ai-count\">{}</span></div><ul class=\"pipe-ai-connections\">",tr("AI connections","AI 연결 목록"),Icon::AiKey.svg(),tr("Connected accounts","연결한 계정"),rows.len()));
         for row in rows {
             let chatgpt = row["authentication"] == "chatgpt";
             let method = if chatgpt {
@@ -133,7 +133,7 @@ pub fn content(app: &App) -> String {
             let icon = if chatgpt {
                 include_str!("../../public/chatgpt.svg").to_owned()
             } else {
-                Icon::Key.svg()
+                Icon::AiKey.svg()
             };
             out.push_str(&format!("<li><span class=\"pipe-ai-account-icon\" aria-hidden=\"true\">{}</span><div class=\"pipe-ai-account-info\"><strong>{}</strong><p class=\"pipe-ai-hint\">{}</p></div><span class=\"badge running\">{}{}</span><div class=\"pipe-ai-manage\">{}{}</div></li>",icon,escape(text(row,"name")),method,Icon::Connected.svg(),tr("Connected","연결됨"),if chatgpt{action("Sign in again","다시 로그인","ai-edit-chatgpt",id,locked||editing)}else{action("Replace API key","API 키 교체","ai-edit-key",id,locked||editing)},action("Disconnect","연결 해제","ai-disconnect",id,locked||editing)));
         }

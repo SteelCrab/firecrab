@@ -28,7 +28,7 @@ pub enum Icon {
     Edit,
     Delete,
     Close,
-    Key,
+    AiKey,
     Sparkles,
     Connected,
 }
@@ -56,7 +56,7 @@ impl Icon {
             Self::Edit => "m16 3 5 5M4 20l4-1 13-13a2.8 2.8 0 0 0-4-4L4 15l-1 6Z",
             Self::Delete => "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7",
             Self::Close => "m6 6 12 12M18 6 6 18",
-            Self::Key => {
+            Self::AiKey => {
                 "M21 8a5 5 0 1 1-10 0 5 5 0 0 1 10 0ZM12.5 11.5 3 21H2v-3l3-3h3v-3l4.5-.5M16 7h.01"
             }
             Self::Sparkles => {
