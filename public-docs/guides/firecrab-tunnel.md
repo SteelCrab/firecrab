@@ -148,6 +148,16 @@ before the first local registration. HTTP loopback is supported for isolated QA.
 
 ## Manual verification
 
+Run the read-only public preflight from the repository:
+
+```sh
+python3 scripts/check-public-tunnel.py
+```
+
+It checks Console HTTPS, the protocol-2 registration endpoint, and wildcard
+DNS/TLS for a random unregistered address. It uses no token and does not create
+or change a connection. A pass does not establish public application access.
+
 Verify dashboard issuance, masking/copy, refresh behavior and revocation. Connect
 both targets, switch between them, restart the API, stop/start the source and
 delete one connection while retaining a peer. Verify token omission in API

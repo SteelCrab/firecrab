@@ -76,6 +76,9 @@ jobs:
 
       - name: Deploy QA guards and OCI fixture contract
         run: python3 scripts/test-ci-qa-deploy.py
+
+      - name: Public Tunnel preflight contract
+        run: python3 scripts/test-check-public-tunnel.py
       - name: CI Deploy Action client contract
         run: python3 scripts/test-deploy-ci-client.py
 
