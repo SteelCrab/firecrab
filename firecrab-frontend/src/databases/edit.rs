@@ -74,19 +74,24 @@ fn resource_field(key: &'static str, label: &'static str, items: &Value) -> Fiel
     field(key, label, "select", "").resources(items, "id", "name")
 }
 pub fn open_operation(app: &Shared, action: &str) {
-    let s = app.borrow();
-    let d = &s.databases;
-    let id = &d.selected;
-    let path = format!("/api/pipe/databases/{}", api::encode(id));
     let request = match uuid() {
         Ok(v) => v,
         Err(err) => {
-            drop(s);
             app.borrow_mut().error = err;
             render_messages(app);
             return;
         }
     };
+    let form = operation_form(&app.borrow(), action, &request);
+    if let Some(form) = form {
+        open(app, form);
+    }
+}
+/// The form of one database operation (`db-*` action), or `None` for another action.
+pub(crate) fn operation_form(app: &App, action: &str, request: &str) -> Option<Form> {
+    let d = &app.databases;
+    let id = &d.selected;
+    let path = format!("/api/pipe/databases/{}", api::encode(id));
     let mut form = match action {
         "db-binding" => Form::new(
             "Database service access",
@@ -150,21 +155,21 @@ pub fn open_operation(app: &Shared, action: &str) {
                 field("tls", "TLS", "checkbox", "true").optional(),
                 field(
                     "caCertificate",
-                    tr("CA certificate (optional)", "CA 인증서 (선택)"),
+                    tr("CA certificate", "CA 인증서"),
                     "textarea",
                     "",
                 )
                 .optional(),
                 field(
                     "clientCertificate",
-                    tr("Client certificate (optional)", "클라이언트 인증서 (선택)"),
+                    tr("Client certificate", "클라이언트 인증서"),
                     "textarea",
                     "",
                 )
                 .optional(),
                 field(
                     "clientKey",
-                    tr("Client key (optional)", "클라이언트 키 (선택)"),
+                    tr("Client key", "클라이언트 키"),
                     "textarea",
                     "",
                 )
@@ -206,7 +211,7 @@ pub fn open_operation(app: &Shared, action: &str) {
                 "pipe/database",
             )
         }
-        _ => return,
+        _ => return None,
     };
     if matches!(action, "db-restore" | "db-migration") {
         form.fields.push(field(
@@ -227,13 +232,12 @@ pub fn open_operation(app: &Shared, action: &str) {
             )
             .optional(),
         );
-        form.base["databaseName"] = json!(text(&selected(&s), "database"));
+        form.base["databaseName"] = json!(text(&selected(app), "database"));
     }
     if action != "db-external" {
         form.base["requestId"] = json!(request);
     }
-    drop(s);
-    open(app, form);
+    Some(form)
 }
 pub fn payload(form: &Form, body: &Value) -> Option<Result<Value, String>> {
     let mut result = body.clone();

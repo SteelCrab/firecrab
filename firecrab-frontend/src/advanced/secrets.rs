@@ -1,7 +1,7 @@
 use crate::{
     App, Shared, api, element,
     model::{escape, list, text},
-    render::{Icon, icon_button, icon_request},
+    render::{Icon, empty_state, icon_button, icon_request, name_cell},
     render_content, render_messages, set_html,
 };
 use serde_json::{Value, json};
@@ -49,11 +49,18 @@ fn load_connections(app: &Shared, path: &'static str) {
 pub fn content(app: &App) -> String {
     use crate::i18n::t;
     let external = app.advanced.secrets_external;
+    let connection_count = list(
+        app.cache
+            .get("/api/secrets/connections")
+            .unwrap_or(&Value::Null),
+    )
+    .len();
     let mut out = format!(
-        "<div class=\"secrets-page\"><div class=\"secret-tabs\" role=\"tablist\" aria-label=\"Secret stores\"><button class=\"btn\" role=\"tab\" aria-label=\"{}\" aria-selected=\"{}\" data-action=\"secret-internal\">{}</button><button class=\"btn\" role=\"tab\" aria-label=\"{}\" aria-selected=\"{external}\" data-action=\"secret-external\">{}</button></div>",
+        "<div class=\"secrets-page\"><div class=\"subtabs secret-tabs\" role=\"tablist\" aria-label=\"Secret stores\"><button class=\"subtab\" type=\"button\" role=\"tab\" aria-label=\"{}\" aria-selected=\"{}\" data-action=\"secret-internal\">{} <em>{}</em></button><button class=\"subtab\" type=\"button\" role=\"tab\" aria-label=\"{}\" aria-selected=\"{external}\" data-action=\"secret-external\">{} <em>{connection_count}</em></button></div>",
         t("Internal secrets"),
         !external,
         t("Secrets"),
+        list(&app.resource).len(),
         t("External connections"),
         t("Connections")
     );
@@ -65,54 +72,96 @@ pub fn content(app: &App) -> String {
             "create",
             "secret-connection",
         ));
-        for link in list(
+        let links = list(
             app.cache
                 .get("/api/secrets/connections")
                 .unwrap_or(&Value::Null),
-        ) {
-            let id = text(link, "id");
-            let name = text(link, "name");
-            out.push_str(&format!(
-                "<article class=\"wasm-card secret-card\"><div class=\"secret-heading\"><h2>{}</h2><div class=\"secret-actions\">{}{}{}</div></div><p>{}</p></article>",
-                escape(name),
-                text_button(&format!("{} {name}", t("Import from")), "Import", "secret-import", id),
-                icon_button(
-                    &format!("{} {name}", t("Edit connection")),
-                    "secret-edit-connection",
-                    id,
-                    Icon::Edit
-                ),
-                icon_request(
-                    &format!("{} {name}", t("Delete connection")),
-                    &format!("/api/secrets/connections/{}", api::encode(id))
-                ),
-                escape(text(link, "provider"))
+        );
+        if links.is_empty() {
+            out.push_str(&empty_state(
+                "secrets",
+                t("No connections yet"),
+                t("Connect a secret store to import its secrets."),
+                "",
             ));
+        } else {
+            out.push_str(&format!(
+                "<div class=\"table-scroll\"><table class=\"wasm-table secret-table\"><thead><tr><th>{}</th><th class=\"col-secondary\">{}</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
+                t("Name"),
+                t("Provider"),
+                t("Actions")
+            ));
+            for link in links {
+                let id = text(link, "id");
+                let name = text(link, "name");
+                out.push_str(&format!(
+                    "<tr><td>{}</td><td class=\"col-secondary\">{}</td><td class=\"row-actions\">{}{}{}</td></tr>",
+                    name_cell(name, "", "", false),
+                    escape(text(link, "provider")),
+                    icon_button(
+                        &format!("{} {name}", t("Import from")),
+                        "secret-import",
+                        id,
+                        Icon::Download
+                    ),
+                    icon_button(
+                        &format!("{} {name}", t("Edit connection")),
+                        "secret-edit-connection",
+                        id,
+                        Icon::Edit
+                    ),
+                    icon_request(
+                        &format!("{} {name}", t("Delete connection")),
+                        &format!("/api/secrets/connections/{}", api::encode(id))
+                    )
+                ));
+            }
+            out.push_str("</tbody></table></div>");
         }
     } else {
         out.push_str("<section class=\"secret-list\" aria-label=\"Internal secrets\"><p>Value changes automatically redeploy running services with a domain that use the secret. Follow progress under Deploy.</p>");
         if list(&app.resource).is_empty() {
-            out.push_str("<p>No secrets yet.</p>");
-        }
-        for row in list(&app.resource) {
-            let id = text(row, "id");
-            let name = text(row, "name");
-            let reveal = app.advanced.reveals.get(id);
+            out.push_str(&empty_state(
+                "secrets",
+                t("No secrets yet"),
+                t("Store values your services need, such as passwords and tokens."),
+                "",
+            ));
+        } else {
             out.push_str(&format!(
-                "<article class=\"wasm-card secret-card\"><div class=\"secret-heading\"><label><input type=\"checkbox\" data-secret-id=\"{}\" aria-label=\"Select {}\"> {}</label><div class=\"secret-actions\">{}{}{}</div></div><p>{}</p><code aria-label=\"{} value\">{}</code></article>",
-                escape(id), escape(name), escape(name),
-                icon_button(&format!("{} {name}", t(if reveal.is_some() { "Hide" } else { "Reveal" })), "secret-reveal", id, if reveal.is_some() { Icon::Hide } else { Icon::Reveal }),
-                icon_button(&format!("{} {name}", t("Edit")), "secret-edit", id, Icon::Edit),
-                icon_request(&format!("{} {name}", t("Delete")), &format!("/api/secrets/{}", api::encode(id))),
-                escape(text(row, "description")), escape(name), escape(reveal.map(|(value,_)|value.as_str()).unwrap_or("••••••••"))));
-            if let Some(source) = row.get("source").filter(|v| v.is_object()) {
+                "<div class=\"table-scroll\"><table class=\"wasm-table secret-table\"><thead><tr><th class=\"secret-check\"><span class=\"sr-only\">{}</span></th><th>{}</th><th class=\"col-secondary\">{}</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
+                t("Select"),
+                t("Name"),
+                t("Value"),
+                t("Actions")
+            ));
+            for row in list(&app.resource) {
+                let id = text(row, "id");
+                let name = text(row, "name");
+                let reveal = app.advanced.reveals.get(id);
+                let sub = match row.get("source").filter(|v| v.is_object()) {
+                    Some(source) => format!(
+                        "{}: {} · v{}",
+                        t("Imported from"),
+                        text(source, "connectionName"),
+                        row["version"].as_u64().unwrap_or(1)
+                    ),
+                    None => text(row, "description").to_string(),
+                };
                 out.push_str(&format!(
-                    "<p>{}: {} · v{}</p>",
-                    crate::i18n::t("Imported from"),
-                    escape(text(source, "connectionName")),
-                    row["version"].as_u64().unwrap_or(1)
+                    "<tr data-id=\"{}\"><td class=\"secret-check\"><input type=\"checkbox\" data-secret-id=\"{}\" aria-label=\"Select {}\"></td><td>{}</td><td class=\"col-secondary\"><code aria-label=\"{} value\">{}</code></td><td class=\"row-actions\">{}{}{}</td></tr>",
+                    escape(id),
+                    escape(id),
+                    escape(name),
+                    name_cell(name, &sub, "", true),
+                    escape(name),
+                    escape(reveal.map(|(value, _)| value.as_str()).unwrap_or("••••••••")),
+                    icon_button(&format!("{} {name}", t(if reveal.is_some() { "Hide" } else { "Reveal" })), "secret-reveal", id, if reveal.is_some() { Icon::Hide } else { Icon::Reveal }),
+                    icon_button(&format!("{} {name}", t("Edit")), "secret-edit", id, Icon::Edit),
+                    icon_request(&format!("{} {name}", t("Delete")), &format!("/api/secrets/{}", api::encode(id)))
                 ));
             }
+            out.push_str("</tbody></table></div>");
         }
         out.push_str("<div class=\"secret-export\"><label for=\"upload-destination\">Upload destination</label><select id=\"upload-destination\">");
         for link in list(

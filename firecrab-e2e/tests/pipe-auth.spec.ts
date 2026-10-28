@@ -190,7 +190,7 @@ test.describe("Pipe Auth @dashboard", () => {
     page.once("dialog", dialog => { expect(dialog.message()).toContain("account integration token"); return dialog.accept(); });
     await detail.getByRole("button", { name: "Disconnect", exact: true }).click();
     await expect.poll(() => mock.deletes).toEqual(["firecrab"]);
-    await expect(page.getByRole("cell", { name: "octocat", exact: true })).toBeVisible();
+    await expect(page.getByRole("cell", { name: /^octocat(\s|$)/ })).toBeVisible();
   });
 
   test("keeps Tunnel tokens separate from the linked account", async ({ page }) => {
@@ -206,7 +206,7 @@ test.describe("Pipe Auth @dashboard", () => {
     await expect(page.getByLabel("Account integration token", { exact: true })).toHaveCount(0);
     const token = "b".repeat(64);
     await page.getByLabel("Ownership token", { exact: true }).fill(token);
-    await page.getByLabel("Target", { exact: true }).selectOption("nginx");
+    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
     await page.getByLabel("Route host", { exact: true }).selectOption("app.example.com");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByRole("link", { name: "https://console-app.firecrab.dev", exact: true })).toBeVisible();
@@ -241,7 +241,7 @@ test.describe("Pipe Auth @dashboard", () => {
   }) => {
     await open(page, { connections: [github, aws] });
     await expect(
-      page.getByRole("cell", { name: "octocat", exact: true }),
+      page.getByRole("cell", { name: /^octocat(\s|$)/ }),
     ).toBeVisible();
     await expect(
       page.getByRole("cell", { name: aws.registry!, exact: true }),
@@ -262,7 +262,7 @@ test.describe("Pipe Auth @dashboard", () => {
       { provider: "github", token: "private-token" },
     ]);
     await expect(
-      page.getByRole("cell", { name: "octocat", exact: true }),
+      page.getByRole("cell", { name: /^octocat(\s|$)/ }),
     ).toBeVisible();
     expect(
       await page.evaluate(
@@ -271,7 +271,7 @@ test.describe("Pipe Auth @dashboard", () => {
     ).not.toContain("private-token");
     await page.goto("/#/pipe/registry");
     await expect(
-      page.getByRole("cell", { name: "ghcr.io", exact: true }),
+      page.getByRole("cell", { name: /^ghcr\.io(\s|$)/ }),
     ).toBeVisible();
   });
   test("connects AWS with session credentials and preserves its region", async ({
@@ -335,7 +335,11 @@ test.describe("Pipe Auth @dashboard", () => {
       "Connections unavailable",
     );
     mock.recover();
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.waitForResponse(
+      (r) =>
+        new URL(r.url()).pathname === "/api/pipe/auth" &&
+        r.request().method() === "GET",
+    );
     await expect(page.getByRole("alert")).toHaveCount(0);
     await page
       .getByRole("button", { name: "Connect GitHub", exact: true })

@@ -55,7 +55,8 @@ A client timeout does not cancel an accepted operation.
 
 In the dashboard, open a service and choose **Deploy update**.
 The guided form offers the same configuration and strategy choices.
-**Release history** lists successful releases and offers **Roll back**.
+The **Releases** tab lists successful releases and offers **Roll back to selected release**.
+The Overview shows the latest three, with the same roll back on the archived ones.
 **Retry Deploy** resumes a failed operation that still owns resources.
 The dashboard and YAML apply send the release they observed to prevent a stale update.
 

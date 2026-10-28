@@ -62,6 +62,7 @@ pub fn content(app: &App) -> String {
     if let Some(form) = &app.form
         && d.row.is_none()
     {
+        out.push_str(&form.heading());
         out.push_str(&form.html(app.busy, &app.field_errors));
     }
     if list(&app.resource).is_empty() && !editing && app.connection_error.is_empty() {
@@ -418,15 +419,17 @@ fn row_editor(app: &App, row: &Row) -> String {
             );
         }
     }
+    // Cancel first, as in the shared form footer.
     let _ = write!(
         out,
-        "<div class=\"wasm-actions wasm-wide\"><button class=\"btn primary\" type=\"submit\">{}</button>{}</div></fieldset>",
+        "<div class=\"wasm-actions wasm-wide\"><button type=\"button\" class=\"btn ghost\" data-action=\"cancel\"{}>{}</button><button class=\"btn primary\" type=\"submit\">{}</button></div></fieldset>",
+        if app.busy { " disabled" } else { "" },
+        tr("Cancel", "취소"),
         if row.operation == "delete" {
             tr("Delete row", "행 삭제")
         } else {
             tr("Save row", "행 저장")
-        },
-        button(tr("Cancel", "취소"), "cancel", "", app.busy)
+        }
     );
     if row.uncertain {
         out.push_str("<p>The result may be unknown. Repeating this request keeps its ID and cannot apply a committed change twice.</p>");
@@ -676,4 +679,38 @@ fn maintenance(app: &App) -> String {
         out.push_str("</tbody></table></div>");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_row_editor_cancels_with_a_ghost_button_before_the_submit_button() {
+        let row = Row {
+            uncertain: false,
+            operation: "insert".into(),
+            request: "request".into(),
+            original: Value::Null,
+            values: BTreeMap::new(),
+            modes: BTreeMap::new(),
+        };
+        let html = row_editor(&App::default(), &row);
+        let cancel =
+            "<button type=\"button\" class=\"btn ghost\" data-action=\"cancel\">Cancel</button>";
+        let submit = "<button class=\"btn primary\" type=\"submit\">Save row</button>";
+        let (cancel_at, submit_at) = (html.find(cancel), html.find(submit));
+        assert!(cancel_at.is_some() && submit_at.is_some(), "{html}");
+        assert!(cancel_at < submit_at, "{html}");
+        // While a request runs, Cancel is disabled like the other buttons; Save row stays as is.
+        let busy = App {
+            busy: true,
+            ..Default::default()
+        };
+        let html = row_editor(&busy, &row);
+        assert!(
+            html.contains("data-action=\"cancel\" disabled>Cancel</button>"),
+            "{html}"
+        );
+    }
 }

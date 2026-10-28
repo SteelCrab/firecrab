@@ -66,7 +66,7 @@ async function open(page: Page, options: { hash?: string; ko?: boolean; failCrea
 test.describe("Persistent volumes @dashboard", () => {
   test("creates and explicitly deletes an independent data volume", async ({ page }, testInfo) => {
     const state = await open(page, { empty: true });
-    await page.getByRole("button", { name: "Create volume", exact: true }).click();
+    await page.locator(".screen-header").getByRole("button", { name: "Create volume", exact: true }).click();
     await page.getByLabel("Name", { exact: true }).fill("uploads");
     await page.getByLabel("Size (GiB)", { exact: true }).fill("4");
     await page.locator("#editor").getByRole("button", { name: "Create volume", exact: true }).click();
@@ -75,7 +75,7 @@ test.describe("Persistent volumes @dashboard", () => {
     await page.screenshot({ path: testInfo.outputPath("volumes-desktop.png"), fullPage: true });
     page.once("dialog", dialog => dialog.accept());
     await page.getByRole("button", { name: "Delete", exact: true }).click();
-    await expect(page.getByText("No data volumes yet.", { exact: true })).toBeVisible();
+    await expect(page.getByText("No data volumes", { exact: true })).toBeVisible();
     expect(state.writes.at(-1)?.method).toBe("delete");
   });
 
@@ -198,7 +198,7 @@ test.describe("Persistent volumes @dashboard", () => {
   test("shows create errors in the Korean mobile flow", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 390, height: 844 });
     const state = await open(page, { ko: true, failCreate: true, empty: true });
-    await page.getByRole("button", { name: "볼륨 생성", exact: true }).click();
+    await page.locator(".screen-header").getByRole("button", { name: "볼륨 생성", exact: true }).click();
     await page.getByLabel("이름", { exact: true }).fill("existing");
     await page.locator("#editor").getByRole("button", { name: "볼륨 생성", exact: true }).click();
     await expect(page.getByRole("alert").filter({ hasText: "volume name is already registered" })).toBeVisible();
@@ -227,6 +227,8 @@ test.describe("Persistent volumes @dashboard", () => {
       },
     } });
     await page.locator("#field-name").fill("volume-vm");
+    // Data volumes are an advanced setting, folded until opened.
+    await page.locator("details.form-advanced summary").click();
     await page.getByRole("button", { name: "Add volume", exact: true }).click();
     await page.getByLabel("Volume", { exact: true }).selectOption(VOLUME);
     await page.getByLabel("Mount path", { exact: true }).fill("/data");

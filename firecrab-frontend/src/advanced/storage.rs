@@ -51,7 +51,7 @@ pub fn content(app: &App) -> String {
         if !text(&s.page, "nextCursor").is_empty() {
             out.push_str(&button("Load more", "storage-more", id));
         }
-        out.push_str(&format!("<div class=\"wasm-form wasm-card\"><label>File<input id=\"storage-file\" type=\"file\"></label><label>File name<input id=\"storage-name\" value=\"{}\"></label><label><input id=\"storage-overwrite\" type=\"checkbox\" {}>Allow overwrite</label>{}{}</div></section>",escape(&s.name),if s.overwrite{"checked"}else{""},button("Upload","storage-upload",id),button("Cancel upload","storage-clear","")));
+        out.push_str(&format!("<div class=\"wasm-form wasm-card\"><label>File<input id=\"storage-file\" type=\"file\"></label><label>File name<input id=\"storage-name\" value=\"{}\"></label><label><input id=\"storage-overwrite\" type=\"checkbox\" {}>Allow overwrite</label>{}{}</div></section>",escape(&s.name),if s.overwrite{"checked"}else{""},crate::render::icon_button("Upload","storage-upload",id,crate::render::Icon::Upload),button("Cancel upload","storage-clear","")));
     } else {
         out.push_str(&button("Connect bucket", "create", "pipe-storage"));
         for connection in list(&app.resource) {

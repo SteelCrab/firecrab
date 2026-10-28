@@ -1,7 +1,7 @@
 use crate::{
     App, Shared, api,
     model::{escape, list, text},
-    render::{button, request},
+    render::{Icon, button, empty_state, icon_link, request, status_dot},
 };
 use serde_json::{Value, json};
 pub fn timing(data: &Value) -> String {
@@ -34,10 +34,42 @@ pub fn timing(data: &Value) -> String {
 pub fn consumed(row: &Value) -> bool {
     row["timing"]["kind"] == "once" && !row["lastRun"].is_null()
 }
+/// "MM/DD HH:mm" in the browser's time zone.
+fn when_label(ms: f64) -> String {
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ms));
+    format!(
+        "{:02}/{:02} {:02}:{:02}",
+        date.get_month() + 1,
+        date.get_date(),
+        date.get_hours(),
+        date.get_minutes()
+    )
+}
+/// The name of a schedule with the MicroVM it acts on, as a link to that VM, under it.
+fn schedule_name(name: &str, vm: &str, vm_id: &str) -> String {
+    format!(
+        "<div class=\"cell-name\"><b class=\"\">{}</b><span class=\"cell-sub\" data-tone=\"\"><a href=\"#/vms?vm={}\">{}</a></span></div>",
+        escape(name),
+        api::encode(vm_id),
+        escape(vm)
+    )
+}
+/// The tone and label of the last run of a schedule.
+fn last_result(row: &Value, ko: bool) -> String {
+    if row["lastRun"].is_null() {
+        return "—".into();
+    }
+    match text(&row["lastRun"], "status") {
+        "succeeded" | "success" | "ok" => status_dot("ok", if ko { "성공" } else { "Succeeded" }),
+        "failed" | "error" => status_dot("error", if ko { "실패" } else { "Failed" }),
+        other => status_dot("busy", other),
+    }
+}
 pub fn content(app: &App) -> String {
+    let ko = app.locale == "ko";
     let filter = super::query("vm").unwrap_or_default();
     let mut out = String::from(
-        "<label for=\"schedule-filter\">Filter by VM</label><select id=\"schedule-filter\"><option value=\"\">All MicroVMs</option>",
+        "<div class=\"schedule-toolbar\"><label for=\"schedule-filter\">Filter by VM</label><select id=\"schedule-filter\"><option value=\"\">All MicroVMs</option>",
     );
     for vm in app.vms.iter().filter(|v| {
         !matches!(
@@ -52,13 +84,39 @@ pub fn content(app: &App) -> String {
             escape(&vm.name)
         ));
     }
-    out.push_str("</select><ul class=\"schedule-list\">");
-    let mut count = 0;
-    for row in list(&app.resource)
+    out.push_str("</select></div>");
+    let rows: Vec<&Value> = list(&app.resource)
         .iter()
         .filter(|row| filter.is_empty() || row["vmId"] == filter)
-    {
-        count += 1;
+        .collect();
+    if rows.is_empty() {
+        out.push_str(&empty_state(
+            "schedules",
+            if ko {
+                "아직 스케줄이 없습니다"
+            } else {
+                "No schedules yet"
+            },
+            if ko {
+                "MicroVM을 정한 시간에 켜고 끕니다."
+            } else {
+                "Start and stop MicroVMs at set times."
+            },
+            &button("New schedule", "create", "schedules"),
+        ));
+        return out;
+    }
+    out.push_str(&format!(
+        "<div class=\"table-scroll\"><table class=\"wasm-table schedule-table\" aria-label=\"{}\"><thead><tr><th>{}</th><th class=\"col-secondary\">{}</th><th class=\"col-secondary\">{}</th><th class=\"col-secondary\">{}</th><th class=\"col-secondary\">{}</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
+        if ko { "스케줄" } else { "Schedules" },
+        if ko { "이름" } else { "Name" },
+        if ko { "일정" } else { "When" },
+        if ko { "동작" } else { "Action" },
+        if ko { "다음 실행" } else { "Next run" },
+        if ko { "최근 결과" } else { "Last result" },
+        crate::i18n::t("Actions")
+    ));
+    for row in rows {
         let id = text(row, "id");
         let vm = app
             .vms
@@ -67,12 +125,39 @@ pub fn content(app: &App) -> String {
             .map(|vm| vm.name.as_str())
             .unwrap_or("Missing VM");
         let enabled = row["enabled"] == true;
-        out.push_str(&format!("<li class=\"wasm-card\" aria-label=\"{}\"><button class=\"schedule-row-main btn\" data-action=\"detail\" data-id=\"{}\" aria-label=\"{}\">{}</button><p>{} · {} · {}</p><a class=\"btn\" href=\"#/vms?vm={}\">{}</a><button class=\"btn\" role=\"switch\" aria-label=\"Enable {}\" aria-checked=\"{enabled}\" data-action=\"schedule-enable\" data-id=\"{}\" {}>{}</button></li>",escape(text(row,"name")),escape(id),escape(&if app.locale=="ko" {format!("{} 예약 보기",text(row,"name"))}else{format!("View schedule {}",text(row,"name"))}),escape(text(row,"name")),escape(&timing(&row["timing"])),escape(text(&row["timing"],"timeZone")),escape(text(row,"action")),api::encode(text(row,"vmId")),escape(vm),escape(text(row,"name")),escape(id),if consumed(row){"disabled"}else{""},if enabled{"Pause schedule"}else{"Enable schedule"}));
+        let selected = app.detail.as_ref().is_some_and(|d| d["id"] == id);
+        let next = row["nextRunAtMs"]
+            .as_f64()
+            .filter(|_| enabled)
+            .map_or("—".to_string(), when_label);
+        let name = text(row, "name");
+        let toggle = if enabled {
+            if ko {
+                "일시 중지"
+            } else {
+                "Pause schedule"
+            }
+        } else if ko {
+            "켜기"
+        } else {
+            "Enable schedule"
+        };
+        out.push_str(&format!(
+            "<tr data-id=\"{}\" aria-selected=\"{selected}\"><td>{}</td><td class=\"col-secondary\">{} · {}</td><td class=\"col-secondary\">{}</td><td class=\"col-secondary\">{next}</td><td class=\"col-secondary\">{}</td><td class=\"row-actions\"><button type=\"button\" class=\"icon-btn\" role=\"switch\" aria-checked=\"{enabled}\" aria-label=\"{} {}\" title=\"{toggle}\" data-action=\"schedule-enable\" data-id=\"{}\"{}>{}</button></td></tr>",
+            escape(id),
+            schedule_name(name, vm, text(row, "vmId")),
+            escape(&timing(&row["timing"])),
+            escape(text(&row["timing"], "timeZone")),
+            escape(text(row, "action")),
+            last_result(row, ko),
+            if ko { "켜기" } else { "Enable" },
+            escape(name),
+            escape(id),
+            if consumed(row) { " disabled" } else { "" },
+            if enabled { Icon::Pause.svg() } else { Icon::Start.svg() }
+        ));
     }
-    out.push_str("</ul>");
-    if count == 0 {
-        out.push_str(&button("Create your first schedule", "create", "schedules"));
-    }
+    out.push_str("</tbody></table></div>");
     out
 }
 pub fn actions(data: &Value) -> String {
@@ -88,59 +173,92 @@ pub fn actions(data: &Value) -> String {
             api::encode(text(data, "vmId"))
         )
 }
-pub fn detail(_app: &App, data: &Value) -> String {
-    let mut out = format!(
-        "<p>{} · {}</p><p>Next run: {}</p>",
-        escape(&timing(&data["timing"])),
-        escape(text(&data["timing"], "timeZone")),
-        data["nextRunAtMs"]
+pub fn detail(app: &App, data: &Value) -> String {
+    let ko = app.locale == "ko";
+    let vm = app
+        .vms
+        .iter()
+        .find(|vm| vm.id == text(data, "vmId"))
+        .map_or("—", |vm| vm.name.as_str());
+    let schedule = crate::details::section(
+        "Schedule",
+        "",
+        &crate::render::properties(&json!({
+            "MicroVM": vm,
+            "When": timing(&data["timing"]),
+            "Time zone": text(&data["timing"], "timeZone"),
+            "Next run": data["nextRunAtMs"].as_f64().map_or("—".to_string(), when_label),
+        })),
     );
+    let mut runs = String::new();
     for run in list(&data["runs"]) {
-        out.push_str(&format!(
-            "<article><p>{}</p><p>{}</p></article>",
-            escape(text(run, "status")),
-            escape(text(run, "error"))
+        let failed = matches!(text(run, "status"), "failed" | "error");
+        runs.push_str(&format!(
+            "<li><span class=\"detail-list-main\">{}</span>{}</li>",
+            escape(text(run, "error")),
+            status_dot(
+                if failed { "error" } else { "ok" },
+                if failed {
+                    if ko { "실패" } else { "Failed" }
+                } else if ko {
+                    "성공"
+                } else {
+                    "Succeeded"
+                }
+            )
         ));
     }
-    if list(&data["runs"]).is_empty() && !data["lastRun"].is_null() {
-        out.push_str(&format!(
-            "<p>{}</p>",
-            escape(text(&data["lastRun"], "error"))
+    if runs.is_empty() && !data["lastRun"].is_null() {
+        runs.push_str(&format!(
+            "<li><span class=\"detail-list-main\">{}</span>{}</li>",
+            escape(text(&data["lastRun"], "error")),
+            last_result(data, ko)
         ));
     }
-    out
+    let runs = if runs.is_empty() {
+        "<p class=\"detail-note\">No runs yet.</p>".to_string()
+    } else {
+        format!("<ul class=\"detail-list\">{runs}</ul>")
+    };
+    schedule + &crate::details::section("Recent runs", "", &runs)
 }
 pub fn vm_schedules(app: &App, vm: &Value) -> String {
     if ["pool", "queue"].contains(&text(vm, "purpose")) {
         return String::new();
     }
-    let mut out = format!(
-        "<section role=\"region\" aria-label=\"{}\"><h3>{}</h3>",
-        if app.locale == "ko" {
-            "예약"
-        } else {
-            "Schedules"
-        },
-        if app.locale == "ko" {
-            "예약"
-        } else {
-            "Schedules"
-        }
-    );
+    let mut rows = String::new();
     for row in list(app.cache.get("/api/schedules").unwrap_or(&Value::Null))
         .iter()
         .filter(|r| r["vmId"] == vm["id"])
     {
-        out.push_str(&format!(
-            "<a class=\"btn\" href=\"#/schedules?vm={}&schedule={}\"><span>{}</span> {}</a>",
+        rows.push_str(&format!(
+            "<li><a class=\"detail-list-main\" href=\"#/schedules?vm={}&schedule={}\">{}</a><span class=\"detail-list-sub\">{}</span></li>",
             api::encode(text(vm, "id")),
             api::encode(text(row, "id")),
             escape(&timing(&row["timing"])),
             escape(text(row, "action"))
         ));
     }
-    out.push_str("</section>");
-    out
+    let add = icon_link(
+        "Add schedule",
+        &format!("#/schedules?vm={}&new=1", api::encode(text(vm, "id"))),
+        false,
+        Icon::Add,
+    );
+    let body = if rows.is_empty() {
+        String::new()
+    } else {
+        format!("<ul class=\"detail-list\">{rows}</ul>")
+    };
+    crate::details::section(
+        if app.locale == "ko" {
+            "예약"
+        } else {
+            "Schedules"
+        },
+        &add,
+        &body,
+    )
 }
 pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
     if action != "schedule-enable" {

@@ -3,9 +3,9 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Element, Event, HtmlElement};
 
 pub const WINDOW_THRESHOLD: usize = 256;
-// Keep these heights in sync with the fixed cells in styles/vm.css.
-const ROW_HEIGHT: usize = 54;
-const HEADER_HEIGHT: usize = 32;
+// Keep these heights in sync with `.wasm-table` in styles/lists.css: a 34px head and 50px rows.
+const ROW_HEIGHT: usize = 50;
+const HEADER_HEIGHT: usize = 34;
 const OVERSCAN: usize = 8;
 
 pub fn cache(app: &Shared) {
@@ -125,7 +125,21 @@ fn render_window(app: &Shared, reset: bool) {
     }
     if let Some(empty) = element("vm-empty").and_then(|empty| empty.dyn_into::<HtmlElement>().ok())
     {
+        if count == 0 {
+            empty.set_inner_html(&render::vm_empty(&state));
+        }
         empty.set_hidden(count != 0);
+    }
+    if let Some(result) = element("vm-result-count") {
+        let label = render::vm_result_count(&state, count);
+        if result.text_content().as_deref() != Some(label.as_str()) {
+            result.set_text_content(Some(&label));
+        }
+    }
+    if let Some(reset) =
+        element("vm-filter-reset").and_then(|node| node.dyn_into::<HtmlElement>().ok())
+    {
+        reset.set_hidden(count == 0 || state.filter == "all" && state.query.is_empty());
     }
     if state.vm_window == Some((start, end)) {
         return;

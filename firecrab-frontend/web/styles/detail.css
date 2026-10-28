@@ -1,31 +1,72 @@
 /* Detail panel content shared by every list screen (spec §6.3, §8.2). */
 
-.detail-head { flex-shrink: 0; padding: 0 16px 14px; border-bottom: 1px solid var(--border); }
-.detail-title { margin: 0 0 6px; overflow: hidden; font-size: 18px; font-weight: 600; letter-spacing: -0.02em; text-overflow: ellipsis; white-space: nowrap; }
-.detail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-3); font-size: 12.5px; }
+/* Panel head: kind, title, one meta line, icon actions and the close X (spec §5.3). */
+.detail-body { display: flex; flex: 1; flex-direction: column; min-height: 0; padding: 0; overflow: hidden; }
+.detail-head { position: relative; z-index: 1; flex: none; padding: 16px 20px 0; }
+.detail-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
+.detail-kind { min-width: 0; overflow: hidden; color: var(--text-4); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.detail-top-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; margin-right: -6px; }
+.detail-top-actions > fieldset { display: flex; align-items: center; gap: 2px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.detail-top-actions .vm-more-actions { margin-left: 0; }
+.detail-title { margin: 2px 0 0; overflow: hidden; font-size: 18px; font-weight: 650; letter-spacing: -0.015em; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.detail-title.mono { font: 500 15px/1.5 var(--mono); letter-spacing: 0; }
+.detail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; color: var(--text-3); font-size: 12.5px; }
+.detail-meta:empty { display: none; }
+.detail-meta .sep { color: var(--text-5); }
 .detail-meta .mono { font-size: 12px; }
-.detail-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
-.detail-tabs { flex-shrink: 0; padding: 0 16px; }
-.detail-body { flex: 1; min-height: 0; padding: 0 16px 28px; overflow-y: auto; }
 
-.detail-sec { padding: 16px 0; border-bottom: 1px solid var(--border); }
-.detail-sec:last-child { border-bottom: 0; }
+/* Underline tabs: a 1px rule under the row; the 2px line of the active tab covers it. Tabs wrap on a very narrow panel, since a scroll box would clip the overlap. */
+.detail-tabs { flex: none; flex-wrap: wrap; gap: 0 18px; height: auto; margin-top: 14px; padding: 0 20px; border-bottom: 1px solid var(--border); }
+.detail-tabs .tab { height: 36px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--text-4); font: 500 13px var(--font); }
+.detail-tabs .tab[aria-selected="true"] { border-bottom-color: var(--text); color: var(--text); }
+.detail-tabs .tab[aria-selected="true"]::after { content: none; }
+.detail-tabs .tab em { margin-left: 5px; color: var(--text-4); font-size: 12px; font-style: normal; }
+@media (hover: hover) { .detail-tabs .tab[aria-selected="false"]:hover { color: var(--text-2); } }
+
+/* The body scrolls under the fixed head and tabs. Without tabs a rule separates it from the head. */
+.detail-content { flex: 1; min-height: 0; padding: 18px 20px 28px; overflow-y: auto; }
+.detail-content.lined { margin-top: 16px; border-top: 1px solid var(--border); }
+
+/* Form panels: the form fills the panel and its action row is a bar at the bottom, for any form height.
+   A tall form scrolls and the bar stays in view (sticky); a short form leaves the free space above the bar. */
+.detail-form .detail-content { display: flex; flex-direction: column; padding-bottom: 0; }
+.detail-form #editor { display: flex; flex: 1 0 auto; flex-direction: column; }
+.detail-form #editor > fieldset { display: flex; flex: 1 0 auto; flex-direction: column; min-width: 0; }
+.detail-form #editor > fieldset > .btn { align-self: flex-start; }
+/* The Deploy form sits in a wrapper (its checks are above it). The wrapper grows too, so the bar reaches the bottom. */
+.detail-form #service-deploy-form { display: flex; flex: 1 0 auto; flex-direction: column; }
+/* The shared bar is in forms.css. Here it runs edge to edge and sits at the bottom of a short form;
+   a result message takes that place and the bar follows it. */
+.detail-form .form-footer { margin: auto -20px 0; padding: 12px 20px; }
+.detail-form #form-result:not(:empty) { margin-top: auto; }
+.detail-form #form-result:not(:empty) + .form-footer { margin-top: 0; }
+
+/* Sections have no frame: a soft rule under each, none under the last. */
+.detail-sec { margin: 0 0 16px; padding: 0 0 16px; border: 0; border-bottom: 1px solid var(--border-soft); background: none; }
+.detail-sec:is(:last-child, :has(+ .detail-result)) { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
 .detail-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; margin-bottom: 10px; }
-.detail-sec-head h3 { margin: 0; color: var(--text-2); font-size: 12px; font-weight: 600; }
+.detail-sec-head h3 { margin: 0; color: var(--text); font-size: 12.5px; font-weight: 600; }
 .detail-sec-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .detail-note { margin: 8px 0 0; color: var(--text-3); font-size: 12px; }
 .detail-sec-head + .detail-note { margin-top: 0; }
 .detail-value-line { margin: 0; }
 .muted { color: var(--text-3); }
 
-.props { display: grid; grid-template-columns: 96px minmax(0, 1fr); margin: 0; }
-.props dt { padding: 6px 0; color: var(--text-3); font-size: 12.5px; }
-.props dd { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 30px; margin: 0; padding: 3px 0; }
+.props { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 9px 8px; margin: 0; font-size: 12.5px; }
+.props > .wasm-property { display: contents; }
+.props dt { display: flex; align-items: center; min-width: 0; min-height: 24px; padding: 0; color: var(--text-3); font-size: 12.5px; overflow-wrap: anywhere; }
+.btn + .props { margin-top: 12px; }
+.props + .detail-sec { margin-top: 16px; }
+.props dd { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 24px; margin: 0; padding: 0; }
+.props dd .btn { height: 22px; margin-left: auto; padding: 0 6px; font-size: 11.5px; }
 .props dd.editing { display: block; }
 .prop-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prop-value .mono { font-size: 12px; }
 .prop-action { width: 24px; height: 24px; margin-left: auto; opacity: 0; }
 .prop-action svg { width: 13px; height: 13px; }
+/* The icon that copies a value, right after it. */
+.prop-copy { flex: none; width: 24px; height: 24px; }
+.prop-copy svg { width: 14px; height: 14px; }
 .props dd:hover .prop-action, .prop-action:focus-visible { opacity: 1; }
 @media (hover: none) { .prop-action { opacity: 1; } }
 .prop-lock { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; margin-left: auto; color: var(--text-3); font-size: 11.5px; white-space: nowrap; }
@@ -34,8 +75,6 @@
 .prop-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .detail-edit-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .prop-editor .detail-edit-actions { margin-top: 0; }
-
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
 
 .kv { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); }
 .kv-row {
@@ -110,12 +149,3 @@
 .screen.has-panel .col-detail { display: none; }
 .vm-table .actions { white-space: nowrap; }
 .vm-table .actions .btn { height: var(--control-height-sm); padding: 0 8px; font-size: 12px; }
-.screen.has-panel .screen-main table.service-table { width: 100%; min-width: 0; table-layout: fixed; }
-.screen.has-panel .screen-main .service-table th:first-child { width: 120px; }
-.screen.has-panel .screen-main .service-table th:nth-child(3) { width: 72px; }
-.screen.has-panel .screen-main .service-table th:last-child { width: 232px; }
-.screen.has-panel .screen-main .service-table .service-image { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* Runtime replicas use their own compact columns inside the detail panel. */
-.detail-embed table.service-table { min-width: 0; }
-.detail-embed .service-table th, .detail-embed .service-table td { padding-inline: 6px; font-size: 12px; }

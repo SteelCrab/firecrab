@@ -135,9 +135,9 @@ test.describe("PIPE databases @dashboard", () => {
     await expect(panel.getByLabel("TLS", { exact: true }).getByRole("option", { name: "Disabled", exact: true })).toHaveCount(0);
     await panel.getByLabel("TLS", { exact: true }).selectOption("verify_full");
     const pem = "-----BEGIN CERTIFICATE-----\nTEST-FIXTURE\n-----END CERTIFICATE-----";
-    await panel.getByLabel("CA certificate (PEM, optional)", { exact: true }).fill(`  ${pem}\n`);
+    await panel.getByLabel("CA certificate (PEM)", { exact: true }).fill(`  ${pem}\n`);
     await panel.getByRole("button", { name: "Save connection", exact: true }).click();
-    await expect(panel.getByRole("cell", { name: "Verified", exact: true })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^Verified(\s|$)/ })).toBeVisible();
     expect(mock.creates[0]).toMatchObject({ provider: "rds", tlsMode: "verify_full", caCertificate: pem });
     await expect(panel).not.toContainText("TEST-FIXTURE");
   });
@@ -173,7 +173,7 @@ test.describe("PIPE databases @dashboard", () => {
     expect(mock.creates).toHaveLength(0);
     await panel.getByLabel("Database URI", { exact: true }).fill("postgres://user:changed@localhost/app");
     await expect(panel.getByRole("status")).toHaveCount(0);
-    await expect(panel.getByRole("cell", { name: "Check only", exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("cell", { name: /^Check\ only(\s|$)/ })).toHaveCount(0);
   });
 
   test("blocks duplicate saves and editing while a connection is pending", async ({ page }) => {
@@ -189,7 +189,7 @@ test.describe("PIPE databases @dashboard", () => {
     await expect(panel.getByRole("button", { name: "Test connection", exact: true })).toBeDisabled();
     await expect(panel.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
     mock.release();
-    await expect(panel.getByRole("cell", { name: "Pending DB", exact: true })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^Pending\ DB(\s|$)/ })).toBeVisible();
     expect(mock.creates).toHaveLength(1);
   });
 
@@ -228,11 +228,11 @@ test.describe("PIPE databases @dashboard", () => {
     const panel = page.getByRole("region", { name: "Databases", exact: true });
     await panel.getByRole("button", { name: "Browse Application DB", exact: true }).click();
     await panel.getByLabel("Table", { exact: true }).selectOption({index:1});
-    await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^Ada(\s|$)/ })).toBeVisible();
     mock.failTables();
     await panel.getByRole("button", { name: "Refresh tables", exact: true }).click();
     await expect(panel.getByRole("alert")).toContainText("Cannot list database tables");
-    await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("cell", { name: /^Ada(\s|$)/ })).toHaveCount(0);
     await expect(panel.getByLabel("Table", { exact: true })).toBeDisabled();
     mock.recoverTables();
     await panel.getByRole("button", { name: "Refresh tables", exact: true }).click();
@@ -249,13 +249,13 @@ test.describe("PIPE databases @dashboard", () => {
     page.once("dialog",dialog=>dialog.accept());
     await page.getByRole("menuitem", { name: "Remove connection Application DB", exact: true }).click();
     await expect(panel.getByRole("alert")).toContainText("Cannot remove database connection");
-    await expect(panel.getByRole("cell", { name: "Application DB", exact: true })).toBeVisible();
-    await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^Application\ DB(\s|$)/ })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^Ada(\s|$)/ })).toBeVisible();
     mock.recoverDelete();
     await panel.getByRole("button", { name: "Application DB actions", exact: true }).click();
     page.once("dialog",dialog=>dialog.accept());
     await page.getByRole("menuitem", { name: "Remove connection Application DB", exact: true }).click();
-    await expect(panel.getByRole("cell", { name: "Application DB", exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("cell", { name: /^Application\ DB(\s|$)/ })).toHaveCount(0);
     expect(mock.removes).toHaveLength(2);
   });
 
@@ -282,7 +282,7 @@ test.describe("PIPE databases @dashboard", () => {
     await panel.getByLabel("Table", { exact: true }).selectOption({index:1});
     await expect(panel.getByRole("cell", { name: html, exact: true })).toBeVisible();
     await expect(panel.locator(".pipe-database-preview tbody tr").nth(1).getByRole("cell")).toHaveText("");
-    await expect(panel.getByRole("cell", { name: "NULL", exact: true })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^NULL(\s|$)/ })).toBeVisible();
     await expect(panel.locator("img, script")).toHaveCount(0);
     expect(mock.previews[0]).toMatchObject({ schema: table.schema, table: table.name });
     await expect(panel.getByRole("button", { name: "Next rows", exact: true })).toBeDisabled();
@@ -293,14 +293,14 @@ test.describe("PIPE databases @dashboard", () => {
     const panel = page.getByRole("region", { name: "Databases", exact: true });
     await panel.getByRole("button", { name: "Browse Application DB", exact: true }).click();
     await panel.getByLabel("Table", { exact: true }).selectOption({index:1});
-    await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^Ada(\s|$)/ })).toBeVisible();
     mock.failPreview();
     await panel.getByRole("button", { name: "Next rows", exact: true }).click();
     await expect(panel.getByRole("alert")).toContainText("SELECT permissions");
-    await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("cell", { name: /^Ada(\s|$)/ })).toHaveCount(0);
     mock.recoverPreview();
     await panel.getByRole("button", { name: "Refresh rows", exact: true }).click();
-    await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^Ada(\s|$)/ })).toBeVisible();
     expect(mock.previews.at(-1)?.offset).toBe(0);
   });
 
@@ -324,13 +324,13 @@ test.describe("PIPE databases @dashboard", () => {
       await expect(panel.getByRole("status")).toHaveText("Database connection succeeded.");
       expect(mock.checks[0]).toMatchObject({ name: "Application DB", provider, uri });
       await panel.getByRole("button", { name: "Save connection", exact: true }).click();
-      await expect(panel.getByRole("cell", { name: "Application DB", exact: true })).toBeVisible();
+      await expect(panel.getByRole("cell", { name: /^Application\ DB(\s|$)/ })).toBeVisible();
       await expect(panel.getByRole("cell", { name: engine, exact: true })).toBeVisible();
       await expect(field).toHaveCount(0);
       await expect(panel).not.toContainText("private-password");
       expect(mock.creates[0]).toEqual(mock.checks[0]);
       await page.reload();
-      await expect(panel.getByRole("cell", { name: "Application DB", exact: true })).toBeVisible();
+      await expect(panel.getByRole("cell", { name: /^Application\ DB(\s|$)/ })).toBeVisible();
     });
   }
 
@@ -339,16 +339,16 @@ test.describe("PIPE databases @dashboard", () => {
     const panel = page.getByRole("region", { name: "Databases", exact: true });
     await panel.getByRole("button", { name: "Browse Application DB", exact: true }).click();
     await panel.getByLabel("Table", { exact: true }).selectOption({index:1});
-    await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
-    await expect(panel.getByRole("cell", { name: "NULL", exact: true })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^Ada(\s|$)/ })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^NULL(\s|$)/ })).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(mock.previews[0]).toEqual({ schema: "public", table: "users", limit: 50, offset: 0 });
     await panel.getByRole("button", { name: "Next rows", exact: true }).click();
-    await expect(panel.getByRole("cell", { name: "Next page", exact: true })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^Next\ page(\s|$)/ })).toBeVisible();
     expect(mock.previews[1].offset).toBe(50);
     await panel.getByRole("button", { name: "Previous rows", exact: true }).click();
-    await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^Ada(\s|$)/ })).toBeVisible();
     await panel.getByLabel("Table", { exact: true }).selectOption({index:2});
     await expect(panel.getByText("This table has no rows on this page.")).toBeVisible();
     await panel.getByRole("button", { name: "Application DB actions", exact: true }).click();
@@ -385,7 +385,7 @@ test.describe("PIPE databases @dashboard", () => {
     await expect(panel.getByRole("alert")).toContainText("SELECT permissions");
     mock.recoverPreview();
     await panel.getByRole("button", { name: "Refresh rows", exact: true }).click();
-    await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^Ada(\s|$)/ })).toBeVisible();
   });
 
   test("supports English connection forms in a narrow viewport", async ({ page }) => {
@@ -395,12 +395,12 @@ test.describe("PIPE databases @dashboard", () => {
     await panel.getByRole("button", { name: "Add database", exact: true }).click();
     await panel.getByLabel("Database source", { exact: true }).selectOption("rds");
     await expect(panel.getByLabel("TLS", { exact: true })).not.toBeVisible();
-    await expect(panel.getByLabel("CA certificate (PEM, optional)", { exact: true })).not.toBeVisible();
+    await expect(panel.getByLabel("CA certificate (PEM)", { exact: true })).not.toBeVisible();
     const security = panel.getByText("TLS & certificates", { exact: true });
     await security.focus();
     await security.press("Enter");
     await expect(panel.getByLabel("TLS", { exact: true }).getByRole("option", { name: "Disabled", exact: true })).toHaveCount(0);
-    await expect(panel.getByLabel("CA certificate (PEM, optional)", { exact: true })).toBeVisible();
+    await expect(panel.getByLabel("CA certificate (PEM)", { exact: true })).toBeVisible();
     const clippedControls = await panel.locator(".pipe-database-form").evaluate(form => {
       const bounds = form.getBoundingClientRect();
       return [...form.querySelectorAll("input, select, textarea, button")].filter(control => {

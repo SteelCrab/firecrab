@@ -33,7 +33,38 @@ pub struct State {
     placement: Value,
     checking: bool,
     submitting: bool,
+    /// The Size step shows its own CPU and memory boxes (the "Custom" card).
+    size_custom: bool,
 }
+/// The five steps of a setup: (name, Korean name, title, Korean title).
+pub const STEPS: [(&str, &str, &str, &str); 5] = [
+    (
+        "App",
+        "앱 선택",
+        "What would you like to run?",
+        "어떤 앱을 실행할까요?",
+    ),
+    (
+        "Access",
+        "접속 방법",
+        "How do people reach your app?",
+        "앱에 어떻게 접속할까요?",
+    ),
+    (
+        "Size",
+        "실행 크기",
+        "How large should it run?",
+        "얼마나 크게 실행할까요?",
+    ),
+    (
+        "Connections",
+        "연결",
+        "What should it connect to?",
+        "무엇과 연결할까요?",
+    ),
+    ("Review", "확인", "Create it like this?", "이대로 만들까요?"),
+];
+const REVIEW: usize = 4;
 fn tr<'a>(en: &'a str, ko: &'a str) -> &'a str {
     if crate::i18n::t("Name") == "이름" {
         ko
@@ -42,10 +73,7 @@ fn tr<'a>(en: &'a str, ko: &'a str) -> &'a str {
     }
 }
 fn setup(form: &Form) -> bool {
-    matches!(
-        form.title.as_str(),
-        "New MicroService" | "Edit MicroService" | "Deploy update"
-    )
+    form.is_wizard()
 }
 fn set_value(app: &Shared, key: &str, value: &str) {
     if let Some(form) = app.borrow_mut().form.as_mut() {
@@ -86,10 +114,18 @@ pub fn open(app: &Shared) {
         .map(|f| f.value.clone())
         .unwrap_or_default();
     let is_setup = setup(form);
+    let value = |key: &str| {
+        form.fields
+            .iter()
+            .find(|f| f.key == key)
+            .map_or("", |f| f.value.as_str())
+    };
+    let size_custom = size_preset(value("cpu"), value("ram")) == "custom";
     let epoch = s.advanced.services.epoch + 1;
     s.advanced.services = State {
         epoch,
         initial,
+        size_custom,
         ..State::default()
     };
     drop(s);
@@ -131,150 +167,279 @@ pub fn html(app: &App, form: &Form) -> String {
         .next()
         .map(|key| field_step(key))
         .unwrap_or(s.step);
-    let mut out = form.html(app.busy, &app.field_errors);
-    if setup(form) {
-        let titles = [
-            tr("What would you like to run?", "어떤 앱을 실행할까요?"),
-            tr("How does your app respond?", "앱에 어떻게 접속할까요?"),
-            tr(
-                "Start with the recommended settings",
-                "권장 설정으로 시작한다",
-            ),
-            tr("Ready to save your app?", "마지막으로 설정을 확인한다"),
-        ];
-        out = format!(
-            "<nav id=\"service-steps\" data-step=\"{step}\" class=\"wasm-actions\" aria-label=\"{}\">{}</nav><h3 tabindex=\"-1\" id=\"service-step-title\">{}</h3>{out}",
-            tr("Setup steps", "설정 단계"),
-            [
-                tr("App", "앱 선택"),
-                tr("Connection", "접속 설정"),
-                tr("Resources", "실행 설정"),
-                tr("Review", "확인")
-            ]
-            .iter()
-            .enumerate()
-            .map(
-                |(i, label)| button(label, "service-step", &i.to_string()).replace(
-                    "type=\"button\"",
-                    if i > s.step {
-                        "type=\"button\" disabled"
-                    } else {
-                        "type=\"button\""
-                    }
-                )
+    let step = step.min(REVIEW);
+    if !setup(form) {
+        let out = form.html(app.busy, &app.field_errors);
+        return if form.title == "Deploy MicroService" {
+            format!(
+                "<div id=\"service-controls\" class=\"wasm-actions\"></div><div id=\"service-auth-check\"></div><div id=\"service-placement\"></div><div id=\"service-deploy-form\">{out}</div>"
             )
-            .collect::<String>(),
-            titles[step.min(3)]
-        );
-        out.push_str(&format!(
-            "<section id=\"service-app-picker\"><p>{} <a href=\"#/pipe/auth\">{}</a></p>",
-            tr(
-                "Choose an app from an account connected in Pipe Auth.",
-                "Pipe Auth에 연결된 계정에서 앱을 선택한다."
-            ),
-            tr("Manage AUTH", "AUTH 관리")
-        ));
-        if s.accounts.is_null() {
-            out.push_str(&button("Retry accounts", "service-accounts", ""));
-        } else if list(&s.accounts).is_empty() {
-            out.push_str(&format!(
-                "<p>{}</p><a href=\"#/pipe/auth\">{}</a>{}",
-                tr("Connect an account first", "먼저 계정을 연결한다"),
-                tr("Connect in AUTH", "AUTH에서 계정 연결"),
-                button("Check connections", "service-accounts", "")
-            ));
         } else {
-            out.push_str(&selector(
-                "service-account",
-                tr("AUTH account", "AUTH 계정"),
-                text(&s.account, "provider"),
-                list(&s.accounts)
+            out
+        };
+    }
+    // The steps are part of the form: the picker, the error line and the review come before its
+    // footer, and Back and Continue are in the footer.
+    let mut body = format!(
+        "<section id=\"service-app-picker\" class=\"wasm-wide\"><p>{} <a href=\"#/pipe/auth\">{}</a></p>",
+        tr(
+            "Choose an app from an account connected in Pipe Auth.",
+            "Pipe Auth에 연결된 계정에서 앱을 선택한다."
+        ),
+        tr("Manage AUTH", "AUTH 관리")
+    );
+    if s.accounts.is_null() {
+        body.push_str(&button("Retry accounts", "service-accounts", ""));
+    } else if list(&s.accounts).is_empty() {
+        body.push_str(&format!(
+            "<p>{}</p><a href=\"#/pipe/auth\">{}</a>{}",
+            tr("Connect an account first", "먼저 계정을 연결한다"),
+            tr("Connect in AUTH", "AUTH에서 계정 연결"),
+            button("Check connections", "service-accounts", "")
+        ));
+    } else {
+        body.push_str(&selector(
+            "service-account",
+            tr("AUTH account", "AUTH 계정"),
+            text(&s.account, "provider"),
+            list(&s.accounts)
+                .iter()
+                .map(|v| {
+                    (
+                        text(v, "provider").into(),
+                        format!(
+                            "{} · {} · {}",
+                            text(v, "provider"),
+                            text(v, "account"),
+                            text(v, "region")
+                        ),
+                    )
+                })
+                .collect(),
+            app.busy || s.loading,
+        ));
+        if !s.account.is_null() {
+            body.push_str(&selector(
+                "service-repository",
+                tr("App repository", "앱 저장소"),
+                &s.repository,
+                s.repositories
                     .iter()
-                    .map(|v| {
-                        (
-                            text(v, "provider").into(),
-                            format!(
-                                "{} · {} · {}",
-                                text(v, "provider"),
-                                text(v, "account"),
-                                text(v, "region")
-                            ),
-                        )
-                    })
+                    .map(|v| (v.clone(), v.clone()))
                     .collect(),
                 app.busy || s.loading,
             ));
-            if !s.account.is_null() {
-                out.push_str(&selector(
-                    "service-repository",
-                    tr("App repository", "앱 저장소"),
-                    &s.repository,
-                    s.repositories
-                        .iter()
-                        .map(|v| (v.clone(), v.clone()))
-                        .collect(),
+            body.push_str(&button("Retry repositories", "service-repositories", ""));
+            if s.next_page.is_some() {
+                body.push_str(&button(
+                    "More repositories",
+                    "service-more-repositories",
+                    "",
+                ));
+            }
+            if !s.repository.is_empty() {
+                body.push_str(&selector(
+                    "service-tag",
+                    tr("App version", "앱 버전"),
+                    &s.tag,
+                    s.tags.iter().map(|v| (v.clone(), v.clone())).collect(),
                     app.busy || s.loading,
                 ));
-                out.push_str(&button("Retry repositories", "service-repositories", ""));
-                if s.next_page.is_some() {
-                    out.push_str(&button(
-                        "More repositories",
-                        "service-more-repositories",
-                        "",
-                    ));
-                }
-                if !s.repository.is_empty() {
-                    out.push_str(&selector(
-                        "service-tag",
-                        tr("App version", "앱 버전"),
-                        &s.tag,
-                        s.tags.iter().map(|v| (v.clone(), v.clone())).collect(),
-                        app.busy || s.loading,
-                    ));
-                    out.push_str(&button("Retry versions", "service-tags", ""));
-                    if s.next_tag.is_some() {
-                        out.push_str(&button("More versions", "service-more-tags", ""));
-                    }
+                body.push_str(&button("Retry versions", "service-tags", ""));
+                if s.next_tag.is_some() {
+                    body.push_str(&button("More versions", "service-more-tags", ""));
                 }
             }
         }
-        out.push_str("</section><div id=\"service-wizard-error\" aria-live=\"polite\"></div><section class=\"service-review\" id=\"service-review\">");
-        let field = |key: &str| {
-            form.fields
-                .iter()
-                .find(|f| f.key == key)
-                .map(|f| f.value.clone())
-                .unwrap_or_default()
-        };
-        let name = |key: &str, path: &str| {
-            app.cache
-                .get(path)
-                .and_then(|rows| list(rows).iter().find(|row| row["id"] == field(key)))
-                .map(|row| text(row, "name").to_string())
-                .unwrap_or_else(|| field(key))
-        };
-        out.push_str(&properties(&json!({"Name":field("name"),"Image":field("image"),"App port":field("port"),"Health path":field("healthPath"),"Domain":field("domain"),"Security group":name("securityGroupId","/api/security-groups"),"Memory (MiB)":field("ram"),"CPU":field("cpu"),"Replicas":field("replicas"),"S3 connection":name("storageConnectionId","/api/pipe/storage"),"Variables / secret references":format!("{} / {}",field("env").lines().count(),field("secrets").lines().count())})));
-        out.push_str("</section><div class=\"wasm-actions\">");
-        out.push_str(&button("Back", "service-back", ""));
-        out.push_str(&button("Continue", "service-next", ""));
-        out.push_str("</div>");
-    } else if form.title == "Deploy MicroService" {
-        out = format!(
-            "<div id=\"service-controls\" class=\"wasm-actions\"></div><div id=\"service-auth-check\"></div><div id=\"service-placement\"></div><div id=\"service-deploy-form\">{out}</div>"
+    }
+    body.push_str("</section><div id=\"service-wizard-error\" class=\"wasm-wide\" aria-live=\"polite\"></div><section class=\"service-review wasm-wide\" id=\"service-review\">");
+    let field = |key: &str| {
+        form.fields
+            .iter()
+            .find(|f| f.key == key)
+            .map(|f| f.value.clone())
+            .unwrap_or_default()
+    };
+    let name = |key: &str, path: &str| {
+        app.cache
+            .get(path)
+            .and_then(|rows| list(rows).iter().find(|row| row["id"] == field(key)))
+            .map(|row| text(row, "name").to_string())
+            .unwrap_or_else(|| field(key))
+    };
+    body.push_str(&properties(&json!({"Name":field("name"),"Image":field("image"),"App port":field("port"),"Health path":field("healthPath"),"Domain":field("domain"),"Security group":name("securityGroupId","/api/security-groups"),"Size":crate::forms::size_label(&field("cpu"),&field("ram")),"Replicas":field("replicas"),"S3 connection":name("storageConnectionId","/api/pipe/storage"),"Variables / secret references":format!("{} / {}",field("env").lines().count(),field("secrets").lines().count())})));
+    body.push_str("</section>");
+    body.push_str(&size_cards(
+        s.size_custom || size_preset(&field("cpu"), &field("ram")) == "custom",
+        &field("cpu"),
+        &field("ram"),
+    ));
+    let ko = tr("en", "ko") == "ko";
+    let nav = format!(
+        "<nav id=\"service-steps\" class=\"wizard-steps\" data-step=\"{step}\" aria-label=\"{}\"><ol>{}</ol></nav>",
+        tr("Setup steps", "설정 단계"),
+        STEPS
+            .iter()
+            .enumerate()
+            .map(|(i, (en, kr, _, _))| format!(
+                "<li><button type=\"button\" class=\"wizard-step\" data-action=\"service-step\" data-id=\"{i}\"{}{}><span class=\"wizard-step-no\" aria-hidden=\"true\">{}</span>{}</button></li>",
+                if i == step { " aria-current=\"step\"" } else { "" },
+                if i > s.step { " disabled" } else { "" },
+                i + 1,
+                tr(en, kr)
+            ))
+            .collect::<String>()
+    );
+    let title = format!(
+        "<h3 tabindex=\"-1\" id=\"service-step-title\">{}</h3>",
+        tr(STEPS[step].2, STEPS[step].3)
+    );
+    let form_html = form.html_with(app.busy, &app.field_errors, &body);
+    if app.route == "services/new" {
+        let values: BTreeMap<String, String> = form
+            .fields
+            .iter()
+            .map(|f| (f.key.to_string(), f.value.clone()))
+            .collect();
+        return format!(
+            "<div class=\"wizard-layout\">{nav}<div class=\"wizard-main\">{title}{form_html}</div><aside class=\"wizard-summary\" aria-label=\"{label}\"><h3>{label}</h3><dl id=\"wizard-summary-list\">{}</dl></aside></div>",
+            summary_list(&values, ko),
+            label = tr("Summary", "요약")
         );
     }
-    out
+    format!("{nav}{title}{form_html}")
+}
+/// "Small", "Medium", "Large" or "Custom" for a CPU and memory pair.
+pub fn size_preset(cpu: &str, ram: &str) -> &'static str {
+    match (cpu.trim(), ram.trim()) {
+        ("1", "512") => "small",
+        ("2", "1024") => "medium",
+        ("4", "4096") => "large",
+        _ => "custom",
+    }
+}
+/// The size cards of the Size step. They are radios without a name, so the form does not send
+/// them: the choice is written into the CPU and memory boxes.
+fn size_cards(custom: bool, cpu: &str, ram: &str) -> String {
+    let current = if custom {
+        "custom"
+    } else {
+        size_preset(cpu, ram)
+    };
+    let cards = [
+        ("small", tr("Small", "작게"), "1 vCPU · 512 MiB"),
+        ("medium", tr("Medium", "보통"), "2 vCPU · 1 GiB"),
+        ("large", tr("Large", "크게"), "4 vCPU · 4 GiB"),
+        (
+            "custom",
+            tr("Custom", "직접 입력"),
+            tr("Set your own values", "값을 직접 정한다"),
+        ),
+    ];
+    let cards = cards
+        .iter()
+        .map(|(id, name, detail)| {
+            format!(
+                "<label class=\"size-card\"><input type=\"radio\" id=\"service-size-{id}\" value=\"{id}\"{}><span class=\"size-card-body\"><b>{name}</b>{}<em>{detail}</em></span></label>",
+                if *id == current { " checked" } else { "" },
+                if *id == "medium" {
+                    format!(
+                        "<span class=\"size-card-tag\">{}</span>",
+                        tr("Recommended", "권장")
+                    )
+                } else {
+                    String::new()
+                }
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<div id=\"service-sizes\" class=\"service-sizes wasm-wide\" role=\"radiogroup\" aria-label=\"{}\">{cards}</div>",
+        crate::i18n::t("Size")
+    )
+}
+/// What the form is about to create, as label and value rows.
+pub fn service_summary(values: &BTreeMap<String, String>, ko: bool) -> Vec<(&'static str, String)> {
+    let get = |key: &str| values.get(key).map_or("", |v| v.trim());
+    let or_none = |value: String| {
+        if value.is_empty() {
+            "—".to_owned()
+        } else {
+            value
+        }
+    };
+    let count = |key: &str| get(key).lines().filter(|l| !l.trim().is_empty()).count();
+    let port = match (get("port"), get("healthPath")) {
+        ("", "") => String::new(),
+        (port, "") => port.to_owned(),
+        ("", path) => path.to_owned(),
+        (port, path) => format!("{port} · {path}"),
+    };
+    let access = match get("domain") {
+        "" => (if ko { "내부 전용" } else { "Internal only" }).to_owned(),
+        domain => format!("{} {domain}", if ko { "도메인" } else { "Domain" }),
+    };
+    let size = if get("cpu").is_empty() && get("ram").is_empty() {
+        String::new()
+    } else {
+        crate::forms::size_label(get("cpu"), get("ram"))
+    };
+    let connections = [
+        ("env", "variables", "변수"),
+        ("secrets", "secrets", "시크릿"),
+        ("queues", "queues", "큐"),
+    ]
+    .iter()
+    .filter_map(|(key, en, kr)| match count(key) {
+        0 => None,
+        n if ko => Some(format!("{kr} {n}개")),
+        n => Some(format!("{n} {en}")),
+    })
+    .collect::<Vec<_>>()
+    .join(" · ");
+    vec![
+        ("Image", or_none(get("image").to_owned())),
+        ("Name", or_none(get("name").to_owned())),
+        ("Port", or_none(port)),
+        ("Access", access),
+        ("Size", or_none(size)),
+        ("Replicas", or_none(get("replicas").to_owned())),
+        ("Connections", or_none(connections)),
+    ]
+}
+/// The summary rows as the `<dt>`/`<dd>` pairs of `#wizard-summary-list`.
+pub fn summary_list(values: &BTreeMap<String, String>, ko: bool) -> String {
+    service_summary(values, ko)
+        .iter()
+        .map(|(label, value)| {
+            format!(
+                "<dt>{}</dt><dd>{}</dd>",
+                escape(crate::i18n::t(label)),
+                escape(value)
+            )
+        })
+        .collect()
+}
+fn field_value(form: &Form, key: &str) -> String {
+    form.fields
+        .iter()
+        .find(|f| f.key == key)
+        .map(|f| f.value.clone())
+        .unwrap_or_default()
 }
 fn show(id: &str, visible: bool) {
     if let Some(el) = element(id).and_then(|v| v.dyn_into::<HtmlElement>().ok()) {
         el.set_hidden(!visible);
     }
 }
+/// The step of the setup that holds a field.
 fn field_step(key: &str) -> usize {
     match key {
         "name" | "image" | "runtime" => 0,
         "port" | "healthPath" | "domain" | "securityGroupId" => 1,
-        _ => 2,
+        "cpu" | "ram" | "replicas" | "startupTimeout" | "drainTimeout" => 2,
+        "strategy" => REVIEW,
+        _ => 3,
     }
 }
 pub fn owns_resources(deployment: &Value) -> bool {
@@ -296,22 +461,23 @@ pub fn sync(app: &Shared) {
     let state = &s.advanced.services;
     if setup(form) {
         for field in &form.fields {
-            let step = match field.key {
-                "name" => 0,
-                "image" => 4,
-                "port" | "healthPath" | "domain" | "securityGroupId" => 1,
-                "strategy" => 3,
-                _ => 2,
-            };
+            // The image comes from the picker, so its own box never shows.
+            let own_box = field.key != "image"
+                && field_step(field.key) == state.step
+                && (state.size_custom
+                    || !matches!(field.key, "cpu" | "ram")
+                    || size_preset(&field_value(form, "cpu"), &field_value(form, "ram"))
+                        == "custom");
             if let Some(el) = element(&format!("field-{}", field.key))
                 .and_then(|el| el.closest(".field").ok().flatten())
                 .and_then(|el| el.dyn_into::<HtmlElement>().ok())
             {
-                el.set_hidden(step != state.step);
+                el.set_hidden(!own_box);
             }
         }
         show("service-app-picker", state.step == 0);
-        show("service-review", state.step == 3);
+        show("service-sizes", state.step == 2);
+        show("service-review", state.step == REVIEW);
         set_html(
             "service-wizard-error",
             &if state.error.is_empty() {
@@ -322,7 +488,7 @@ pub fn sync(app: &Shared) {
         );
         if let Ok(Some(next)) = crate::document().query_selector("[data-action=service-next]") {
             let next = next.unchecked_into::<web_sys::HtmlButtonElement>();
-            next.set_hidden(state.step == 3);
+            next.set_hidden(state.step == REVIEW);
             next.set_disabled(
                 s.busy
                     || state.loading
@@ -336,7 +502,7 @@ pub fn sync(app: &Shared) {
         }
         if let Ok(Some(save)) = crate::document().query_selector("#editor button[type=submit]") {
             save.unchecked_into::<HtmlElement>()
-                .set_hidden(state.step != 3);
+                .set_hidden(state.step != REVIEW);
         }
     } else if form.title == "Deploy MicroService" {
         let mut auth = String::new();
@@ -433,7 +599,7 @@ pub fn sync(app: &Shared) {
 fn alive(app: &App, generation: u64, epoch: u64) -> bool {
     app.generation == generation
         && app.advanced.services.epoch == epoch
-        && app.route == "services"
+        && matches!(app.route.as_str(), "services" | "services/new")
         && app.form.is_some()
 }
 fn accounts(app: &Shared) {
@@ -668,6 +834,27 @@ pub fn change(app: &Shared, target: &Element) -> bool {
             };
             drop(s);
             set_value(app, "image", &image);
+            redraw(app);
+            true
+        }
+        "service-size-small"
+        | "service-size-medium"
+        | "service-size-large"
+        | "service-size-custom" => {
+            let preset = target.id().trim_start_matches("service-size-").to_string();
+            let (cpu, ram) = match preset.as_str() {
+                "small" => ("1", "512"),
+                "medium" => ("2", "1024"),
+                "large" => ("4", "4096"),
+                _ => ("", ""),
+            };
+            super::capture_form(app);
+            app.borrow_mut().advanced.services.size_custom = preset == "custom";
+            if preset != "custom" {
+                set_value(app, "cpu", cpu);
+                set_value(app, "ram", ram);
+            }
+            app.borrow_mut().dirty = true;
             redraw(app);
             true
         }
@@ -1279,6 +1466,46 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_setup_sections_are_inside_the_form_and_the_wizard_buttons_in_its_footer() {
+        let app = App {
+            route: "services".into(),
+            ..Default::default()
+        };
+        for kind in ["services", "services-edit"] {
+            let form = if kind == "services" {
+                crate::forms::resource_form("services", &Value::Null, "")
+            } else {
+                crate::forms::resource_form("services", &json!({"name": "orders"}), "s1")
+            }
+            .unwrap();
+            let html = html(&app, &form);
+            let at = |needle: &str| {
+                html.find(needle)
+                    .unwrap_or_else(|| panic!("{needle}: {html}"))
+            };
+            // One form; the picker, the error line and the review come before its footer.
+            assert_eq!(html.matches("<form ").count(), 1, "{html}");
+            assert!(html.ends_with("</form>"), "{html}");
+            let footer = at("form-footer wizard-footer");
+            for section in [
+                "id=\"service-app-picker\"",
+                "id=\"service-wizard-error\"",
+                "id=\"service-review\"",
+            ] {
+                assert!(
+                    at("<form ") < at(section) && at(section) < footer,
+                    "{section}: {html}"
+                );
+            }
+            // Back and Continue are in the footer, once; nothing else follows the form.
+            for button in ["service-back", "service-next"] {
+                assert_eq!(html.matches(button).count(), 1, "{button}");
+                assert!(at(button) > footer, "{button}");
+            }
+        }
+    }
     #[test]
     fn image_auth_requires_the_connected_registry_owner_and_service() {
         let a = json!([{"provider":"github","account":"Team","registry":"ghcr.io","services":["registry"]},{"provider":"aws","registry":"123.dkr.ecr.region.amazonaws.com","services":["storage"]}]);
@@ -1289,5 +1516,79 @@ mod tests {
             "123.dkr.ecr.region.amazonaws.com/app:v1",
             &a
         ));
+    }
+}
+
+#[cfg(test)]
+mod wizard_tests {
+    use super::{STEPS, field_step, service_summary, size_preset, summary_list};
+    use std::collections::BTreeMap;
+
+    fn values(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn maps_each_field_to_its_step() {
+        assert_eq!(field_step("image"), 0);
+        assert_eq!(field_step("domain"), 1);
+        assert_eq!(field_step("replicas"), 2);
+        assert_eq!(field_step("drainTimeout"), 2);
+        assert_eq!(field_step("secrets"), 3);
+        assert_eq!(field_step("storageConnectionId"), 3);
+        assert_eq!(field_step("strategy"), 4);
+        assert_eq!(STEPS.len(), 5);
+    }
+
+    #[test]
+    fn recognises_size_presets() {
+        assert_eq!(size_preset("1", "512"), "small");
+        assert_eq!(size_preset("2", "1024"), "medium");
+        assert_eq!(size_preset("4", "4096"), "large");
+        assert_eq!(size_preset("2", "512"), "custom");
+    }
+
+    #[test]
+    fn summarises_the_draft() {
+        let rows = service_summary(
+            &values(&[
+                ("image", "nginx:1.27"),
+                ("name", "nginx"),
+                ("port", "80"),
+                ("healthPath", "/health"),
+                ("domain", ""),
+                ("cpu", "2"),
+                ("ram", "1024"),
+                ("replicas", "2"),
+                ("env", "A=1\nB=2"),
+                ("secrets", ""),
+                ("queues", ""),
+            ]),
+            false,
+        );
+        assert!(rows.contains(&("Size", "2 vCPU · 1 GiB".to_string())));
+        assert!(rows.contains(&("Access", "Internal only".to_string())));
+        assert!(rows.contains(&("Port", "80 · /health".to_string())));
+        assert!(rows.contains(&("Connections", "2 variables".to_string())));
+        assert!(service_summary(&values(&[]), false).contains(&("Image", "—".to_string())));
+    }
+
+    #[test]
+    fn the_summary_reads_in_korean_and_escapes_values() {
+        let rows = service_summary(
+            &values(&[
+                ("domain", "a.example.com"),
+                ("env", "A=1"),
+                ("secrets", "S=1"),
+            ]),
+            true,
+        );
+        assert!(rows.contains(&("Access", "도메인 a.example.com".to_string())));
+        assert!(rows.contains(&("Connections", "변수 1개 · 시크릿 1개".to_string())));
+        let html = summary_list(&values(&[("name", "<b>x</b>")]), false);
+        assert!(html.contains("<dd>&lt;b&gt;x&lt;/b&gt;</dd>"), "{html}");
     }
 }

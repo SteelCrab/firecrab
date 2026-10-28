@@ -45,18 +45,18 @@ body {
   letter-spacing: -0.003em;
   white-space: nowrap;
   text-decoration: none;
-  box-shadow: var(--shadow-xs);
+  box-shadow: none;
   cursor: pointer;
   transition: transform 140ms var(--ease-out), background-color 120ms ease, border-color 120ms ease;
 }
 .btn svg { width: 15px; height: 15px; flex-shrink: 0; color: var(--text-2); stroke-width: 1.75; }
 .btn:active:not(:disabled) { transform: scale(0.97); }
-.btn:disabled { color: var(--text-4); box-shadow: none; cursor: default; }
+.btn:disabled { color: var(--text-4); cursor: default; }
 .btn:disabled svg { color: var(--text-4); }
 .btn.primary { background: var(--text); border-color: var(--text); color: #ffffff; }
 .btn.primary svg { color: #ffffff; }
 .btn.primary:disabled { background: var(--text-4); border-color: var(--text-4); }
-.btn.ghost { border-color: transparent; background: none; box-shadow: none; color: var(--text-2); }
+.btn.ghost { border-color: transparent; background: none; color: var(--text-2); }
 .btn.danger, .btn.danger svg { color: var(--red-ink); }
 .btn.sm { height: var(--control-height-sm); padding: 0 8px; font-size: 12px; }
 
@@ -71,11 +71,14 @@ body {
   background: none;
   color: var(--text-3);
   text-decoration: none;
+  box-shadow: none;
   cursor: pointer;
-  transition: background-color 120ms ease, color 120ms ease;
+  transition: transform 140ms var(--ease-out), background-color 120ms ease, color 120ms ease;
 }
 .icon-btn svg { width: 16px; height: 16px; stroke-width: 1.75; }
+.icon-btn:active:not(:disabled) { transform: scale(0.97); }
 .icon-btn:disabled { color: var(--text-4); cursor: default; }
+.icon-btn.danger:not(:disabled) { color: var(--red-ink); }
 
 @media (hover: hover) and (pointer: fine) {
   .btn:hover:not(:disabled) { background: var(--bg-subtle); border-color: #cfcfd6; }
@@ -83,6 +86,7 @@ body {
   .btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
   .btn.danger:hover:not(:disabled) { border-color: #f0b4b4; background: var(--red-soft); }
   .icon-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+  .icon-btn.danger:hover:not(:disabled) { background: var(--red-soft); color: var(--red-ink); }
 }
 
 /* Form fields. `.field` wraps a label and its control; `.input` styles a
@@ -124,42 +128,34 @@ select.input, .field :where(select) { padding-right: 28px; text-overflow: ellips
 input[type="checkbox"], input[type="radio"] { accent-color: var(--text); }
 .field-error { color: var(--red-ink); font-size: 12px; }
 
-/* Status badge, chip, keyboard key */
+/* Status label (a 7px dot and text, no pill; `--dot` and `--dot-blink` are set per state), keyboard key */
 
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 22px;
-  padding: 0 8px 0 7px;
-  border-radius: 999px;
-  background: var(--gray-soft);
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: none;
   color: var(--text-2);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 12.5px;
+  font-weight: 400;
   white-space: nowrap;
 }
-.badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.badge.running { background: var(--green-soft); color: var(--green-ink); }
-.badge.paused, .badge.pausing, .badge.resuming, .badge.starting, .badge.stopping { background: var(--amber-soft); color: var(--amber-ink); }
-.badge.starting::before, .badge.stopping::before { animation: badge-pulse 1.4s ease-in-out infinite; }
-.badge.error { background: var(--red-soft); color: var(--red-ink); }
-.badge.created { background: var(--indigo-soft); color: var(--indigo-ink); }
-@keyframes badge-pulse { 50% { opacity: 0.3; } }
-
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--text-2);
-  font-size: 12px;
+.badge::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dot, var(--text-5));
+  animation: var(--dot-blink, none);
 }
-.chip svg { width: 13px; height: 13px; color: var(--text-3); }
+.badge.running { --dot: var(--green); }
+.badge.starting, .badge.stopping, .badge.pausing, .badge.resuming { --dot: var(--amber); --dot-blink: badge-pulse 1.4s ease-in-out infinite; }
+.badge.error { --dot: var(--red); }
+.badge.stopped, .badge.paused, .badge.created { --dot: var(--text-5); }
+@keyframes badge-pulse { 50% { opacity: 0.3; } }
 
 kbd {
   padding: 0 5px;
@@ -221,7 +217,7 @@ kbd {
   box-shadow: 0 1px 2px rgba(17, 17, 26, 0.08), 0 0 0 1px var(--border);
 }
 
-/* Alert box and empty state */
+/* Alert box */
 
 .alert {
   display: flex;
@@ -237,30 +233,7 @@ kbd {
 .alert.error { border-color: #f6caca; background: var(--red-soft); color: var(--red-ink); }
 .alert.warn { border-color: #f4d9a8; background: var(--amber-soft); color: var(--amber-ink); }
 
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 32px 24px;
-  color: var(--text-3);
-  text-align: center;
-}
-.empty-state-icon {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg-subtle);
-  color: var(--text-2);
-}
-.empty-state-icon svg { width: 20px; height: 20px; }
-.empty-state-title { color: var(--text); font-size: 14px; font-weight: 600; }
-
 @media (prefers-reduced-motion: reduce) {
-  .btn { transition: none; }
+  .btn, .icon-btn, .input, .field :where(input, select, textarea) { transition: none; }
   .badge::before { animation: none; }
 }

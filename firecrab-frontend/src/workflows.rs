@@ -179,12 +179,11 @@ fn app_addresses(vms: &[crate::model::Vm]) -> Value {
 pub fn sync_form() {
     crate::advanced::sync_form();
     if let (Some(mode), Some(interface)) = (
-        element("field-networkMode")
-            .and_then(|el| el.dyn_into::<web_sys::HtmlSelectElement>().ok()),
+        crate::form_value("networkMode"),
         element("field-networkInterface")
             .and_then(|el| el.dyn_into::<web_sys::HtmlSelectElement>().ok()),
     ) {
-        let bridged = mode.value() == "bridged";
+        let bridged = mode == "bridged";
         if let Some(field) = interface
             .closest(".field")
             .ok()
@@ -202,10 +201,7 @@ pub fn sync_form() {
         }
     }
 
-    let kind = element("field-targetType")
-        .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
-        .map(|e| e.value());
-    if let Some(kind) = kind {
+    if let Some(kind) = crate::form_value("targetType") {
         for (key, show) in [("upstreams", kind == "apps"), ("host", kind != "apps")] {
             if let Some(field) = element(&format!("field-{key}"))
                 .and_then(|e| e.closest(".field").ok().flatten())
@@ -604,7 +600,10 @@ pub fn change(app: &Shared, target: &Element) -> bool {
             == "local";
         tls.set_value(if local { "disable" } else { "verify_full" });
     }
-    if id == "field-targetType" || id == "field-networkMode" {
+    if matches!(
+        crate::control_id(target).as_str(),
+        "field-targetType" | "field-networkMode"
+    ) {
         sync_form();
         return false;
     }
@@ -725,13 +724,37 @@ fn inspect_form(app: Shared, kind: &str) {
                     };
                     state.workflows.form_result = Some((form_path, html.clone()));
                     drop(state);
-                    set_html("form-result", &html);
+                    crate::show_form_result(&html);
                 }
             }
         }
     });
 }
+/// The summary of a create page follows the fields as they change: the footer line of New
+/// MicroVM, the aside of New MicroService.
+pub fn update_form_summary(app: &Shared) {
+    let state = app.borrow();
+    if !matches!(state.route.as_str(), "vms/new" | "services/new") {
+        return;
+    }
+    let (Some(form), Some(data)) = (state.form.as_ref(), read_form()) else {
+        return;
+    };
+    let values = values(form, &data);
+    let ko = state.locale == "ko";
+    let vm = state.route == "vms/new";
+    drop(state);
+    if vm {
+        crate::set_text("form-summary", &crate::forms::vm_create_summary(&values));
+    } else {
+        set_html(
+            "wizard-summary-list",
+            &crate::advanced::services::summary_list(&values, ko),
+        );
+    }
+}
 pub fn form_input(app: &Shared, target: &Element) {
+    update_form_summary(app);
     app.borrow_mut().workflows.form_result = None;
     set_html("form-result", "");
     if target.id() != "field-apiToken" {

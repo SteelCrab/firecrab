@@ -77,7 +77,7 @@ test.describe("Pipe registries against the API", () => {
     await page.getByLabel("Registry host", { exact: true }).fill(HOST);
     await page.getByLabel("Username", { exact: true }).fill("AWS");
     // ECR is inferred from the hostname; only Harbor needs a manual provider hint.
-    await expect(page.getByLabel("Provider", { exact: true })).toHaveValue("");
+    await expect(page.getByRole("radiogroup", { name: "Provider", exact: true }).getByRole("radio", { name: "Default", exact: true })).toBeChecked();
     await page.getByLabel("Password / token", { exact: true }).fill(SECRET);
     await page.getByRole("button", { name: "Save", exact: true }).click();
     const row = panel.getByRole("row").filter({ has: page.getByRole("cell", { name: HOST, exact: true }) });
