@@ -79,6 +79,10 @@ jobs:
 
       - name: Public Tunnel preflight contract
         run: python3 scripts/test-check-public-tunnel.py
+
+      - name: Public Tunnel app probe contract
+        run: python3 scripts/test-check-public-tunnel-app.py
+
       - name: CI Deploy Action client contract
         run: python3 scripts/test-deploy-ci-client.py
 
