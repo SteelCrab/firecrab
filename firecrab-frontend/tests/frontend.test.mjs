@@ -71,6 +71,8 @@ test('cluster preserves an unknown placement across reload and routes lifecycle 
   await open('cluster');
   await expect(page.locator('#detail-panel')).toBeHidden();
   await expect(page.locator('#panel-toggle')).toHaveCount(0);
+  // The placement form is on the placements tab.
+  await page.getByRole('tab', { name: /VM placements/ }).click();
   const name = page.getByLabel('VM name', { exact: true });
   await name.fill('resilient-vm'); await name.focus();
   const heartbeat = page.waitForResponse(response => new URL(response.url()).pathname === '/api/cluster/hosts');
@@ -79,6 +81,7 @@ test('cluster preserves an unknown placement across reload and routes lifecycle 
   await expect(page.getByRole('button', { name: 'Retry saved placement' })).toBeVisible();
   const saved = await page.evaluate(() => sessionStorage.getItem('firecrab.cluster.placement.v1'));
   assert.ok(saved); await page.reload();
+  await page.getByRole('tab', { name: /VM placements/ }).click();
   await page.getByRole('button', { name: 'Retry saved placement' }).click();
   const placed = page.locator('[data-cluster-placement]'); await expect(placed).toContainText('resilient-vm');
   const submissions = calls.filter(call => call.path === '/api/cluster/placements');
@@ -86,8 +89,10 @@ test('cluster preserves an unknown placement across reload and routes lifecycle 
   assert.equal(submissions[0].body.targets.length, 2);
   assert.deepEqual(submissions[0].body.targets[1], { network: { hostId: hostIds[1], resourceId: networkIds[1] }, storage: { hostId: hostIds[1], resourceId: 'default' } });
   assert.equal(await page.evaluate(() => sessionStorage.getItem('firecrab.cluster.placement.v1')), null);
+  await page.getByRole('tab', { name: /Workload hosts/ }).click();
   await page.locator(`[data-cluster-host="${hostIds[0]}"]`).getByRole('button', { name: 'Drain host' }).click();
   await expect(page.locator(`[data-cluster-host="${hostIds[0]}"]`).getByRole('button', { name: 'Resume placement' })).toBeVisible();
+  await page.getByRole('tab', { name: /VM placements/ }).click();
   const candidate = page.locator(`[data-cluster-input="candidate-${hostIds[0]}"]`); await expect(candidate).toBeDisabled(); await expect(candidate).not.toBeChecked();
   await placed.getByRole('button', { name: 'Stop', exact: true }).click(); await expect(placed).toContainText('stopped');
   assert.ok(calls.some(call => call.path === `/api/cluster/placements/${placement.id}/stop`));
@@ -178,7 +183,6 @@ test('state filters expose only matching rows to the screen and accessibility tr
   await page.getByRole('tab', { name: /^Running/ }).click();
   fixture.state.vms[1].state = 'running';
   const refreshed = page.waitForResponse(response => response.url().endsWith('/api/vms'));
-  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await refreshed;
   await expect(table.getByRole('row')).toHaveCount(62);
 });
@@ -213,7 +217,6 @@ test('large lists keep all VMs reachable through scrolling, palette, keyboard an
   fixture.state.vms[2506].cpuUsagePercent = 25;
   fixture.state.vms[2506].template = 'ubuntu-24.04-refreshed';
   const updated = page.waitForResponse(response => response.url().endsWith('/api/vms'));
-  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await updated;
   await expect(page.getByRole('button', { name: 'vm-02506', exact: true })).toBeVisible();
   await expect(page.locator('#vm-rows tr[data-id]').filter({ has: page.getByRole('button', { name: 'vm-02506', exact: true }) })).toContainText('ubuntu-24.04-refreshed');
@@ -236,7 +239,6 @@ test('large lists keep all VMs reachable through scrolling, palette, keyboard an
   await expect(page.locator('.vm-row-name').last()).toHaveText('vm-04996');
   fixture.state.vms[1].state = 'running';
   const refreshed = page.waitForResponse(response => response.url().endsWith('/api/vms'));
-  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await refreshed;
   await expect(table).toHaveAttribute('aria-rowcount', '1252');
 });
@@ -264,26 +266,40 @@ test('medium lists stay bounded when a state filter leaves a smaller result set'
 test('VM creation sends numeric resources, optional storage, environment and port rules', async () => {
   await open('vms/new');
   await page.getByLabel('Name', { exact: true }).fill('new-wasm-vm');
-  await page.getByLabel('Environment (NAME=value, one per line)').fill('URL=https://example.com/?a=b');
-  await page.getByLabel('Port forwarding (HOST:GUEST/tcp, one per line)').fill('8080:80');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.locator('details.form-advanced summary').click();
+  await page.getByLabel('Environment', { exact: true }).fill('URL=https://example.com/?a=b');
+  await page.getByLabel('Port forwarding', { exact: true }).fill('8080:80');
+  await page.getByRole('button', { name: 'Create MicroVM', exact: true }).click();
   await expect(page.locator('.vm-row-name').filter({ hasText: 'new-wasm-vm' })).toHaveCount(1);
   const body = mutation('/api/vms').body;
   assert.equal(body.ram, 1024); assert.equal(body.cpu, 2); assert.equal(body.storageRoot, null);
   assert.deepEqual(body.env, { URL: 'https://example.com/?a=b' });
   assert.deepEqual(body.portForwards, [{ hostPort: 8080, guestPort: 80, protocol: 'tcp' }]);
+  // CreateVmRequest rejects unknown fields: nothing the page only shows may travel in the body.
+  assert.deepEqual(Object.keys(body).sort(), ['blockStorages', 'cpu', 'diskGb', 'egressPolicy', 'env', 'microNetworkId', 'name', 'portForwards', 'ram', 'shellIds', 'storageRoot', 'template']);
 });
 
 test('API failures preserve the entered form and allow retry', async () => {
   await open('vms/new');
   await page.getByLabel('Name', { exact: true }).fill('retry-vm');
   fixture.failNext = { path: '/api/vms', method: 'POST', message: 'Name already exists' };
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('button', { name: 'Create MicroVM', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('Name already exists');
   await expect(page.getByLabel('Name', { exact: true })).toHaveValue('retry-vm');
   await page.getByLabel('Name', { exact: true }).fill('retry-vm-2');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('button', { name: 'Create MicroVM', exact: true }).click();
   await expect(page.locator('.vm-row-name').filter({ hasText: 'retry-vm-2' })).toHaveCount(1);
+});
+
+test('VM creation opens advanced settings when an advanced field is invalid', async () => {
+  await open('vms/new');
+  await page.getByLabel('Name', { exact: true }).fill('bad-env');
+  await page.locator('details.form-advanced summary').click();
+  await page.getByLabel('Environment', { exact: true }).fill('A=1\nA=2');
+  await page.locator('details.form-advanced summary').click();
+  await page.getByRole('button', { name: 'Create MicroVM', exact: true }).click();
+  await expect(page.locator('details.form-advanced')).toHaveAttribute('open', '');
+  await expect(page.locator('#error-env')).toBeVisible();
 });
 
 test('VM resource edits preserve isolation and environment edits use the real PUT contract', async () => {
@@ -342,7 +358,7 @@ test('network, storage and Shell creation send the expected wire fields', async 
     ['shells', { Name: 'setup', 'Shell script': '#!/bin/sh\necho hello' }, '/api/shells'],
   ]) {
     await open(route);
-    await page.getByRole('button', { name: 'Create', exact: true }).click();
+    await page.getByRole('button', { name: { networks: 'New network', storages: 'New storage', shells: 'New shell' }[route], exact: true }).click();
     for (const [label, value] of Object.entries(values)) await page.getByLabel(label, { exact: true }).fill(value);
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(page.locator('#editor')).toHaveCount(0);
@@ -354,13 +370,14 @@ test('MicroService deployment collects hostPort instead of sending unsupported r
   fixture.handlers.set('GET /api/micro-services/service-1/deployment', ({ send }) => send(200, null));
   await open('services');
   await page.getByRole('button', { name: 'Open web', exact: true }).click();
-  const deploy = page.getByRole('button', { name: 'Deploy and run', exact: true });
   await expect(page.locator('#service-status').getByRole('status')).toHaveText('Not deployed');
+  await page.getByRole('complementary', { name: 'MicroService detail' }).getByRole('button', { name: 'Deploy', exact: true }).click();
+  const deploy = page.getByRole('button', { name: 'Deploy and run', exact: true });
   await expect(deploy).toBeEnabled();
   const checkedPort = page.waitForResponse(response =>
     new URL(response.url()).pathname === '/api/micro-services/service-1/deployment/check' &&
     response.request().method() === 'POST' && response.request().postDataJSON()?.hostPort === 30123);
-  await page.getByLabel('First host port (optional)', { exact: true }).fill('30123');
+  await page.getByLabel('First host port', { exact: true }).fill('30123');
   assert.equal((await checkedPort).status(), 200);
   await expect(deploy).toBeEnabled();
   await deploy.click();
@@ -381,6 +398,7 @@ test('shell publishing uses latestContent and revision endpoints', async () => {
 
 test('image registration and OCI import expose completion', async () => {
   await open('images');
+  await page.getByRole('tab', { name: /Packages/ }).click();
   await page.getByRole('button', { name: 'Register', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Progress', exact: true })).toBeVisible();
   assert.deepEqual(mutation('/api/microregistry/register').body, { alias: 'ubuntu-24.04', version: '2026.09.1' });
@@ -459,9 +477,9 @@ test('navigation cancels dirty forms and ignores late responses from the previou
   await page.locator('nav a.sidebar-item[href="#/vms"]').click();
   await page.locator('nav a.sidebar-item[href="#/services"]').click();
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('MicroService');
-  await expect(page.locator('.service-image')).toHaveAttribute('title', 'ghcr.io/team/orders:1.0');
+  await expect(page.locator('.service-table .cell-sub')).toHaveAttribute('title', 'ghcr.io/team/orders:1.0');
   await new Promise(resolve => setTimeout(resolve, 550));
-  await expect(page.locator('.service-image')).toHaveAttribute('title', 'ghcr.io/team/orders:1.0');
+  await expect(page.locator('.service-table .cell-sub')).toHaveAttribute('title', 'ghcr.io/team/orders:1.0');
 });
 
 test('untrusted API text cannot create DOM elements or execute handlers', async () => {
@@ -549,7 +567,7 @@ test('initial API errors recover and periodic refresh preserves search focus and
   fixture.failNext = { path: '/api/vms', method: 'GET', status: 503, message: 'Temporarily unavailable' };
   await open();
   await expect(page.getByRole('alert')).toContainText('Temporarily unavailable');
-  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await page.waitForResponse(response => response.url().endsWith('/api/vms') && response.request().method() === 'GET');
   await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(12);
   const search = page.getByRole('searchbox', { name: 'Filter MicroVMs' });
   await search.fill('vm-00009');
@@ -616,7 +634,7 @@ test('live egress edits preserve running VM resources and human-readable Shell s
   await detail(0);
   await page.getByLabel('More VM actions', { exact: true }).click();
   await page.getByRole('button', { name: 'Egress', exact: true }).click();
-  await page.getByLabel('Internet access', { exact: true }).selectOption('isolated');
+  await page.getByRole('radiogroup', { name: 'Internet access', exact: true }).getByRole('radio', { name: 'Isolated', exact: true }).check();
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.locator('#editor')).toHaveCount(0);
   assert.equal(mutation(`/api/vms/${fixture.state.vms[0].id}`, 'PUT').body.egressPolicy, 'isolated');
@@ -633,7 +651,7 @@ test('field errors preserve input and identify the rejected field', async () => 
   await open('vms/new');
   await page.getByLabel('Name', { exact: true }).fill('field-error');
   fixture.failNext = { path: '/api/vms', method: 'POST', fields: { name: 'This name is reserved.' } };
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('button', { name: 'Create MicroVM', exact: true }).click();
   await expect(page.getByLabel('Name', { exact: true })).toHaveAttribute('aria-invalid', 'true');
   await expect(page.locator('#error-name')).toHaveText('This name is reserved.');
   await expect(page.getByLabel('Name', { exact: true })).toHaveValue('field-error');
@@ -850,7 +868,7 @@ test('update dialog reviews notes, rejects stale PID progress, follows failures 
   fixture.handlers.set('POST /api/update', ({ send }) => { run++; send(202, { current: '0.3.1', pid: 221 + run }); });
   fixture.handlers.set('GET /api/update/progress', ({ send }) => send(200, progress));
   await open('host');
-  await page.getByRole('button', { name: 'Updates', exact: true }).click();
+  await page.getByRole('button', { name: 'Check for updates', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Updates', exact: true });
   await expect(dialog).toContainText('Changes');
   await expect(dialog.locator('script, a[href^="javascript:"]')).toHaveCount(0);
@@ -876,7 +894,7 @@ test('update dialog reviews notes, rejects stale PID progress, follows failures 
 test('dirty Back and Forward cancellation preserves indexed browser history', async () => {
   await open();
   await page.locator('nav a.sidebar-item[href="#/networks"]').click();
-  await page.getByRole('button', { name: 'Create', exact: true }).click();
+  await page.getByRole('button', { name: 'New network', exact: true }).click();
   await page.getByLabel('Name', { exact: true }).fill('unsaved-network');
   const cancelled = page.waitForEvent('dialog').then(dialog => dialog.dismiss());
   await page.evaluate(() => history.back());
@@ -895,7 +913,8 @@ test('Korean locale translates forms, detail tabs and console settings', async (
   await open('vms/new');
   await expect(page.getByRole('heading', { level: 2 })).toHaveText('새 MicroVM');
   await expect(page.getByLabel('이름', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '저장', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'MicroVM 만들기', exact: true })).toBeVisible();
+  await expect(page.locator('.form-section h3')).toHaveText(['기본', '사양', '네트워크']);
   await page.getByRole('button', { name: '취소', exact: true }).click();
   await expect(page.locator('.vm-row-name')).toHaveCount(12);
   await page.locator('.vm-row-name').first().click();
@@ -938,7 +957,7 @@ test('clipboard copies private keys and public addresses without storing keys', 
   await context.grantPermissions(['clipboard-read','clipboard-write']);
   fixture.state.pipe.firecrabTunnels=[{subdomain:'fixture',publicUrl:'https://fixture.example.com/',target:{type:'apps',upstreams:['10.42.0.2:80']}}];
   await open('pipe/firecrab-tunnel');
-  await page.getByRole('button',{name:'Copy',exact:true}).click();
+  await page.getByRole('button',{name:'Copy address',exact:true}).click();
   assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'https://fixture.example.com/');
   await detail(0);
   await page.getByRole('button',{name:'SSH connection',exact:true}).click();

@@ -89,21 +89,12 @@ test.describe("command palette", () => {
     await expect(page.getByRole("complementary", { name: "MicroVM detail" }).getByRole("heading", { name: "postgres-main" })).toBeVisible();
   });
 
-  test("toggles the detail panel", async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
+  test("has no entry that toggles the detail panel", async ({ page }) => {
     await open(page);
-    const detail = page.getByRole("complementary", { name: "MicroVM detail" });
-    await expect(detail).toBeVisible();
-
     await page.keyboard.press("ControlOrMeta+k");
     await search(page).fill("toggle detail");
-    await page.keyboard.press("Enter");
-    await expect(detail).toHaveCount(0);
-
-    await page.keyboard.press("ControlOrMeta+k");
-    await search(page).fill("toggle detail");
-    await page.keyboard.press("Enter");
-    await expect(detail).toBeVisible();
+    await expect(palette(page).getByRole("option")).toHaveCount(0);
+    await expect(palette(page)).toContainText("No results");
   });
 
   test("New MicroVM goes to the create page", async ({ page }) => {

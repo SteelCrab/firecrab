@@ -76,7 +76,7 @@ test.describe("pool dashboard @dashboard", () => {
   test("shows the pool, ready members, and active lease", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1100 });
     await openDashboard(page, { hash: "#/pools", routes });
-    await page.getByRole("button", { name: "ci-runners", exact: true }).click();
+    await page.getByRole("row", { name: /^ci-runners(\s|$)/ }).click();
     await expect(page.getByRole("button", { name: "End session", exact: true })).toBeVisible();
     await expect(page.locator(".screen-header")).toContainText("Pools");
     if (process.env.FIRECRAB_POOL_SCREENSHOT) {
@@ -97,14 +97,14 @@ test.describe("pool dashboard @dashboard", () => {
         return route.fulfill({ status: 201, json: created });
       },
     } });
-    await page.getByRole("button", { name: "New pool", exact: true }).click();
+    await page.locator(".screen-header").getByRole("button", { name: "New pool", exact: true }).click();
     const form = page.getByRole("region", { name: "Create a pool", exact: true });
     await expect(form.getByLabel("Image", { exact: true })).toHaveValue("ubuntu");
     await expect(form.getByLabel("Image", { exact: true }).locator("option")).toHaveCount(1);
     await expect(form.locator("input:visible, select:visible")).toHaveCount(2);
     await form.getByLabel("Name", { exact: true }).fill("build-runners");
     await form.getByRole("button", { name: "Create pool", exact: true }).click();
-    await expect(page.getByRole("button", { name: "build-runners", exact: true })).toBeVisible();
+    await expect(page.getByRole("row", { name: /^build-runners(\s|$)/ })).toBeVisible();
     expect(request).toMatchObject({ template: "ubuntu", diskGb: 8, cpu: 1, ram: 512, minReady: 2, maxSize: 4, leaseTtlSeconds: 600, microNetworkId: "default" });
     await expect(form).toHaveCount(0);
   });
@@ -116,7 +116,7 @@ test.describe("pool dashboard @dashboard", () => {
       [`/api/pools/${POOL_ID}/leases`]: route => route.fulfill({ json: [{ ...lease, state: released ? "released" : "active" }] }),
       [`/api/pools/${POOL_ID}/leases/${lease.id}`]: route => { released = true; return route.fulfill({ json: { ...lease, state: "released" } }); },
     } });
-    await page.getByRole("button", { name: "ci-runners", exact: true }).click();
+    await page.getByRole("row", { name: /^ci-runners(\s|$)/ }).click();
     await expect(page.getByRole("link", { name: "Open terminal", exact: true })).toHaveAttribute("href", new RegExp(VM_ID));
     await expect(page.getByRole("button", { name: "Delete pool", exact: true })).toBeHidden();
     await page.getByRole("button", { name: "End session", exact: true }).click();
@@ -130,7 +130,7 @@ test.describe("pool dashboard @dashboard", () => {
       ...routes,
       [`/api/pools/${POOL_ID}`]: route => { updated = route.request().postDataJSON(); return route.fulfill({ json: pool }); },
     } });
-    await page.getByRole("button", { name: "ci-runners", exact: true }).click();
+    await page.getByRole("row", { name: /^ci-runners(\s|$)/ }).click();
     await expect(page.getByLabel("Keep ready", { exact: true })).toBeHidden();
     await page.getByText("Pool settings", { exact: true }).click();
     await page.getByLabel("Session duration (minutes)", { exact: true }).fill("30");
@@ -141,14 +141,14 @@ test.describe("pool dashboard @dashboard", () => {
   test("shows the simple Korean flow on desktop and mobile", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 860 });
     await openDashboard(page, { hash: "#/pools", locale: "ko", routes });
-    await page.getByRole("button", { name: "ci-runners", exact: true }).click();
+    await page.getByRole("row", { name: /^ci-runners(\s|$)/ }).click();
     await expect(page.getByRole("button", { name: "사용 종료", exact: true })).toBeVisible();
     if (process.env.FIRECRAB_POOL_SCREENSHOT) await page.screenshot({ path: process.env.FIRECRAB_POOL_SCREENSHOT, fullPage: true });
     await page.getByRole("button", { name: "새 풀", exact: true }).click();
     await expect(page.locator("#editor input:visible, #editor select:visible")).toHaveCount(2);
     if (process.env.FIRECRAB_POOL_SCREENSHOT) await page.screenshot({ path: process.env.FIRECRAB_POOL_SCREENSHOT.replace(/\.png$/, "-create.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
-    const content = page.locator(".pools-screen");
+    const content = page.locator("#content");
     expect(await content.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await expect(page.getByRole("button", { name: "VM 사용", exact: true })).toBeVisible();
   });

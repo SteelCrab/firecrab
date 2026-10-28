@@ -3,7 +3,7 @@ use crate::{
     App, Shared, api, element,
     forms::Field,
     model::{escape, list, text},
-    render::button,
+    render::{Icon, button, chips, empty_state, icon_button, status_dot, status_line},
     render_content, render_editor, render_messages, set_html,
 };
 use serde_json::{Value, json};
@@ -37,72 +37,176 @@ fn controls_disabled(app: &App) -> &'static str {
         ""
     }
 }
+/// The tone of a queue or engine phase.
+fn phase_tone(phase: &str) -> &'static str {
+    match phase {
+        "running" => "ok",
+        "failed" => "error",
+        _ => "busy",
+    }
+}
 pub fn content(app: &App) -> String {
+    let ko = app.locale == "ko";
     let engine = app.cache.get("/api/queue/engine").unwrap_or(&Value::Null);
     let disabled = controls_disabled(app);
-    let mut out =
-        "<div class=\"queue-page\"><section class=\"wasm-card\"><h2>Internal RabbitMQ</h2>"
-            .to_string();
+    let mut out = String::from("<div class=\"queue-page\">");
     if engine.is_null() {
-        out.push_str(&format!("<form id=\"queue-engine-form\" class=\"queue-form\"><fieldset {disabled}><div class=\"queue-inputs\"><label>MicroNetwork<select name=\"microNetworkId\" required><option value=\"\">Select a network</option>"));
+        // Not installed: the install form is the first thing to do.
+        let mut form = format!(
+            "<form id=\"queue-engine-form\" class=\"queue-form\"><fieldset {disabled}><div class=\"queue-inputs\"><label>MicroNetwork<select name=\"microNetworkId\" required><option value=\"\">Select a network</option>"
+        );
         for network in list(app.cache.get("/api/micro-networks").unwrap_or(&Value::Null)) {
-            out.push_str(&format!(
+            form.push_str(&format!(
                 "<option value=\"{}\">{}</option>",
                 escape(text(network, "id")),
                 escape(text(network, "name"))
             ));
         }
-        out.push_str("</select></label>");
-        out.push_str(&input("cpu", "CPU", "4", 1, 32));
-        out.push_str(&input("ram", "Memory (MiB)", "4096", 128, 32768));
-        out.push_str(&input("diskGb", "Disk (GiB)", "8", 4, 1024));
-        out.push_str("</div><button type=\"submit\" class=\"btn primary\">Install RabbitMQ</button></fieldset></form>");
+        form.push_str("</select></label>");
+        form.push_str(&input("cpu", "CPU", "4", 1, 32));
+        form.push_str(&input("ram", "Memory (MiB)", "4096", 128, 32768));
+        form.push_str(&input("diskGb", "Disk (GiB)", "8", 4, 1024));
+        form.push_str("</div><button type=\"submit\" class=\"btn primary\">Install RabbitMQ</button></fieldset></form>");
+        out.push_str(&empty_state(
+            "queues",
+            if ko { "큐를 쓰려면 엔진을 설치합니다" } else { "Install the engine to use queues" },
+            if ko {
+                "RabbitMQ 엔진은 MicroVM 하나에서 실행되고 모든 큐가 함께 씁니다. 한 번만 설치하면 됩니다."
+            } else {
+                "The RabbitMQ engine runs in one MicroVM and every queue shares it. You install it once."
+            },
+            &form,
+        ));
     } else {
         let phase = text(engine, "phase");
-        out.push_str(&format!("<p class=\"badge\">{}</p><p>One persistent MicroVM hosts your application queues.</p><fieldset class=\"queue-actions\" {disabled}>",escape(&title(phase))));
+        let mut actions = format!("<fieldset class=\"queue-actions\" {disabled}>");
         if ["stopped", "failed"].contains(&phase) {
-            out.push_str(&button("Start / recover", "queue-start", ""));
-        }
-        if phase == "running" {
-            out.push_str(&button("Stop", "queue-stop", ""));
-        }
-        out.push_str("</fieldset>");
-        if !text(engine, "error").is_empty() {
-            out.push_str(&format!(
-                "<p role=\"alert\">{}</p>",
-                escape(text(engine, "error"))
+            actions.push_str(&icon_button(
+                "Start / recover",
+                "queue-start",
+                "",
+                Icon::Start,
             ));
         }
+        if phase == "running" {
+            actions.push_str(&icon_button("Stop", "queue-stop", "", Icon::Stop));
+        }
+        actions.push_str("</fieldset>");
+        let message = if phase == "running" {
+            ""
+        } else if ko {
+            "엔진이 실행 중일 때 큐를 만들 수 있습니다."
+        } else {
+            "Queues can be created once the engine is running."
+        };
+        out.push_str(&status_line(
+            phase_tone(phase),
+            "Internal RabbitMQ",
+            &[status_dot(phase_tone(phase), &title(phase))],
+            &actions,
+            if text(engine, "error").is_empty() {
+                message
+            } else {
+                text(engine, "error")
+            },
+        ));
         if !text(engine, "log").is_empty() {
             out.push_str(&format!("<details><summary>Installation log</summary><pre class=\"queue-log\">{}</pre></details>",escape(text(engine,"log"))));
         }
     }
     let ready = text(engine, "phase") == "running" && disabled.is_empty();
-    out.push_str(&format!("</section><section class=\"wasm-card\"><h2>Application queues</h2><form id=\"queue-create-form\" class=\"queue-form\"><fieldset {}><div class=\"queue-inputs\"><label>Queue name<input name=\"name\" required pattern=\"[a-z0-9-]{{1,40}}\" maxlength=\"40\"></label>",if ready { "" } else { "disabled" }));
+    // New queue: a flat form row above the list.
+    out.push_str(&format!("<form id=\"queue-create-form\" class=\"queue-form queue-create\"><fieldset {}><div class=\"queue-inputs\"><label>Queue name<input name=\"name\" required pattern=\"[a-z0-9-]{{1,40}}\" maxlength=\"40\"></label>",if ready { "" } else { "disabled" }));
     out.push_str(&input("deliveryLimit", "Delivery limit", "5", 1, 100));
     out.push_str(&input("maxMib", "Capacity per queue (MiB)", "64", 1, 1024));
     out.push_str("</div><button class=\"btn primary\" type=\"submit\">Create Queue</button></fieldset></form>");
-    for queue in list(&app.resource) {
-        let id = text(queue, "id");
-        out.push_str(&format!("<article><div class=\"queue-heading\">{}<span class=\"badge\">{}</span><fieldset class=\"queue-actions\" {disabled}>",button(text(queue,"name"),"queue-select",id),escape(&title(text(queue,"phase")))));
-        if text(queue, "phase") == "failed" {
-            out.push_str(&button("Retry", "queue-retry", id));
-        }
-        out.push_str(&format!("<button class=\"btn\" data-action=\"queue-delete\" data-id=\"{}\" {}>Delete</button></fieldset></div>",escape(id),if list(&queue["services"]).is_empty() { "" } else { "disabled" }));
-        if !list(&queue["services"]).is_empty() {
-            out.push_str("<p>Used by a MicroService. Remove its connection before deletion.</p>");
-        }
-        if !text(queue, "error").is_empty() {
-            out.push_str(&format!(
-                "<p role=\"alert\">{}</p>",
-                escape(text(queue, "error"))
+    let queues = list(&app.resource);
+    if queues.is_empty() {
+        if !engine.is_null() {
+            out.push_str(&empty_state(
+                "queues",
+                if ko {
+                    "아직 큐가 없습니다"
+                } else {
+                    "No queues yet"
+                },
+                if ko {
+                    "엔진이 시작되면 위 양식으로 첫 큐를 만듭니다."
+                } else {
+                    "Create the first queue with the form above once the engine starts."
+                },
+                "",
             ));
         }
-        out.push_str("</article>");
+    } else {
+        out.push_str(&format!(
+            "<div class=\"table-scroll\"><table class=\"wasm-table queue-table\" aria-label=\"{}\"><thead><tr><th>{}</th><th>{}</th><th class=\"col-secondary\">{}</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
+            if ko { "큐" } else { "Queues" },
+            if ko { "이름" } else { "Name" },
+            if ko { "상태" } else { "Status" },
+            if ko { "사용 서비스" } else { "Used by" },
+            crate::i18n::t("Actions")
+        ));
+        for queue in queues {
+            let id = text(queue, "id");
+            let phase = text(queue, "phase");
+            let services = list(&queue["services"]);
+            let used = services
+                .iter()
+                .map(|service| {
+                    [text(service, "name"), text(service, "id")]
+                        .into_iter()
+                        .find(|v| !v.is_empty())
+                        .unwrap_or("MicroService")
+                        .to_string()
+                })
+                .collect::<Vec<_>>();
+            let error = text(queue, "error");
+            let sub = if error.is_empty() {
+                format!(
+                    "{} {} · {} {} MiB",
+                    if ko {
+                        "전달 한도"
+                    } else {
+                        "Delivery limit"
+                    },
+                    queue["deliveryLimit"],
+                    if ko { "최대" } else { "Max" },
+                    queue["maxBytes"].as_u64().map_or(0, |b| b / 1_048_576)
+                )
+            } else {
+                error.to_string()
+            };
+            let mut actions = format!("<fieldset class=\"queue-actions\" {disabled}>");
+            if phase == "failed" {
+                actions.push_str(&icon_button("Retry", "queue-retry", id, Icon::Retry));
+            }
+            actions.push_str(&format!(
+                "<button type=\"button\" class=\"icon-btn danger\" aria-label=\"Delete\" title=\"{}\" data-action=\"queue-delete\" data-id=\"{}\" {}>{}</button></fieldset>",
+                if services.is_empty() {
+                    "Delete"
+                } else {
+                    "Used by a MicroService. Remove its connection before deletion."
+                },
+                escape(id),
+                if services.is_empty() { "" } else { "disabled" },
+                Icon::Delete.svg()
+            ));
+            out.push_str(&format!(
+                "<tr data-id=\"{}\"><td><div class=\"cell-name\"><b><button type=\"button\" class=\"cell-link\" data-action=\"queue-select\" data-id=\"{}\">{}</button></b><span class=\"cell-sub\" data-tone=\"{}\">{}</span></div></td><td>{}</td><td class=\"col-secondary\">{}</td><td class=\"row-actions\">{actions}</td></tr>",
+                escape(id),
+                escape(id),
+                escape(text(queue, "name")),
+                if error.is_empty() { "" } else { "error" },
+                escape(&sub),
+                status_dot(phase_tone(phase), &title(phase)),
+                chips(&used)
+            ));
+        }
+        out.push_str("</tbody></table></div>");
     }
-    out.push_str("</section>");
     if !app.advanced.queues.selected.is_empty() {
-        out.push_str(&format!("<section class=\"wasm-card\"><h2>Queue detail</h2><div id=\"queue-metrics\">{}</div><fieldset class=\"queue-actions\" {disabled}>{}{}{}</fieldset>",metrics(&app.advanced.queues.metrics),button("Show sender connection","queue-reveal-publish",""),button("Show receiver connection","queue-reveal-consume",""),button("Hide","queue-hide","")));
+        out.push_str(&format!("<section class=\"queue-detail\"><h2>Queue detail</h2><div id=\"queue-metrics\">{}</div><fieldset class=\"queue-actions\" {disabled}>{}{}{}</fieldset>",metrics(&app.advanced.queues.metrics),button("Show sender connection","queue-reveal-publish",""),button("Show receiver connection","queue-reveal-consume",""),button("Hide","queue-hide","")));
         if let Some((url, _)) = &app.advanced.queues.reveal {
             out.push_str(&format!(
                 "<div class=\"queue-connection\"><code>{}</code></div>",

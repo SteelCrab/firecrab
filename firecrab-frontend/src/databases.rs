@@ -736,6 +736,20 @@ pub fn submit(app: &Shared, form: &HtmlFormElement) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn the_connection_form_shows_its_heading_once() {
+        let app = App {
+            route: "pipe/database".into(),
+            form: crate::forms::resource_form("database", &Value::Null, ""),
+            ..Default::default()
+        };
+        let html = view::content(&app);
+        assert_eq!(
+            html.matches("<h2>Connect database</h2>").count(),
+            1,
+            "{html}"
+        );
+    }
+    #[test]
     fn connection_payload_omits_automatic_tls_and_absent_ca() {
         let form = crate::forms::resource_form("database", &Value::Null, "").unwrap();
         let values = BTreeMap::from([

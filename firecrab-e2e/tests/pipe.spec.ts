@@ -642,13 +642,13 @@ test.describe("Pipe cards @dashboard", () => {
     }];
     await open(page, { savedRoutes, card: "firecrab-tunnel" });
     await page.getByRole("button", { name: "Connect", exact: true }).click();
-    await page.getByLabel("Target", { exact: true }).selectOption("nginx");
+    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
     await expect(page.getByLabel("Route host", { exact: true }).locator('option[value="orders.internal"]')).toHaveCount(0);
     await expect(page.getByLabel("Route host", { exact: true }).locator('option[value="app.example.com"]')).toHaveCount(1);
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await page.goto("/#/pipe/quick-tunnel");
     await page.getByRole("button", { name: "Connect", exact: true }).click();
-    await page.getByLabel("Target", { exact: true }).selectOption("routes");
+    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
     await expect(page.getByLabel("Route host", { exact: true }).locator('option[value="orders.internal"]')).toHaveCount(0);
   });
 
@@ -668,7 +668,7 @@ test.describe("Pipe cards @dashboard", () => {
     ];
     for (const card of cards) {
       await page.goto("/#/pipe");
-      await page.locator(`#content a[href="#/pipe/${card}"]`).click();
+      await page.locator(`#content a.pipe-row[href="#/pipe/${card}"]`).click();
       await expect(page).toHaveURL(new RegExp(`#/pipe/${card}$`));
       await expect(page.locator("#content")).not.toBeEmpty();
     }
@@ -751,10 +751,10 @@ test.describe("Pipe cards @dashboard", () => {
     page,
   }) => {
     const m = await open(page, { configuredTunnel: true });
-    for (const name of ["ingress: stop", "tunnel: restart"]) {
+    for (const name of ["Stop ingress", "Restart tunnel"]) {
       page.once("dialog", (d) => d.accept());
       await page.getByRole("button", { name, exact: true }).click();
-      await expect(page.getByRole("status")).toContainText("Saved");
+      await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
     }
     expect(m.actions).toEqual([
       { service: "ingress", action: "stop" },
@@ -771,7 +771,7 @@ test.describe("Pipe cards @dashboard", () => {
       .getByLabel("Listen address", { exact: true })
       .fill("127.0.0.1:8090");
     await page
-      .getByRole("button", { name: "ingress: restart", exact: true })
+      .getByRole("button", { name: "Restart ingress", exact: true })
       .click();
     await expect(page.getByRole("alert")).toContainText(
       "service operation failed",
@@ -836,7 +836,7 @@ test.describe("Pipe cards @dashboard", () => {
       quickTunnels: [webTunnel],
     });
     await page.getByRole("button", { name: "Edit", exact: true }).click();
-    await page.getByLabel("Target", { exact: true }).selectOption("routes");
+    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
     await page
       .getByLabel("Route host", { exact: true })
       .selectOption("app.example.com");
@@ -871,8 +871,7 @@ test.describe("Pipe cards @dashboard", () => {
       quickTunnels: [webTunnel, apiTunnel],
     });
     await page
-      .locator('[data-path="/api/pipe/quick-tunnels/' + QUICK_ID + '/service"]')
-      .filter({ hasText: "stop" })
+      .locator('[data-path="/api/pipe/quick-tunnels/' + QUICK_ID + '/service"][aria-label="Stop"]')
       .click();
     await expect.poll(() => m.quickActions.length).toBe(1);
     page.once("dialog", (d) => d.accept());
@@ -906,7 +905,7 @@ test.describe("Pipe cards @dashboard", () => {
       target: { type: "apps" },
     });
     await page.getByRole("button", { name: "Edit", exact: true }).click();
-    await page.getByLabel("Target", { exact: true }).selectOption("nginx");
+    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
     await save(page);
     await expect.poll(() => m.firecrabSaves.length).toBe(2);
     expect(m.firecrabSaves[1]).toEqual({
@@ -920,7 +919,7 @@ test.describe("Pipe cards @dashboard", () => {
     await page
       .getByLabel("Ownership token", { exact: true })
       .fill(CONNECTION_TOKEN);
-    await page.getByLabel("Target", { exact: true }).selectOption("nginx");
+    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
     await save(page);
     await expect(page.getByRole("alert")).toContainText("invalid or revoked");
     await expect(
@@ -973,7 +972,11 @@ test.describe("Pipe cards @dashboard", () => {
   }) => {
     const m = await open(page, { quickTunnels: [webTunnel] });
     m.unavailable();
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.waitForResponse(
+      (r) =>
+        new URL(r.url()).pathname === "/api/pipe" &&
+        r.request().method() === "GET",
+    );
     await expect(page.getByRole("alert")).toContainText(
       "Pipe helper unavailable",
     );

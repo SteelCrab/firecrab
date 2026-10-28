@@ -58,12 +58,12 @@ test.describe("Host Firecrab panel @dashboard", () => {
 
     const panel = page.getByRole("region", { name: "Firecrab" });
     await expect(panel.getByRole("heading", { name: "Firecrab" })).toBeVisible();
-    await expect(panel.locator("dt")).toHaveText(["version", "firecracker", "API service", "helper service", "prefix", "datadir", "confdir", "unitdir", "api"]);
+    await expect(panel.locator("dt")).toHaveText(["Version", "Firecracker", "API service", "Helper service", "Install prefix", "Data directory", "Config directory", "systemd directory", "API address"]);
     await expect(panel.locator("dd")).toHaveText([
       INFO.version,
       INFO.firecrackerVersion,
-      INFO.apiService,
-      INFO.netHelperService,
+      "Running",
+      "Running",
       INFO.prefix,
       INFO.datadir,
       INFO.confdir,
@@ -71,12 +71,12 @@ test.describe("Host Firecrab panel @dashboard", () => {
       INFO.apiBase,
     ]);
 
-    await expect(page.getByRole("heading", { name: "Host info", exact: true })).toBeVisible();
-    await expect(page.locator(".host-info").nth(0)).toContainText("Debian GNU/Linux 13 (trixie)");
+    await expect(page.locator(".host-title")).toHaveText("Debian GNU/Linux 13 (trixie)");
+    await expect(page.locator(".host-info").nth(0)).toContainText("arm64");
     expect(await page.locator(".host-info").count()).toBe(2);
     const host = await page.locator(".host-info").nth(0).boundingBox();
     const firecrab = await panel.boundingBox();
-    expect(firecrab!.y).toBeGreaterThan(host!.y + host!.height);
+    expect(firecrab!.y).toBeGreaterThanOrEqual(host!.y + host!.height);
     await page.screenshot({ path: testInfo.outputPath("host-en.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(panel.getByText(INFO.firecrackerVersion, { exact: true })).toBeVisible();
@@ -90,7 +90,7 @@ test.describe("Host Firecrab panel @dashboard", () => {
     const panel = page.getByRole("region", { name: "Firecrab" });
     await expect(panel).toContainText("Firecrab 정보를 불러오지 못했습니다.");
     await expect(panel.locator("dt")).toHaveCount(0);
-    await expect(page.locator(".host-info").nth(0)).toContainText("Debian GNU/Linux 13 (trixie)");
+    await expect(page.locator(".host-title")).toHaveText("Debian GNU/Linux 13 (trixie)");
   });
 
   test("missing runtime tools do not hide installation info", async ({ page }) => {
@@ -105,8 +105,7 @@ test.describe("Host Firecrab panel @dashboard", () => {
     const { firecrackerVersion: _version, apiService: _api, netHelperService: _helper, helperUnit: _unit, ...legacy } = INFO;
     await openHost(page, "en", legacy);
     const panel = page.getByRole("region", { name: "Firecrab" });
-    await expect(panel.getByText("Unavailable", { exact: true })).toBeVisible();
-    await expect(panel.getByText("unknown", { exact: true })).toHaveCount(2);
+    await expect(panel.getByText("Unavailable", { exact: true })).toHaveCount(3);
     await expect(panel).toContainText(INFO.datadir);
   });
 
@@ -114,33 +113,33 @@ test.describe("Host Firecrab panel @dashboard", () => {
     let response: object | null = INFO;
     await openHost(page, "en", () => response);
     const panel = page.getByRole("region", { name: "Firecrab" });
-    await expect(panel.getByText("active", { exact: true })).toHaveCount(2);
+    await expect(panel.getByText("Running", { exact: true })).toHaveCount(2);
 
     response = { ...INFO, netHelperService: "failed", helperUnit: "firecrab-net-helper.service" };
     await page.waitForTimeout(3_100);
-    await expect(panel.getByText("failed", { exact: true })).toHaveAttribute("title", "firecrab-net-helper.service");
-    await expect(panel.getByText("failed", { exact: true })).toHaveClass(/error/);
+    await expect(panel.getByText("Failed", { exact: true })).toHaveAttribute("title", "firecrab-net-helper.service");
+    await expect(panel.getByText("Failed", { exact: true })).toHaveClass(/error/);
 
     response = null;
     await page.waitForTimeout(3_100);
     await expect(panel).toContainText("Could not load the Firecrab info.");
-    await expect(panel.getByText("active", { exact: true })).toHaveCount(0);
+    await expect(panel.getByText("Running", { exact: true })).toHaveCount(0);
 
     response = INFO;
     await page.waitForTimeout(3_100);
-    await expect(panel.getByText("active", { exact: true })).toHaveCount(2);
+    await expect(panel.getByText("Running", { exact: true })).toHaveCount(2);
   });
 
   test("a stalled API request clears stale active states after five seconds", async ({ page }) => {
     await openHost(page, "en", INFO);
     const panel = page.getByRole("region", { name: "Firecrab" });
-    await expect(panel.getByText("active", { exact: true })).toHaveCount(2);
+    await expect(panel.getByText("Running", { exact: true })).toHaveCount(2);
     await page.route("**/api/info", () => {});
     const request = page.waitForRequest("**/api/info");
     await page.waitForTimeout(3_100);
     await request;
     await page.waitForTimeout(5_100);
     await expect(panel).toContainText("Could not load the Firecrab info.");
-    await expect(panel.getByText("active", { exact: true })).toHaveCount(0);
+    await expect(panel.getByText("Running", { exact: true })).toHaveCount(0);
   });
 });

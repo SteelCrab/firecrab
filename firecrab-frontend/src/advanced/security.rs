@@ -1,23 +1,146 @@
 use crate::{
     App, Shared, api,
     model::{escape, list, text},
-    render::{button, request},
+    render::{Icon, button, chips, empty_state, icon_button, icon_request_with, name_cell},
     render_messages, set_html,
 };
 use serde_json::{Value, json};
 use wasm_bindgen_futures::spawn_local;
+/// "Inbound N · Outbound M" for the rules of a group.
+fn rule_counts(group: &Value, ko: bool) -> String {
+    let rules = list(&group["rules"]);
+    let inbound = rules.iter().filter(|r| r["direction"] == "ingress").count();
+    let outbound = rules.len() - inbound;
+    if ko {
+        format!("인바운드 {inbound} · 아웃바운드 {outbound}")
+    } else {
+        format!("Inbound {inbound} · Outbound {outbound}")
+    }
+}
+/// The names of the services that use a group, from the connections the screen has loaded.
+fn applied_to(app: &App, group: &Value) -> Vec<String> {
+    let id = text(group, "id");
+    app.cache
+        .get("security-connections")
+        .map(|data| {
+            list(&data["services"])
+                .iter()
+                .filter(|service| service["securityGroupId"] == id)
+                .map(|service| text(service, "name").to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
 pub fn content(app: &App) -> String {
-    let mut out = String::from("<section class=\"security-groups-screen\">");
-    if list(&app.resource).is_empty() {
-        out.push_str("<p>No security groups yet.</p>");
+    let ko = app.locale == "ko";
+    let rows = list(&app.resource);
+    if rows.is_empty() {
+        return empty_state(
+            "security-groups",
+            if ko {
+                "아직 보안그룹이 없습니다"
+            } else {
+                "No security groups yet"
+            },
+            if ko {
+                "MicroVM과 MicroService가 받을 트래픽을 정합니다."
+            } else {
+                "Decide which traffic MicroVMs and MicroServices accept."
+            },
+            &button("New security group", "create", "security-groups"),
+        );
     }
-    for group in list(&app.resource) {
-        let name = text(group, "name");
+    let mut out = format!(
+        "<div class=\"table-scroll\"><table class=\"wasm-table security-group-table\" aria-label=\"{}\"><thead><tr><th>{}</th><th>{}</th><th class=\"col-secondary\">{}</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
+        if ko {
+            "보안그룹"
+        } else {
+            "Security groups"
+        },
+        if ko { "이름" } else { "Name" },
+        if ko { "규칙" } else { "Rules" },
+        if ko { "적용 대상" } else { "Applied to" },
+        crate::i18n::t("Actions")
+    );
+    for group in rows {
         let id = text(group, "id");
-        out.push_str(&format!("<article class=\"wasm-card\"><h2>{}</h2><p>Network: {}</p>{}{}<div id=\"connections-{}\">{}</div></article>",escape(name),escape(text(group,"microNetworkId")),button(&if app.locale=="ko"{format!("{name} 규칙 편집")}else{format!("Edit rules for {name}")},"security-edit",id),request(&format!("Delete {name}"),"DELETE",&format!("/api/security-groups/{}",api::encode(id)),Value::Null),escape(id),connections(app,group)));
+        let name = text(group, "name");
+        let selected = app.detail.as_ref().is_some_and(|d| d["id"] == id);
+        let sub = match text(group, "description") {
+            "" => text(group, "microNetworkId"),
+            description => description,
+        };
+        out.push_str(&format!(
+            "<tr data-id=\"{}\" aria-selected=\"{selected}\"><td>{}</td><td>{}</td><td class=\"col-secondary\">{}</td><td class=\"row-actions\">{}{}</td></tr>",
+            escape(id),
+            name_cell(name, sub, "", false),
+            rule_counts(group, ko),
+            chips(&applied_to(app, group)),
+            icon_button(
+                &if ko { format!("{name} 규칙 편집") } else { format!("Edit rules for {name}") },
+                "security-edit",
+                id,
+                Icon::Edit
+            ),
+            icon_request_with(
+                &format!("Delete {name}"),
+                "DELETE",
+                &format!("/api/security-groups/{}", api::encode(id)),
+                Value::Null,
+                Icon::Delete
+            )
+        ));
     }
-    out.push_str("</section>");
+    out.push_str("</tbody></table></div>");
     out
+}
+/// The panel of a group: its rules, then the services and VMs it reaches.
+pub fn detail(app: &App, group: &Value) -> String {
+    let ko = app.locale == "ko";
+    let rules = list(&group["rules"]);
+    let line = |rule: &Value| {
+        let ports = if rule["portFrom"] == rule["portTo"] {
+            rule["portFrom"].to_string()
+        } else {
+            format!("{}-{}", rule["portFrom"], rule["portTo"])
+        };
+        format!(
+            "<li><span class=\"mono detail-list-main\">{} {} · {}</span></li>",
+            escape(&text(rule, "protocol").to_uppercase()),
+            ports,
+            escape(text(rule, "peerCidr"))
+        )
+    };
+    let mut body = String::new();
+    for (direction, label) in [
+        ("ingress", if ko { "인바운드" } else { "Inbound" }),
+        ("egress", if ko { "아웃바운드" } else { "Outbound" }),
+    ] {
+        let lines: String = rules
+            .iter()
+            .filter(|rule| rule["direction"] == direction)
+            .map(line)
+            .collect();
+        if !lines.is_empty() {
+            body.push_str(&format!(
+                "<h4 class=\"detail-subhead\">{label}</h4><ul class=\"detail-list\">{lines}</ul>"
+            ));
+        }
+    }
+    if body.is_empty() {
+        body = "<p class=\"detail-note\">No allow rules. All new peer connections are denied.</p>"
+            .into();
+    }
+    crate::details::section("Rules", "", &body)
+        + &crate::details::section(
+            "Connections",
+            "",
+            &format!(
+                "<div id=\"connections-{}\">{}</div>",
+                escape(text(group, "id")),
+                connections(app, group)
+            ),
+        )
 }
 fn connections(app: &App, group: &Value) -> String {
     let empty = Value::Null;
@@ -33,7 +156,12 @@ fn connections(app: &App, group: &Value) -> String {
     );
     if data["serviceError"] == true {
         out.push_str("<p role=\"alert\">Connections are unavailable.</p>");
-        out.push_str(&button("Retry connections", "security-retry", ""));
+        out.push_str(&crate::render::icon_button(
+            "Retry connections",
+            "security-retry",
+            "",
+            Icon::Retry,
+        ));
         out.push_str("</figure>");
         return out;
     }
@@ -171,6 +299,12 @@ pub fn load(app: &Shared) {
                 &format!("connections-{}", text(group, "id")),
                 &connections(&s, group),
             );
+        }
+        let editing = s.form.is_some();
+        drop(s);
+        // The list names the services a group is applied to, which this answer brings.
+        if !editing {
+            crate::render_content(&a);
         }
     });
 }

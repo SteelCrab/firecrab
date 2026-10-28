@@ -1,4 +1,6 @@
 import {
+  newServiceButton,
+  openDeployForm,
   serviceAction,
   serviceStep,
   selectServiceApp,
@@ -239,7 +241,7 @@ test.describe("Security groups @dashboard", () => {
         .first(),
     ).toBeVisible();
     await page
-      .getByRole("button", { name: "New security group", exact: true })
+      .locator(".screen-header").getByRole("button", { name: "New security group", exact: true })
       .click();
     await page.getByLabel("Name", { exact: true }).fill("orders-policy");
     await expect(
@@ -282,7 +284,7 @@ test.describe("Security groups @dashboard", () => {
         .fill(direction === "ingress" ? "172.30.0.0/24" : "0.0.0.0/0");
     }
     await page.getByRole("button", { name: "Save rules", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Rules saved.");
+    await expect(page.locator("#messages").getByRole("status")).toHaveText("Rules saved.");
     expect(state.ruleWrites[0]).toEqual({
       rules: [
         { ...RULE, portTo: 8082 },
@@ -389,7 +391,7 @@ test.describe("Security groups @dashboard", () => {
     await page
       .getByRole("button", { name: "Delete orders-policy", exact: true })
       .click();
-    await expect(page.getByText("No security groups yet.")).toBeVisible();
+    await expect(page.getByText("No security groups yet", { exact: true })).toBeVisible();
   });
 
   test("supports Korean and mobile rule editing without horizontal overflow", async ({
@@ -430,8 +432,7 @@ test.describe("Security groups @dashboard", () => {
     page,
   }, testInfo) => {
     const state = await setup(page, [POLICY], "#/services");
-    await page
-      .getByRole("button", { name: "New MicroService", exact: true })
+    await newServiceButton(page)
       .click();
     await page.getByLabel("Name", { exact: true }).fill("orders");
     await selectServiceApp(page, "ghcr.io/team/nginx:stable-alpine");
@@ -469,7 +470,7 @@ test.describe("Security groups @dashboard", () => {
       .getByLabel("Security group", { exact: true })
       .selectOption(GROUP);
     await saveService(page);
-    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await openDeployForm(page);
     await expect(page.getByLabel("Network", { exact: true })).toHaveValue(
       NETWORK,
     );
@@ -494,7 +495,7 @@ test.describe("Security groups @dashboard", () => {
     await page.getByLabel("Name", { exact: true }).fill("orders-v2");
     await serviceStep(page, 1);
     await expect(
-      page.getByRole("button", { name: "Continue", exact: true }),
+      page.getByRole("button", { name: "Next", exact: true }),
     ).toBeDisabled();
     state.failGroups = false;
     await page
@@ -521,7 +522,7 @@ test.describe("Security groups @dashboard", () => {
     page,
   }) => {
     const state = await setup(page, [], "#/services");
-    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await openDeployForm(page);
     await expect(page.getByRole("alert")).toContainText("Policy not found");
     await expect(
       page.getByRole("button", { name: "Deploy and run", exact: true }),

@@ -42,6 +42,8 @@ async function open(page: Page, loseFirstResponse = false) {
     };
   }
   await openDashboard(page, { routes, hash: "#/cluster", locale: "en" });
+  // Controller services are the third tab of the cluster screen.
+  await page.getByRole("tab", { name: /Controller services/ }).click();
   return writes;
 }
 
@@ -92,6 +94,7 @@ test("reload retries an unknown create result using the exact saved key and requ
   await expect(page.getByRole("button", { name: "Retry saved service request", exact: true })).toBeVisible();
   const first = structuredClone(writes[0]);
   await page.reload();
+  await page.getByRole("tab", { name: /Controller services/ }).click();
   await page.getByRole("button", { name: "Retry saved service request", exact: true }).click();
   await expect.poll(() => writes.length).toBe(2);
   expect(writes[1]).toEqual(first);

@@ -45,7 +45,7 @@ for (const os of ["macos", "windows"] as const) {
     await expect(page.getByText("Previous apply failed", { exact: true })).toHaveCount(0);
     await page.getByLabel("CPU").fill("4");
     await page.getByLabel("Memory (MiB)").fill("8192");
-    await page.getByLabel("Network mode", { exact: true }).selectOption(os === "macos" ? "bridged" : "mirrored");
+    await page.getByRole("radiogroup", { name: "Network mode", exact: true }).getByRole("radio", { name: os === "macos" ? "Bridged" : "Mirrored", exact: true }).check();
     if (os === "macos") await expect(page.getByLabel("Network interface")).toHaveValue("en0");
     else await expect(page.getByText("CPU, RAM, and networking affect every WSL2 distribution.", { exact: false })).toBeVisible();
     await page.getByRole("button", { name: "Save", exact: true }).click();

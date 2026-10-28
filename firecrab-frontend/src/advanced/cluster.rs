@@ -4,7 +4,9 @@ mod services;
 use crate::{
     App, Shared, api,
     model::{escape, list, text},
-    render::button,
+    render::{
+        Icon, active_subtab, button, empty_state, icon_button, name_cell, status_dot, subtabs,
+    },
     render_content, render_messages, window,
 };
 use serde_json::{Value, json};
@@ -94,43 +96,129 @@ fn options(items: &[Value], key: &str, label: &str, selected: &str) -> String {
         .collect()
 }
 
-pub fn content(app: &App) -> String {
-    let hosts = list(&app.resource);
-    let state = &app.advanced.cluster;
-    let mut out = String::from(
-        "<section class=\"cluster-screen\" aria-label=\"Cluster\"><h2>Workload hosts</h2><p>Drain prevents new placements. Existing VMs stay on their recorded host.</p>",
+/// "Ready", "Draining" or "Offline" as a status dot.
+fn host_status(host: &Value, ko: bool) -> String {
+    if host["online"] != true {
+        status_dot("error", if ko { "연결 끊김" } else { "Disconnected" })
+    } else if host["draining"] == true {
+        status_dot("busy", if ko { "비우는 중" } else { "Draining" })
+    } else {
+        status_dot("ok", if ko { "정상" } else { "Healthy" })
+    }
+}
+/// A bar and "used / total" for a reserved resource; amber from 80 %.
+fn reserved(used: f64, total: f64, label: String) -> String {
+    let percent = if total > 0.0 {
+        (used / total * 100.0).min(100.0)
+    } else {
+        0.0
+    };
+    format!(
+        "<div class=\"meter\"><span class=\"meter-bar\"{}><i style=\"width:{percent:.0}%\"></i></span><span class=\"meter-label\">{label}</span></div>",
+        if percent >= 80.0 {
+            " data-warn=\"true\""
+        } else {
+            ""
+        }
+    )
+}
+fn hosts_tab(app: &App, hosts: &[Value]) -> String {
+    let ko = app.locale == "ko";
+    if hosts.is_empty() {
+        return empty_state(
+            "cluster",
+            if ko {
+                "등록된 작업 호스트가 없습니다"
+            } else {
+                "No workload hosts registered"
+            },
+            if ko {
+                "다른 Mac이나 Linux 호스트를 이 컨트롤러에 등록하면 VM을 나눠 실행할 수 있습니다."
+            } else {
+                "Register another Mac or Linux host with this controller to spread VMs across hosts."
+            },
+            "",
+        );
+    }
+    let mut out = format!(
+        "<div class=\"table-scroll\"><table class=\"wasm-table cluster-hosts\" aria-label=\"{}\"><thead><tr><th>{}</th><th>{}</th><th class=\"col-secondary\">{}</th><th class=\"col-secondary\">{}</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
+        if ko {
+            "작업 호스트"
+        } else {
+            "Workload hosts"
+        },
+        if ko { "호스트" } else { "Host" },
+        if ko { "상태" } else { "Status" },
+        if ko { "CPU 예약" } else { "CPU reserved" },
+        if ko {
+            "메모리 예약"
+        } else {
+            "Memory reserved"
+        },
+        crate::i18n::t("Actions")
     );
-    out.push_str("<div class=\"wasm-cards cluster-hosts\">");
     for host in hosts {
         let report = &host["report"];
         let id = text(report, "id");
-        let status = if host["online"] != true {
-            "Offline"
-        } else if host["draining"] == true {
-            "Draining"
-        } else {
-            "Ready"
-        };
-        let label = if host["draining"] == true {
-            "Resume placement"
-        } else {
-            "Drain host"
-        };
-        let action = if host["draining"] == true {
-            "cluster-resume"
-        } else {
-            "cluster-drain"
-        };
-        out.push_str(&format!("<article class=\"wasm-card\" data-cluster-host=\"{}\"><h3>{}</h3><p>{status} · {}</p><p>Reserved CPU: {} / {} · Memory: {} / {} MiB</p>{}<details><summary>Host inventory</summary>{}</details></article>",
-            escape(id),escape(text(report,"name")),escape(id),host["reserved"]["cpu"],report["capacity"]["cpu"],
-            host["reserved"]["ramMib"],report["capacity"]["ramMib"],button(label,action,id),crate::render::properties(report)));
+        let draining = host["draining"] == true;
+        let (used_cpu, cpu) = (
+            host["reserved"]["cpu"].as_f64().unwrap_or(0.0),
+            report["capacity"]["cpu"].as_f64().unwrap_or(0.0),
+        );
+        let (used_ram, ram) = (
+            host["reserved"]["ramMib"].as_f64().unwrap_or(0.0),
+            report["capacity"]["ramMib"].as_f64().unwrap_or(0.0),
+        );
+        out.push_str(&format!(
+            "<tr data-cluster-host=\"{}\"><td>{}</td><td>{}</td><td class=\"col-secondary\">{}</td><td class=\"col-secondary\">{}</td><td class=\"row-actions\">{}</td></tr>",
+            escape(id),
+            name_cell(text(report, "name"), id, "", true),
+            host_status(host, ko),
+            reserved(used_cpu, cpu, format!("{used_cpu} / {cpu}")),
+            reserved(
+                used_ram,
+                ram,
+                format!("{} / {} GiB", crate::render::gib(used_ram as u64), crate::render::gib(ram as u64))
+            ),
+            if draining {
+                icon_button("Resume placement", "cluster-resume", id, Icon::Start)
+            } else {
+                icon_button("Drain host", "cluster-drain", id, Icon::Drain)
+            }
+        ));
     }
-    out.push_str("</div>");
-    if hosts.is_empty() {
-        out.push_str("<p class=\"empty-state\">No workload hosts registered. Configure worker enrollment with the controller's host UUID and HTTPS endpoint.</p>");
+    out.push_str("</tbody></table></div>");
+    out.push_str(&format!(
+        "<p class=\"cluster-note\">{}</p>",
+        if ko {
+            "드레인하면 새 배치를 받지 않습니다. 이미 있는 VM은 기록된 호스트에 남습니다."
+        } else {
+            "Drain prevents new placements. Existing VMs stay on their recorded host."
+        }
+    ));
+    for host in hosts {
+        out.push_str(&format!(
+            "<details class=\"cluster-inventory\"><summary>{} · {}</summary>{}</details>",
+            if ko { "호스트 정보" } else { "Host info" },
+            escape(text(&host["report"], "name")),
+            crate::render::properties(&host["report"])
+        ));
     }
-    out.push_str(&services::content(app));
-    out.push_str("<h2>Place a VM</h2>");
+    out
+}
+fn placements_tab(app: &App, hosts: &[Value], placements: &[Value]) -> String {
+    let ko = app.locale == "ko";
+    let state = &app.advanced.cluster;
+    let mut out = String::new();
+    out.push_str("<div class=\"cluster-place\">");
+    out.push_str(&format!(
+        "<h3 class=\"cluster-subhead\">{}</h3>",
+        if app.locale == "ko" {
+            "VM 배치"
+        } else {
+            "Place a VM"
+        }
+    ));
     if let Some(saved) = &state.pending {
         out.push_str(&format!("<article class=\"wasm-card\"><p>A saved request for <strong>{}</strong> has no acknowledged result. Retry to recover the same placement.</p>{}</article>",
             escape(text(&saved["spec"],"name")),button("Retry saved placement","cluster-place","")));
@@ -200,43 +288,132 @@ pub fn content(app: &App) -> String {
         out.push_str(&button("Place VM", "cluster-place", ""));
         out.push_str("</section>");
     }
-    out.push_str("<h2>VM placements</h2>");
+    out.push_str("</div>");
+    if placements.is_empty() {
+        out.push_str(&empty_state(
+            "cluster",
+            if ko {
+                "아직 VM 배치가 없습니다"
+            } else {
+                "No VM placements yet"
+            },
+            if ko {
+                "위 양식으로 VM을 호스트에 배치합니다."
+            } else {
+                "Place a VM on a host with the form above."
+            },
+            "",
+        ));
+        return out;
+    }
+    out.push_str(&format!(
+        "<div class=\"table-scroll\"><table class=\"wasm-table cluster-placements\" aria-label=\"{}\"><thead><tr><th>{}</th><th class=\"col-secondary\">{}</th><th>{}</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
+        if ko { "VM 배치" } else { "VM placements" },
+        "VM",
+        if ko { "호스트" } else { "Host" },
+        if ko { "상태" } else { "Status" },
+        crate::i18n::t("Actions")
+    ));
+    for placement in placements {
+        let id = text(placement, "id");
+        let phase = text(placement, "phase");
+        let owner = text(&placement["vm"], "hostId");
+        let host = hosts
+            .iter()
+            .find(|h| text(&h["report"], "id") == owner)
+            .map(|h| text(&h["report"], "name"))
+            .unwrap_or(owner);
+        let error = text(placement, "error");
+        let tone = match phase {
+            "confirmed" => "ok",
+            "rejected" => "error",
+            "deleted" => "off",
+            _ => "busy",
+        };
+        let mut actions = String::new();
+        if phase != "deleted" {
+            if phase == "confirmed" {
+                actions.push_str(&icon_button("Start", "cluster-start", id, Icon::Start));
+                actions.push_str(&icon_button("Stop", "cluster-stop", id, Icon::Stop));
+            }
+            if phase != "rejected" {
+                actions.push_str(&icon_button(
+                    "Reconcile",
+                    "cluster-reconcile",
+                    id,
+                    Icon::Retry,
+                ));
+            }
+            actions.push_str(&icon_button("Delete", "cluster-delete", id, Icon::Delete));
+        }
+        out.push_str(&format!(
+            "<tr data-cluster-placement=\"{}\"><td>{}</td><td class=\"col-secondary\">{}</td><td>{}</td><td class=\"row-actions\">{actions}</td></tr>",
+            escape(id),
+            name_cell(text(&placement["spec"], "name"), error, if error.is_empty() { "" } else { "error" }, false),
+            escape(host),
+            status_dot(tone, format!("{phase} {}", text(&placement["observed"], "state")).trim())
+        ));
+    }
+    out.push_str("</tbody></table></div>");
+    out
+}
+
+pub fn content(app: &App) -> String {
+    let ko = app.locale == "ko";
+    let hosts = list(&app.resource);
     let placements = app
         .cache
         .get("/api/cluster/placements")
         .map(list)
         .unwrap_or_default();
-    for placement in placements {
-        let id = text(placement, "id");
-        let phase = text(placement, "phase");
-        let owner = text(&placement["vm"], "hostId");
-        let name = hosts
-            .iter()
-            .find(|h| text(&h["report"], "id") == owner)
-            .map(|h| text(&h["report"], "name"))
-            .unwrap_or(owner);
-        out.push_str(&format!("<article class=\"wasm-card\" data-cluster-placement=\"{}\"><h3>{}</h3><p>{} · {}</p><p>Host: {} · VM: {}</p><p>{}</p>",
-            escape(id),escape(text(&placement["spec"],"name")),escape(phase),escape(text(&placement["observed"],"state")),escape(name),
-            escape(text(&placement["vm"],"resourceId")),escape(text(placement,"error"))));
-        if phase != "deleted" {
-            out.push_str("<div class=\"cluster-actions\">");
-            if phase == "confirmed" {
-                out.push_str(&button("Start", "cluster-start", id));
-                out.push_str(&button("Stop", "cluster-stop", id));
-            }
-            if phase != "rejected" {
-                out.push_str(&button("Reconcile", "cluster-reconcile", id));
-            }
-            out.push_str(&button("Delete", "cluster-delete", id));
-            out.push_str("</div>");
-        }
-        out.push_str("</article>");
-    }
-    if placements.is_empty() {
-        out.push_str("<p class=\"empty-state\">No VM placements yet.</p>");
-    }
-    out.push_str("</section>");
-    out
+    let services = app
+        .cache
+        .get("/api/cluster/services")
+        .map(list)
+        .unwrap_or_default();
+    let active = active_subtab(app, "cluster", "hosts");
+    let tabs = subtabs(
+        "cluster",
+        if ko {
+            "클러스터 구역"
+        } else {
+            "Cluster sections"
+        },
+        &[
+            (
+                "hosts",
+                if ko {
+                    "작업 호스트"
+                } else {
+                    "Workload hosts"
+                },
+                hosts.len(),
+            ),
+            (
+                "placements",
+                if ko { "VM 배치" } else { "VM placements" },
+                placements.len(),
+            ),
+            (
+                "services",
+                if ko {
+                    "컨트롤러 서비스"
+                } else {
+                    "Controller services"
+                },
+                services.len(),
+            ),
+        ],
+        active,
+    );
+    let body = match active {
+        "placements" => placements_tab(app, hosts, placements),
+        "services" => services::content(app),
+        _ => hosts_tab(app, hosts),
+    };
+    format!(
+        "<section class=\"cluster-screen\" aria-label=\"Cluster\">{tabs}<div role=\"tabpanel\" class=\"cluster-body\">{body}</div></section>"
+    )
 }
 
 pub fn restore(app: &Shared) {
@@ -456,21 +633,25 @@ mod tests {
     }
     #[test]
     fn hosts_show_health_reservations_and_host_local_resources_without_html_injection() {
-        let app = app();
+        let mut app = app();
         let html = content(&app);
         assert!(html.contains("&lt;host&gt;"));
         assert!(!html.contains("<host>"));
-        assert!(html.contains("Reserved CPU: 1 / 4"));
-        assert!(html.contains("Memory: 512 / 4096 MiB"));
+        assert!(html.contains("1 / 4"));
+        assert!(html.contains("0.5 / 4 GiB"));
+        assert!(html.contains("Drain host"));
+        // The form that places a VM is on the placements tab.
+        app.subtabs.insert("cluster".into(), "placements".into());
+        let html = content(&app);
         assert!(html.contains("private"));
         assert!(html.contains("default"));
-        assert!(html.contains("Drain host"));
     }
     #[test]
     fn an_unresolved_request_offers_the_same_retry_instead_of_another_new_placement() {
         let mut app = app();
         app.advanced.cluster.pending =
             Some(json!({"key":"retry-key","spec":{"name":"original-vm"}}));
+        app.subtabs.insert("cluster".into(), "placements".into());
         let html = content(&app);
         assert!(html.contains("Retry saved placement"));
         assert!(html.contains("original-vm"));
@@ -486,6 +667,7 @@ mod tests {
             );
             app.resource[0]["online"] = json!(online);
             app.resource[0]["draining"] = json!(draining);
+            app.subtabs.insert("cluster".into(), "placements".into());
             let html = content(&app);
             assert!(html.contains("disabled"));
             assert!(!html.contains("checked disabled"));
