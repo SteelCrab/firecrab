@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use super::{PersistenceError, Store};
 
+/// Tables for bounded app output and collection progress.
 pub(super) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS service_observation_logs (
  id INTEGER PRIMARY KEY AUTOINCREMENT, service_id TEXT NOT NULL, vm_id TEXT NOT NULL,
@@ -20,15 +21,22 @@ CREATE TABLE IF NOT EXISTS service_observation_cursors (
 ) STRICT;
 ";
 
+/// Maximum retained app output chunks per service.
 const MAX_LOGS: i64 = 2000;
+/// Retention interval for app output and collection state.
 const HISTORY_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+/// Maximum UTF-8 bytes retained for one app output chunk.
 const MAX_MESSAGE_BYTES: usize = 4096;
 
 /// A runtime's sequenced record, before it is committed to service history.
 pub(crate) struct InputLog {
+    /// Sequence assigned by the VM's log collector.
     pub sequence: u64,
+    /// Host collection time in Unix milliseconds.
     pub timestamp: i64,
+    /// App output stream, either stdout or stderr.
     pub stream: String,
+    /// Captured app output chunk.
     pub message: String,
 }
 
@@ -36,19 +44,26 @@ pub(crate) struct InputLog {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ServiceLog {
+    /// Database sequence used to page records.
     pub id: i64,
+    /// Collection time in RFC 3339 format.
     pub timestamp: String,
+    /// App output stream, either stdout or stderr.
     pub stream: String,
+    /// Captured app output chunk, limited in size.
     pub message: String,
+    /// VM identifier for the replica that produced the output.
     pub instance_id: String,
 }
 
+/// Convert Unix milliseconds into the API timestamp format.
 fn timestamp(millis: i64) -> String {
     chrono::DateTime::from_timestamp_millis(millis)
         .unwrap_or(chrono::DateTime::UNIX_EPOCH)
         .to_rfc3339()
 }
 
+/// Truncate a message at a UTF-8 boundary and report any truncation.
 fn bounded(message: &str) -> (String, bool) {
     if message.len() <= MAX_MESSAGE_BYTES {
         return (message.to_owned(), false);
@@ -61,6 +76,32 @@ fn bounded(message: &str) -> (String, bool) {
 }
 
 impl Store {
+    /// Remove expired history even when a service no longer emits records.
+    pub(crate) fn prune_service_observations(&self) -> Result<(), PersistenceError> {
+        self.prune_service_observations_at(chrono::Utc::now().timestamp_millis())
+    }
+
+    /// Prune history and cursors older than the retention interval.
+    fn prune_service_observations_at(&self, now: i64) -> Result<(), PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let cutoff = now.saturating_sub(HISTORY_MS);
+        tx.execute(
+            "DELETE FROM service_observation_logs WHERE timestamp_ms < ?1",
+            [cutoff],
+        )?;
+        tx.execute(
+            "DELETE FROM service_observation_cursors WHERE updated_at < ?1",
+            [cutoff],
+        )?;
+        tx.execute(
+            "DELETE FROM service_observation_events WHERE timestamp < ?1",
+            [now.div_euclid(1000).saturating_sub(HISTORY_MS / 1000)],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// A cursor is committed with its records and is scoped to this runtime.
     pub(crate) fn service_log_cursor(
         &self,
@@ -295,5 +336,48 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn inactive_service_history_is_deleted_without_new_records() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(&root.path().join("state.db")).unwrap();
+        let now = 2_000_000_000_000_i64;
+        let cutoff = now - HISTORY_MS;
+        let service = Uuid::new_v4().to_string();
+        {
+            let conn = store.lock();
+            for (vm, at) in [("old", cutoff - 1_000), ("new", cutoff + 1_000)] {
+                conn.execute("INSERT INTO service_observation_logs(service_id, vm_id, runtime_id, sequence, timestamp_ms, stream, message) VALUES (?1, ?2, 'runtime', 1, ?3, 'stdout', 'line')", params![service, vm, at]).unwrap();
+                conn.execute("INSERT INTO service_observation_cursors(service_id, vm_id, runtime_id, sequence, status, updated_at) VALUES (?1, ?2, 'runtime', 1, 'inactive', ?3)", params![service, vm, at]).unwrap();
+                conn.execute("INSERT INTO service_observation_events(service_id, timestamp, kind, severity, message) VALUES (?1, ?2, 'test', 'info', 'event')", params![service, at / 1000]).unwrap();
+            }
+        }
+        store.prune_service_observations_at(now).unwrap();
+        let conn = store.lock();
+        for table in [
+            "service_observation_logs",
+            "service_observation_events",
+            "service_observation_cursors",
+        ] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 1, "{table}");
+        }
+        let retained: String = conn
+            .query_row("SELECT vm_id FROM service_observation_logs", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(retained, "new");
+        let retained: String = conn
+            .query_row("SELECT vm_id FROM service_observation_cursors", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(retained, "new");
     }
 }

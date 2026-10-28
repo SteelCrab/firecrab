@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use super::{PersistenceError, Store};
 
+/// Tables for bounded service events and current alert states.
 pub(super) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS service_observation_events (
  id INTEGER PRIMARY KEY AUTOINCREMENT, service_id TEXT NOT NULL, timestamp INTEGER NOT NULL,
@@ -19,17 +20,24 @@ CREATE TABLE IF NOT EXISTS service_observation_alerts (
 ) STRICT;
 ";
 
+/// Maximum retained events per service.
 const HISTORY_LIMIT: i64 = 1000;
+/// Retention interval for event history.
 const HISTORY_SECONDS: i64 = 7 * 24 * 60 * 60;
 
 /// A bounded lifecycle or alert transition. Messages never contain error details or secrets.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Event {
+    /// Database sequence used to page events.
     pub id: i64,
+    /// Event time in RFC 3339 format.
     pub timestamp: String,
+    /// Stable event category.
     pub kind: String,
+    /// Severity assigned to the transition.
     pub severity: String,
+    /// Redacted description of the transition.
     pub message: String,
 }
 
@@ -37,18 +45,24 @@ pub(crate) struct Event {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Alert {
+    /// Time of the most recent alert transition.
     pub timestamp: String,
+    /// Stable alert category.
     pub kind: String,
+    /// Redacted description of the alert.
     pub message: String,
+    /// Whether the alert is currently active.
     pub active: bool,
 }
 
+/// Convert Unix seconds into the API timestamp format.
 fn timestamp(seconds: i64) -> String {
     chrono::DateTime::from_timestamp(seconds, 0)
         .unwrap_or(chrono::DateTime::UNIX_EPOCH)
         .to_rfc3339()
 }
 
+/// Return a short display name for a persisted Deploy phase.
 fn phase_name(phase: ServicePhase) -> &'static str {
     match phase {
         ServicePhase::SwitchingTraffic => "switching traffic",
@@ -68,6 +82,7 @@ fn phase_name(phase: ServicePhase) -> &'static str {
     }
 }
 
+/// Append one event and enforce its service retention limit.
 pub(super) fn event(
     conn: &Connection,
     service: Uuid,
@@ -88,6 +103,7 @@ pub(super) fn event(
     Ok(())
 }
 
+/// Record an alert only when its active state changes.
 fn alert(
     conn: &Connection,
     service: Uuid,

@@ -42,6 +42,7 @@ mod scheduler;
 mod secrets;
 mod server;
 mod service_log_collection;
+mod service_log_retention;
 mod service_observation;
 mod service_runtime;
 mod shells;

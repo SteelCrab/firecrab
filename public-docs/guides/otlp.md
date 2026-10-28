@@ -29,6 +29,8 @@ per service for seven days. The observation API returns the latest 200 of
 each. Output is stored in chunks, which need not be complete lines. During an
 API outage each VM keeps two files of up to 1 MiB each. Older buffered output
 can be lost when these files fill; the service view reports a gap.
+Expired history is pruned at startup and hourly. Expired shim log files are
+removed only when the runtime is verified as stopped; uncertain files are kept.
 
 The export queue holds at most 128 records per service. Each record is limited
 to 8,192 UTF-8 bytes, and each request contains at most 16 records. A full
@@ -44,7 +46,8 @@ in-flight exports and resets these counters. Status reports `queuePersistent`
 as `false` so this limitation is visible. Disabling or changing the endpoint
 drops pending exports. A request already transmitted may still reach the old
 collector. Local observation history has its own retention policy and is not
-replayed into this queue.
+replayed into this queue. The opt-in boundary uses the host clock; a large
+backward clock change can make the age of buffered output ambiguous.
 
 At the next guest boot, Firecrab adds these variables to the service process:
 

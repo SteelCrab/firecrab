@@ -25,11 +25,17 @@ use std::{
 };
 use uuid::Uuid;
 
+/// One service's exporter and in-memory history cursors.
 struct Session {
+    /// Validated collector base URL.
     endpoint: String,
+    /// Service name attached to exported records.
     name: String,
+    /// Bounded asynchronous OTLP worker.
     exporter: Exporter,
+    /// Last submitted event identifier.
     events: i64,
+    /// Last submitted app output identifier.
     logs: i64,
     /// Do not export buffered app output created before this opt-in.
     since_ms: Option<i64>,
@@ -38,7 +44,9 @@ struct Session {
 /// Live exporter state. Observation history remains in SQLite.
 #[derive(Default)]
 pub(crate) struct Runtime {
+    /// Active exporters indexed by service identifier.
     sessions: Mutex<HashMap<Uuid, Session>>,
+    /// Services whose exporter could not be started.
     failed: Mutex<HashSet<Uuid>>,
 }
 impl std::fmt::Debug for Runtime {
@@ -47,6 +55,7 @@ impl std::fmt::Debug for Runtime {
     }
 }
 impl Runtime {
+    /// Stop and discard the active exporter for a service.
     fn remove(&self, service: Uuid) {
         if let Some(old) = self
             .sessions
@@ -61,6 +70,7 @@ impl Runtime {
             .unwrap_or_else(|p| p.into_inner())
             .remove(&service);
     }
+    /// Replace the exporter after a new setting has been persisted.
     fn install(&self, service: Uuid, session: Session) {
         let old = self
             .sessions
@@ -75,6 +85,7 @@ impl Runtime {
             .unwrap_or_else(|p| p.into_inner())
             .remove(&service);
     }
+    /// Return redacted delivery status for the currently stored endpoint.
     fn view(&self, service: Uuid, endpoint: Option<String>) -> OtlpView {
         let sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
         let status = sessions
@@ -118,35 +129,54 @@ impl Runtime {
     }
 }
 
+/// Redacted endpoint and delivery counters returned to an operator.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OtlpView {
+    /// Current collector base URL, or none when disabled.
     endpoint: Option<String>,
+    /// Most recent exporter state.
     status: DeliveryState,
+    /// Whether queued records survive an API restart.
     queue_persistent: bool,
+    /// Records waiting for delivery.
     queued: u64,
+    /// Records in a delivery attempt.
     in_flight: u64,
+    /// Records acknowledged by the collector.
     delivered: u64,
+    /// Records dropped on overflow, shutdown or failure.
     dropped: u64,
+    /// Records rejected by the collector.
     rejected: u64,
+    /// Batches that exhausted retries or failed permanently.
     failed_batches: u64,
 }
+/// Operator view of one service's observations.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct View {
+    /// Recent isolated application output.
     logs: Vec<ServiceLog>,
+    /// App output collection status and any known gap.
     logs_status: String,
+    /// Recent lifecycle and health events.
     events: Vec<Event>,
+    /// Current state of actionable alerts.
     alerts: Vec<Alert>,
+    /// Redacted collector and delivery status.
     otlp: OtlpView,
 }
+/// Explicit collector setting supplied by an operator.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Settings {
+    /// Collector base URL; explicit null disables export.
     #[serde(deserialize_with = "required_endpoint")]
     endpoint: Option<String>,
 }
 
+/// Require the endpoint field even when the supplied value is null.
 fn required_endpoint<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -154,6 +184,7 @@ where
     Option::<String>::deserialize(deserializer)
 }
 
+/// Reject callers without verified operator privileges.
 fn operator(caller: Caller, request: Uuid) -> Result<(), AppError> {
     caller.operator().map_err(|_| {
         AppError::new(
@@ -165,6 +196,7 @@ fn operator(caller: Caller, request: Uuid) -> Result<(), AppError> {
     })
 }
 
+/// Reject services owned by a controller or managed across hosts.
 async fn ensure_local_service(
     state: &AppState,
     service: Uuid,
@@ -355,6 +387,7 @@ pub(crate) async fn configure(
     Ok(Json(response))
 }
 
+/// Parse an API timestamp into OTLP Unix nanoseconds.
 fn nanos(timestamp: &str) -> u64 {
     chrono::DateTime::parse_from_rfc3339(timestamp)
         .ok()
@@ -365,6 +398,8 @@ fn nanos(timestamp: &str) -> u64 {
 
 /// Start service-specific exporters before collecting buffered VM logs.
 pub(crate) fn start(state: AppState) {
+    crate::service_log_collection::start_retention(state.store.clone());
+    crate::service_log_retention::start(state.clone());
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -381,6 +416,7 @@ pub(crate) fn start(state: AppState) {
     });
 }
 
+/// Reconcile exporters and submit bounded pages of new service history.
 async fn export_pass(state: &AppState) -> Result<(), crate::persistence::PersistenceError> {
     let _claim = state.service_mutations.lock().await;
     let services = state.store.list_micro_services()?;

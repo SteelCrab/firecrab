@@ -8,12 +8,33 @@ use uuid::Uuid;
 
 use crate::artifacts::VmArtifactPaths;
 use crate::model::VmRecord;
+use crate::persistence::Store;
 use crate::persistence::service_logs::InputLog;
 use crate::state::AppState;
 use crate::vm_shim::app_log::{self, Status};
 
 const PAGE_SIZE: usize = 512;
 const PAGES_PER_PASS: usize = 32;
+
+/// Start retention independently of collection and export.
+pub(crate) fn start_retention(store: Store) {
+    tokio::spawn(retention_loop(store, std::time::Duration::from_secs(3600)));
+}
+
+async fn retention_loop(store: Store, period: std::time::Duration) {
+    let mut interval = tokio::time::interval(period);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        interval.tick().await;
+        let store = store.clone();
+        if !matches!(
+            tokio::task::spawn_blocking(move || store.prune_service_observations()).await,
+            Ok(Ok(()))
+        ) {
+            tracing::warn!("Could not prune service observation history");
+        }
+    }
+}
 
 fn status_name(status: Status) -> &'static str {
     match status {
@@ -169,4 +190,37 @@ pub(crate) async fn collect(state: &AppState) {
         }
     })
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn retention_runs_without_new_service_activity() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("state.db");
+        let store = Store::open(&path).unwrap();
+        let conn = rusqlite::Connection::open(path).unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let service = Uuid::new_v4().to_string();
+        let old = now - 8 * 24 * 60 * 60 * 1000;
+        {
+            conn.execute("INSERT INTO service_observation_logs(service_id, vm_id, runtime_id, sequence, timestamp_ms, stream, message) VALUES (?1, 'vm', 'runtime', 1, ?2, 'stdout', 'old')", rusqlite::params![service, old]).unwrap();
+            conn.execute("INSERT INTO service_observation_events(service_id, timestamp, kind, severity, message) VALUES (?1, ?2, 'test', 'info', 'old')", rusqlite::params![service, old / 1000]).unwrap();
+            conn.execute("INSERT INTO service_observation_cursors(service_id, vm_id, runtime_id, sequence, status, updated_at) VALUES (?1, 'vm', 'runtime', 1, 'inactive', ?2)", rusqlite::params![service, old]).unwrap();
+        }
+        let worker = tokio::spawn(retention_loop(
+            store.clone(),
+            std::time::Duration::from_millis(20),
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let remaining: i64 = conn.query_row("SELECT (SELECT COUNT(*) FROM service_observation_logs) + (SELECT COUNT(*) FROM service_observation_events) + (SELECT COUNT(*) FROM service_observation_cursors)", [], |row| row.get(0)).unwrap();
+                if remaining == 0 { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }).await.expect("retention worker did not remove expired rows");
+        worker.abort();
+    }
 }
