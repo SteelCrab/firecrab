@@ -458,7 +458,7 @@ fn service_overview(app: &App, data: &Value) -> String {
         // The log is a block under the line, shut until the icon opens it.
         let log = render::deployment_log(deployment);
         let open = crate::deploy::log_open(app) && !log.is_empty();
-        let toggle = if log.is_empty() {
+        let mut toggle = if log.is_empty() {
             String::new()
         } else {
             render::icon_toggle(
@@ -469,6 +469,10 @@ fn service_overview(app: &App, data: &Value) -> String {
                 render::Icon::Log,
             )
         };
+        // A queued deployment can be cancelled before it starts.
+        if deployment.is_some_and(crate::deploy::cancellable) {
+            toggle.insert_str(0, &crate::deploy::cancel_button(app));
+        }
         let log = if open {
             format!("<div id=\"service-log\">{log}</div>")
         } else {
@@ -974,7 +978,11 @@ pub fn tick(app: &Shared) {
         .form
         .as_ref()
         .is_some_and(|form| form.title == "Deploy MicroService");
-    if state.busy
+    let auto_editing = crate::document().active_element().is_some_and(|element| {
+        element.id().starts_with("deploy-auto-") || element.id().starts_with("deploy-ci-")
+    });
+    if auto_editing
+        || state.busy
         || state.form.is_some() && !deploy_form
         || !state.panel_open
         || !["vms", "services"].contains(&state.route.as_str())
@@ -1033,6 +1041,9 @@ pub fn tick(app: &Shared) {
             crate::advanced::services::sync(&app);
         } else {
             crate::render_detail(&app);
+        }
+        if service {
+            crate::deploy::refresh_automation(&app);
         }
         if logs {
             load_log(app);

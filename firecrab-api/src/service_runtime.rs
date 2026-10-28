@@ -24,8 +24,12 @@ use crate::oci::{self, ImageReference, ImageVersion, Sha256Digest};
 use crate::server::RequestId;
 use crate::state::AppState;
 
+pub(crate) mod auto_deploy;
 pub(crate) mod deploy;
 mod domain;
+mod internal;
+pub(crate) mod queue;
+pub(crate) mod recovery;
 pub(crate) mod secrets;
 
 /// Validate deployment settings, persist a queued snapshot and start background work.
@@ -79,7 +83,7 @@ async fn deploy_with_id(
     controller_credentials: bool,
 ) -> Result<(StatusCode, Json<MicroServiceDeployment>), AppError> {
     let request_id = RequestId(request_id);
-    let _claim = state.service_mutations.lock().await;
+    let claim = state.service_mutations.clone().lock_owned().await;
     crate::handlers::micro_services::ensure_stack_writer(&state, id, operation, request_id.0)
         .await?;
     ensure_editable(&state, id, request_id.0).await?;
@@ -99,7 +103,9 @@ async fn deploy_with_id(
         secrets::preflight(&state, &service.spec, request_id.0).await?;
     }
     domain::preflight(&state, id, &service.spec, request_id.0).await?;
+    internal::preflight(&state, id, &service.spec, request_id.0).await?;
     let deployment = MicroServiceDeployment {
+        recovery: None,
         started_at: chrono::Utc::now().timestamp(),
         finished_at: None,
         update: None,
@@ -109,20 +115,38 @@ async fn deploy_with_id(
         request,
         phase: ServicePhase::Queued,
         domain_route_owned: false,
+        internal_route_owned: false,
         digest: None,
         instances: vec![],
         log: vec!["Deployment queued".into()],
         error: None,
     };
-    save(&state, &deployment)
-        .await
-        .map_err(|_| AppError::internal(request_id.0))?;
-    let task_state = state.clone();
-    let task_deployment = deployment.clone();
-    tokio::spawn(async move {
-        run_deploy(task_state, task_deployment).await;
-    });
+    let deployment = submit_initial(state, deployment, claim, request_id.0).await?;
     Ok((StatusCode::ACCEPTED, Json(deployment)))
+}
+
+/// Acceptance and dispatch continue even if the HTTP waiter disappears during SQLite work.
+async fn submit_initial(
+    state: AppState,
+    deployment: MicroServiceDeployment,
+    claim: tokio::sync::OwnedMutexGuard<()>,
+    request: Uuid,
+) -> Result<MicroServiceDeployment, AppError> {
+    tokio::spawn(async move {
+        let _claim = claim;
+        let store = state.store.clone();
+        let record = deployment.clone();
+        database(request, move || store.save_service_deployment(&record)).await?;
+        state.service_deploy_changed.notify_waiters();
+        let task_state = state.clone();
+        let task_deployment = deployment.clone();
+        tokio::spawn(async move {
+            run_deploy(task_state, task_deployment).await;
+        });
+        Ok::<_, AppError>(deployment)
+    })
+    .await
+    .map_err(|_| AppError::internal(request))?
 }
 
 fn validate_database_bindings(
@@ -165,6 +189,7 @@ pub async fn check(
     crate::queues::placement(&state, &service.spec, &mut request, request_id.0)?;
     validate_placement(&state, &service.spec, &request, request_id.0).await?;
     domain::preflight(&state, id, &service.spec, request_id.0).await?;
+    internal::preflight(&state, id, &service.spec, request_id.0).await?;
     Ok(Json(()))
 }
 
@@ -186,6 +211,7 @@ async fn validate_placement(
         }
     }
     if spec.domain.is_none()
+        && request.host_port != 0
         && !fields.contains_key("hostPort")
         && let Some(conflict) =
             host_port_conflict(state, request, spec.replicas, request_id).await?
@@ -319,7 +345,8 @@ pub(crate) async fn stop_from_stack(
         update.transition = None;
         deployment.phase = ServicePhase::Stopping;
         deployment.finished_at = None;
-        let deployment = deploy::submit(state.clone(), deployment, claim, request_id.0).await?;
+        let deployment =
+            deploy::submit(state.clone(), deployment, claim, request_id.0, None).await?;
         return Ok((StatusCode::ACCEPTED, Json(deployment)));
     }
     deployment.phase = ServicePhase::Stopping;
@@ -360,6 +387,7 @@ pub(crate) async fn ensure_editable(
                 .is_some_and(|update| !update.completed)
             || !deployment.instances.is_empty()
             || deployment.domain_route_owned
+            || deployment.internal_route_owned
         {
             return Err(AppError::conflict(
                 "service_in_use",
@@ -405,14 +433,16 @@ pub(crate) fn deployment_fields(
     let mut fields = BTreeMap::new();
     let end = u32::from(request.host_port) + u32::from(spec.replicas) - 1;
     if spec.domain.is_none()
+        && request.host_port != 0
         && (request.host_port < 1024
             || end > 65535
             || (u32::from(request.host_port)..=end).contains(&5523)
+            || (u32::from(request.host_port)..=end).contains(&5525)
             || (u32::from(request.host_port)..=end).contains(&u32::from(api_port)))
     {
         fields.insert(
             "hostPort".into(),
-            "replicas need consecutive host ports from 1024 to 65535; port 5523 is reserved".into(),
+            "replicas need consecutive host ports from 1024 to 65535; ports 5523 and 5525 are reserved".into(),
         );
     }
     fields
@@ -426,7 +456,11 @@ async fn save(state: &AppState, deployment: &MicroServiceDeployment) -> Result<(
         store.save_service_deployment(&record)
     })
     .await
-    .map_err(|_| "Could not save deployment state".to_owned())
+    .map_err(|_| "Could not save deployment state".to_owned())?;
+    if deployment.phase == ServicePhase::Queued || !deployment.phase.is_busy() {
+        state.service_deploy_changed.notify_waiters();
+    }
+    Ok(())
 }
 
 /// Record a phase transition and progress message, retaining the latest 128 entries.
@@ -452,8 +486,8 @@ async fn phase(
 }
 
 /// Run under the deployment permit and clean up owned VMs if deployment fails.
-async fn run_deploy(state: AppState, mut deployment: MicroServiceDeployment) {
-    let Ok(_permit) = state.service_deploy_permits.acquire().await else {
+async fn run_deploy(state: AppState, deployment: MicroServiceDeployment) {
+    let Some((_permit, mut deployment)) = queue::admit(&state, &deployment).await else {
         return;
     };
     let result = async {
@@ -498,6 +532,7 @@ async fn execute(
     secrets::capture(state, deployment).await?;
     check_capacity(state, &deployment.spec).await?;
     if deployment.spec.domain.is_none()
+        && deployment.request.host_port != 0
         && let Some(conflict) = host_port_conflict(
             state,
             &deployment.request,
@@ -620,7 +655,7 @@ async fn execute(
             ),
         )
         .await?;
-        let host_port = if deployment.spec.domain.is_some() {
+        let host_port = if deployment.spec.domain.is_some() || deployment.request.host_port == 0 {
             0
         } else {
             deployment.request.host_port + index
@@ -729,6 +764,7 @@ async fn execute(
         save(state, deployment).await?;
     }
     domain::publish(state, deployment).await?;
+    internal::publish(state, deployment).await?;
     phase(
         state,
         deployment,
@@ -888,8 +924,10 @@ async fn refresh_instances(state: &AppState, deployment: &mut MicroServiceDeploy
 /// Retain unremoved identifiers if cleanup fails so a later Stop can retry.
 async fn cleanup(state: &AppState, deployment: &mut MicroServiceDeployment) -> Result<(), String> {
     domain::withdraw(state, deployment).await?;
+    let internal_was_owned = deployment.internal_route_owned;
+    internal::withdraw(state, deployment).await?;
     if deployment.phase == ServicePhase::Stopping && deployment.spec.drain_timeout > 0 {
-        let mut draining = false;
+        let mut draining = internal_was_owned;
         for instance in &deployment.instances {
             let running = state
                 .vms
@@ -954,6 +992,7 @@ async fn cleanup(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
         save(state, deployment).await?;
     }
     secrets::remove(state, deployment).await?;
+    deployment.recovery = None;
     Ok(())
 }
 
@@ -983,6 +1022,14 @@ pub(crate) async fn recover(state: &AppState) {
             }
             continue;
         }
+        if recovery::pending(&deployment) && deployment.phase.is_busy() {
+            resumable.push(deployment);
+            continue;
+        }
+        if crate::persistence::deploy_queue::cancellable(&deployment) {
+            resumable.push(deployment);
+            continue;
+        }
         if deployment.phase.is_busy() {
             deployment.phase = ServicePhase::Failed;
             deployment.error = Some(
@@ -1000,8 +1047,36 @@ pub(crate) async fn recover(state: &AppState) {
             deployment.id,
         )
     });
+    // Restore every priority/ordinal before dispatch: task polling order is not admission order.
+    for deployment in &resumable {
+        let store = state.store.clone();
+        let saved = deployment.clone();
+        if database(saved.id, move || {
+            store.enqueue_service_deployment(&saved, true)
+        })
+        .await
+        .is_err()
+        {
+            tracing::error!(service_id = %deployment.service_id, "Could not restore Deploy queue");
+            return;
+        }
+    }
     for deployment in resumable {
-        deploy::resume_worker(state.clone(), deployment);
+        if recovery::pending(&deployment)
+            && deployment
+                .update
+                .as_ref()
+                .is_none_or(|update| update.completed)
+        {
+            recovery::resume(state.clone(), deployment);
+        } else if deployment.update.is_some() {
+            deploy::resume_worker(state.clone(), deployment);
+        } else {
+            let task_state = state.clone();
+            tokio::spawn(async move {
+                run_deploy(task_state, deployment).await;
+            });
+        }
     }
 }
 

@@ -58,8 +58,10 @@ pub(super) fn migrate_history(conn: &rusqlite::Connection) -> Result<(), Persist
                 .is_none_or(|update| update.completed)
         {
             deployment.instances.clear();
+            deployment.recovery = None;
             deployment.update = None;
             deployment.domain_route_owned = false;
+            deployment.internal_route_owned = false;
             let text = serde_json::to_string(&deployment).map_err(|error| {
                 PersistenceError::CorruptRecord {
                     id: id.clone(),
@@ -148,28 +150,36 @@ impl Store {
         service: &MicroServiceResponse,
     ) -> Result<(), PersistenceError> {
         let spec = encode(service)?;
-        self.lock()
-            .execute(
-                "INSERT INTO micro_services (id, name, spec) VALUES (?1, ?2, ?3)",
-                params![service.id.to_string(), service.spec.name, spec],
-            )
-            .map_err(|error| write_error(error, &service.spec.name))?;
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO micro_services (id, name, spec) VALUES (?1, ?2, ?3)",
+            params![service.id.to_string(), service.spec.name, spec],
+        )
+        .map_err(|error| write_error(error, &service.spec.name))?;
+        super::auto_deploy::configuration(&tx, service)?;
+        tx.commit()?;
         Ok(())
     }
 
-    /// A single statement replaces all fields, so a failed edit leaves the old spec intact.
+    /// Commit configuration and policy together; a failed edit leaves both unchanged.
     pub fn update_micro_service(
         &self,
         service: &MicroServiceResponse,
     ) -> Result<bool, PersistenceError> {
         let spec = encode(service)?;
-        let changed = self
-            .lock()
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let changed = tx
             .execute(
                 "UPDATE micro_services SET name = ?2, spec = ?3 WHERE id = ?1",
                 params![service.id.to_string(), service.spec.name, spec],
             )
             .map_err(|error| write_error(error, &service.spec.name))?;
+        if changed != 0 {
+            super::auto_deploy::configuration(&tx, service)?;
+        }
+        tx.commit()?;
         Ok(changed != 0)
     }
 
@@ -178,6 +188,10 @@ impl Store {
     pub fn delete_micro_service(&self, id: Uuid) -> Result<bool, PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM service_deploy_queue WHERE service_id = ?1",
+            [id.to_string()],
+        )?;
         tx.execute(
             "DELETE FROM micro_service_attempts WHERE service_id = ?1",
             [id.to_string()],
@@ -188,6 +202,18 @@ impl Store {
         )?;
         tx.execute(
             "DELETE FROM micro_service_deployments WHERE service_id = ?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM service_tag_watches WHERE service_id=?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM service_deploy_tokens WHERE service_id=?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM service_ci_requests WHERE service_id=?1",
             [id.to_string()],
         )?;
         let changed = tx.execute("DELETE FROM micro_services WHERE id = ?1", [id.to_string()])?;
@@ -222,6 +248,24 @@ impl Store {
         &self,
         deployment: &MicroServiceDeployment,
     ) -> Result<(), PersistenceError> {
+        self.save_deployment_with_ci(deployment, None)
+    }
+
+    /// Commit CI authorization/identity and queue intent as one transaction.
+    pub(crate) fn save_ci_deployment(
+        &self,
+        deployment: &MicroServiceDeployment,
+        admission: &super::ci_deploy::Admission,
+    ) -> Result<(), PersistenceError> {
+        self.save_deployment_with_ci(deployment, Some(admission))
+    }
+
+    /// Ordinary worker snapshots do not re-authorize an already accepted CI credential.
+    fn save_deployment_with_ci(
+        &self,
+        deployment: &MicroServiceDeployment,
+        admission: Option<&super::ci_deploy::Admission>,
+    ) -> Result<(), PersistenceError> {
         let text =
             serde_json::to_string(deployment).map_err(|error| PersistenceError::CorruptRecord {
                 id: deployment.id.to_string(),
@@ -229,6 +273,9 @@ impl Store {
             })?;
         let mut conn = self.lock();
         let tx = conn.transaction()?;
+        if let Some(admission) = admission {
+            super::ci_deploy::admit(&tx, deployment, admission)?;
+        }
         tx.execute(
             "INSERT INTO micro_service_deployments (service_id, deployment) VALUES (?1, ?2)
              ON CONFLICT(service_id) DO UPDATE SET deployment = excluded.deployment",
@@ -243,6 +290,9 @@ impl Store {
                 text
             ],
         )?;
+        super::deploy_queue::save(&tx, deployment)?;
+        super::auto_deploy::deployment(&tx, deployment)?;
+        super::ci_deploy::observe(&tx, deployment)?;
         if deployment.phase == firecrab_api_types::ServicePhase::Running
             && deployment.digest.is_some()
             && deployment
@@ -251,10 +301,12 @@ impl Store {
                 .is_none_or(|update| update.completed)
         {
             let mut release = deployment.clone();
+            release.recovery = None;
             release.update = None;
             // Releases describe reproducible inputs, not ownership of retired VMs.
             release.instances.clear();
             release.domain_route_owned = false;
+            release.internal_route_owned = false;
             let release = serde_json::to_string(&release).map_err(|error| {
                 PersistenceError::CorruptRecord {
                     id: deployment.id.to_string(),
@@ -265,7 +317,8 @@ impl Store {
                 "INSERT OR IGNORE INTO micro_service_releases (id, service_id, deployment) VALUES (?1, ?2, ?3)",
                 params![deployment.id.to_string(), deployment.service_id.to_string(), release],
             )?;
-            if deployment.update.is_some() {
+            // Health maintenance keeps the running release, not a new desired configuration.
+            if deployment.update.is_some() && deployment.recovery.is_none() {
                 let service = MicroServiceResponse {
                     id: deployment.service_id,
                     spec: deployment.spec.clone(),
@@ -300,6 +353,10 @@ impl Store {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         tx.execute(
+            "DELETE FROM service_deploy_queue WHERE operation_id = ?1",
+            [failed.id.to_string()],
+        )?;
+        tx.execute(
             "UPDATE micro_service_attempts SET deployment = ?2 WHERE id = ?1",
             params![failed.id.to_string(), failed_text],
         )?;
@@ -319,6 +376,8 @@ impl Store {
             "UPDATE micro_services SET name = ?2, spec = ?3 WHERE id = ?1",
             params![service.id.to_string(), service.spec.name, encode(&service)?],
         )?;
+        super::auto_deploy::deployment(&tx, failed)?;
+        super::ci_deploy::observe(&tx, failed)?;
         tx.commit()?;
         Ok(())
     }

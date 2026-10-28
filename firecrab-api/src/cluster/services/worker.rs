@@ -156,7 +156,10 @@ async fn observe(state: &AppState, receipt: &mut ServiceWorkerReceipt) -> Result
     }
     if receipt.intent.desired == ClusterServiceDesired::Stopped
         && receipt.deployment.as_ref().is_none_or(|d| {
-            d.phase == ServicePhase::Stopped && d.instances.is_empty() && !d.domain_route_owned
+            d.phase == ServicePhase::Stopped
+                && d.instances.is_empty()
+                && !d.domain_route_owned
+                && !d.internal_route_owned
         })
     {
         credentials::remove_stopped(state, receipt).await?;
@@ -206,6 +209,7 @@ async fn apply(
         if deployment.phase != ServicePhase::Stopped
             || !deployment.instances.is_empty()
             || deployment.domain_route_owned
+            || deployment.internal_route_owned
         {
             let _ =
                 crate::service_runtime::stop_from_stack(state.clone(), request.0, id, None).await?;

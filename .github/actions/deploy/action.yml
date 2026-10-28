@@ -1,0 +1,45 @@
+name: Deploy
+description: Deploy a pinned image to one Firecrab service and wait for its exact outcome.
+inputs:
+  service-url:
+    description: HTTPS service URL ending in /__firecrab/deploy.
+    required: true
+  token:
+    description: Service Deploy token stored in an Actions secret.
+    required: true
+  image:
+    description: Exact repository image pinned with @sha256.
+    required: true
+  operation-id:
+    description: Optional UUID reused after a lost response. Defaults to a stable run/job/step identity.
+  expected-release:
+    description: Optional active release UUID to compare before acceptance.
+  strategy:
+    description: rolling or blue_green.
+    default: rolling
+  timeout:
+    description: Total wait deadline in seconds. Timeout does not cancel accepted work.
+    default: '1800'
+outputs:
+  operation-id:
+    description: Exact Deploy operation UUID.
+    value: ${{ steps.deploy.outputs.operation-id }}
+  digest:
+    description: Verified host-platform image digest after a successful deployment.
+    value: ${{ steps.deploy.outputs.digest }}
+runs:
+  using: composite
+  steps:
+    - id: deploy
+      shell: bash
+      run: python3 "$CI_DEPLOY_ACTION_PATH/deploy.py"
+      env:
+        CI_DEPLOY_ACTION_PATH: ${{ github.action_path }}
+        CI_DEPLOY_URL: ${{ inputs.service-url }}
+        CI_DEPLOY_TOKEN: ${{ inputs.token }}
+        CI_DEPLOY_IMAGE: ${{ inputs.image }}
+        CI_DEPLOY_OPERATION: ${{ inputs.operation-id }}
+        CI_DEPLOY_EXPECTED: ${{ inputs.expected-release }}
+        CI_DEPLOY_STRATEGY: ${{ inputs.strategy }}
+        CI_DEPLOY_TIMEOUT: ${{ inputs.timeout }}
+        CI_DEPLOY_RUN_KEY: ${{ github.run_id }}/${{ github.job }}/${{ github.action }}

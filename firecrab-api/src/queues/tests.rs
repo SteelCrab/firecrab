@@ -187,6 +187,7 @@ async fn binding_credentials_are_private_role_scoped_and_references_cannot_be_de
     state
         .store
         .save_service_deployment(&MicroServiceDeployment {
+            recovery: None,
             started_at: 0,
             finished_at: None,
             update: None,
@@ -208,6 +209,7 @@ async fn binding_credentials_are_private_role_scoped_and_references_cannot_be_de
             }],
             log: vec![],
             domain_route_owned: false,
+            internal_route_owned: false,
             error: None,
         })
         .unwrap();

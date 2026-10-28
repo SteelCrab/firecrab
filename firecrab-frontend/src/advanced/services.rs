@@ -446,6 +446,8 @@ pub fn owns_resources(deployment: &Value) -> bool {
     !list(&deployment["instances"]).is_empty()
         || !list(&deployment["update"]["previous"]["instances"]).is_empty()
         || deployment["domainRouteOwned"] == true
+        || deployment["internalRouteOwned"] == true
+        || deployment["update"]["previous"]["internalRouteOwned"] == true
         || crate::deploy::busy(deployment)
 }
 
@@ -1098,7 +1100,7 @@ fn port_error(form: &Form, body: &Value) -> Option<String> {
     if text(&form.base, "domain").is_empty() {
         let p = body["hostPort"].as_u64().unwrap_or(0);
         let max = 65536 - form.base["replicas"].as_u64().unwrap_or(1);
-        if p < 1024 || p > max {
+        if p != 0 && (p < 1024 || p > max) {
             return Some(format!(
                 "Choose a first host port from 1024 to {max}. All replicas need consecutive ports."
             ));
@@ -1452,7 +1454,7 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
             let form = s.form.as_ref().unwrap();
             let body = request_body(form);
             let detail = s.detail.as_ref().unwrap();
-            let draft = json!({"serviceId":detail["id"],"serviceName":detail["name"],"image":detail["image"],"microNetworkId":body["microNetworkId"].as_str().unwrap_or(""),"hostPort":body["hostPort"].as_u64().unwrap_or(30100)});
+            let draft = json!({"serviceId":detail["id"],"serviceName":detail["name"],"image":detail["image"],"microNetworkId":body["microNetworkId"].as_str().unwrap_or(""),"hostPort":body["hostPort"].as_u64().unwrap_or(0)});
             drop(s);
             app.borrow_mut().dirty = false;
             save_draft(&draft);

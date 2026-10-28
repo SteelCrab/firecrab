@@ -634,6 +634,25 @@ async function save(page: Page) {
   await page.getByRole("button", { name: "Save", exact: true }).click();
 }
 test.describe("Pipe cards @dashboard", () => {
+  test("excludes private service routes from public connector targets", async ({ page }) => {
+    const savedRoutes: PipeConfig["routes"] = [...initial.config.routes, {
+      host: "orders.internal", pathPrefix: "/", upstreams: ["172.30.36.4:8080"],
+      owner: { serviceId: QUICK_ID, deploymentId: SECOND_QUICK_ID },
+      network: { micro_network_id: QUICK_ID, gateway: "172.30.36.1", prefix: 24 },
+    }];
+    await open(page, { savedRoutes, card: "firecrab-tunnel" });
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
+    await expect(page.getByLabel("Route host", { exact: true }).locator('option[value="orders.internal"]')).toHaveCount(0);
+    await expect(page.getByLabel("Route host", { exact: true }).locator('option[value="app.example.com"]')).toHaveCount(1);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.goto("/#/pipe/quick-tunnel");
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
+    await expect(page.getByLabel("Route host", { exact: true }).locator('option[value="orders.internal"]')).toHaveCount(0);
+  });
+
+
   test("opens all nine destinations from their cards", async ({ page }) => {
     await open(page, { card: null });
     const cards = [

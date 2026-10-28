@@ -147,6 +147,8 @@ pub fn prepare_form(app: &Shared) {
         let routes = json!(
             list(&state.resource["config"]["routes"])
                 .iter()
+                .filter(|route| route["network"].is_null()
+                    && !text(route, "host").ends_with(".internal"))
                 .map(|route| json!({"id":route["host"],"name":route["host"]}))
                 .collect::<Vec<_>>()
         );
@@ -789,6 +791,7 @@ fn select_zone(app: &Shared) {
         .unwrap_or("");
     let hosts: Vec<String> = list(&state.resource["config"]["routes"])
         .iter()
+        .filter(|route| route["network"].is_null() && !text(route, "host").ends_with(".internal"))
         .map(|route| text(route, "host"))
         .filter(|host| !name.is_empty() && (*host == name || host.ends_with(&format!(".{name}"))))
         .map(str::to_owned)

@@ -9,12 +9,15 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 async fn app(root: &std::path::Path) -> (AppState, Router) {
+    let socket = root.join(format!("ingress-{}.sock", Uuid::new_v4()));
+    let _ = crate::network::test_support::spawn_recording_helper(&socket, None);
     let state = AppState::with_db_file(
         TemplateRegistry::from_specs(root, std::iter::empty()).unwrap(),
         root.join("state.db"),
     )
     .await
-    .unwrap();
+    .unwrap()
+    .with_test_network(crate::network::NetworkClient::with_socket_path(socket));
     state
         .store
         .put_pipe_auth(&crate::pipe_auth::SavedAuth::Github {
@@ -446,6 +449,7 @@ async fn service_ownership_blocks_rules_and_replica_attachment_edits_until_clean
     assert_eq!(status, StatusCode::CREATED);
     let id = Uuid::parse_str(service["id"].as_str().unwrap()).unwrap();
     let mut deployment = MicroServiceDeployment {
+        recovery: None,
         started_at: 0,
         finished_at: None,
         update: None,
@@ -468,6 +472,7 @@ async fn service_ownership_blocks_rules_and_replica_attachment_edits_until_clean
         log: vec![],
         error: None,
         domain_route_owned: false,
+        internal_route_owned: false,
     };
     state.store.save_service_deployment(&deployment).unwrap();
     let rules = format!("/api/security-groups/{group}/rules");

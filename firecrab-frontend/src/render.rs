@@ -16,6 +16,10 @@ pub fn button(label: &str, action: &str, id: &str) -> String {
 }
 
 pub enum Icon {
+    Key,
+    Save,
+    Play,
+    Refresh,
     Add,
     Reveal,
     Hide,
@@ -46,7 +50,15 @@ pub enum Icon {
 impl Icon {
     pub fn svg(&self) -> String {
         let path = match self {
+            Self::Key => {
+                "M21 2l-2 2m-7.6 7.6a5.5 5.5 0 1 1-7.8 7.8 5.5 5.5 0 0 1 7.8-7.8ZM11.4 11.6 19 4m-3 3 3 3 3-3-3-3"
+            }
+            Self::Save => {
+                "M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12l4 4v12a2 2 0 0 1-2 2ZM7 3v6h10V3M7 21v-8h10v8"
+            }
+            Self::Play => "m8 5 12 7-12 7Z",
             Self::Add => "M12 5v14M5 12h14",
+            Self::Refresh => "M20 7v5h-5M4 17v-5h5m-5 0a8 8 0 0 1 14-6l2 2M4 16l2 2a8 8 0 0 0 14-6",
             Self::Reveal => {
                 "M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12Zm13 0a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
             }
@@ -1448,6 +1460,7 @@ pub fn phase_label(phase: &str) -> String {
         "stopping" => "Stopping service",
         "stopped" => "Stopped",
         "failed" => "Deployment failed",
+        "cancelled" => "Cancelled",
         other => {
             let mut words = other.replace('_', " ");
             if let Some(first) = words.chars().next() {
@@ -1558,6 +1571,9 @@ pub fn deployment_summary(value: Option<&Value>) -> String {
             "<div class=\"service-progress\" role=\"progressbar\" aria-label=\"{}\" aria-valuemin=\"0\" aria-valuenow=\"{ready}\" aria-valuemax=\"{replicas}\">{cells}</div>",
             crate::i18n::t("Healthy replicas")
         );
+    }
+    if value["internalRouteOwned"] == true && ["running", "degraded"].contains(&phase) {
+        out.push_str(&format!("<p><code>http://{}.internal</code></p><p>Available to apps in the same MicroNetwork.</p>", escape(text(&value["spec"], "name"))));
     }
     if value["domainRouteOwned"] == true
         && ["running", "degraded"].contains(&phase)
@@ -3837,7 +3853,7 @@ mod service_list_tests {
 
     /// Every phase the API type `ServicePhase` has, with its English and Korean label.
     const PHASES: [(&str, &str, &str); 13] = [
-        ("queued", "Queued", "대기 중"),
+        ("queued", "Queued", "대기"),
         ("importing", "Preparing image", "이미지 준비 중"),
         ("starting", "Starting replicas", "복제본 시작 중"),
         ("checking_health", "Checking health", "상태 확인 중"),

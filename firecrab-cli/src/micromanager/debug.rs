@@ -376,6 +376,7 @@ fn redact(text: &str) -> String {
                 || [
                     "authorization:",
                     "bearer ",
+                    "fcd_",
                     "password=",
                     "passwd=",
                     "token=",
@@ -428,10 +429,10 @@ mod tests {
 
     #[test]
     fn redaction_hides_credentials_and_private_key_blocks() {
-        let text = "before\ntoken=abc\n-----BEGIN OPENSSH PRIVATE KEY-----\nsecret material\n-----END OPENSSH PRIVATE KEY-----\nafter";
+        let text = "before\ntoken=abc\nfcd_fixture_credential\n-----BEGIN OPENSSH PRIVATE KEY-----\nsecret material\n-----END OPENSSH PRIVATE KEY-----\nafter";
         assert_eq!(
             redact(text),
-            "before\n[REDACTED]\n[REDACTED]\n[REDACTED]\n[REDACTED]\nafter"
+            "before\n[REDACTED]\n[REDACTED]\n[REDACTED]\n[REDACTED]\n[REDACTED]\nafter"
         );
     }
 

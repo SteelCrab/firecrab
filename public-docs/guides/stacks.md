@@ -84,6 +84,11 @@ Boolean fields require `true` or `false`.
 There is no environment interpolation or file inclusion.
 YAML anchors, aliases, and merge keys are rejected.
 
+Domain services use `hostPort: 0` and an Nginx-backed `config.domain`.
+They can declare [automatic registry Deploy](deploy.md#automatic-registry-deploy)
+under `config.autoDeploy`. Keep `config.image` digest-pinned for initial deployment.
+A later apply preserves the running automatic image and reconciles other settings.
+
 ## Local constraints
 
 - IPv4 prefixes must be /16 through /28; declared ranges must not overlap.
@@ -95,7 +100,7 @@ YAML anchors, aliases, and merge keys are rejected.
 - Service images must have an `@sha256:` suffix with 64 hexadecimal digits.
 - Services allow 1-100 replicas; each consecutive host TCP port must fit in 1-65535.
 - Host port ranges must not overlap between declared services.
-- Domain routing and nonempty secret references fail validation because the current host-port deployment does not support them.
+- Domain services require zero host port. Secret references use existing PipeSecrets IDs; inline Secret values are not supported.
 
 Keep credentials out of `env` and Git.
 Use `env` only for non-secret settings.

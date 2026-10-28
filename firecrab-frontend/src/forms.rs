@@ -154,7 +154,7 @@ impl Form {
 
         if self.title == "Deploy MicroService" {
             html.push_str("<p class=\"wasm-wide\">Secret values are injected into every replica. Changes apply on the next deployment.</p>");
-            html.push_str(&format!("<p class=\"wasm-wide\">Each replica uses one host port, starting at 30100. App port: {}.</p>", self.base["port"].as_u64().unwrap_or(8080)));
+            html.push_str(&format!("<p class=\"wasm-wide\">Leave the host port empty for internal access. App port: {}.</p>", self.base["port"].as_u64().unwrap_or(8080)));
         }
         let domain_deploy =
             self.title == "Deploy MicroService" && !text(&self.base, "domain").is_empty();
@@ -611,7 +611,7 @@ impl Form {
                 if kind == "number" {
                     if field.key == "hostPort" && self.title == "Deploy MicroService" {
                         format!(
-                            "min=\"1\" max=\"{}\" step=\"1\"",
+                            "min=\"0\" max=\"{}\" step=\"1\"",
                             65536_u64.saturating_sub(self.base["replicas"].as_u64().unwrap_or(1))
                         )
                     } else {
@@ -674,6 +674,11 @@ impl Form {
                 } else {
                     "This field is required.".into()
                 })
+            } else if field.key == "hostPort"
+                && self.title == "Deploy MicroService"
+                && value.trim().is_empty()
+            {
+                None
             } else {
                 match field.kind {
                     "number" => match value.parse::<u32>() {
@@ -682,6 +687,9 @@ impl Form {
                                 "cpu" => (1..=32).contains(&number),
                                 "ram" => [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
                                     .contains(&number),
+                                "hostPort" if self.title == "Deploy MicroService" => {
+                                    number <= 65535
+                                }
                                 "hostPort" | "port" => (1..=65535).contains(&number),
                                 "replicas" => (1..=100).contains(&number),
                                 "sizeGib" => (1..=65535).contains(&number),
@@ -750,6 +758,13 @@ impl Form {
                 return Err(format!("{} is required.", field.label));
             }
             body[field.key] = match field.kind {
+                "number"
+                    if field.key == "hostPort"
+                        && self.title == "Deploy MicroService"
+                        && value.trim().is_empty() =>
+                {
+                    json!(0)
+                }
                 "number" => json!(
                     value
                         .parse::<u32>()
@@ -811,6 +826,9 @@ impl Form {
                 Ok(body)
             }
             "New MicroService" | "Edit MicroService" | "Deploy update" => {
+                if let Some(policy) = self.base.get("autoDeploy") {
+                    body["autoDeploy"] = policy.clone();
+                }
                 if body["queues"].as_object().is_some_and(|q| q.is_empty()) {
                     body.as_object_mut().unwrap().remove("queues");
                 }
@@ -1160,7 +1178,7 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
                 format!("/api/micro-services{suffix}/deployment"),
                 "POST",
                 vec![
-                    Field::new("hostPort", "First host port", "number", 30100),
+                    Field::new("hostPort", "First host port", "number", 30100).optional(),
                     Field::new("microNetworkId", "Network", "nullable-select", "").optional(),
                 ],
                 "services",
@@ -1493,6 +1511,7 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
                         "routes",
                         list(&data["routes"])
                             .iter()
+                            .filter(|route| route["owner"].is_null())
                             .map(|r| {
                                 format!(
                                     "{} | {} | {}",
@@ -2694,6 +2713,26 @@ mod tests {
         let deploy = resource_form("service-deploy", &Value::Null, "service-1").unwrap();
         let _: DeployMicroServiceRequest =
             serde_json::from_value(deploy.payload(&values(&deploy)).unwrap()).unwrap();
+        let mut private = values(&deploy);
+        private.insert("hostPort".into(), String::new());
+        assert!(deploy.validate(&private).is_empty());
+        let request: DeployMicroServiceRequest =
+            serde_json::from_value(deploy.payload(&private).unwrap()).unwrap();
+        assert_eq!(request.host_port, 0);
+    }
+    #[test]
+    fn routing_editor_leaves_service_owned_routes_to_backend_reconciliation() {
+        let config = json!({"listen":"127.0.0.1:8080", "routes":[
+            {"host":"manual.example.com", "pathPrefix":"/", "upstreams":["127.0.0.1:9000"]},
+            {"host":"web.internal", "pathPrefix":"/", "upstreams":["172.30.0.2:80"],
+             "owner":{"serviceId":"service", "deploymentId":"release"}}
+        ], "tunnel":null});
+        let form = resource_form("route", &config, "").unwrap();
+        let input = values(&form);
+        assert!(!input["routes"].contains("web.internal"));
+        let payload = form.payload(&input).unwrap();
+        assert_eq!(payload["config"]["routes"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["config"]["routes"][0]["host"], "manual.example.com");
     }
     #[test]
     fn running_update_payload_keeps_release_fencing_outside_the_service_spec() {

@@ -216,6 +216,7 @@ fn update_summary(app: &Shared) {
 }
 
 fn render_content(app: &Shared) {
+    deploy::discard_credentials(&mut app.borrow_mut());
     if app.borrow().route == "ai-sandbox" {
         sandbox::render(app);
         return;
@@ -1152,6 +1153,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 }
             }
             _ => {
+                if deploy::change(&changed, &target) {
+                    return;
+                }
                 if advanced::cluster::input(&changed, &target) {
                     return;
                 }

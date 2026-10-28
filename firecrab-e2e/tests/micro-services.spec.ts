@@ -209,6 +209,44 @@ function retained(id: string, image: string, digest = `sha256:${"b".repeat(64)}`
 }
 
 test.describe("MicroService configuration @dashboard", () => {
+  test("deploys privately with an empty host port and shows its internal address", async ({ page }) => {
+    const service = { ...INITIAL, domain: null, replicas: 2 };
+    await openServices(page, [service]);
+    let deployment: object | null = null;
+    await page.route(`**/api/micro-services/${ID}/deployment`, async route => {
+      if (route.request().method() === "POST") {
+        expect(route.request().postDataJSON()).toEqual({ hostPort: 0, microNetworkId: null });
+        deployment = { id: SECRET, serviceId: ID, spec: service, phase: "running", request: { hostPort: 0 },
+          digest: null, internalRouteOwned: true, domainRouteOwned: false, error: null, log: [],
+          instances: [{ vmId: SECRET, ipv4: "172.30.0.2", hostPort: 0, state: "running", healthy: true }] };
+        return route.fulfill({ status: 202, json: deployment });
+      }
+      return route.fulfill({ json: deployment });
+    });
+    await openDeployForm(page);
+    await page.getByLabel("First host port", { exact: true }).fill("");
+    await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
+    await expect(page.getByText("Available to apps in the same MicroNetwork.", { exact: true })).toBeVisible();
+    await expect(page.locator("code").filter({ hasText: "http://orders.internal" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Open app", exact: true })).toHaveCount(0);
+    await openMoreMenu(page);
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeEnabled();
+  });
+
+  test("retains Stop after uncertain internal routing cleanup without replicas", async ({ page }) => {
+    await openServices(page, [{ ...INITIAL, domain: null }]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: {
+      id: SECRET, serviceId: ID, spec: { ...INITIAL, domain: null }, phase: "failed", request: { hostPort: 0 }, digest: null,
+      internalRouteOwned: true, instances: [], log: [], error: "Could not withdraw internal DNS and routing; retry Stop."
+    } }));
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await openMoreMenu(page);
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeHidden();
+    await expect(page.getByText("Available to apps in the same MicroNetwork.", { exact: true })).toHaveCount(0);
+  });
+
+
   test("keeps long image references compact and exposes row actions by keyboard", async ({ page }) => {
     const image = `118167167440.dkr.ecr.ap-northeast-2.amazonaws.com/ecr/nginx@sha256:${"a".repeat(64)}`;
     await openServices(page, [{ ...INITIAL, image }]);
@@ -1084,7 +1122,7 @@ test.describe("MicroService configuration @dashboard", () => {
 
     await expect(
       page.getByText(
-        "Each replica uses one host port, starting at 30100. App port: 9090.",
+        "Leave the host port empty for internal access. App port: 9090.",
         { exact: true },
       ),
     ).toBeVisible();
@@ -1634,6 +1672,178 @@ function release(id: string, image = "ghcr.io/team/orders:1.0") {
 }
 
 test.describe("Deploy release management @dashboard", () => {
+  test("cancels a queued private initial Deploy and allows a new Deploy", async ({ page }, testInfo) => {
+    const spec = { ...DEPLOY_SPEC, domain: null };
+    await openServices(page, [{ id: ID, ...spec }]);
+    let current: object = { ...release(RELEASE_B), spec, phase: "queued", instances: [], domainRouteOwned: false,
+      internalRouteOwned: false, finishedAt: null };
+    let cancellations = 0;
+    let deployments = 0;
+    let releaseCancel!: () => void;
+    const cancelGate = new Promise<void>(resolve => { releaseCancel = resolve; });
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => {
+      if (route.request().method() === "POST") {
+        deployments++;
+        current = { ...release(RELEASE_A), spec, domainRouteOwned: false, internalRouteOwned: true };
+        return route.fulfill({ status: 202, json: current });
+      }
+      return route.fulfill({ json: current });
+    });
+    await page.route(`**/api/micro-services/${ID}/deployments/${RELEASE_B}/cancel`, async route => {
+      expect(route.request().method()).toBe("POST");
+      expect(route.request().postData()).toBeNull();
+      cancellations++;
+      await cancelGate;
+      current = { ...current, phase: "cancelled", finishedAt: 1792886420 };
+      return route.fulfill({ json: current });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    const cancel = page.locator("#deploy-cancel");
+    await expect(cancel).toHaveAccessibleName("Cancel");
+    await expect(cancel).toHaveAttribute("title", "Cancel");
+    await expect(cancel).toHaveText("");
+    await expect(cancel.locator("svg")).toHaveCount(1);
+    await openMoreMenu(page);
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeDisabled();
+    const screenshot = testInfo.outputPath("deploy-queue-cancel-desktop.png");
+    await page.screenshot({ path: screenshot, fullPage: true });
+    await testInfo.attach("Queued initial Deploy cancellation", { path: screenshot, contentType: "image/png" });
+    await cancel.click();
+    await expect.poll(() => cancellations).toBe(1);
+    await expect(cancel).toBeDisabled();
+    releaseCancel();
+    await expect(page.locator("#service-status").getByRole("status")).toHaveText("Cancelled");
+    await expect(cancel).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toHaveCount(0);
+    // Deploying again starts from the head of the panel.
+    await servicePanel(page).getByRole("button", { name: "Deploy", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Deploy and run", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
+    await expect.poll(() => deployments).toBe(1);
+    expect(cancellations).toBe(1);
+  });
+
+  test("reloads the serving release after cancelling a queued update in Korean", async ({ page }, testInfo) => {
+    const active = release(RELEASE_A);
+    const queued = { ...release(RELEASE_B, "ghcr.io/team/orders:2.0"), phase: "queued", instances: [],
+      domainRouteOwned: false, update: { previous: active, requestedSpec: DEPLOY_SPEC, strategy: "rolling",
+        rollbackOf: null, cancelled: false, restoring: false, routedNew: false, transition: null, retiring: [], completed: false } };
+    await openServices(page, [{ id: ID, ...active.spec }]);
+    let current: object = queued;
+    let cancelled = false;
+    let refreshed = false;
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => {
+      if (cancelled) refreshed = true;
+      return route.fulfill({ json: current });
+    });
+    await page.route(`**/api/micro-services/${ID}/deployments/${RELEASE_B}/cancel`, route => {
+      expect(route.request().method()).toBe("POST");
+      expect(route.request().postData()).toBeNull();
+      cancelled = true;
+      current = active;
+      return route.fulfill({ json: { ...queued, phase: "cancelled", update: { ...queued.update, cancelled: true, completed: true } } });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await expect(page.locator("#deploy-cancel")).toBeEnabled();
+    await page.getByRole("combobox", { name: "Language", exact: true }).selectOption("ko");
+    const cancel = page.locator("#deploy-cancel");
+    await expect(cancel).toHaveAccessibleName("취소");
+    await expect(cancel).toHaveAttribute("title", "취소");
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const screenshot = testInfo.outputPath("deploy-queue-cancel-mobile.png");
+    await page.screenshot({ path: screenshot, fullPage: true });
+    await testInfo.attach("Queued update cancellation", { path: screenshot, contentType: "image/png" });
+    await cancel.click();
+    await expect(page.locator("#service-status").getByRole("status")).toHaveText("실행 중");
+    expect(refreshed).toBe(true);
+    await expect(cancel).toHaveCount(0);
+    await servicePanel(page).locator("#vm-more-summary").click();
+    await expect(page.getByRole("button", { name: "서비스 중지", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "업데이트 배포", exact: true })).toBeEnabled();
+    await expect(page.getByText("배포 실패", { exact: true })).toHaveCount(0);
+  });
+
+  test("withdraws Cancel when a queued operation starts and reports the conflict", async ({ page }) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    let current = { ...release(RELEASE_B), phase: "queued", instances: [], domainRouteOwned: false };
+    let cancellations = 0;
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: current }));
+    await page.route(`**/api/micro-services/${ID}/deployments/${RELEASE_B}/cancel`, route => {
+      cancellations++;
+      current = { ...current, phase: "importing" };
+      return route.fulfill({ status: 409, json: { error: { code: "deployment_not_queued", message: "This Deploy has already started" } } });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await page.locator("#deploy-cancel").click();
+    await expect(page.getByText("HTTP 409: This Deploy has already started", { exact: true })).toBeVisible();
+    await expect(page.locator("#service-status [data-phase=importing]")).toBeVisible();
+    await expect(page.locator("#deploy-cancel")).toHaveCount(0);
+    await openMoreMenu(page);
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeDisabled();
+    expect(cancellations).toBe(1);
+  });
+
+  test("ignores a delayed cancellation refresh after navigation to a newer operation", async ({ page }) => {
+    test.setTimeout(45_000);
+    const reports = { ...DEPLOY_SPEC, id: STORAGE, name: "reports", domain: "reports.example.com" };
+    await openServices(page, [{ id: ID, ...DEPLOY_SPEC }, { id: STORAGE, ...reports }]);
+    const ordersOperation = { ...release(RELEASE_B), phase: "queued", instances: [], domainRouteOwned: false };
+    let reportsOperation = { ...release(RELEASE_A), serviceId: STORAGE, spec: reports, phase: "queued", instances: [], domainRouteOwned: false };
+    let ordersCancelled = false;
+    let oldRefreshEntered = false;
+    let reportsCancellationEntered = false;
+    let releaseOldRefresh!: () => void;
+    let releaseReports!: () => void;
+    const oldRefreshGate = new Promise<void>(resolve => { releaseOldRefresh = resolve; });
+    const reportsGate = new Promise<void>(resolve => { releaseReports = resolve; });
+    await page.route(`**/api/micro-services/${STORAGE}`, route => route.fulfill({ json: { id: STORAGE, ...reports } }));
+    await page.route(`**/api/micro-services/${ID}/deployment`, async route => {
+      if (ordersCancelled) {
+        oldRefreshEntered = true;
+        await oldRefreshGate;
+      }
+      return route.fulfill({ json: { ...ordersOperation, phase: ordersCancelled ? "cancelled" : "queued" } });
+    });
+    await page.route(`**/api/micro-services/${ID}/deployments/${RELEASE_B}/cancel`, route => {
+      ordersCancelled = true;
+      return route.fulfill({ json: { ...ordersOperation, phase: "cancelled" } });
+    });
+    await page.route(`**/api/micro-services/${STORAGE}/deployment`, route => route.fulfill({ json: reportsOperation }));
+    await page.route(`**/api/micro-services/${STORAGE}/deployments/${RELEASE_A}/cancel`, async route => {
+      reportsCancellationEntered = true;
+      await reportsGate;
+      reportsOperation = { ...reportsOperation, phase: "cancelled" };
+      return route.fulfill({ json: reportsOperation });
+    });
+    try {
+      await page.getByRole("button", { name: "Open orders", exact: true }).click();
+      await page.locator("#deploy-cancel").click();
+      await expect.poll(() => oldRefreshEntered).toBe(true);
+      await page.evaluate(() => { location.hash = "/vms"; });
+      await expect(page.getByRole("heading", { name: "MicroVM", exact: true })).toBeVisible();
+      await page.evaluate(() => { location.hash = "/services"; });
+      await page.getByRole("button", { name: "Open reports", exact: true }).click();
+      const cancel = page.locator("#deploy-cancel");
+      await expect(cancel).toBeEnabled();
+      await cancel.click();
+      await expect.poll(() => reportsCancellationEntered).toBe(true);
+      await expect(cancel).toBeDisabled();
+      const oldResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/micro-services/${ID}/deployment`);
+      releaseOldRefresh();
+      await oldResponse;
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await expect(cancel).toBeDisabled();
+      await expect(page.getByRole("heading", { name: "reports", exact: true })).toBeVisible();
+      releaseReports();
+      await expect(page.locator("#service-status").getByRole("status")).toHaveText("Cancelled");
+      await expect(cancel).toHaveCount(0);
+    } finally {
+      releaseOldRefresh();
+      releaseReports();
+    }
+  });
+
   test("uses Deploy for a running update and preserves the reviewed release identity", async ({ page }) => {
     const writes = await openServices(page, [DEPLOY_SPEC]);
     let current: object = release(RELEASE_A);
@@ -1756,5 +1966,148 @@ test.describe("Deploy release management @dashboard", () => {
     await expect(panel.locator("table.release-table tbody tr")).toHaveCount(1);
     await expect(panel.getByRole("alert")).toHaveCount(0);
     expect(live.reads.releases).toBe(2);
+  });
+});
+
+test.describe("Registry automatic Deploy @dashboard", () => {
+  test("saves a bounded policy, pauses/resumes and disables with icon controls", async ({ page }, testInfo) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    const current = release(RELEASE_A);
+    let status: any = { policy: null, pause: null, observedTag: null, observedDigest: null, nextCheckAt: 0, operationId: null, failures: 0, error: null };
+    const writes: any[] = [];
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: current }));
+    await page.route(`**/api/micro-services/${ID}/auto-deploy{,/**}`, async route => {
+      const request = route.request();
+      const suffix = new URL(request.url()).pathname.split("auto-deploy")[1];
+      if (request.method() === "PUT") {
+        const policy = request.postDataJSON();
+        writes.push(policy);
+        status = { ...status, policy, pause: null, observedTag: policy ? (policy.reference.endsWith("*") ? "v1.1.0" : policy.reference.split(":").at(-1)) : null, observedDigest: policy ? `sha256:${"b".repeat(64)}` : null };
+      } else if (suffix === "/pause") status = { ...status, pause: "manual" };
+      else if (suffix === "/resume") status = { ...status, pause: null };
+      return route.fulfill({ json: status });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await servicePanel(page).getByRole("tab", { name: "Releases" }).click();
+    await page.getByRole("button", { name: "Automation", exact: true }).click();
+    await page.getByLabel("Registry source", { exact: true }).fill("ghcr.io/team/orders:v1.*");
+    await page.getByLabel("Interval (seconds)", { exact: true }).fill("59");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("60–3600");
+    expect(writes).toHaveLength(0);
+    await page.getByLabel("Interval (seconds)", { exact: true }).fill("60");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeEnabled();
+    expect(writes).toEqual([{ reference: "ghcr.io/team/orders:v1.*", intervalSeconds: 60 }]);
+    const pause = page.getByRole("button", { name: "Pause", exact: true });
+    await expect(pause.locator("svg")).toHaveCount(1);
+    await expect(pause).toHaveText("");
+    await pause.click();
+    await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeEnabled();
+    await page.screenshot({ path: testInfo.outputPath("deploy-automation-desktop.png"), fullPage: true });
+    await page.getByRole("button", { name: "Resume", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeEnabled();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect.poll(() => page.locator("#deploy-panel code").evaluate(node => node.getBoundingClientRect().right <= node.parentElement!.getBoundingClientRect().right + 1)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("deploy-automation-mobile.png"), fullPage: true });
+    await page.getByLabel("Registry source", { exact: true }).fill(`ghcr.io/team/orders:${"r".repeat(128)}`);
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeEnabled();
+    await expect.poll(() => page.locator("#deploy-panel [role=status]").evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+    await page.getByRole("button", { name: "Disable", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeDisabled();
+    expect(writes.at(-1)).toBeNull();
+  });
+
+  test("reports API policy errors without altering the running release", async ({ page }) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: release(RELEASE_A) }));
+    await page.route(`**/api/micro-services/${ID}/auto-deploy`, route => route.fulfill({ status: 409, json: { error: { code: "stack_source_managed", message: "Use Git sync to change this policy" } } }));
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await servicePanel(page).getByRole("tab", { name: "Releases" }).click();
+    await page.getByRole("button", { name: "Automation", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Use Git sync");
+    await openMoreMenu(page);
+    await expect(page.getByRole("button", { name: "Stop service", exact: true })).toBeEnabled();
+  });
+});
+
+test.describe("Service CI Deploy @dashboard", () => {
+  const tokenId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const credential = { id: tokenId, serviceId: ID, name: "GitHub", repository: "ghcr.io/team/orders", createdAt: 1793040000, expiresAt: 1793644800 };
+  const fixtureToken = `fcd_${tokenId.replaceAll("-", "")}_${"a".repeat(43)}`;
+
+  test("issues one-time tokens, copies and hides them, and revokes with icon controls", async ({ page }, testInfo) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: release(RELEASE_A) }));
+    let rows: object[] = [];
+    const writes: any[] = [];
+    await page.route(`**/api/micro-services/${ID}/deploy-tokens{,/**}`, async route => {
+      const method = route.request().method();
+      if (method === "POST") {
+        writes.push(route.request().postDataJSON()); rows = [credential];
+        return route.fulfill({ status: 201, json: { credential, token: fixtureToken } });
+      }
+      if (method === "DELETE") { rows = []; return route.fulfill({ status: 204 }); }
+      return route.fulfill({ json: rows });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await servicePanel(page).getByRole("tab", { name: "Releases" }).click();
+    await page.getByRole("button", { name: "CI tokens", exact: true }).click();
+    await page.getByLabel("Name", { exact: true }).fill("GitHub");
+    await page.getByLabel("Lifetime", { exact: true }).selectOption("7");
+    const issue = page.getByRole("button", { name: "Token", exact: true });
+    await expect(issue).toHaveText(""); await expect(issue.locator("svg")).toHaveCount(1);
+    await issue.click();
+    await expect(page.locator("#deploy-ci-issued")).toHaveValue(fixtureToken);
+    await expect(page.locator("#deploy-ci-issued")).toHaveAttribute("type", "password");
+    expect(writes).toEqual([{ name: "GitHub", expiresInSeconds: 604800 }]);
+    await page.getByRole("button", { name: "Reveal", exact: true }).click();
+    await expect(page.locator("#deploy-ci-issued")).toHaveAttribute("type", "text");
+    await page.getByRole("button", { name: "Copy", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(fixtureToken);
+    await page.getByRole("button", { name: "Hide", exact: true }).click();
+    await page.setViewportSize({ width: 1280, height: 1100 });
+    await page.locator(".service-panel .detail-content").evaluate(node => { node.scrollTop = 0; });
+    await page.screenshot({ path: testInfo.outputPath("deploy-ci-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 1100 });
+    await page.locator(".service-panel .detail-content").evaluate(node => { node.scrollTop = 0; });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("deploy-ci-mobile.png"), fullPage: true });
+    await page.getByRole("button", { name: "CI tokens", exact: true }).click();
+    await page.getByRole("button", { name: "CI tokens", exact: true }).click();
+    await expect(page.locator("#deploy-ci-issued")).toHaveCount(0);
+    await page.getByRole("button", { name: "Revocation: GitHub", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Revocation: GitHub", exact: true })).toHaveCount(0);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByRole("combobox", { name: "Language", exact: true }).selectOption("ko");
+    await expect(page.getByRole("button", { name: "CI 토큰", exact: true })).toBeVisible();
+  });
+
+  test("closing during issuance cannot restore the one-time value from a late response", async ({ page }) => {
+    await openServices(page, [DEPLOY_SPEC]);
+    await page.route(`**/api/micro-services/${ID}/deployment`, route => route.fulfill({ json: release(RELEASE_A) }));
+    let finish!: () => void;
+    let started = false;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    await page.route(`**/api/micro-services/${ID}/deploy-tokens`, async route => {
+      if (route.request().method() === "POST") {
+        started = true; await gate;
+        return route.fulfill({ status: 201, json: { credential, token: fixtureToken } });
+      }
+      return route.fulfill({ json: [] });
+    });
+    await page.getByRole("button", { name: "Open orders", exact: true }).click();
+    await servicePanel(page).getByRole("tab", { name: "Releases" }).click();
+    await page.getByRole("button", { name: "CI tokens", exact: true }).click();
+    await page.getByLabel("Name", { exact: true }).fill("GitHub");
+    await page.getByRole("button", { name: "Token", exact: true }).click();
+    await expect.poll(() => started).toBe(true);
+    await page.getByRole("button", { name: "CI tokens", exact: true }).click();
+    finish();
+    await page.getByRole("button", { name: "CI tokens", exact: true }).click();
+    await expect(page.locator("#deploy-ci-issued")).toHaveCount(0);
+    expect(await page.content()).not.toContain(fixtureToken);
   });
 });

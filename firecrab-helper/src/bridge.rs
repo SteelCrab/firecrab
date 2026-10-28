@@ -83,6 +83,12 @@ pub enum BridgeError {
         /// The bridge's name.
         name: String,
     },
+    /// A bridge must have an Ethernet address before it can become a gateway.
+    #[error("bridge {name} has no Ethernet address")]
+    MissingMacAddress {
+        /// The bridge's name.
+        name: String,
+    },
     /// Writing one of the per-interface IPv6 sysctls failed.
     #[error("failed to configure IPv6 on {name}")]
     Ipv6Disable {
@@ -366,10 +372,24 @@ async fn ensure_bridge_for(
         }
     };
 
+    let address = bridge
+        .attributes
+        .iter()
+        .find_map(|attribute| match attribute {
+            LinkAttribute::Address(address) if address.len() == 6 => Some(address.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| BridgeError::MissingMacAddress {
+            name: config.name.to_owned(),
+        })?;
+    // Explicitly set even an unchanged address: otherwise Linux follows the
+    // lowest port MAC, and removing that TAP strands cached gateway neighbors.
+    // Preserve an existing bridge's address so upgrades do not change it either.
     handle
         .link()
         .change(
             LinkUnspec::new_with_index(bridge.header.index)
+                .address(address)
                 .mtu(config.mtu)
                 .up()
                 .build(),

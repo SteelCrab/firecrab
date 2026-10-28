@@ -21,6 +21,7 @@ async fn fixture() -> (tempfile::TempDir, AppState, MicroServiceDeployment) {
         })
         .unwrap();
     let deployment = MicroServiceDeployment {
+        recovery: None,
         started_at: 0,
         finished_at: None,
         update: None,
@@ -33,6 +34,7 @@ async fn fixture() -> (tempfile::TempDir, AppState, MicroServiceDeployment) {
         },
         phase: ServicePhase::Queued,
         domain_route_owned: false,
+        internal_route_owned: false,
         digest: None,
         instances: vec![],
         log: vec![],

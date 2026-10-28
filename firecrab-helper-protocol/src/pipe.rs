@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+use crate::network::MicroNetworkSpec;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -25,6 +26,8 @@ pub const STATUS_SOCKET: &str = "/run/firecrab-ingress/status.sock";
 pub const TUNNEL_UNIT: &str = "firecrab-tunnel.service";
 /// Internal Host header used only by the anonymous Cloudflare connector.
 pub const QUICK_TUNNEL_HOST: &str = "quick.firecrab.internal";
+/// Image-only, bearer-authenticated CI listener; never contains operator API routes.
+pub const CI_DEPLOY_ADDRESS: &str = "127.0.0.1:5525";
 
 /// Validation and manifest IO errors shared by CLI and helper callers.
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -52,6 +55,16 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Route {
+    /// App port retained for private ingress policy while every replica is unready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_port: Option<u16>,
+    /// Destination ingress rules for a private service. An empty group denies all peers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_group: Option<crate::security_group::SecurityGroupPolicySpec>,
+    /// Private listener on this MicroNetwork's IPv4 gateway, port 80.
+    /// Only deployment-owned `<name>.internal` routes may select a network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<MicroNetworkSpec>,
     /// MicroService deployment that owns this route; manual routes omit this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<ServiceRouteOwner>,
@@ -239,6 +252,12 @@ impl Config {
                     "quick.firecrab.internal is reserved for Quick Tunnel connections".into(),
                 );
             }
+            if let Some(network) = &route.network {
+                service_routes::validate_internal_route(route, network)?;
+            }
+            if route.security_group.is_some() && route.network.is_none() {
+                return Err("service security groups require an internal route".into());
+            }
             if !path(&route.path_prefix) {
                 return Err(format!("{}: paths must be literal absolute paths", route.host).into());
             }
@@ -247,7 +266,10 @@ impl Config {
                     format!("duplicate route: {} {}", route.host, route.path_prefix).into(),
                 );
             }
-            validate_upstreams(&route.upstreams, Some(self.listen), &route.host)?;
+            // An owned service keeps its hostname while every endpoint is unready.
+            if !route.upstreams.is_empty() || route.owner.is_none() {
+                validate_upstreams(&route.upstreams, Some(self.listen), &route.host)?;
+            }
         }
         self.validate_service_routes()?;
         let mut ids = BTreeSet::new();
@@ -271,7 +293,11 @@ impl Config {
             .tunnel
             .as_ref()
             .and_then(|tunnel| tunnel.hostname.as_ref())
-            && (!hostname(host) || !self.routes.iter().any(|route| &route.host == host))
+            && (!hostname(host)
+                || !self
+                    .routes
+                    .iter()
+                    .any(|route| &route.host == host && route.network.is_none()))
         {
             return Err(
                 "keep a route for the Cloudflare public hostname, or disconnect its tunnel first"
@@ -312,6 +338,9 @@ impl Config {
             .quick_tunnel
             .as_ref()
             .map(|quick| Route {
+                service_port: None,
+                security_group: None,
+                network: None,
                 owner: None,
                 host: QUICK_TUNNEL_HOST.into(),
                 path_prefix: "/".into(),
@@ -323,6 +352,9 @@ impl Config {
             let host = quick_tunnel_host(entry.id);
             match &entry.target {
                 QuickTunnelTarget::Apps { upstreams } => quick_routes.push(Route {
+                    service_port: None,
+                    security_group: None,
+                    network: None,
                     owner: None,
                     host,
                     path_prefix: "/".into(),
@@ -332,7 +364,7 @@ impl Config {
                     quick_routes.extend(
                         self.routes
                             .iter()
-                            .filter(|route| &route.host == selected)
+                            .filter(|route| &route.host == selected && route.network.is_none())
                             .map(|route| Route {
                                 host: host.clone(),
                                 ..route.clone()
@@ -341,24 +373,41 @@ impl Config {
                 }
             }
         }
-        let mut hosts: BTreeMap<&str, Vec<(usize, &Route)>> = BTreeMap::new();
+        let mut hosts: BTreeMap<(SocketAddr, &str), Vec<(usize, &Route)>> = BTreeMap::new();
+        let mut listeners = BTreeSet::from([self.listen]);
         for (index, route) in self.routes.iter().chain(quick_routes.iter()).enumerate() {
-            text.push_str(&format!(
-                "  upstream fc_route_{index} {{\n    zone fc_route_{index} 64k;\n"
-            ));
-            for address in &route.upstreams {
+            if !route.upstreams.is_empty() {
                 text.push_str(&format!(
-                    "    server {address} max_fails=1 fail_timeout=30s;\n"
+                    "  upstream fc_route_{index} {{\n    zone fc_route_{index} 64k;\n"
                 ));
+                for address in &route.upstreams {
+                    text.push_str(&format!(
+                        "    server {address} max_fails=1 fail_timeout=30s;\n"
+                    ));
+                }
+                text.push_str("    keepalive 16;\n  }\n");
             }
-            text.push_str("    keepalive 16;\n  }\n");
-            hosts.entry(&route.host).or_default().push((index, route));
+            let listen = route.network.as_ref().map_or(self.listen, |network| {
+                SocketAddr::new(network.gateway.into(), 80)
+            });
+            listeners.insert(listen);
+            hosts
+                .entry((listen, &route.host))
+                .or_default()
+                .push((index, route));
         }
-        text.push_str(&format!(
-            "  server {{ listen {} default_server; server_name _; return 404; }}\n",
-            self.listen
-        ));
-        for (host, routes) in hosts {
+        for listen in listeners {
+            let http2 = if listen == self.listen {
+                ""
+            } else {
+                "http2 on; "
+            };
+            text.push_str(&format!(
+                "  server {{ listen {} default_server; {http2}server_name _; return 404; }}\n",
+                listen
+            ));
+        }
+        for ((listen, host), routes) in hosts {
             let proxy_host = if has_quick_tunnels && reserved_quick_host(host) {
                 "$fc_quick_host"
             } else {
@@ -366,9 +415,37 @@ impl Config {
             };
             text.push_str(&format!(
                 "  server {{ listen {}; server_name {host};\n",
-                self.listen
+                listen
             ));
+            let internal = routes[0].1.network.as_ref();
+            if let Some(network) = internal {
+                text.push_str("    http2 on;\n");
+                for cidr in service_routes::allowed_sources(routes[0].1, network) {
+                    text.push_str(&format!("    allow {cidr};\n"));
+                }
+                text.push_str("    deny all;\n");
+            }
+            let proto = if internal.is_some() {
+                "$scheme"
+            } else {
+                "$fc_proto"
+            };
             let has_fallback = routes.iter().any(|(_, route)| route.path_prefix == "/");
+            // The public service owns this fixed mapping. No caller-selected API path or service UUID is forwarded.
+            if internal.is_none()
+                && let Some(owner) = routes.iter().find_map(|(_, route)| route.owner.as_ref())
+            {
+                let target = format!(
+                    "http://{CI_DEPLOY_ADDRESS}/api/ci/services/{}/deployments",
+                    owner.service_id
+                );
+                for (location, upstream) in [
+                    ("= /__firecrab/deploy", target.clone()),
+                    ("^~ /__firecrab/deploy/", format!("{target}/")),
+                ] {
+                    text.push_str(&format!("    location {location} {{\n      limit_except GET POST {{ deny all; }}\n      client_max_body_size 8k;\n      proxy_pass {upstream};\n      proxy_http_version 1.1;\n      proxy_set_header Host localhost;\n      proxy_set_header Authorization $http_authorization;\n      proxy_set_header Cookie \"\";\n      proxy_set_header Connection \"\";\n      proxy_connect_timeout 2s;\n      proxy_read_timeout 15s;\n      proxy_next_upstream off;\n      add_header Cache-Control \"no-store\" always;\n    }}\n"));
+                }
+            }
             for (index, route) in routes {
                 let prefix = route.path_prefix.trim_end_matches('/');
                 let locations = if prefix.is_empty() {
@@ -377,7 +454,12 @@ impl Config {
                     vec![format!("= \"{prefix}\""), format!("^~ \"{prefix}/\"")]
                 };
                 for location in locations {
-                    text.push_str(&format!("    location {location} {{\n      proxy_pass http://fc_route_{index};\n      proxy_http_version 1.1;\n      proxy_set_header Host {proxy_host};\n      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n      proxy_set_header X-Forwarded-Proto $fc_proto;\n      proxy_set_header Upgrade $http_upgrade;\n      proxy_set_header Connection $fc_connection;\n      proxy_connect_timeout 2s;\n      proxy_read_timeout 30s;\n      proxy_next_upstream error timeout http_500 http_502 http_503 http_504;\n      proxy_next_upstream_timeout 3s;\n    }}\n"));
+                    if route.upstreams.is_empty() {
+                        // try_files runs after access checks; this non-directory root cannot serve content.
+                        text.push_str(&format!("    location {location} {{ root /dev/null; try_files /unready =503; }}\n"));
+                        continue;
+                    }
+                    text.push_str(&format!("    location {location} {{\n      proxy_pass http://fc_route_{index};\n      proxy_http_version 1.1;\n      proxy_set_header Host {proxy_host};\n      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n      proxy_set_header X-Forwarded-Proto {proto};\n      proxy_set_header Upgrade $http_upgrade;\n      proxy_set_header Connection $fc_connection;\n      proxy_connect_timeout 2s;\n      proxy_read_timeout 30s;\n      proxy_next_upstream error timeout http_500 http_502 http_503 http_504;\n      proxy_next_upstream_timeout 3s;\n    }}\n"));
                 }
             }
             if !has_fallback {
@@ -389,10 +471,28 @@ impl Config {
         text
     }
 
+    /// dnsmasq's reloadable hosts file contains only deployed internal service addresses.
+    pub fn internal_dns_hosts(&self) -> String {
+        self.routes
+            .iter()
+            .filter_map(|route| {
+                route
+                    .network
+                    .as_ref()
+                    .map(|network| format!("{} {}\n", network.gateway, route.host))
+            })
+            .collect()
+    }
+
     /// Render cloudflared ingress with systemd credentials and a final 404 rule.
     pub fn tunnel_config(&self) -> Option<Value> {
         self.tunnel.as_ref().map(|tunnel| {
-            let hosts: BTreeSet<_> = self.routes.iter().map(|route| &route.host).collect();
+            let hosts: BTreeSet<_> = self
+                .routes
+                .iter()
+                .filter(|route| route.network.is_none())
+                .map(|route| &route.host)
+                .collect();
             let mut ingress: Vec<_> = hosts
                 .into_iter()
                 .map(|host| json!({"hostname": host, "service": format!("http://{}", self.listen)}))
@@ -616,6 +716,35 @@ mod tests {
                 .get("quickTunnel")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn ci_paths_bind_public_owned_routes_to_one_service_without_operator_proxying() {
+        let mut config = config();
+        assert!(!config.nginx().contains("/__firecrab/deploy"));
+        config.routes.truncate(1);
+        let service = Uuid::from_u128(1);
+        config.routes[0].owner = Some(ServiceRouteOwner {
+            service_id: service,
+            deployment_id: Uuid::from_u128(2),
+        });
+        config.validate().unwrap();
+        let text = config.nginx();
+        assert!(text.contains(&format!(
+            "proxy_pass http://{CI_DEPLOY_ADDRESS}/api/ci/services/{service}/deployments;"
+        )));
+        assert!(text.contains("location = /__firecrab/deploy"));
+        assert!(text.contains("location ^~ /__firecrab/deploy/"));
+        assert!(text.contains("proxy_next_upstream off;"));
+        assert!(!text.contains("127.0.0.1:5523"));
+        config.routes[0].host = "app.internal".into();
+        config.routes[0].network = Some(
+            serde_json::from_value(
+                json!({"micro_network_id":Uuid::from_u128(3),"gateway":"172.30.0.1","prefix":24}),
+            )
+            .unwrap(),
+        );
+        assert!(!config.nginx().contains("/__firecrab/deploy"));
     }
 
     #[test]

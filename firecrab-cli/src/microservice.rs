@@ -9,9 +9,18 @@ use firecrab_api_types::{
 use uuid::Uuid;
 
 use crate::api_client::{ApiClient, ApiError};
+pub(crate) mod ci;
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Submit an image-only Deploy using a scoped token and fail on an unsuccessful outcome.
+    CiDeploy(ci::DeployArgs),
+    /// Issue, list or revoke credentials for this service's image repository.
+    Tokens {
+        id: Uuid,
+        #[command(subcommand)]
+        command: ci::Tokens,
+    },
     /// Update a running domain service through Nginx without stopping it first.
     Rollout {
         id: Uuid,
@@ -59,7 +68,7 @@ pub enum Command {
     /// Pull the image, start replicas, and wait for app health.
     Deploy {
         id: Uuid,
-        /// First host TCP port; omit when the service has a domain.
+        /// Optional first host TCP port; omit for internal-only or domain routing.
         #[arg(long, default_value_t = 0)]
         host_port: u16,
         /// Existing network UUID. Omit to create/use the services network.
@@ -103,6 +112,8 @@ pub enum Command {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Ci(#[from] ci::Error),
     #[error("{0}")]
     Deployment(String),
     #[error(transparent)]
@@ -121,6 +132,8 @@ pub enum Error {
 
 pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
     match command {
+        Command::CiDeploy(args) => ci::deploy(args).map_err(Error::Ci)?,
+        Command::Tokens { id, command } => ci::tokens(client, id, command)?,
         Command::Rollout {
             id,
             file,

@@ -59,6 +59,9 @@ pub(crate) async fn create_with_id(
     validate(&spec, request_id.0)?;
     let _claim = state.service_mutations.lock().await;
     require_image_auth(&state, &spec.image, request_id.0).await?;
+    if let Some(policy) = &spec.auto_deploy {
+        crate::service_runtime::auto_deploy::validate_auth(&state, policy, request_id.0).await?;
+    }
     super::pipe_storage::validate_binding(&state, &spec, request_id.0).await?;
     crate::queues::validate_bindings(&state, &spec, request_id.0).await?;
     let _network = state.network_mutations.lock().await;
@@ -96,6 +99,9 @@ pub(crate) async fn update_from_stack(
     ensure_stack_writer(&state, id, operation, request_id.0).await?;
     crate::service_runtime::ensure_editable(&state, id, request_id.0).await?;
     require_image_auth(&state, &spec.image, request_id.0).await?;
+    if let Some(policy) = &spec.auto_deploy {
+        crate::service_runtime::auto_deploy::validate_auth(&state, policy, request_id.0).await?;
+    }
     super::pipe_storage::validate_binding(&state, &spec, request_id.0).await?;
     crate::queues::validate_bindings(&state, &spec, request_id.0).await?;
     let _network = state.network_mutations.lock().await;
@@ -213,6 +219,22 @@ pub(crate) async fn database<T: Send + 'static>(
         .await
         .map_err(|_| AppError::internal(request_id))?
         .map_err(|error| match error {
+            PersistenceError::CiDeployUnauthorized => AppError::new(
+                StatusCode::UNAUTHORIZED,
+                "deploy_token_required",
+                "CI Deploy authorization is no longer valid",
+                request_id,
+            ),
+            PersistenceError::CiTokenLimit => AppError::conflict(
+                "deploy_token_limit",
+                "Revoke an old token before creating another; each service permits twenty tokens",
+                request_id,
+            ),
+            PersistenceError::DeployQueueIdentity => AppError::conflict(
+                "operation_conflict",
+                "operationId is already reserved by another Deploy operation",
+                request_id,
+            ),
             PersistenceError::DuplicateMicroServiceName { .. } => AppError::validation(
                 BTreeMap::from([("name".to_owned(), "is already registered".to_owned())]),
                 request_id,
@@ -256,7 +278,8 @@ pub(crate) fn validate(spec: &MicroServiceSpec, request_id: Uuid) -> Result<(), 
         );
     }
     if let Some(domain) = &spec.domain
-        && !firecrab_helper_protocol::pipe::valid_route_hostname(domain)
+        && (!firecrab_helper_protocol::pipe::valid_route_hostname(domain)
+            || domain.ends_with(".internal"))
     {
         fields.insert(
             "domain".to_owned(),
@@ -319,6 +342,17 @@ pub(crate) fn validate(spec: &MicroServiceSpec, request_id: Uuid) -> Result<(), 
             "secrets".to_owned(),
             "an environment name must not appear in both env and secrets".to_owned(),
         );
+    }
+    if let Some(policy) = &spec.auto_deploy {
+        if let Some((field, message)) = policy.validation_error() {
+            fields.insert(format!("autoDeploy.{field}"), message.into());
+        }
+        if spec.domain.is_none() {
+            fields.insert(
+                "autoDeploy".into(),
+                "requires an Nginx-backed service domain".into(),
+            );
+        }
     }
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id));
