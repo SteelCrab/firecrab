@@ -157,7 +157,10 @@ def public_offline(credential):
                                                           context=ssl.create_default_context())) as connection:
             connection.request("GET", "/app", headers={"Cache-Control": "no-cache"})
             response = connection.getresponse()
-            response.read(4096)
+            body = response.read(4096)
+            if response.status == 530:
+                return (response.getheader("Server", "").strip().lower() == "cloudflare"
+                        and body == b"error code: 1033\n")
             return response.status in (404, 410, 502, 503, 504)
     except (OSError, http.client.HTTPException):
         return False

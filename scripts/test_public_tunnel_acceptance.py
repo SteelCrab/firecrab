@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import public_tunnel_acceptance as acceptance
 from public_tunnel_credentials import Credential
@@ -163,6 +163,31 @@ sys.exit(9)
             for _ in range(4):
                 poll()
         self.assertEqual(len(calls), 2)
+
+
+class OfflineResponseTest(unittest.TestCase):
+    def test_only_cloudflare_1033_is_accepted_for_http_530(self):
+        credential = Credential(label="qa-test-a", token="a" * 64, path="/private/a")
+        cases = [
+            (530, "cloudflare", b"error code: 1033\n", True),
+            (530, "CloudFlare", b"error code: 1033\n", True),
+            (530, "cloudflare", b"error code: 1000\n", False),
+            (530, "cloudflare", b"error code: 1033", False),
+            (530, "cloudflare", b"error code: 1033\nextra", False),
+            (530, "other", b"error code: 1033\n", False),
+            (200, "cloudflare", b"error code: 1033\n", False),
+            (404, "cloudflare", b"not found", True),
+        ]
+        for status, server, body, expected in cases:
+            with self.subTest(status=status, server=server, body=body):
+                response = MagicMock(status=status)
+                response.getheader.return_value = server
+                response.read.return_value = body
+                connection = MagicMock()
+                connection.getresponse.return_value = response
+                with patch.object(acceptance.http.client, "HTTPSConnection", return_value=connection):
+                    self.assertEqual(acceptance.public_offline(credential), expected)
+                connection.request.assert_called_once_with("GET", "/app", headers={"Cache-Control": "no-cache"})
 
 
 class HostGuardTest(unittest.TestCase):
