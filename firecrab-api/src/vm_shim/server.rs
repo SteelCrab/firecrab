@@ -810,6 +810,27 @@ threading.Thread(target=_burst, daemon=True).start()
     }
 
     #[tokio::test]
+    async fn exit_is_reported_when_application_log_collection_is_enabled() {
+        let directory = short_tempdir();
+        let runtime = HostRuntimePaths::in_dir(directory.path().join("vm/r/one"));
+        fs::create_dir_all(&runtime.dir).unwrap();
+        crate::vm_shim::app_log::prepare(&runtime, "0123456789abcdef0123456789abcdef").unwrap();
+        let binary = fake_firecracker(directory.path(), &format!("{HONOR_SIGTERM}{SERVE_LOOP}"));
+        let running = launch_with(directory, binary, Duration::from_secs(5));
+        let mut client = connect(&running.runtime.shim_socket).await;
+        output_until(&mut client, "booted").await;
+        write_request(&mut client, &ShimRequest::Terminate)
+            .await
+            .unwrap();
+        assert!(exited(&mut client).await.clean());
+        let (_directory, runtime, _) = finish(running).await;
+        let report: ShimExit =
+            serde_json::from_slice(&fs::read(&runtime.exit_status).unwrap()).unwrap();
+        assert!(report.status.clean());
+        assert!(report.stop_requested);
+    }
+
+    #[tokio::test]
     async fn console_output_is_teed_to_the_log_without_usage_lines() {
         // Printed on request, so the client is attached and sees it live
         // rather than through the (filtered) backlog.

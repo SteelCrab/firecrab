@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use tokio::io::AsyncReadExt;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{Semaphore, oneshot};
+use tokio::sync::{Semaphore, oneshot, watch};
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::artifacts::HostRuntimePaths;
@@ -35,6 +35,8 @@ const FRAME_LIMIT: usize = 4096;
 const CONNECTION_LIMIT: usize = 4;
 const QUEUE_LIMIT: usize = 64;
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+/// Limit how much one peer can contribute after Firecracker exits.
+const SHUTDOWN_DRAIN_LIMIT: usize = 256 * 1024;
 
 /// Capture availability for this VM runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -330,10 +332,7 @@ impl Writer {
                 let lost = self.health.lost.swap(0, Ordering::Relaxed);
                 if lost > 0
                     && self
-                        .append(
-                            "system",
-                            format!("{lost} application output bytes were dropped").as_bytes(),
-                        )
+                        .append("system", b"Application output was dropped")
                         .is_err()
                 {
                     self.failed = true;
@@ -377,9 +376,15 @@ impl Collector {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        let _ = tokio::time::timeout(DRAIN_TIMEOUT + Duration::from_secs(1), &mut self.task).await;
-        self.task.abort();
-        let _ = self.task.await;
+        // A completed JoinHandle must not be polled again. Only abort and
+        // await it when the timeout expired before completion.
+        if tokio::time::timeout(DRAIN_TIMEOUT + Duration::from_secs(1), &mut self.task)
+            .await
+            .is_err()
+        {
+            self.task.abort();
+            let _ = self.task.await;
+        }
         if matches!(
             tokio::time::timeout(DRAIN_TIMEOUT, &mut self.writer_done).await,
             Ok(Ok(()))
@@ -449,6 +454,7 @@ pub(super) fn start(runtime: &HostRuntimePaths) -> Option<Collector> {
     let (stop, mut stopping) = oneshot::channel();
     let task = tokio::spawn(async move {
         let semaphore = Arc::new(Semaphore::new(CONNECTION_LIMIT));
+        let (shutdown, _) = watch::channel(false);
         let mut tasks = JoinSet::new();
         loop {
             tokio::select! {
@@ -458,15 +464,18 @@ pub(super) fn start(runtime: &HostRuntimePaths) -> Option<Collector> {
                     Ok((stream, _)) => {
                         if let Ok(permit) = semaphore.clone().try_acquire_owned() {
                             let tx = tx.clone(); let key = key.clone(); let health = health.clone();
-                            tasks.spawn(async move { let _permit = permit; connection(stream, &key, tx, health).await; });
+                            let shutdown = shutdown.subscribe();
+                            tasks.spawn(async move { let _permit = permit; connection(stream, &key, tx, health, shutdown).await; });
                         }
                     },
                     Err(_) => break,
                 }
             }
         }
+        let _ = shutdown.send(true);
         let drain = async { while tasks.join_next().await.is_some() {} };
         if tokio::time::timeout(DRAIN_TIMEOUT, drain).await.is_err() {
+            health.lost(1);
             tasks.abort_all();
             while tasks.join_next().await.is_some() {}
         }
@@ -486,62 +495,119 @@ async fn connection(
     key: &[u8],
     tx: SyncSender<Event>,
     health: Arc<Health>,
+    mut shutdown: watch::Receiver<bool>,
 ) {
-    let auth = async {
-        let mut header = [0_u8; 5];
-        stream.read_exact(&mut header).await?;
-        if header[0] != 0 || u32::from_be_bytes(header[1..].try_into().unwrap()) as usize != KEY_LEN
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid app log handshake",
-            ));
-        }
-        let mut received = [0_u8; KEY_LEN];
-        stream.read_exact(&mut received).await?;
-        if received.as_slice().ct_eq(key).unwrap_u8() != 1 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "invalid app log key",
-            ));
-        }
-        Ok::<(), io::Error>(())
-    };
-    if !matches!(tokio::time::timeout(DRAIN_TIMEOUT, auth).await, Ok(Ok(()))) {
-        return;
-    }
-    health.seen.store(true, Ordering::Relaxed);
-    health.active.fetch_add(1, Ordering::Relaxed);
-    let _active = Active(health.clone());
+    let deadline = tokio::time::Instant::now() + DRAIN_TIMEOUT;
+    let mut pending = Vec::with_capacity(FRAME_LIMIT + 5);
+    let mut input = [0_u8; FRAME_LIMIT];
+    let mut active = None;
+    let mut stopping = false;
+    let mut drained = 0;
     loop {
-        let mut header = [0_u8; 5];
-        if stream.read_exact(&mut header).await.is_err() {
+        let read = if stopping {
+            // Firecracker has exited. Consume only currently buffered bytes;
+            // a peer that never sends EOF cannot hold up VM recovery.
+            if drained >= SHUTDOWN_DRAIN_LIMIT {
+                if try_drain(&stream, &mut input[..1]).is_ok_and(|count| count > 0)
+                    && active.is_some()
+                {
+                    health.lost(1);
+                }
+                break;
+            }
+            let size = input.len().min(SHUTDOWN_DRAIN_LIMIT - drained);
+            match try_drain(&stream, &mut input[..size]) {
+                Ok(count) => {
+                    drained += count;
+                    count
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    if active.is_some() {
+                        health.lost(1);
+                    }
+                    break;
+                }
+            }
+        } else {
+            tokio::select! {
+                biased;
+                _ = shutdown.changed() => { stopping = true; continue; }
+                _ = tokio::time::sleep_until(deadline), if active.is_none() => break,
+                result = stream.read(&mut input) => match result { Ok(count) => count, Err(_) => break },
+            }
+        };
+        if read == 0 {
             break;
         }
-        let length = u32::from_be_bytes(header[1..].try_into().unwrap()) as usize;
-        if length == 0 || length > FRAME_LIMIT {
-            break;
-        }
-        let mut bytes = vec![0; length];
-        if stream.read_exact(&mut bytes).await.is_err() {
-            health.lost(length as u64);
-            break;
-        }
-        let event = match header[0] {
-            1 => Event::Data("stdout", bytes),
-            2 => Event::Data("stderr", bytes),
-            3 if length == 8 => {
-                health.lost(u64::from_be_bytes(bytes.try_into().unwrap()));
+        pending.extend_from_slice(&input[..read]);
+        loop {
+            if pending.len() < 5 {
+                break;
+            }
+            let length = u32::from_be_bytes(pending[1..5].try_into().unwrap()) as usize;
+            if length == 0 || length > FRAME_LIMIT {
+                if active.is_some() {
+                    health.lost(1);
+                }
+                return;
+            }
+            if pending.len() < 5 + length {
+                break;
+            }
+            let tag = pending[0];
+            let body = pending[5..5 + length].to_vec();
+            pending.drain(..5 + length);
+            if active.is_none() {
+                if tag != 0 || length != KEY_LEN || body.as_slice().ct_eq(key).unwrap_u8() != 1 {
+                    return;
+                }
+                health.seen.store(true, Ordering::Relaxed);
+                health.active.fetch_add(1, Ordering::Relaxed);
+                active = Some(Active(health.clone()));
                 continue;
             }
-            _ => break,
-        };
-        match tx.try_send(event) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => health.lost(length as u64),
-            Err(TrySendError::Disconnected(_)) => return,
+            let event = match tag {
+                1 => Event::Data("stdout", body),
+                2 => Event::Data("stderr", body),
+                3 if length == 8 => {
+                    health.lost(u64::from_be_bytes(body.try_into().unwrap()));
+                    continue;
+                }
+                _ => {
+                    health.lost(1);
+                    return;
+                }
+            };
+            match tx.try_send(event) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => health.lost(length as u64),
+                Err(TrySendError::Disconnected(_)) => return,
+            }
         }
     }
+    if active.is_some() && !pending.is_empty() {
+        health.lost(pending.len() as u64);
+    }
+}
+
+/// Read the kernel socket buffer directly without waiting for reactor readiness.
+fn try_drain(stream: &UnixStream, buffer: &mut [u8]) -> io::Result<usize> {
+    // SAFETY: the descriptor remains owned by stream; buffer is writable for
+    // its full length and MSG_DONTWAIT prevents the call from blocking.
+    let count = unsafe {
+        libc::recv(
+            stream.as_raw_fd(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            libc::MSG_DONTWAIT,
+        )
+    };
+    if count < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(count as usize)
 }
 
 #[cfg(test)]
@@ -587,8 +653,15 @@ mod tests {
         let key = b"0123456789abcdef0123456789abcdef";
         let health = Arc::new(Health::default());
         let (tx, rx) = mpsc::sync_channel(8);
+        let (_shutdown, receiver) = watch::channel(false);
         let (mut guest, host) = UnixStream::pair().unwrap();
-        let task = tokio::spawn(connection(host, key, tx.clone(), health.clone()));
+        let task = tokio::spawn(connection(
+            host,
+            key,
+            tx.clone(),
+            health.clone(),
+            receiver.clone(),
+        ));
         guest.write_all(&[0, 0, 0, 0, 32]).await.unwrap();
         guest
             .write_all(b"bad-key-01234567bad-key-01234567")
@@ -600,7 +673,7 @@ mod tests {
         assert!(!health.seen.load(Ordering::Relaxed));
 
         let (mut guest, host) = UnixStream::pair().unwrap();
-        let task = tokio::spawn(connection(host, key, tx, health.clone()));
+        let task = tokio::spawn(connection(host, key, tx, health.clone(), receiver));
         guest.write_all(&[0, 0, 0, 0, 32]).await.unwrap();
         guest.write_all(key).await.unwrap();
         guest
@@ -628,5 +701,72 @@ mod tests {
         prepare(&runtime, "0123456789abcdef0123456789abcdef").unwrap();
         assert!(start(&runtime).is_none());
         assert_eq!(read(&runtime, 0, 1).unwrap().status, Status::Error);
+    }
+
+    /// Connect a guest and wait until its authenticated stream is active.
+    async fn connected_collector() -> (tempfile::TempDir, HostRuntimePaths, Collector, UnixStream) {
+        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let runtime = HostRuntimePaths::in_dir(directory.path().to_owned());
+        let key = "0123456789abcdef0123456789abcdef";
+        prepare(&runtime, key).unwrap();
+        let collector = start(&runtime).unwrap();
+        let mut guest = UnixStream::connect(socket_path(&runtime)).await.unwrap();
+        guest.write_all(&[0, 0, 0, 0, 32]).await.unwrap();
+        guest.write_all(key.as_bytes()).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while read(&runtime, 0, 1).unwrap().status != Status::Active {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("guest did not authenticate");
+        (directory, runtime, collector, guest)
+    }
+
+    #[tokio::test]
+    async fn finish_drains_complete_frames_without_waiting_for_peer_eof() {
+        let (_directory, runtime, collector, mut guest) = connected_collector().await;
+        guest
+            .write_all(&[1, 0, 0, 0, 3, b'o', b'u', b't'])
+            .await
+            .unwrap();
+        guest
+            .write_all(&[2, 0, 0, 0, 3, b'e', b'r', b'r'])
+            .await
+            .unwrap();
+        // Keep the connection open: waiting for its EOF used to delay VM exit.
+        tokio::time::timeout(Duration::from_millis(1500), collector.finish())
+            .await
+            .expect("collector waited for peer EOF");
+        let batch = read(&runtime, 0, 10).unwrap();
+        assert!(
+            batch
+                .records
+                .iter()
+                .any(|record| record.stream == "stdout" && record.message == "out")
+        );
+        assert!(
+            batch
+                .records
+                .iter()
+                .any(|record| record.stream == "stderr" && record.message == "err")
+        );
+        assert!(!batch.truncated);
+    }
+
+    #[tokio::test]
+    async fn finish_reports_an_incomplete_frame_as_lost() {
+        let (_directory, runtime, collector, mut guest) = connected_collector().await;
+        guest
+            .write_all(&[1, 0, 0, 0, 8, b'p', b'a', b'r'])
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_millis(1500), collector.finish())
+            .await
+            .expect("collector waited for a partial frame");
+        let batch = read(&runtime, 0, 10).unwrap();
+        assert!(batch.truncated);
+        assert!(batch.records.iter().any(|record| record.stream == "system"));
+        assert!(!batch.records.iter().any(|record| record.stream == "stdout"));
     }
 }
