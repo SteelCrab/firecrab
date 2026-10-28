@@ -33,7 +33,7 @@ test("SEC9: CRUD survives an API restart and leaves only encrypted values on dis
   await expect(page.getByLabel("qa-DB_PASSWORD value", { exact: true })).toHaveText(value);
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete qa-DB_PASSWORD", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "No secrets yet", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Internal secrets", exact: true }).getByRole("status")).toContainText("No secrets yet");
   await local.restart();
   expect(await local.rows()).toEqual([]);
 });

@@ -142,6 +142,9 @@ test.describe("Secrets web console @dashboard", () => {
         await click;
         await expect(remove).toHaveCount(accept ? 0 : 1);
         expect(writes.filter(write => write.method === "DELETE" && write.path === path)).toHaveLength(accept ? 1 : 0);
+        if (accept && path === `/api/secrets/${ID}`) {
+          await expect(page.getByRole("region", { name: "Internal secrets", exact: true }).getByRole("status")).toContainText("No secrets yet");
+        }
       }
     }
   });
