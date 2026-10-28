@@ -89,7 +89,7 @@ test.describe("SSH access", () => {
 
     const ipv4 = dialog.locator(".console-ssh-block").filter({ has: page.locator(".console-ssh-block-label", { hasText: /^IPv4$/ }) });
     await ipv4.getByRole("button", { name: "Copy IPv4", exact: true }).click();
-    await expect(page.getByRole("status")).toContainText("Copied");
+    await expect(page.getByRole("status").filter({ hasText: "Copied" })).toBeVisible();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("ssh -i firecrab-api-gateway.pem root@10.42.0.11");
 
     await expect(dialog.locator(".console-ssh-code.is-masked")).toHaveCount(1);

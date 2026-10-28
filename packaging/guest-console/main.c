@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #define _GNU_SOURCE
+#include "app_log.h"
 #include "resize.h"
 #include "user.h"
 #include <errno.h>
@@ -20,6 +21,8 @@ int main(int argc, char **argv) {
         puts("firecrab-guest-console 1");
         return 0;
     }
+    if (argc == 2 && !strcmp(argv[1], "--app-log-check")) return 0;
+    if (argc >= 3 && !strcmp(argv[1], "--app-run")) return firecrab_app_log_run(argc - 2, argv + 2);
     if (argc != 1) return 2;
     signal(SIGPIPE, SIG_IGN);
     int server;

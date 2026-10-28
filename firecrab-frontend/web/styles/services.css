@@ -1,63 +1,157 @@
-/* Keep service identity and runtime separate from deployment inputs. */
+/* MicroService (spec §7.5): the list, and the panel with its Overview, Instances, Releases and Settings tabs.
+   Tables, name cells, status dots, row actions and the panel head are the shared ones (lists.css, detail.css). */
+
+/* List: name, port, replicas, domain, row actions. One line in every cell; the full text is the tooltip. */
 .service-list { min-width: 0; }
-.service-table th { color: var(--text-3); font-size: 12px; font-weight: 500; }
-.service-table th:nth-last-child(3) { width: 72px; }
-.service-table th:nth-last-child(2) { width: 80px; }
-.service-table th:last-child { width: 48px; }
-.service-table td { height: 76px; vertical-align: middle; }
-.service-table tr[aria-selected="true"] td { background: var(--bg-subtle); }
-.service-name { display: block; max-width: 100%; padding: 0; border: 0; background: none; color: var(--text); font: 600 14px/1.5 var(--font); cursor: pointer; text-align: left; }
-.service-name, .service-image { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.service-name:hover { text-decoration: underline; text-underline-offset: 3px; }
-.service-name:disabled { color: var(--text-3); cursor: default; text-decoration: none; }
-.service-image { display: block; margin-top: 4px; color: var(--text-3); font-size: 12px; }
-.service-row-menu { position: relative; }
-.service-row-menu summary { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius); color: var(--text-2); cursor: pointer; list-style: none; }
+.service-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.service-table .service-col-port { width: 80px; }
+.service-table .service-col-replicas { width: 88px; }
+.service-table .service-col-domain { width: 200px; }
+.service-table .service-col-actions { width: 96px; }
+.service-table td.row-actions { overflow: visible; }
+
+/* The row's menu (Edit, Delete) opens over the table. */
+.service-row-menu { position: relative; display: inline-block; vertical-align: middle; }
+.service-row-menu summary { list-style: none; }
 .service-row-menu summary::-webkit-details-marker { display: none; }
-.service-row-menu summary:hover, .service-row-menu[open] summary { background: var(--bg-hover); }
-.service-row-actions { position: absolute; right: 0; top: 36px; z-index: 10; display: grid; min-width: 170px; max-width: 260px; gap: 4px; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); box-shadow: var(--shadow-pop); }
-.service-row-actions .btn { justify-content: flex-start; border: 0; box-shadow: none; height: auto; min-height: 32px; padding: 8px; text-align: left; }
-.service-panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 24px; border-bottom: 1px solid var(--border); }
-.service-panel-head > div { min-width: 0; }
-.service-eyebrow { color: var(--text-3); font-size: 12px; }
-.service-panel-head h2 { margin: 4px 0 0; font-size: 18px; font-weight: 600; letter-spacing: -0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.service-panel-head > .btn { border: 0; box-shadow: none; color: var(--text-2); }
-.service-panel-body { padding: 24px; }
+.service-row-menu[open] summary { background: var(--bg-hover); color: var(--text); opacity: 1; }
+.service-row-actions { position: absolute; right: 0; top: 32px; z-index: 10; display: grid; min-width: 170px; max-width: 260px; gap: 4px; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); box-shadow: var(--shadow-pop); }
+.service-row-actions .btn { justify-content: flex-start; border: 0; box-shadow: none; height: auto; min-height: 32px; padding: 8px; text-align: left; white-space: normal; }
+
+/* Overview: the Deployment section, first in the tab. Without a deployment the status line stands alone
+   (and above the Deploy form), with the rule a section would have under it. */
+.service-status-block { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border-soft); }
 .service-runtime { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.service-state { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 600; }
-.service-state::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--text-4); flex: none; }
-.service-state[data-phase="running"]::before { background: var(--green); }
-.service-state[data-phase="failed"]::before, .service-state[data-phase="degraded"]::before { background: var(--red); }
+.service-runtime:last-child { margin-bottom: 0; }
+.service-state { margin: 0; font-size: 14px; font-weight: 600; }
+.service-state .status { color: var(--text); font-size: 14px; font-weight: 600; }
 .service-health { color: var(--text-2); font-size: 12px; white-space: nowrap; }
-.service-endpoint { display: block; margin: 0 0 16px; font-size: 13px; overflow-wrap: anywhere; }
-.service-disclosure { border-top: 1px solid var(--border); }
-.service-disclosure summary { display: flex; align-items: center; gap: 8px; padding: 15px 0; font-size: 13px; font-weight: 500; cursor: pointer; list-style: none; }
-.service-disclosure summary::-webkit-details-marker { display: none; }
-.service-disclosure summary::before { content: '›'; width: 12px; color: var(--text-3); font-size: 17px; line-height: 1; }
-.service-disclosure[open] > summary::before { transform: rotate(90deg); }
-.service-disclosure summary span { margin-left: auto; color: var(--text-3); font-size: 12px; font-weight: 400; }
-.service-disclosure .wasm-log { margin: 0 0 16px; padding: 12px; border-radius: var(--radius); background: var(--bg-subtle); font-size: 12px; line-height: 1.6; }
-.service-instances { font-size: 12px; margin-bottom: 16px; }
-.service-instances th, .service-instances td { padding: 10px 4px; }
-.service-instance-id { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
-.service-config { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; margin: 4px 0 20px; font-size: 12px; }
-.service-config dt { color: var(--text-3); }
-.service-config dd { margin: 0; overflow-wrap: anywhere; }
-.service-disclosure > .wasm-actions { margin-bottom: 16px; }
-#service-controls:not(:empty) { margin: 16px 0; }
-.service-panel-body > .detail-actions { margin: 16px 0; }
-#service-deploy-form { margin: 24px 0; }
-#service-deploy-form h2 { font-size: 14px; margin: 0 0 16px; }
-#service-deploy-form .wasm-form { gap: 12px; }
-#service-deploy-form p { margin: 0; color: var(--text-2); font-size: 12px; }
-.service-panel #deploy-panel section { margin: 20px 0; }
-.service-panel #deploy-panel h3 { display: none; }
-.service-panel #deploy-panel p { color: var(--text-2); font-size: 12px; }
+.service-endpoint { display: block; margin: 0 0 12px; font-size: 13px; overflow-wrap: anywhere; }
+.service-endpoint:last-child { margin-bottom: 0; }
+#service-status [role="alert"] { margin: 12px 0 0; color: var(--red-ink); font-size: 12.5px; }
+.service-update { margin: 10px 0 0; color: var(--text-2); font-size: 12.5px; }
+.service-update .mono { color: var(--text); font-size: 12px; }
+/* One cell per replica: healthy, the next one in progress, the rest waiting. */
+.service-progress { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; margin-top: 10px; }
+.service-progress i { height: 6px; border-radius: 3px; background: #efeff2; }
+.service-progress i[data-state="ok"] { background: var(--green); }
+.service-progress i[data-state="busy"] { background: var(--amber); }
+.service-panel .wasm-log { max-height: 160px; margin: 10px 0 0; padding: 10px 12px; border-radius: var(--radius); background: var(--bg-subtle); font: 11.5px/1.7 var(--mono); }
+/* Recent releases: a short list. The roll back icon is always shown and keeps its place on every row. */
+.release-recent .detail-list-main { font-size: 12px; }
+.release-recent li { min-height: 36px; }
+.release-roll { display: inline-flex; flex: none; justify-content: center; width: 28px; }
+
+/* Tables in the panel: the panel is 380px, so cells are tighter, the first and last sit on the content edge. */
+.service-panel .wasm-table :is(th, td) { padding-inline: 8px; }
+.service-panel .wasm-table :is(th, td):first-child { padding-left: 0; }
+.service-panel .wasm-table :is(th, td):last-child { padding-right: 0; }
+.service-instances .instance-col-ip { width: 98px; }
+.service-instances .instance-col-port { width: 54px; }
+.service-instances .instance-col-health { width: 90px; }
+.release-table .release-col-id { width: 132px; }
+.release-table .release-col-actions { width: 36px; }
+.release-table td:first-child { white-space: nowrap; }
+.release-table td:first-child :is(.status, .release-archived) { margin-left: 8px; }
+.release-archived { color: var(--text-4); font-size: 12.5px; }
+.release-table .cell-sub { font: 11.5px var(--mono); }
+.service-panel .wasm-table td.row-actions, .service-panel .wasm-table th.row-actions { width: 36px; padding-right: 0; }
+
+/* The first step of a setup: the account, repository and version pickers, one under the other. */
+#service-app-picker { display: flex; flex-direction: column; gap: 12px; }
+#service-app-picker > p { margin: 0; }
+#service-app-picker > .btn { align-self: flex-start; }
+
+/* The Deploy form's checks sit above it: each is a row that wraps, with room under it. */
+#service-controls:not(:empty), #service-auth-check:not(:empty), #service-placement:not(:empty) { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 16px; }
+#service-auth-check > p, #service-placement > p { flex: 1 0 100%; margin: 0; }
+
+/* Releases: update and roll back. */
+#deploy-panel section { margin: 0; }
+#deploy-panel p { margin: 0 0 12px; color: var(--text-2); font-size: 12px; line-height: 1.55; }
+#deploy-panel .wasm-actions { margin-bottom: 12px; }
+#deploy-panel .table-scroll { margin-bottom: 16px; }
+#deploy-panel .wasm-form { gap: 12px; margin-bottom: 12px; }
+
+
+/* Observability: logs, events, alerts and OTLP export, under the instances. */
+.service-observability { border-top: 1px solid var(--border); padding: 12px 0; min-width: 0; }
+.service-observability h3 { margin: 12px 0; font-size: 13px; }
+.service-observability .icon-btn[aria-pressed="true"] { background: var(--bg-hover); color: var(--text); }
+.service-observability-list { list-style: none; margin: 0; padding: 0; }
+.service-observability-list li { min-width: 0; border-top: 1px solid var(--border); padding: 10px 0; }
+.service-observability-list .meta { color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
+.service-observability-list pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-size: 12px; }
+.service-otlp-metrics { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; font-size: 12px; }
+.service-otlp-metrics dt { color: var(--text-3); }
+.service-otlp-metrics dd { margin: 0; }
 @media (max-width: 767px) {
-  .screen:has(#detail-panel[data-view="services"]:not([hidden])) .screen-head > .wasm-actions { display: none; }
-  .service-table th, .service-table td { padding-left: 8px; padding-right: 8px; }
-  .service-table th:nth-last-child(2) { width: 64px; }
-  .service-table th:nth-last-child(3) { width: 56px; }
-  .service-table th:last-child { width: 44px; }
-  .service-panel-head, .service-panel-body { padding: 20px; }
+  .screen:has(#detail-panel[data-view="services"]:not([hidden])) .screen-header-end > :not(#api-status) { display: none; }
+  .service-table :is(th, td) { padding-left: 8px; padding-right: 8px; }
+  .service-table .service-col-port { width: 56px; }
+  .service-table .service-col-replicas { width: 64px; }
+  .service-table .service-col-actions { width: 84px; }
+}
+
+/* New MicroService (spec §7.6): steps at the left, the step and its footer in the middle, what it
+   will create at the right. Like the New MicroVM page it fills #content and its footer bar sits at the
+   bottom of the page. In the panel the same steps are a row above the form. */
+.wasm-content:has(.wizard-page) { padding: 0; }
+.wizard-page { display: flex; flex: 1 0 auto; flex-direction: column; padding-top: 28px; }
+.wizard-page > header { margin: 0 32px 20px; }
+.wizard-page > header h2 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; }
+.wizard-page > header p { margin: 4px 0 0; color: var(--text-3); font-size: 13px; }
+.wizard-layout { display: grid; flex: 1 0 auto; grid-template-columns: 232px minmax(0, 1fr) 300px; min-width: 0; }
+.wizard-main { display: flex; flex-direction: column; min-width: 0; padding: 0 32px; }
+.wizard-main > h3 { margin: 0 0 16px; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+.wizard-main > form, .wizard-main > form > fieldset { display: flex; flex: 1 0 auto; flex-direction: column; gap: 0; min-width: 0; max-width: none; margin: 0; }
+.wizard-main > form > fieldset > .wasm-form { display: grid; gap: 14px; }
+.wizard-main .form-footer { margin: auto -32px 0; padding: 12px 32px; }
+.wizard-main #service-wizard-error:not(:empty) { margin-top: 12px; color: var(--red-ink); }
+
+.wizard-steps ol { display: grid; gap: 2px; margin: 0; padding: 0 0 0 32px; list-style: none; }
+.wizard-step { display: flex; align-items: center; gap: 10px; width: 100%; height: 34px; padding: 0 10px; border: 0; border-radius: var(--radius); background: none; color: var(--text-3); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.wizard-step:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.wizard-step:disabled { color: var(--text-5); cursor: default; }
+.wizard-step[aria-current="step"] { background: var(--bg-active); color: var(--text); font-weight: 600; }
+.wizard-step-no { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border: 1px solid var(--border-strong); border-radius: 50%; font-size: 11px; font-variant-numeric: tabular-nums; }
+.wizard-step[aria-current="step"] .wizard-step-no { border-color: var(--text); background: var(--text); color: var(--bg); }
+
+.wizard-summary { align-self: start; position: sticky; top: 0; margin: 0 32px 0 0; padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-lg, 10px); }
+.wizard-summary h3 { margin: 0 0 12px; font-size: 12px; font-weight: 600; color: var(--text-3); }
+.wizard-summary dl { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 10px 12px; margin: 0; font-size: 12.5px; }
+.wizard-summary dt { color: var(--text-4); }
+.wizard-summary dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+
+/* The Size step: three presets and a custom one. The CPU and memory boxes show only for the custom card. */
+.service-sizes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; order: -1; }
+.service-sizes[hidden] { display: none; }
+.size-card { position: relative; display: block; cursor: pointer; }
+.size-card input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.size-card-body { display: grid; gap: 4px; min-height: 84px; padding: 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); }
+.size-card-body b { font-size: 13.5px; font-weight: 600; }
+.size-card-body em { color: var(--text-3); font-size: 12px; font-style: normal; }
+.size-card-tag { position: absolute; top: 12px; right: 12px; color: var(--text-3); font-size: 11px; }
+.size-card input:checked + .size-card-body { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
+.size-card input:focus-visible + .size-card-body { box-shadow: 0 0 0 3px var(--accent-ring); }
+.size-card input:checked:focus-visible + .size-card-body { box-shadow: inset 0 0 0 1px var(--text), 0 0 0 3px var(--accent-ring); }
+
+/* In the panel the steps are a row above the form. */
+#detail-panel .wizard-steps ol { display: flex; gap: 6px; padding: 0 0 12px; overflow-x: auto; }
+#detail-panel .wizard-step { width: auto; height: 28px; padding: 0 8px; white-space: nowrap; }
+#detail-panel .service-sizes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+@media (max-width: 1279px) {
+  .wizard-layout { grid-template-columns: 232px minmax(0, 1fr); }
+  .wizard-summary { display: none; }
+}
+@media (max-width: 1023px) {
+  .wizard-page { padding-top: 20px; }
+  .wizard-page > header { margin-inline: 16px; }
+  .wizard-layout { grid-template-columns: minmax(0, 1fr); }
+  .wizard-steps ol { display: flex; gap: 6px; padding: 0 16px 12px; overflow-x: auto; }
+  .wizard-step { width: auto; white-space: nowrap; }
+  .wizard-main { padding: 0 16px; }
+  .wizard-main .form-footer { margin-inline: -16px; padding-inline: 16px; }
+  .service-sizes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

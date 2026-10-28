@@ -227,6 +227,7 @@ impl Store {
             tx.commit()?;
             return Ok(Claim::Obsolete);
         };
+        let previous = current.clone();
         if current.phase == ServicePhase::Queued {
             current.phase = ServicePhase::Importing;
             if current.log.len() >= 128 {
@@ -234,6 +235,7 @@ impl Store {
             }
             current.log.push("Deploy admitted from queue".into());
         }
+        super::service_observation::observe(&tx, Some(&previous), &current)?;
         let text =
             serde_json::to_string(&current).map_err(|error| PersistenceError::CorruptRecord {
                 id: id.to_string(),

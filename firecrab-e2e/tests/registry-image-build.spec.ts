@@ -117,6 +117,8 @@ async function open(
   });
   await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
   await page.goto("/#/images");
+  // Pulled registry images are the third tab of the images screen.
+  await page.getByRole("tab", { name: /Registry images/ }).click();
   const panel = page.locator("main");
   const row = panel.locator(".pulled-image-row");
   return {
@@ -149,8 +151,9 @@ test.describe("Pulled registry images in M2Image @dashboard", () => {
         .getByRole("button", { name: "Build M2Image", exact: true })
         .click();
       await expect(m.row).toContainText("Building…");
+      await page.getByRole("tab", { name: /^Installed/ }).click();
       await expect(
-        page.getByRole("cell", { name: SOURCE.templateAlias, exact: true }),
+        page.getByRole("cell", { name: new RegExp(`^${SOURCE.templateAlias}(\s|$)`) }),
       ).toBeVisible();
       const repository = reference.split("@")[0].replace(/:[^/]+$/, "");
       expect(m.requests).toEqual([{ reference: `${repository}@${DIGEST}` }]);
@@ -174,9 +177,10 @@ test.describe("Pulled registry images in M2Image @dashboard", () => {
     await m.row
       .getByRole("button", { name: "Build M2Image", exact: true })
       .click();
-    await expect(
-      page.getByRole("cell", { name: SOURCE.templateAlias, exact: true }),
-    ).toBeVisible();
+    await page.getByRole("tab", { name: /^Installed/ }).click();
+      await expect(
+        page.getByRole("cell", { name: new RegExp(`^${SOURCE.templateAlias}(\s|$)`) }),
+      ).toBeVisible();
     expect(m.requests).toHaveLength(2);
   });
   test("resumes a running build after reload without another import", async ({
@@ -188,11 +192,13 @@ test.describe("Pulled registry images in M2Image @dashboard", () => {
       .click();
     await expect(m.row).toContainText("Building…");
     await page.reload();
+    await page.getByRole("tab", { name: /Registry images/ }).click();
     await expect(m.row).toContainText("Building…");
     m.allowBuild();
-    await expect(
-      page.getByRole("cell", { name: SOURCE.templateAlias, exact: true }),
-    ).toBeVisible();
+    await page.getByRole("tab", { name: /^Installed/ }).click();
+      await expect(
+        page.getByRole("cell", { name: new RegExp(`^${SOURCE.templateAlias}(\s|$)`) }),
+      ).toBeVisible();
     expect(m.requests).toHaveLength(1);
   });
   test("reports an unavailable inventory and recovers on refresh", async ({
@@ -203,7 +209,11 @@ test.describe("Pulled registry images in M2Image @dashboard", () => {
       "Pulled image list unavailable",
     );
     m.allowList();
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.waitForResponse(
+      (r) =>
+        new URL(r.url()).pathname === "/api/images" &&
+        r.request().method() === "GET",
+    );
     await expect(m.row).toContainText("Build required");
     await expect(page.getByRole("alert")).toHaveCount(0);
   });
@@ -219,8 +229,9 @@ test.describe("Pulled registry images in M2Image @dashboard", () => {
     await m.row
       .getByRole("button", { name: "Build M2Image", exact: true })
       .click();
-    await expect(
-      page.getByRole("cell", { name: SOURCE.templateAlias, exact: true }),
-    ).toBeVisible();
+    await page.getByRole("tab", { name: /^Installed/ }).click();
+      await expect(
+        page.getByRole("cell", { name: new RegExp(`^${SOURCE.templateAlias}(\s|$)`) }),
+      ).toBeVisible();
   });
 });

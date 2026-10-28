@@ -44,13 +44,13 @@ test("IPv6 defaults to IPv4-only and supports SLAAC or DHCPv6", async ({
 }) => {
   await openEnglish(page, "/#/networks");
   await page.locator('[data-action="create"][data-id="networks"]').click();
-  const mode = page.locator("#field-ipv6AddressMode");
-  await expect(mode).toHaveValue("");
+  const mode = page.getByRole("radiogroup", { name: "IPv6 address mode", exact: true });
+  await expect(mode.getByRole("radio", { name: "Default", exact: true })).toBeChecked();
   await expect(page.locator("#field-ipv6Cidr")).toHaveValue("");
-  await mode.selectOption("slaac");
-  await expect(mode).toHaveValue("slaac");
-  await mode.selectOption("dhcpv6");
-  await expect(mode).toHaveValue("dhcpv6");
+  await mode.getByRole("radio", { name: "SLAAC", exact: true }).check();
+  await expect(mode.getByRole("radio", { name: "SLAAC", exact: true })).toBeChecked();
+  await mode.getByRole("radio", { name: "DHCPv6", exact: true }).check();
+  await expect(mode.getByRole("radio", { name: "DHCPv6", exact: true })).toBeChecked();
 });
 
 test("creates an IPv4-only network and an auto-ULA dual-stack network", async ({

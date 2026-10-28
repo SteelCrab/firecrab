@@ -219,7 +219,7 @@ test.describe("PipeStorage @dashboard", () => {
     page,
   }) => {
     await open(page, { overview: true, bound: true });
-    await page.locator('#content a[href="#/pipe/storage"]').click();
+    await page.locator('#content a.pipe-row[href="#/pipe/storage"]').click();
     await expect(
       page.getByRole("region", { name: "PipeStorage", exact: true }),
     ).toContainText("web");
@@ -239,7 +239,7 @@ test.describe("PipeStorage @dashboard", () => {
   }) => {
     const m = await open(page, { empty: true });
     await connect(page);
-    await page.getByLabel("Folder (optional)", { exact: true }).fill("team");
+    await page.getByLabel("Folder", { exact: true }).fill("team");
     await expect(page.getByLabel("Region", { exact: true })).toHaveValue(
       "ap-northeast-2",
     );
@@ -259,10 +259,11 @@ test.describe("PipeStorage @dashboard", () => {
   }) => {
     const m = await open(page, { empty: true });
     await connect(page);
-    await page.getByLabel("Name (optional)", { exact: true }).fill("Reports");
+    await page.getByLabel("Name", { exact: true }).fill("Reports");
     await page
-      .getByLabel("Credentials", { exact: true })
-      .selectOption("connection");
+      .getByRole("radiogroup", { name: "Credentials", exact: true })
+      .getByRole("radio", { name: "Separate AWS keys", exact: true })
+      .check();
     await page
       .getByLabel("AWS access key ID", { exact: true })
       .fill("FIXTURE_KEY");
@@ -270,7 +271,7 @@ test.describe("PipeStorage @dashboard", () => {
       .getByLabel("AWS secret access key", { exact: true })
       .fill("private-secret");
     await page
-      .getByLabel("Session token (optional)", { exact: true })
+      .getByLabel("Session token", { exact: true })
       .fill("private-session");
     await save(page);
     await expect(editor(page)).toHaveCount(0);
@@ -283,7 +284,7 @@ test.describe("PipeStorage @dashboard", () => {
       .getByRole("button", { name: "Edit connection", exact: true })
       .click();
     await expect(page.locator("#field-secretAccessKey")).toHaveValue("");
-    await page.getByLabel("Name (optional)", { exact: true }).fill("Changed");
+    await page.getByLabel("Name", { exact: true }).fill("Changed");
     await save(page);
     await expect.poll(() => m.writes.length).toBe(2);
     expect(m.writes[1]).not.toHaveProperty("credentials");
@@ -300,7 +301,7 @@ test.describe("PipeStorage @dashboard", () => {
     await browse(page);
     await page.getByRole("button", { name: "Load more", exact: true }).click();
     await expect(
-      page.getByRole("cell", { name: "next.csv", exact: true }),
+      page.getByRole("cell", { name: /^next\.csv(\s|$)/ }),
     ).toBeVisible();
     expect(new URLSearchParams(m.listings[1]).get("cursor")).toBe(
       "opaque+/=&cursor",
@@ -328,11 +329,11 @@ test.describe("PipeStorage @dashboard", () => {
     await page
       .getByRole("button", { name: "Edit connection", exact: true })
       .click();
-    await page.getByLabel("Name (optional)", { exact: true }).fill("Changed");
+    await page.getByLabel("Name", { exact: true }).fill("Changed");
     await save(page);
     await expect(page.getByRole("alert")).toContainText("AWS rejected");
     await expect(
-      page.getByLabel("Name (optional)", { exact: true }),
+      page.getByLabel("Name", { exact: true }),
     ).toHaveValue("Changed");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await browse(page);
@@ -369,7 +370,7 @@ test.describe("PipeStorage @dashboard", () => {
     page.once("dialog", (d) => d.accept());
     await page.getByRole("button", { name: "Upload", exact: true }).click();
     await expect(
-      page.getByRole("cell", { name: "upload.bin", exact: true }),
+      page.getByRole("cell", { name: /^upload\.bin(\s|$)/ }),
     ).toBeVisible();
     expect(m.operations.filter((o) => o.method === "PUT")).toMatchObject([
       { key: "team/upload.bin", size: 5, overwrite: "false" },
@@ -385,7 +386,7 @@ test.describe("PipeStorage @dashboard", () => {
       .getByRole("button", { name: "team/archive/", exact: true })
       .click();
     await expect(
-      page.getByRole("cell", { name: "report.csv", exact: true }),
+      page.getByRole("cell", { name: /^report\.csv(\s|$)/ }),
     ).toBeVisible();
     await page
       .getByRole("button", { name: "team/archive/2025/", exact: true })

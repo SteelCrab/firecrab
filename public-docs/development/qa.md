@@ -40,6 +40,8 @@ The Firecrab API host is native Linux or managed Debian on macOS/Windows.
 | `scripts/test-pipe-cli.py` | Real systemd CLI routing, default private-engine discovery, explicit overrides, missing-engine status without traffic loss, rollback, and cleanup |
 | `scripts/test-pipe-api.py` | Unprivileged API through the systemd helper; route preservation and ingress lifecycle |
 | `scripts/test-pipe-runtime.py` | Real ingress routing, health, reload, independent Quick Tunnel targets, and rejected-config rollback |
+| `scripts/check-public-tunnel.py` | Read-only public DNS, TLS, Console and registration preflight; no app acceptance |
+| `scripts/check-public-tunnel-app.py` | HTTPS fixture response and WebSocket echo through an owned public test address; does not manage connections |
 | `scripts/test-ingress-install.sh` | Isolated initial install/reinstall; executable mode, all attributions, and saved routes, with fake service controls |
 | `scripts/ci-qa-pipe-databases.sh --browser` | PDB1–PDB12; real API, PostgreSQL/MySQL, TLS and desktop/mobile browser checks |
 | `scripts/test-pipe-databases-qa.py` | Database QA remote-host guard and cleanup after failures |

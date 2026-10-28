@@ -108,14 +108,8 @@ pub fn content(a: &App) -> String {
         "<div class=\"sb-layout\"><aside class=\"sb-projects\" aria-label=\"{}\"><div class=\"sb-projects-title\"><span>{}</span>{}</div><div class=\"sb-project-list\">",
         tr(a, "Sandbox projects", "Sandbox 프로젝트"),
         tr(a, "Projects", "프로젝트"),
-        btn(
-            tr(a, "New project", "새 프로젝트"),
-            "sb-new",
-            "",
-            "plus",
-            "icon-btn",
-            s.busy
-        )
+        // New project is the primary action of the screen header.
+        ""
     );
     for p in s.projects.iter().flatten() {
         let id = text(p, "id");

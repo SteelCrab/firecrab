@@ -91,6 +91,7 @@ async fn deploy_with_id(
     let service = database(request_id.0, move || store.micro_service(id))
         .await?
         .ok_or_else(|| AppError::not_found(request_id.0))?;
+    crate::otlp::preflight_service(&state, id, &service.spec, request_id.0).await?;
     validate_database_bindings(&state, id, request_id.0)?;
     require_image_auth(&state, &service.spec.image, request_id.0).await?;
     crate::queues::validate_bindings(&state, &service.spec, request_id.0).await?;

@@ -47,6 +47,7 @@ jobs:
           ./scripts/build-guest-console.sh target/ingress
           python3 scripts/test-guest-console.py
           sudo python3 scripts/test-sandbox-user.py
+          python3 scripts/test-guest-app-log.py
 
       - name: Verify bundled ingress installation
         run: sudo bash scripts/test-ingress-install.sh target/ingress
@@ -76,6 +77,13 @@ jobs:
 
       - name: Deploy QA guards and OCI fixture contract
         run: python3 scripts/test-ci-qa-deploy.py
+
+      - name: Public Tunnel preflight contract
+        run: python3 scripts/test-check-public-tunnel.py
+
+      - name: Public Tunnel app probe contract
+        run: python3 scripts/test-check-public-tunnel-app.py
+
       - name: CI Deploy Action client contract
         run: python3 scripts/test-deploy-ci-client.py
 
@@ -880,8 +888,8 @@ jobs:
 
       - name: Deploy with real MicroVMs and Nginx
         if: ${{ !cancelled() && steps.guest-kernel.outcome == 'success' }}
-        timeout-minutes: 20
-        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation --replica-recovery --queue-controls --automatic-deploy --ci-deploy --report target/qa/secret-rotation.json 2>&1 | tee target/qa/deploy.log
+        timeout-minutes: 25
+        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation --replica-recovery --queue-controls --automatic-deploy --ci-deploy --observability --report target/qa/secret-rotation.json 2>&1 | tee target/qa/deploy.log
 
       - name: Retain Deploy acceptance evidence
         if: always()

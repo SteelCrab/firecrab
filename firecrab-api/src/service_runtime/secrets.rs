@@ -141,10 +141,26 @@ pub(crate) async fn guest_env(
         .await
         .map_err(|_| "Could not read service ownership")?
         .map_err(|_| "Could not read service ownership")?;
-    let Some(deployment) = deployment.filter(|record| !record.spec.secrets.is_empty()) else {
+    let Some(deployment) = deployment else {
         return Ok(vm.env.clone());
     };
     let mut env = vm.env.clone();
+    // Observability is a current operator setting, separate from immutable
+    // release configuration. It takes effect only on a later guest boot.
+    let store = state.store.clone();
+    let service_id = deployment.service_id;
+    let endpoint = tokio::task::spawn_blocking(move || store.otlp_endpoint(service_id))
+        .await
+        .map_err(|_| "Could not read service OTLP configuration")?
+        .map_err(|_| "Could not read service OTLP configuration")?;
+    if let Some(endpoint) = endpoint {
+        let names = deployment.spec.secrets.keys().cloned().collect();
+        env = crate::otlp::application_env(&endpoint, &deployment.spec.name, &env, &names)
+            .map_err(|error| error.to_string())?;
+    }
+    if deployment.spec.secrets.is_empty() {
+        return Ok(env);
+    }
     vault(state, move |vault| {
         vault.read(|contents| {
             let secrets =

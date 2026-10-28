@@ -2,7 +2,7 @@ use crate::{
     App, Shared, api, element,
     i18n::t,
     model::{escape, list, text},
-    render::button,
+    render::{Icon, button, empty_state, name_cell, status_dot},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -60,50 +60,78 @@ fn disabled(value: bool) -> &'static str {
 }
 
 pub fn content(app: &App) -> String {
-    let mut html = format!(
-        "<p>{}</p>",
+    let ko = app.locale == "ko";
+    let hint = format!(
+        "<p class=\"volume-hint\">{}</p>",
         t("Data volumes survive VM deletion. Attach them in the Volumes tab of a stopped MicroVM.")
     );
     if list(&app.resource).is_empty() {
-        html.push_str(&format!(
-            "<p class=\"empty-state\">{}</p>",
-            t("No data volumes yet.")
-        ));
-        return html;
+        return empty_state(
+            "volumes",
+            if ko {
+                "데이터 볼륨이 없습니다"
+            } else {
+                "No data volumes"
+            },
+            if ko {
+                "VM을 지워도 남는 디스크입니다. 중지된 MicroVM에 붙이면 데이터가 유지됩니다."
+            } else {
+                "Disks that stay after a VM is deleted. Attach one to a stopped MicroVM to keep its data."
+            },
+            &button("Create volume", "create", "volumes"),
+        );
     }
-    html.push_str(
-        "<div class=\"volume-table-scroll\"><table class=\"wasm-table volume-table\"><thead><tr>",
-    );
-    for label in [
-        "Name",
-        "Size (GiB)",
-        "State",
-        "Storage",
-        "MicroVM",
-        "Mount path",
-        "Actions",
-    ] {
-        html.push_str(&format!("<th>{}</th>", t(label)));
-    }
-    html.push_str("</tr></thead><tbody>");
+    let mut html = hint;
+    html.push_str(&format!(
+        "<div class=\"table-scroll volume-table-scroll\"><table class=\"wasm-table volume-table\"><thead><tr><th>{}</th><th>{}</th><th class=\"col-secondary\">{}</th><th class=\"col-secondary\">{}</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
+        t("Name"),
+        t("State"),
+        t("MicroVM"),
+        t("Storage"),
+        t("Actions")
+    ));
     for volume in list(&app.resource) {
         let vm = text(volume, "attachedVmId");
-        let owner = if vm.is_empty() {
-            "—".into()
-        } else {
+        let attached = !vm.is_empty();
+        let owner = if attached {
             let label = app
                 .vms
                 .iter()
                 .find(|item| item.id == vm)
                 .map(|item| item.name.as_str())
                 .unwrap_or(vm);
-            button(label, "navigate-vm", vm)
+            format!(
+                "{} <span class=\"mono volume-mount\">{}</span>",
+                button(label, "navigate-vm", vm),
+                escape(text(volume, "mountPath"))
+            )
+        } else {
+            "—".into()
         };
+        let sub = format!(
+            "{} GiB · {}",
+            volume["sizeGib"],
+            text(volume, "storageRoot")
+        );
         html.push_str(&format!(
-            "<tr><td><strong>{}</strong><div class=\"mono volume-id\" title=\"{}\">{}</div></td><td>{}</td><td>{}</td><td>{}</td><td>{owner}</td><td class=\"mono\">{}</td><td><button type=\"button\" class=\"btn danger\" data-action=\"volume-delete\" data-id=\"{}\" {}>{}</button></td></tr>",
-            escape(text(volume,"name")), escape(text(volume,"id")), escape(text(volume,"id")), volume["sizeGib"], t(text(volume,"state")),
-            escape(text(volume,"storageRoot")), escape(text(volume,"mountPath")), escape(text(volume,"id")),
-            disabled(app.busy || !available(volume)), t("Delete")
+            "<tr><td>{}</td><td>{}</td><td class=\"col-secondary\">{owner}</td><td class=\"col-secondary mono\">{}</td><td class=\"row-actions\"><button type=\"button\" class=\"icon-btn danger\" aria-label=\"{}\" title=\"{}\" data-action=\"volume-delete\" data-id=\"{}\" {}>{}</button></td></tr>",
+            name_cell(text(volume, "name"), &sub, "", false),
+            status_dot(
+                if attached { "ok" } else { "off" },
+                if attached {
+                    if ko { "연결됨" } else { "Attached" }
+                } else if ko {
+                    "사용 가능"
+                } else {
+                    "Available"
+                }
+            ),
+            escape(text(volume, "storageRoot")),
+            t("Delete"),
+            t("Delete"),
+            escape(text(volume, "id")),
+            disabled(app.busy || !available(volume)),
+            Icon::Delete.svg()
         ));
     }
     html.push_str("</tbody></table></div>");
@@ -199,8 +227,9 @@ pub fn panel(app: &App, vm: &Value) -> String {
         attached.len(),
         if can_attach && !app.volumes.attach_open {
             format!(
-                "<button id=\"volume-open-attach\" class=\"btn sm\" type=\"button\" data-action=\"volume-open-attach\"><span aria-hidden=\"true\">＋</span> {}</button>",
-                t("Attach volume")
+                "<button id=\"volume-open-attach\" class=\"icon-btn\" type=\"button\" aria-label=\"{label}\" title=\"{label}\" data-action=\"volume-open-attach\">{}</button>",
+                Icon::Attach.svg(),
+                label = t("Attach volume")
             )
         } else {
             String::new()
@@ -243,7 +272,7 @@ pub fn panel(app: &App, vm: &Value) -> String {
     }
     for volume in &attached {
         let id = text(volume, "id");
-        html.push_str(&format!("<div class=\"volume-item\"><div class=\"volume-item-head\"><span class=\"volume-icon\">{DISK_ICON}</span><div class=\"volume-item-name\"><strong>{}</strong><span>{} GiB</span></div><button class=\"btn ghost sm\" type=\"button\" id=\"volume-detach-{}\" data-action=\"volume-detach-prompt\" data-id=\"{}\" {}>{}</button></div><div class=\"volume-path\"><span>{}</span><code>{}</code></div>", escape(text(volume,"name")), volume["sizeGib"], escape(id), escape(id), disabled(!enabled), t("Detach"), t("Mount path"), escape(text(volume,"mountPath"))));
+        html.push_str(&format!("<div class=\"volume-item\"><div class=\"volume-item-head\"><span class=\"volume-icon\">{DISK_ICON}</span><div class=\"volume-item-name\"><strong>{}</strong><span>{} GiB</span></div><button class=\"icon-btn\" type=\"button\" id=\"volume-detach-{}\" aria-label=\"{detach}\" title=\"{detach}\" data-action=\"volume-detach-prompt\" data-id=\"{}\" {}>{}</button></div><div class=\"volume-path\"><span>{}</span><code>{}</code></div>", escape(text(volume,"name")), volume["sizeGib"], escape(id), escape(id), disabled(!enabled), Icon::Detach.svg(), t("Mount path"), escape(text(volume,"mountPath")), detach = t("Detach")));
         if app.volumes.detaching.as_deref() == Some(id) {
             html.push_str(&format!("<div class=\"volume-confirm\"><p>{}</p><div class=\"volume-editor-actions\">{}<button class=\"btn danger sm\" data-action=\"volume-detach\" data-id=\"{}\" {}>{}</button></div></div>", t("Detach this volume? Its data will be kept."), format_args!("<button id=\"volume-confirm-cancel\" class=\"btn sm\" data-action=\"volume-cancel\">{}</button>",t("Cancel")), escape(id), disabled(!enabled), t("Detach volume")));
         }

@@ -1,6 +1,37 @@
-/* MicroVM screen: toolbar, summary, list, detail panel (spec §8). */
+/* MicroVM screen: summary strip, toolbar, list, detail panel (spec §7.1). */
 
 .screen-body.flush { gap: 0; padding: 0; }
+
+/* Summary strip: four numbers in one row, 87px tall. Memory and disk carry a 4px bar. */
+
+.vm-summary {
+  display: grid;
+  flex-shrink: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.vm-summary-item { min-width: 0; padding: 0 20px; border-left: 1px solid var(--border); }
+.vm-summary-item:first-child { padding-left: 0; border-left: 0; }
+.vm-summary-item dt { color: var(--text-3); font-size: 12px; line-height: 16px; }
+.vm-summary-item dd { margin: 0; }
+.vm-summary-value {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 26px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vm-summary-value small { margin-left: 3px; color: var(--text-4); font-size: 13px; font-weight: 500; letter-spacing: 0; line-height: 1; }
+.vm-summary-bar { display: block; height: 4px; margin-top: 6px; overflow: hidden; border-radius: 2px; background: #efeff2; }
+.vm-summary-bar i { display: block; height: 100%; border-radius: inherit; background: #3f3f46; }
+.vm-summary-bar.warn i { background: var(--amber); }
 
 /* Toolbar */
 
@@ -10,8 +41,8 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  padding: 7px 12px 7px 16px;
-  border-bottom: 1px solid var(--border);
+  min-height: 48px;
+  padding: 0 20px 0 24px;
 }
 .vm-filters { display: flex; gap: 2px; }
 .vm-filter {
@@ -23,14 +54,13 @@
   border: 0;
   border-radius: 6px;
   background: none;
-  color: var(--text-2);
+  color: var(--text-3);
   font: 500 13px var(--font);
   cursor: pointer;
 }
-.vm-filter-count { color: var(--text-3); font-variant-numeric: tabular-nums; }
-.vm-filter[aria-selected="true"] { background: var(--bg-active); color: var(--text); }
-.vm-filter[aria-selected="true"] .vm-filter-count { color: var(--text-2); }
-@media (hover: hover) { .vm-filter:hover { background: var(--bg-hover); } }
+.vm-filter-count { color: var(--text-4); font-size: 12px; font-variant-numeric: tabular-nums; }
+.vm-filter[aria-selected="true"] { background: var(--bg-hover); color: var(--text); }
+@media (hover: hover) { .vm-filter[aria-selected="false"]:hover { color: var(--text-2); } }
 
 .vm-search {
   display: flex;
@@ -50,54 +80,23 @@
 .vm-search input::placeholder { color: var(--text-3); }
 .vm-search:focus-within { border-color: var(--border-strong); box-shadow: 0 0 0 3px var(--accent-ring); }
 
-/* Summary strip */
+.vm-list-footer { display: flex; flex-shrink: 0; align-items: center; gap: 12px; min-height: 28px; padding: 3px 24px; border-top: 1px solid var(--border); color: var(--text-3); font-size: 11.5px; }
+.vm-list-footer .btn { height: 22px; padding: 0 8px; font-size: 11.5px; }
+.vm-list-hint { margin-left: auto; }
 
-.vm-summary { display: grid; flex-shrink: 0; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border-bottom: 1px solid var(--border); }
-.vm-summary-item { min-width: 0; padding: 8px 20px 9px; border-right: 1px solid var(--border); }
-.vm-summary-item:last-child { border-right: 0; }
-.vm-summary-item dt { display: flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 12px; }
-.vm-summary-item dt svg { width: 14px; height: 14px; stroke-width: 1.75; }
-.vm-summary-item dd { margin: 0; }
-.vm-summary-value { display: block; margin-top: 1px; font-size: 18px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.3; font-variant-numeric: tabular-nums; }
-.vm-summary-value small { color: var(--text-3); font-size: 12.5px; font-weight: 500; letter-spacing: 0; }
-.vm-summary-bar { display: block; height: 4px; margin-top: 5px; overflow: hidden; border-radius: 99px; background: var(--gray-soft); }
-.vm-summary-bar i { display: block; height: 100%; border-radius: inherit; background: var(--text-2); }
-
-/* List */
+/* List: the head, rows, hover and selection come from `.wasm-table` (lists.css). */
 
 .vm-list-scroll { flex: 1; min-height: 0; overflow: auto; }
-table.vm-list { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+table.vm-list { table-layout: fixed; }
 .vm-col-state { width: 112px; }
 .vm-col-ip { width: 120px; }
 .vm-col-cpu { width: 116px; }
 .vm-col-mem { width: 104px; }
 .vm-col-actions { width: 132px; }
-.vm-list th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  height: 32px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-subtle);
-  color: var(--text-3);
-  font-size: 12px;
-  font-weight: 500;
-  text-align: left;
-  white-space: nowrap;
-}
-.vm-list td {
-  height: 54px;
-  padding: 0 12px;
-  overflow: hidden;
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-}
-.vm-list th:first-child, .vm-list td:first-child { padding-left: 20px; }
-.vm-list tbody tr { cursor: pointer; }
-@media (hover: hover) { .vm-list tbody tr:hover td { background: var(--bg-subtle); } }
-.vm-list tbody tr.selected td { background: #f5f5f7; }
-.vm-list tbody tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+/* The head stays in view while the rows scroll under it. */
+.vm-list th { position: sticky; top: 0; z-index: 1; background: var(--bg); }
+.vm-list td { overflow: hidden; white-space: nowrap; }
+.vm-list th:first-child, .vm-list td:first-child { padding-left: 24px; }
 
 .vm-row-name {
   display: block;
@@ -107,17 +106,16 @@ table.vm-list { width: 100%; border-collapse: separate; border-spacing: 0; table
   border: 0;
   background: none;
   color: var(--text);
-  font: 600 13px var(--font);
+  font: 600 13.5px var(--font);
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
 }
-.vm-row-sub { margin-top: 2px; overflow: hidden; color: var(--text-3); font-size: 12px; text-overflow: ellipsis; }
+.vm-row-sub { margin-top: 2px; overflow: hidden; color: var(--text-4); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .vm-row-sub.error { color: var(--red-ink); }
 .vm-row-sub.busy { color: var(--amber-ink); }
 .vm-nil { color: var(--text-4); }
-.vm-list .mono { font-size: 12px; }
 
 .vm-usage { display: inline-flex; align-items: center; gap: 8px; }
 .vm-usage-value { min-width: 34px; color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -134,26 +132,14 @@ table.vm-list { width: 100%; border-collapse: separate; border-spacing: 0; table
 .sparkline.warn .sparkline-area { fill: var(--amber-soft); }
 
 .vm-list td.vm-row-actions { padding: 0 10px 0 0; text-align: right; }
-.vm-row-actions .icon-btn { opacity: 0; }
-.vm-list tr:hover .vm-row-actions .icon-btn,
-.vm-list tr.selected .vm-row-actions .icon-btn,
-.vm-row-actions .icon-btn:focus-visible,
-.vm-row-actions .icon-btn[aria-expanded="true"] { opacity: 1; }
-@media (hover: none) { .vm-row-actions .icon-btn { opacity: 1; } }
+/* Row actions appear on hover, selection and focus: see `.row-actions` in lists.css. */
 
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* State badge used through StatusLabel keeps the tooltip but drops the old label look. */
+/* State label used through StatusLabel keeps the tooltip; the dot comes from `.badge`. */
 .state-label.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px 0 7px;
-  border-radius: 999px;
   font-family: var(--font);
-  font-size: 12px;
-  font-weight: 500;
   letter-spacing: 0;
   line-height: 22px;
 }
@@ -218,19 +204,18 @@ table.vm-list { width: 100%; border-collapse: separate; border-spacing: 0; table
 .vm-timeline-detail { grid-column: 2 / -1; padding-bottom: 6px; color: var(--red-ink); font-size: 12px; overflow-wrap: anywhere; }
 
 @media (max-width: 767px) {
-  .vm-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .vm-summary-item:nth-child(2) { border-right: 0; }
-  .vm-summary-item:nth-child(-n + 2) { border-bottom: 1px solid var(--border); }
+  /* Two items a row; the first of each row has no rule and no left padding. */
+  .vm-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 0; padding: 12px 16px; }
+  .vm-summary-item:nth-child(odd) { padding-left: 0; border-left: 0; }
+  .vm-list-footer { flex-wrap: wrap; padding: 8px 12px; }
+  .vm-list-hint { display: none; }
   .vm-search { width: 100%; margin-left: 0; }
-  .vm-list .vm-col-ip, .vm-list .vm-col-mem { display: none; }
-  /* Row actions live in the detail panel on a phone; the name gets the room. */
-  .vm-list col.vm-col-actions { width: 0; }
-  .vm-list thead th:last-child, .vm-list td.vm-row-actions { display: none; }
+  /* IPv4, CPU and memory hide through `.col-secondary` (lists.css). The name, the state and the row actions stay. */
   .vm-list col.vm-col-state { width: 92px; }
-  .vm-list col.vm-col-cpu { width: 92px; }
-  .vm-list .vm-usage .sparkline { display: none; }
+  .vm-list th:first-child, .vm-list td:first-child { padding-left: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .spin, .vm-timeline-step.running .vm-timeline-dot svg { animation: none; }
+  .vm-search { transition: none; }
 }

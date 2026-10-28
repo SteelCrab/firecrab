@@ -50,9 +50,9 @@ test("local AWS account: real Auth and shared S3 connection roundtrip", async ({
   await editor
     .getByLabel("Region", { exact: true })
     .fill(process.env.FIRECRAB_STORAGE_QA_REGION!);
-  await editor.getByLabel("Folder (optional)", { exact: true }).fill("qa/");
+  await editor.getByLabel("Folder", { exact: true }).fill("qa/");
   await editor
-    .getByLabel("Name (optional)", { exact: true })
+    .getByLabel("Name", { exact: true })
     .fill("Local AWS account QA");
   await editor.getByRole("button", { name: "Save", exact: true }).click();
   await expect(panel.getByRole("status")).toContainText("Saved");
@@ -80,10 +80,7 @@ test("local AWS account: real Auth and shared S3 connection roundtrip", async ({
   const row = page
     .getByRole("row")
     .filter({
-      has: page.getByRole("cell", {
-        name: "account-console-proof.txt",
-        exact: true,
-      }),
+      has: page.getByRole("cell", { name: /^account-console-proof\.txt(\s|$)/ }),
     });
   const file = row.getByRole("button", { name: "Download", exact: true });
   const pending = page.waitForEvent("download");

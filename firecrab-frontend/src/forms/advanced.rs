@@ -34,8 +34,8 @@ pub fn resource(kind: &str, data: &Value, id: &str) -> Option<Form> {
                             "ap-northeast-2".into()
                         },
                     ),
-                    Field::new("prefix", "Folder (optional)", "text", value("prefix")).optional(),
-                    Field::new("name", "Name (optional)", "text", value("name")).optional(),
+                    Field::new("prefix", "Folder", "text", value("prefix")).optional(),
+                    Field::new("name", "Name", "text", value("name")).optional(),
                     Field::new(
                         "credentialRef",
                         "Credentials",
@@ -57,11 +57,10 @@ pub fn resource(kind: &str, data: &Value, id: &str) -> Option<Form> {
                         if edit { "false" } else { "true" },
                     )
                     .choices(&[("false", "Keep saved keys"), ("true", "Replace keys")]),
-                    Field::new("accessKeyId", "AWS access key ID", "password", "").optional(),
+                    Field::new("accessKeyId", "AWS access key ID", "password", "").conditional(),
                     Field::new("secretAccessKey", "AWS secret access key", "password", "")
-                        .optional(),
-                    Field::new("sessionToken", "Session token (optional)", "password", "")
-                        .optional(),
+                        .conditional(),
+                    Field::new("sessionToken", "Session token", "password", "").optional(),
                 ],
                 "pipe/storage",
             );
@@ -156,7 +155,7 @@ pub fn resource(kind: &str, data: &Value, id: &str) -> Option<Form> {
                 format!("/api/schedules{suffix}"),
                 method,
                 vec![
-                    Field::new("name", "Name (optional)", "text", value("name")).optional(),
+                    Field::new("name", "Name", "text", value("name")).optional(),
                     Field::new("vmId", "MicroVM", "select", value("vmId")),
                     Field::new(
                         "action",
@@ -188,23 +187,23 @@ pub fn resource(kind: &str, data: &Value, id: &str) -> Option<Form> {
                         "time",
                         draft["time"].as_str().unwrap_or("09:00"),
                     )
-                    .optional(),
+                    .conditional(),
                     Field::new("date", "Date", "date", draft["date"].as_str().unwrap_or(""))
-                        .optional(),
+                        .conditional(),
                     Field::new(
                         "days",
                         "Days",
                         "days",
                         draft["days"].as_str().unwrap_or("Mon"),
                     )
-                    .optional(),
+                    .conditional(),
                     Field::new(
                         "expression",
                         "Cron expression",
                         "text",
                         text(timing, "expression"),
                     )
-                    .optional(),
+                    .conditional(),
                     Field::new(
                         "timeZone",
                         "Time zone",
@@ -215,7 +214,7 @@ pub fn resource(kind: &str, data: &Value, id: &str) -> Option<Form> {
                             text(timing, "timeZone").into()
                         },
                     )
-                    .optional(),
+                    .conditional(),
                     Field::new(
                         "enabled",
                         "Enabled",
@@ -272,32 +271,44 @@ pub fn resource(kind: &str, data: &Value, id: &str) -> Option<Form> {
                     ("awsSecretsManager", "AWS Secrets Manager"),
                 ]),
             ];
+            // The provider decides which of these show. The base URL (Firecrab) and the region
+            // (AWS) are required when they show.
             for (key, label, default) in [
                 ("baseUrl", "Base URL", ""),
                 ("region", "Region", "us-east-1"),
-                ("prefix", "Name prefix (optional)", ""),
+                ("prefix", "Name prefix", ""),
             ] {
-                fields.push(
-                    Field::new(
-                        key,
-                        label,
-                        "text",
-                        if text(settings, key).is_empty() {
-                            default
-                        } else {
-                            text(settings, key)
-                        },
-                    )
-                    .optional(),
+                let field = Field::new(
+                    key,
+                    label,
+                    "text",
+                    if text(settings, key).is_empty() {
+                        default
+                    } else {
+                        text(settings, key)
+                    },
                 );
+                fields.push(if key == "prefix" {
+                    field.optional()
+                } else {
+                    field.conditional()
+                });
             }
+            // AWS keys are required for a new connection; an edit keeps the saved keys when empty.
             for (key, label) in [
-                ("token", "Bearer token (optional)"),
+                ("token", "Bearer token"),
                 ("accessKeyId", "AWS access key ID"),
                 ("secretAccessKey", "AWS secret access key"),
-                ("sessionToken", "AWS session token (optional)"),
+                ("sessionToken", "AWS session token"),
             ] {
-                fields.push(Field::new(key, label, "password", "").optional());
+                let field = Field::new(key, label, "password", "");
+                fields.push(
+                    if !edit && ["accessKeyId", "secretAccessKey"].contains(&key) {
+                        field.conditional()
+                    } else {
+                        field.optional()
+                    },
+                );
             }
             let mut form = Form::new(
                 if edit {
