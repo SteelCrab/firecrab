@@ -44,6 +44,16 @@
 .service-config dt { color: var(--text-3); }
 .service-config dd { margin: 0; overflow-wrap: anywhere; }
 .service-disclosure > .wasm-actions { margin-bottom: 16px; }
+.service-observability { border-top: 1px solid var(--border); padding: 12px 0; min-width: 0; }
+.service-observability h3 { margin: 12px 0; font-size: 13px; }
+.service-observability .icon-btn[aria-pressed="true"] { background: var(--bg-hover); color: var(--text); }
+.service-observability-list { list-style: none; margin: 0; padding: 0; }
+.service-observability-list li { min-width: 0; border-top: 1px solid var(--border); padding: 10px 0; }
+.service-observability-list .meta { color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
+.service-observability-list pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-size: 12px; }
+.service-otlp-metrics { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; font-size: 12px; }
+.service-otlp-metrics dt { color: var(--text-3); }
+.service-otlp-metrics dd { margin: 0; }
 #service-controls:not(:empty) { margin: 16px 0; }
 .service-panel-body > .detail-actions { margin: 16px 0; }
 #service-deploy-form { margin: 24px 0; }

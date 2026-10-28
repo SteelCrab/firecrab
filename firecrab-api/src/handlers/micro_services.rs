@@ -98,6 +98,7 @@ pub(crate) async fn update_from_stack(
     let _claim = state.service_mutations.lock().await;
     ensure_stack_writer(&state, id, operation, request_id.0).await?;
     crate::service_runtime::ensure_editable(&state, id, request_id.0).await?;
+    crate::otlp::preflight_service(&state, id, &spec, request_id.0).await?;
     require_image_auth(&state, &spec.image, request_id.0).await?;
     if let Some(policy) = &spec.auto_deploy {
         crate::service_runtime::auto_deploy::validate_auth(&state, policy, request_id.0).await?;

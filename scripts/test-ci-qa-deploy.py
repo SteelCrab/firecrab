@@ -22,6 +22,7 @@ from unittest.mock import Mock, patch
 import deploy_auto_qa as automatic
 import deploy_fleet_qa as fleet
 import deploy_recovery_qa as recovery
+import deploy_observation_qa as observation
 
 module = importlib.util.spec_from_file_location("deploy_qa", Path(__file__).with_name("ci-qa-deploy.py"))
 qa = importlib.util.module_from_spec(module)
@@ -29,6 +30,31 @@ module.loader.exec_module(qa)
 
 
 class DeployQaTests(unittest.TestCase):
+    def test_observation_acceptance_requires_report_before_runtime_access(self):
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name("ci-qa-deploy.py")),
+                                 "--disposable-host", "--observability"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("extended acceptance requires --report", result.stderr)
+
+    def test_local_collector_validates_and_records_otlp_and_failure_response(self):
+        collector = observation.Collector()
+        self.addCleanup(collector.close)
+        connection = http.client.HTTPConnection("127.0.0.1", collector.server.server_port)
+        self.addCleanup(connection.close)
+        payload = {"resourceLogs": [{"resource": {"attributes": [
+            {"key": "firecrab.service.id", "value": {"stringValue": "service-a"}}]},
+            "scopeLogs": [{"logRecords": [{"attributes": [{"key": "log.iostream", "value": {"stringValue": "stderr"}}],
+                "body": {"stringValue": "line-a"}}]}]}]}
+        for fail in [False, True]:
+            collector.set_failure(fail)
+            connection.request("POST", "/v1/logs", json.dumps(payload), {"Content-Type": "application/json"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 400 if fail else 200)
+            self.assertEqual(response.read(), b"{}")
+        records = collector.observations()
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0], ({"firecrab.service.id": "service-a"}, {"log.iostream": "stderr"}, "line-a"))
+
     def test_automatic_acceptance_requires_report_before_runtime_access(self):
         result = subprocess.run([sys.executable, str(Path(__file__).with_name("ci-qa-deploy.py")), "--automatic-deploy", "--disposable-host"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
@@ -171,9 +197,21 @@ class DeployQaTests(unittest.TestCase):
             self.assertEqual(qa.digest(layer), document["layers"][0]["digest"])
             raw = gzip.decompress(layer)
             self.assertEqual(qa.digest(raw), config["rootfs"]["diff_ids"][0])
-            self.assertEqual(config["config"]["Entrypoint"][0:2], ["/bin/busybox", "httpd"])
+            self.assertEqual(config["config"]["Entrypoint"], ["/bin/sh", "/bin/observed-init"])
             with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
                 self.assertEqual("www/health" in archive.getnames(), healthy)
+                init = archive.extractfile("bin/observed-init").read().decode()
+                self.assertIn('fixture-stdout-%s', init)
+                self.assertIn('fixture-stderr-%s', init)
+                self.assertIn('exec /bin/busybox httpd', init)
+                cgi = archive.extractfile("www/cgi-bin/observation").read().decode()
+                result = subprocess.run(["/bin/sh", "-c", cgi], env={"OBS_ID": "alpha"}, capture_output=True, check=True)
+                self.assertEqual(result.stderr, b"fixture-cgi-alpha\n")
+                self.assertTrue(result.stdout.endswith(b"observed\n"))
+                env_cgi = archive.extractfile("www/cgi-bin/otel-environment").read().decode()
+                otel = {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf", "OTEL_SERVICE_NAME": "alpha"}
+                output = subprocess.check_output(["/bin/sh", "-c", env_cgi], env=otel)
+                self.assertTrue(output.endswith(b"http://collector:4318|http/protobuf|alpha\n"))
                 self.assertEqual(archive.extractfile("www/index.html").read(), b"release-A\n")
                 self.assertEqual(archive.getmember("bin/sh").linkname, "busybox")
                 held = archive.extractfile("www/cgi-bin/hold").read()

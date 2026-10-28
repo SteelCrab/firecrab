@@ -7,6 +7,7 @@
 //! always the same version as the installed API and needs nothing new from
 //! packaging or self-update.
 
+pub(crate) mod app_log;
 pub(crate) mod client;
 pub(crate) mod protocol;
 pub(crate) mod server;

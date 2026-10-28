@@ -126,6 +126,8 @@ pub struct AppState {
     pub(crate) vm_mutations: Arc<Mutex<HashMap<Uuid, Weak<AsyncMutex<()>>>>>,
     /// Short service configuration/operation claims; never held while booting a guest.
     pub(crate) service_mutations: Arc<AsyncMutex<()>>,
+    /// Per-service bounded observation exporters.
+    pub(crate) observations: Arc<crate::service_observation::Runtime>,
     /// Serializes durable apply admission and identical retry lookup, never worker execution.
     pub(crate) stack_apply_admission: Arc<AsyncMutex<()>>,
     /// Serializes RabbitMQ engine lifecycle and queue declarations.
@@ -227,6 +229,7 @@ impl AppState {
             vm_mutations: Arc::new(Mutex::new(HashMap::new())),
             secrets,
             service_mutations: Arc::new(AsyncMutex::new(())),
+            observations: Arc::new(crate::service_observation::Runtime::default()),
             queue_mutations: Arc::new(AsyncMutex::new(())),
             service_deploy_permits: Arc::new(Semaphore::new(1)),
             service_deploy_changed: Arc::new(Notify::new()),
