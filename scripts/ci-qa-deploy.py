@@ -490,8 +490,13 @@ def run(args, evidence):
         if cleanup_errors and not original_error:
             raise RuntimeError("Deploy QA cleanup failed; see report")
     assert not api.call("GET", "/api/vms") and not api.call("GET", "/api/micro-services")
-    evidence["allResourcesRemoved"] = True
-    print("PASS all dedicated Deploy QA VMs, services, routes, network, fixture images and credentials removed", flush=True)
+    if args.public_tunnel:
+        evidence["deployFixtureResourcesRemoved"] = True
+        evidence["allResourcesRemoved"] = False
+        print("PASS Deploy QA fixtures removed; public reservations and token files require operator cleanup", flush=True)
+    else:
+        evidence["allResourcesRemoved"] = True
+        print("PASS all dedicated Deploy QA VMs, services, routes, network, fixture images and credentials removed", flush=True)
 
 
 if __name__ == "__main__":
