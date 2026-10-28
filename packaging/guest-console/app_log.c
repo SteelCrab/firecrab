@@ -65,7 +65,8 @@ static void close_link(int *fd, int *state) {
     *state = 0;
 }
 
-/* A partially sent frame is discarded when the connection is closed. */
+/* Retry without reconnecting when no bytes could be sent. A partial frame
+ * cannot be replayed on the same stream, so reconnect in that case. */
 static int send_frame(int fd, unsigned char tag, const void *data, size_t length) {
     unsigned char header[5] = {tag, 0, 0, 0, 0};
     uint32_t size = htonl((uint32_t)length);
@@ -75,6 +76,7 @@ static int send_frame(int fd, unsigned char tag, const void *data, size_t length
     message.msg_iov = items;
     message.msg_iovlen = 2;
     ssize_t written = sendmsg(fd, &message, MSG_DONTWAIT | MSG_NOSIGNAL);
+    if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return 1;
     return written == (ssize_t)(sizeof header + length) ? 0 : -1;
 }
 
@@ -129,8 +131,9 @@ static void report_lost(int *fd, int *state, uint64_t *lost) {
     if (*state != 2 || !*lost) return;
     unsigned char count[8];
     for (int i = 7; i >= 0; --i) count[7 - i] = (unsigned char)(*lost >> (i * 8));
-    if (send_frame(*fd, 3, count, sizeof count)) close_link(fd, state);
-    else *lost = 0;
+    int sent = send_frame(*fd, 3, count, sizeof count);
+    if (sent < 0) close_link(fd, state);
+    else if (sent == 0) *lost = 0;
 }
 
 /* When setup cannot run, retain the original app path and console behavior. */
@@ -146,9 +149,19 @@ int firecrab_app_log_run(int argc, char **argv) {
     int out[2], err[2];
     if (pipe(out)) return fallback(argv);
     if (pipe(err)) { close(out[0]); close(out[1]); return fallback(argv); }
+    sigset_t blocked, previous;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, SIGTERM);
+    sigaddset(&blocked, SIGINT);
+    sigaddset(&blocked, SIGHUP);
+    if (sigprocmask(SIG_BLOCK, &blocked, &previous)) {
+        close(out[0]); close(out[1]); close(err[0]); close(err[1]);
+        return fallback(argv);
+    }
     pid_t child = fork();
     if (child < 0) {
         close(out[0]); close(out[1]); close(err[0]); close(err[1]);
+        (void)sigprocmask(SIG_SETMASK, &previous, NULL);
         return fallback(argv);
     }
     if (!child) {
@@ -157,6 +170,7 @@ int firecrab_app_log_run(int argc, char **argv) {
         if (dup2(out[1], STDOUT_FILENO) < 0 || dup2(err[1], STDERR_FILENO) < 0) _exit(127);
         close(out[1]); close(err[1]);
         signal(SIGPIPE, SIG_DFL);
+        (void)sigprocmask(SIG_SETMASK, &previous, NULL);
         execv(argv[0], argv);
         _exit(127);
     }
@@ -171,6 +185,7 @@ int firecrab_app_log_run(int argc, char **argv) {
     (void)sigaction(SIGINT, &action, NULL);
     (void)sigaction(SIGHUP, &action, NULL);
     signal(SIGPIPE, SIG_IGN);
+    (void)sigprocmask(SIG_SETMASK, &previous, NULL);
 
     int link = -1, state = 0, done = 0, result = 0;
     int64_t retry_at = 0, drain_until = 0;
@@ -190,16 +205,16 @@ int firecrab_app_log_run(int argc, char **argv) {
             if (link >= 0) state = 1;
             else retry_at = now + RETRY_MS;
         }
-        struct pollfd fds[3] = {{out[0], POLLIN, 0}, {err[0], POLLIN, 0}, {link, state == 1 ? POLLOUT : 0, 0}};
+        struct pollfd fds[3] = {{out[0], POLLIN, 0}, {err[0], POLLIN, 0}, {link, (state == 1 || (state == 2 && (count || lost))) ? POLLOUT : 0, 0}};
         if (poll(fds, 3, 100) < 0 && errno != EINTR) break;
         if (link >= 0 && state == 1 && fds[2].revents) {
             int error = 0; socklen_t size = sizeof error;
-            if (getsockopt(link, SOL_SOCKET, SO_ERROR, &error, &size) || error ||
-                send_frame(link, 0, key, sizeof key)) {
+            if (getsockopt(link, SOL_SOCKET, SO_ERROR, &error, &size) || error) {
                 close_link(&link, &state); retry_at = now + RETRY_MS;
             } else {
-                state = 2;
-                report_lost(&link, &state, &lost);
+                int sent = send_frame(link, 0, key, sizeof key);
+                if (sent < 0) { close_link(&link, &state); retry_at = now + RETRY_MS; }
+                else if (sent == 0) { state = 2; report_lost(&link, &state, &lost); }
             }
         } else if (link >= 0 && state == 2 && (fds[2].revents & (POLLERR | POLLHUP | POLLNVAL))) {
             close_link(&link, &state); retry_at = now + RETRY_MS;
@@ -226,10 +241,12 @@ int firecrab_app_log_run(int argc, char **argv) {
         report_lost(&link, &state, &lost);
         while (state == 2 && count) {
             struct queued_chunk *chunk = &pending[head];
-            if (send_frame(link, chunk->tag, chunk->data, chunk->length)) {
+            int sent = send_frame(link, chunk->tag, chunk->data, chunk->length);
+            if (sent < 0) {
                 close_link(&link, &state); retry_at = now + RETRY_MS;
                 break;
             }
+            if (sent > 0) break;
             head = (head + 1) % BACKLOG;
             --count;
         }

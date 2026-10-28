@@ -2,6 +2,7 @@
 """Exercise the guest app supervisor with a real local stream socket."""
 import os
 from pathlib import Path
+import signal
 import socket
 import subprocess
 import tempfile
@@ -17,12 +18,40 @@ class GuestAppLog(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory(prefix="firecrab-applog-", dir="/tmp")
         root = Path(cls.temp.name)
         driver = root / "driver.c"
-        driver.write_text('#include "app_log.h"\nint main(int argc, char **argv) { return firecrab_app_log_run(argc - 1, argv + 1); }\n')
+        driver.write_text('''#define _POSIX_C_SOURCE 200809L
+#include "app_log.h"
+#include <errno.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+#include <unistd.h>
+ssize_t test_sendmsg(int fd, const struct msghdr *msg, int flags) {
+    static int injected;
+    const unsigned char *header = msg->msg_iov[0].iov_base;
+    if (!injected && getenv("TEST_EAGAIN") && header[0] == 1) {
+        injected = 1; errno = EAGAIN; return -1;
+    }
+    return sendmsg(fd, msg, flags);
+}
+pid_t test_fork(void) {
+    pid_t child = fork();
+    if (child > 0 && getenv("TEST_FORK_TERM")) kill(getpid(), SIGTERM);
+    return child;
+}
+int main(int argc, char **argv) { return firecrab_app_log_run(argc - 1, argv + 1); }
+''')
         cls.binary = root / "app-log-test"
+        object_file = root / "app-log.o"
         subprocess.run([
             os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
             "-DFIRECRAB_APP_LOG_TEST", "-D_DARWIN_C_SOURCE", "-I", str(ROOT / "packaging/guest-console"),
-            str(ROOT / "packaging/guest-console/app_log.c"), str(driver), "-o", str(cls.binary),
+            "-Dsendmsg=test_sendmsg", "-Dfork=test_fork", "-c", str(ROOT / "packaging/guest-console/app_log.c"), "-o", str(object_file),
+        ], check=True)
+        subprocess.run([
+            os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
+            "-I", str(ROOT / "packaging/guest-console"), str(object_file), str(driver), "-o", str(cls.binary),
         ], check=True)
 
     @classmethod
@@ -93,6 +122,33 @@ class GuestAppLog(unittest.TestCase):
                                 env=self.env, capture_output=True, timeout=8)
         self.assertEqual(result.returncode, 0)
         self.assertEqual((result.stdout, result.stderr), (b"", b""))
+
+    def test_eagain_retries_without_losing_the_connection(self):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(self.socket))
+            listener.listen()
+            listener.settimeout(5)
+            process = subprocess.Popen([str(self.binary), "/bin/sh", "-c", "printf 'retry-me'"],
+                                       env={**self.env, "TEST_EAGAIN": "1"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                with listener.accept()[0] as stream:
+                    stream.settimeout(5)
+                    header = self.exact(stream, 5)
+                    self.assertEqual((header[0], self.exact(stream, int.from_bytes(header[1:], "big"))), (0, KEY))
+                    header = self.exact(stream, 5)
+                    self.assertEqual((header[0], self.exact(stream, int.from_bytes(header[1:], "big"))), (1, b"retry-me"))
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 0)
+                self.assertEqual((stdout, stderr), (b"", b""))
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_termination_immediately_after_fork_reaches_child(self):
+        result = subprocess.run([str(self.binary), "/bin/sleep", "1"],
+                                env={**self.env, "TEST_FORK_TERM": "1"}, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 128 + signal.SIGTERM)
 
 
 if __name__ == "__main__":

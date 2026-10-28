@@ -416,9 +416,25 @@ pub(crate) fn start(state: AppState) {
     });
 }
 
-/// Reconcile exporters and submit bounded pages of new service history.
-async fn export_pass(state: &AppState) -> Result<(), crate::persistence::PersistenceError> {
-    let _claim = state.service_mutations.lock().await;
+/// Reconcile exporters without blocking the async runtime on SQLite or mutexes.
+async fn export_pass(state: &AppState) -> Result<(), ()> {
+    let claim = state.service_mutations.clone().lock_owned().await;
+    let state = state.clone();
+    let runtime = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        // Keep mutation ownership even if the caller is cancelled while the
+        // blocking pass is still using its configuration snapshot.
+        let _claim = claim;
+        let _runtime = runtime.enter();
+        export_pass_blocking(&state)
+    })
+    .await
+    .map_err(|_| ())?
+    .map_err(|_| ())
+}
+
+/// Submit bounded pages while configuration mutations are excluded.
+fn export_pass_blocking(state: &AppState) -> Result<(), crate::persistence::PersistenceError> {
     let services = state.store.list_micro_services()?;
     let mut present = HashSet::new();
     for service in services {
@@ -478,6 +494,21 @@ async fn export_pass(state: &AppState) -> Result<(), crate::persistence::Persist
                 },
             );
         }
+        let (event_cursor, log_cursor) = {
+            let sessions = state
+                .observations
+                .sessions
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let Some(session) = sessions.get(&id) else {
+                continue;
+            };
+            (session.events, session.logs)
+        };
+        // Do not hold the status mutex during database work: operator reads
+        // use it to display delivery state on the asynchronous runtime.
+        let events = state.store.service_events_after(id, event_cursor)?;
+        let logs = state.store.service_logs_after(id, log_cursor)?;
         let mut sessions = state
             .observations
             .sessions
@@ -486,7 +517,7 @@ async fn export_pass(state: &AppState) -> Result<(), crate::persistence::Persist
         let Some(session) = sessions.get_mut(&id) else {
             continue;
         };
-        for event in state.store.service_events_after(id, session.events)? {
+        for event in events {
             session.events = event.id;
             let time = nanos(&event.timestamp);
             let severity = match event.severity.as_str() {
@@ -503,7 +534,7 @@ async fn export_pass(state: &AppState) -> Result<(), crate::persistence::Persist
                 stream: None,
             });
         }
-        for log in state.store.service_logs_after(id, session.logs)? {
+        for log in logs {
             session.logs = log.id;
             let time = nanos(&log.timestamp);
             if session
@@ -553,6 +584,85 @@ mod tests {
     use super::*;
     use crate::{persistence::service_logs::InputLog, templates::TemplateRegistry};
     use firecrab_api_types::{MicroServiceResponse, MicroServiceSpec};
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_blocked_export_pass_does_not_block_the_async_executor() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::with_db_file(
+            TemplateRegistry::from_specs(root.path(), std::iter::empty()).unwrap(),
+            root.path().join("state.db"),
+        )
+        .await
+        .unwrap();
+        let id = Uuid::new_v4();
+        let spec = serde_json::from_value(serde_json::json!({"name":"lock-test", "image":"ghcr.io/team/app:v1", "port":8080, "ram":128, "cpu":1})).unwrap();
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse { id, spec })
+            .unwrap();
+        let blocker = state.clone();
+        let (ready, wait) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let _guard = blocker.observations.sessions.lock().unwrap();
+            ready.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(1200));
+        });
+        wait.recv().unwrap();
+        let exporting = state.clone();
+        let started = std::time::Instant::now();
+        let pass = tokio::spawn(async move { export_pass(&exporting).await });
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(600),
+            "export blocked the async executor"
+        );
+        assert!(state.service_mutations.try_lock().is_err());
+        let configuring = state.clone();
+        let update = tokio::spawn(async move {
+            configure(
+                State(configuring),
+                Extension(RequestId(Uuid::new_v4())),
+                Caller::default(),
+                Path(id.to_string()),
+                ValidatedJson(Settings {
+                    endpoint: Some("http://collector.test".into()),
+                }),
+            )
+            .await
+        });
+        pass.abort();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            state.service_mutations.try_lock().is_err(),
+            "cancelled caller released the active pass's lock"
+        );
+        assert!(
+            !update.is_finished(),
+            "configuration changed during the active pass"
+        );
+        tokio::task::spawn_blocking(move || thread.join().unwrap())
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(1), update)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.is_ok());
+        assert_eq!(
+            state.store.otlp_endpoint(id).unwrap().as_deref(),
+            Some("http://collector.test/")
+        );
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state.service_mutations.try_lock().is_ok() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
 
     #[tokio::test]
     async fn exporter_only_submits_new_service_history_and_same_settings_preserve_session() {

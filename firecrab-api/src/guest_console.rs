@@ -72,15 +72,23 @@ fn supports_app_log(binary: &[u8]) -> bool {
 
 /// Re-exec the original app through the collector exactly once; old helpers fall back.
 fn instrument_app_script(script: &str) -> Option<String> {
-    if script.contains(WRAPPER_BEGIN) {
-        return script.contains(WRAPPER_END).then(|| script.to_owned());
+    if let Some(begin) = script.find(WRAPPER_BEGIN) {
+        let end = begin + script[begin..].find(WRAPPER_END)? + WRAPPER_END.len();
+        let old = format!("exec {GUEST_PATH} --app-run \"$0\" --firecrab-app-log-child\n");
+        let new = format!("exec {GUEST_PATH} --app-run \"$0\" --firecrab-app-log-child \"$@\"\n");
+        return Some(format!(
+            "{}{}{}",
+            &script[..begin],
+            script[begin..end].replace(&old, &new),
+            &script[end..]
+        ));
     }
     let (first, rest) = script.split_once('\n')?;
     if !first.starts_with("#!") {
         return None;
     }
     Some(format!(
-        "{first}\n{WRAPPER_BEGIN}\nif [ \"${{1-}}\" = --firecrab-app-log-child ]; then\n  shift\nelif [ -r {APP_KEY} ] && {GUEST_PATH} --app-log-check >/dev/null 2>&1; then\n  exec {GUEST_PATH} --app-run \"$0\" --firecrab-app-log-child\nfi\n{WRAPPER_END}\n{rest}"
+        "{first}\n{WRAPPER_BEGIN}\nif [ \"${{1-}}\" = --firecrab-app-log-child ]; then\n  shift\nelif [ -r {APP_KEY} ] && {GUEST_PATH} --app-log-check >/dev/null 2>&1; then\n  exec {GUEST_PATH} --app-run \"$0\" --firecrab-app-log-child \"$@\"\nfi\n{WRAPPER_END}\n{rest}"
     ))
 }
 
@@ -135,6 +143,50 @@ mod tests {
         assert_eq!(instrument_app_script(&wrapped).unwrap(), wrapped);
         assert!(instrument_app_script("echo no-interpreter\n").is_none());
         assert!(instrument_app_script("#!/bin/sh\n# >>> firecrab application log\n").is_none());
+    }
+
+    #[test]
+    fn app_wrapper_preserves_arguments_and_upgrades_old_wrapper() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let key = root.path().join("key");
+        let helper = root.path().join("helper");
+        let app = root.path().join("app");
+        std::fs::write(&key, "key").unwrap();
+        std::fs::write(
+            &helper,
+            "#!/bin/sh\nif [ \"$1\" = --app-log-check ]; then exit 0; fi\nshift\nexec \"$@\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let script = instrument_app_script("#!/bin/sh\nprintf '<%s>\\n' \"$@\"\n").unwrap();
+        let legacy = script.replace(
+            "--firecrab-app-log-child \"$@\"\n",
+            "--firecrab-app-log-child\n",
+        );
+        let legacy_runner = legacy
+            .replace(APP_KEY, key.to_str().unwrap())
+            .replace(GUEST_PATH, helper.to_str().unwrap());
+        std::fs::write(&app, legacy_runner).unwrap();
+        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let before = std::process::Command::new(&app)
+            .args(["one", "two words", ""])
+            .output()
+            .unwrap();
+        assert_eq!(before.stdout, b"<>\n");
+        let upgraded = instrument_app_script(&legacy).unwrap();
+        assert_eq!(upgraded, script);
+        let script = upgraded
+            .replace(APP_KEY, key.to_str().unwrap())
+            .replace(GUEST_PATH, helper.to_str().unwrap());
+        std::fs::write(&app, script).unwrap();
+        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let output = std::process::Command::new(&app)
+            .args(["one", "two words", ""])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"<one>\n<two words>\n<>\n");
     }
 
     #[test]

@@ -1527,8 +1527,11 @@ test.describe("Service observations @dashboard", () => {
       const button = panel.getByRole("button", { name, exact: true });
       await expect(button).toHaveText("");
       await expect(button.locator("svg")).toHaveCount(1);
+      await expect(button).toHaveAttribute("aria-pressed", "false");
     }
     await panel.getByRole("button", { name: "Logs", exact: true }).click();
+    await expect(panel.getByRole("button", { name: "Logs", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(panel.getByRole("button", { name: "Refresh", exact: true })).not.toHaveAttribute("aria-pressed");
     await expect(panel.getByText("<img src=x onerror=alert(1)>", { exact: true })).toBeVisible();
     await expect(panel.locator("img")).toHaveCount(0);
     for (const [status, label] of [
@@ -1575,6 +1578,7 @@ test.describe("Service observations @dashboard", () => {
     await panel.getByRole("button", { name: "OTLP", exact: true }).click();
     const endpoint = panel.getByLabel("Collector base URL", { exact: true });
     await expect(endpoint).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Save", exact: true })).not.toHaveAttribute("aria-pressed");
     await expect(panel).toContainText("Saving sends platform logs and events to this collector. App logs can contain sensitive values.");
     await expect(panel).toContainText("Queued data is lost on API restart or when the endpoint is changed or disabled.");
     await expect(panel.locator(".service-otlp-metrics")).toContainText("Dropped2");

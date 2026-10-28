@@ -54,11 +54,20 @@ pub fn clear(app: &mut App) {
     }
 }
 
-fn view_button(label: &str, action: &str, icon: Icon, selected: bool, disabled: bool) -> String {
+fn view_button(
+    label: &str,
+    action: &str,
+    icon: Icon,
+    selected: Option<bool>,
+    disabled: bool,
+) -> String {
     icon_button(label, action, "", icon).replace(
         "type=\"button\"",
         &format!(
-            "type=\"button\" id=\"{action}\" aria-pressed=\"{selected}\"{}",
+            "type=\"button\" id=\"{action}\"{}{}",
+            selected
+                .map(|pressed| format!(" aria-pressed=\"{pressed}\""))
+                .unwrap_or_default(),
             if disabled { " disabled" } else { "" }
         ),
     )
@@ -145,7 +154,7 @@ pub fn html(app: &App) -> String {
             label,
             action,
             icon,
-            selected == Some(view),
+            Some(selected == Some(view)),
             state.saving,
         ));
     }
@@ -165,7 +174,7 @@ pub fn html(app: &App) -> String {
         tr(app, "Refresh", "새로고침"),
         "service-observe-refresh",
         Icon::Refresh,
-        false,
+        None,
         state.pending,
     ));
     if state.pending && state.snapshot.is_none() {
@@ -186,7 +195,7 @@ pub fn html(app: &App) -> String {
                 tr(app, "Collector base URL", "수집기 기본 URL"),
                 escape(&state.endpoint),
                 if state.pending { " disabled" } else { "" },
-                view_button(tr(app, "Save", "저장"), "service-observe-save", Icon::Save, false, state.pending),
+                view_button(tr(app, "Save", "저장"), "service-observe-save", Icon::Save, None, state.pending),
                 tr(app, "Signal paths are added automatically. Clear the URL to disable export.", "신호별 경로는 자동으로 추가한다. URL을 비우면 내보내기를 끈다."),
                 tr(app, "Platform export applies immediately. App settings apply after Deploy or VM restart.", "플랫폼 내보내기는 즉시 적용한다. 앱 설정은 Deploy 또는 VM 재시작 후 적용한다."),
                 tr(app, "Saving sends platform logs and events to this collector. App logs can contain sensitive values.", "저장하면 플랫폼 로그와 이벤트를 이 수집기로 보낸다. 앱 로그에는 민감한 값이 있을 수 있다.")
