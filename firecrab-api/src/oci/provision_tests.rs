@@ -695,6 +695,12 @@ fi
         .replace("/usr/bin/fastfetch", fastfetch.to_str().unwrap())
         .replace("/usr/sbin/sshd", ssh_binary.to_str().unwrap())
         .replace("/dev/console", root.join("console").to_str().unwrap());
+    // The boot shell exits before its background package worker. Wait for that
+    // worker here so its observations and exit status cannot race the assertions.
+    let script = script
+        .strip_suffix("exit 0\n")
+        .expect("boot shell exits after starting the package worker");
+    let script = format!("{script}wait \"$!\"\n");
     let ready = root.join("app-ready");
     let observed = root.join("package-saw-app");
     let ssh_ready = root.join("ssh-ready");
@@ -712,6 +718,10 @@ fi
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
+    assert!(
+        root.join("packages-done").exists(),
+        "The package worker must finish its startup observations"
+    );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     while (!observed.exists() || !ssh_ready.exists()) && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(10));
