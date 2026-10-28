@@ -175,9 +175,14 @@ class HostGuardTest(unittest.TestCase):
         self.values = {
             "/api/micro-services": [{"id": service["id"], **service["spec"]} for service in self.services],
             "/api/vms": [{"id": "vm1"}, {"id": "vm2"}],
-            "/api/micro-services/1/deployment": {"phase": "running", "instances": [{"vmId": "vm1", "ipv4": "172.29.1.2"}]},
-            "/api/micro-services/2/deployment": {"phase": "running", "instances": [{"vmId": "vm2", "ipv4": "172.29.1.3"}]},
-            "/api/pipe": {"config": {"routes": [{"host": "a.example.test"}, {"host": "b.example.test"}]}},
+            "/api/micro-services/1/deployment": {"id": "d1", "phase": "running", "instances": [{"vmId": "vm1", "ipv4": "172.29.1.2"}]},
+            "/api/micro-services/2/deployment": {"id": "d2", "phase": "running", "instances": [{"vmId": "vm2", "ipv4": "172.29.1.3"}]},
+            "/api/pipe": {"config": {"routes": [
+                {"host": "a.example.test", "owner": {"serviceId": "1", "deploymentId": "d1"}},
+                {"host": "tunnel-qa-a.internal", "owner": {"serviceId": "1", "deploymentId": "d1"}},
+                {"host": "b.example.test", "owner": {"serviceId": "2", "deploymentId": "d2"}},
+                {"host": "tunnel-qa-b.internal", "owner": {"serviceId": "2", "deploymentId": "d2"}},
+            ]}},
         }
         class FakeApi:
             def call(_, method, path):
@@ -204,6 +209,11 @@ class HostGuardTest(unittest.TestCase):
             acceptance.fixture_targets(self.api, self.services)
         del self.values["/api/pipe"]["firecrabTunnels"]
         self.values["/api/pipe"]["config"]["routes"].append({"host": "other.example.test"})
+        with self.assertRaises(acceptance.AcceptanceError):
+            acceptance.fixture_targets(self.api, self.services)
+
+    def test_internal_route_with_another_owner_is_rejected(self):
+        self.values["/api/pipe"]["config"]["routes"][1]["owner"]["serviceId"] = "foreign"
         with self.assertRaises(acceptance.AcceptanceError):
             acceptance.fixture_targets(self.api, self.services)
 

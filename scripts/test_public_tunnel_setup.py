@@ -10,16 +10,23 @@ from public_tunnel_setup import run_fixture_services
 
 
 class Api:
-    def __init__(self, fail_deploy=None, fail_stop=None):
+    def __init__(self, fail_deploy=None, fail_stop=None, lose_create=None):
         self.states = {}
+        self.specs = {}
         self.deleted = []
         self.fail_deploy = fail_deploy
         self.fail_stop = fail_stop
+        self.lose_create = lose_create
 
     def call(self, method, path, body=None):
+        if (method, path) == ("GET", "/api/micro-services"):
+            return [{"id": identity, **spec} for identity, spec in self.specs.items() if identity not in self.deleted]
         if (method, path) == ("POST", "/api/micro-services"):
             identity = str(len(self.states) + 1)
             self.states[identity] = None
+            self.specs[identity] = body
+            if identity == self.lose_create:
+                raise RuntimeError("creation response lost")
             return {"id": identity}
         identity = path.split("/")[3]
         if path.endswith("/deployment") and method == "POST":
@@ -91,6 +98,15 @@ class SetupTests(unittest.TestCase):
                                  lambda *_: self.fail("acceptance must not run"))
         self.assertEqual(api.deleted, ["2"])
         self.assertEqual(len(evidence["publicFixtureCleanupErrors"]), 1)
+
+    def test_lost_creation_response_recovers_owned_service_for_cleanup(self):
+        api = Api(lose_create="2")
+        evidence = {}
+        with self.assertRaisesRegex(RuntimeError, "creation response lost"):
+            run_fixture_services(api, wait_for, "network", {}, [("a",), ("b",)], (), evidence,
+                                 lambda *_: self.fail("acceptance must not run"))
+        self.assertEqual(api.deleted, ["2", "1"])
+        self.assertEqual(evidence["publicFixtureCleanupErrors"], [])
 
 
 if __name__ == "__main__":

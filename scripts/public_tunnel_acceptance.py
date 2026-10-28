@@ -100,7 +100,7 @@ def fixture_targets(api, services):
     if {item["id"] for item in listed} != expected_ids:
         raise AcceptanceError("refusing a host with other services")
     listed_by_id = {item["id"]: item for item in listed}
-    deployments, vm_ids = [], set()
+    deployments, vm_ids, route_owners = [], set(), {}
     for service, label in zip(services, ("A", "B")):
         spec = service["spec"]
         saved = listed_by_id[service["id"]]
@@ -112,6 +112,11 @@ def fixture_targets(api, services):
         instances = deployment["instances"]
         if deployment["phase"] != "running" or len(instances) != 1 or not instances[0].get("ipv4"):
             raise AcceptanceError("each fixture needs one running VM")
+        if not deployment.get("id"):
+            raise AcceptanceError("fixture deployment identity is missing")
+        owner = {"serviceId": service["id"], "deploymentId": deployment["id"]}
+        route_owners[spec["domain"]] = owner
+        route_owners[spec["name"] + ".internal"] = owner
         instance = instances[0]
         vm_ids.add(instance["vmId"])
         expect_fixture(instance["ipv4"], spec["port"], ("fixture-" + label).encode())
@@ -122,11 +127,11 @@ def fixture_targets(api, services):
     config = snapshot.get("config") or {}
     if snapshot.get("firecrabTunnels") or config.get("quickTunnels") or config.get("quickTunnel") or config.get("tunnel"):
         raise AcceptanceError("refusing existing tunnel connections")
-    if not any(route.get("host") == services[1]["spec"]["domain"] for route in config.get("routes", [])):
-        raise AcceptanceError("fixture B has no saved Nginx route")
-    allowed_hosts = {service["spec"]["domain"] for service in services}
-    if any(route.get("host") not in allowed_hosts for route in config.get("routes", [])):
-        raise AcceptanceError("refusing a host with other Nginx routes")
+    routes = config.get("routes", [])
+    if (len(routes) != len(route_owners) or {route.get("host") for route in routes} != set(route_owners)
+            or any(route.get("owner") != route_owners.get(route.get("host"))
+                   or route.get("pathPrefix", "/") != "/" for route in routes)):
+        raise AcceptanceError("refusing unexpected or unowned Nginx routes")
     if STORE.exists():
         try:
             store = json.loads(STORE.read_text())
