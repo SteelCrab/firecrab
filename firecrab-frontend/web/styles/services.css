@@ -73,6 +73,18 @@
 #deploy-panel .table-scroll { margin-bottom: 16px; }
 #deploy-panel .wasm-form { gap: 12px; margin-bottom: 12px; }
 
+
+/* Observability: logs, events, alerts and OTLP export, under the instances. */
+.service-observability { border-top: 1px solid var(--border); padding: 12px 0; min-width: 0; }
+.service-observability h3 { margin: 12px 0; font-size: 13px; }
+.service-observability .icon-btn[aria-pressed="true"] { background: var(--bg-hover); color: var(--text); }
+.service-observability-list { list-style: none; margin: 0; padding: 0; }
+.service-observability-list li { min-width: 0; border-top: 1px solid var(--border); padding: 10px 0; }
+.service-observability-list .meta { color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
+.service-observability-list pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-size: 12px; }
+.service-otlp-metrics { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; font-size: 12px; }
+.service-otlp-metrics dt { color: var(--text-3); }
+.service-otlp-metrics dd { margin: 0; }
 @media (max-width: 767px) {
   .screen:has(#detail-panel[data-view="services"]:not([hidden])) .screen-header-end > :not(#api-status) { display: none; }
   .service-table :is(th, td) { padding-left: 8px; padding-right: 8px; }

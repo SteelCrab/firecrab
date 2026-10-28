@@ -539,7 +539,11 @@ fn service_instances(app: &App) -> String {
     } else {
         table
     };
-    format!("<div id=\"service-instances\">{body}</div>")
+    // Logs, events, alerts and OTLP export belong to the instances that produce them.
+    format!(
+        "<div id=\"service-instances\">{body}</div>{}",
+        crate::observability::html(app)
+    )
 }
 
 /// Update, roll back and the releases. The polls and the release list redraw `#deploy-panel` alone.
@@ -979,7 +983,9 @@ pub fn tick(app: &Shared) {
         .as_ref()
         .is_some_and(|form| form.title == "Deploy MicroService");
     let auto_editing = crate::document().active_element().is_some_and(|element| {
-        element.id().starts_with("deploy-auto-") || element.id().starts_with("deploy-ci-")
+        element.id().starts_with("deploy-auto-")
+            || element.id().starts_with("deploy-ci-")
+            || element.id() == "service-observe-endpoint"
     });
     if auto_editing
         || state.busy

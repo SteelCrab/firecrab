@@ -216,6 +216,23 @@ impl Store {
             "DELETE FROM service_ci_requests WHERE service_id=?1",
             [id.to_string()],
         )?;
+        tx.execute(
+            "DELETE FROM service_observation_events WHERE service_id=?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM service_observation_alerts WHERE service_id=?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM service_observation_logs WHERE service_id=?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM service_observation_cursors WHERE service_id=?1",
+            [id.to_string()],
+        )?;
+        super::otlp_config::delete(&tx, id)?;
         let changed = tx.execute("DELETE FROM micro_services WHERE id = ?1", [id.to_string()])?;
         tx.commit()?;
         Ok(changed != 0)
@@ -276,6 +293,8 @@ impl Store {
         if let Some(admission) = admission {
             super::ci_deploy::admit(&tx, deployment, admission)?;
         }
+        let previous = super::service_observation::previous(&tx, deployment.service_id)?;
+        super::service_observation::observe(&tx, previous.as_ref(), deployment)?;
         tx.execute(
             "INSERT INTO micro_service_deployments (service_id, deployment) VALUES (?1, ?2)
              ON CONFLICT(service_id) DO UPDATE SET deployment = excluded.deployment",
@@ -352,6 +371,9 @@ impl Store {
         let restored_text = serialize(restored)?;
         let mut conn = self.lock();
         let tx = conn.transaction()?;
+        let previous = super::service_observation::previous(&tx, failed.service_id)?;
+        super::service_observation::observe(&tx, previous.as_ref(), failed)?;
+        super::service_observation::observe(&tx, Some(failed), restored)?;
         tx.execute(
             "DELETE FROM service_deploy_queue WHERE operation_id = ?1",
             [failed.id.to_string()],

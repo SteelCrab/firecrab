@@ -290,6 +290,7 @@ async fn accept(
     if rollback_of.is_some() {
         body.spec.auto_deploy = previous.spec.auto_deploy.clone();
     }
+    crate::otlp::preflight_service(&state, id, &body.spec, request.0).await?;
     if let Writer::Tag(watch) = &writer {
         super::auto_deploy::authorize(&state, &previous, &body.spec, watch, body.operation_id)
             .await?;

@@ -8,6 +8,7 @@ mod i18n;
 mod manager;
 mod model;
 mod notes;
+mod observability;
 mod render;
 mod sandbox;
 mod terminal;
@@ -61,6 +62,7 @@ struct App {
     detail_polling: Option<u64>,
     service_deployment: Option<Value>,
     deploy: deploy::State,
+    observability: observability::State,
     job: Option<(String, Value)>,
     workflows: workflows::State,
     databases: databases::State,
@@ -277,6 +279,7 @@ fn render_detail(app: &Shared) {
         .unwrap_or_default();
     let (open, width, html, selection, same_view) = {
         let mut state = app.borrow_mut();
+        observability::clear(&mut state);
         let narrow = window()
             .inner_width()
             .ok()
@@ -537,6 +540,7 @@ pub fn start() -> Result<(), JsValue> {
         }
         drop(state);
         details::tick(&poll);
+        observability::tick(&poll);
         volumes::tick(&poll);
         if poll.borrow().route == "ai-sandbox" {
             sandbox::tick(&poll);
@@ -1153,6 +1157,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 }
             }
             _ => {
+                if observability::change(&changed, &target) {
+                    return;
+                }
                 if deploy::change(&changed, &target) {
                     return;
                 }
@@ -1553,6 +1560,9 @@ fn close_detail(app: &Shared) {
     render_content(app);
 }
 fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
+    if observability::dispatch(&app, action) {
+        return;
+    }
     if deploy::dispatch(&app, action, id) {
         return;
     }

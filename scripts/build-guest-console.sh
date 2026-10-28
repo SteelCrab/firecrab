@@ -12,6 +12,7 @@ license=${GUEST_CONSOLE_LIBC_LICENSE:-/usr/share/doc/musl/copyright}
 uapi_arch=$("$cc" -dumpmachine)
 "$cc" -idirafter /usr/include -idirafter "/usr/include/$uapi_arch" -std=c11 -Os -static -Wall -Wextra -Werror \
     "$root/packaging/guest-console/main.c" "$root/packaging/guest-console/resize.c" \
+    "$root/packaging/guest-console/app_log.c" \
     -o "$output/firecrab-guest-console"
 "$root/scripts/verify-release-binary.sh" "$output/firecrab-guest-console" "$(uname -m)" musl
 "$output/firecrab-guest-console" --version
