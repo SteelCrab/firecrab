@@ -15,6 +15,9 @@ use uuid::Uuid;
 #[path = "server_ai_sandbox_access_tests.rs"]
 mod access_tests;
 
+#[path = "server_ai_sandbox_coordination_tests.rs"]
+mod coordination_tests;
+
 #[derive(Clone, Default)]
 struct Provider {
     requests: Arc<Mutex<Vec<Value>>>,
@@ -275,7 +278,9 @@ async fn sandbox_native_tools_edit_an_isolated_branch_and_apply_checks_conflicts
     let mut pending = f.state.store.sandbox_task(id).unwrap().unwrap();
     pending.task.id = Uuid::new_v4();
     pending.task.attempt_id = Uuid::new_v4();
+    pending.task.retry_root = Some(pending.task.id);
     pending.task.state = firecrab_api_types::SandboxTaskState::InProgress;
+    pending.results_exported = false;
     pending.workspace = None;
     f.state.store.save_sandbox_task(&pending).unwrap();
     assert_eq!(
@@ -330,6 +335,7 @@ async fn sandbox_cancel_and_restart_do_not_replay_uncertain_attempts() {
     assert_eq!(finish(&f, id).await["state"], "cancelled");
     let mut saved = f.state.store.sandbox_task(id).unwrap().unwrap();
     saved.task.state = firecrab_api_types::SandboxTaskState::InProgress;
+    saved.results_exported = false;
     f.state.store.save_sandbox_task(&saved).unwrap();
     f.state.store.interrupt_sandbox_tasks().unwrap();
     let count = f.provider.requests.lock().unwrap().len();

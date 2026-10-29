@@ -297,7 +297,7 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
     await detail.getByRole("button", { name: "Disconnect", exact: true }).click();
     await removed;
     await expect(row).toHaveCount(0);
-    await expect(page.locator("#content").getByRole("cell", { name: "public.ecr.aws", exact: true })).toBeVisible();
+    await expect(page.locator("#content").getByRole("cell", { name: /^public\.ecr\.aws(\s|$)/ })).toBeVisible();
   });
   test("does not query catalogs or tags without a saved login", async ({
     page,
@@ -491,7 +491,11 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
       "상태 확인 불가",
     );
     m.allowImages();
-    await page.locator("[data-action=refresh]").click();
+    await page.waitForResponse(
+      (r) =>
+        new URL(r.url()).pathname === "/api/pipe/registries" &&
+        r.request().method() === "GET",
+    );
     await page.setViewportSize({ width: 390, height: 844 });
     expect(
       await page.evaluate(

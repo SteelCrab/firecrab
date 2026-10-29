@@ -39,4 +39,10 @@ pub struct SavedTask {
     /// A known attempt-owned guest workspace exists and must be cleaned after export.
     #[serde(default)]
     pub guest_staged: bool,
+    /// Required outputs were persisted and exported before temporary Environment cleanup.
+    #[serde(default)]
+    pub results_exported: bool,
+    /// Environment-owned execution isolation fixed at admission; absent for borrowed VMs.
+    #[serde(default)]
+    pub execution_mode: Option<SandboxExecutionMode>,
 }

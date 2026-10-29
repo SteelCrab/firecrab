@@ -25,6 +25,21 @@ async fn local_invocation(
     payload: &str,
     seconds: u64,
 ) -> io::Result<Output> {
+    local_script(
+        root,
+        action,
+        seconds,
+        script(action, id, invocation, payload, seconds),
+    )
+    .await
+}
+
+async fn local_script(
+    root: &Path,
+    action: &str,
+    seconds: u64,
+    input: Vec<u8>,
+) -> io::Result<Output> {
     let mut command = Command::new("/bin/sh");
     command
         .arg("-s")
@@ -32,7 +47,7 @@ async fn local_invocation(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let input = String::from_utf8(script(action, id, invocation, payload, seconds))
+    let input = String::from_utf8(input)
         .unwrap()
         .replace("/var/lib/firecrab-ai", root.to_str().unwrap());
     capture(
@@ -43,12 +58,305 @@ async fn local_invocation(
     )
     .await
 }
+
+#[test]
+fn versioned_shell_parses_for_every_execution_mode_and_operation() {
+    assert!(!SCRIPT.contains("ulimit -n 128"));
+    assert!(SCRIPT.contains("--ulimit nofile=1024:1024"));
+    let modes = [
+        None,
+        Some(SandboxExecutionMode::PersistentWorkspace),
+        Some(SandboxExecutionMode::AgentSandbox {
+            runtime: SandboxContainerRuntime::Docker,
+            image: format!("example.invalid/image@sha256:{}", "a".repeat(64)),
+        }),
+        Some(SandboxExecutionMode::AgentSandbox {
+            runtime: SandboxContainerRuntime::Nspawn,
+            image: format!("sha256:{}", "b".repeat(64)),
+        }),
+    ];
+    use std::io::Write;
+    for mode in &modes {
+        for action in [
+            "hydrate",
+            "hydrate_baseline",
+            "stage",
+            "run",
+            "cancel",
+            "recover",
+            "status",
+            "export",
+            "cleanup",
+            "processes",
+            "signal",
+        ] {
+            let input = script_options(
+                action,
+                Uuid::new_v4(),
+                Some(Uuid::new_v4()),
+                "",
+                5,
+                ScriptOptions {
+                    mode: mode.as_ref(),
+                    ..Default::default()
+                },
+            );
+            assert!(!String::from_utf8_lossy(&input).contains("__MODE__"));
+            let mut child = std::process::Command::new("/bin/sh")
+                .arg("-n")
+                .stdin(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(&input).unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{action}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
+
+// Local Linux process fixture. A managed-MicroVM stop/resume still requires separate live evidence.
+#[tokio::test]
+#[ignore = "requires FIRECRAB_SANDBOX_GUEST_QA=1 in an isolated disposable root container"]
+async fn guest_persistent_workspace_survives_attempt_cleanup_and_reuses_code_packages_and_config() {
+    assert_eq!(
+        std::env::var("FIRECRAB_SANDBOX_GUEST_QA").as_deref(),
+        Ok("1")
+    );
+    assert_eq!(unsafe { libc::geteuid() }, 0);
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let root = dir.path().join("guest");
+    let source = dir.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("main.txt"), "initial").unwrap();
+    let mode = SandboxExecutionMode::PersistentWorkspace;
+    let workspace = Uuid::new_v4();
+    for turn in 0..2 {
+        let id = Uuid::new_v4();
+        let invocation = Some(Uuid::new_v4());
+        let options = || ScriptOptions {
+            mode: Some(&mode),
+            workspace: Some(workspace),
+            limits: None,
+        };
+        if turn == 1 {
+            let hydrated = local_script(
+                &root,
+                "hydrate",
+                0,
+                script_options("hydrate", id, invocation, "", 0, options()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(hydrated.code, 0);
+            workspace::import(&source, &hydrated.stdout).unwrap();
+            let baseline = files::Root::open(&source)
+                .unwrap()
+                .files()
+                .unwrap()
+                .join("\n")
+                + "\n";
+            let acknowledged = local_script(
+                &root,
+                "hydrate_baseline",
+                0,
+                script_options(
+                    "hydrate_baseline",
+                    id,
+                    invocation,
+                    &STANDARD.encode(baseline),
+                    0,
+                    options(),
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(acknowledged.code, 0);
+            assert_eq!(
+                std::fs::read_to_string(source.join("main.txt")).unwrap(),
+                "changed\n"
+            );
+            std::fs::write(source.join("main.txt"), "host-overlay\n").unwrap();
+            std::fs::remove_file(source.join("config/tool.conf")).unwrap();
+        }
+        let archive = STANDARD.encode(workspace::archive(&source).unwrap());
+        let staged = local_script(
+            &root,
+            "stage",
+            0,
+            script_options("stage", id, invocation, &archive, 0, options()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            staged.code,
+            0,
+            "{}",
+            String::from_utf8_lossy(&staged.stderr)
+        );
+        let command = if turn == 0 {
+            "mkdir -p .local/pkg .config config; echo package >.local/pkg/installed; echo setting >.config/tool; echo removable >config/tool.conf; echo changed >main.txt; printf 'out'; printf 'err' >&2; exit 7"
+        } else {
+            "test \"$(cat main.txt)\" = host-overlay && test \"$(cat .local/pkg/installed)\" = package && test \"$(cat .config/tool)\" = setting && test ! -e config/tool.conf; printf 'retained'"
+        };
+        let output = local_script(
+            &root,
+            "run",
+            5,
+            script_options(
+                "run",
+                id,
+                invocation,
+                &STANDARD.encode(command),
+                5,
+                options(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            output.code,
+            if turn == 0 { 7 } else { 0 },
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            output.stdout,
+            if turn == 0 {
+                b"out".as_slice()
+            } else {
+                b"retained".as_slice()
+            }
+        );
+        let export = local_script(
+            &root,
+            "export",
+            0,
+            script_options("export", id, invocation, "", 0, options()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(export.code, 0);
+        let cleanup = local_script(
+            &root,
+            "cleanup",
+            0,
+            script_options("cleanup", id, invocation, "", 0, options()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            cleanup.code,
+            0,
+            "{}",
+            String::from_utf8_lossy(&cleanup.stderr)
+        );
+        assert!(!root.join(id.simple().to_string()).exists());
+        assert_eq!(
+            std::fs::read_to_string(
+                root.join(".workspaces")
+                    .join(workspace.simple().to_string())
+                    .join("main.txt")
+            )
+            .unwrap(),
+            if turn == 0 {
+                "changed\n"
+            } else {
+                "host-overlay\n"
+            }
+        );
+    }
+}
 fn files_limit(action: &str) -> usize {
     if action == "export" {
         super::super::files::TREE_LIMIT + 4 * 1024 * 1024
     } else {
         65536
     }
+}
+
+// Executes the shipped C helper, not a mock setpriv/flock implementation.
+#[tokio::test]
+#[ignore = "requires FIRECRAB_SANDBOX_GUEST_QA=1 and the bundled static helper in a disposable Linux root container"]
+async fn guest_static_helper_executes_without_distribution_uid_or_timed_lock_utilities() {
+    assert_eq!(
+        std::env::var("FIRECRAB_SANDBOX_GUEST_QA").as_deref(),
+        Ok("1")
+    );
+    assert_eq!(unsafe { libc::geteuid() }, 0);
+    assert!(
+        Command::new("/usr/local/sbin/firecrab-console-resize")
+            .arg("--sandbox-probe")
+            .status()
+            .await
+            .unwrap()
+            .success()
+    );
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let root = directory.path().join("guest");
+    let source = directory.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("main.txt"), "initial").unwrap();
+    let id = Uuid::new_v4();
+    let invocation = Some(Uuid::new_v4());
+    let generated = |action: &str, payload: &str| {
+        String::from_utf8(script(action, id, invocation, payload, 5))
+            .unwrap()
+            .replace("if command -v setpriv", "if false && command -v setpriv")
+            .replace("if command -v flock", "if false && command -v flock")
+            .into_bytes()
+    };
+    let staged = local_script(
+        &root,
+        "stage",
+        5,
+        generated(
+            "stage",
+            &STANDARD.encode(workspace::archive(&source).unwrap()),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        staged.code,
+        0,
+        "{}",
+        String::from_utf8_lossy(&staged.stderr)
+    );
+    let request=SandboxGuestCommand{version:1,argv:vec!["/bin/sh".into(),"-c".into(),"test \"$(id -u)\" -ne 0; test \"$(awk '/^NoNewPrivs:/ {print $2}' /proc/self/status)\" = 1; cat; printf stdout; printf stderr >&2; exit 7".into()],cwd:".".into(),env:Default::default(),stdin:"stdin-nonce\n".into(),limits:SandboxGuestLimits{wall_seconds:5,cpu_seconds:5,memory_mib:128,output_bytes:4096}};
+    let program = super::super::guest_protocol::program(&request).unwrap();
+    let result = local_script(&root, "run", 5, generated("run", &STANDARD.encode(program)))
+        .await
+        .unwrap();
+    assert_eq!(
+        result.code,
+        7,
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(result.stdout, b"stdin-nonce\nstdout");
+    assert_eq!(result.stderr, b"stderr");
+    assert_eq!(
+        local_script(&root, "export", 5, generated("export", ""))
+            .await
+            .unwrap()
+            .code,
+        0
+    );
+    assert_eq!(
+        local_script(&root, "cleanup", 5, generated("cleanup", ""))
+            .await
+            .unwrap()
+            .code,
+        0
+    );
+    assert!(!root.join(id.simple().to_string()).exists());
 }
 
 // Run explicitly only inside a disposable root container. This test creates real dedicated users.

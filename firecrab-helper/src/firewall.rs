@@ -383,6 +383,13 @@ pub async fn remove_vm_policy(actor: &FirewallActor, vm_id: Uuid) -> Result<(), 
     let Some((_, policy)) = state.applied_vms.get(&vm_id).cloned() else {
         return Ok(());
     };
+    // A vanished TAP leaves established host sockets waiting for TCP timeouts.
+    // Reset only this VM's gateway-to-guest connections so ingress can fail over.
+    for (source, destination) in crate::vm_connections::targets(&policy, &state.networks) {
+        if let Err(error) = crate::vm_connections::close(source, destination).await {
+            tracing::warn!(%vm_id, %error, "could not close stopped VM TCP connections");
+        }
+    }
     let policies: Vec<_> = state
         .applied_vms
         .values()
@@ -1241,6 +1248,7 @@ mod tests {
 
     fn sample_network(id: u128, gateway: &str, prefix: u8) -> MicroNetworkSpec {
         MicroNetworkSpec {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             micro_network_id: Uuid::from_u128(id),
             gateway: gateway.parse().unwrap(),
             prefix,

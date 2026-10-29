@@ -3,11 +3,26 @@ thread_local! { static KOREAN: Cell<bool> = const { Cell::new(false) }; }
 pub fn set(locale: &str) {
     KOREAN.with(|value| value.set(locale == "ko"));
 }
+/// The name of a copy button: "Copy ID", or "ID 복사" in Korean.
+pub fn copy_name(label: &str) -> String {
+    if KOREAN.with(Cell::get) {
+        format!("{} 복사", t(label))
+    } else {
+        format!("Copy {label}")
+    }
+}
+/// Whether the page is in Korean, for text that has no English counterpart (an empty unit).
+pub fn korean() -> bool {
+    KOREAN.with(Cell::get)
+}
 pub fn t(value: &str) -> &str {
     if !KOREAN.with(Cell::get) {
         return value;
     }
     match value {
+        "Open menu" => "메뉴 열기",
+        "Close menu" => "메뉴 닫기",
+        "Clear filters" => "필터 초기화",
         "More" => "더 보기",
         "More VM actions" => "VM 추가 작업",
         "VM settings" => "VM 설정",
@@ -66,9 +81,54 @@ pub fn t(value: &str) -> &str {
         "Select a volume and an absolute mount path." => "볼륨과 절대 마운트 경로를 지정합니다.",
         "A volume can be selected only once." => "한 볼륨은 한 번만 선택합니다.",
         "Not deployed" => "배포 전",
-        "Configuration" => "설정",
-        "Edit configuration" => "설정 수정",
+        "Configuration" => "구성",
+        "Edit configuration" => "구성 수정",
         "Instances" => "인스턴스",
+        "Releases" => "릴리스",
+        "Release" => "릴리스",
+        "Settings" => "설정",
+        "Properties" => "속성",
+        "Recent releases" => "최근 릴리스",
+        "Active" => "활성",
+        "Archived" => "보관됨",
+        "In progress" => "진행 중",
+        "Deployment" => "배포 진행",
+        "Healthy replicas" => "정상 복제본",
+        "Size" => "크기",
+        "Deploy update" => "업데이트 배포",
+        "Preparing image" => "이미지 준비 중",
+        "Starting replicas" => "복제본 시작 중",
+        "Checking health" => "상태 확인 중",
+        "Connecting domain" => "도메인 연결 중",
+        "Degraded" => "일부 비정상",
+        "Stopping service" => "서비스 중지 중",
+        "Deployment failed" => "배포 실패",
+        "Switching Nginx traffic" => "Nginx 트래픽 전환 중",
+        "Draining previous requests" => "이전 요청 정리 중",
+        "Restoring previous release" => "이전 릴리스 복원 중",
+        "Roll back" => "롤백",
+        "Roll back to this release" => "이 버전으로 롤백",
+        "Rolling" => "롤링",
+        "Blue-green" => "블루그린",
+        "MicroService settings" => "MicroService 설정",
+        "No instances are running." => "실행 중인 인스턴스가 없습니다.",
+        "No releases yet. Deploy the service first." => {
+            "아직 릴리스가 없습니다. 먼저 서비스를 배포하세요."
+        }
+        "Releases and updates are available for a service that has a domain." => {
+            "도메인이 있는 서비스에서 릴리스와 업데이트를 사용할 수 있습니다."
+        }
+        "Change the image, port, size or connections. Changes apply on the next deployment." => {
+            "이미지, 포트, 크기, 연결을 바꿉니다. 변경은 다음 배포부터 적용됩니다."
+        }
+        "Remove this MicroService's configuration." => "이 MicroService의 구성을 삭제합니다.",
+        "For public HTTPS, point this domain's DNS CNAME to" => {
+            "공개 HTTPS를 쓰려면 이 도메인의 DNS CNAME을 다음으로 지정합니다:"
+        }
+        "Keep Cloudflare proxy enabled." => "Cloudflare 프록시는 켜 둡니다.",
+        "For public HTTPS, connect your domain in" => {
+            "공개 HTTPS를 쓰려면 도메인을 다음에서 연결합니다:"
+        }
         "Deployment log" => "배포 로그",
         "App port" => "앱 포트",
         "healthy" => "정상",
@@ -92,8 +152,11 @@ pub fn t(value: &str) -> &str {
         "Connect S3 bucket" => "S3 버킷 연결",
         "Edit S3 connection" => "S3 연결 수정",
         "Bucket" => "버킷",
-        "Folder (optional)" => "폴더 (선택)",
-        "Name (optional)" => "이름 (선택)",
+        "Folder" => "폴더",
+        "S3 connection" => "S3 연결",
+        "Name prefix" => "이름 접두사",
+        "Bearer token" => "Bearer 토큰",
+        "AWS session token" => "AWS 세션 토큰",
         "Credentials" => "인증",
         "AWS account from Account" => "Account의 AWS 계정",
         "Separate AWS keys" => "별도 AWS 키",
@@ -111,6 +174,10 @@ pub fn t(value: &str) -> &str {
 
         "Pause" => "일시정지",
         "Resume" => "재개",
+        "Retry pause" => "일시정지 다시 시도",
+        "Retry resume" => "재개 다시 시도",
+        "Terminal (new tab)" => "터미널 (새 탭)",
+        "Open console" => "콘솔 열기",
         "Paused" => "일시정지됨",
         "Memory stays allocated while the VM is paused. Resume to reconnect." => {
             "메모리는 계속 점유합니다. 재개하면 다시 연결할 수 있습니다."
@@ -200,13 +267,16 @@ pub fn t(value: &str) -> &str {
         "Delete" => "삭제",
         "Close" => "닫기",
         "Cancel" => "취소",
+        "Cancelled" => "취소됨",
+        "Queued" => "대기",
         "Save" => "저장",
-        "Refresh" => "새로 고침",
         "Copy" => "복사",
         "Copied" => "복사됨",
         "Download" => "다운로드",
         "Retry" => "다시 시도",
         "Default" => "기본값",
+        "Optional" => "선택",
+        "Advanced settings" => "고급 설정",
         "Start" => "시작",
         "Stop" => "중지",
         "Restart" => "재시작",
@@ -233,16 +303,79 @@ pub fn t(value: &str) -> &str {
         "Latest revision" => "최신 버전",
         "Description" => "설명",
         "Memory (MiB)" => "메모리 (MiB)",
+        "Disk" => "디스크",
         "Disk (GB)" => "디스크 (GB)",
+        "e.g. 8080:80/tcp" => "예: 8080:80/tcp",
+        "NAME=value" => "이름=값",
         "Disk (GiB)" => "디스크 (GiB)",
         "Memory" => "메모리",
-        "Resources" => "리소스",
-        "VM resources" => "VM 리소스",
+        "Resources" => "사양",
+        "Basics" => "기본",
+        "Name and the image to boot." => "이름과 시작할 이미지를 정합니다.",
+        "vCPU, memory and disk for this MicroVM." => "이 MicroVM의 vCPU, 메모리, 디스크입니다.",
+        "Isolated MicroVMs talk only inside their MicroNetwork." => {
+            "격리하면 같은 MicroNetwork 안에서만 통신합니다."
+        }
+        "Allow internet" => "인터넷 허용",
+        "Create MicroVM" => "MicroVM 만들기",
+        "Create MicroService" => "서비스 만들기",
+        "No secrets yet" => "아직 Secret이 없습니다",
+        "Store values your services need, such as passwords and tokens." => {
+            "서비스에 필요한 비밀번호나 토큰 같은 값을 보관합니다."
+        }
+        "No connections yet" => "아직 연결이 없습니다",
+        "Connect a secret store to import its secrets." => {
+            "Secret 저장소를 연결해 값을 가져옵니다."
+        }
+        "Select" => "선택",
+        "Value" => "값",
+        "Uptime" => "가동 시간",
+        "Load" => "부하",
+        "Check for updates" => "업데이트 확인",
+        "Public addresses" => "공개 주소",
+        "Data" => "데이터",
+        "Active sessions" => "사용 중인 세션",
+        "Members" => "멤버",
+        "Rules" => "규칙",
+        "Schedule" => "일정",
+        "Recent runs" => "최근 실행",
+        "When" => "일정",
+        "Next run" => "다음 실행",
+        "No runs yet." => "아직 실행 기록이 없습니다.",
+        "No members yet." => "아직 멤버가 없습니다.",
+        "Nothing in use. Choose Use VM to get started." => {
+            "사용 중인 세션이 없습니다. VM 사용을 눌러 시작합니다."
+        }
+        "Open terminal" => "터미널 열기",
+        "OS" => "운영체제",
+        "Virtualization" => "가상화",
+        "API service" => "API 서비스",
+        "Helper service" => "도우미 서비스",
+        "Install prefix" => "설치 경로",
+        "Data directory" => "데이터 폴더",
+        "Config directory" => "설정 폴더",
+        "systemd directory" => "systemd 폴더",
+        "API address" => "API 주소",
+        "Failed" => "실패",
+        "Unavailable" => "확인 불가",
+        "Retry connections" => "연결 다시 확인",
+        "Add schedule" => "스케줄 추가",
+        "Schedules" => "스케줄",
+        "Copy URL" => "URL 복사",
+        "Copy address" => "주소 복사",
+        "Drain host" => "호스트 비우기",
+        "Resume placement" => "배치 다시 받기",
+        "Reconcile" => "상태 맞추기",
+        "Start / recover" => "시작 / 복구",
+        "Summary" => "요약",
+        "Access" => "접속",
+        "Free host memory" => "호스트 여유 메모리",
+        "VM resources" => "VM 사양",
         "VM environment" => "VM 환경 변수",
         "VM port forwarding" => "VM 포트 포워딩",
         "VM storage" => "VM 스토리지",
         "VM shells" => "VM Shell",
-        "Internet access" => "인터넷 접근",
+        "Internet access" => "외부 통신",
         "Internet" => "인터넷 허용",
         "Isolated" => "격리",
         "Internet enabled" => "인터넷 사용",
@@ -253,13 +386,12 @@ pub fn t(value: &str) -> &str {
         "Uplink (empty restores default)" => "외부 인터페이스 (비우면 기본값)",
         "IPv4 subnet (CIDR)" => "IPv4 서브넷 (CIDR)",
         "IPv4 subnet" => "IPv4 서브넷",
-        "IPv6 subnet (optional)" => "IPv6 서브넷 (선택)",
+        "IPv6 subnet" => "IPv6 서브넷",
         "IPv6 address mode" => "IPv6 주소 방식",
         "Gateway" => "게이트웨이",
         "Directory" => "디렉터리",
         "Shells" => "Shell",
         "Shell IDs (one per line)" => "Shell",
-        "Network ID (optional)" => "네트워크 (선택)",
         "Storage path" => "스토리지 경로",
         "Automatic services network" => "서비스 네트워크 자동 생성",
         "Environment (NAME=value, one per line)" | "Environment (NAME=value)" => {
@@ -274,7 +406,7 @@ pub fn t(value: &str) -> &str {
         "Port" => "포트",
         "First host port" => "첫 번째 호스트 포트",
         "Health path" => "상태 확인 경로",
-        "Domain (optional)" => "도메인 (선택)",
+        "Domain" => "도메인",
         "Replicas" => "복제 수",
         "Startup timeout (seconds)" => "시작 제한 시간 (초)",
         "Drain timeout (seconds)" => "요청 종료 대기 시간 (초)",
@@ -287,6 +419,10 @@ pub fn t(value: &str) -> &str {
         "Available packages" => "사용 가능한 패키지",
         "Register" => "등록",
         "Download package" => "패키지 다운로드",
+        "Build kernel" => "커널 빌드",
+        "Update credentials" => "인증 정보 변경",
+        "Update token" => "토큰 변경",
+        "Firecrab Console" => "Firecrab 콘솔",
         "Install" => "설치",
         "Delete image" => "이미지 삭제",
         "Delete package" => "패키지 삭제",
@@ -352,7 +488,7 @@ pub fn t(value: &str) -> &str {
         "Connection name" => "연결 이름",
         "Database source" => "DB 위치",
         "Database URI" => "DB URI",
-        "CA certificate (PEM, optional)" => "CA 인증서 (PEM, 선택)",
+        "CA certificate (PEM)" => "CA 인증서 (PEM)",
         "Allow writes" => "쓰기 허용",
         "Show URI" => "URI 표시",
         "Hide URI" => "URI 숨기기",
@@ -361,7 +497,6 @@ pub fn t(value: &str) -> &str {
         "Local" => "로컬",
         "Required" => "필수",
         "Verify certificate" => "인증서 확인",
-        "CA certificate (optional)" => "CA 인증서 (선택)",
         "Test connection" => "연결 테스트",
         "Connected" => "연결됨",
         "Tables" => "테이블",
@@ -400,7 +535,6 @@ pub fn t(value: &str) -> &str {
         "Bridged" => "브리지",
         "Mirrored" => "미러링",
         "Host status" => "호스트 상태",
-        "Host and updates" => "호스트 및 업데이트",
         "Updates" => "업데이트",
         "Install update" => "업데이트 설치",
         "Update progress" => "업데이트 진행 상황",
@@ -426,7 +560,6 @@ pub fn t(value: &str) -> &str {
         "Command palette" => "명령 팔레트",
         "Close detail" => "세부정보 닫기",
         "Resize detail panel" => "세부정보 너비 조절",
-        "Select an item to see its details." => "항목을 선택하면 세부정보를 표시한다.",
         "Show values" => "값 표시",
         "Hide values" => "값 숨기기",
         "Startup timeline" => "시작 진행 상황",

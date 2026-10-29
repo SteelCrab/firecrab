@@ -75,6 +75,43 @@ test.describe("MicroVM detail panel", () => {
     await expect(startup.getByRole("listitem").first()).toContainText("1s");
   });
 
+  test("copies only the values worth copying, with an icon named after the value", async ({ page }) => {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await open(page, [RUNNING], "postgres-main");
+    const properties = section(page, "Properties");
+    const copies = properties.getByRole("button", { name: /^Copy / });
+    // ID, Image and Hostname; the host key is empty, and state, spec and storage have nothing to copy.
+    await expect(copies).toHaveCount(3);
+    for (const name of ["Copy ID", "Copy Image", "Copy Hostname"]) {
+      const icon = properties.getByRole("button", { name, exact: true });
+      await expect(icon).toHaveAttribute("title", name);
+      expect((await icon.innerText()).trim()).toBe("");
+    }
+    await expect(properties.getByRole("button", { name: "Copy", exact: true })).toHaveCount(0);
+    // The icon sits right after its value.
+    const id = properties.locator(".wasm-property", { hasText: "ID" }).first();
+    const value = (await id.locator(".prop-value").boundingBox())!;
+    const button = (await id.getByRole("button", { name: "Copy ID", exact: true }).boundingBox())!;
+    expect(button.x - (value.x + value.width)).toBeLessThan(12);
+    await properties.getByRole("button", { name: "Copy ID", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(RUNNING.id);
+
+    await panel(page).getByRole("tab", { name: /Network/ }).click();
+    const network = panel(page).getByRole("tabpanel");
+    await expect(network.getByRole("button", { name: "Copy IPv4", exact: true })).toBeVisible();
+    await expect(network.getByRole("button", { name: "Copy Hostname", exact: true })).toBeVisible();
+    await expect(network.getByRole("button", { name: /^Copy / })).toHaveCount(2);
+  });
+
+  test("names the copy icons in Korean", async ({ page }) => {
+    await openDashboard(page, { locale: "ko", vms: [RUNNING], routes: { [`/api/vms/${RUNNING.id}`]: RUNNING } });
+    await page.getByRole("button", { name: RUNNING.name, exact: true }).click();
+    // The section title and the icons read in Korean.
+    const properties = page.getByRole("complementary", { name: "MicroVM 상세", exact: true }).getByRole("region", { name: "속성", exact: true });
+    await expect(properties.getByRole("button", { name: "ID 복사", exact: true })).toBeVisible();
+    await expect(properties.getByRole("button", { name: "이미지 복사", exact: true })).toBeVisible();
+  });
+
   test("edits only the spec section", async ({ page }) => {
     const puts = await open(page, [STOPPED], "redis-cache");
     await panel(page).getByLabel("More VM actions", { exact: true }).click();
@@ -234,13 +271,15 @@ test.describe("MicroVM pause and resume", () => {
       await page.route(`**/api/vms/${current.id}`, (route) => route.fulfill({ json: current }));
       await page.getByRole("button", { name: current.name, exact: true }).click();
       const detail = page.getByRole("complementary", { name: locale === "en" ? "MicroVM detail" : "MicroVM 상세", exact: true });
+      // A running VM's head has the console link, in both languages.
+      await expect(detail.locator(".detail-head").getByRole("link", { name: locale === "en" ? "Open console" : "콘솔 열기", exact: true })).toBeVisible();
       await detail.getByRole("button", { name: locale === "en" ? "Pause" : "일시정지", exact: true }).click();
       await expect(detail.getByRole("button", { name: locale === "en" ? "Resume" : "재개", exact: true })).toBeVisible();
       await expect(detail).toContainText(locale === "en" ? "Memory stays allocated" : "메모리는 계속 점유합니다");
       await expect(detail.getByRole("button", { name: locale === "en" ? "Start" : "시작", exact: true })).toHaveCount(0);
       await expect(detail.getByRole("button", { name: locale === "en" ? "Delete" : "삭제", exact: true })).toHaveCount(0);
       await expect(detail.getByRole("button", { name: locale === "en" ? "Edit spec" : "사양 수정", exact: true })).toHaveCount(0);
-      await expect(detail.getByRole("link", { name: locale === "en" ? "Console" : "콘솔", exact: true })).toHaveCount(0);
+      await expect(detail.getByRole("link", { name: locale === "en" ? "Open console" : "콘솔 열기", exact: true })).toHaveCount(0);
       expect(current.ram).toBe(RUNNING.ram);
       expect(current.ipv4).toBe(RUNNING.ipv4);
       await detail.getByRole("button", { name: locale === "en" ? "Resume" : "재개", exact: true }).click();

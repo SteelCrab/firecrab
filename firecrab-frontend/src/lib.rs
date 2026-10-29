@@ -8,6 +8,7 @@ mod i18n;
 mod manager;
 mod model;
 mod notes;
+mod observability;
 mod render;
 mod sandbox;
 mod terminal;
@@ -61,6 +62,7 @@ struct App {
     detail_polling: Option<u64>,
     service_deployment: Option<Value>,
     deploy: deploy::State,
+    observability: observability::State,
     job: Option<(String, Value)>,
     workflows: workflows::State,
     databases: databases::State,
@@ -75,10 +77,14 @@ struct App {
     panel_drag_x: i32,
     panel_drag_width: u32,
     detail_tab: String,
+    /// The tab chosen on each screen that splits its lists with `render::subtabs`.
+    subtabs: BTreeMap<String, String>,
     detail_log: String,
     detail_log_loaded: bool,
     show_env: bool,
     rendered_selected: String,
+    /// `panel_view` of the last panel render; "" while the panel is closed.
+    rendered_panel: String,
     pending_vm: Option<String>,
     palette_query: String,
     palette_index: usize,
@@ -95,10 +101,72 @@ fn document() -> Document {
 fn element(id: &str) -> Option<Element> {
     document().get_element_by_id(id)
 }
+/// The current value of form field `key`: what a text box holds, what a dropdown selects, or
+/// the checked radio of a choice group (`role="radiogroup"`, `id="field-{key}"`).
+fn form_value(key: &str) -> Option<String> {
+    let field = element(&format!("field-{key}"))?;
+    if field.get_attribute("role").as_deref() == Some("radiogroup") {
+        return Some(
+            field
+                .query_selector("input[type=radio]:checked")
+                .ok()
+                .flatten()
+                .and_then(|radio| radio.dyn_into::<HtmlInputElement>().ok())
+                .map(|radio| radio.value())
+                .unwrap_or_default(),
+        );
+    }
+    if let Some(select) = field.dyn_ref::<HtmlSelectElement>() {
+        Some(select.value())
+    } else if let Some(input) = field.dyn_ref::<HtmlInputElement>() {
+        Some(input.value())
+    } else {
+        field
+            .dyn_ref::<web_sys::HtmlTextAreaElement>()
+            .map(|area| area.value())
+    }
+}
+/// The id of the control an event belongs to. A radio of a choice group reports the id of its
+/// group (`field-{key}`), the id the dropdown had.
+fn control_id(target: &Element) -> String {
+    target
+        .closest("[role=radiogroup]")
+        .ok()
+        .flatten()
+        .filter(|_| target.get_attribute("type").as_deref() == Some("radio"))
+        .map_or_else(|| target.id(), |group| group.id())
+}
+/// Shows the result of a check in the form's result area and brings it into view above the
+/// footer bar (the area's scroll margin leaves room for the bar). A tall form may be scrolled
+/// away from it.
+fn show_form_result(html: &str) {
+    set_html("form-result", html);
+    if let Some(node) = element("form-result").filter(|_| !html.is_empty()) {
+        node.scroll_into_view_with_bool(false);
+    }
+}
 fn set_html(id: &str, html: &str) {
     if let Some(node) = element(id) {
         node.set_inner_html(html);
     }
+}
+fn set_text(id: &str, value: &str) {
+    if let Some(node) = element(id)
+        && node.text_content().as_deref() != Some(value)
+    {
+        node.set_text_content(Some(value));
+    }
+}
+/// Writes the host status into the nodes `render::host_meters` made. The link stays in
+/// the DOM, so a keyboard user's focus survives the poll.
+fn set_host_status(status: &render::HostStatus) {
+    if let Some(dot) = element("host-dot") {
+        dot.set_class_name(if status.ok { "host-dot ok" } else { "host-dot" });
+    }
+    set_text("host-health", status.head);
+    set_text("host-load", &status.load);
+    set_text("host-memory", &status.memory);
+    set_text("host-disk", &status.disk);
 }
 fn render_page(app: &Shared) {
     let html = render::page(&app.borrow());
@@ -117,7 +185,7 @@ fn update_host(app: &Shared) {
     let Some(host) = state.cache.get("/api/host") else {
         return;
     };
-    set_html("host-status", &render::host_meters(&state));
+    set_host_status(&render::host_status(&state));
     if state.route == "vms"
         && state.loaded
         && let Some(summary) = element("vm-summary")
@@ -135,7 +203,22 @@ fn update_host(app: &Shared) {
     }
 }
 
+/// The summary strip of a list screen. The toolbar lives in the page shell, outside `#content`,
+/// so the strip is a shell slot too: that puts it above the toolbar, as the mockup has it.
+/// Only the MicroVM screen has one so far. `render_content` refreshes it.
+fn update_summary(app: &Shared) {
+    let state = app.borrow();
+    let html = if state.route == "vms" && state.loaded {
+        render::vm_summary(&state)
+    } else {
+        String::new()
+    };
+    drop(state);
+    set_html("screen-summary", &html);
+}
+
 fn render_content(app: &Shared) {
+    deploy::discard_credentials(&mut app.borrow_mut());
     if app.borrow().route == "ai-sandbox" {
         sandbox::render(app);
         return;
@@ -147,6 +230,7 @@ fn render_content(app: &Shared) {
     };
     app.borrow_mut().rendering = true;
     set_html("content", &html);
+    update_summary(app);
     advanced::cluster::restore_focus(cluster_focus);
     app.borrow_mut().rendering = false;
     if let Some(content) = element("content") {
@@ -164,7 +248,7 @@ fn render_editor(app: &Shared) {
         return;
     }
 
-    if app.borrow().route == "vms/new" {
+    if matches!(app.borrow().route.as_str(), "vms/new" | "services/new") {
         render_content(app);
     } else {
         render_detail(app);
@@ -178,15 +262,24 @@ fn render_editor(app: &Shared) {
         set_html("form-result", html);
     }
 }
+/// The scrolling body of the open panel.
+fn panel_body() -> Option<Element> {
+    document()
+        .query_selector("#detail-panel .detail-content")
+        .ok()
+        .flatten()
+}
 fn render_detail(app: &Shared) {
     let more_open = element("vm-more-actions").is_some_and(|el| el.has_attribute("open"));
+    let scroll_top = panel_body().map_or(0, |body| body.scroll_top());
     let focused = document()
         .active_element()
         .filter(|el| el.closest("#detail-panel").ok().flatten().is_some())
         .map(|el| el.id())
         .unwrap_or_default();
-    let (open, width, html, selection) = {
+    let (open, width, html, selection, same_view) = {
         let mut state = app.borrow_mut();
+        observability::clear(&mut state);
         let narrow = window()
             .inner_width()
             .ok()
@@ -203,19 +296,7 @@ fn render_detail(app: &Shared) {
                 .panel_width
                 .min(viewport.saturating_sub(716).clamp(320, 720));
         }
-        let open = (!["security-groups", "services"].contains(&state.route.as_str())
-            || state.detail.is_some()
-            || state.form.is_some())
-            && state.panel_open
-            && ![
-                "vms/new",
-                "queues",
-                "cluster",
-                "pipe/database",
-                "ai-sandbox",
-            ]
-            .contains(&state.route.as_str())
-            && (!narrow || state.detail.is_some() || state.form.is_some());
+        let open = details::panel_visible(&state);
         let html = if open {
             details::panel(&state)
         } else {
@@ -237,7 +318,14 @@ fn render_detail(app: &Shared) {
             }
             state.rendered_selected = selected;
         }
-        (open, state.panel_width, html, updates)
+        let view = if open {
+            details::panel_view(&state)
+        } else {
+            String::new()
+        };
+        let same_view = !view.is_empty() && state.rendered_panel == view;
+        state.rendered_panel = view;
+        (open, state.panel_width, html, updates, same_view)
     };
     app.borrow_mut().rendering = true;
     if let Some(panel) =
@@ -255,6 +343,14 @@ fn render_detail(app: &Shared) {
             if more_open && let Some(menu) = element("vm-more-actions") {
                 let _ = menu.set_attribute("open", "");
             }
+            if same_view
+                && scroll_top > 0
+                && let Some(body) = panel_body()
+            {
+                body.set_scroll_top(scroll_top);
+            }
+        } else {
+            panel.set_inner_html("");
         }
     }
     app.borrow_mut().rendering = false;
@@ -270,7 +366,14 @@ fn render_detail(app: &Shared) {
         let _ = row.set_attribute("aria-selected", if selected { "true" } else { "false" });
         row.set_class_name(if selected { "selected" } else { "" });
     }
-    if let Ok(buttons) = document().query_selector_all("[data-action=service-run]") {
+    if app.borrow().route != "vms" {
+        mark_selected_rows(app);
+    }
+    // While another form is open, a service cannot be opened or deployed from its row: that would
+    // replace the form in the panel.
+    if let Ok(buttons) = document()
+        .query_selector_all("[data-action=service-run], .service-table [data-action=detail]")
+    {
         let editing = app
             .borrow()
             .form
@@ -289,17 +392,31 @@ fn render_detail(app: &Shared) {
             }
         }
     }
-    if let Some(toggle) = element("panel-toggle") {
-        let label = i18n::t(if open { "Hide details" } else { "Show details" });
-        if app.borrow().route == "secrets" {
-            toggle.set_text_content(Some(i18n::t("Details")));
-            let _ = toggle.set_attribute("title", label);
-            let _ = toggle.set_attribute("aria-expanded", if open { "true" } else { "false" });
-        } else {
-            toggle.set_text_content(Some(label));
-        }
-    }
     advanced::services::sync(app);
+}
+
+/// Marks the table row of the selected item, so the highlight shows before the next list render.
+/// The VM list keeps its own row cache (`vm_rows`).
+fn mark_selected_rows(app: &Shared) {
+    let Ok(rows) = document().query_selector_all("#content tr[data-id]") else {
+        return;
+    };
+    let state = app.borrow();
+    for index in 0..rows.length() {
+        let Some(row) = rows
+            .item(index)
+            .and_then(|row| row.dyn_into::<Element>().ok())
+        else {
+            continue;
+        };
+        let id = row.get_attribute("data-id").unwrap_or_default();
+        let selected = state.detail.as_ref().is_some_and(|detail| {
+            ["id", "alias", "version", "provider", "registry"]
+                .iter()
+                .any(|key| detail[key] == id.as_str())
+        });
+        let _ = row.set_attribute("aria-selected", if selected { "true" } else { "false" });
+    }
 }
 
 fn render_messages(app: &Shared) {
@@ -322,11 +439,9 @@ fn render_messages(app: &Shared) {
         }
     }
     if let Some(status) = element("api-status") {
-        status.set_text_content(Some(if state.connection_error.is_empty() {
-            ""
-        } else {
-            "API unavailable — retrying every 3s"
-        }));
+        let (data_state, label) = render::api_status(&state);
+        let _ = status.set_attribute("data-state", data_state);
+        status.set_text_content(Some(label));
     }
 }
 fn update_toolbar(app: &Shared) {
@@ -347,6 +462,7 @@ fn update_toolbar(app: &Shared) {
                     "aria-selected",
                     if state.filter == id { "true" } else { "false" },
                 );
+                let _ = tab.set_attribute("tabindex", if state.filter == id { "0" } else { "-1" });
                 if let Ok(Some(counter)) = tab.query_selector(".vm-filter-count") {
                     counter.set_text_content(Some(&count.to_string()));
                 }
@@ -385,13 +501,7 @@ pub fn start() -> Result<(), JsValue> {
         locale,
         filter: "all".into(),
         detail_tab: "overview".into(),
-        panel_open: window()
-            .local_storage()
-            .ok()
-            .flatten()
-            .and_then(|s| s.get_item("firecrab.detailPanel").ok().flatten())
-            .as_deref()
-            != Some("closed"),
+        panel_open: true,
         panel_width: window()
             .local_storage()
             .ok()
@@ -430,6 +540,7 @@ pub fn start() -> Result<(), JsValue> {
         }
         drop(state);
         details::tick(&poll);
+        observability::tick(&poll);
         volumes::tick(&poll);
         if poll.borrow().route == "ai-sandbox" {
             sandbox::tick(&poll);
@@ -451,6 +562,7 @@ fn route_from_hash() -> String {
     let hash = hash.split('?').next().unwrap_or(&hash);
     let route = hash.trim_start_matches('#').trim_start_matches('/');
     if route == "vms/new"
+        || route == "services/new"
         || route.starts_with("console/")
         || [
             "pipe/auth",
@@ -516,6 +628,10 @@ fn load_route(app: Shared) {
         load_create_vm(app);
         return;
     }
+    if route == "services/new" {
+        load_new_service(app);
+        return;
+    }
     refresh(app.clone());
     if route == "cluster" {
         advanced::cluster::restore(&app);
@@ -554,6 +670,15 @@ fn load_route(app: Shared) {
     if route == "services" {
         aux.extend(["/api/pipe", "/api/pipe/storage", "/api/queues"]);
     }
+    if route == "pipe" {
+        aux.extend([
+            "/api/pipe/auth",
+            "/api/pipe/ai/connections",
+            "/api/pipe/storage",
+            "/api/pipe/registries",
+            "/api/pipe/databases",
+        ]);
+    }
     if route != "vms" {
         aux.push("/api/vms");
     }
@@ -572,8 +697,9 @@ fn load_route(app: Shared) {
                     state.vms = vms;
                 }
                 state.cache.insert(path.into(), value);
-                let visible = matches!(state.route.as_str(), "host" | "images" | "volumes")
-                    && state.form.is_none();
+                let visible =
+                    matches!(state.route.as_str(), "host" | "images" | "volumes" | "pipe")
+                        && state.form.is_none();
                 drop(state);
                 if visible {
                     render_content(&app);
@@ -614,7 +740,7 @@ fn refresh(app: Shared) {
         return;
     }
     let mut state = app.borrow_mut();
-    if state.refreshing || state.route == "vms/new" {
+    if state.refreshing || matches!(state.route.as_str(), "vms/new" | "services/new") {
         return;
     }
     state.refreshing = true;
@@ -643,6 +769,7 @@ fn refresh(app: Shared) {
         }
         state.refreshing = false;
         let mut changed = !state.loaded || !state.connection_error.is_empty();
+        let mut selection_gone = false;
         if let Some(services) = services {
             let services = services.unwrap_or_else(|_| json!({"unavailable":true}));
             changed |= state.cache.get("/api/cluster/services") != Some(&services);
@@ -673,14 +800,10 @@ fn refresh(app: Shared) {
                                         )
                                     })
                                     .collect();
-                                if state.form.is_none()
+                                selection_gone = !state.dirty
                                     && state.detail.as_ref().is_some_and(|detail| {
                                         !vms.iter().any(|vm| vm.id == text(detail, "id"))
-                                    })
-                                {
-                                    state.detail = None;
-                                    state.detail_generation += 1;
-                                }
+                                    });
                                 state.vms = vms;
                             }
                         }
@@ -705,8 +828,11 @@ fn refresh(app: Shared) {
                 state.loaded = true;
             }
         }
-        let has_form = state.form.is_some();
         drop(state);
+        if selection_gone {
+            close_detail(&app);
+        }
+        let has_form = app.borrow().form.is_some();
         advanced::after_refresh(&app);
         databases::after_refresh(&app);
         databases::tick(&app);
@@ -721,7 +847,7 @@ fn refresh(app: Shared) {
             }
             workflows::after_refresh(&app);
             let pending = app.borrow_mut().pending_vm.take();
-            if route == "vms"
+            if matches!(route.as_str(), "vms" | "services")
                 && let Some(id) = pending
             {
                 show_detail(app.clone(), id);
@@ -757,12 +883,74 @@ fn load_create_vm(app: Shared) {
                 }
             }
         }
-        let mut state = app.borrow_mut();
-        state.form = Some(forms::vm_create(&state.cache));
-        state.loaded = true;
-        drop(state);
+        let known = {
+            let mut state = app.borrow_mut();
+            let mut form = forms::vm_create(&state.cache);
+            // The host is already polled: use what it said last. The hint is only a line under
+            // the memory sizes, so the page does not wait for it.
+            form.host_free_mib = state.cache.get("/api/host").and_then(host_free_memory);
+            let known = form.host_free_mib.is_some();
+            state.form = Some(form);
+            state.loaded = true;
+            known
+        };
         render_content(&app);
+        if known {
+            return;
+        }
+        let Some(free) = api::request("GET", "/api/host", None)
+            .await
+            .ok()
+            .as_ref()
+            .and_then(host_free_memory)
+        else {
+            return;
+        };
+        let mut state = app.borrow_mut();
+        if state.generation != generation {
+            return;
+        }
+        let Some(form) = state
+            .form
+            .as_mut()
+            .filter(|form| form.title == "New MicroVM")
+        else {
+            return;
+        };
+        form.host_free_mib = Some(free);
+        let hint = form.memory_hint();
+        drop(state);
+        set_text("hint-ram", &hint);
     });
+}
+/// The page that creates a MicroService: the lists its pickers draw from, then the form.
+fn load_new_service(app: Shared) {
+    let generation = app.borrow().generation;
+    spawn_local(async move {
+        for path in [
+            "/api/pipe",
+            "/api/pipe/storage",
+            "/api/queues",
+            "/api/micro-networks",
+            "/api/security-groups",
+        ] {
+            let result = api::request("GET", path, None).await;
+            let mut state = app.borrow_mut();
+            if state.generation != generation {
+                return;
+            }
+            // A list that does not load only leaves its picker empty; the page still opens.
+            if let Ok(value) = result {
+                state.cache.insert(path.into(), value);
+            }
+        }
+        app.borrow_mut().loaded = true;
+        open_form(app, "services", "");
+    });
+}
+/// The free memory a `/api/host` answer reports, in MiB.
+fn host_free_memory(host: &Value) -> Option<f64> {
+    host["memoryAvailableMib"].as_f64()
 }
 fn history_index() -> Option<i32> {
     window()
@@ -907,6 +1095,15 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             if target.closest(".service-row-menu").ok().flatten().is_some() {
                 return;
             }
+            // A link in a row goes where it points; it does not also select the row.
+            if target
+                .closest("tr[data-id] a[href]")
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                return;
+            }
             if let Some(row) = target.closest("tr[data-id]").ok().flatten() {
                 show_detail(
                     clicked.clone(),
@@ -921,7 +1118,11 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
         }
         let action = button.get_attribute("data-action").unwrap_or_default();
         let id = button.get_attribute("data-id").unwrap_or_default();
-        if clicked.borrow().busy && !matches!(action.as_str(), "palette" | "palette-close" | "menu")
+        if clicked.borrow().busy
+            && !matches!(
+                action.as_str(),
+                "palette" | "palette-close" | "menu" | "menu-close"
+            )
         {
             return;
         }
@@ -956,6 +1157,12 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 }
             }
             _ => {
+                if observability::change(&changed, &target) {
+                    return;
+                }
+                if deploy::change(&changed, &target) {
+                    return;
+                }
                 if advanced::cluster::input(&changed, &target) {
                     return;
                 }
@@ -1031,8 +1238,8 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                     .flatten()
                     .is_some();
                 render_page(&language);
-                if menu_open && let Ok(Some(frame)) = document().query_selector(".app-frame") {
-                    let _ = frame.set_attribute("data-nav-open", "");
+                if menu_open {
+                    set_navigation(true);
                 }
             }
         } else if target.closest("#editor").ok().flatten().is_some() {
@@ -1105,6 +1312,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             open_palette(&keyboard);
             return;
         }
+        if navigation_key(&event) || vm_filter_key(&keyboard, &event) {
+            return;
+        }
         if event.key() == "Escape" {
             if let Ok(Some(menu)) = document().query_selector(".service-row-menu[open]") {
                 let _ = menu.remove_attribute("open");
@@ -1143,8 +1353,8 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 event.prevent_default();
                 return;
             }
-            if !keyboard.borrow().dirty && keyboard.borrow().panel_open {
-                details::dispatch(&keyboard, "panel-toggle", "");
+            if !keyboard.borrow().dirty && details::panel_visible(&keyboard.borrow()) {
+                close_detail(&keyboard);
             }
             return;
         }
@@ -1196,14 +1406,135 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
     });
     window().add_event_listener_with_callback("beforeunload", before.as_ref().unchecked_ref())?;
     before.forget();
+    let resize = Closure::<dyn FnMut(Event)>::new(move |_| {
+        if window()
+            .inner_width()
+            .ok()
+            .and_then(|width| width.as_f64())
+            .is_some_and(|width| width >= 768.0)
+        {
+            set_navigation(false);
+        }
+    });
+    window().add_event_listener_with_callback("resize", resize.as_ref().unchecked_ref())?;
+    resize.forget();
     advanced::install(app)?;
     Ok(())
 }
+
+fn set_navigation(open: bool) {
+    let Some(toggle) = element("nav-toggle") else {
+        return;
+    };
+    let was_open = toggle.get_attribute("aria-expanded").as_deref() == Some("true");
+    if let Ok(Some(frame)) = document().query_selector(".app-frame") {
+        let _ = frame.toggle_attribute_with_force("data-nav-open", open);
+    }
+    let _ = toggle.set_attribute("aria-expanded", if open { "true" } else { "false" });
+    let _ = toggle.set_attribute(
+        "aria-label",
+        i18n::t(if open { "Close menu" } else { "Open menu" }),
+    );
+    if let Ok(Some(workspace)) = document().query_selector(".app-workspace") {
+        let _ = workspace.toggle_attribute_with_force("inert", open);
+    }
+    let focus = if open {
+        document()
+            .query_selector(".sidebar [aria-current=page]")
+            .ok()
+            .flatten()
+    } else if was_open {
+        Some(toggle)
+    } else {
+        None
+    };
+    if let Some(focus) = focus.and_then(|node| node.dyn_into::<web_sys::HtmlElement>().ok()) {
+        let _ = focus.focus();
+    }
+}
+
+fn navigation_key(event: &KeyboardEvent) -> bool {
+    if !element("nav-toggle")
+        .is_some_and(|toggle| toggle.get_attribute("aria-expanded").as_deref() == Some("true"))
+    {
+        return false;
+    }
+    if event.key() == "Escape" {
+        event.prevent_default();
+        set_navigation(false);
+        return true;
+    }
+    if event.key() != "Tab" {
+        return true;
+    }
+    let Ok(nodes) = document().query_selector_all(
+        "#nav-toggle, .sidebar a[href], .sidebar button:not([disabled]), .sidebar select",
+    ) else {
+        return false;
+    };
+    let controls: Vec<_> = (0..nodes.length())
+        .filter_map(|i| nodes.item(i)?.dyn_into::<web_sys::HtmlElement>().ok())
+        .filter(|node| node.offset_height() > 0)
+        .collect();
+    let Some(first) = controls.first() else {
+        return false;
+    };
+    let Some(last) = controls.last() else {
+        return false;
+    };
+    let active = document().active_element();
+    let next = if event.shift_key() && active.as_ref() == Some(first.as_ref()) {
+        Some(last)
+    } else if !event.shift_key() && active.as_ref() == Some(last.as_ref()) {
+        Some(first)
+    } else {
+        None
+    };
+    if let Some(next) = next {
+        event.prevent_default();
+        let _ = next.focus();
+    }
+    true
+}
+
+fn vm_filter_key(app: &Shared, event: &KeyboardEvent) -> bool {
+    let Some(tab) = document()
+        .active_element()
+        .filter(|node| node.matches(".vm-filter").unwrap_or(false))
+    else {
+        return false;
+    };
+    let ids = ["all", "running", "paused", "stopped", "error"];
+    let current = ids
+        .iter()
+        .position(|id| Some(*id) == tab.get_attribute("data-id").as_deref())
+        .unwrap_or(0);
+    let index = match event.key().as_str() {
+        "ArrowRight" => (current + 1) % ids.len(),
+        "ArrowLeft" => (current + ids.len() - 1) % ids.len(),
+        "Home" => 0,
+        "End" => ids.len() - 1,
+        _ => return false,
+    };
+    event.prevent_default();
+    app.borrow_mut().filter = ids[index].into();
+    update_toolbar(app);
+    vm_list::filter(app);
+    if let Ok(Some(next)) =
+        document().query_selector(&format!(".vm-filter[data-id={}]", ids[index]))
+        && let Ok(next) = next.dyn_into::<web_sys::HtmlElement>()
+    {
+        let _ = next.focus();
+    }
+    true
+}
+
 fn open_palette(app: &Shared) {
     if element("palette-query").is_some() {
         set_html("palette-root", "");
         return;
     }
+    set_navigation(false);
     app.borrow_mut().palette_query.clear();
     app.borrow_mut().palette_index = 0;
     set_html("palette-root", &render::palette(&app.borrow()));
@@ -1213,8 +1544,26 @@ fn open_palette(app: &Shared) {
         let _ = input.focus();
     }
 }
+/// Drops the selection and any open form. The caller has already asked about unsaved changes.
+fn discard_detail(state: &mut App) {
+    state.form = None;
+    state.dirty = false;
+    state.detail = None;
+    state.detail_generation += 1;
+    state.detail_result.clear();
+}
+fn close_detail(app: &Shared) {
+    if !allow_discard(app) {
+        return;
+    }
+    discard_detail(&mut app.borrow_mut());
+    render_content(app);
+}
 fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
-    if deploy::dispatch(&app, action) {
+    if observability::dispatch(&app, action) {
+        return;
+    }
+    if deploy::dispatch(&app, action, id) {
         return;
     }
     if action != "vm-menu" {
@@ -1239,15 +1588,23 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
         return;
     }
     match action {
-        "refresh" => {
-            app.borrow_mut().cache.remove("security-connections");
-            refresh(app)
-        }
         "palette" => open_palette(&app),
         "palette-close" => set_html("palette-root", ""),
-        "menu" => {
-            if let Ok(Some(frame)) = document().query_selector(".app-frame") {
-                let _ = frame.toggle_attribute("data-nav-open");
+        "menu" => set_navigation(button.get_attribute("aria-expanded").as_deref() != Some("true")),
+        "menu-close" => set_navigation(false),
+        "vm-clear-filters" => {
+            {
+                let mut state = app.borrow_mut();
+                state.query.clear();
+                state.filter = "all".into();
+            }
+            update_toolbar(&app);
+            vm_list::filter(&app);
+            if let Some(input) =
+                element("vm-search").and_then(|node| node.dyn_into::<HtmlInputElement>().ok())
+            {
+                input.set_value("");
+                let _ = input.focus();
             }
         }
         "filter" => {
@@ -1311,16 +1668,18 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
             );
         }
         "detail" => show_detail(app, id.into()),
-        "close-detail" => {
+        "close-detail" => close_detail(&app),
+        // `id` is `{screen}:{tab}`. The selection belongs to the old tab, so it closes.
+        "subtab" => {
+            let Some((screen, tab)) = id.split_once(':') else {
+                return;
+            };
             if !allow_discard(&app) {
                 return;
             }
             let mut state = app.borrow_mut();
-            state.form = None;
-            state.dirty = false;
-            state.detail = None;
-            state.detail_generation += 1;
-            state.detail_result.clear();
+            state.subtabs.insert(screen.into(), tab.into());
+            discard_detail(&mut state);
             drop(state);
             render_content(&app);
         }
@@ -1333,6 +1692,10 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
                 .map(|detail| text(detail, "id").to_string())
                 .unwrap_or_default();
             open_form(app, id, &detail_id);
+        }
+        "cancel" if app.borrow().route == "services/new" => {
+            // Leaving the page asks about unsaved input, like any other way out.
+            let _ = window().location().set_hash("/services");
         }
         "cancel" => {
             let mut state = app.borrow_mut();
@@ -1688,6 +2051,9 @@ fn mutate(
                     rows.retain(|row| row["id"] != value["id"]);
                     rows.push(value.clone());
                     state.resource = json!(rows);
+                }
+                if state.route == "services/new" && path == "/api/micro-services" {
+                    state.pending_vm = Some(text(&value, "id").to_string());
                 }
                 if path == "/api/schedules"
                     || path == "/api/security-groups"

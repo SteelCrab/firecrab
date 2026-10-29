@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Real MicroVM/Nginx Deploy acceptance on an empty, disposable Linux CI host.
 
-Uses locally built OCI images and a private, fake Auth fixture. It never contacts
-GitHub/GHCR and does not establish external-registry or public TLS acceptance.
+Uses locally built OCI images and a private, fake Auth fixture. The optional
+public Tunnel mode contacts the production connection service and requires
+separate target approval and two disposable dashboard-issued tokens.
 """
 
 import argparse
@@ -20,6 +21,7 @@ import platform
 import socket
 import sqlite3
 import subprocess
+import sys
 import tarfile
 import threading
 import time
@@ -28,6 +30,15 @@ import uuid
 
 from deploy_fleet_qa import host_evidence, run_fleet
 from deploy_rotation_qa import run_rotation
+from deploy_auto_qa import run_auto
+from deploy_recovery_qa import run_recovery
+from deploy_queue_qa import run_queue
+from deploy_ci_qa import run_ci
+from deploy_observation_qa import run_observation
+from public_tunnel_credentials import load_credentials, verify_registration
+from public_tunnel_fixture import image_fixture as public_image_fixture, static_elf_arch
+from public_tunnel_setup import run_fixture_services
+from public_tunnel_acceptance import run_public
 
 
 def digest(data):
@@ -42,12 +53,13 @@ def image_fixture(busybox, label, healthy=True):
             entry.type = tarfile.DIRTYPE
             entry.mode = 0o755
             archive.addfile(entry)
-        files = {"bin/busybox": busybox, "www/index.html": f"release-{label}\n".encode()}
+        files = {"bin/busybox": busybox, "www/index.html": f"release-{label}\n".encode(),
+                 "bin/observed-init": b'#!/bin/sh\nprintf "fixture-stdout-%s\\n" "$OBS_ID"\nprintf "fixture-stderr-%s\\n" "$OBS_ID" >&2\nexec /bin/busybox httpd -f -p 8080 -h /www\n'}
         if healthy:
             files["www/health"] = b"healthy\n"
         for path, data in files.items():
             entry = tarfile.TarInfo(path)
-            entry.mode = 0o755 if path == "bin/busybox" else 0o644
+            entry.mode = 0o755 if path.startswith("bin/") else 0o644
             entry.size = len(data)
             archive.addfile(entry, io.BytesIO(data))
         shell = tarfile.TarInfo("bin/sh")
@@ -67,19 +79,35 @@ printf 'release-{label}\\n'
             "holding": "#!/bin/sh\nprintf 'Content-Type: text/plain\\r\\n\\r\\n'\nif [ -f /tmp/deploy-holding ]; then echo holding; else echo idle; fi\n",
             "environment": "#!/bin/sh\nprintf 'Content-Type: text/plain\\r\\n\\r\\n%s:%s\\n' \"$FLEET_SERVICE\" \"$FLEET_RELEASE\"\n",
             "rotation": """#!/bin/sh
-printf 'Content-Type: text/plain\\r\\n\\r\\n'
 case "$PASSWORD" in
-  qa-secret-v0) echo old ;;
-  qa-secret-v1) echo next ;;
-  qa-secret-v2) echo latest ;;
-  *) if [ "$UNRELATED" = 1 ]; then echo unrelated; else echo invalid; fi ;;
+  qa-secret-v0) reply=old ;;
+  qa-secret-v1) reply=next ;;
+  qa-secret-v2) reply=latest ;;
+  *) if [ "$UNRELATED" = 1 ]; then reply=unrelated; else reply=invalid; fi ;;
 esac
+printf 'Content-Type: text/plain\\r\\nContent-Length: %s\\r\\n\\r\\n%s\\n' "$((${#reply} + 1))" "$reply"
 """,
             "rotation-health": """#!/bin/sh
 case "$PASSWORD:$UNRELATED" in
   qa-secret-v0:*|qa-secret-v1:*|qa-secret-v2:*|:1) printf 'Content-Type: text/plain\\r\\n\\r\\nhealthy\\n' ;;
   *) printf 'Status: 503 Service Unavailable\\r\\nContent-Type: text/plain\\r\\n\\r\\nunhealthy\\n' ;;
 esac
+""",
+            "recovery-health": "#!/bin/sh\nif [ -f /unhealthy ]; then printf 'Status: 503 Service Unavailable\\r\\n'; fi\nprintf 'Content-Type: text/plain\\r\\n\\r\\nhealth\\n'\n",
+            "fail-health": "#!/bin/sh\n/bin/busybox touch /unhealthy\nprintf 'Content-Type: text/plain\\r\\n\\r\\ninjected\\n'\n",
+            "observation": """#!/bin/sh
+printf 'fixture-cgi-%s\\n' "$OBS_ID" >&2
+printf 'Content-Type: text/plain\\r\\n\\r\\nobserved\\n'
+""",
+            "otel-environment": """#!/bin/sh
+printf 'Content-Type: text/plain\\r\\n\\r\\n%s|%s|%s\\n' "$OTEL_EXPORTER_OTLP_ENDPOINT" "$OTEL_EXPORTER_OTLP_PROTOCOL" "$OTEL_SERVICE_NAME"
+""",
+            "internal-call": """#!/bin/sh
+reply=$(/bin/busybox wget -q -O - "http://$SELF_INTERNAL/cgi-bin/rotation") || {
+  printf 'Status: 502 Bad Gateway\\r\\nContent-Type: text/plain\\r\\n\\r\\nunavailable\\n'
+  exit 0
+}
+printf 'Content-Type: text/plain\\r\\n\\r\\n%s\\n' "$reply"
 """,
         }
         for name, script in scripts.items():
@@ -92,7 +120,7 @@ esac
     compressed = gzip.compress(raw, mtime=0)
     architecture = "arm64" if platform.machine() in ["aarch64", "arm64"] else "amd64"
     config = json.dumps({"architecture": architecture, "os": "linux", "rootfs": {"type": "layers", "diff_ids": [digest(raw)]},
-        "config": {"Env": ["PATH=/bin"], "Entrypoint": ["/bin/busybox", "httpd", "-f", "-p", "8080", "-h", "/www"]}}, separators=(",", ":")).encode()
+        "config": {"Env": ["PATH=/bin"], "Entrypoint": ["/bin/sh", "/bin/observed-init"]}}, separators=(",", ":")).encode()
     manifest = json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
         "config": {"mediaType": "application/vnd.oci.image.config.v1+json", "digest": digest(config), "size": len(config)},
         "layers": [{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": digest(compressed), "size": len(compressed)}]}, separators=(",", ":")).encode()
@@ -144,15 +172,18 @@ def wait_for(check, timeout=180, message="condition timed out"):
     raise AssertionError(message)
 
 
+_UNSET = object()
+
+
 class Api:
     def __init__(self, base):
         address = urlsplit(base)
         assert address.scheme == "http" and address.hostname == "127.0.0.1", "local disposable API required"
         self.port = address.port or 80
 
-    def call(self, method, path, body=None, allowed=(200, 201, 202, 204)):
+    def call(self, method, path, body=_UNSET, allowed=(200, 201, 202, 204)):
         with contextlib.closing(http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)) as connection:
-            connection.request(method, path, body=json.dumps(body) if body is not None else None, headers={"Content-Type": "application/json"})
+            connection.request(method, path, body=json.dumps(body) if body is not _UNSET else None, headers={"Content-Type": "application/json"})
             response = connection.getresponse()
             raw = response.read()
             assert response.status in allowed, f"{method} {path}: {response.status} {raw[:1000]!r}"
@@ -169,9 +200,15 @@ class Api:
 
 def traffic(host, port, domain, path="/"):
     with contextlib.closing(http.client.HTTPConnection(host, port, timeout=120 if path == "/cgi-bin/hold" else 5)) as connection:
-        connection.request("GET", path, headers={"Host": domain})
-        response = connection.getresponse()
-        return response.status, response.read().decode().strip()
+        stage = "request"
+        try:
+            connection.request("GET", path, headers={"Host": domain})
+            stage = "response headers"
+            response = connection.getresponse()
+            stage = "response body"
+            return response.status, response.read().decode().strip()
+        except TimeoutError as error:
+            raise TimeoutError(f"{stage} timed out") from error
 
 
 def atomic_json(path, value):
@@ -193,7 +230,7 @@ def require_empty_host(api):
 
 def run(args, evidence):
     assert args.disposable_host and os.geteuid() == 0 and Path("/dev/kvm").exists()
-    required_cpus = 4 if args.secret_rotation else 3
+    required_cpus = 4 if args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability or args.public_tunnel else 3
     assert int(subprocess.check_output(["nproc"], text=True)) >= required_cpus, f"{required_cpus} CPUs required for the selected rolling-surge acceptance"
     if args.fifteen_services:
         evidence["host"] = host_evidence(args.images)
@@ -201,12 +238,25 @@ def run(args, evidence):
     api = Api(args.api)
     api.ready()
     require_empty_host(api)
-    if args.secret_rotation:
+    credentials = load_credentials(args.public_token) if args.public_tunnel else None
+    if args.public_tunnel:
+        evidence["publicTarget"] = {"hostname": platform.node(), "architecture": platform.machine(),
+                                    "addresses": [credential.label for credential in credentials]}
+        evidence["publicRegistration"] = [verify_registration(credential) for credential in credentials]
+    if args.secret_rotation or args.replica_recovery:
         assert not api.call("GET", "/api/secrets"), "refusing existing Secrets"
         assert not api.call("GET", "/api/secrets/connections"), "refusing existing Secret connections"
     unit = "firecrab-ingress.service"
-    fixtures = [image_fixture(Path(args.busybox).read_bytes(), label, label != "bad") for label in ["A", "B", "bad"]]
-    registry = Registry(fixtures)
+    fixtures = [image_fixture(Path(args.busybox).read_bytes(), label, label != "bad") for label in ["A", "B", "bad", "C"]]
+    public_fixtures = []
+    if args.public_tunnel:
+        binary = args.public_fixture_binary.read_bytes()
+        expected_arch = {"aarch64": "arm64", "arm64": "arm64", "x86_64": "amd64", "amd64": "amd64"}.get(platform.machine())
+        if expected_arch is None or static_elf_arch(binary) != expected_arch:
+            raise ValueError("fixture architecture must match the host")
+        public_fixtures = [public_image_fixture(binary, label) for label in ["A", "B"]]
+    all_fixtures = fixtures + public_fixtures
+    registry = Registry(all_fixtures)
     images = Path(args.images)
     registrations = images / ".templates.json"
     database = Path(args.database)
@@ -287,7 +337,7 @@ def run(args, evidence):
         api.call("DELETE", service_path())
 
     try:
-        for digest_value, _, _ in fixtures:
+        for digest_value, _, _ in all_fixtures:
             result = api.call("POST", "/api/oci/import", {"reference": f"{registry.address}/team/deploy-qa@{digest_value}"})
             alias = result["alias"]
             aliases.append(alias)
@@ -296,7 +346,7 @@ def run(args, evidence):
         subprocess.run(["systemctl", "stop", "firecrab-api.service"], check=True)
         try:
             entries = json.loads(registrations.read_text())
-            for source_alias, (digest_value, _, _) in zip(aliases.copy(), fixtures):
+            for source_alias, (digest_value, _, _) in zip(aliases.copy(), all_fixtures):
                 spec = next(entry.copy() for entry in entries if entry["alias"] == source_alias)
                 spec["alias"] = "ghcr.io-team-deploy-qa-sha256-" + digest_value.split(":")[1][:12]
                 assert spec["version"] == digest_value
@@ -385,16 +435,29 @@ def run(args, evidence):
         assert len(samples) > 20 and not failures, {"samples": len(samples), "failures": failures[:10]}
         print(f"PASS unhealthy candidate stays out of traffic; {len(samples)} continuous HTTP requests, zero errors", flush=True)
         evidence["coreRequests"] = len(samples)
-        if args.fifteen_services or args.secret_rotation:
+        if args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability or args.public_tunnel:
             stop.set()
             loader.join(timeout=10)
             stop_service()
             service = None
             if args.secret_rotation:
                 run_rotation(api, wait_for, traffic, network, spec_a, ingress_port, evidence)
-            else:
+            elif args.fifteen_services:
                 run_fleet(api, wait_for, traffic, network, spec_a, fixtures[1][0], ingress_port, evidence)
+            if args.replica_recovery:
+                run_recovery(api, wait_for, traffic, network, spec_a, ingress_port, evidence)
+            if args.queue_controls:
+                run_queue(api, wait_for, traffic, network, spec_a, fixtures[1][0], ingress_port, evidence)
+            if args.automatic_deploy:
+                run_auto(api, wait_for, traffic, network, spec_a, fixtures, ingress_port, evidence)
+            if args.ci_deploy:
+                run_ci(api, wait_for, traffic, network, spec_a, fixtures, ingress_port, evidence)
+            if args.observability:
+                run_observation(api, wait_for, traffic, network, spec_a, ingress_port, evidence)
+            if args.public_tunnel:
+                run_fixture_services(api, wait_for, network, spec_a, public_fixtures, credentials, evidence, run_public)
     finally:
+        original_error = sys.exc_info()[0] is not None
         stop.set()
         if loader: loader.join(timeout=10)
         for address in held_ips:
@@ -409,6 +472,7 @@ def run(args, evidence):
             except Exception as error:
                 cleanup_errors.append(f"{label}: {error}")
 
+        cleanup("API readiness after fixture restart", api.ready)
         if service: cleanup("service VMs and configuration", stop_service)
         if network: cleanup("network", lambda: api.call("DELETE", "/api/micro-networks/" + network))
         for alias in reversed(aliases):
@@ -422,10 +486,17 @@ def run(args, evidence):
             for name in ["manifest.json", "ingress.conf"]:
                 cleanup("Pipe file " + name, lambda name=name: (Path(args.config) / "pipe" / name).unlink(missing_ok=True))
         registry.close()
-        assert not cleanup_errors, cleanup_errors
+        evidence["cleanupErrors"] = cleanup_errors
+        if cleanup_errors and not original_error:
+            raise RuntimeError("Deploy QA cleanup failed; see report")
     assert not api.call("GET", "/api/vms") and not api.call("GET", "/api/micro-services")
-    evidence["allResourcesRemoved"] = True
-    print("PASS all dedicated Deploy QA VMs, services, routes, network, fixture images and credentials removed", flush=True)
+    if args.public_tunnel:
+        evidence["deployFixtureResourcesRemoved"] = True
+        evidence["allResourcesRemoved"] = False
+        print("PASS Deploy QA fixtures removed; public reservations and token files require operator cleanup", flush=True)
+    else:
+        evidence["allResourcesRemoved"] = True
+        print("PASS all dedicated Deploy QA VMs, services, routes, network, fixture images and credentials removed", flush=True)
 
 
 if __name__ == "__main__":
@@ -439,14 +510,32 @@ if __name__ == "__main__":
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--fifteen-services", action="store_true", help="require 16 CPUs and run the live 15-service acceptance")
     modes.add_argument("--secret-rotation", action="store_true", help="require four CPUs and run live shared-Secret rotation acceptance")
+    parser.add_argument("--replica-recovery", action="store_true", help="run live replica restart/replacement and API recovery acceptance")
+    parser.add_argument("--automatic-deploy", action="store_true", help="run authenticated tag monitoring and rollback/restart acceptance with private TLS trust")
+    parser.add_argument("--queue-controls", action="store_true", help="run live queued cancellation, rollback priority and API restart acceptance")
+    parser.add_argument("--ci-deploy", action="store_true", help="run scoped CLI/Action acceptance through private verified TLS and Nginx")
+    parser.add_argument("--observability", action="store_true", help="run isolated app logs, API restart, events and OTLP acceptance")
+    parser.add_argument("--public-tunnel", action="store_true", help="run explicitly approved public Tunnel acceptance")
+    parser.add_argument("--public-target-approved", action="store_true", help="confirm separate approval for the host and public test addresses")
+    parser.add_argument("--public-token", nargs=2, action="append", metavar=("LABEL", "PRIVATE_FILE"), help="owned qa- label and private token file; repeat twice")
+    parser.add_argument("--public-fixture-binary", type=Path, help="statically linked Linux public Tunnel fixture")
     parser.add_argument("--report", type=Path, help="write measured evidence even when acceptance fails")
     args = parser.parse_args()
-    if (args.fifteen_services or args.secret_rotation) and not args.report:
+    if (args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability or args.public_tunnel) and not args.report:
         parser.error("extended acceptance requires --report")
+    if args.public_tunnel:
+        if not args.public_target_approved or not args.public_fixture_binary or not args.public_token or len(args.public_token) != 2:
+            parser.error("public Tunnel acceptance requires explicit target approval, a fixture binary, and exactly two token files")
+        if args.api != "http://127.0.0.1:5523" or args.config != "/etc/firecrab" or args.database != "/var/lib/firecrab/data/firecrab.db" or args.images != "/var/lib/firecrab/images":
+            parser.error("public Tunnel acceptance requires the default disposable host paths and API")
+        if args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability:
+            parser.error("public Tunnel acceptance cannot be combined with other extended modes")
+    elif args.public_target_approved or args.public_fixture_binary or args.public_token:
+        parser.error("public Tunnel options require --public-tunnel")
     evidence = {"status": "failed", "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}
     try:
         run(args, evidence)
-        evidence["status"] = "passed"
+        evidence["status"] = "pending_operator_verification" if args.public_tunnel else "passed"
     except BaseException as error:
         evidence["error"] = str(error)
         raise

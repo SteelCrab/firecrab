@@ -289,6 +289,19 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(crate::service_runtime::get).post(crate::service_runtime::deploy),
         )
         .route(
+            "/api/micro-services/{id}/auto-deploy",
+            get(crate::service_runtime::auto_deploy::get)
+                .put(crate::service_runtime::auto_deploy::configure),
+        )
+        .route(
+            "/api/micro-services/{id}/auto-deploy/pause",
+            post(crate::service_runtime::auto_deploy::pause),
+        )
+        .route(
+            "/api/micro-services/{id}/auto-deploy/resume",
+            post(crate::service_runtime::auto_deploy::resume),
+        )
+        .route(
             "/api/micro-services/{id}/updates",
             post(crate::service_runtime::deploy::update),
         )
@@ -307,6 +320,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/micro-services/{id}/deployments/{operation_id}",
             get(crate::service_runtime::deploy::operation),
+        )
+        .route(
+            "/api/micro-services/{id}/deployments/{operation_id}/cancel",
+            post(crate::service_runtime::queue::cancel),
         )
         .route(
             "/api/micro-services/{id}/deployment/check",
@@ -778,6 +795,48 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // Model verification and explicit guest recovery need longer bounded HTTP waits.
     let sandbox = Router::new()
         .route(
+            "/api/ai-sandbox/tunnels",
+            get(handlers::sandbox_tunnels::inventory),
+        )
+        .route(
+            "/api/ai-sandbox/tunnels/{id}/retarget",
+            post(handlers::sandbox_tunnels::retarget),
+        )
+        .merge(handlers::sandbox_environments::routes())
+        .merge(handlers::sandbox_guest::routes())
+        .route(
+            "/api/ai-sandbox/tunnel-addresses",
+            get(handlers::sandbox_tunnels::addresses),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{project}/tunnels",
+            get(handlers::sandbox_tunnels::list),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{project}/tunnels/{id}",
+            axum::routing::put(handlers::sandbox_tunnels::save),
+        )
+        .route(
+            "/api/ai-sandbox/tunnels/{id}",
+            get(handlers::sandbox_tunnels::get).delete(handlers::sandbox_tunnels::delete),
+        )
+        .route(
+            "/api/ai-sandbox/tunnels/{id}/publish",
+            post(handlers::sandbox_tunnels::publish),
+        )
+        .route(
+            "/api/ai-sandbox/tunnels/{id}/reconcile",
+            post(handlers::sandbox_tunnels::reconcile),
+        )
+        .route(
+            "/api/ai-sandbox/tunnels/{id}/stop",
+            post(handlers::sandbox_tunnels::stop),
+        )
+        .route(
+            "/api/ai-sandbox/tunnels/{id}/verify",
+            post(handlers::sandbox_tunnels::verify),
+        )
+        .route(
             "/api/ai-sandbox/access/{principal}",
             get(handlers::ai_sandbox::get_access)
                 .put(handlers::ai_sandbox::set_access)
@@ -824,6 +883,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/ai-sandbox/tasks/{id}/apply",
             post(handlers::ai_sandbox::apply_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}/artifacts/{artifact}",
+            get(handlers::ai_sandbox::get_artifact),
         )
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
@@ -889,6 +952,38 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             enforce_limits,
         ));
 
+    let observability = Router::new()
+        .route(
+            "/api/micro-services/{id}/observability",
+            get(crate::service_observation::get),
+        )
+        .route(
+            "/api/micro-services/{id}/observability/otlp",
+            axum::routing::put(crate::service_observation::configure),
+        )
+        .layer(cors.clone())
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn_with_state(
+            limits.clone(),
+            enforce_limits,
+        ))
+        .layer(middleware::from_fn(handlers::secrets::no_store));
+    let ci_tokens = Router::new()
+        .route(
+            "/api/micro-services/{id}/deploy-tokens",
+            get(crate::ci_deploy::list_tokens).post(crate::ci_deploy::create_token),
+        )
+        .route(
+            "/api/micro-services/{id}/deploy-tokens/{token}",
+            delete(crate::ci_deploy::revoke_token),
+        )
+        .layer(cors.clone())
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn_with_state(
+            limits.clone(),
+            enforce_limits,
+        ))
+        .layer(middleware::from_fn(handlers::secrets::no_store));
     let console = Router::new().route("/ws/vms/{id}/console", get(handlers::console::console_ws));
     // Object bodies stream with their own 512 MiB limit and upstream deadline.
     let storage_transfers = Router::new()
@@ -918,6 +1013,8 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             enforce_limits,
         ));
     let app = rest
+        .merge(ci_tokens)
+        .merge(observability)
         .merge(cluster)
         .merge(sandbox)
         .merge(recovery)
@@ -959,6 +1056,31 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     ))
     .layer(middleware::from_fn_with_state(policy, enforce_origin))
     .layer(middleware::from_fn(assign_request_id))
+}
+
+/// Dedicated bearer-only data-plane entry. Operator and dashboard routes never join this router.
+pub(crate) fn ci_deploy_router(state: AppState) -> Router {
+    Router::new()
+        .route(
+            "/api/ci/services/{id}/deployments",
+            get(crate::ci_deploy::service_status).post(crate::ci_deploy::submit),
+        )
+        .route(
+            "/api/ci/services/{id}/deployments/{operation}",
+            get(crate::ci_deploy::operation_status),
+        )
+        .fallback(not_found)
+        .with_state(state)
+        .layer(DefaultBodyLimit::max(8192))
+        .layer(middleware::from_fn_with_state(
+            RequestLimits {
+                permits: Arc::new(Semaphore::new(16)),
+                timeout: Some(Duration::from_secs(10)),
+            },
+            enforce_limits,
+        ))
+        .layer(middleware::from_fn(handlers::secrets::no_store))
+        .layer(middleware::from_fn(assign_request_id))
 }
 
 async fn assign_request_id(mut request: Request, next: Next) -> Response {

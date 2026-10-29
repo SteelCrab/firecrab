@@ -228,6 +228,9 @@ fn run(cli: Cli) -> i32 {
                 schedule::run(client, command)
             })
         }
+        Command::Microservice {
+            command: microservice::Command::CiDeploy(args),
+        } => finish_api_command(microservice::ci::deploy(args)),
         Command::Microservice { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 microservice::run(client, command)

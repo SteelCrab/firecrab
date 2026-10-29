@@ -53,9 +53,76 @@ Use `--expected-release UUID` to reject an update if the active release changed.
 `--no-wait` returns after acceptance.
 A client timeout does not cancel an accepted operation.
 
+## Queue and cancellation
+
+Deploy, YAML apply, Secrets rotation, rollback, and replica recovery share one
+host-local worker permit. A waiting rollback runs before waiting ordinary Deploy
+work. Requests in the same priority class keep their saved acceptance order.
+An operation that has already started keeps its permit until it finishes or pauses.
+After API restart, interrupted updates and replica repairs resume before waiting
+work. Queued initial deployments also resume.
+
+Use the **Cancel** icon while an operation is queued. The API also accepts
+`POST /api/micro-services/{id}/deployments/{operationId}/cancel` without a body.
+Repeat cancellation with the same operation UUID after a lost response.
+The recorded attempt becomes `cancelled`. Cancelling an update restores the
+previous active release without stopping its VMs or changing its Nginx routes.
+An initial queued cancellation creates no VM. A later Deploy uses a new operation UUID.
+
+Cancellation returns `409` after the worker claims execution. Inspect the operation
+before choosing Retry or Stop for work that has already started.
+Direct cancellation cannot change Git/Stack or controller-owned service intent.
+
+## Automatic registry Deploy
+
+Open **Automation** in the service's Deploy panel. Save an explicitly tagged
+source such as `ghcr.io/team/app:stable` or `ghcr.io/team/app:v1.*`.
+The connected Auth account must own that namespace or ECR registry.
+Polling is opt-in, every 60–3600 seconds (default 300). Registry reads use normal
+TLS verification, including installed system CA roots for private registry trust.
+
+Exact tags follow their changed manifest digest. Version rules `*`, `v*`, `1.*`,
+`v1.*`, `1.2.*` and `v1.2.*` select the highest matching stable semantic version.
+Prereleases are excluded. Each scan reads at most ten pages and 1000 tags.
+Metadata reads have a 30-second deadline. Errors back off up to one hour.
+The selected host-platform digest enters the existing serial Deploy queue.
+A lost acknowledgement or API restart keeps the same recorded operation UUID.
+
+Rollback keeps the current policy and pauses its observed digest. A different
+digest resumes monitoring. **Resume** explicitly permits the same digest again.
+A failed or cancelled automatic operation uses the same pause rule. Interrupted
+work that still owns resources must finish recovery first. **Pause** requires an
+explicit Resume; a new digest cannot override it. Pause does not cancel a queued
+operation. Use its Cancel icon separately. **Disable** removes monitoring.
+
+Use `GET` or `PUT /api/micro-services/{id}/auto-deploy` to inspect or configure it:
+
+```json
+{"reference":"ghcr.io/team/app:v1.*","intervalSeconds":60}
+```
+
+Send JSON `null` with PUT to disable. Bodyless POST to `/auto-deploy/pause` or
+`/auto-deploy/resume` changes monitoring. Status contains the last verified tag,
+digest, pause reason, operation UUID, failure count and next check time. It never
+contains registry credentials or remote response bodies.
+
+YAML services can declare the same object under `config.autoDeploy`, a domain,
+`hostPort: 0`, and an initial digest-pinned `config.image`. That image bootstraps a
+new service. Reapplying YAML or Git preserves an automated running digest while
+reconciling other declared settings. Removing the policy returns image ownership
+to the declared pin. Git-owned policy edits still require Git sync; local runtime
+pause/resume remains available. Active Stack work excludes automatic admission.
+Controller-owned multi-host services are excluded.
+
+## Dashboard
+
+Use [Service CI Deploy](ci-deploy.md) for image-only CLI/GitHub Action deployment
+with expiring service/repository tokens and exact pipeline outcomes.
+
 In the dashboard, open a service and choose **Deploy update**.
 The guided form offers the same configuration and strategy choices.
-**Release history** lists successful releases and offers **Roll back**.
+The **Releases** tab lists successful releases and offers **Roll back to selected release**.
+The Overview shows the latest three, with the same roll back on the archived ones.
 **Retry Deploy** resumes a failed operation that still owns resources.
 The dashboard and YAML apply send the release they observed to prevent a stale update.
 
@@ -98,6 +165,7 @@ Deploy keeps owned resources and reports the reason instead of discarding the re
 | `POST` | `/api/micro-services/{id}/rollback` | `{operationId, expectedReleaseId?, releaseId, strategy?}`; `202` |
 | `POST` | `/api/micro-services/{id}/deployment/retry` | `{operationId}`; `202` |
 | `GET` | `/api/micro-services/{id}/deployments/{operationId}` | Exact recorded attempt, including failed attempts |
+| `POST` | `/api/micro-services/{id}/deployments/{operationId}/cancel` | No body; cancel an exact queued operation and retain its terminal outcome |
 
 `spec` is a complete [MicroService configuration](microservices.md#fields).
 `strategy` is `rolling` or `blue_green`.

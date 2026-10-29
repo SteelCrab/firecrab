@@ -39,13 +39,15 @@ jobs:
         # `dnsmasq --test` to validate generated configs, and oci::ext4's
         # tests pack a root-owned image via real `fakeroot` (issue #250) —
         # neither preinstalled on the runner image.
-        run: sudo apt-get update && sudo apt-get install -y dnsmasq fakeroot musl-tools
+        run: sudo apt-get update && sudo apt-get install -y dnsmasq fakeroot musl-tools iproute2
 
       - name: Build private ingress engine
         run: |
           ./scripts/build-ingress.sh target/ingress
           ./scripts/build-guest-console.sh target/ingress
           python3 scripts/test-guest-console.py
+          sudo python3 scripts/test-sandbox-user.py
+          python3 scripts/test-guest-app-log.py
 
       - name: Verify bundled ingress installation
         run: sudo bash scripts/test-ingress-install.sh target/ingress
@@ -76,11 +78,38 @@ jobs:
       - name: Deploy QA guards and OCI fixture contract
         run: python3 scripts/test-ci-qa-deploy.py
 
+      - name: Public Tunnel preflight contract
+        run: python3 scripts/test-check-public-tunnel.py
+
+      - name: Public Tunnel app probe contract
+        run: python3 scripts/test-check-public-tunnel-app.py
+
+      - name: Public Tunnel acceptance safety contracts
+        run: |
+          python3 scripts/test_public_tunnel_credentials.py
+          python3 scripts/test_public_tunnel_fixture.py
+          python3 scripts/test_public_tunnel_setup.py
+          python3 scripts/test_public_tunnel_acceptance.py
+
+      - name: CI Deploy Action client contract
+        run: python3 scripts/test-deploy-ci-client.py
+
       - name: Sandbox live QA evidence and ownership guards
         run: python3 scripts/test-ci-qa-ai-sandbox.py
 
       - name: Sandbox recovery QA ownership and fault guards
         run: python3 scripts/test-ci-qa-ai-sandbox-recovery.py
+
+      - name: Sandbox coordination QA evidence guards
+        run: python3 scripts/test-ci-qa-ai-sandbox-coordination.py
+
+      - name: Sandbox prepared image and environment fixture guards
+        run: |
+          python3 scripts/test-sandbox-environment-seed.py
+          python3 scripts/test-sandbox-oci-archive.py
+          python3 scripts/test-sandbox-oci-startup.py
+          setpriv --no-new-privs python3 scripts/test-qa-sandbox-http-ws.py
+          python3 scripts/test-qa-sandbox-openrc-v1.py
 
       - name: Database QA guards and cleanup contract
         run: python3 scripts/test-pipe-databases-qa.py
@@ -147,6 +176,45 @@ jobs:
           name: native-coverage
           path: lcov.info
           retention-days: 7
+
+  vm-socket-failover:
+    name: VM socket failover (real Nginx)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: socket-failover-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Build helper tests and private ingress
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools iproute2
+          ./scripts/build-ingress.sh target/ingress
+          cargo test -p firecrab-helper vm_connections:: --locked
+      - name: Reset dead sockets with the helper's network capability
+        run: |
+          helper_test_binary=$(cargo test -p firecrab-helper --no-run --message-format=json | python3 -c 'import json,sys; entries=[json.loads(line) for line in sys.stdin]; print(next(item["executable"] for item in entries if item.get("reason") == "compiler-artifact" and item.get("profile", {}).get("test") and item.get("target", {}).get("name") == "firecrab-helper" and item.get("executable")))')
+          socket_qa_dir=$(mktemp -d /var/tmp/firecrab-socket-qa.XXXXXX)
+          trap 'sudo rm -rf "$socket_qa_dir"' EXIT
+          sudo chown root:root "$socket_qa_dir"
+          sudo install -m 0755 "$helper_test_binary" "$socket_qa_dir/helper-tests"
+          sudo install -m 0755 target/ingress/firecrab-ingress "$socket_qa_dir/ingress"
+          sudo systemd-run --quiet --wait --pipe --collect \
+            -p CapabilityBoundingSet=CAP_NET_ADMIN -p NoNewPrivileges=yes \
+            --setenv=FIRECRAB_SOCKET_RESET_QA=1 \
+            --setenv=FIRECRAB_TEST_INGRESS="$socket_qa_dir/ingress" \
+            --working-directory="$socket_qa_dir" \
+            "$socket_qa_dir/helper-tests" --ignored --exact \
+            vm_connections::tests::reset_dead_upstream_retries_without_cutting_healthy_requests \
+            --test-threads=1
 
   dev-container-runtime:
     name: Worktree dev (private Docker runtime, real KVM)
@@ -827,8 +895,8 @@ jobs:
 
       - name: Deploy with real MicroVMs and Nginx
         if: ${{ !cancelled() && steps.guest-kernel.outcome == 'success' }}
-        timeout-minutes: 15
-        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation --report target/qa/secret-rotation.json 2>&1 | tee target/qa/deploy.log
+        timeout-minutes: 25
+        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation --replica-recovery --queue-controls --automatic-deploy --ci-deploy --observability --report target/qa/secret-rotation.json 2>&1 | tee target/qa/deploy.log
 
       - name: Retain Deploy acceptance evidence
         if: always()

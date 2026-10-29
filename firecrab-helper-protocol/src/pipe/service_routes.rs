@@ -77,6 +77,7 @@ impl ServiceRouteRequest {
                 upstreams,
             } => {
                 let route = Route {
+                    service_port: None,
                     security_group: security_group.clone(),
                     owner: Some(owner.clone()),
                     network: Some(network.clone()),
@@ -101,7 +102,9 @@ impl ServiceRouteRequest {
                 if upstreams.len() > 100 {
                     return Err("a service route supports at most 100 replicas".into());
                 }
-                validate_upstreams(upstreams, None, host).map_err(|error| error.to_string())?;
+                if !upstreams.is_empty() || matches!(self, Self::Publish { .. }) {
+                    validate_upstreams(upstreams, None, host).map_err(|error| error.to_string())?;
+                }
                 (owner, host)
             }
             Self::Remove { owner, host } => (owner, host),
@@ -109,7 +112,7 @@ impl ServiceRouteRequest {
         if !hostname(host) || (!valid_route_hostname(host) && !host.ends_with(".internal")) {
             return Err("provide a service, deployment and valid domain".into());
         }
-        if matches!(self, Self::Publish { .. } | Self::Replace { .. })
+        if matches!(self, Self::Publish { .. })
             && (!valid_route_hostname(host) || host.ends_with(".internal"))
         {
             return Err("public service domains cannot use .internal".into());
@@ -125,8 +128,10 @@ impl ServiceRouteRequest {
             {
                 return Err("route transitions must retain the service owner".into());
             }
-            validate_upstreams(expected_upstreams, None, host)
-                .map_err(|error| error.to_string())?;
+            if !expected_upstreams.is_empty() {
+                validate_upstreams(expected_upstreams, None, host)
+                    .map_err(|error| error.to_string())?;
+            }
         }
         validate_owner(owner)
     }
@@ -155,6 +160,7 @@ impl ServiceRouteRequest {
                     !(route.owner.as_ref() == Some(owner) && route.network.is_some())
                 });
                 next.routes.push(Route {
+                    service_port: upstreams.first().map(|address| address.port()),
                     security_group: security_group.clone(),
                     owner: Some(owner.clone()),
                     network: Some(network.clone()),
@@ -197,6 +203,11 @@ impl ServiceRouteRequest {
                         );
                     }
                     route.owner = Some(owner.clone());
+                    route.service_port = upstreams
+                        .first()
+                        .map(|address| address.port())
+                        .or_else(|| route.upstreams.first().map(|address| address.port()))
+                        .or(route.service_port);
                     route.upstreams = upstreams.clone();
                 }
             }
@@ -216,6 +227,7 @@ impl ServiceRouteRequest {
                     !(route.owner.as_ref() == Some(owner) && route.network.is_none())
                 });
                 next.routes.push(Route {
+                    service_port: upstreams.first().map(|address| address.port()),
                     security_group: None,
                     network: None,
                     host: host.clone(),
@@ -347,6 +359,17 @@ pub(super) fn validate_internal_route(
     }) {
         return Err("internal upstreams must be replicas in the service MicroNetwork".into());
     }
+    let port = route
+        .service_port
+        .or_else(|| route.upstreams.first().map(|address| address.port()))
+        .filter(|port| *port != 0)
+        .ok_or("internal routes need their service port while suspended")?;
+    if route.upstreams.iter().any(|address| address.port() != port) {
+        return Err("internal upstreams must retain the configured service port".into());
+    }
+    if route.upstreams.is_empty() {
+        return Ok(());
+    }
     validate_upstreams(&route.upstreams, None, &route.host).map_err(|error| error.to_string())
 }
 
@@ -356,7 +379,12 @@ pub(super) fn allowed_sources(route: &Route, network: &MicroNetworkSpec) -> Vec<
     let Some(group) = &route.security_group else {
         return vec![network.subnet_cidr()];
     };
-    let port = route.upstreams[0].port();
+    let Some(port) = route
+        .service_port
+        .or_else(|| route.upstreams.first().map(|address| address.port()))
+    else {
+        return vec![];
+    };
     group
         .rules
         .iter()
@@ -393,6 +421,44 @@ mod tests {
             service_id: Uuid::from_u128(1),
             deployment_id: Uuid::from_u128(2),
         }
+    }
+
+    #[test]
+    fn an_owned_service_can_suspend_and_resume_without_losing_its_hostname() {
+        let mut saved = publish().updated_config(&config()).unwrap();
+        saved.quick_tunnels.push(super::super::QuickTunnelEntry {
+            id: Uuid::from_u128(3),
+            name: "service".into(),
+            target: super::super::QuickTunnelTarget::Routes {
+                host: "web.example.com".into(),
+            },
+        });
+        let request = ServiceRouteRequest::Replace {
+            expected_owner: owner(),
+            expected_upstreams: saved.routes[1].upstreams.clone(),
+            owner: owner(),
+            host: "web.example.com".into(),
+            upstreams: vec![],
+        };
+        let suspended = request.updated_config(&saved).unwrap();
+        suspended.validate().unwrap();
+        let nginx = suspended.nginx();
+        assert!(nginx.contains("server_name web.example.com"));
+        assert!(nginx.contains("location / { root /dev/null; try_files /unready =503; }"));
+        assert!(!nginx.contains("upstream fc_route_1"));
+        let restored = ServiceRouteRequest::Replace {
+            expected_owner: owner(),
+            expected_upstreams: vec![],
+            owner: owner(),
+            host: "web.example.com".into(),
+            upstreams: saved.routes[1].upstreams.clone(),
+        }
+        .updated_config(&suspended)
+        .unwrap();
+        assert_eq!(restored, saved);
+        let mut manual = suspended;
+        manual.routes[1].owner = None;
+        assert!(manual.validate().is_err());
     }
     fn publish() -> ServiceRouteRequest {
         ServiceRouteRequest::Publish {
@@ -507,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn internal_ingress_intersects_group_peers_and_app_ports_with_the_network() {
+    fn private_only_internal_ingress_retains_dns_and_group_policy_across_recovery() {
         let mut request = internal();
         let group = serde_json::from_value(serde_json::json!({
             "id":Uuid::from_u128(9),"micro_network_id":Uuid::from_u128(8),
@@ -518,15 +584,61 @@ mod tests {
                 {"direction":"ingress","protocol":"tcp","port_from":80,"port_to":80,"peer_address":"172.30.0.0","peer_prefix":24}
             ]
         })).unwrap();
-        if let ServiceRouteRequest::PublishInternal { security_group, .. } = &mut request {
+        if let ServiceRouteRequest::PublishInternal {
+            security_group,
+            network,
+            ..
+        } = &mut request
+        {
             *security_group = Some(group);
+            network.internet_enabled = false;
+            network.dns_mode = firecrab_api_types::MicroNetworkDnsMode::PrivateOnly;
         }
         let next = request.updated_config(&config()).unwrap();
         let route = next.routes.last().unwrap();
+        assert_eq!(next.internal_dns_hosts(), "172.30.0.1 web.internal\n");
+        assert_eq!(
+            route.network.as_ref().unwrap().dns_mode,
+            firecrab_api_types::MicroNetworkDnsMode::PrivateOnly
+        );
         assert_eq!(
             allowed_sources(route, route.network.as_ref().unwrap()),
             vec!["172.30.0.10/32"]
         );
+        let suspended = ServiceRouteRequest::Replace {
+            expected_owner: owner(),
+            expected_upstreams: route.upstreams.clone(),
+            owner: owner(),
+            host: "web.internal".into(),
+            upstreams: vec![],
+        }
+        .updated_config(&next)
+        .unwrap();
+        let paused = suspended.routes.last().unwrap();
+        assert_eq!(paused.owner, route.owner);
+        assert_eq!(paused.network, route.network);
+        assert_eq!(paused.security_group, route.security_group);
+        assert_eq!(suspended.internal_dns_hosts(), next.internal_dns_hosts());
+        assert_eq!(paused.service_port, Some(8080));
+        assert_eq!(
+            allowed_sources(paused, paused.network.as_ref().unwrap()),
+            vec!["172.30.0.10/32"]
+        );
+        let nginx = suspended.nginx();
+        assert!(nginx.contains("listen 172.30.0.1:80; server_name web.internal;"));
+        assert!(!nginx.contains("listen 127.0.0.1:8080; server_name web.internal;"));
+        assert!(nginx.contains("allow 172.30.0.10/32;\n    deny all;"));
+        assert!(nginx.contains("try_files /unready =503;"));
+        let restored = ServiceRouteRequest::Replace {
+            expected_owner: owner(),
+            expected_upstreams: vec![],
+            owner: owner(),
+            host: "web.internal".into(),
+            upstreams: route.upstreams.clone(),
+        }
+        .updated_config(&suspended)
+        .unwrap();
+        assert_eq!(restored, next);
         let mut empty = next.clone();
         empty
             .routes

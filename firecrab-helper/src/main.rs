@@ -29,6 +29,8 @@ mod security_groups;
 mod self_update;
 /// Per-VM TAP device lifecycle.
 mod tap;
+/// Reset host TCP connections to a VM after its runtime exits.
+mod vm_connections;
 /// Per-VM systemd units that run the VM shim.
 mod vm_unit;
 /// WSL2 TCP listeners for Windows localhost forwarding.
@@ -671,7 +673,11 @@ async fn dispatch(
 ) -> Result<AfterResponse, HelperFailure> {
     match request {
         NetworkRequest::Pipe { request } => {
-            let changed = !matches!(request, firecrab_helper_protocol::pipe::Operation::Inspect);
+            let changed = !matches!(
+                request,
+                firecrab_helper_protocol::pipe::Operation::Inspect
+                    | firecrab_helper_protocol::pipe::Operation::InspectQuickTunnel { .. }
+            );
             let result = pipe::run(request).await;
             if changed {
                 // A failed Pipe transaction may have rolled back a manifest seen
@@ -804,6 +810,7 @@ async fn dispatch(
             .map_err(|error| HelperFailure::Internal {
                 detail: error_chain(&error),
             }),
+        NetworkRequest::CheckPrivateDnsSupport => Ok(AfterResponse::Continue),
         NetworkRequest::SyncDhcpLeases {
             revision,
             leases,
@@ -1217,6 +1224,7 @@ mod tests {
 
     fn sample_spec(uplink: Option<&str>) -> MicroNetworkSpec {
         MicroNetworkSpec {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             micro_network_id: Uuid::nil(),
             gateway: "172.31.0.1".parse().unwrap(),
             prefix: 24,

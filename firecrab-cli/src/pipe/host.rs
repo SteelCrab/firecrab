@@ -804,6 +804,76 @@ pub(super) fn inspect() -> Result<()> {
     Ok(())
 }
 
+/// Read exactly one connector unit; no manifest, journal, credentials or service mutations.
+fn quick_unit_snapshot(runner: &dyn CommandRunner, id: uuid::Uuid) -> Result<Snapshot> {
+    let unit = quick_tunnel_unit(id);
+    let output = runner.run(
+        "systemctl",
+        &[
+            "show",
+            "--property=LoadState,ActiveState,SubState,MainPID",
+            &unit,
+        ],
+    )?;
+    let text = std::str::from_utf8(&output.stdout)?;
+    let property = |name: &str| -> Result<String> {
+        let prefix = format!("{name}=");
+        let mut values = text.lines().filter_map(|line| line.strip_prefix(&prefix));
+        let value = values
+            .next()
+            .filter(|value| !value.is_empty())
+            .ok_or("connector unit inspection returned incomplete state")?;
+        if values.next().is_some() {
+            return Err("connector unit inspection returned duplicate properties".into());
+        }
+        Ok(value.into())
+    };
+    let observed = UnitStatus {
+        unit,
+        load_state: property("LoadState")?,
+        active_state: property("ActiveState")?,
+        sub_state: property("SubState")?,
+        main_pid: property("MainPID")?.parse()?,
+    };
+    // systemctl may exit unsuccessfully for an explicitly not-found unit. A bus
+    // or permission failure without complete state must never become PID zero.
+    if !output.status.success() && observed.load_state != "not-found" {
+        return Err("connector unit inspection failed".into());
+    }
+    Ok(Snapshot {
+        config: None,
+        units: vec![observed],
+        nginx_available: false,
+        cloudflared_available: false,
+        quick_tunnel: None,
+        quick_tunnels: vec![],
+        firecrab_tunnels: vec![],
+        ingress_graceful_drain: false,
+        ingress_workers: None,
+    })
+}
+
+/// Validate the helper's bounded UUID input before running any host query.
+fn quick_unit_request(runner: &dyn CommandRunner, input: &[u8]) -> Result<Snapshot> {
+    if input.len() > 64 {
+        return Err("connector unit inspection input exceeds 64 bytes".into());
+    }
+    let id: uuid::Uuid = serde_json::from_slice(input)?;
+    quick_unit_snapshot(runner, id)
+}
+
+/// Privileged-helper entry point accepts only a UUID, never unit names or extra arguments.
+pub(super) fn inspect_quick() -> Result<()> {
+    use std::io::Read;
+    let mut input = Vec::new();
+    std::io::stdin().take(65).read_to_end(&mut input)?;
+    println!(
+        "{}",
+        serde_json::to_string(&quick_unit_request(&RealCommandRunner, &input)?)?
+    );
+    Ok(())
+}
+
 /// Apply a bounded helper request, retaining existing credentials when omitted.
 pub(super) fn apply_managed() -> Result<()> {
     use std::io::Read;

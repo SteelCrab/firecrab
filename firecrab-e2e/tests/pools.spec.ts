@@ -47,7 +47,7 @@ async function openEnglish(page: Page, hash: string): Promise<void> {
 }
 
 function poolsPanel(page: Page): Locator {
-  return page.locator(".pools-screen");
+  return page.locator("#content");
 }
 
 async function deleteOwnedPool(): Promise<void> {
@@ -149,7 +149,7 @@ test("shows a pool create form with image, network, capacity and lease settings"
   page,
 }) => {
   await openEnglish(page, "/#/pools");
-  await page.locator('[data-action="create"][data-id="pools"]').click();
+  await page.locator(".screen-header").getByRole("button", { name: "New pool", exact: true }).click();
   await page.locator("#editor").getByText("Advanced settings", { exact: true }).click();
   for (const field of [
     "name",
@@ -180,7 +180,7 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
 
   await openEnglish(page, "/#/pools");
   const panel = poolsPanel(page);
-  await page.locator('[data-action="create"][data-id="pools"]').click();
+  await page.locator(".screen-header").getByRole("button", { name: "New pool", exact: true }).click();
   await expect(
     page.locator(`#field-template option[value="${alias}"]`),
   ).toHaveCount(1, {
@@ -206,10 +206,10 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
 
   await submitCreate(page, panel);
   const row = panel
-    .locator("article.wasm-card")
+    .locator("table.pool-table tbody tr")
     .filter({ hasText: POOL_E2E_NAME });
   await expect(row).toBeVisible();
-  await expect(row).toContainText("0 members");
+  await expect(row.getByRole("cell", { name: "0 / 0", exact: true })).toBeVisible();
   const created = (await api.listPools()).find(
     (pool) => pool.name === POOL_E2E_NAME,
   );
@@ -237,7 +237,7 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
     expect(dialog.message()).toContain("Delete");
     await dialog.accept();
   });
-  await row.getByRole("button", { name: POOL_E2E_NAME, exact: true }).click();
+  await row.click();
   await page.getByRole("button", { name: "Delete pool", exact: true }).click();
   await expect(row).toHaveCount(0, { timeout: 30_000 });
 });

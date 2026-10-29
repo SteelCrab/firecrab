@@ -11,7 +11,7 @@ const { Client } = await import(pathToFileURL(join(resolve(sdkRoot), "dist/esm/c
 const { StdioClientTransport } = await import(pathToFileURL(join(resolve(sdkRoot), "dist/esm/client/stdio.js")));
 const borrowedId = randomUUID();
 const anthropicConnection = { id: randomUUID(), name: "Claude API", provider: "anthropic", authentication: "api_key", endpoint: "https://api.anthropic.com/v1/models", models: [], streaming: false, toolCalls: false };
-const network = (id, name, subnetCidr) => ({ id, name, subnetCidr, gateway: subnetCidr.replace(".0/24", ".1"), internetEnabled: true, uplink: null, ipv6Cidr: null, ipv6Gateway: null, ipv6AddressMode: null, ipv6Egress: null });
+const network = (id, name, subnetCidr, internetEnabled = false) => ({ id, name, subnetCidr, gateway: subnetCidr.replace(".0/24", ".1"), internetEnabled, uplink: null, ipv6Cidr: null, ipv6Gateway: null, ipv6AddressMode: null, ipv6Egress: null });
 let networks = [network(borrowedId, "borrowed", "172.30.0.0/24")];
 let vms = [];
 const trace = [];
@@ -28,7 +28,7 @@ const rest = createServer(async (request, response) => {
   else if (request.method === "GET" && path.endsWith("/model")) result = null;
   else if (request.method === "GET" && path === "/api/micro-networks") result = networks;
   else if (request.method === "POST" && path === "/api/micro-networks") {
-    result = network(randomUUID(), input.name, input.subnetCidr); networks.push(result); status = 201;
+    result = network(randomUUID(), input.name, input.subnetCidr, input.internetEnabled); networks.push(result); status = 201;
   } else if (request.method === "GET" && path === "/api/vms") result = vms;
   else if (request.method === "POST" && path === "/api/vms") {
     result = { id: randomUUID(), ...input, state: "created", templateVersion: "fixture", reconciliation: null, startupStep: null,
@@ -39,12 +39,15 @@ const rest = createServer(async (request, response) => {
   } else if (/^\/api\/vms\/[^/]+/.test(path)) {
     const id = path.split("/")[3];
     const vm = vms.find(vm => vm.id === id);
-    assert.ok(vm);
-    if (request.method === "DELETE") { assert.equal(vm.state, "stopped"); vms = vms.filter(vm => vm.id !== id); status = 204; }
+    if (!vm && request.method === "GET") { status = 404; result = {error:"not_found"}; }
+    else if (request.method === "DELETE") { assert.ok(vm); assert.equal(vm.state, "stopped"); vms = vms.filter(vm => vm.id !== id); status = 204; }
     else { if (path.endsWith("/start")) vm.state = "running"; if (path.endsWith("/stop")) vm.state = "stopped"; result = vm; }
   } else if (request.method === "DELETE" && path.startsWith("/api/micro-networks/")) {
     const id = path.split("/").at(-1); assert.notEqual(id, borrowedId);
     assert.ok(vms.every(vm => vm.microNetworkId !== id)); networks = networks.filter(network => network.id !== id); status = 204;
+  } else if (request.method === "GET" && path.startsWith("/api/micro-networks/")) {
+    result = networks.find(network => network.id === path.split("/").at(-1));
+    if (!result) { status = 404; result = {error:"not_found"}; }
   } else throw new Error(`Unexpected REST request: ${request.method} ${path}`);
   response.writeHead(status, { "content-type": "application/json" });
   response.end(status === 204 ? "" : JSON.stringify(result));
@@ -64,10 +67,11 @@ try {
   }
   await call("images_list");
   assert.equal((await call("networks_list")).items.length, 1);
-  const args = { operationId: randomUUID(), name: "sdk-proof", subnetCidr: "172.31.0.0/24" };
+  const args = { operationId: randomUUID(), name: "sdk-proof", subnetCidr: "172.31.0.0/24", internetEnabled: true };
   const createdNetwork = await call("network_create", args);
   assert.equal((await call("network_create", args)).id, createdNetwork.id);
-  const vm = await call("vm_create", { operationId: randomUUID(), name: "sdk-proof", template: "ubuntu-fixture", microNetworkId: createdNetwork.id, cpu: 1, ram: 512, diskGb: 2 });
+  const vm = await call("vm_create", { operationId: randomUUID(), name: "sdk-proof", template: "ubuntu-fixture", microNetworkId: createdNetwork.id, cpu: 1, ram: 512, diskGb: 2, egressPolicy: "isolated" });
+  assert.equal(vm.egressPolicy, "isolated");
   assert.ok(!JSON.stringify(vm).includes("omit-from-model-context"));
   await call("vm_start", { id: vm.id });
   assert.equal((await call("vm_wait", { id: vm.id, state: "running", timeoutSeconds: 1 })).reached, true);

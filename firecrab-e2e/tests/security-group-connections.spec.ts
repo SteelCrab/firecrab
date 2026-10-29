@@ -144,6 +144,20 @@ async function setup(page: Page) {
 const graph = (page: Page, name = "orders-policy") =>
   page.getByRole("figure", { name: `Connections for ${name}`, exact: true });
 
+/** The connections of a group are in its panel: select the group's row first. */
+const selectGroup = async (page: Page, name = "orders-policy") => {
+  await page.getByRole("cell", { name: new RegExp(`^${name}(\\s|$)`) }).click();
+  await expect(graph(page, name)).toBeVisible();
+};
+
+// The connection list reloads on every poll of the route.
+const nextServicesPoll = (page: Page) =>
+  page.waitForResponse(
+    (r) =>
+      new URL(r.url()).pathname === "/api/micro-services" &&
+      r.request().method() === "GET",
+  );
+
 test.describe("Security group connections @dashboard", () => {
   test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1000 });
@@ -155,6 +169,7 @@ test.describe("Security group connections @dashboard", () => {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     await setup(page);
+    await selectGroup(page);
     const connections = graph(page);
     await expect(connections).toContainText("2 services · 2 replica VMs");
     await expect(
@@ -173,9 +188,6 @@ test.describe("Security group connections @dashboard", () => {
       connections.getByText("172.30.0.3", { exact: true }),
     ).toBeVisible();
     await expect(connections.locator(".sg-connection-circle")).toHaveCount(2);
-    await expect(
-      page.getByRole("complementary", { name: "Security group detail" }),
-    ).toHaveCount(0);
     await page.screenshot({
       path: testInfo.outputPath("security-group-connections-desktop.png"),
       fullPage: true,
@@ -204,9 +216,11 @@ test.describe("Security group connections @dashboard", () => {
       { ...POLICY, id: OTHER_GROUP, name: "next-policy" },
     ];
     state.services = [{ ...SPEC, securityGroupId: OTHER_GROUP }];
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await nextServicesPoll(page);
+    await selectGroup(page);
     await expect(graph(page)).toContainText("Previous deployment");
     await expect(graph(page).locator(".sg-connection-circle")).toHaveCount(2);
+    await selectGroup(page, "next-policy");
     await expect(graph(page, "next-policy")).toContainText(
       "Applies on the next deployment",
     );
@@ -221,6 +235,7 @@ test.describe("Security group connections @dashboard", () => {
     const state = await setup(page);
     state.vms[0].securityGroupId = OTHER_GROUP;
     state.vms[1].securityGroupId = undefined;
+    await selectGroup(page);
     await expect(
       graph(page).getByText("Group mismatch", { exact: true }),
     ).toBeVisible();
@@ -244,13 +259,14 @@ test.describe("Security group connections @dashboard", () => {
   }) => {
     const state = await setup(page);
     state.failDeployment = true;
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await selectGroup(page);
+    await nextServicesPoll(page);
     await expect(graph(page).getByRole("alert")).toHaveText(
       "VM status unavailable.",
     );
     await expect(graph(page)).not.toContainText("0 replica VMs");
     state.failServices = true;
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await nextServicesPoll(page);
     await expect(graph(page).getByRole("alert")).toHaveText(
       "Connections are unavailable.",
     );
@@ -267,7 +283,7 @@ test.describe("Security group connections @dashboard", () => {
     ).toHaveCount(2);
     state.services = [{ ...SPEC, securityGroupId: null }];
     state.failDeployment = true;
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await nextServicesPoll(page);
     await expect(graph(page).getByRole("alert")).toHaveText(
       "Some deployments could not be checked.",
     );
@@ -278,6 +294,7 @@ test.describe("Security group connections @dashboard", () => {
     page,
   }) => {
     const state = await setup(page);
+    await selectGroup(page);
     await expect(graph(page).locator(".sg-connection-circle")).toHaveCount(2);
     await page
       .getByRole("button", {
@@ -286,10 +303,10 @@ test.describe("Security group connections @dashboard", () => {
       })
       .click();
     await page.getByLabel("Port from", { exact: true }).fill("9090");
+    // The editor takes the panel; the next polls must not replace what was typed.
     state.deployment.instances = [state.deployment.instances[0]];
-    await expect(graph(page).locator(".sg-connection-circle")).toHaveCount(1, {
-      timeout: 15_000,
-    });
+    await nextServicesPoll(page);
+    await nextServicesPoll(page);
     await expect(page.getByLabel("Port from", { exact: true })).toHaveValue(
       "9090",
     );
@@ -299,6 +316,7 @@ test.describe("Security group connections @dashboard", () => {
     page,
   }, testInfo) => {
     await setup(page);
+    await selectGroup(page);
     await page
       .getByRole("combobox", { name: "Language", exact: true })
       .selectOption("ko");

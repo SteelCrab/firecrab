@@ -246,10 +246,19 @@ async fn unconfirmed_state_stays_active_and_can_be_retried() {
 
 #[tokio::test]
 async fn concurrent_pause_and_resume_are_serialized() {
-    let fixture = Fixture::new().await;
+    let fixture = Arc::new(Fixture::new().await);
     fixture.native.lock().unwrap().delay = true;
-    let (pause, resume) = tokio::join!(fixture.action("pause"), fixture.action("resume"));
-    assert_eq!(pause.0, StatusCode::OK);
+    let pausing = fixture.clone();
+    let pause = tokio::spawn(async move { pausing.action("pause").await });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while fixture.native.lock().unwrap().patches == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("pause must reach the runtime before resume is submitted");
+    let (pause, resume) = tokio::join!(pause, fixture.action("resume"));
+    assert_eq!(pause.unwrap().0, StatusCode::OK);
     assert_eq!(resume.0, StatusCode::OK);
     assert_eq!(fixture.saved(), VmState::Running);
 }

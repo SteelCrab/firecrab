@@ -50,11 +50,7 @@ pub fn detail(app: &App, data: &Value) -> Option<String> {
     match app.route.as_str() {
         "pools" => Some(pools::detail(app, data)),
         "schedules" => Some(schedules::detail(app, data)),
-        "security-groups" => Some(if list(&data["rules"]).is_empty() {
-            "<p>No allow rules. All new peer connections are denied.</p>".into()
-        } else {
-            crate::render::properties(&data["rules"])
-        }),
+        "security-groups" => Some(security::detail(app, data)),
         "secrets" => Some(String::new()),
         _ => None,
     }
@@ -152,12 +148,7 @@ pub fn sync_form() {
     {
         network.set_disabled(true);
     }
-    let value = |key: &str| {
-        element(&format!("field-{key}"))
-            .and_then(|el| el.dyn_into::<HtmlSelectElement>().ok())
-            .map(|el| el.value())
-            .unwrap_or_default()
-    };
+    let value = |key: &str| crate::form_value(key).unwrap_or_default();
     let repeat = value("repeat");
     if !repeat.is_empty() {
         for (key, show) in [
@@ -170,10 +161,8 @@ pub fn sync_form() {
             visible(key, show);
         }
     }
-    if let Some(credentials) =
-        element("field-credentialRef").and_then(|el| el.dyn_into::<HtmlSelectElement>().ok())
-    {
-        let own = credentials.value() == "connection";
+    if let Some(credentials) = crate::form_value("credentialRef") {
+        let own = credentials == "connection";
         let replace = value("replaceKeys") != "false";
         for key in ["accessKeyId", "secretAccessKey", "sessionToken"] {
             visible(key, own && replace);
@@ -492,6 +481,9 @@ pub fn capture_form(app: &Shared) {
                     f.value = v.value();
                 } else if let Some(v) = el.dyn_ref::<web_sys::HtmlTextAreaElement>() {
                     f.value = v.value();
+                } else if let Some(v) = crate::form_value(f.key) {
+                    // A choice group.
+                    f.value = v;
                 }
             }
         }

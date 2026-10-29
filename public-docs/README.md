@@ -23,6 +23,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Configure and manage an app | [MicroService](guides/microservices.md) |
 | Register hosts and place VMs through one controller | [Multi-host placement](guides/multihost.md) |
 | Update or roll back a running app through Nginx | [Deploy](guides/deploy.md) |
+| Configure service telemetry export | [OTLP export](guides/otlp.md) |
 | Connect apps with internal RabbitMQ message queues | [Queue](guides/queues.md) |
 | Validate a declarative YAML stack offline | [Stack validation](guides/stacks.md) |
 | Register stack ownership and preview configuration changes | [Stack planning](guides/stack-planning.md) |

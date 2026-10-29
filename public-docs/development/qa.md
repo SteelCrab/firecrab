@@ -40,6 +40,9 @@ The Firecrab API host is native Linux or managed Debian on macOS/Windows.
 | `scripts/test-pipe-cli.py` | Real systemd CLI routing, default private-engine discovery, explicit overrides, missing-engine status without traffic loss, rollback, and cleanup |
 | `scripts/test-pipe-api.py` | Unprivileged API through the systemd helper; route preservation and ingress lifecycle |
 | `scripts/test-pipe-runtime.py` | Real ingress routing, health, reload, independent Quick Tunnel targets, and rejected-config rollback |
+| `scripts/check-public-tunnel.py` | Read-only public DNS, TLS, Console and registration preflight; no app acceptance |
+| `scripts/check-public-tunnel-app.py` | HTTPS fixture response and WebSocket echo through an owned public test address; does not manage connections |
+| `scripts/ci-qa-deploy.py --public-tunnel` | Operator-approved public Tunnel verification with two disposable addresses, real MicroVMs and Nginx; dashboard cleanup remains manual |
 | `scripts/test-ingress-install.sh` | Isolated initial install/reinstall; executable mode, all attributions, and saved routes, with fake service controls |
 | `scripts/ci-qa-pipe-databases.sh --browser` | PDB1–PDB12; real API, PostgreSQL/MySQL, TLS and desktop/mobile browser checks |
 | `scripts/test-pipe-databases-qa.py` | Database QA remote-host guard and cleanup after failures |
@@ -47,6 +50,7 @@ The Firecrab API host is native Linux or managed Debian on macOS/Windows.
 | `firecrab-e2e` `test:secrets:live` | SEC9–SEC14; Chromium, actual API processes, encrypted vaults, and local providers |
 | `scripts/ci-qa-secrets.py` | Secrets unit tests, lint/types/builds, SEC1–SEC14; JSON/Markdown report, SEC16 manual warning |
 | `scripts/test-ci-qa-secrets.py` | Failure aggregation, missing-case reporting, manual warnings, and stale-build prevention |
+| `scripts/ci-qa-deploy.py --queue-controls` | Real Nginx/MicroVM queued cancellation, rollback priority, retained traffic, API restart, and cleanup |
 
 See [PIPE database E2E and QA](pipe-databases-qa.md) for the case matrix,
 fixture-only browser commands, live database prerequisites and cloud acceptance limits.
@@ -59,6 +63,58 @@ nginx is a separate pass using `nginx:1.27-alpine`.
 
 R4f helper migration requires `FIRECRAB_QA_HELPER_UPGRADE=1` on a disposable Linux CI host.
 Manual cases outside Ubuntu CI include I2/I3/I4/I7/I10/U1.
+
+## Deploy queue QA
+
+```sh
+sudo python3 scripts/ci-qa-deploy.py --disposable-host --queue-controls --report target/qa/deploy-queue.json
+```
+
+Use an empty disposable Linux/KVM host with at least four CPUs.
+This pass holds an active Deploy in drain, cancels queued initial/update attempts,
+and restarts the API with a rollback behind an ordinary Deploy.
+The active drain must finish first. The rollback must then drain before the
+ordinary Deploy starts. HTTP requests keep the five-second deadline and must
+finish without errors. The JSON report records request counts, operation IDs,
+the four-VM/vCPU limit, and cleanup results. Local OCI fixtures do not validate
+an external registry or public DNS/TLS.
+
+## Public Tunnel QA
+
+Public Tunnel acceptance also requires an explicitly approved host and two new,
+owned `qa-` dashboard addresses. Do not reuse an existing address or token. The
+host must use the default Firecrab paths, and its API, Pipe configuration, VMs,
+services, pools, and Auth must be empty. If two addresses cannot be issued, stop
+without changing other resources. Keep each token in a separate root-owned 0600
+file with no symbolic links; never put token values in commands or reports.
+
+Build the fixture for the host's Linux architecture. For an x86_64 host with
+the Rust musl target installed:
+
+```sh
+rustc --edition=2021 --target x86_64-unknown-linux-musl -O -C target-feature=+crt-static scripts/public_tunnel_fixture.rs -o /tmp/public-tunnel-fixture
+sudo python3 scripts/ci-qa-deploy.py --disposable-host --public-tunnel --public-target-approved \
+  --public-fixture-binary /tmp/public-tunnel-fixture \
+  --public-token qa-example-a /root/qa-token-a --public-token qa-example-b /root/qa-token-b \
+  --report target/qa/public-tunnel.json
+```
+
+Replace both example labels and file paths with the approved test resources.
+The runner first performs the existing Deploy acceptance. It then creates two
+fixture services and checks registration, HTTPS, WebSocket echo, VM and Nginx
+targets, retargeting, API restart, and address isolation. At each prompt, revoke
+the named test token through an authorized dashboard operator method and press
+Enter. The current dashboard UI may not expose a revoke button. Stop if the
+operator cannot revoke the token; rotating or deleting it is not proof of token
+revocation. A 401/410 registration response alone cannot distinguish revocation
+from expiry. Confirm the dashboard's revoked state separately.
+
+The report records measured stages and local cleanup errors, but its final
+public status remains `pending_operator_verification`. Confirm both token
+revocations and remove only the test-owned dashboard reservations. Verify that
+the public addresses no longer serve traffic. Remove the token files and the
+disposable host, then record those results separately. Never mark acceptance
+complete from a local test, a failed probe, or an operator prompt alone.
 
 ## PipeSecrets QA
 

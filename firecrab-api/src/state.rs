@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
-use tokio::sync::{Mutex as AsyncMutex, Semaphore};
+use tokio::sync::{Mutex as AsyncMutex, Notify, Semaphore};
 use uuid::Uuid;
 
 use crate::firecracker::{self, ShimLauncher, VmProcess};
@@ -126,6 +126,8 @@ pub struct AppState {
     pub(crate) vm_mutations: Arc<Mutex<HashMap<Uuid, Weak<AsyncMutex<()>>>>>,
     /// Short service configuration/operation claims; never held while booting a guest.
     pub(crate) service_mutations: Arc<AsyncMutex<()>>,
+    /// Per-service bounded observation exporters.
+    pub(crate) observations: Arc<crate::service_observation::Runtime>,
     /// Serializes durable apply admission and identical retry lookup, never worker execution.
     pub(crate) stack_apply_admission: Arc<AsyncMutex<()>>,
     /// Serializes RabbitMQ engine lifecycle and queue declarations.
@@ -134,6 +136,8 @@ pub struct AppState {
     pub(crate) stack_source_permits: Arc<Semaphore>,
     /// One image/VM deployment at a time bounds replica surge on one host.
     pub(crate) service_deploy_permits: Arc<Semaphore>,
+    /// Wakes waiting Deploy workers after queue order or ownership changes.
+    pub(crate) service_deploy_changed: Arc<Notify>,
     /// Live VM id -> its running Firecracker process handle.
     pub(crate) processes: Arc<Mutex<HashMap<Uuid, VmProcess>>>,
     /// Environment-derived runtime settings.
@@ -225,8 +229,10 @@ impl AppState {
             vm_mutations: Arc::new(Mutex::new(HashMap::new())),
             secrets,
             service_mutations: Arc::new(AsyncMutex::new(())),
+            observations: Arc::new(crate::service_observation::Runtime::default()),
             queue_mutations: Arc::new(AsyncMutex::new(())),
             service_deploy_permits: Arc::new(Semaphore::new(1)),
+            service_deploy_changed: Arc::new(Notify::new()),
             processes: Arc::new(Mutex::new(HashMap::new())),
             reconciliation: Arc::new(Mutex::new(HashMap::new())),
             runtime: Arc::new(runtime),

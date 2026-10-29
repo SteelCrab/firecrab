@@ -142,6 +142,9 @@ test.describe("Secrets web console @dashboard", () => {
         await click;
         await expect(remove).toHaveCount(accept ? 0 : 1);
         expect(writes.filter(write => write.method === "DELETE" && write.path === path)).toHaveLength(accept ? 1 : 0);
+        if (accept && path === `/api/secrets/${ID}`) {
+          await expect(page.getByRole("region", { name: "Internal secrets", exact: true }).getByRole("status")).toContainText("No secrets yet");
+        }
       }
     }
   });
@@ -180,21 +183,21 @@ test.describe("Secrets web console @dashboard", () => {
     await page.getByRole("tab", { name: /External connections/ }).click();
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
     await page.getByLabel("Connection name", { exact: true }).fill("AWS production");
-    await page.getByLabel("Provider", { exact: true }).selectOption("awsSecretsManager");
+    await page.getByRole("radiogroup", { name: "Provider", exact: true }).getByRole("radio", { name: "AWS Secrets Manager", exact: true }).check();
     await page.getByLabel("AWS access key ID", { exact: true }).fill("FIXTURE_KEY");
     await page.getByLabel("AWS secret access key", { exact: true }).fill("fixture-credential");
     await page.getByRole("button", { name: "Save connection", exact: true }).click();
     expect(writes[0].body.provider).toBe("awsSecretsManager");
     await page.getByRole("button", { name: "Edit connection AWS production", exact: true }).click();
     await expect(page.getByLabel("AWS secret access key", { exact: true })).toHaveValue("");
-    await page.getByLabel("Name prefix (optional)", { exact: true }).fill("production/");
+    await page.getByLabel("Name prefix", { exact: true }).fill("production/");
     await page.getByRole("button", { name: "Save connection", exact: true }).click();
     expect(writes[1].body.credentials).toEqual({});
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
-    await page.getByLabel("Provider", { exact: true }).selectOption("firecrab");
+    await page.getByRole("radiogroup", { name: "Provider", exact: true }).getByRole("radio", { name: "Firecrab · PipeSecrets", exact: true }).check();
     await expect(page.getByLabel("Base URL", { exact: true })).toBeVisible();
-    await expect(page.getByLabel("Bearer token (optional)", { exact: true })).toHaveAttribute("type", "password");
-    await expect(page.getByLabel("Provider", { exact: true }).locator("option")).toHaveText(["Firecrab · PipeSecrets", "AWS Secrets Manager"]);
+    await expect(page.getByLabel("Bearer token", { exact: true })).toHaveAttribute("type", "password");
+    await expect(page.getByRole("radiogroup", { name: "Provider", exact: true }).locator(".choice-option span")).toHaveText(["Firecrab · PipeSecrets", "AWS Secrets Manager"]);
     await expect(page.getByLabel("Project ID", { exact: true })).toHaveCount(0);
     await expect(page.getByLabel("Secret path", { exact: true })).toHaveCount(0);
   });

@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-pub(super) fn journal() -> MicroServiceDeployment {
+pub(in crate::service_runtime) fn journal() -> MicroServiceDeployment {
     let service = Uuid::new_v4();
     let mut previous = deployment(service);
     previous.phase = ServicePhase::Running;
@@ -56,12 +56,12 @@ pub(super) fn journal() -> MicroServiceDeployment {
     current
 }
 
-pub(super) struct Helper {
-    pub(super) client: crate::network::NetworkClient,
-    config: Arc<Mutex<Config>>,
-    workers: Arc<Mutex<Vec<IngressWorker>>>,
-    changes: Arc<AtomicUsize>,
-    auto_drain: Arc<AtomicBool>,
+pub(in crate::service_runtime) struct Helper {
+    pub(in crate::service_runtime) client: crate::network::NetworkClient,
+    pub(in crate::service_runtime) config: Arc<Mutex<Config>>,
+    pub(in crate::service_runtime) workers: Arc<Mutex<Vec<IngressWorker>>>,
+    pub(in crate::service_runtime) changes: Arc<AtomicUsize>,
+    pub(in crate::service_runtime) auto_drain: Arc<AtomicBool>,
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for Helper {
@@ -69,13 +69,17 @@ impl Drop for Helper {
         self.task.abort();
     }
 }
-pub(super) async fn helper(root: &std::path::Path, deployment: &MicroServiceDeployment) -> Helper {
+pub(in crate::service_runtime) async fn helper(
+    root: &std::path::Path,
+    deployment: &MicroServiceDeployment,
+) -> Helper {
     let path = root.join("deploy.sock");
     let listener = tokio::net::UnixListener::bind(&path).unwrap();
     let previous = &deployment.update.as_ref().unwrap().previous;
     let mut initial: Config =
         serde_json::from_value(serde_json::json!({"routes":[], "tunnel":null})).unwrap();
     initial.routes.push(Route {
+        service_port: None,
         network: None,
         security_group: None,
         host: previous.spec.domain.clone().unwrap(),
@@ -111,7 +115,10 @@ pub(super) async fn helper(root: &std::path::Path, deployment: &MicroServiceDepl
     let task = tokio::spawn(async move {
         loop {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let envelope: NetworkRequestEnvelope = read_frame(&mut stream).await.unwrap();
+            let envelope: Result<NetworkRequestEnvelope, _> = read_frame(&mut stream).await;
+            let Ok(envelope) = envelope else {
+                continue;
+            };
             let mut result = Ok(());
             if let NetworkRequest::Pipe {
                 request: Operation::ManageServiceRoute { request },
@@ -148,7 +155,8 @@ pub(super) async fn helper(root: &std::path::Path, deployment: &MicroServiceDepl
                 quick_tunnels: vec![],
                 firecrab_tunnels: vec![],
             };
-            write_frame(
+            // Drain timeouts can close the client before its reply; keep serving retries.
+            let _ = write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
                     version: PROTOCOL_VERSION,
@@ -157,8 +165,7 @@ pub(super) async fn helper(root: &std::path::Path, deployment: &MicroServiceDepl
                     pipe: Some(snapshot),
                 },
             )
-            .await
-            .unwrap();
+            .await;
         }
     });
     Helper {
@@ -453,7 +460,7 @@ async fn operation_identity_rejects_conflicting_retries_and_other_services() {
         body.clone(),
         None,
         None,
-        None,
+        Writer::Stack(None),
     )
     .await
     .unwrap();
@@ -468,7 +475,7 @@ async fn operation_identity_rejects_conflicting_retries_and_other_services() {
         changed,
         None,
         None,
-        None,
+        Writer::Stack(None),
     )
     .await
     .unwrap_err();
@@ -480,7 +487,7 @@ async fn operation_identity_rejects_conflicting_retries_and_other_services() {
         body,
         None,
         None,
-        None,
+        Writer::Stack(None),
     )
     .await
     .unwrap_err();
@@ -752,7 +759,7 @@ async fn direct_port_updates_fail_before_mutating_a_live_release() {
         body,
         None,
         None,
-        None,
+        Writer::Stack(None),
     )
     .await
     .unwrap_err();
@@ -853,7 +860,7 @@ async fn stale_release_and_stale_retry_do_not_mutate_the_active_operation() {
         },
         None,
         None,
-        None,
+        Writer::Stack(None),
     )
     .await
     .unwrap_err();
@@ -892,7 +899,7 @@ async fn cancelled_http_waiter_does_not_cancel_committed_stop_or_lose_ownership(
     let service = record.service_id;
     let claim = state.service_mutations.clone().lock_owned().await;
     {
-        let mut future = std::pin::pin!(submit(state.clone(), record, claim, Uuid::new_v4()));
+        let mut future = std::pin::pin!(submit(state.clone(), record, claim, Uuid::new_v4(), None));
         // One poll starts the independently owned commit/dispatch task.
         assert!(
             std::future::poll_fn(|context| std::task::Poll::Ready(future.as_mut().poll(context)))

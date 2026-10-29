@@ -46,12 +46,12 @@ export async function createNetwork(
   dualStack = false,
 ) {
   await expect(page.locator("#content")).toHaveAttribute("data-loaded", "true");
-  await page.locator('[data-action="create"][data-id="networks"]').click();
+  await page.locator(".screen-header").getByRole("button", { name: "New network", exact: true }).click();
   await page.locator("#field-name").fill(name);
   await page.locator("#field-subnetCidr").fill(cidr);
-  await expect(page.locator("#field-ipv6AddressMode")).toHaveValue("");
-  if (dualStack)
-    await page.locator("#field-ipv6AddressMode").selectOption("slaac");
+  const mode = page.getByRole("radiogroup", { name: "IPv6 address mode", exact: true });
+  await expect(mode.getByRole("radio", { name: "Default", exact: true })).toBeChecked();
+  if (dualStack) await mode.getByRole("radio", { name: "SLAAC", exact: true }).check();
   const pending = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&

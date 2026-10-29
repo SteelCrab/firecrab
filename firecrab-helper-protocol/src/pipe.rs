@@ -26,6 +26,8 @@ pub const STATUS_SOCKET: &str = "/run/firecrab-ingress/status.sock";
 pub const TUNNEL_UNIT: &str = "firecrab-tunnel.service";
 /// Internal Host header used only by the anonymous Cloudflare connector.
 pub const QUICK_TUNNEL_HOST: &str = "quick.firecrab.internal";
+/// Image-only, bearer-authenticated CI listener; never contains operator API routes.
+pub const CI_DEPLOY_ADDRESS: &str = "127.0.0.1:5525";
 
 /// Validation and manifest IO errors shared by CLI and helper callers.
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -53,6 +55,9 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Route {
+    /// App port retained for private ingress policy while every replica is unready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_port: Option<u16>,
     /// Destination ingress rules for a private service. An empty group denies all peers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security_group: Option<crate::security_group::SecurityGroupPolicySpec>,
@@ -261,7 +266,10 @@ impl Config {
                     format!("duplicate route: {} {}", route.host, route.path_prefix).into(),
                 );
             }
-            validate_upstreams(&route.upstreams, Some(self.listen), &route.host)?;
+            // An owned service keeps its hostname while every endpoint is unready.
+            if !route.upstreams.is_empty() || route.owner.is_none() {
+                validate_upstreams(&route.upstreams, Some(self.listen), &route.host)?;
+            }
         }
         self.validate_service_routes()?;
         let mut ids = BTreeSet::new();
@@ -330,6 +338,7 @@ impl Config {
             .quick_tunnel
             .as_ref()
             .map(|quick| Route {
+                service_port: None,
                 security_group: None,
                 network: None,
                 owner: None,
@@ -343,6 +352,7 @@ impl Config {
             let host = quick_tunnel_host(entry.id);
             match &entry.target {
                 QuickTunnelTarget::Apps { upstreams } => quick_routes.push(Route {
+                    service_port: None,
                     security_group: None,
                     network: None,
                     owner: None,
@@ -366,15 +376,17 @@ impl Config {
         let mut hosts: BTreeMap<(SocketAddr, &str), Vec<(usize, &Route)>> = BTreeMap::new();
         let mut listeners = BTreeSet::from([self.listen]);
         for (index, route) in self.routes.iter().chain(quick_routes.iter()).enumerate() {
-            text.push_str(&format!(
-                "  upstream fc_route_{index} {{\n    zone fc_route_{index} 64k;\n"
-            ));
-            for address in &route.upstreams {
+            if !route.upstreams.is_empty() {
                 text.push_str(&format!(
-                    "    server {address} max_fails=1 fail_timeout=30s;\n"
+                    "  upstream fc_route_{index} {{\n    zone fc_route_{index} 64k;\n"
                 ));
+                for address in &route.upstreams {
+                    text.push_str(&format!(
+                        "    server {address} max_fails=1 fail_timeout=30s;\n"
+                    ));
+                }
+                text.push_str("    keepalive 16;\n  }\n");
             }
-            text.push_str("    keepalive 16;\n  }\n");
             let listen = route.network.as_ref().map_or(self.listen, |network| {
                 SocketAddr::new(network.gateway.into(), 80)
             });
@@ -419,6 +431,21 @@ impl Config {
                 "$fc_proto"
             };
             let has_fallback = routes.iter().any(|(_, route)| route.path_prefix == "/");
+            // The public service owns this fixed mapping. No caller-selected API path or service UUID is forwarded.
+            if internal.is_none()
+                && let Some(owner) = routes.iter().find_map(|(_, route)| route.owner.as_ref())
+            {
+                let target = format!(
+                    "http://{CI_DEPLOY_ADDRESS}/api/ci/services/{}/deployments",
+                    owner.service_id
+                );
+                for (location, upstream) in [
+                    ("= /__firecrab/deploy", target.clone()),
+                    ("^~ /__firecrab/deploy/", format!("{target}/")),
+                ] {
+                    text.push_str(&format!("    location {location} {{\n      limit_except GET POST {{ deny all; }}\n      client_max_body_size 8k;\n      proxy_pass {upstream};\n      proxy_http_version 1.1;\n      proxy_set_header Host localhost;\n      proxy_set_header Authorization $http_authorization;\n      proxy_set_header Cookie \"\";\n      proxy_set_header Connection \"\";\n      proxy_connect_timeout 2s;\n      proxy_read_timeout 15s;\n      proxy_next_upstream off;\n      add_header Cache-Control \"no-store\" always;\n    }}\n"));
+                }
+            }
             for (index, route) in routes {
                 let prefix = route.path_prefix.trim_end_matches('/');
                 let locations = if prefix.is_empty() {
@@ -427,6 +454,11 @@ impl Config {
                     vec![format!("= \"{prefix}\""), format!("^~ \"{prefix}/\"")]
                 };
                 for location in locations {
+                    if route.upstreams.is_empty() {
+                        // try_files runs after access checks; this non-directory root cannot serve content.
+                        text.push_str(&format!("    location {location} {{ root /dev/null; try_files /unready =503; }}\n"));
+                        continue;
+                    }
                     text.push_str(&format!("    location {location} {{\n      proxy_pass http://fc_route_{index};\n      proxy_http_version 1.1;\n      proxy_set_header Host {proxy_host};\n      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n      proxy_set_header X-Forwarded-Proto {proto};\n      proxy_set_header Upgrade $http_upgrade;\n      proxy_set_header Connection $fc_connection;\n      proxy_connect_timeout 2s;\n      proxy_read_timeout 30s;\n      proxy_next_upstream error timeout http_500 http_502 http_503 http_504;\n      proxy_next_upstream_timeout 3s;\n    }}\n"));
                 }
             }
@@ -555,6 +587,11 @@ pub enum Operation {
     },
     /// Read persisted configuration, engine availability and systemd state.
     Inspect,
+    /// Read one fixed UUID connector unit even when its manifest entry is absent.
+    InspectQuickTunnel {
+        /// Saved connector identity; never an arbitrary systemd unit name.
+        id: Uuid,
+    },
     /// Apply a complete configuration with rollback on verification failure.
     Apply {
         /// Manifest and optional replacement tunnel credentials.
@@ -684,6 +721,35 @@ mod tests {
                 .get("quickTunnel")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn ci_paths_bind_public_owned_routes_to_one_service_without_operator_proxying() {
+        let mut config = config();
+        assert!(!config.nginx().contains("/__firecrab/deploy"));
+        config.routes.truncate(1);
+        let service = Uuid::from_u128(1);
+        config.routes[0].owner = Some(ServiceRouteOwner {
+            service_id: service,
+            deployment_id: Uuid::from_u128(2),
+        });
+        config.validate().unwrap();
+        let text = config.nginx();
+        assert!(text.contains(&format!(
+            "proxy_pass http://{CI_DEPLOY_ADDRESS}/api/ci/services/{service}/deployments;"
+        )));
+        assert!(text.contains("location = /__firecrab/deploy"));
+        assert!(text.contains("location ^~ /__firecrab/deploy/"));
+        assert!(text.contains("proxy_next_upstream off;"));
+        assert!(!text.contains("127.0.0.1:5523"));
+        config.routes[0].host = "app.internal".into();
+        config.routes[0].network = Some(
+            serde_json::from_value(
+                json!({"micro_network_id":Uuid::from_u128(3),"gateway":"172.30.0.1","prefix":24}),
+            )
+            .unwrap(),
+        );
+        assert!(!config.nginx().contains("/__firecrab/deploy"));
     }
 
     #[test]

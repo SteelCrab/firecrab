@@ -19,6 +19,9 @@ pub enum ServiceRuntime {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MicroServiceSpec {
+    /// Optional registry tag policy. A running image remains pinned in release history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_deploy: Option<crate::AutoDeployPolicy>,
     /// Unique DNS label; deployed services resolve as `<name>.internal`.
     pub name: String,
     /// OCI image reference (tag or sha256 digest). Resolved only during deployment.
@@ -117,6 +120,8 @@ pub enum ServicePhase {
     Stopping,
     /// All owned VMs have been removed.
     Stopped,
+    /// A waiting operation was cancelled before admission or resource changes.
+    Cancelled,
     /// Deployment or cleanup failed; remaining instances can be removed with Stop.
     Failed,
 }
@@ -159,6 +164,9 @@ pub struct ServiceInstance {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MicroServiceDeployment {
+    /// Periodic health observations and restart-safe replica repair intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<Box<crate::ServiceRecovery>>,
     /// Unix time when the attempt was accepted; zero for older records.
     #[serde(default)]
     pub started_at: i64,

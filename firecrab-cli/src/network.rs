@@ -52,6 +52,7 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), ApiError> {
             json,
         } => {
             let request = CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name,
                 subnet_cidr,
                 internet_enabled: true,
@@ -118,6 +119,7 @@ mod tests {
 
     fn network() -> MicroNetworkResponse {
         MicroNetworkResponse {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             id: Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
             name: "lab".to_owned(),
             subnet_cidr: "172.31.0.0/24".to_owned(),

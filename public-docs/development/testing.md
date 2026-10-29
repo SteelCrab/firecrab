@@ -275,6 +275,15 @@ Run `scripts/ci-qa-lifetime.sh [OCI reference]` for the automated lifetime pass.
 
 ## nginx combined scenario
 
+Service recovery uses an empty disposable Linux/KVM host:
+`sudo python3 scripts/ci-qa-deploy.py --disposable-host --replica-recovery --report target/qa/replica-recovery.json`.
+
+- [ ] **SR1 — Replica restart:** stop one VM and verify automatic restart, pinned inputs, and healthy/unrelated VM continuity.
+- [ ] **SR2 — Application replacement:** fail one health endpoint and verify withdrawal, restart, replacement, and captured Secret retention.
+- [ ] **SR3 — Durable drain:** hold a request, restart the API during recovery drain, then verify exact candidate ownership and request completion.
+- [ ] **SR4 — Empty and stopped service:** verify HTTP 503 with retained hostname, recovery to a ready VM, Stop, no resurrection, and complete cleanup.
+
+
 Run `scripts/ci-qa-nginx.sh nginx:1.27-alpine`.
 Use `QA_NGINX=ci`, a pinned POSIX shell, and TCP `18080 → 80`; update env to `QA_NGINX=two`.
 Check `/etc/firecrab/vm.env` and executable `/var/lib/firecrab/shells/00.sh` over SSH.
@@ -412,3 +421,18 @@ Keep logs and summaries; see [QA script coverage](qa.md#script-coverage).
   `--caller-template`, and `--output`. The image must answer the configured app
   port and health path. Two deploy/stop cycles check the gateway MAC, the first
   A/AAAA responses within one second, and access to a surviving service.
+
+## Service CI Deploy
+
+- **CID1 — Credential boundary:** run `cargo test -p firecrab-api ci_deploy --locked`.
+  Check hash-only storage, one-time issuance, expiry/revocation, service/repository
+  scope, immutable outcomes, ownership conflicts, redaction and atomic admission.
+- **CID2 — Pipeline outcome:** run `cargo test -p firecrab-cli microservice::ci --locked`
+  and `python3 scripts/test-deploy-ci-client.py`. Check exact operation retries,
+  lost acknowledgements, TLS/redirect boundaries, failure and timeout exit codes.
+- **CID3 — Dashboard:** run the `Service CI Deploy @dashboard` E2E cases. Check
+  icon controls, one-time reveal/copy, delayed responses and desktop/mobile layout.
+- **CID4 — Real Linux/KVM:** on the disposable Installer runner, add `--ci-deploy`
+  to `scripts/ci-qa-deploy.py --disposable-host --report PATH`. Check CLI disconnect,
+  API restart, Action resume, failed health, expiry/revocation and HTTP continuity
+  through private verified TLS and Nginx. Retain `ciDeploy` measurements and cleanup.

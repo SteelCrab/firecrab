@@ -7,6 +7,7 @@ fn fixture() -> (Vec<MicroNetworkSpec>, Vec<VmPolicy>) {
         .into_iter()
         .enumerate()
         .map(|(i, ip)| MicroNetworkSpec {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             micro_network_id: Uuid::from_u128(100 + i as u128),
             gateway: ip.parse().unwrap(),
             prefix: 24,

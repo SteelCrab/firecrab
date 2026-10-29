@@ -130,4 +130,8 @@ Its `sandbox_*` tools cover projects, models, verification, task admission, insp
 Task start advertises guest execution. Apply advertises destructive source modification and requires explicit reviewed paths.
 EOF does not delete retained data or borrowed resources.
 
-This slice does not implement managed environment creation, Tunnel previews, multi-agent execution, or a terminal controlled directly by the browser. Those broader issue #414 items remain separate.
+Managed environments and retained preview controls are described in
+[Sandbox environments](sandbox-environments.md) and
+[Sandbox control](sandbox-control.md). Task dependencies and bounded retries
+reuse this task lifecycle. Interactive browser terminals belong to Canvas #496,
+which remains on hold until AI Sandbox implementation and direct QA are accepted.

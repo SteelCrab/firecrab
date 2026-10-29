@@ -1,26 +1,75 @@
 use crate::{
     App, Shared, api,
     model::{escape, list, text},
-    render::{button, request},
+    render::{Icon, button, empty_state, icon_button, icon_link, name_cell, request, status_dot},
     render_content, render_messages, window,
 };
 use serde_json::{Value, json};
 use wasm_bindgen_futures::spawn_local;
 pub fn content(app: &App) -> String {
-    let mut out = String::from("<section class=\"pools-screen\" aria-label=\"Pools\">");
-    for pool in list(&app.resource) {
+    let rows = list(&app.resource);
+    if rows.is_empty() {
+        return empty_state(
+            "pools",
+            tr(app, "No pools yet", "아직 풀이 없습니다"),
+            tr(
+                app,
+                "A pool keeps MicroVMs warm so a VM is ready in seconds.",
+                "풀은 MicroVM을 미리 켜 두어 몇 초 안에 쓸 수 있게 합니다.",
+            ),
+            &button("New pool", "create", "pools"),
+        );
+    }
+    let mut out = format!(
+        "<div class=\"table-scroll\"><table class=\"wasm-table pool-table\" aria-label=\"{}\"><thead><tr><th>{}</th><th>{}</th><th class=\"col-secondary\">{}</th><th class=\"col-secondary\">{}</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
+        tr(app, "Pools", "풀"),
+        tr(app, "Pool", "풀"),
+        tr(app, "Ready", "준비됨"),
+        tr(app, "In use", "사용 중"),
+        tr(app, "Lease time", "임대 시간"),
+        crate::i18n::t("Actions")
+    );
+    for pool in rows {
         let id = text(pool, "id");
-        let ready = list(&pool["members"])
-            .iter()
-            .filter(|m| m["state"] == "ready")
-            .count();
-        out.push_str(&format!("<article class=\"wasm-card\"><h2>{}</h2><p>{ready} ready · {} members · {}</p>{}</article>",button(text(pool,"name"),"detail",id),list(&pool["members"]).len(),escape(text(pool,"template")),button("Use VM","pool-acquire",id)));
+        let members = list(&pool["members"]);
+        let ready = members.iter().filter(|m| m["state"] == "ready").count();
+        let in_use = match pool["leases"].as_array() {
+            Some(leases) => leases
+                .iter()
+                .filter(|l| l["state"] == "active")
+                .count()
+                .to_string(),
+            None => "—".into(),
+        };
+        let selected = app.detail.as_ref().is_some_and(|d| d["id"] == id);
+        let sub = format!(
+            "{} · {}",
+            text(pool, "template"),
+            crate::forms::size_label(&pool["cpu"].to_string(), &pool["ramMib"].to_string())
+        );
+        let sub = if pool["cpu"].is_null() || pool["ramMib"].is_null() {
+            text(pool, "template").to_string()
+        } else {
+            sub
+        };
+        let lease = pool["leaseTtlSeconds"]
+            .as_u64()
+            .map_or("—".to_string(), |s| {
+                format!("{} {}", s / 60, tr(app, "min", "분"))
+            });
+        out.push_str(&format!(
+            "<tr data-id=\"{}\" aria-selected=\"{selected}\"><td>{}</td><td>{ready} / {}</td><td class=\"col-secondary\">{in_use}</td><td class=\"col-secondary\">{lease}</td><td class=\"row-actions\">{}</td></tr>",
+            escape(id),
+            name_cell(text(pool, "name"), &sub, "", false),
+            members.len(),
+            icon_button("Use VM", "pool-acquire", id, Icon::Start)
+        ));
     }
-    if list(&app.resource).is_empty() {
-        out.push_str("<p class=\"empty-state\">No pools yet.</p>");
-    }
-    out.push_str("</section>");
+    out.push_str("</tbody></table></div>");
     out
+}
+fn tr<'a>(app: &App, en: &'a str, ko: &'a str) -> &'a str {
+    if app.locale == "ko" { ko } else { en }
 }
 pub fn actions(data: &Value) -> String {
     button("Pool settings", "edit", "pools")
@@ -36,20 +85,65 @@ pub fn actions(data: &Value) -> String {
         }
 }
 pub fn detail(_app: &App, data: &Value) -> String {
-    let mut out = crate::render::properties(
-        &json!({"template":data["template"],"minReady":data["minReady"],"maxSize":data["maxSize"],"leaseTtlSeconds":data["leaseTtlSeconds"]}),
+    let settings = crate::details::section(
+        "Settings",
+        "",
+        &crate::render::properties(
+            &json!({"template":data["template"],"minReady":data["minReady"],"maxSize":data["maxSize"],"leaseTtlSeconds":data["leaseTtlSeconds"]}),
+        ),
     );
     let active: Vec<_> = list(&data["leases"])
         .iter()
         .filter(|l| l["state"] == "active")
         .collect();
+    let mut sessions = String::new();
     if active.is_empty() {
-        out.push_str("<p>Nothing in use. Choose Use VM to get started.</p>");
+        sessions
+            .push_str("<p class=\"detail-note\">Nothing in use. Choose Use VM to get started.</p>");
     }
     for lease in active {
-        out.push_str(&format!("<section class=\"wasm-card\"><h3>{}</h3><p>Expires: {}</p><a class=\"btn\" href=\"#/console/{}\" target=\"_blank\" rel=\"noopener\">Open terminal</a>{}</section>",escape(text(&lease["vm"],"name")),lease["expiresAtMs"],api::encode(text(lease,"vmId")),button("End session","pool-release",&format!("{}/{}",text(data,"id"),text(lease,"id")))));
+        sessions.push_str(&format!(
+            "<li><span class=\"detail-list-main\">{}</span><span class=\"detail-list-sub\">Expires: {}</span>{}{}</li>",
+            escape(text(&lease["vm"], "name")),
+            lease["expiresAtMs"],
+            icon_link(
+                "Open terminal",
+                &format!("#/console/{}", api::encode(text(lease, "vmId"))),
+                true,
+                Icon::Terminal
+            ),
+            icon_button(
+                "End session",
+                "pool-release",
+                &format!("{}/{}", text(data, "id"), text(lease, "id")),
+                Icon::Close
+            )
+        ));
     }
-    out
+    let members = list(&data["members"]);
+    let mut member_rows = String::new();
+    for member in members {
+        let ready = member["state"] == "ready";
+        member_rows.push_str(&format!(
+            "<li><span class=\"detail-list-main\">{}</span>{}</li>",
+            escape(text(member, "name")),
+            status_dot(if ready { "ok" } else { "busy" }, text(member, "state"))
+        ));
+    }
+    if member_rows.is_empty() {
+        member_rows.push_str("<p class=\"detail-note\">No members yet.</p>");
+    }
+    settings
+        + &crate::details::section("Active sessions", "", &list_of(&sessions))
+        + &crate::details::section("Members", "", &list_of(&member_rows))
+}
+/// Rows (`<li>`) in a panel list; a plain note stays a note.
+fn list_of(rows: &str) -> String {
+    if rows.starts_with("<li>") {
+        format!("<ul class=\"detail-list\">{rows}</ul>")
+    } else {
+        rows.to_string()
+    }
 }
 fn key(pool: &str) -> Result<String, String> {
     let storage = window().session_storage().map_err(api::error)?.ok_or(

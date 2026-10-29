@@ -14,6 +14,7 @@ Group=@FIRECRAB_GROUP@
 WorkingDirectory=@DATADIR@
 Environment=FIRECRAB_IMAGE_ROOT=@DATADIR@/images
 Environment=FIRECRAB_STATIC_ROOT=@SHAREDIR@/dashboard
+Environment=FIRECRAB_CI_DEPLOY=1
 # So `firecrab update`, spawned as a child of this service, resolves the same
 # install layout `firecrab info` reports instead of falling back to defaults.
 # PREFIX and FIRECRAB_LIBDIR are also what firecrab-helper.service exports

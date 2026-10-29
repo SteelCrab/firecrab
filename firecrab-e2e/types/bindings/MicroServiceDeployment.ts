@@ -1,7 +1,7 @@
 import type { MicroServiceSpec } from "./MicroServiceSpec";
 import type { VmState } from "./VmState";
 
-export type ServicePhase = "queued" | "importing" | "starting" | "checking_health" | "connecting_domain" | "switching_traffic" | "draining" | "rolling_back" | "running" | "degraded" | "stopping" | "stopped" | "failed";
+export type ServicePhase = "queued" | "importing" | "starting" | "checking_health" | "connecting_domain" | "switching_traffic" | "draining" | "rolling_back" | "running" | "degraded" | "stopping" | "stopped" | "failed" | "cancelled";
 export type DeployStrategy = "rolling" | "blue_green";
 export type UpdateServiceRequest = { operationId: string; expectedReleaseId?: string; spec: MicroServiceSpec; strategy?: DeployStrategy };
 export type RollbackServiceRequest = { operationId: string; expectedReleaseId?: string; releaseId: string; strategy?: DeployStrategy };

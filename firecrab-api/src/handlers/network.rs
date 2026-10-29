@@ -234,6 +234,7 @@ mod tests {
             State(state.clone()),
             axum::extract::Extension(crate::server::RequestId(uuid::Uuid::new_v4())),
             crate::extract::ValidatedJson(firecrab_api_types::CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "panel-net".to_owned(),
                 subnet_cidr: "172.29.0.0/24".to_owned(),
                 internet_enabled: true,

@@ -26,15 +26,23 @@ mod queues;
 pub(crate) use cluster::ClusterError;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod ai_sandbox;
+pub(crate) mod auto_deploy;
+pub(crate) mod ci_deploy;
 mod deploy_images;
+pub(crate) mod deploy_queue;
 mod micro_services;
+pub(crate) mod otlp_config;
 mod pipe_ai;
 mod pipe_auth;
 mod pipe_databases;
 mod pipe_storage;
 mod registries;
+mod sandbox_environments;
+mod sandbox_tunnels;
 mod schedules;
 mod security_groups;
+pub(crate) mod service_logs;
+pub(crate) mod service_observation;
 mod stack_applies;
 mod stack_sources;
 pub(crate) use stack_sources::SourceTrigger;
@@ -105,17 +113,18 @@ const CREATE_MICRO_NETWORKS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_
     internet_enabled INTEGER NOT NULL DEFAULT 1,
     uplink TEXT,
     ipv6_cidr TEXT,
-    ipv6_address_mode TEXT
+    ipv6_address_mode TEXT,
+    dns_mode TEXT NOT NULL DEFAULT 'legacy_forward'
 ) STRICT";
 
 /// Selects every column [`Store::list_micro_networks`] needs.
 const SELECT_ALL_MICRO_NETWORKS_SQL: &str = "SELECT id, name, subnet_cidr, internet_enabled, \
-    uplink, ipv6_cidr, ipv6_address_mode FROM micro_networks";
+    uplink, ipv6_cidr, ipv6_address_mode, dns_mode FROM micro_networks";
 
 /// Inserts a new row; fails on a duplicate id.
 const INSERT_MICRO_NETWORK_SQL: &str = "INSERT INTO micro_networks \
-    (id, name, subnet_cidr, internet_enabled, uplink, ipv6_cidr, ipv6_address_mode) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+    (id, name, subnet_cidr, internet_enabled, uplink, ipv6_cidr, ipv6_address_mode, dns_mode) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 
 /// MicroStorage pools (`public-docs/guides/storage.md`).
 const CREATE_MICRO_STORAGES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_storages (
@@ -369,6 +378,20 @@ fn migrate_internet_enabled_column(conn: &Connection) -> Result<(), PersistenceE
     Ok(())
 }
 
+/// Keep networks created by older releases on their recorded forwarding behavior.
+fn migrate_dns_mode_column(conn: &Connection) -> Result<(), PersistenceError> {
+    let present = conn
+        .prepare("SELECT 1 FROM pragma_table_info('micro_networks') WHERE name='dns_mode'")?
+        .exists([])?;
+    if !present {
+        conn.execute(
+            "ALTER TABLE micro_networks ADD COLUMN dns_mode TEXT NOT NULL DEFAULT 'legacy_forward'",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
 /// Adds `uplink` to a `micro_networks` table created before per-network
 /// egress NIC selection existed. `NULL` keeps the host default-route iface.
 fn migrate_uplink_column(conn: &Connection) -> Result<(), PersistenceError> {
@@ -461,7 +484,8 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
             1,
             Option::<String>::None,
             Option::<String>::None,
-            Option::<String>::None
+            Option::<String>::None,
+            firecrab_api_types::MicroNetworkDnsMode::LegacyForward.id(),
         ],
     )?;
     conn.execute(
@@ -486,6 +510,12 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    /// CI credentials were revoked, expired or no longer match the service/repository.
+    #[error("CI Deploy authorization is no longer valid")]
+    CiDeployUnauthorized,
+    /// Operators must revoke old credentials before issuing more.
+    #[error("service has twenty Deploy tokens")]
+    CiTokenLimit,
     /// The requested data disk no longer exists.
     #[error("MicroBlockStorage {id} was not found")]
     MissingBlockStorage { id: Uuid },
@@ -542,6 +572,9 @@ pub enum PersistenceError {
     InvalidStackResource,
     #[error("MicroService name {name} is already registered")]
     DuplicateMicroServiceName { name: String },
+    /// An operation ID is already reserved by another durable Deploy queue owner.
+    #[error("Deploy queue operation identity conflicts")]
+    DeployQueueIdentity,
     /// Couldn't create the database's parent directory.
     #[error("failed to create VM data directory {path}: {source}")]
     CreateDirectory {
@@ -761,6 +794,7 @@ impl Store {
         migrate_internet_enabled_column(&conn)?;
         migrate_uplink_column(&conn)?;
         migrate_ipv6_columns(&conn)?;
+        migrate_dns_mode_column(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute_batch(block_storage::SCHEMA)?;
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
@@ -772,9 +806,18 @@ impl Store {
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
         conn.execute_batch(ai_sandbox::SCHEMA)?;
+        conn.execute_batch(sandbox_tunnels::SCHEMA)?;
+        conn.execute_batch(sandbox_environments::SCHEMA)?;
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
+        conn.execute_batch(service_observation::SCHEMA)?;
+        conn.execute_batch(service_logs::SCHEMA)?;
+        conn.execute(otlp_config::SCHEMA, [])?;
+        otlp_config::migrate(&conn)?;
         conn.execute_batch(micro_services::HISTORY_SQL)?;
+        conn.execute(auto_deploy::SCHEMA, [])?;
+        conn.execute_batch(ci_deploy::SCHEMA)?;
+        conn.execute_batch(deploy_queue::SCHEMA)?;
         conn.execute(deploy_images::SCHEMA, [])?;
         micro_services::migrate_history(&conn)?;
         conn.execute_batch(stacks::SCHEMA_SQL)?;
@@ -900,6 +943,7 @@ impl Store {
                 network.uplink,
                 network.ipv6_cidr,
                 network.ipv6_address_mode.map(|mode| mode.id().to_owned()),
+                network.dns_mode.id(),
             ],
         )?;
         Ok(())
@@ -974,7 +1018,16 @@ impl Store {
             let ipv6 = ipv6_cidr.as_deref().and_then(|cidr| {
                 SubnetSpec::parse_ipv6(cidr, ipam::protocol_address_mode(ipv6_address_mode))
             });
+            let dns_text: String = row.get(7)?;
+            let dns_mode =
+                firecrab_api_types::MicroNetworkDnsMode::parse(&dns_text).ok_or_else(|| {
+                    PersistenceError::CorruptRecord {
+                        id: id_text,
+                        reason: "invalid DNS mode".into(),
+                    }
+                })?;
             networks.push(MicroNetworkResponse {
+                dns_mode,
                 id,
                 name: row.get(1)?,
                 subnet_cidr,
@@ -2138,6 +2191,16 @@ mod tests {
             "a column added by migration must default to the pre-existing behavior"
         );
 
+        let promoted = store
+            .micro_network(migrated.micro_network_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            promoted.dns_mode,
+            firecrab_api_types::MicroNetworkDnsMode::LegacyForward
+        );
+        assert_eq!(promoted.subnet_cidr, "172.30.0.0/24");
+
         // And the column is now writable, same as any other field.
         let mut updated = migrated.clone();
         updated.egress_policy = crate::model::EgressPolicy::Isolated;
@@ -2353,6 +2416,10 @@ mod tests {
             "every network was masqueraded before the toggle existed"
         );
 
+        assert_eq!(
+            network.dns_mode,
+            firecrab_api_types::MicroNetworkDnsMode::LegacyForward
+        );
         // And it is writable from here on.
         store.set_micro_network_internet(id, false).unwrap();
         assert!(!store.micro_network(id).unwrap().unwrap().internet_enabled);
@@ -2398,6 +2465,7 @@ mod tests {
         let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
 
         let ula = MicroNetworkResponse {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             id: Uuid::new_v4(),
             name: "ula".to_owned(),
             subnet_cidr: "172.31.0.0/24".to_owned(),
@@ -2513,12 +2581,36 @@ mod tests {
     }
 
     #[test]
+    fn private_dns_round_trips_and_invalid_stored_dns_never_enables_forwarding() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("firecrab.db");
+        let store = Store::open(&path).unwrap();
+        let network: MicroNetworkResponse = serde_json::from_value(serde_json::json!({
+            "id":Uuid::new_v4(), "name":"private", "subnetCidr":"172.31.5.0/24", "gateway":"172.31.5.1",
+            "internetEnabled":false, "dnsMode":"private_only"
+        })).unwrap();
+        store.insert_micro_network(&network).unwrap();
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.micro_network(network.id).unwrap(), Some(network));
+        store
+            .lock()
+            .execute("UPDATE micro_networks SET dns_mode='typo'", [])
+            .unwrap();
+        assert!(matches!(
+            store.list_micro_networks(),
+            Err(PersistenceError::CorruptRecord { .. })
+        ));
+    }
+
+    #[test]
     fn set_micro_network_uplink_round_trips() {
         let directory = tempdir().unwrap();
         let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
         let id = Uuid::new_v4();
         store
             .insert_micro_network(&MicroNetworkResponse {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 id,
                 name: "prod".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),

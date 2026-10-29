@@ -621,6 +621,15 @@ fn the_boot_script_exposes_dev_fd_for_process_substitution() {
 
 #[test]
 fn image_services_start_while_optional_package_install_waits() {
+    check_image_services_start(false);
+}
+
+#[test]
+fn preinstalled_ssh_starts_without_waiting_for_optional_packages() {
+    check_image_services_start(true);
+}
+
+fn check_image_services_start(preinstalled: bool) {
     let directory = tempdir().unwrap();
     let root = directory.path();
     let services = root.join("services");
@@ -632,8 +641,10 @@ fn image_services_start_while_optional_package_install_waits() {
     std::fs::write(
         &ssh,
         r#"#!/bin/sh
-[ -f "$QA_PACKAGES_DONE" ] || exit 92
+[ "$QA_PREINSTALLED_SSH" = true ] || [ -f "$QA_PACKAGES_DONE" ] || exit 92
+echo started >> "$QA_SSH_STARTS"
 : > "$QA_SSH_READY"
+sleep 1
 "#,
     )
     .unwrap();
@@ -644,6 +655,11 @@ fn image_services_start_while_optional_package_install_waits() {
     let fastfetch = root.join("fastfetch");
     std::fs::write(&fastfetch, "#!/bin/sh\nexit 0\n").unwrap();
     std::fs::set_permissions(&fastfetch, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let ssh_binary = root.join("sshd-binary");
+    if preinstalled {
+        std::fs::write(&ssh_binary, "fixture").unwrap();
+        std::fs::set_permissions(&ssh_binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let boot = provision::boot_script();
     let worker = &boot[boot.find("# The image carries").unwrap()..];
     let script = worker
@@ -651,7 +667,6 @@ fn image_services_start_while_optional_package_install_waits() {
         .replace(
             provision::BASE_PACKAGE_INSTALL,
             r#"
-[ ! -f "$QA_SSH_READY" ] || exit 91
 attempt=0
 while [ "$attempt" -lt 200 ]; do
   if [ -f "$QA_APP_READY" ]; then
@@ -661,16 +676,35 @@ while [ "$attempt" -lt 200 ]; do
   sleep 0.01
   attempt=$((attempt + 1))
 done
+if [ "$QA_PREINSTALLED_SSH" = true ]; then
+  attempt=0
+  while [ ! -f "$QA_SSH_READY" ] && [ "$attempt" -lt 200 ]; do
+    sleep 0.01
+    attempt=$((attempt + 1))
+  done
+  [ -f "$QA_SSH_READY" ] || exit 91
+  : > "$QA_PACKAGE_SAW_SSH"
+else
+  [ ! -f "$QA_SSH_READY" ] || exit 91
+fi
 : > "$QA_PACKAGES_DONE"
 "#,
         )
         .replace("/etc/firecrab/services.d", services.to_str().unwrap())
         .replace("/run/firecrab", root.join("run").to_str().unwrap())
         .replace("/usr/bin/fastfetch", fastfetch.to_str().unwrap())
+        .replace("/usr/sbin/sshd", ssh_binary.to_str().unwrap())
         .replace("/dev/console", root.join("console").to_str().unwrap());
+    // The boot shell exits before its background package worker. Wait for that
+    // worker here so its observations and exit status cannot race the assertions.
+    let script = script
+        .strip_suffix("exit 0\n")
+        .expect("boot shell exits after starting the package worker");
+    let script = format!("{script}wait \"$!\"\n");
     let ready = root.join("app-ready");
     let observed = root.join("package-saw-app");
     let ssh_ready = root.join("ssh-ready");
+    let ssh_starts = root.join("ssh-starts");
     let output = std::process::Command::new("sh")
         .args(["-c", &script])
         .env("BB", &toolbox)
@@ -678,9 +712,16 @@ done
         .env("QA_PACKAGE_SAW_APP", &observed)
         .env("QA_PACKAGES_DONE", root.join("packages-done"))
         .env("QA_SSH_READY", &ssh_ready)
+        .env("QA_SSH_STARTS", &ssh_starts)
+        .env("QA_PACKAGE_SAW_SSH", root.join("package-saw-ssh"))
+        .env("QA_PREINSTALLED_SSH", preinstalled.to_string())
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
+    assert!(
+        root.join("packages-done").exists(),
+        "The package worker must finish its startup observations"
+    );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     while (!observed.exists() || !ssh_ready.exists()) && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -691,8 +732,14 @@ done
     );
     assert!(
         ssh_ready.exists(),
-        "SSH must start after its package dependencies are installed"
+        "SSH must start when its binary is available"
     );
+    assert_eq!(
+        std::fs::read_to_string(ssh_starts).unwrap(),
+        "started\n",
+        "The package worker must not start a second live SSH service"
+    );
+    assert_eq!(root.join("package-saw-ssh").exists(), preinstalled);
 }
 
 #[tokio::test]

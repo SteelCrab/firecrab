@@ -122,7 +122,7 @@ test.describe("VM startup reconciliation @dashboard", () => {
         const detail = panel.getByRole("region", { name: "API-STATUS", exact: true });
         const vm = vms.find((item) => item.name === `vm-${outcome}`)!;
         await expect(panel.locator(".detail-title")).toHaveText(vm.name);
-        await expect(panel.getByRole("region", { name: "Properties", exact: true })).toContainText(vm.state);
+        await expect(panel.getByRole("region", { name: locale === "ko" ? "속성" : "Properties", exact: true })).toContainText(vm.state);
         await expect(panel.locator(".props").first()).toContainText(vm.id);
         await expect(panel.getByRole("heading", { name: "API-STATUS", exact: true })).toBeVisible();
         await expect(detail).toContainText("Firecrab API · firecrab-api");
@@ -152,7 +152,10 @@ test.describe("VM startup reconciliation @dashboard", () => {
     vm.state = "starting";
     vm.reconciliation = null;
     await expect(page.locator("table.vm-list .vm-status-label")).toHaveAttribute("data-state", "starting");
-    await expect(page.locator("table.vm-list .vm-status-label")).toHaveCSS("color", "rgb(180, 83, 9)");
+    // The state is a colored dot plus plain text; "starting" uses the amber dot.
+    await expect
+      .poll(() => page.locator("table.vm-list .vm-status-label").evaluate((el) => getComputedStyle(el, "::before").backgroundColor))
+      .toBe("rgb(217, 119, 6)");
     await expect(page.getByRole("region", { name: "API-STATUS", exact: true })).toHaveCount(0);
   });
 

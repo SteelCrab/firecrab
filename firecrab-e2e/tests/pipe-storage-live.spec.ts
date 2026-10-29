@@ -29,7 +29,7 @@ test("real S3 read-only connection: browse, download, denied upload/delete and r
   const row = page
     .getByRole("row")
     .filter({
-      has: page.getByRole("cell", { name: "한글 +%?.bin", exact: true }),
+      has: page.getByRole("cell", { name: /^한글\ \+%\?\.bin(\s|$)/ }),
     });
   const file = row.getByRole("button", { name: "Download", exact: true });
   const download = page.waitForEvent("download");

@@ -288,6 +288,7 @@ pub(super) async fn state(root: &std::path::Path) -> AppState {
 
 pub(super) fn deployment(id: Uuid) -> MicroServiceDeployment {
     MicroServiceDeployment {
+        recovery: None,
         started_at: 0,
         finished_at: None,
         update: None,

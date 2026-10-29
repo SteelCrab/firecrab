@@ -1,0 +1,146 @@
+/* Forms (spec §6.1): choice groups, the optional tag, the advanced fold, sections and the footer bar. */
+
+/* Label row: the label and, for an optional field, a quiet tag. */
+.field-head { display: flex; align-items: baseline; gap: 6px; min-height: 16px; }
+.field-label { color: var(--text-2); font-size: 12px; font-weight: 500; line-height: 1.3; }
+.field-optional { color: var(--text-4); font-size: 12px; font-weight: 400; line-height: 1.3; }
+#form-result:empty { display: none; }
+/* A result scrolled into view stops above the footer bar. */
+#form-result { scroll-margin-bottom: 72px; }
+
+/* Choice group: a radio group shown as chips (3-7 choices, or memory) or a segmented control (2).
+   Each radio stretches over its option and is invisible, so a click anywhere on it picks it. */
+.choice { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.choice[aria-invalid="true"] { outline: 1px solid var(--red); outline-offset: 3px; border-radius: 8px; }
+.choice-option { position: relative; display: flex; min-width: 0; }
+.choice-option input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.choice-option span {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+.choice-option input:checked + span { border-color: var(--text); color: var(--text); font-weight: 600; }
+.choice-option input:focus-visible + span { box-shadow: 0 0 0 3px var(--accent-ring); }
+@media (hover: hover) { .choice-option input:not(:checked, :disabled):hover + span { background: var(--bg-subtle); } }
+.choice-option input:disabled { cursor: default; }
+/* A group of chips (memory) takes a whole row of the form grid. */
+.field:has(> .choice.chips) { grid-column: 1 / -1; }
+
+.choice.segmented { flex-wrap: nowrap; gap: 0; align-self: flex-start; max-width: 100%; padding: 2px; border-radius: 8px; background: var(--bg-hover); }
+.choice.segmented .choice-option span {
+  justify-content: center;
+  min-height: 28px;
+  padding: 4px 12px;
+  border-color: transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-3);
+  font-weight: 500;
+  text-align: center;
+}
+.choice.segmented .choice-option input:checked + span { background: var(--bg); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+/* Focus lands on the checked segment: it keeps its shadow and gets the ring too. */
+.choice.segmented .choice-option input:checked:focus-visible + span { box-shadow: 0 0 0 3px var(--accent-ring), 0 1px 2px rgba(0, 0, 0, 0.08); }
+
+/* Advanced settings: one folded row between two rules; the list names what is inside. */
+.form-advanced { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.form-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 500;
+  list-style: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.form-advanced > summary::-webkit-details-marker { display: none; }
+.form-advanced > summary::after {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: -3px 2px 0 0;
+  border-right: 1.5px solid var(--text-4);
+  border-bottom: 1.5px solid var(--text-4);
+  transform: rotate(45deg);
+}
+.form-advanced > summary:not(:has(.form-advanced-list))::after { margin-left: auto; }
+.form-advanced[open] > summary::after { margin-top: 3px; transform: rotate(-135deg); }
+.form-advanced > summary:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-ring); border-radius: 6px; }
+.form-advanced-list { min-width: 0; margin-left: auto; overflow: hidden; color: var(--text-4); font-size: 12.5px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.form-advanced > .wasm-form { padding: 4px 0 18px; }
+
+/* Sections: the title and a line of help on the left, the fields on the right. One column below 1024px. */
+.form-section { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 28px; padding: 22px 0; border-bottom: 1px solid var(--border-soft); }
+.form-section-head h3 { margin: 0; font-size: 13.5px; font-weight: 600; }
+.form-section-head p { margin: 4px 0 0; color: var(--text-4); font-size: 12px; line-height: 1.5; }
+.form-section-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-content: start; min-width: 0; }
+@media (max-width: 1023px) {
+  .form-section { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+}
+@media (max-width: 767px) {
+  .form-section-fields { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Footer bar: Cancel and the submit button stay at the bottom of the scrolling area.
+   The panel pins it to the panel's edge (detail.css); a page form pins it to the page. */
+.form-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+/* A setup form: Cancel stays at the left, Back, Continue and the last step's submit button at the right. */
+.wizard-footer [data-action="cancel"] { margin-right: auto; }
+
+/* A page form: the page has no padding below, so the bar reaches the bottom edge and nothing scrolls beneath it. */
+.wasm-content:has(.form-footer) { padding-bottom: 0; }
+
+/* The summary of what the form will create, at the left of the footer bar (New MicroVM). */
+.form-summary { min-width: 0; margin-right: auto; overflow: hidden; color: var(--text-3); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+/* One line of help under a control. An empty one (the host has not answered yet) takes no room. */
+.field-hint { margin: 0; color: var(--text-4); font-size: 12px; line-height: 1.5; }
+.field-hint:empty { display: none; }
+/* A unit sits inside the box at its right edge; the value stops before it. */
+.input-unit { position: relative; display: flex; min-width: 0; }
+.input-unit input { flex: 1; padding-right: 40px; }
+.input-unit input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+.input-unit input[type="number"]::-webkit-inner-spin-button, .input-unit input[type="number"]::-webkit-outer-spin-button { margin: 0; appearance: none; }
+.field-unit { position: absolute; top: 0; right: 11px; bottom: 0; display: flex; align-items: center; color: var(--text-4); font-size: 12px; pointer-events: none; }
+
+/* A page form (New MicroVM, spec §7.2): sections in a 760px column under a head. The footer bar
+   spans the whole page and sits at the bottom of it, also when the sections are short. The page
+   fills #content (no padding of its own), so the column's side space is the gutter. */
+.wasm-content:has(.form-page) { padding: 0; }
+.form-page { --gutter: max(24px, calc((100% - 760px) / 2)); display: flex; flex: 1 0 auto; flex-direction: column; padding-top: 28px; }
+.form-page > header, .form-page .form-section, .form-page .form-advanced, .form-page #form-result, .form-page .field-error.wasm-wide { margin-inline: var(--gutter); }
+.form-page > header h2 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; }
+.form-page > header p { margin: 4px 0 0; color: var(--text-3); font-size: 13px; }
+.form-page > form, .form-page > form > fieldset { display: flex; flex: 1 0 auto; flex-direction: column; gap: 0; min-width: 0; max-width: none; margin: 0; }
+.form-page .wasm-form textarea { min-height: 76px; }
+/* Port forwarding is usually one rule: a box one line high that grows with its lines. */
+.form-page #field-portForwards { min-height: var(--control-height); padding-block: 5px; field-sizing: content; }
+@supports not (field-sizing: content) { .form-page #field-portForwards { height: var(--control-height); resize: vertical; } }
+.form-page .form-footer { margin-top: auto; padding-inline: 32px; }
+@media (max-width: 767px) {
+  .form-page { --gutter: 16px; padding-top: 20px; }
+  .form-page .form-footer { padding-inline: 16px; }
+  /* The summary takes a row, so Cancel and Create share the next one. */
+  .form-page .form-summary { flex: 1 0 100%; }
+}

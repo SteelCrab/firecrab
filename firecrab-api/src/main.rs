@@ -2,6 +2,7 @@ mod ai_sandbox;
 mod artifacts;
 mod block_storage;
 mod bootstrap;
+mod ci_deploy;
 mod cluster;
 mod console;
 mod console_replay;
@@ -24,6 +25,7 @@ mod model;
 mod network;
 mod network_policy;
 mod oci;
+mod otlp;
 mod package;
 mod persistence;
 mod pipe_ai;
@@ -39,6 +41,9 @@ mod rootfs;
 mod scheduler;
 mod secrets;
 mod server;
+mod service_log_collection;
+mod service_log_retention;
+mod service_observation;
 mod service_runtime;
 mod shells;
 mod stack_source;
@@ -172,7 +177,11 @@ async fn run() -> Result<(), StartupError> {
     reconcile::reconcile(&state).await;
     service_runtime::recover(&state).await;
     queues::recover(&state).await;
+    ai_sandbox::environment::start_maintenance(state.clone());
+    service_observation::start(state.clone());
+    service_runtime::recovery::start(state.clone());
     service_runtime::deploy::rotation::start(state.clone());
+    service_runtime::auto_deploy::start(state.clone());
     // Fetch the shared bootstrap builder source now, in the background, so
     // the request that needs it doesn't have to — see spawn_warmup.
     microboot::spawn_warmup(state.clone());
@@ -187,6 +196,19 @@ async fn run() -> Result<(), StartupError> {
         })?;
 
     let local_address = listener.local_addr().map_err(StartupError::LocalAddress)?;
+    let ci_listener = if std::env::var("FIRECRAB_CI_DEPLOY").as_deref() == Ok("1") {
+        let address = ci_deploy::ADDRESS
+            .parse()
+            .expect("constant CI loopback address");
+        Some(
+            tokio::net::TcpListener::bind(address)
+                .await
+                .map_err(|source| StartupError::Bind { address, source })?,
+        )
+    } else {
+        None
+    };
+    let ci_app = server::ci_deploy_router(state.clone());
     state.api_port = local_address.port();
     pipe_databases::events::spawn(state.clone());
     pipe_databases::managed_rabbitmq::recover(state.clone());
@@ -199,8 +221,19 @@ async fn run() -> Result<(), StartupError> {
     let app = build_router(state, &config);
     let scheme = if transport.is_some() { "https" } else { "http" };
     tracing::info!(address = %local_address, %scheme, "listening on {scheme}://{local_address}");
-    tls::serve(listener, app, transport)
-        .await
-        .map_err(StartupError::Serve)?;
+    if let Some(ci_listener) = ci_listener {
+        tracing::info!(
+            address = ci_deploy::ADDRESS,
+            "listening for scoped CI Deploy requests"
+        );
+        tokio::select! {
+            result=tls::serve(listener,app,transport)=>result.map_err(StartupError::Serve)?,
+            result=axum::serve(ci_listener,ci_app)=>result.map_err(StartupError::Serve)?,
+        }
+    } else {
+        tls::serve(listener, app, transport)
+            .await
+            .map_err(StartupError::Serve)?;
+    }
     Ok(())
 }

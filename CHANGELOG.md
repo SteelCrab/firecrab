@@ -23,6 +23,40 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- AI Sandbox gains pinned, role-based environments, separate readiness checks,
+  scoped service discovery, Docker/nspawn execution and retained Workspaces.
+  Projects accept local Git refs, selected skills and reference files. Assigned
+  agents share dependency results through the existing task engine with bounded
+  explicit retries. Command-backed tests and downloadable artifacts retain their
+  task/attempt identities. Dashboard, CLI and local stdio MCP share these REST
+  contracts. Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
+- Saved Sandbox preview bindings retain fixed addresses and immutable execution
+  references. Explicit successor bindings retarget the same URL. Helper health,
+  public HTTPS/WebSocket verification, local removal and remote retirement are
+  reported separately. Canvas work waits for completed Sandbox implementation
+  and direct QA acceptance. Bounded commands do not provide interactive PTY.
+  Explicit shutdown checks require a fresh inactive connector observation and
+  verify the saved HTTPS address without following redirects. Dashboard, CLI
+  and MCP retain the result separately from remote retirement.
+
+- Service-scoped CI Deploy tokens, image-only Nginx endpoints, CLI and GitHub Action
+  preserve exact operation outcomes, with expiry/revocation and one-time Dashboard controls.
+
+- Opt-in registry tag automation submits pinned images through Deploy, with durable rollback/failure pauses, Dashboard controls and YAML/Git image ownership.
+
+- The Deploy queue prioritizes waiting rollbacks and supports cancelling an exact
+  queued operation. Cancellation retains the active release and its VMs and routes.
+  Saved ordering and cancelled outcomes survive API restart. Dashboard actions
+  use the existing icon controls. Tracked in [#521](https://github.com/SteelCrab/firecrab/issues/521).
+
+- MicroServices periodically check replica health and restart or replace failed
+  VMs through Deploy. Pinned inputs, encrypted environments, healthy replicas,
+  bounded retries, and recovery ownership survive API restart. An all-unready
+  service keeps its hostname with HTTP 503. Tracked in [#516](https://github.com/SteelCrab/firecrab/issues/516).
+  VM teardown resets only its gateway-to-guest TCP connections, allowing ingress
+  to retry stalled requests without shortening healthy response timeouts.
+
 - MicroServices publish private `<name>.internal` DNS and network-scoped ingress
   after app health succeeds. Internal-only deployments need no host ports.
   DNS and routes retain deployment ownership through restart and cleanup retries.
@@ -268,6 +302,19 @@ Entries land here as work merges, and move under the next version heading when t
 - None.
 
 ### Fixed
+
+- Alpine Sandbox cleanup accepts the owned user's explicit primary-group
+  membership after verifying its durable account records. Foreign or shared
+  membership still blocks cleanup and preserves the attempt for reconciliation.
+
+- Private Sandbox VM names follow IPAM allocations instead of expiring DHCP
+  leases. A separate DNS hosts file preserves existing VM names through private
+  resolver restart, network changes and service-record refresh. Tracked in
+  [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
+- Sandbox CLI and MCP artifact downloads reject a task response whose ID differs
+  from the requested task. Artifact ownership and download URLs remain bound to
+  that task and its attempt. Existing output files retain their original bytes.
 
 - Gateway MAC addresses remain stable when MicroVM TAP ports join or leave.
   Stopping a service no longer strands surviving guests' cached gateway

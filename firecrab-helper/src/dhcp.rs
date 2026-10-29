@@ -1,8 +1,10 @@
 //! DHCP for guest VMs: a `dnsmasq` child process bound only to the Firecrab
 //! bridge (`fcbr0`), handing out the exact IP each VM's IPAM lease already
-//! reserved (MAC-keyed static reservations, no dynamic pool) and forwarding
-//! DNS queries to the host's own resolver. Reservations are rewritten as one
-//! full snapshot per `sync_dhcp_leases` call — write, validate, atomically
+//! reserved (MAC-keyed static reservations, no dynamic pool). Legacy networks
+//! forward DNS to the host resolver. Private networks use a separate daemon
+//! without upstreams; their local name view is shared within that group. Private
+//! VM names follow IPAM reservations, independently of guest DHCP renewal.
+//! Reservations are rewritten as one full snapshot per `sync_dhcp_leases` call — write, validate, atomically
 //! swap, reload — never edited in place.
 
 use std::io;
@@ -11,6 +13,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use firecrab_api_types::MicroNetworkDnsMode;
 use firecrab_helper_protocol::network::{
     DhcpLeaseEntry, Ipv6AddressMode, MacAddr, MicroNetworkSpec, guest_hostname,
 };
@@ -19,6 +22,10 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+
+#[cfg(test)]
+#[path = "dhcp_private_dns_tests.rs"]
+mod private_dns_tests;
 
 /// Where the live host-reservation file lives; `sync_dhcp_leases` only ever
 /// replaces it via an atomic rename, never edits it in place.
@@ -71,18 +78,28 @@ pub enum DhcpError {
     Inspect(#[source] io::Error),
 }
 
-/// Single-writer actor: every reservation-file rewrite goes through one
-/// mutex, and the last-applied revision it caches is what lets a
-/// duplicate/out-of-order snapshot be recognized as stale and ignored (see
-/// `NetworkRequest::SyncDhcpLeases`'s doc comment).
+/// Two independent single-writer pools keep private answers out of the legacy
+/// forwarding cache. Adding a private network leaves legacy runtime files and
+/// the supervised/orphaned legacy daemon untouched.
 #[derive(Debug)]
 pub struct DhcpActor {
+    /// Existing forwarding daemon and its unchanged runtime paths.
+    legacy: DhcpPool,
+    /// Separate no-upstream daemon shared only by private DNS networks.
+    private: DhcpPool,
+}
+
+/// One resolver process owns only networks with this immutable DNS posture.
+#[derive(Debug)]
+struct DhcpPool {
+    /// Lease revision, process and exact inputs last acknowledged by this pool.
     state: Mutex<DhcpState>,
-    /// All runtime files, including the PID used to signal orphaned dnsmasq,
-    /// belong to this instance. Tests use a private temporary directory.
+    /// Derives all owned PID/config/lease/service-host files for this pool.
     hosts_path: PathBuf,
-    /// Authoritative deployment-owned routes, independent of the API process.
+    /// Committed deployment routes supply the reloadable local DNS names.
     manifest_path: PathBuf,
+    /// Immutable partition key; a lease belongs only to its network's pool.
+    mode: MicroNetworkDnsMode,
 }
 
 #[derive(Debug, Default)]
@@ -102,15 +119,29 @@ struct DhcpState {
 }
 
 impl DhcpActor {
-    /// Creates an actor with no dnsmasq process running yet.
+    /// Creates both pools without starting either resolver.
     pub fn new() -> Self {
+        let manifest =
+            PathBuf::from(std::env::var_os("CONFDIR").unwrap_or_else(|| "/etc/firecrab".into()))
+                .join("pipe/manifest.json");
+        Self::at(PathBuf::from(HOSTS_FILE), manifest)
+    }
+
+    /// Paths for the legacy pool remain byte-for-byte compatible with older releases.
+    fn at(hosts: PathBuf, manifest: PathBuf) -> Self {
         Self {
-            state: Mutex::default(),
-            hosts_path: PathBuf::from(HOSTS_FILE),
-            manifest_path: PathBuf::from(
-                std::env::var_os("CONFDIR").unwrap_or_else(|| "/etc/firecrab".into()),
-            )
-            .join("pipe/manifest.json"),
+            legacy: DhcpPool {
+                state: Mutex::default(),
+                hosts_path: hosts.clone(),
+                manifest_path: manifest.clone(),
+                mode: MicroNetworkDnsMode::LegacyForward,
+            },
+            private: DhcpPool {
+                state: Mutex::default(),
+                hosts_path: hosts.with_file_name("dnsmasq-private-hosts.conf"),
+                manifest_path: manifest,
+                mode: MicroNetworkDnsMode::PrivateOnly,
+            },
         }
     }
 }
@@ -175,6 +206,20 @@ fn render_hosts_file(leases: &[DhcpLeaseEntry]) -> String {
     rendered
 }
 
+/// DHCP host declarations enter DNS only after negotiation. Private names must
+/// also survive an expired dynamic lease or a resolver restart without a guest.
+fn render_vm_hosts_file(leases: &[DhcpLeaseEntry]) -> String {
+    let mut rendered = String::new();
+    for lease in leases {
+        let name = guest_hostname(lease.vm_id);
+        rendered.push_str(&format!("{} {name} {name}.internal\n", lease.ipv4));
+        if let Some(ipv6) = lease.ipv6 {
+            rendered.push_str(&format!("{ipv6} {name} {name}.internal\n"));
+        }
+    }
+    rendered
+}
+
 /// Force-releases dnsmasq's active lease for any `(ip, mac)` pair its own
 /// lease database (`active_leases`) has that `current` doesn't — i.e. an IP
 /// whose active lease belongs to a MAC that no longer holds the static
@@ -220,8 +265,7 @@ fn serving_interface(ip: Ipv4Addr, micro_networks: &[MicroNetworkSpec]) -> Strin
 /// treated as "no active leases" — the normal case right after a fresh
 /// dnsmasq spawn that hasn't leased anything yet.
 async fn active_leases(hosts_path: &Path) -> Vec<(Ipv4Addr, MacAddr)> {
-    let Ok(text) = tokio::fs::read_to_string(hosts_path.with_file_name("dnsmasq.leases")).await
-    else {
+    let Ok(text) = tokio::fs::read_to_string(runtime_path(hosts_path, "leases")).await else {
         return Vec::new();
     };
     parse_lease_file(&text)
@@ -338,21 +382,36 @@ fn render_base_config(hosts_file: &Path, micro_networks: &[MicroNetworkSpec]) ->
     } else {
         ""
     };
+    let private = micro_networks
+        .iter()
+        .any(|network| network.dns_mode == MicroNetworkDnsMode::PrivateOnly);
+    let dns_policy = if private {
+        "no-resolv\nno-poll\nno-hosts\nlocal=/#/\ndomain=internal\n"
+    } else {
+        ""
+    };
+    let vm_dns = if private {
+        format!("addn-hosts={}\n", vm_hosts_path(hosts_file).display())
+    } else {
+        String::new()
+    };
     format!(
         "{served}\
          {enable_ra}\
          bind-dynamic\n\
          except-interface=lo\n\
+         {dns_policy}\
          local=/internal/\n\
          addn-hosts={}\n\
+         {vm_dns}\
          dhcp-hostsfile={}\n\
          dhcp-leasefile={}\n\
          pid-file={}\n\
          log-dhcp\n",
         service_hosts_path(hosts_file).display(),
         hosts_file.display(),
-        hosts_file.with_file_name("dnsmasq.leases").display(),
-        hosts_file.with_file_name("dnsmasq.pid").display(),
+        runtime_path(hosts_file, "leases").display(),
+        runtime_path(hosts_file, "pid").display(),
     )
 }
 
@@ -367,44 +426,37 @@ pub async fn sync_dhcp_leases(
     leases: &[DhcpLeaseEntry],
     micro_networks: &[MicroNetworkSpec],
 ) -> Result<(), DhcpError> {
+    for pool in [&actor.legacy, &actor.private] {
+        let networks: Vec<_> = micro_networks
+            .iter()
+            .filter(|network| network.dns_mode == pool.mode)
+            .cloned()
+            .collect();
+        let reservations: Vec<_> = leases
+            .iter()
+            .filter(|lease| networks.iter().any(|network| network.contains(lease.ipv4)))
+            .copied()
+            .collect();
+        sync_pool(pool, revision, &reservations, &networks).await?;
+    }
+    Ok(())
+}
+
+/// Apply only one group's changes so unrelated lease revisions preserve its cache.
+async fn sync_pool(
+    actor: &DhcpPool,
+    revision: u64,
+    leases: &[DhcpLeaseEntry],
+    micro_networks: &[MicroNetworkSpec],
+) -> Result<(), DhcpError> {
     let mut state = actor.state.lock().await;
-    write_service_dns(actor).await?;
+    let (_, services_changed) = write_service_dns(actor).await?;
     let hosts_path = actor.hosts_path.as_path();
-    let networks_changed = state.served_networks.as_deref() != Some(micro_networks);
+    let mut networks_changed = state.served_networks.as_deref() != Some(micro_networks);
     let dnsmasq_running = owned_child_running(&mut state)?
         || (state.child.is_none() && running_orphan_pid(hosts_path).await.is_some());
-    let (revision, leases) = if !networks_changed
-        && state
-            .applied_revision
-            .is_some_and(|applied| revision < applied)
-    {
-        (
-            state.applied_revision.unwrap(),
-            state.applied_leases.clone(),
-        )
-    } else {
-        (revision, dhcpv6_reservations_only(leases, micro_networks))
-    };
-    let hosts_content = render_hosts_file(&leases);
-    let base_content = render_base_config(hosts_path, micro_networks);
-    let base_matches = file_matches(&base_config_path(hosts_path), &base_content).await;
-    let hosts_match = file_matches(hosts_path, &hosts_content).await;
-    if can_skip_snapshot(
-        state.applied_revision,
-        revision,
-        networks_changed,
-        dnsmasq_running,
-        base_matches && hosts_match,
-    ) {
-        // Re-read the known-good reservations even if the process previously
-        // loaded a tampered hosts file. Liveness alone cannot prove that.
-        if let Some(child) = state.child.as_mut() {
-            reload(child)?;
-        } else if let Some(pid) = running_orphan_pid(hosts_path).await {
-            reload_pid(pid)?;
-        }
-        return Ok(());
-    }
+    let (revision, leases) = snapshot_reservations(&state, revision, leases, micro_networks);
+    let vm_dns_changed = write_vm_dns(actor, &leases, micro_networks).await?;
     // Without a bridge to serve, dnsmasq's config has no `interface=` line,
     // and dnsmasq then answers DNS on every host interface, uplink included.
     // Nothing to serve means nothing runs.
@@ -413,6 +465,43 @@ pub async fn sync_dhcp_leases(
         state.served_networks = Some(Vec::new());
         state.applied_revision = Some(revision);
         state.applied_leases = leases;
+        return Ok(());
+    }
+
+    let hosts_content = render_hosts_file(&leases);
+    let base_content = render_base_config(hosts_path, micro_networks);
+    let base_matches = file_matches(&base_config_path(hosts_path), &base_content).await;
+    let hosts_match = file_matches(hosts_path, &hosts_content).await;
+    // A helper restart can adopt the previous daemon only when its pinned
+    // command line and both durable inputs match the exact current snapshot.
+    if state.served_networks.is_none() && dnsmasq_running && base_matches && hosts_match {
+        state.served_networks = Some(micro_networks.to_vec());
+        state.applied_leases = leases.clone();
+        networks_changed = false;
+    }
+    if (state.applied_leases == leases
+        && !networks_changed
+        && dnsmasq_running
+        && base_matches
+        && hosts_match)
+        || can_skip_snapshot(
+            state.applied_revision,
+            revision,
+            networks_changed,
+            dnsmasq_running,
+            base_matches && hosts_match,
+        )
+    {
+        // No new inputs: preserve this group's cache. A changed service file
+        // still needs SIGHUP; changed lease/base files take the repair path.
+        if services_changed || vm_dns_changed {
+            if let Some(child) = state.child.as_mut() {
+                reload(child)?;
+            } else if let Some(pid) = running_orphan_pid(hosts_path).await {
+                reload_pid(pid)?;
+            }
+        }
+        state.applied_revision = Some(state.applied_revision.unwrap_or(0).max(revision));
         return Ok(());
     }
 
@@ -454,6 +543,19 @@ pub async fn sync_dhcp_leases(
     state.applied_revision = Some(revision);
     state.applied_leases = leases;
     Ok(())
+}
+
+/// Network changes still apply, but cannot roll back newer IPAM reservations.
+fn snapshot_reservations(
+    state: &DhcpState,
+    revision: u64,
+    leases: &[DhcpLeaseEntry],
+    networks: &[MicroNetworkSpec],
+) -> (u64, Vec<DhcpLeaseEntry>) {
+    match state.applied_revision {
+        Some(applied) if revision < applied => (applied, state.applied_leases.clone()),
+        _ => (revision, dhcpv6_reservations_only(leases, networks)),
+    }
 }
 
 /// Whether this snapshot can be skipped as stale/duplicate. A changed
@@ -519,7 +621,7 @@ async fn stop_running_dnsmasq(state: &mut DhcpState, hosts_path: &Path) {
 /// Linux reports success for an unreaped zombie, which cannot serve DHCP or
 /// react to SIGHUP.
 async fn running_orphan_pid(hosts_path: &Path) -> Option<u32> {
-    let text = tokio::fs::read_to_string(hosts_path.with_file_name("dnsmasq.pid"))
+    let text = tokio::fs::read_to_string(runtime_path(hosts_path, "pid"))
         .await
         .ok()?;
     let pid: u32 = text.trim().parse().ok()?;
@@ -666,6 +768,24 @@ async fn validate(
     }
 }
 
+/// Derive separate private runtime files while preserving all legacy names.
+fn runtime_path(hosts: &Path, suffix: &str) -> PathBuf {
+    let private = hosts
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with("dnsmasq-private-"));
+    let prefix = if private {
+        "dnsmasq-private"
+    } else {
+        "dnsmasq"
+    };
+    let separator = if matches!(suffix, "services.hosts" | "vms.hosts") {
+        "-"
+    } else {
+        "."
+    };
+    hosts.with_file_name(format!("{prefix}{separator}{suffix}"))
+}
+
 /// Where the base config (bridge/range/hostsfile directives) is written —
 /// must differ from `hosts_path` itself. `hosts_path` already ends in
 /// `.conf`, so deriving this via `.with_extension("conf")` would be a no-op
@@ -676,38 +796,105 @@ async fn validate(
 /// `dhcp-host=`-prefixed lines it left behind ("bad hex constant"), silently
 /// breaking every reservation for the process's whole lifetime.
 fn base_config_path(hosts_path: &Path) -> PathBuf {
-    hosts_path.with_file_name("dnsmasq.conf")
+    runtime_path(hosts_path, "conf")
 }
 
 fn service_hosts_path(hosts_path: &Path) -> PathBuf {
-    hosts_path.with_file_name("dnsmasq-services.hosts")
+    runtime_path(hosts_path, "services.hosts")
 }
 
-async fn write_service_dns(actor: &DhcpActor) -> Result<bool, DhcpError> {
+/// Independent IPAM-backed records, never replaced by a Pipe service refresh.
+fn vm_hosts_path(hosts_path: &Path) -> PathBuf {
+    runtime_path(hosts_path, "vms.hosts")
+}
+
+/// Keep VM records separate from Pipe routes so a service refresh cannot erase
+/// reserved VM names. Legacy forwarding keeps its existing lease-based behavior.
+async fn write_vm_dns(
+    actor: &DhcpPool,
+    leases: &[DhcpLeaseEntry],
+    networks: &[MicroNetworkSpec],
+) -> Result<bool, DhcpError> {
+    if actor.mode != MicroNetworkDnsMode::PrivateOnly {
+        return Ok(false);
+    }
+    // Configuration-only changes can remove a network without advancing the
+    // lease revision. Its retained checkpoint must not keep publishing names.
+    let leases: Vec<_> = leases
+        .iter()
+        .filter(|lease| {
+            networks
+                .iter()
+                .any(|network| network.dns_mode == actor.mode && network.contains(lease.ipv4))
+        })
+        .copied()
+        .collect();
+    write_dns_hosts(
+        &vm_hosts_path(&actor.hosts_path),
+        &render_vm_hosts_file(&leases),
+    )
+    .await
+}
+
+/// Skip identical readable input; otherwise publish a complete atomic snapshot.
+async fn write_dns_hosts(path: &Path, text: &str) -> Result<bool, DhcpError> {
+    if file_matches(path, text).await {
+        return Ok(false);
+    }
+    let candidate = path.with_extension("tmp");
+    write_atomic_candidate(&candidate, text).await?;
+    tokio::fs::rename(candidate, path)
+        .await
+        .map_err(|source| DhcpError::Swap {
+            path: path.to_owned(),
+            source,
+        })?;
+    Ok(true)
+}
+
+async fn write_service_dns(actor: &DhcpPool) -> Result<(bool, bool), DhcpError> {
     use firecrab_helper_protocol::pipe::Config;
     let text = match Config::read(&actor.manifest_path) {
-        Ok(config) => config.internal_dns_hosts(),
+        Ok(mut config) => {
+            config.routes.retain(|route| {
+                route
+                    .network
+                    .as_ref()
+                    .is_some_and(|network| network.dns_mode == actor.mode)
+            });
+            config.internal_dns_hosts()
+        }
         Err(_) if !actor.manifest_path.exists() => String::new(),
         Err(error) => return Err(DhcpError::ServiceRoutes(error.to_string())),
     };
-    let path = service_hosts_path(&actor.hosts_path);
-    let candidate = path.with_extension("tmp");
-    write_atomic_candidate(&candidate, &text).await?;
-    tokio::fs::rename(candidate, &path)
-        .await
-        .map_err(|source| DhcpError::Swap { path, source })?;
-    Ok(!text.is_empty())
+    let changed = write_dns_hosts(&service_hosts_path(&actor.hosts_path), &text).await?;
+    Ok((!text.is_empty(), changed))
 }
 
 /// Rebuild DNS from committed routes after a Pipe transaction. SIGHUP also clears
 /// cached negative answers, so a newly published service resolves immediately.
 pub async fn refresh_service_dns(actor: &DhcpActor) -> Result<(), DhcpError> {
+    for pool in [&actor.legacy, &actor.private] {
+        refresh_pool_service_dns(pool).await?;
+    }
+    Ok(())
+}
+
+/// Reload service records in one pool, leaving the other pool's cache intact.
+async fn refresh_pool_service_dns(actor: &DhcpPool) -> Result<(), DhcpError> {
     let mut state = actor.state.lock().await;
-    let has_services = write_service_dns(actor).await?;
+    let (has_services, changed) = write_service_dns(actor).await?;
+    if !changed && !has_services {
+        return Ok(());
+    }
     if owned_child_running(&mut state)? {
-        reload(state.child.as_mut().expect("live dnsmasq child"))?;
+        if changed {
+            reload(state.child.as_mut().expect("live dnsmasq child"))?;
+        }
     } else if let Some(pid) = running_orphan_pid(&actor.hosts_path).await {
-        reload_pid(pid)?;
+        if changed {
+            reload_pid(pid)?;
+        }
     } else if let Some(networks) = state
         .served_networks
         .clone()
@@ -782,11 +969,10 @@ mod tests {
     use super::*;
 
     fn isolated_actor(dir: &tempfile::TempDir) -> DhcpActor {
-        DhcpActor {
-            state: Mutex::default(),
-            hosts_path: dir.path().join("dnsmasq-hosts.conf"),
-            manifest_path: dir.path().join("pipe.json"),
-        }
+        DhcpActor::at(
+            dir.path().join("dnsmasq-hosts.conf"),
+            dir.path().join("pipe.json"),
+        )
     }
 
     #[tokio::test]
@@ -802,15 +988,18 @@ mod tests {
             "upstreams":["172.30.0.2:8080"]
         })).unwrap();
         let next = publish.updated_config(&config).unwrap();
-        tokio::fs::write(&actor.manifest_path, serde_json::to_vec(&next).unwrap())
-            .await
-            .unwrap();
-        assert!(write_service_dns(&actor).await.unwrap());
+        tokio::fs::write(
+            &actor.legacy.manifest_path,
+            serde_json::to_vec(&next).unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(write_service_dns(&actor.legacy).await.unwrap().0);
         assert!(
             refresh_service_dns(&actor).await.is_err(),
             "an absent DNS runtime must not confirm publication"
         );
-        let path = service_hosts_path(&actor.hosts_path);
+        let path = service_hosts_path(&actor.legacy.hosts_path);
         assert_eq!(
             tokio::fs::read_to_string(&path).await.unwrap(),
             "172.30.0.1 api.internal\n"
@@ -822,19 +1011,19 @@ mod tests {
         tokio::fs::write(&path, "203.0.113.1 api.internal\n")
             .await
             .unwrap();
-        write_service_dns(&actor).await.unwrap();
+        write_service_dns(&actor.legacy).await.unwrap();
         assert_eq!(
             tokio::fs::read_to_string(&path).await.unwrap(),
             next.internal_dns_hosts()
         );
         // The next helper lifetime repairs DNS using the same persisted routes.
         let reopened = isolated_actor(&dir);
-        write_service_dns(&reopened).await.unwrap();
+        write_service_dns(&reopened.legacy).await.unwrap();
         assert_eq!(
             tokio::fs::read_to_string(&path).await.unwrap(),
             next.internal_dns_hosts()
         );
-        tokio::fs::write(&actor.manifest_path, "invalid")
+        tokio::fs::write(&actor.legacy.manifest_path, "invalid")
             .await
             .unwrap();
         assert!(refresh_service_dns(&actor).await.is_err());
@@ -842,12 +1031,15 @@ mod tests {
             tokio::fs::read_to_string(&path).await.unwrap(),
             next.internal_dns_hosts()
         );
-        tokio::fs::write(&actor.manifest_path, serde_json::to_vec(&config).unwrap())
-            .await
-            .unwrap();
+        tokio::fs::write(
+            &actor.legacy.manifest_path,
+            serde_json::to_vec(&config).unwrap(),
+        )
+        .await
+        .unwrap();
         refresh_service_dns(&actor).await.unwrap();
         assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), "");
-        let base = render_base_config(&actor.hosts_path, &[]);
+        let base = render_base_config(&actor.legacy.hosts_path, &[]);
         assert!(base.contains("local=/internal/\n"));
         assert!(base.contains(&format!("addn-hosts={}\n", path.display())));
     }
@@ -975,6 +1167,7 @@ mod tests {
 
     fn sample_network(id: u128, gateway: &str, prefix: u8) -> MicroNetworkSpec {
         MicroNetworkSpec {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             micro_network_id: Uuid::from_u128(id),
             gateway: gateway.parse().unwrap(),
             prefix,
@@ -984,6 +1177,182 @@ mod tests {
             uplink: None,
             ipv6: None,
         }
+    }
+
+    #[test]
+    fn private_dns_has_no_upstream_and_uses_independent_runtime_files() {
+        let actor = DhcpActor::at(
+            PathBuf::from(HOSTS_FILE),
+            PathBuf::from("/missing-manifest"),
+        );
+        let legacy = sample_network(1, "172.30.1.1", 24);
+        let private = MicroNetworkSpec {
+            dns_mode: MicroNetworkDnsMode::PrivateOnly,
+            ..sample_network(2, "172.30.2.1", 24)
+        };
+        let old = render_base_config(&actor.legacy.hosts_path, &[legacy]);
+        let strict = render_base_config(&actor.private.hosts_path, std::slice::from_ref(&private));
+        for option in [
+            "no-resolv\n",
+            "no-poll\n",
+            "no-hosts\n",
+            "local=/#/\n",
+            "domain=internal\n",
+        ] {
+            assert!(strict.contains(option), "{option}");
+            assert!(
+                !old.contains(option),
+                "legacy behavior must remain unchanged"
+            );
+        }
+        assert!(strict.contains(&format!("interface={}\n", private.bridge_name())));
+        assert!(strict.contains("dhcp-range=172.30.2.0,static\n"));
+        assert!(
+            !strict.contains("auth-server"),
+            "authoritative mode disables DHCP on that interface"
+        );
+        for suffix in ["conf", "pid", "leases", "services.hosts"] {
+            assert_ne!(
+                runtime_path(&actor.legacy.hosts_path, suffix),
+                runtime_path(&actor.private.hosts_path, suffix)
+            );
+        }
+        assert!(strict.contains("pid-file=/run/firecrab/dnsmasq-private.pid\n"));
+        assert!(strict.contains("dhcp-leasefile=/run/firecrab/dnsmasq-private.leases\n"));
+    }
+
+    #[tokio::test]
+    async fn service_dns_files_share_names_only_within_the_same_posture_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let actor = isolated_actor(&dir);
+        let network = |id, ip, mode| MicroNetworkSpec {
+            dns_mode: mode,
+            ..sample_network(id, ip, 24)
+        };
+        let config = serde_json::json!({ "routes": [
+            {"owner":{"serviceId":Uuid::from_u128(10),"deploymentId":Uuid::from_u128(11)}, "host":"legacy.internal", "upstreams":["172.30.1.2:8080"], "network":network(1,"172.30.1.1",MicroNetworkDnsMode::LegacyForward)},
+            {"owner":{"serviceId":Uuid::from_u128(20),"deploymentId":Uuid::from_u128(21)}, "host":"private-one.internal", "upstreams":["172.30.2.2:8080"], "network":network(2,"172.30.2.1",MicroNetworkDnsMode::PrivateOnly)},
+            {"owner":{"serviceId":Uuid::from_u128(30),"deploymentId":Uuid::from_u128(31)}, "host":"private-two.internal", "upstreams":["172.30.3.2:8080"], "network":network(3,"172.30.3.1",MicroNetworkDnsMode::PrivateOnly)}
+        ], "tunnel":null });
+        tokio::fs::write(
+            &actor.legacy.manifest_path,
+            serde_json::to_vec(&config).unwrap(),
+        )
+        .await
+        .unwrap();
+        write_service_dns(&actor.legacy).await.unwrap();
+        write_service_dns(&actor.private).await.unwrap();
+        let legacy = tokio::fs::read_to_string(service_hosts_path(&actor.legacy.hosts_path))
+            .await
+            .unwrap();
+        let private = tokio::fs::read_to_string(service_hosts_path(&actor.private.hosts_path))
+            .await
+            .unwrap();
+        assert_eq!(legacy, "172.30.1.1 legacy.internal\n");
+        assert_eq!(
+            private,
+            "172.30.2.1 private-one.internal\n172.30.3.1 private-two.internal\n"
+        );
+        assert_eq!(
+            write_service_dns(&actor.private).await.unwrap(),
+            (true, false)
+        );
+    }
+
+    #[tokio::test]
+    async fn unrelated_lease_revision_preserves_the_legacy_process_and_durable_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let actor = isolated_actor(&dir);
+        let networks = vec![sample_network(1, "172.30.1.1", 24)];
+        let leases = vec![lease(1, "172.30.1.2", "02:fc:00:00:00:01")];
+        let path = &actor.legacy.hosts_path;
+        let config = render_base_config(path, &networks);
+        write_atomic_candidate(&base_config_path(path), &config)
+            .await
+            .unwrap();
+        write_atomic_candidate(path, &render_hosts_file(&leases))
+            .await
+            .unwrap();
+        write_service_dns(&actor.legacy).await.unwrap();
+        let mut child = Command::new("sleep")
+            .arg("60")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        {
+            let mut state = actor.legacy.state.lock().await;
+            state.child = Some(child);
+            state.served_networks = Some(networks.clone());
+            state.applied_leases = leases.clone();
+            state.applied_revision = Some(1);
+        }
+        sync_pool(&actor.legacy, 2, &leases, &networks)
+            .await
+            .unwrap();
+        let mut state = actor.legacy.state.lock().await;
+        child = state.child.take().unwrap();
+        assert_eq!(child.id(), Some(pid));
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "SIGHUP would terminate this stand-in; unchanged pools must not clear their cache"
+        );
+        assert_eq!(state.applied_revision, Some(2));
+        assert_eq!(
+            tokio::fs::read_to_string(base_config_path(path))
+                .await
+                .unwrap(),
+            config
+        );
+        child.kill().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn matching_legacy_orphan_is_adopted_after_a_helper_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let actor = isolated_actor(&dir);
+        let networks = vec![sample_network(1, "172.30.1.1", 24)];
+        let leases = vec![lease(1, "172.30.1.2", "02:fc:00:00:00:01")];
+        let path = &actor.legacy.hosts_path;
+        let config = base_config_path(path);
+        write_atomic_candidate(&config, &render_base_config(path, &networks))
+            .await
+            .unwrap();
+        write_atomic_candidate(path, &render_hosts_file(&leases))
+            .await
+            .unwrap();
+        write_service_dns(&actor.legacy).await.unwrap();
+        let mut command = Command::new("sh");
+        command.as_std_mut().arg0("dnsmasq");
+        let mut child = command
+            .arg("-c")
+            .arg("read -r _")
+            .arg(format!("--conf-file={}", config.display()))
+            .stdin(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        tokio::fs::write(runtime_path(path, "pid"), pid.to_string())
+            .await
+            .unwrap();
+        sync_pool(&actor.legacy, 7, &leases, &networks)
+            .await
+            .unwrap();
+        let state = actor.legacy.state.lock().await;
+        assert!(
+            state.child.is_none(),
+            "the process belongs to the previous helper lifetime"
+        );
+        assert_eq!(state.served_networks, Some(networks));
+        assert_eq!(state.applied_leases, leases);
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "adoption must not signal/restart the matching resolver"
+        );
+        assert_eq!(running_orphan_pid(path).await, Some(pid));
+        child.kill().await.unwrap();
     }
 
     #[test]
@@ -1222,7 +1591,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let actor = isolated_actor(&dir);
         {
-            let mut state = actor.state.lock().await;
+            let mut state = actor.legacy.state.lock().await;
             state.applied_revision = Some(5);
             state.served_networks = Some(Vec::new());
             state.child = Some(
@@ -1237,8 +1606,8 @@ mod tests {
         // revision. Stop it, then preserve the newest lease generation when
         // a delayed older snapshot arrives.
         assert!(
-            sync_dhcp_leases(
-                &actor,
+            sync_pool(
+                &actor.legacy,
                 5,
                 &[lease(1, "172.30.0.5", "02:fc:00:00:00:05")],
                 &[]
@@ -1247,8 +1616,8 @@ mod tests {
             .is_ok()
         );
         assert!(
-            sync_dhcp_leases(
-                &actor,
+            sync_pool(
+                &actor.legacy,
                 3,
                 &[lease(1, "172.30.0.5", "02:fc:00:00:00:05")],
                 &[]
@@ -1257,7 +1626,7 @@ mod tests {
             .is_ok()
         );
 
-        let state = actor.state.lock().await;
+        let state = actor.legacy.state.lock().await;
         assert!(state.child.is_none());
         assert_eq!(state.applied_revision, Some(5));
         assert_eq!(
@@ -1271,7 +1640,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let actor = isolated_actor(&dir);
         {
-            let mut state = actor.state.lock().await;
+            let mut state = actor.legacy.state.lock().await;
             state.applied_revision = Some(5);
             state.served_networks = Some(vec![sample_network(0x1234, "172.31.0.1", 24)]);
             state.child = Some(
@@ -1282,9 +1651,22 @@ mod tests {
             );
         }
 
-        // No hosts file is written and nothing is spawned, so this needs no root.
+        // Even matching empty files cannot justify a daemon serving no bridges.
+        write_atomic_candidate(
+            &base_config_path(&actor.legacy.hosts_path),
+            &render_base_config(&actor.legacy.hosts_path, &[]),
+        )
+        .await
+        .unwrap();
+        write_atomic_candidate(&actor.legacy.hosts_path, "")
+            .await
+            .unwrap();
+        {
+            let mut state = actor.legacy.state.lock().await;
+            state.served_networks = Some(vec![]);
+        }
         assert!(sync_dhcp_leases(&actor, 6, &[], &[]).await.is_ok());
-        let state = actor.state.lock().await;
+        let state = actor.legacy.state.lock().await;
         assert!(state.child.is_none(), "the running dnsmasq is stopped");
         assert_eq!(state.served_networks.as_deref(), Some(&[][..]));
         assert_eq!(state.applied_revision, Some(6));
@@ -1332,7 +1714,7 @@ mod tests {
         let other_dir = tempfile::tempdir().unwrap();
         let actor = isolated_actor(&own_dir);
         let other = isolated_actor(&other_dir);
-        let other_config = base_config_path(&other.hosts_path);
+        let other_config = base_config_path(&other.legacy.hosts_path);
         // A shell blocked on stdin mimics dnsmasq's argv without opening sockets.
         tokio::fs::write(&other_config, "# isolated signal target\n")
             .await
@@ -1355,21 +1737,24 @@ mod tests {
             "signal target must be running"
         );
         let pid = child.id().unwrap().to_string();
-        for hosts_path in [&actor.hosts_path, &other.hosts_path] {
-            tokio::fs::write(hosts_path.with_file_name("dnsmasq.pid"), &pid)
+        for hosts_path in [&actor.legacy.hosts_path, &other.legacy.hosts_path] {
+            tokio::fs::write(runtime_path(hosts_path, "pid"), &pid)
                 .await
                 .unwrap();
         }
 
-        assert_eq!(running_orphan_pid(&actor.hosts_path).await, None);
+        assert_eq!(running_orphan_pid(&actor.legacy.hosts_path).await, None);
         assert!(sync_dhcp_leases(&actor, 1, &[], &[]).await.is_ok());
         assert!(
             child.try_wait().unwrap().is_none(),
             "another instance must survive"
         );
-        assert_eq!(running_orphan_pid(&other.hosts_path).await, child.id());
+        assert_eq!(
+            running_orphan_pid(&other.legacy.hosts_path).await,
+            child.id()
+        );
 
-        stop_running_dnsmasq(&mut DhcpState::default(), &other.hosts_path).await;
+        stop_running_dnsmasq(&mut DhcpState::default(), &other.legacy.hosts_path).await;
         tokio::time::timeout(std::time::Duration::from_secs(3), child.wait())
             .await
             .expect("the matching instance must stop")
