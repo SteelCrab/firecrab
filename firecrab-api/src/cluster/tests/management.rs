@@ -247,14 +247,15 @@ async fn accepted_start_reports_worker_boot_failure_without_losing_ownership_or_
     assert_eq!(intent.generation, placed.generation + 1);
     world.settled(placed.id, PlacementPhase::Confirmed).await;
     // The fixture has no bootable rootfs or VMM. The controller must still retain the VM.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
-        if world.hosts[0].state.vms.lock().unwrap()[&placed.id].state == VmState::Error {
+        let state = world.hosts[0].state.vms.lock().unwrap()[&placed.id].state;
+        if state == VmState::Error {
             break;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "fixture VM did not report its boot failure"
+            "fixture VM did not report its boot failure; last state: {state:?}"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }

@@ -256,14 +256,7 @@ fn workspace(a: &App, p: &Value, out: &mut String) {
             "message"
         ),
         tab(
-            &format!(
-                "{} {}",
-                tr(a, "Tasks", "작업"),
-                s.tasks
-                    .iter()
-                    .filter(|t| t["request"]["kind"] == "code")
-                    .count()
-            ),
+            &format!("{} {}", tr(a, "Tasks", "작업"), s.tasks.len()),
             "sb-tasks-tab",
             "sb-tab-tasks",
             "sb-panel",
@@ -544,7 +537,7 @@ fn board(a: &App, out: &mut String) {
         let tasks = s
             .tasks
             .iter()
-            .filter(|t| t["request"]["kind"] == "code" && states.contains(&text(t, "state")))
+            .filter(|t| states.contains(&text(t, "state")))
             .collect::<Vec<_>>();
         let _ = write!(
             out,
@@ -560,6 +553,22 @@ fn board(a: &App, out: &mut String) {
             );
         }
         for t in tasks {
+            if t["request"]["kind"] == "chat" {
+                let _ = write!(
+                    out,
+                    "<button type=\"button\" id=\"sb-card-{}\" class=\"sb-task-card\" data-action=\"sb-review\" data-id=\"{}\"><span class=\"sb-task-state {}\">{}{}</span><strong>{}</strong><span class=\"sb-card-meta\">{}<span>{}</span></span><span class=\"sb-error-text\">{}</span></button>",
+                    escape(text(t, "id")),
+                    escape(text(t, "id")),
+                    escape(text(t, "state")),
+                    icon("message"),
+                    state_label(a, t),
+                    escape(text(&t["request"], "input")),
+                    escape(text(&t["selection"], "model")),
+                    tr(a, "Conversation", "대화"),
+                    escape(text(t, "error"))
+                );
+                continue;
+            }
             let tests = t["testCount"].as_u64().unwrap_or(0);
             let failed = t["failedTestCount"].as_u64();
             let agent = text(&t["request"]["coordination"], "assignedAgent");
@@ -914,6 +923,12 @@ fn review(a: &App, r: &Review, out: &mut String) {
         );
         return;
     };
+    let code = task["request"]["kind"] == "code";
+    let review_tab = if code && r.tab == "changes" {
+        "changes"
+    } else {
+        "activity"
+    };
     let changes = list(&task["changes"]);
     let events = list(&task["events"]);
     let _ = write!(
@@ -942,29 +957,33 @@ fn review(a: &App, r: &Review, out: &mut String) {
         escape(&text(task, "attemptId").chars().take(8).collect::<String>()),
         escape(text(task, "result")),
         tr(a, "Task details", "작업 상세"),
-        tab(
-            &format!("{} {}", tr(a, "Changes", "변경 내용"), changes.len()),
-            "sb-review-changes-tab",
-            "sb-review-changes",
-            "sb-review-panel",
-            r.tab == "changes",
-            "diff"
-        ),
+        if code {
+            tab(
+                &format!("{} {}", tr(a, "Changes", "변경 내용"), changes.len()),
+                "sb-review-changes-tab",
+                "sb-review-changes",
+                "sb-review-panel",
+                review_tab == "changes",
+                "diff",
+            )
+        } else {
+            String::new()
+        },
         tab(
             &format!("{} {}", tr(a, "Activity", "실행 기록"), events.len()),
             "sb-review-activity-tab",
             "sb-review-activity",
             "sb-review-panel",
-            r.tab == "activity",
+            review_tab == "activity",
             "terminal"
         ),
-        r.tab,
+        review_tab,
         banner(&r.error),
         banner(&r.load_error),
         banner(text(task, "error"))
     );
     resources::result(a, task, out);
-    if r.tab == "changes" {
+    if review_tab == "changes" {
         if changes.is_empty() {
             let _ = write!(
                 out,
@@ -1070,15 +1089,18 @@ fn review(a: &App, r: &Review, out: &mut String) {
             out.push_str("</details>");
         }
     }
-    let _ = write!(
-        out,
-        "</div><footer class=\"sb-dialog-footer\"><p class=\"sb-hint\">{}</p>",
-        tr(
-            a,
-            "Only selected files are applied. A changed source file is reported as a conflict.",
-            "선택한 파일만 원본에 반영한다. 원본이 바뀌었으면 충돌을 알린다."
-        )
-    );
+    out.push_str("</div><footer class=\"sb-dialog-footer\">");
+    if code {
+        let _ = write!(
+            out,
+            "<p class=\"sb-hint\">{}</p>",
+            tr(
+                a,
+                "Only selected files are applied. A changed source file is reported as a conflict.",
+                "선택한 파일만 원본에 반영한다. 원본이 바뀌었으면 충돌을 알린다."
+            )
+        );
+    }
     if active(task) {
         out.push_str(&btn(
             tr(a, "Stop task", "작업 중지"),
@@ -1109,19 +1131,21 @@ fn review(a: &App, r: &Review, out: &mut String) {
             r.busy || a.sandbox.busy,
         ));
     }
-    out.push_str(&btn(
-        tr(a, "Apply selected files", "선택한 파일 반영"),
-        "sb-apply",
-        "",
-        "check",
-        "btn primary",
-        r.busy
-            || !r.load_error.is_empty()
-            || active(task)
-            || task["state"] == "interrupted"
-            || !changes
-                .iter()
-                .any(|c| c["applied"] != true && r.paths.contains(text(c, "path"))),
-    ));
+    if code {
+        out.push_str(&btn(
+            tr(a, "Apply selected files", "선택한 파일 반영"),
+            "sb-apply",
+            "",
+            "check",
+            "btn primary",
+            r.busy
+                || !r.load_error.is_empty()
+                || active(task)
+                || task["state"] == "interrupted"
+                || !changes
+                    .iter()
+                    .any(|c| c["applied"] != true && r.paths.contains(text(c, "path"))),
+        ));
+    }
     out.push_str("</footer></dialog>");
 }

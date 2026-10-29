@@ -259,10 +259,12 @@ pub fn key(app: &Shared, event: &KeyboardEvent) -> bool {
     {
         let current = focused.unwrap().id();
         let review = current.starts_with("sb-review-");
-        let first = if review {
+        let first = if !review {
+            "sb-chat-tab"
+        } else if element("sb-review-changes-tab").is_some() {
             "sb-review-changes-tab"
         } else {
-            "sb-chat-tab"
+            "sb-review-activity-tab"
         };
         let last = if review {
             "sb-review-activity-tab"
