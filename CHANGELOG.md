@@ -24,7 +24,45 @@ Entries land here as work merges, and move under the next version heading when t
 
 ## [0.4.0] - 2026-10-30
 
+This release adds AI Sandbox, declarative stacks, MicroService deployment and
+recovery, database and queue integrations, security groups, and a refreshed dashboard.
+
 ### Added
+
+- Pipe Database connects to MySQL and PostgreSQL with verified TLS. The
+  dashboard can browse and edit rows, manage backups and restore, and apply
+  versioned schema changes. Services can use private database accounts and
+  managed RabbitMQ change delivery. Tracked in [#412](https://github.com/SteelCrab/firecrab/issues/412).
+
+- Queue resources use a persistent RabbitMQ MicroVM for durable messaging.
+  Dashboard, REST and CLI manage the engine, queues and connection credentials.
+  MicroServices can bind separate publisher and consumer credentials. Messages
+  survive receiver disconnects; the initial engine runs on one VM. Tracked in
+  [#479](https://github.com/SteelCrab/firecrab/issues/479).
+
+- PipeStorage connects AWS S3 buckets for object browsing, uploads and downloads.
+  MicroServices can use a saved connection, with credentials kept out of public
+  VM and deployment records. Tracked in [#439](https://github.com/SteelCrab/firecrab/issues/439).
+
+- Security groups apply IPv4 TCP and UDP ingress and egress rules to MicroVMs.
+  MicroService replicas inherit their configured group. Rules can be managed in
+  the dashboard and REST API. Upgrade the API and helper together for the new
+  helper protocol. Tracked in [#59](https://github.com/SteelCrab/firecrab/issues/59).
+
+- MicroVM schedules support one-time and recurring start and stop operations
+  through the dashboard, CLI and REST API. Recurring schedules use cron with
+  an explicit time zone. Run history and interrupted-operation recovery survive
+  API restarts. Tracked in [#436](https://github.com/SteelCrab/firecrab/issues/436).
+
+- Cloudflare Quick Tunnels provide temporary public URLs for VM apps or saved
+  Nginx routes. Firecrab Tunnel can connect fixed `firecrab.dev` addresses to
+  Quick Tunnels or Nginx routes. The fixed-address service requires its operator
+  deployment. See [Firecrab Tunnel](public-docs/guides/firecrab-tunnel.md).
+
+- MicroService observability exposes application logs, lifecycle events and
+  health alerts. Locally managed services can opt into OTLP export. App metrics
+  and traces require an existing OpenTelemetry SDK. Tracked in
+  [#527](https://github.com/SteelCrab/firecrab/issues/527).
 
 - AI Sandbox gains pinned, role-based environments, separate readiness checks,
   scoped service discovery, Docker/nspawn execution and retained Workspaces.
@@ -37,8 +75,7 @@ Entries land here as work merges, and move under the next version heading when t
 - Saved Sandbox preview bindings retain fixed addresses and immutable execution
   references. Explicit successor bindings retarget the same URL. Helper health,
   public HTTPS/WebSocket verification, local removal and remote retirement are
-  reported separately. Canvas work waits for completed Sandbox implementation
-  and direct QA acceptance. Bounded commands do not provide interactive PTY.
+  reported separately. Bounded commands do not provide interactive PTY.
   Explicit shutdown checks require a fresh inactive connector observation and
   verify the saved HTTPS address without following redirects. Dashboard, CLI
   and MCP retain the result separately from remote retirement.
@@ -140,9 +177,9 @@ Entries land here as work merges, and move under the next version heading when t
 - GitHub stack sources resolve exact commits and verified regular-file blobs, then
   detect configuration drift without changing resources. Periodic and manual
   checks share durable admission, generation guards, pause/resume, bounded
-  backoff and fifty redacted observations. `stack source` and REST expose the
-  configuration and history. Private sources use the existing GitHub Auth
-  connection. Opt-in automatic synchronization and `stack source sync` reuse
+  backoff and fifty redacted observations. `stack source`, REST and the dashboard
+  expose status and history; the dashboard also shows recovery guidance.
+  Private sources use the existing GitHub Auth connection. Opt-in automatic synchronization and `stack source sync` reuse
   native apply, retain desired/attempted/successful revisions, and stop after
   failed or interrupted applies until explicit operation-ID recovery (#437).
 
@@ -155,9 +192,8 @@ Entries land here as work merges, and move under the next version heading when t
 - Browser console dimensions reach the guest serial terminal through a private
   vsock resize helper. Connected viewers share the smallest available grid.
   The console reports whether the guest applied the size and keeps working
-  when guest resize support is unavailable. The default OCI kernel is
-  `7.2.2-vsock1`, with built-in vsock on x86_64 and ARM64, versioned packages,
-  and matching source archives. Tracked in [#471](https://github.com/SteelCrab/firecrab/issues/471).
+  when guest resize support is unavailable. Host-built stable guest kernels
+  include vsock support on x86_64 and ARM64. Tracked in [#471](https://github.com/SteelCrab/firecrab/issues/471).
 
 - The browser console uses Ghostty WebAssembly for VT parsing, Unicode cells,
   terminal modes and history. It supports mobile editing, composition,
@@ -199,7 +235,7 @@ Entries land here as work merges, and move under the next version heading when t
   records redacted progress by retry UUID. Plan fingerprints reject stale input;
   running VM changes and service replica replacement require explicit stop
   permission. Interrupted work keeps its exact ownership for explicit recovery.
-  Automatic replacement and pruning remain follow-up work for #437.
+  Opt-in replacement and pruning use the lifecycle policies described above (#437).
 
 - Host-local stack registration and UUID ownership bindings survive API restarts.
   `firecrab stack register/list/status/bind/unbind` manages metadata without
@@ -296,12 +332,10 @@ Entries land here as work merges, and move under the next version heading when t
   remain explicit. `FIRECRAB_KERNEL_RELEASES_URL` and `FIRECRAB_KERNEL_BUILD_JOBS`
   control source discovery and compiler parallelism.
 
-- The dashboard's Pipe page lists its services as five cards: Route, Pipe
-  Registry, Firecrab Tunnel, Cloudflare Quick Tunnel, and Cloudflare Named
-  Tunnel. Each card shows the service state and opens that service's page
-  (`#/pipe/<card>`); **← Pipe** returns to the cards. Route combines the Nginx
-  service row and the route table, and the Cloudflare Tunnel service menu moves
-  to the Named Tunnel card.
+- The dashboard has refreshed navigation, tables, status indicators and detail
+  panels. Pipe uses sub-navigation and overview rows for its services. MicroVM
+  creation has a dedicated form, and MicroService management groups overview,
+  instances, releases and settings into tabs.
 - The dashboard's VM list shows only a VM's own state: the API label next to it
   is gone, and the API's reconciliation result for a VM stays in its detail view.
 
@@ -403,8 +437,8 @@ Entries land here as work merges, and move under the next version heading when t
   status, and stderr. Warnings also identify failed nftables and firewall-state
   queries that keep their existing empty or disabled fallback ([#305]).
 
-- MicroService setup guides users through app, connection, resources, and review
-  steps, with field explanations and a configuration summary. App selection
+- MicroService setup guides users through a five-step wizard with field
+  explanations and a configuration summary. App selection
   uses only Pipe Auth-connected GitHub or AWS accounts and their repository/tag
   lists, rechecks the connection before saving, and directs unconnected users
   to Auth. The API also checks image ownership when saving, updating, and
