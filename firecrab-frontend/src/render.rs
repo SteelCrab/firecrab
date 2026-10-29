@@ -4184,16 +4184,37 @@ mod uptime_tests {
 
 fn service_security(app: &App) -> String {
     let title = tr(app, "Serverless security", "서버리스 보안");
-    let explanation = tr(app, "CVE scanning, threat detection, and AI analysis are not available yet. These services have not been scanned.", "CVE 검사, 위협 탐지와 AI 분석을 아직 사용할 수 없다. 아래 서비스는 검사되지 않았다.");
-    let mut out = format!("<section class=\"security-page\"><h2>{}</h2><p role=\"status\">{}</p>", escape(title), escape(explanation));
+    let explanation = tr(
+        app,
+        "CVE scanning, threat detection, and AI analysis are not available yet. These services have not been scanned.",
+        "CVE 검사, 위협 탐지와 AI 분석을 아직 사용할 수 없다. 아래 서비스는 검사되지 않았다.",
+    );
+    let mut out = format!(
+        "<section class=\"security-page\"><h2>{}</h2><p role=\"status\">{}</p>",
+        escape(title),
+        escape(explanation)
+    );
     let services = list(&app.resource["services"]);
     if services.is_empty() {
-        out.push_str(&format!("<p>{}</p>", tr(app, "No service deployment records.", "서비스 배포 기록이 없다.")));
+        out.push_str(&format!(
+            "<p>{}</p>",
+            tr(
+                app,
+                "No service deployment records.",
+                "서비스 배포 기록이 없다."
+            )
+        ));
     } else {
         out.push_str(&format!("<div class=\"table-scroll\"><table class=\"wasm-table\"><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>", tr(app, "Service", "서비스"), tr(app, "Deployment", "배포"), tr(app, "Image digest", "이미지 식별값"), tr(app, "Coverage", "검사 상태")));
         for service in services {
             let digest = text(service, "digest");
-            out.push_str(&format!("<tr><td>{}</td><td>{}</td><td class=\"mono\">{}</td><td>{}</td></tr>", escape(text(service, "name")), escape(text(service, "deploymentId")), escape(if digest.is_empty() { "—" } else { digest }), tr(app, "Not scanned", "검사되지 않음")));
+            out.push_str(&format!(
+                "<tr><td>{}</td><td>{}</td><td class=\"mono\">{}</td><td>{}</td></tr>",
+                escape(text(service, "name")),
+                escape(text(service, "deploymentId")),
+                escape(if digest.is_empty() { "—" } else { digest }),
+                tr(app, "Not scanned", "검사되지 않음")
+            ));
         }
         out.push_str("</tbody></table></div>");
     }
