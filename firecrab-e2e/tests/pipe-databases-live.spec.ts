@@ -41,8 +41,8 @@ test("connects, reads and removes a real database through the dashboard", async 
     await panel.getByRole("button", { name: `${name} actions`, exact: true }).click();
     page.once("dialog", dialog => dialog.accept());
     await page.getByRole("menuitem", { name: `Remove connection ${name}`, exact: true }).click();
-    await expect(panel.getByRole("cell", { name, exact: true })).toHaveCount(0);
-    await expect(panel.getByRole("status")).toHaveText("Connection removed. The source database is unchanged.");
+    await expect(panel.getByRole("cell", { name: new RegExp(`^${name}(\\s|$)`) })).toHaveCount(0);
+    await expect(panel.locator("#db-notice")).toHaveText("Connection removed. The source database is unchanged.");
     const removed = await page.request.get(`/api/pipe/databases/${summary.id}/tables`);
     expect(removed.status()).toBe(404);
   } finally {
