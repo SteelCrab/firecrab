@@ -8,6 +8,8 @@ use uuid::Uuid;
 
 use super::{PersistenceError, Store};
 
+mod lifecycle;
+
 pub(super) const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS stack_applies (
     operation_id TEXT PRIMARY KEY,
@@ -18,7 +20,13 @@ CREATE TABLE IF NOT EXISTS stack_applies (
     status TEXT NOT NULL
 ) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_stack_apply
-ON stack_applies ((1)) WHERE state IN ('queued','running');";
+ON stack_applies ((1)) WHERE state IN ('queued','running');
+CREATE TABLE IF NOT EXISTS stack_apply_reservations (
+    kind TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL REFERENCES stack_applies(operation_id) ON DELETE CASCADE,
+    PRIMARY KEY (kind, resource_id)
+) STRICT;";
 
 /// Private retry identity, separate from the public status response.
 pub(crate) struct StoredApply {
@@ -83,16 +91,30 @@ impl Store {
         if active {
             return Err(PersistenceError::StackApplyBusy);
         }
+        lifecycle::validate(&tx, &current, status)?;
         let creates = status
             .changes
             .iter()
-            .filter(|s| s.change.action == Action::Create)
+            .filter(|s| s.change.action == Action::Create && s.replacement_for.is_none())
             .collect::<Vec<_>>();
-        if current.bindings.len() + creates.len() > firecrab_stack::MAX_RESOURCES {
+        let pruned = status
+            .changes
+            .iter()
+            .filter(|s| {
+                s.change.action == Action::Delete
+                    && !status.changes.iter().any(|new| {
+                        new.replacement_for == s.change.resource_id
+                            && new.change.kind == s.change.kind
+                            && new.change.key == s.change.key
+                    })
+            })
+            .count();
+        if current.bindings.len() + creates.len() - pruned > firecrab_stack::MAX_RESOURCES {
             return Err(PersistenceError::StackBindingLimit);
         }
         tx.execute("INSERT INTO stack_applies (operation_id,stack_id,desired_hash,allow_stop,state,status) VALUES (?1,?2,?3,?4,'queued',?5)",
             params![status.operation_id.to_string(), current.id.to_string(), hash, allow_stop, encode(status)?])?;
+        lifecycle::reserve(&tx, status)?;
         for step in &creates {
             let change = &step.change;
             let id = change
@@ -117,6 +139,10 @@ impl Store {
                 || check
                     .plan
                     .as_ref()
+                    .is_none_or(|plan| plan.lifecycle != status.lifecycle)
+                || check
+                    .plan
+                    .as_ref()
                     .is_none_or(|plan| plan.inputs != status.inputs)
             {
                 return Err(PersistenceError::StackApplyIdentity);
@@ -129,7 +155,29 @@ impl Store {
 
     /// Update only a still-active operation; an interrupted worker cannot revive its journal.
     pub(crate) fn save_stack_apply(&self, status: &ApplyStatus) -> Result<bool, PersistenceError> {
-        Ok(self.lock().execute("UPDATE stack_applies SET state=?1,status=?2 WHERE operation_id=?3 AND stack_id=?4 AND state IN ('queued','running')",
+        let conn = self.lock();
+        let Some(previous) = read(&conn, status.operation_id)? else {
+            return Ok(false);
+        };
+        let before = previous.status;
+        if before.state.is_terminal() {
+            return Ok(false);
+        }
+        if before.stack_id != status.stack_id
+            || before.name != status.name
+            || before.lifecycle != status.lifecycle
+            || before.inputs != status.inputs
+            || before.git_revision != status.git_revision
+            || before.changes.len() != status.changes.len()
+            || before.changes.iter().zip(&status.changes).any(|(a, b)| {
+                a.change != b.change
+                    || a.replacement_for != b.replacement_for
+                    || a.vm_disk != b.vm_disk
+            })
+        {
+            return Err(PersistenceError::StackApplyIdentity);
+        }
+        Ok(conn.execute("UPDATE stack_applies SET state=?1,status=?2 WHERE operation_id=?3 AND stack_id=?4 AND state IN ('queued','running')",
             params![status.state.as_str(), encode(status)?, status.operation_id.to_string(), status.stack_id.to_string()])? == 1)
     }
 

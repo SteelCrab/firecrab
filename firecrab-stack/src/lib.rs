@@ -11,12 +11,14 @@ use serde::{Deserialize, Serialize};
 
 mod apply;
 mod inputs;
+mod lifecycle;
 mod planning;
 mod source;
 pub use apply::{
     ApplyFailure, ApplyRequest, ApplyState, ApplyStatus, ApplyStep, StepState, desired_hash,
 };
 pub use inputs::{PlanInputs, TemplatePin, TemplateSnapshot};
+pub use lifecycle::{LifecyclePolicy, VmDiskIdentity};
 pub use planning::{
     Action, Binding, Change, DeleteStackRequest, Inventory, Plan, RegisterStackRequest,
     ResourceKind, ServiceSnapshot, StackRecord, VmSnapshot, fingerprint, plan,
@@ -41,6 +43,9 @@ pub struct Stack {
     pub kind: StackKind,
     /// Stable logical stack name, independent of the file path.
     pub name: String,
+    /// Explicit replacement/pruning policy. Omission preserves all resources and disks.
+    #[serde(default, skip_serializing_if = "LifecyclePolicy::is_default")]
+    pub lifecycle: LifecyclePolicy,
     /// Logical network names and their IPv4 configuration.
     #[serde(default)]
     pub micro_networks: BTreeMap<String, Network>,
@@ -217,9 +222,15 @@ pub fn validate(stack: &Stack) -> Result<(), Vec<Diagnostic>> {
     }
     let counts = stack.counts();
     let total = counts.micro_networks + counts.micro_vms + counts.micro_services;
-    if total == 0 || total > MAX_RESOURCES {
+    if (total == 0 && !stack.lifecycle.prune) || total > MAX_RESOURCES {
         errors.push(diagnostic("$", "must declare between 1 and 256 resources"));
         return Err(errors);
+    }
+    if stack.lifecycle.delete_vm_disks && !stack.lifecycle.replace && !stack.lifecycle.prune {
+        errors.push(diagnostic(
+            "lifecycle.deleteVmDisks",
+            "requires an explicit replace or prune policy",
+        ));
     }
     let mut subnets: Vec<(u32, u32)> = Vec::new();
     let mut names = BTreeSet::new();

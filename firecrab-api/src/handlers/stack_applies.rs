@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
 use firecrab_stack::{
-    Action, ApplyFailure, ApplyRequest, ApplyState, ApplyStatus, ApplyStep, GitCheck, StepState,
+    Action, ApplyFailure, ApplyRequest, ApplyState, ApplyStatus, GitCheck, StepState,
 };
 use uuid::Uuid;
 
@@ -16,6 +16,7 @@ use crate::server::RequestId;
 use crate::state::AppState;
 
 mod execute;
+mod lifecycle;
 
 /// Accept a fresh plan or return an identical operation without repeating its effects.
 pub async fn apply(
@@ -109,40 +110,33 @@ pub(crate) async fn admit(
             id,
         ));
     }
-    if plan
-        .changes
-        .iter()
-        .any(|c| matches!(c.action, Action::Blocked | Action::Replace))
-    {
+    if plan.changes.iter().any(|c| {
+        c.action == Action::Blocked
+            || (c.action == Action::Replace && !request.stack.lifecycle.replace)
+    }) {
         return Err(AppError::conflict(
             "unsupported_stack_plan",
-            "resolve blocked entries; automatic replacement and pruning are not supported",
+            "resolve blocked entries and explicitly enable replacement in the manifest before reviewing a fresh plan",
             id,
         ));
     }
-    for change in &mut plan.changes {
-        if change.action == Action::Create {
-            change.resource_id = Some(Uuid::new_v4());
-        }
-    }
+    let steps = lifecycle::steps(&plan, &observed);
+    plan.changes = steps.iter().map(|step| step.change.clone()).collect();
+    lifecycle::preflight(&state, &request.stack, &steps, request.allow_stop, id)
+        .await
+        .map_err(AppError::redacted)?;
     execute::preflight(&state, &request.stack, &plan, request.allow_stop, id)
         .await
         .map_err(AppError::redacted)?;
     let status = ApplyStatus {
+        lifecycle: request.stack.lifecycle,
         inputs: plan.inputs,
         git_revision: source.as_ref().and_then(GitCheck::revision),
         operation_id: id,
         stack_id: record.id,
         name: record.name.clone(),
         state: ApplyState::Queued,
-        changes: plan
-            .changes
-            .into_iter()
-            .map(|change| ApplyStep {
-                change,
-                state: StepState::Pending,
-            })
-            .collect(),
+        changes: steps,
         error: None,
     };
     let store = state.store.clone();

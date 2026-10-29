@@ -27,6 +27,7 @@ Changed artifact bytes reject apply before resource mutation with `stack_templat
 The executor creates VMs from the approved version and retains these inputs in the apply journal.
 Later starts of an owned VM reject changed approved content, including changes after API restart.
 The plan fingerprint excludes live VM metrics, lifecycle state, service health samples and logs.
+Destructive plans also include standalone VM disk generation identities.
 Apply checks stop permissions again when executing each affected resource.
 
 The first version supports these operations:
@@ -42,7 +43,9 @@ The first version supports these operations:
 | `deploy` service | Deploy the declared placement; stop existing owned replicas if needed |
 | `noop` | Keep matching configuration; also verify a declared service is healthy |
 | `retain` | Keep the removed declaration's binding, resource and disks |
-| `replace`, `blocked` | Reject the whole operation before reserving UUIDs or changing resources |
+| `replace` | Require `lifecycle.replace`; delete old dependencies in reverse order, then create replacements with fresh UUIDs |
+| `delete` | Require `lifecycle.prune`; remove only the exact owned resource and release its binding |
+| `blocked` | Reject the whole operation before reserving UUIDs or changing resources |
 
 Standalone VM lifecycle is outside this schema. A newly created VM remains stopped until explicitly started.
 Service replicas use the existing deployment controller and its image, capacity, port and policy checks.
@@ -66,7 +69,9 @@ firecrab stack apply --file stack.yaml --expected-plan plan.json --allow-stop --
 
 If any planned change needs stop permission and it was not supplied, preflight rejects the entire operation.
 Other planned creates do not start first.
-Standalone VM/network replacement, disk shrinking, implicit adoption and pruning are unsupported.
+Replacement and pruning require [explicit lifecycle policies](stack-lifecycle.md).
+Disk shrinking uses VM replacement. Standalone VM disk artifacts are retained unless `deleteVmDisks` is also enabled.
+Implicit adoption remains unsupported.
 
 ## Durable status and retries
 
@@ -82,7 +87,7 @@ Use a real non-nil UUID in place of the uppercase placeholder.
 An accepted request returns `202` with `operationId`, `stackId`, `name`, `state`, `changes` and optional `error`.
 Each step includes its exact resource UUID and `pending`, `running`, `succeeded`, `failed` or `skipped` state.
 Overall states are `queued`, `running`, `succeeded`, `failed` and `interrupted`.
-Status records contain input identities, field names and static error categories, never environment values or backend error details.
+Status records contain input identities, lifecycle permissions, retained disk identities, field names and static error categories, never environment values or backend error details.
 
 The journal stores a hash of the declaration, stop permission and redacted status.
 It does not store the manifest. The normal resource store still contains its usual configuration.
@@ -100,7 +105,8 @@ Service wait timeouts can also leave the underlying service controller finishing
 
 ## Failure and explicit recovery
 
-All create UUIDs are reserved in the stack's ownership set before resource creation begins.
+All create UUIDs are reserved before resource creation begins.
+Initial creates also reserve their bindings. Replacements keep the old binding until deletion succeeds, then transfer it atomically to the new UUID.
 A failure leaves completed work and all reserved identities available for inspection.
 Apply does not roll back by deleting resources or silently release missing reservations.
 After API restart, unfinished operations become `interrupted`; they are never replayed automatically.
@@ -110,6 +116,7 @@ Check service deployment status for its owned replica IDs and any cleanup still 
 Keep completed resources by leaving their bindings in place.
 If a reserved resource never appeared, release only that exact missing binding after inspection.
 Then review a fresh plan and use a new operation ID.
+For replacement and pruning failures, also inspect [both UUIDs and retained disks](stack-lifecycle.md#failures-and-recovery).
 
 For complete test cleanup, stop a service and wait for replica cleanup, delete its saved configuration, stop/delete standalone VMs, and delete their network last.
 Release each exact binding and delete the empty registration with its exact stack UUID.
@@ -131,4 +138,4 @@ Partial success is recorded rather than hidden.
 Git sources use [source synchronization](stack-git-source.md) as their sole apply writer.
 Their services reject independent edit, deploy, rollback, retry, stop and delete requests, including while polling is paused.
 Explicitly release the source or exact service binding before direct recovery operations.
-Automatic replacement/pruning and a stack dashboard remain follow-up work for [#437](https://github.com/SteelCrab/firecrab/issues/437).
+A stack dashboard and full Git-to-runtime verification remain follow-up work for [#437](https://github.com/SteelCrab/firecrab/issues/437).

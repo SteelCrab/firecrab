@@ -351,6 +351,22 @@ fn print_apply_status(status: &ApplyStatus, json: bool) {
                 .unwrap_or_default(),
             step.state.as_str()
         );
+        if step.state == firecrab_stack::StepState::Succeeded
+            && !status.lifecycle.delete_vm_disks
+            && let Some(disk) = &step.vm_disk
+        {
+            println!(
+                "Retained VM disk artifacts: storage={}, vm={}, generation={}",
+                disk.storage_root,
+                step.change
+                    .resource_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_default(),
+                disk.generation
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "unprepared".into())
+            );
+        }
     }
     if let Some(error) = &status.error {
         eprintln!(

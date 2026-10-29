@@ -80,6 +80,11 @@ Entries land here as work merges, and move under the next version heading when t
   shares queue/capacity limits, and retains bounded retries across API restarts.
   Tracked in [#503](https://github.com/SteelCrab/firecrab/issues/503).
 
+- Stack manifests can opt into dependency-ordered replacement and pruning with
+  exact UUID ownership checks and durable replacement reservations. Standalone
+  VM disk artifacts remain retained by default; `deleteVmDisks` requires an
+  additional explicit manifest flag. External dependencies block destruction (#437).
+
 - One controller registers authenticated workload hosts and places VMs using
   deterministic image/resource filtering and durable capacity reservations.
   Idempotent operations reconcile with the recorded owner after timeouts and

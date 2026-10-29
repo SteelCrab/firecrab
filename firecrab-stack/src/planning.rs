@@ -116,6 +116,9 @@ pub struct VmSnapshot {
     pub template_boot_args_sha256: String,
     /// Full boot approval from a created or successfully reconciled owned VM.
     pub template_pin: Option<crate::TemplatePin>,
+    /// Disk identity for destructive-plan approval and retention; not ordinary drift.
+    #[serde(skip)]
+    pub disk_generation: Option<Uuid>,
     /// Current virtual CPU count.
     pub cpu: u8,
     /// Current RAM in MiB.
@@ -170,6 +173,8 @@ pub enum Action {
     Noop,
     /// Ownership remains after its declaration is removed; pruning is disabled.
     Retain,
+    /// Explicit pruning policy requests deletion of this exact owned UUID.
+    Delete,
     /// Missing ownership target or an existing name prevents safe planning.
     Blocked,
 }
@@ -184,6 +189,7 @@ impl Action {
             Self::Deploy => "deploy",
             Self::Noop => "noop",
             Self::Retain => "retain",
+            Self::Delete => "delete",
             Self::Blocked => "blocked",
         }
     }
@@ -217,6 +223,9 @@ pub struct Change {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
+    /// Explicit destructive permissions included in plan approval.
+    #[serde(default, skip_serializing_if = "crate::LifecyclePolicy::is_default")]
+    pub lifecycle: crate::LifecyclePolicy,
     /// Immutable inputs included in the fingerprint. Legacy responses default to empty.
     #[serde(default)]
     pub inputs: PlanInputs,
@@ -455,7 +464,9 @@ pub fn plan(
                 "hostPort",
                 deployed.is_none_or(|d| d.request.host_port != desired.host_port),
             );
-            change.action = if change.fields.iter().any(|f| f.starts_with("config.")) {
+            change.action = if network_action == Action::Replace {
+                Action::Replace
+            } else if change.fields.iter().any(|f| f.starts_with("config.")) {
                 Action::Update
             } else if !change.fields.is_empty() {
                 Action::Deploy
@@ -488,17 +499,44 @@ pub fn plan(
             ResourceKind::Service => stack.micro_services.contains_key(*key),
         };
         if !declared {
-            changes.push(Change {
+            let mut change = Change {
                 kind: *kind,
                 key: (*key).to_owned(),
                 resource_id: Some(*resource_id),
-                action: Action::Retain,
+                action: if stack.lifecycle.prune {
+                    Action::Delete
+                } else {
+                    Action::Retain
+                },
                 fields: Vec::new(),
-                reason: Some("declaration removed; pruning is disabled".to_owned()),
-            });
+                reason: Some(
+                    if stack.lifecycle.prune {
+                        "declaration removed; explicit pruning is enabled"
+                    } else {
+                        "declaration removed; pruning is disabled"
+                    }
+                    .to_owned(),
+                ),
+            };
+            if stack.lifecycle.prune
+                && *kind == ResourceKind::Service
+                && inventory
+                    .services
+                    .iter()
+                    .find(|s| s.service.id == *resource_id)
+                    .is_some_and(|s| s.deployment.as_ref().is_some_and(deployment_busy))
+            {
+                change.action = Action::Blocked;
+                change.reason = Some(
+                    "service deployment or recovery is in progress; inspect it before pruning"
+                        .into(),
+                );
+            }
+            changes.push(change);
         }
     }
     Ok(Plan {
+        lifecycle: stack.lifecycle,
         inputs,
         fingerprint: fingerprint(stack, record, inventory),
         stack_id: record.id,
@@ -530,6 +568,7 @@ pub fn fingerprint(stack: &Stack, record: &StackRecord, inventory: &Inventory) -
                     &d.digest,
                     deployment_busy(d),
                     d.domain_route_owned,
+                    d.internal_route_owned,
                     instances,
                 )
             });
@@ -545,6 +584,15 @@ pub fn fingerprint(stack: &Stack, record: &StackRecord, inventory: &Inventory) -
         record.revision,
         bindings,
         resolved_inputs(stack, record, inventory),
+        (stack.lifecycle.replace || stack.lifecycle.prune).then(|| {
+            let mut disks = inventory
+                .vms
+                .iter()
+                .map(|vm| (vm.id, vm.disk_generation))
+                .collect::<Vec<_>>();
+            disks.sort();
+            disks
+        }),
         networks,
         vms,
         services,
@@ -598,6 +646,10 @@ fn resolved_inputs(stack: &Stack, record: &StackRecord, inventory: &Inventory) -
 
 fn deployment_busy(deployment: &MicroServiceDeployment) -> bool {
     deployment.phase.is_busy()
+        || deployment
+            .recovery
+            .as_ref()
+            .is_some_and(|health| health.repair.is_some())
         || deployment
             .update
             .as_ref()

@@ -204,6 +204,24 @@ pub struct MicroServiceDeployment {
     pub error: Option<String>,
 }
 
+impl MicroServiceDeployment {
+    /// Exact replica identities, including previous releases and pending cleanup.
+    /// These VMs must never be managed independently as standalone stack targets.
+    pub fn owned_vm_ids(&self) -> impl Iterator<Item = Uuid> + '_ {
+        self.instances
+            .iter()
+            .map(|instance| instance.vm_id)
+            .chain(self.update.iter().flat_map(|update| {
+                update
+                    .previous
+                    .instances
+                    .iter()
+                    .map(|instance| instance.vm_id)
+                    .chain(update.retiring.iter().copied())
+            }))
+    }
+}
+
 /// How Deploy replaces the current healthy instances.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

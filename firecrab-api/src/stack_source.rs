@@ -274,11 +274,9 @@ async fn inspect(
         }
     }
     check.state = if plan.blocked
-        || plan
-            .changes
-            .iter()
-            .any(|c| matches!(c.action, Action::Blocked | Action::Replace))
-    {
+        || plan.changes.iter().any(|c| {
+            c.action == Action::Blocked || (c.action == Action::Replace && !stack.lifecycle.replace)
+        }) {
         GitCheckState::Blocked
     } else if plan
         .changes

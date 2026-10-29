@@ -53,6 +53,7 @@ impl Store {
                 step.change.kind == ResourceKind::Vm
                     && step.change.key == key
                     && step.change.resource_id == Some(vm)
+                    && step.change.action != firecrab_stack::Action::Delete
                     && (accepted_updates
                         || step.change.action == firecrab_stack::Action::Create
                         || step.state == firecrab_stack::StepState::Succeeded)
@@ -330,7 +331,10 @@ fn corrupt(id: &str) -> PersistenceError {
     }
 }
 
-fn validate_resource(conn: &Connection, binding: &Binding) -> Result<(), PersistenceError> {
+pub(super) fn validate_resource(
+    conn: &Connection,
+    binding: &Binding,
+) -> Result<(), PersistenceError> {
     let id = binding.resource_id.to_string();
     let query = match binding.kind {
         ResourceKind::Network => "SELECT EXISTS(SELECT 1 FROM micro_networks WHERE id = ?1)",
@@ -354,9 +358,8 @@ fn validate_resource(conn: &Connection, binding: &Binding) -> Result<(), Persist
             serde_json::from_str(&row?).map_err(|_| corrupt(&id))?;
         if deployment.phase.is_busy()
             || deployment
-                .instances
-                .iter()
-                .any(|instance| instance.vm_id == binding.resource_id)
+                .owned_vm_ids()
+                .any(|id| id == binding.resource_id)
         {
             return Err(PersistenceError::InvalidStackResource);
         }

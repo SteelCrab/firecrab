@@ -85,7 +85,7 @@ See [Stack validation](../guides/stacks.md) for the experimental schema and its 
 `stack source status NAME`, `history NAME`, and `check NAME --generation N` expose read-only exact-commit comparisons.
 `stack source sync NAME --generation N [--recover-operation-id UUID]` resolves Git and applies supported changes. A failed/interrupted apply requires its operation ID before fresh recovery.
 `stack source pause|resume NAME --generation N` controls periodic checks and opt-in automatic synchronization. See [Git source synchronization](../guides/stack-git-source.md).
-See [Native YAML stack apply](../guides/stack-apply.md) for stop permissions, retry identity and explicit failure recovery.
+See [Native YAML stack apply](../guides/stack-apply.md) for recovery and [lifecycle permissions](../guides/stack-lifecycle.md) for replacement, pruning and disk retention.
 These commands use normal host selection; see [Stack ownership and planning](../guides/stack-planning.md) for the full workflow.
 
 | Resource | Commands |

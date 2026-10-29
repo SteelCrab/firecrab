@@ -212,6 +212,10 @@ async fn run_steps(
                 id,
             )?;
         }
+        if change.action == Action::Delete {
+            *status = super::lifecycle::delete(state, status, index, allow_stop).await?;
+            continue;
+        }
         execute(
             state,
             stack,
@@ -629,7 +633,7 @@ fn deploy_operation_id(apply: Uuid, service: Uuid) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
-async fn wait_service(
+pub(super) async fn wait_service(
     state: &AppState,
     service: Uuid,
     deployment_id: Uuid,
@@ -712,7 +716,9 @@ async fn wait_service(
 fn network_ids(changes: &[Change]) -> BTreeMap<&str, Uuid> {
     changes
         .iter()
-        .filter(|c| c.kind == ResourceKind::Network && c.action != Action::Retain)
+        .filter(|c| {
+            c.kind == ResourceKind::Network && !matches!(c.action, Action::Retain | Action::Delete)
+        })
         .filter_map(|c| c.resource_id.map(|id| (c.key.as_str(), id)))
         .collect()
 }

@@ -470,7 +470,40 @@ pub async fn delete_micro_network(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    delete_from_stack(state, request_id.0, id, None).await
+}
+
+pub(crate) async fn delete_from_stack(
+    state: AppState,
+    request_id: Uuid,
+    id: Uuid,
+    operation: Option<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let request_id = RequestId(request_id);
     let group_guard = state.network_mutations.lock().await;
+    if let Some(operation) = operation {
+        state
+            .store
+            .guard_stack_delete_resource(operation, firecrab_stack::ResourceKind::Network, id)
+            .map_err(|_| {
+                AppError::conflict(
+                    "stale_stack_plan",
+                    "stack ownership changed before network deletion",
+                    request_id.0,
+                )
+            })?;
+        if state
+            .store
+            .stack_network_has_dependents(id)
+            .map_err(|_| AppError::internal(request_id.0))?
+        {
+            return Err(AppError::conflict(
+                "stack_external_dependency",
+                "network acquired an external dependency after planning",
+                request_id.0,
+            ));
+        }
+    }
     if state
         .store
         .network_has_security_groups(id)

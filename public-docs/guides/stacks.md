@@ -120,6 +120,9 @@ The shared `firecrab-stack` crate provides the parser and local validation for l
 ## Limits and next steps
 
 Passing offline validation does not establish deployment readiness.
+Optional `lifecycle` flags `replace`, `prune`, and `deleteVmDisks` default to false.
+Only explicit pruning permits a manifest with no resource declarations.
+See [replacement, pruning and disk retention](stack-lifecycle.md) before enabling destructive changes.
 Offline validation does not check host image availability, image-specific disk minimums, registered storage, capacity, or existing resource conflicts.
 `templatePin` declares `version`, `kernelSha256`, `rootfsSha256`, `initrdSha256` (nullable), and `bootArgsSha256`.
 Hashes must contain 64 lowercase hexadecimal characters. The host plan resolves and checks installed template identities.
