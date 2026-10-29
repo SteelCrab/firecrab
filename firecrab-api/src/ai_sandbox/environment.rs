@@ -153,9 +153,9 @@ pub fn validate_mode(mode: &SandboxExecutionMode) -> Result<(), String> {
         return Ok(());
     };
     let digest = match runtime {
-        SandboxContainerRuntime::Docker => {
+        SandboxContainerRuntime::Docker | SandboxContainerRuntime::Crun => {
             let Some((repository, digest)) = image.rsplit_once("@sha256:") else {
-                return Err("Docker images require repository@sha256:digest".into());
+                return Err("OCI images require repository@sha256:digest".into());
             };
             if repository.is_empty()
                 || repository.len() > 200
@@ -164,7 +164,7 @@ pub fn validate_mode(mode: &SandboxExecutionMode) -> Result<(), String> {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"./:_-".contains(&b))
             {
-                return Err("Invalid digest-pinned Docker image".into());
+                return Err("Invalid digest-pinned OCI image".into());
             }
             digest
         }
@@ -686,6 +686,10 @@ async fn observe(
                         runtime: SandboxContainerRuntime::Docker,
                         ..
                     } => capabilities.docker,
+                    SandboxExecutionMode::AgentSandbox {
+                        runtime: SandboxContainerRuntime::Crun,
+                        ..
+                    } => capabilities.crun,
                     SandboxExecutionMode::AgentSandbox {
                         runtime: SandboxContainerRuntime::Nspawn,
                         ..

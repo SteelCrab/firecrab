@@ -113,7 +113,16 @@ pub fn capabilities(bytes: &[u8]) -> io::Result<SandboxGuestCapabilities> {
             return Err(invalid("Duplicate guest capability field"));
         }
     }
-    if values.len() != 6 || values.get("version") != Some(&"1") {
+    if !(6..=7).contains(&values.len())
+        || values.get("version") != Some(&"1")
+        || !values.contains_key("unsupported")
+        || values.keys().any(|key| {
+            !matches!(
+                *key,
+                "version" | "init" | "execution" | "docker" | "crun" | "nspawn" | "unsupported"
+            )
+        })
+    {
         return Err(invalid("Unsupported guest protocol response"));
     }
     let init = *values
@@ -140,6 +149,11 @@ pub fn capabilities(bytes: &[u8]) -> io::Result<SandboxGuestCapabilities> {
         init: init.into(),
         execution,
         docker: flag("docker")?,
+        crun: if values.contains_key("crun") {
+            flag("crun")?
+        } else {
+            false
+        },
         nspawn: flag("nspawn")?,
         unsupported: reason,
     })
@@ -236,7 +250,14 @@ mod tests {
         let supported =
             b"version=1\ninit=openrc\nexecution=true\ndocker=false\nnspawn=false\nunsupported=\n";
         assert!(capabilities(supported).unwrap().execution);
+        assert!(!capabilities(supported).unwrap().crun);
         assert!(capabilities(&supported[..supported.len() - 1]).is_ok());
+        let crun = b"version=1\ninit=openrc\nexecution=true\ndocker=false\ncrun=true\nnspawn=false\nunsupported=\n";
+        assert!(capabilities(crun).unwrap().crun);
+        let invalid_crun = b"version=1\ninit=openrc\nexecution=true\ndocker=false\ncrun=unknown\nnspawn=false\nunsupported=\n";
+        assert!(capabilities(invalid_crun).is_err());
+        let unknown = b"version=1\ninit=openrc\nexecution=true\ndocker=false\nother=true\nnspawn=false\nunsupported=\n";
+        assert!(capabilities(unknown).is_err());
         let unsupported=b"version=1\ninit=distroless\nexecution=false\ndocker=false\nnspawn=false\nunsupported=missing_setpriv\n";
         assert_eq!(
             capabilities(unsupported).unwrap().unsupported.as_deref(),

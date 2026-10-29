@@ -81,13 +81,48 @@ separate live packet and IPv6 acceptance checks.
 
 ## Execution and retention
 
-`agent_sandbox` runs Docker or systemd-nspawn inside the managed MicroVM.
+`agent_sandbox` uses containerd + crun as the recommended OCI execution mode
+inside the managed MicroVM. Docker and systemd-nspawn remain available for
+existing configurations. Workspace defaults and saved execution modes do not change.
 The controller host never starts these task containers. Docker requires a
 pre-installed `repository@sha256:digest` image. It receives an attempt-specific
 name and ownership label, an unprivileged UID, no capabilities, no privilege
 escalation, fixed resource limits, and only owned workspace/control mounts.
 The Docker socket and host/provider credentials are not mounted. Its network is
 the MicroVM's network, where the host security group enforces the role policy.
+
+Select `Agent Sandbox · containerd + crun` in the Dashboard, or set the role's
+execution mode through the existing REST, CLI, or stdio MCP environment API:
+
+```json
+{"kind":"agent_sandbox","runtime":"crun","image":"registry.example.com/team/image@sha256:DIGEST"}
+```
+
+For crun, install and start containerd inside the managed MicroVM. Install
+`nerdctl`, `crun`, and `containerd-shim-runc-v2`, and enable cgroup v2 with
+CPU, memory and pids controllers. Prepare the exact digest-pinned OCI image in the
+`firecrab-sandbox` containerd namespace before starting the task. For example,
+an operator can prepare a trusted image with:
+
+```sh
+nerdctl --address /run/containerd/containerd.sock --namespace firecrab-sandbox \
+  pull registry.example.com/team/image@sha256:DIGEST
+```
+
+Replace `DIGEST` with the image's 64-character lowercase SHA256 digest. The
+runtime never pulls images during a task. It explicitly selects the installed
+crun binary and applies the same workspace, user, network, and resource limits
+as the Docker mode. The image must contain `/bin/sh`; Firecrab overrides its
+entrypoint to run each command. Each command uses a temporary container. An
+agent does not retain a dedicated container between commands.
+
+Image presence is checked through nerdctl's native inspection mode. This avoids
+Docker-compatible image-inspection failures observed for an installed OCI index
+with nerdctl 2.4.1. The runtime uses the explicit crun binary and cgroupfs driver;
+it does not rely on containerd's Kubernetes CRI defaults.
+
+The [real MicroVM benchmark](../development/sandbox-crun-benchmark-2026-10-30.md)
+records lower daemon memory overhead, without a measured command-speed advantage.
 
 nspawn requires systemd and cgroup v2 in the managed guest. Install the exact
 root archive at `/var/lib/firecrab-sandbox-images/DIGEST.tar`. Its SHA256 must match
@@ -122,5 +157,5 @@ never deletes shared images, borrowed VMs, unrelated networks or provider accoun
 Contract tests cover immutable reservations, restart persistence, dependency
 ordering, exact network allows, missing exports and retained ownership. Guest
 shell fixtures cover bounded execution and workspace preservation. Real systemd,
-OpenRC, distroless, Docker, nspawn and four-VM network runs need separate evidence.
+OpenRC, distroless, Docker, crun, nspawn and four-VM network runs need separate evidence.
 The Canvas foundation gate is not accepted by fixture results alone.

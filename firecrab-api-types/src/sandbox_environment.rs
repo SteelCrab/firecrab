@@ -9,6 +9,8 @@ use uuid::Uuid;
 pub enum SandboxContainerRuntime {
     /// A digest-pinned Docker image.
     Docker,
+    /// A digest-pinned OCI image executed with containerd and crun.
+    Crun,
     /// A pre-installed, content-addressed nspawn root filesystem.
     Nspawn,
 }
@@ -21,7 +23,7 @@ pub enum SandboxExecutionMode {
     AgentSandbox {
         /// Guest container engine.
         runtime: SandboxContainerRuntime,
-        /// Docker repo@sha256:digest or nspawn sha256:digest.
+        /// Docker/crun repo@sha256:digest or nspawn sha256:digest.
         image: String,
     },
     /// Direct execution; code, packages and configuration survive stop/resume.

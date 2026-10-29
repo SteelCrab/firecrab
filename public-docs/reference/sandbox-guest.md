@@ -35,7 +35,7 @@ unknown group registrations and unsafe lock files are rejected without adoption.
 | cpuSeconds | 1–120 |
 | memoryMib | 16–65536 address-space limit |
 | outputBytes | 1–65536 per stream |
-| Open files | Fixed at 1024 per process, including direct/Docker/nspawn payloads |
+| Open files | Fixed at 1024 per process, including direct/Docker/crun/nspawn payloads |
 
 The channel returns stdout and stderr separately. It records the invocation
 identity and confirmed exit status independently of the SSH connection's exit.
@@ -63,8 +63,8 @@ The following endpoints resolve an already-admitted task under
 Signals require task execution authority. They reject a different UID, guest
 boot or recycled PID. Cancellation uses the existing task cancellation API.
 The controller fences the attempt before stopping its root supervisor and UID.
-Docker cancellation also verifies its immutable attempt ownership label before
-removing the exact container. It never removes an image or unrelated container.
+Docker and crun cancellation also verify the attempt ownership label before
+removing the exact container. They never remove an image or unrelated container.
 
 ## Guest capabilities
 
@@ -77,7 +77,7 @@ are separate from execution support. Prepared distroless images use the static
 helper, injected BusyBox applets and key-only SSH overlay described in the
 [acceptance recipe](../development/sandbox-environments-qa.md). Missing tools
 report unsupported execution. An init name alone never proves support.
-Docker/nspawn also require cgroup v2.
+Docker/crun/nspawn also require cgroup v2.
 
 V1 provides bounded command execution and scoped process controls. Persistent
 interactive PTY create/attach/input/output/resize/reconnect belongs to Runtime
