@@ -984,8 +984,14 @@ archive_tar() { if [ "$tar_program" = /etc/firecrab/busybox ]; then "$tar_progra
 [ "$action" != probe ] || exit 0
 readonly=false
 case "$action" in processes|status|recover|export) readonly=true;; esac
+missing_query_state() {
+  case "$action" in recover|export) exit 79;; status) exit 78;; *) exit 77;; esac
+}
 if [ "$readonly" = true ]; then
   # Queries must not recreate a cleaned attempt or truncate its existing lock.
+  if [ ! -e "$base" ] && [ ! -L "$base" ]; then
+    missing_query_state
+  fi
   for directory in "$root" "$meta" "$meta/locks"; do
     [ -d "$directory" ] && [ ! -L "$directory" ] || exit 77
   done
@@ -1014,6 +1020,8 @@ lock_accounts() {
 }
 case "$action" in stage|cleanup) lock_accounts;; esac
 if [ "$readonly" = true ]; then
+  # Cleanup may have removed the attempt while this query waited for its lock.
+  if [ ! -e "$base" ] && [ ! -L "$base" ]; then missing_query_state; fi
   for directory in "$base" "$control"; do
     [ -d "$directory" ] && [ ! -L "$directory" ] || exit 77
   done

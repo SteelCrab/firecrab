@@ -122,7 +122,12 @@ fn versioned_shell_parses_for_every_execution_mode_and_operation() {
 #[tokio::test]
 async fn queries_refuse_missing_state_without_initializing_paths() {
     let directory = tempfile::tempdir().unwrap();
-    for action in ["processes", "status", "recover", "export"] {
+    for (action, expected_code) in [
+        ("processes", 77),
+        ("status", 78),
+        ("recover", 79),
+        ("export", 79),
+    ] {
         for existing_root in [false, true] {
             let root = directory.path().join(format!("{action}-{existing_root}"));
             if existing_root {
@@ -142,7 +147,7 @@ async fn queries_refuse_missing_state_without_initializing_paths() {
                 .unwrap();
             assert_eq!(
                 result.code,
-                77,
+                expected_code,
                 "{action}: {}",
                 String::from_utf8_lossy(&result.stderr)
             );
@@ -383,12 +388,20 @@ async fn guest_queries_preserve_control_and_do_not_recreate_cleaned_attempt() {
     // Cleanup is a writer. Only subsequent queries must preserve its lock state.
     std::fs::write(&lock, "cleaned-lock").unwrap();
     let cleaned_lock = std::fs::read(&lock).unwrap();
-    for action in ["processes", "status", "recover", "export"] {
+    for (action, expected_code) in [
+        ("processes", 77),
+        ("status", 78),
+        ("recover", 79),
+        ("export", 79),
+    ] {
         for _ in 0..2 {
             let result = local_invocation(&root, action, id, invocation, "", 0)
                 .await
                 .unwrap();
-            assert_eq!(result.code, 77, "{action} normalized a missing attempt");
+            assert_eq!(
+                result.code, expected_code,
+                "{action} returned an unexpected missing-state code"
+            );
             assert!(result.stdout.is_empty());
             assert!(!base.exists(), "{action} recreated the cleaned attempt");
             assert_eq!(std::fs::read(&lock).unwrap(), cleaned_lock);
