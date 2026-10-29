@@ -18,7 +18,7 @@ Usage: install-cli.sh [options]
 Install the firecrab client without root, Cargo, or the Linux host services.
 
 Options:
-  --version VER       Release tag such as v0.1.3 (default: latest)
+  --version VER       Release tag such as v0.4.1 (default: latest)
   --install-dir DIR   Destination directory (default: ~/.local/bin)
   --uninstall         Remove the standalone firecrab client
   --purge             With --uninstall, also remove saved host configuration

@@ -138,7 +138,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-**Batasan Windows:** guest v0.2.2 yang saat ini dipatok mendukung API, image, dan jaringan, tetapi tidak dapat memulai MicroVM pada WSL2 standar. Perbaikan net-helper memerlukan rilis guest baru yang dipatok; VM nginx lokal juga terdampak. CLI Windows tetap dapat mengelola host Linux jarak jauh yang didukung.
+**Windows:** instalasi memilih rilis stabil Firecrab terbaru. Gunakan `firecrab update --apply` untuk memperbarui guest terkelola yang sudah ada. KVM bertingkat diperlukan. Lihat [panduan Windows](public-docs/getting-started/windows.md).
 
 </details>
 
@@ -179,7 +179,7 @@ firecrab service debug --logs --tail 100
 firecrab service stop
 ```
 
-**Batasan Windows:** guest v0.2.2 yang saat ini dipatok mendukung API, image, dan jaringan, tetapi tidak dapat memulai MicroVM pada WSL2 standar. Perbaikan net-helper memerlukan rilis guest baru yang dipatok; VM nginx lokal juga terdampak. CLI Windows tetap dapat mengelola host Linux jarak jauh yang didukung.
+**Windows:** instalasi memilih rilis stabil Firecrab terbaru. Gunakan `firecrab update --apply` untuk memperbarui guest terkelola yang sudah ada. KVM bertingkat diperlukan. Lihat [panduan Windows](public-docs/getting-started/windows.md).
 
 Saat sehat, buka `http://127.0.0.1:5523/`. Buat MicroNetwork, pilih image terpasang, buat dan mulai VM, lalu buka Terminal setelah `running`. Untuk host jarak jauh, atur [profil host CLI](public-docs/reference/cli.md#host-profiles).
 

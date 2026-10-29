@@ -1,6 +1,6 @@
-# OS/Firecracker defaults and the legacy Firecrab recovery snapshot.
-# Explicit installs replace [firecrab] with the latest stable GitHub release
-# and its verified SHA256SUMS before downloading or stopping any services.
+# OS and Firecracker defaults shared by primary and development installations.
+# Firecrab is resolved from the latest stable GitHub release and SHA256SUMS
+# at installation time. No Firecrab version or download URL is bundled here.
 schema_version = 1
 
 # Editable in <managed-home>/micromanager.toml. Applied on the next service start.
@@ -37,27 +37,6 @@ filename = "firecracker-v1.17.0-x86_64.tgz"
 url = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.17.0/firecracker-v1.17.0-x86_64.tgz"
 algorithm = "sha256"
 digest = "06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558"
-
-[firecrab]
-version = "v0.2.2"
-
-[firecrab.installer]
-filename = "install-firecrab-v0.2.2.sh"
-url = "https://github.com/SteelCrab/firecrab/releases/download/v0.2.2/install.sh"
-algorithm = "sha256"
-digest = "af2fb56b92dff1559cdaa449aa025808e0990437c16ccc0bb2b4d558ef50dacb"
-
-[firecrab.aarch64]
-filename = "firecrab-host-aarch64-gnu.tar.gz"
-url = "https://github.com/SteelCrab/firecrab/releases/download/v0.2.2/firecrab-host-aarch64-gnu.tar.gz"
-algorithm = "sha256"
-digest = "2e995ed27d8c19848baaf38c8bf8a2d5d126ab90776738d91790524a8564e982"
-
-[firecrab.x86_64]
-filename = "firecrab-host-x86_64-gnu.tar.gz"
-url = "https://github.com/SteelCrab/firecrab/releases/download/v0.2.2/firecrab-host-x86_64-gnu.tar.gz"
-algorithm = "sha256"
-digest = "ad59b359ccc6d4f28ca6927339b6157b7684b9d734ded79c639a546d709b5315"
 
 [macos]
 image_build = "20260914-2601"

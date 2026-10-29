@@ -1,11 +1,13 @@
 # microManager installation and runtime TOML
 
-[packaging/micromanager.toml](../../packaging/micromanager.toml) defines Debian, Firecrab, Firecracker, kernels, platform images, URLs, and checksums.
+[packaging/micromanager.toml](../../packaging/micromanager.toml) defines Debian, Firecracker, kernels, platform images, URLs, and checksums.
 The CLI embeds it at build time.
 Debian, Firecracker and kernels use these bundled defaults. Explicit installs
 resolve the latest stable Firecrab release and SHA256SUMS from GitHub before
-downloading or stopping services. The bundled Firecrab section is only a legacy
-recovery snapshot; it is replaced for every explicit primary installation.
+downloading or stopping services. Firecrab has no bundled version or download URL.
+The resolved release is
+recorded only after a successful installation, for both primary and private
+development environments.
 macOS uses ARM64 assets; Windows selects x86_64 or ARM64.
 
 ## Runtime settings
@@ -93,7 +95,8 @@ the service. Preserve the rest of the installed TOML when editing.
 
 Updating the CLI alone does not migrate existing installations.
 `service dev` installs only when the management VM is missing.
-An installation without `<managed-home>/micromanager.toml` uses legacy pins for validation and offline repair.
+An installation without `<managed-home>/micromanager.toml` needs an explicit install to record its release inputs.
+macOS offline OS repair retains its frozen OS image fallback; it does not select a Firecrab release.
 
 ## Install and migrate
 
@@ -112,8 +115,8 @@ Failures do not publish a new installed manifest.
 The release sections record installation inputs for validation and repair.
 The next explicit installation resolves the latest stable Firecrab release and
 retains the editable runtime settings. Ordinary starts and repairs keep the
-recorded tag and checksums. Private source-development installations retain
-their separate, verified baseline.
+recorded tag and checksums. Private development installs resolve the same
+latest stable release and retain their own runtime policies and ownership.
 
 ### macOS
 

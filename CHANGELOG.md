@@ -37,6 +37,9 @@ Hotfix for macOS and Windows managed installations and updates.
 - Explicit `service install` and `service reinstall` select the latest stable
   Firecrab release at installation time and verify its published SHA-256 sums.
   Installed manifests retain the exact selected tag for validation and repair.
+- Primary and private development installs share this selection. The default
+  manifest contains no Firecrab release pin, and the separate development
+  release overlay has been removed.
 
 ### Deprecated
 
@@ -52,6 +55,8 @@ Hotfix for macOS and Windows managed installations and updates.
 ### Improved
 
 - Update failures restore development service settings and preserve diagnostics.
+- Rust, frontend and E2E package versions and lockfiles agree on 0.4.1, with a
+  release check that rejects mismatched versions or fixed managed-install pins.
 
 ## [0.4.0] - 2026-10-30
 

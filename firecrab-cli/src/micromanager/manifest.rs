@@ -14,16 +14,6 @@ use super::runtime::Runtime;
 
 pub const FILE_NAME: &str = "micromanager.toml";
 const BUNDLED: &str = include_str!("../../../packaging/micromanager.toml");
-#[cfg(any(target_os = "macos", test))]
-const DEVELOPMENT: &str = include_str!("../../../packaging/micromanager-dev.toml");
-
-#[cfg(any(target_os = "macos", test))]
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DevelopmentRelease {
-    firecrab: Firecrab,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
@@ -115,8 +105,22 @@ pub enum Error {
 }
 
 impl Manifest {
+    fn from_release(release: Firecrab) -> Result<Self, Error> {
+        let mut defaults: toml::Table = toml::from_str(BUNDLED)?;
+        defaults.insert("firecrab".into(), toml::Value::try_from(release)?);
+        Self::parse(&toml::to_string(&defaults)?)
+    }
+
+    #[cfg(test)]
     pub fn bundled() -> Result<Self, Error> {
-        Self::parse(BUNDLED)
+        #[derive(Deserialize)]
+        struct Fixture {
+            firecrab: Firecrab,
+        }
+        let legacy: Fixture = toml::from_str(include_str!(
+            "../../tests/fixtures/micromanager-legacy-firecrab.toml"
+        ))?;
+        Self::from_release(legacy.firecrab)
     }
 
     /// Resolve the latest stable Firecrab once, retaining host policies.
@@ -127,20 +131,12 @@ impl Manifest {
     }
 
     fn for_install_with_release(home: &Path, release: Firecrab) -> Result<Self, Error> {
-        let mut manifest = Self::bundled()?;
-        manifest.firecrab = release;
+        let mut manifest = Self::from_release(release)?;
         if let Some(installed) = Self::installed(home)? {
             manifest.runtime = Some(installed.runtime.unwrap_or_default());
         }
         manifest.validate()?;
         Ok(manifest)
-    }
-
-    /// Explicit private installs use their own verified release pins.
-    #[cfg(any(target_os = "macos", test))]
-    pub fn for_development_install(home: &Path) -> Result<Self, Error> {
-        let release: DevelopmentRelease = toml::from_str(DEVELOPMENT)?;
-        Self::for_install_with_release(home, release.firecrab)
     }
 
     fn parse(text: &str) -> Result<Self, Error> {
@@ -388,13 +384,14 @@ mod tests {
 
     #[test]
     fn invalid_manifest_inputs_and_corrupt_installed_files_are_errors() {
+        let bundled = toml::to_string(&Manifest::bundled().unwrap()).unwrap();
         for text in [
-            BUNDLED.replace("schema_version = 1", "schema_version = 2"),
-            BUNDLED.replace("install-firecrab-v0.2.2.sh", "../escape.sh"),
-            BUNDLED.replace("algorithm = \"sha256\"", "algorithm = \"md5\""),
-            BUNDLED.replace("6.12.111+deb13-arm64", "6.12.111;touch-pwned"),
-            BUNDLED.replace("https://", "http://"),
-            format!("unknown = true\n{BUNDLED}"),
+            bundled.replace("schema_version = 1", "schema_version = 2"),
+            bundled.replace("install-firecrab-v0.2.2.sh", "../escape.sh"),
+            bundled.replace("algorithm = \"sha256\"", "algorithm = \"md5\""),
+            bundled.replace("6.12.111+deb13-arm64", "6.12.111;touch-pwned"),
+            bundled.replace("https://", "http://"),
+            format!("unknown = true\n{bundled}"),
         ] {
             assert!(Manifest::parse(&text).is_err());
         }
@@ -432,67 +429,6 @@ mod tests {
         assert_eq!(
             next_install.macos.kernel_version,
             Manifest::bundled().unwrap().macos.kernel_version
-        );
-    }
-
-    #[test]
-    fn development_installs_keep_primary_pins_and_preserve_installed_policies() {
-        let home = tempfile::tempdir().unwrap();
-        let primary =
-            Manifest::for_install_with_release(home.path(), Manifest::bundled().unwrap().firecrab)
-                .unwrap();
-        assert_eq!(primary.firecrab.version, "v0.2.2");
-        assert_eq!(Manifest::bundled().unwrap().firecrab.version, "v0.2.2");
-
-        let mut development = Manifest::for_development_install(home.path()).unwrap();
-        assert_eq!(development.firecrab.version, "v0.3.1");
-        assert_eq!(
-            development.firecrab.installer.filename,
-            "install-firecrab-v0.3.1.sh"
-        );
-        for artifact in [
-            &development.firecrab.installer,
-            &development.firecrab.aarch64,
-            &development.firecrab.x86_64,
-        ] {
-            assert!(artifact.url.contains("/releases/download/v0.3.1/"));
-        }
-        development.firecrab = primary.firecrab.clone();
-        assert_eq!(
-            toml::to_string(&development).unwrap(),
-            toml::to_string(&primary).unwrap(),
-            "development pins must preserve all other release inputs and runtime settings"
-        );
-        assert!(!home.path().join(FILE_NAME).exists());
-
-        let mut installed = primary;
-        let settings = installed.runtime.as_mut().unwrap();
-        settings.auto_restart = false;
-        settings.ssh.reconnect_delay_secs = 17;
-        settings.ssh.restart_vm_on_failure = false;
-        installed.save(home.path()).unwrap();
-        let next = Manifest::for_development_install(home.path()).unwrap();
-        assert_eq!(next.runtime, installed.runtime);
-        assert_eq!(next.firecrab.version, "v0.3.1");
-        assert_eq!(
-            Manifest::installed(home.path())
-                .unwrap()
-                .unwrap()
-                .firecrab
-                .version,
-            "v0.2.2",
-            "selecting explicit install inputs must not migrate the installed manifest"
-        );
-        next.save(home.path()).unwrap();
-        let reinstalled = Manifest::for_development_install(home.path()).unwrap();
-        assert_eq!(reinstalled.firecrab.version, "v0.3.1");
-        assert_eq!(reinstalled.runtime, installed.runtime);
-        assert_eq!(
-            Manifest::for_install_with_release(home.path(), Manifest::bundled().unwrap().firecrab)
-                .unwrap()
-                .firecrab
-                .version,
-            "v0.2.2"
         );
     }
 
@@ -542,7 +478,7 @@ mod tests {
 
     #[test]
     fn partial_runtime_settings_default_and_invalid_policies_are_rejected() {
-        let mut value: toml::Value = toml::from_str(BUNDLED).unwrap();
+        let mut value = toml::Value::try_from(Manifest::bundled().unwrap()).unwrap();
         value.as_table_mut().unwrap().remove("runtime");
         let releases = toml::to_string(&value).unwrap();
         let parsed =

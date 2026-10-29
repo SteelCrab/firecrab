@@ -140,7 +140,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-**Windows limitation:** the currently pinned v0.2.2 guest supports the API, images, and networks, but cannot start MicroVMs on stock WSL2. The net-helper fix needs a newer pinned guest release; local nginx VM execution is affected too. The Windows CLI can still manage a supported remote Linux host.
+**Windows:** installation selects the latest stable Firecrab guest. Run `firecrab update --apply` to upgrade an existing managed guest. Nested KVM is required; see the [Windows guide](public-docs/getting-started/windows.md).
 
 </details>
 
@@ -181,7 +181,7 @@ firecrab service debug --logs --tail 100
 firecrab service stop
 ```
 
-**Windows limitation:** the currently pinned v0.2.2 guest supports the API, images, and networks, but cannot start MicroVMs on stock WSL2. The net-helper fix needs a newer pinned guest release; local nginx VM execution is affected too. The Windows CLI can still manage a supported remote Linux host.
+**Windows:** installation selects the latest stable Firecrab guest. Run `firecrab update --apply` to upgrade an existing managed guest. Nested KVM is required; see the [Windows guide](public-docs/getting-started/windows.md).
 
 When healthy, open `http://127.0.0.1:5523/`. Create a MicroNetwork, choose an installed image, create and start a VM, then open Terminal after `running`. For a remote host, configure a [CLI host profile](public-docs/reference/cli.md#host-profiles).
 

@@ -250,14 +250,10 @@ fn development_logs(home: &Path) -> Result<String, Error> {
 
 /// Select install inputs only after private ownership has been validated.
 fn installation_manifest(home: &Path) -> Result<manifest::Manifest, Error> {
-    let private = super::dev::instance::load(home)
-        .map_err(|source| super::dev::io_error("select development installation manifest", source))?
-        .is_some();
-    Ok(if private {
-        manifest::Manifest::for_development_install(home)?
-    } else {
-        manifest::Manifest::for_install(home)?
-    })
+    super::dev::instance::load(home).map_err(|source| {
+        super::dev::io_error("select development installation manifest", source)
+    })?;
+    Ok(manifest::Manifest::for_install(home)?)
 }
 
 fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
@@ -1159,7 +1155,7 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn installation_manifest_selects_private_pins_only_for_valid_ownership() {
+    fn installation_manifest_rejects_foreign_or_missing_private_ownership() {
         let directory = tempfile::tempdir().unwrap();
         let instance = super::super::dev::instance::test_instance(
             directory.path(),
@@ -1167,15 +1163,6 @@ mod tests {
             36001,
             36002,
         );
-        assert_eq!(
-            installation_manifest(&instance.managed_home)
-                .unwrap()
-                .firecrab
-                .version,
-            "v0.3.1"
-        );
-        assert!(!instance.managed_home.join(manifest::FILE_NAME).exists());
-
         let record = instance.managed_home.join("dev-instance.json");
         let mut foreign = instance.clone();
         foreign.managed_home = instance.primary_home.clone();
