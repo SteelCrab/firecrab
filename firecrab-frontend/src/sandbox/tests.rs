@@ -97,3 +97,52 @@ fn provider_text_paths_and_diff_contents_are_escaped_in_all_review_surfaces() {
     assert!(!html.contains("<img id=attack"));
     assert!(html.contains(&escape(attack)));
 }
+
+#[test]
+fn board_shows_chat_and_code_tasks_in_their_actual_states() {
+    let mut a = ready();
+    a.sandbox.tab = "tasks".into();
+    let mut chat = task();
+    chat["id"] = json!("chat-result");
+    chat["request"]["kind"] = json!("chat");
+    chat["request"]["input"] = json!("Summarize the result");
+    chat["changes"] = json!([]);
+    let mut waiting = chat.clone();
+    waiting["id"] = json!("chat-waiting");
+    waiting["state"] = json!("waiting");
+    a.sandbox.tasks = vec![summary(task()), summary(chat), summary(waiting)];
+
+    let html = content(&a);
+    assert!(html.contains("Tasks <span>3</span>"));
+    assert!(html.contains("Waiting<span>1</span>"));
+    assert!(html.contains("Results<span>2</span>"));
+    assert!(html.contains("id=\"sb-card-chat-result\""));
+    assert!(html.contains("id=\"sb-card-chat-waiting\""));
+    assert!(html.contains("id=\"sb-card-11111111-1111-4111-8111-111111111111\""));
+}
+
+#[test]
+fn chat_result_can_be_reviewed_without_file_apply_controls() {
+    let mut a = ready();
+    let mut chat = task();
+    chat["request"]["kind"] = json!("chat");
+    chat["changes"] = json!([]);
+    chat["events"] = json!([]);
+    chat["result"] = json!("A saved answer");
+    a.sandbox.review = Some(Review {
+        id: "task".into(),
+        task: Some(chat),
+        tab: "activity".into(),
+        paths: BTreeSet::new(),
+        error: String::new(),
+        load_error: String::new(),
+        busy: false,
+        polling: false,
+    });
+
+    let html = content(&a);
+    assert!(html.contains("A saved answer"));
+    assert!(!html.contains("sb-review-changes-tab"));
+    assert!(!html.contains("Apply selected files"));
+    assert!(!html.contains("Only selected files are applied"));
+}

@@ -82,8 +82,16 @@ test.describe("AI Sandbox @dashboard", () => {
     await page.getByRole("combobox", { name: ko ? "실행 모드" : "Execution mode", exact: true }).selectOption("code");
     await box.fill("Add a health check endpoint and cover it with tests"); await page.getByRole("button", { name: ko ? "코드 작업 실행" : "Run code task", exact: true }).click();
     const board = page.locator(".sb-board"); await expect(board.getByText("Add a health check endpoint and cover it with tests")).toBeVisible();
+    const conversationCard = board.getByRole("button", { name: /Plan a small health endpoint/ });
+    await expect(conversationCard).toBeVisible(); await conversationCard.click();
+    const conversationResult = page.getByRole("dialog", { name: ko ? "작업 결과" : "Task result", exact: true });
+    await expect(conversationResult.getByText("Start with a small health endpoint.", { exact: false })).toBeVisible();
+    await expect(conversationResult.getByRole("button", { name: ko ? "선택한 파일 반영" : "Apply selected files", exact: true })).toHaveCount(0);
+    const activity = conversationResult.getByRole("tab", { name: ko ? /실행 기록/ : /Activity/ });
+    await activity.focus(); await page.keyboard.press("ArrowRight"); await expect(activity).toBeFocused();
+    await conversationResult.getByRole("button", { name: ko ? "닫기" : "Close", exact: true }).click();
     await page.screenshot({ path: info.outputPath(`sandbox-board-${locale}-${width}.png`), fullPage: true });
-    await board.getByRole("button").click(); const dialog = page.getByRole("dialog", { name: ko ? "작업 결과" : "Task result", exact: true });
+    await board.getByRole("button", { name: /Add a health check endpoint and cover it with tests/ }).click(); const dialog = page.getByRole("dialog", { name: ko ? "작업 결과" : "Task result", exact: true });
     await expect(dialog.getByText("src/health.ts", { exact: true })).toBeVisible(); await expect(dialog.getByText('export const health = () => ({ status: "ok" });', { exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath(`sandbox-review-${locale}-${width}.png`), fullPage: true });
     mock.conflict(true); await dialog.getByRole("button", { name: ko ? "선택한 파일 반영" : "Apply selected files", exact: true }).click(); await expect(dialog.getByRole("alert")).toContainText("Source file changed");
@@ -182,7 +190,7 @@ test.describe("Sandbox resource contracts @dashboard",()=>{
     await input.fill("Test the Debug result");await page.getByRole("button",{name:"Run code task",exact:true}).click();
     await expect(page.locator(".sb-board").getByText("Test the Debug result",{exact:true})).toBeVisible();
     expect(mock.starts[1].coordination).toEqual({dependencies:[mock.tasks[0].id],assignedAgent:"test",retryLimit:2});
-    await page.locator(".sb-board").getByRole("button").click();const review=page.getByRole("dialog",{name:"Task result",exact:true});
+    await page.locator(".sb-board").getByRole("button",{name:/Test the Debug result/}).click();const review=page.getByRole("dialog",{name:"Task result",exact:true});
     await expect(review.getByText("health regression",{exact:false})).toBeVisible();await expect(review.getByRole("link",{name:/reports\/tests.json/})).toHaveAttribute("href",new RegExp(`/tasks/${mock.tasks[1].id}/artifacts/`));
     await review.getByRole("button",{name:"Create app preview",exact:true}).click();const preview=page.getByRole("dialog",{name:"App preview",exact:true});
     await expect(preview.getByRole("combobox",{name:"Saved fixed address",exact:true})).toHaveValue("qa-preview");await expect(preview.locator('input[type="password"]')).toHaveCount(0);
