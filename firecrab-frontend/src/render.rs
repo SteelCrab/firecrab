@@ -210,6 +210,7 @@ pub fn navigation_icon(name: &str) -> String {
             "M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM12 13v3l2 1"
         }
         "services" => "m12 3 9 5v8l-9 5-9-5V8l9-5Zm0 10 9-5M12 13 3 8M12 13v8M7.5 5.5l9 5v5",
+        "stacks" => "m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5",
         "cluster" => "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
         "networks" => "M9 3h6v6H9zM3 15h6v6H3zM15 15h6v6h-6zM12 9v3M6 15v-3h12v3",
         "security-groups" => {
@@ -533,7 +534,9 @@ pub fn page(app: &App) -> String {
         "hidden"
     };
     let category = match section {
-        "vms" | "services" | "pools" | "schedules" | "cluster" => tr(app, "Compute", "컴퓨팅"),
+        "vms" | "services" | "stacks" | "pools" | "schedules" | "cluster" => {
+            tr(app, "Compute", "컴퓨팅")
+        }
         "networks" | "pipe" | "security-groups" => tr(app, "Network", "네트워크"),
         "storages" | "volumes" | "images" | "kernels" | "secrets" | "queues" => {
             tr(app, "Data", "데이터")
@@ -713,6 +716,7 @@ pub fn content(app: &App) -> String {
             crate::advanced::content(app)
         }
         "services" => services(app),
+        "stacks" => crate::stacks::content(app),
         "networks" => resource_table(
             app,
             &app.resource,

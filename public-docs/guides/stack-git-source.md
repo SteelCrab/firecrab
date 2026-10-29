@@ -118,6 +118,8 @@ They never become an empty declaration or trigger resource deletion.
 
 ## Read observations
 
+The dashboard **Stack** view shows source status, desired, attempted and applied commits, errors and recovery guidance. It does not submit recovery or change Git revisions; inspect the operation and use the documented commands when needed.
+
 | Field | Meaning |
 | --- | --- |
 | `latest.source` | Source configuration captured for this check; history preserves earlier generations' repository, ref, path, and credential reference |
