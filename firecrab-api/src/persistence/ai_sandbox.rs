@@ -17,11 +17,14 @@ CREATE TABLE IF NOT EXISTS ai_sandbox_task_index (id TEXT PRIMARY KEY, project_i
 CREATE INDEX IF NOT EXISTS ai_sandbox_summary_order ON ai_sandbox_task_index(project_id,ordinal);
 CREATE INDEX IF NOT EXISTS ai_sandbox_summary_updates ON ai_sandbox_task_index(project_id,updated_at);
 CREATE INDEX IF NOT EXISTS ai_sandbox_summary_busy ON ai_sandbox_task_index(busy,project_id);
+CREATE INDEX IF NOT EXISTS ai_sandbox_summary_retry ON ai_sandbox_task_index(json_extract(summary,'$.retryRoot'),ordinal);
 CREATE TRIGGER IF NOT EXISTS ai_sandbox_index_update AFTER UPDATE OF spec ON ai_sandbox_tasks BEGIN DELETE FROM ai_sandbox_task_index WHERE id=NEW.id; END;
 CREATE TRIGGER IF NOT EXISTS ai_sandbox_index_delete AFTER DELETE ON ai_sandbox_tasks BEGIN DELETE FROM ai_sandbox_task_index WHERE id=OLD.id; END;
 CREATE TABLE IF NOT EXISTS ai_sandbox_models (connection_id TEXT NOT NULL, model TEXT NOT NULL, spec TEXT NOT NULL, PRIMARY KEY(connection_id,model)) STRICT;
 CREATE TABLE IF NOT EXISTS ai_sandbox_access (principal TEXT PRIMARY KEY, spec TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS ai_sandbox_attempts (task_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, attempt_id TEXT NOT NULL UNIQUE, vm_id TEXT, runtime_id TEXT, caller TEXT NOT NULL, source_path TEXT, CHECK ((vm_id IS NULL) = (runtime_id IS NULL))) STRICT;
+CREATE INDEX IF NOT EXISTS ai_sandbox_attempt_vm ON ai_sandbox_attempts(vm_id);
+CREATE TABLE IF NOT EXISTS ai_sandbox_admissions (task_id TEXT PRIMARY KEY, identity TEXT NOT NULL) STRICT;
 ";
 
 /// Serialize a typed private record without logging its contents.
@@ -150,6 +153,10 @@ impl Store {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         tx.execute(
+            "DELETE FROM ai_sandbox_admissions WHERE task_id IN (SELECT id FROM ai_sandbox_tasks WHERE project_id=?1)",
+            [id.to_string()],
+        )?;
+        tx.execute(
             "DELETE FROM ai_sandbox_attempts WHERE project_id=?1",
             [id.to_string()],
         )?;
@@ -274,6 +281,45 @@ impl Store {
             |r| r.get(0),
         )?)
     }
+    /// Read only active or unresolved attempts, including dependency waiters.
+    pub fn sandbox_busy_tasks(&self, project: Uuid) -> Result<Vec<SavedTask>, PersistenceError> {
+        let ids: Vec<String> = self.lock().prepare("SELECT id FROM ai_sandbox_task_index WHERE project_id=?1 AND busy=1 ORDER BY ordinal")?
+            .query_map([project.to_string()], |row| row.get(0))?.collect::<Result<_,_>>()?;
+        ids.into_iter()
+            .map(|id| {
+                self.sandbox_task(Uuid::parse_str(&id).map_err(|_| corrupt())?)?
+                    .ok_or_else(corrupt)
+            })
+            .collect()
+    }
+    /// A retained Workspace VM admits one active or uncertain attempt across every project.
+    pub fn sandbox_runtime_busy(&self, vm: Uuid, except: Uuid) -> Result<bool, PersistenceError> {
+        Ok(self.lock().query_row("SELECT EXISTS(SELECT 1 FROM ai_sandbox_task_index i JOIN ai_sandbox_attempts a ON a.task_id=i.id JOIN ai_sandbox_tasks t ON t.id=i.id WHERE a.vm_id=?1 AND i.id!=?2 AND i.busy=1 AND (json_extract(i.summary,'$.state')!='waiting' OR json_extract(t.spec,'$.guest_pending')=1 OR json_extract(t.spec,'$.guest_staged')=1))",
+            params![vm.to_string(),except.to_string()], |row| row.get(0))?)
+    }
+    /// Retained code stays bound to the source and Git base of its first admitted Workspace task.
+    pub fn sandbox_workspace_origin(
+        &self,
+        vm: Uuid,
+    ) -> Result<Option<SavedTask>, PersistenceError> {
+        let id: Option<String> = self.lock().query_row("SELECT t.id FROM ai_sandbox_attempts a JOIN ai_sandbox_tasks t ON t.id=a.task_id WHERE a.vm_id=?1 AND json_extract(t.spec,'$.execution_mode.kind')='persistent_workspace' ORDER BY t.rowid LIMIT 1", [vm.to_string()], |row| row.get(0)).optional()?;
+        id.map(|id| {
+            self.sandbox_task(Uuid::parse_str(&id).map_err(|_| corrupt())?)?
+                .ok_or_else(corrupt)
+        })
+        .transpose()
+    }
+    /// Retry chains retain every task/attempt; the latest ordinal is the authoritative outcome.
+    pub fn sandbox_retry_tasks(&self, root: Uuid) -> Result<Vec<SavedTask>, PersistenceError> {
+        let ids: Vec<String> = self.lock().prepare("SELECT id FROM ai_sandbox_task_index WHERE id=?1 OR json_extract(summary,'$.retryRoot')=?1 ORDER BY ordinal")?
+            .query_map([root.to_string()], |row| row.get(0))?.collect::<Result<_,_>>()?;
+        ids.into_iter()
+            .map(|id| {
+                self.sandbox_task(Uuid::parse_str(&id).map_err(|_| corrupt())?)?
+                    .ok_or_else(corrupt)
+            })
+            .collect()
+    }
     /// Bound queued and unresolved guest attempts across controller restarts.
     pub fn sandbox_pending_count(&self) -> Result<usize, PersistenceError> {
         let count: i64 = self.lock().query_row(
@@ -309,7 +355,9 @@ impl Store {
         let tx = conn.transaction()?;
         let runtime = task.task.runtime;
         validate_runtime(task)?;
+        validate_outputs(task)?;
         tx.execute("INSERT INTO ai_sandbox_attempts(task_id,project_id,attempt_id,vm_id,runtime_id,caller,source_path) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(task_id) DO NOTHING",params![task.task.id.to_string(),task.task.project_id.to_string(),task.task.attempt_id.to_string(),runtime.map(|r|r.vm_id.to_string()),runtime.map(|r|r.runtime_id.to_string()),encode(&task.caller)?,task.project.source_path])?;
+        tx.execute("INSERT INTO ai_sandbox_admissions(task_id,identity) VALUES(?1,?2) ON CONFLICT(task_id) DO NOTHING", params![task.task.id.to_string(), admission_identity(task)?])?;
         verify_references(&tx, task)?;
         tx.execute("INSERT INTO ai_sandbox_tasks(id,project_id,spec) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",params![task.task.id.to_string(),task.task.project_id.to_string(),encode(task)?])?;
         let ordinal = tx.query_row(
@@ -361,6 +409,75 @@ fn verify_references(
     let valid:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM ai_sandbox_attempts WHERE task_id=?1 AND project_id=?2 AND attempt_id=?3 AND vm_id IS ?4 AND runtime_id IS ?5 AND caller=?6 AND source_path IS ?7)",params![task.task.id.to_string(),task.task.project_id.to_string(),task.task.attempt_id.to_string(),runtime.map(|r|r.vm_id.to_string()),runtime.map(|r|r.runtime_id.to_string()),encode(&task.caller)?,task.project.source_path],|row|row.get(0))?;
     if !valid {
         return Err(corrupt());
+    }
+    let admission: Option<String> = conn
+        .query_row(
+            "SELECT identity FROM ai_sandbox_admissions WHERE task_id=?1",
+            [task.task.id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(identity) = admission
+        && admission_identity(task)? != identity
+    {
+        return Err(corrupt());
+    }
+    validate_outputs(task)?;
+    Ok(())
+}
+
+fn admission_identity(task: &SavedTask) -> Result<String, PersistenceError> {
+    encode(&(
+        &task.task.request,
+        &task.project,
+        &task.task.selection,
+        &task.task.git_commit,
+        task.task.retry_root,
+        task.task.retry_number,
+        &task.task.environment,
+        &task.execution_mode,
+    ))
+}
+
+fn validate_outputs(task: &SavedTask) -> Result<(), PersistenceError> {
+    if task.task.retry_number > 3
+        || task.task.artifacts.len() > 16
+        || task.task.tests.len() > 64
+        || (task.results_exported
+            && (task.task.state.active() || task.guest_pending || task.guest_staged))
+    {
+        return Err(corrupt());
+    }
+    let mut artifacts = std::collections::BTreeSet::new();
+    let mut artifact_bytes = 0usize;
+    for artifact in &task.task.artifacts {
+        artifact_bytes = artifact_bytes
+            .checked_add(artifact.size)
+            .ok_or_else(corrupt)?;
+        if artifact.task_id != task.task.id
+            || artifact.attempt_id != task.task.attempt_id
+            || !artifacts.insert(artifact.id)
+            || !crate::ai_sandbox::files::allowed(&artifact.path)
+            || artifact.size > crate::ai_sandbox::files::FILE_LIMIT
+            || artifact.sha256.len() != 64
+            || !artifact.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(corrupt());
+        }
+    }
+    if artifact_bytes > 8 * crate::ai_sandbox::files::FILE_LIMIT {
+        return Err(corrupt());
+    }
+    for test in &task.task.tests {
+        let Some(event) = task.task.events.get(test.event_sequence) else {
+            return Err(corrupt());
+        };
+        if !matches!(event.name.as_str(), "run_command" | "run_argv")
+            || event.exit_code.is_none()
+            || test.passed != (event.exit_code == Some(0))
+        {
+            return Err(corrupt());
+        }
     }
     Ok(())
 }

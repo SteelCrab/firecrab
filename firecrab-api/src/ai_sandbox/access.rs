@@ -271,9 +271,24 @@ pub fn attempt(state: &AppState, saved: &super::SavedTask) -> Result<(), String>
         .map_err(|_| "Cannot read owning Sandbox project")?
         .ok_or("Owning Sandbox project is unavailable")?;
     if project.spec.source_path != saved.project.source_path
-        || project.spec.vm_id != saved.project.vm_id
+        || project.spec.environment_id != saved.project.environment_id
     {
         return Err("Sandbox project resources changed after admission".into());
+    }
+    if let Some(reference) = &saved.task.environment {
+        if project.spec.environment_id != Some(reference.id) || project.spec.vm_id.is_some() {
+            return Err("Sandbox Environment changed after admission".into());
+        }
+        super::environment::verify_binding(
+            state,
+            reference,
+            saved
+                .task
+                .runtime
+                .ok_or("Environment attempt has no runtime")?,
+        )?;
+    } else if project.spec.vm_id != saved.project.vm_id {
+        return Err("Sandbox project runtime changed after admission".into());
     }
     if saved.task.request.kind == SandboxTaskKind::Code {
         let runtime = saved

@@ -29,10 +29,10 @@ async function removeLogin(): Promise<void> {
   ).toBe(true);
 }
 
-async function openCards(page: Page) {
+async function openOverview(page: Page) {
   await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
   await page.goto("/#/pipe");
-  return page.locator("#content");
+  return page.locator("#content .pipe-group");
 }
 
 test.describe("Pipe registries against the API", () => {
@@ -45,15 +45,15 @@ test.describe("Pipe registries against the API", () => {
   });
   test.afterEach(removeLogin);
 
-  test("B18 lists Account, AI and Registry cards and shows the API login list", async ({
+  test("B18 lists Account, AI and Registry destinations and shows the API login list", async ({
     page,
   }) => {
     const { rows } = await connections();
-    const pipe = await openCards(page);
+    const pipe = await openOverview(page);
     await expect(pipe.locator("a.pipe-row")).toHaveCount(9);
-    await expect(pipe.locator("a.pipe-row", { hasText: /^Account/ })).toBeVisible();
-    await expect(pipe.locator("a.pipe-row", { hasText: /^Pipe AI/ })).toBeVisible();
-    const card = pipe.locator("a.pipe-row", { hasText: /^Registry/ });
+    await expect(pipe.getByRole("link", { name: /^Account/ })).toBeVisible();
+    await expect(pipe.getByRole("link", { name: /^Pipe AI/ })).toBeVisible();
+    const card = pipe.locator('a.pipe-row[href="#/pipe/registry"]');
     await card.click();
     await expect(page).toHaveURL(/#\/pipe\/registry$/);
     const panel = page.locator("#content");
@@ -70,8 +70,8 @@ test.describe("Pipe registries against the API", () => {
   test("B19 saves an ECR login without exposing the secret and removes it", async ({
     page,
   }) => {
-    const pipe = await openCards(page);
-    await pipe.locator("a.pipe-row", { hasText: /^Registry/ }).click();
+    const pipe = await openOverview(page);
+    await pipe.locator('a.pipe-row[href="#/pipe/registry"]').click();
     const panel = page.locator("#content");
     await panel.getByRole("button", { name: "Connect registry" }).click();
     await page.getByLabel("Registry host", { exact: true }).fill(HOST);
@@ -95,7 +95,7 @@ test.describe("Pipe registries against the API", () => {
     expect(await page.content()).not.toContain(SECRET);
 
     await page.goto("/#/pipe");
-    await pipe.getByRole("link", { name: /^Registry/ }).click();
+    await pipe.locator('a.pipe-row[href="#/pipe/registry"]').click();
     await row.getByRole("button", { name: "Details", exact: true }).click();
     page.once("dialog", (dialog) => void dialog.accept());
     await page

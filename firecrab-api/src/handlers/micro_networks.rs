@@ -211,7 +211,17 @@ pub(crate) async fn create_micro_network_with_id(
     }
     let gateway = subnet.gateway();
 
+    if req.dns_mode == firecrab_api_types::MicroNetworkDnsMode::PrivateOnly {
+        state.network.require_private_dns().await.map_err(|_| {
+            AppError::conflict(
+                "private_dns_unsupported",
+                "The network helper must support private DNS before creating this network",
+                request_id.0,
+            )
+        })?;
+    }
     let network = MicroNetworkResponse {
+        dns_mode: req.dns_mode,
         id,
         name: req.name,
         subnet_cidr: req.subnet_cidr,
@@ -402,6 +412,16 @@ pub(crate) async fn ensure_all_networks(state: &AppState) -> Result<(), String> 
 /// concurrent snapshot from removing a newly installed VM policy.
 pub(crate) async fn ensure_all_networks_locked(state: &AppState) -> Result<(), String> {
     let micro_networks = crate::handlers::vms::micro_network_specs(state).await?;
+    if micro_networks
+        .iter()
+        .any(|network| network.dns_mode == firecrab_api_types::MicroNetworkDnsMode::PrivateOnly)
+    {
+        state
+            .network
+            .require_private_dns()
+            .await
+            .map_err(|_| "Network helper does not support required private DNS")?;
+    }
     let vm_policies = crate::handlers::vms::active_vm_policy_specs(state).await?;
 
     for network in &micro_networks {
@@ -637,6 +657,7 @@ pub(crate) mod test_support {
         let cidr = "172.31.0.0/24";
         let subnet = SubnetSpec::parse(id, cidr).expect("valid literal CIDR");
         let network = MicroNetworkResponse {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             id,
             name: "test-net".to_owned(),
             subnet_cidr: cidr.to_owned(),
@@ -683,6 +704,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn private_dns_requires_explicit_helper_support_before_persisting_resources() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let socket = directory.path().join("legacy-helper.sock");
+        let (_helper, calls) = crate::network::test_support::spawn_recording_helper(
+            &socket,
+            Some("check_private_dns_support"),
+        );
+        let state =
+            state.with_test_network(crate::network::NetworkClient::with_socket_path(socket));
+        let request: CreateMicroNetworkRequest = serde_json::from_value(serde_json::json!({
+            "name":"private", "subnetCidr":"172.31.8.0/24", "internetEnabled":false, "dnsMode":"private_only"
+        })).unwrap();
+        let error = create_micro_network(State(state.clone()), extension(), ValidatedJson(request))
+            .await
+            .unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+        assert!(state.store.list_micro_networks().unwrap().is_empty());
+        assert_eq!(*calls.lock().unwrap(), vec!["check_private_dns_support"]);
+    }
+
+    #[tokio::test]
     async fn create_then_list_then_delete_round_trips_through_the_handlers() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
@@ -691,6 +734,7 @@ mod tests {
             State(state.clone()),
             extension(),
             ValidatedJson(CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "prod".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
@@ -736,6 +780,7 @@ mod tests {
             State(state.clone()),
             extension(),
             ValidatedJson(CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: String::new(),
                 subnet_cidr: "not-a-cidr".to_owned(),
                 internet_enabled: true,
@@ -759,6 +804,7 @@ mod tests {
             State(state.clone()),
             extension(),
             ValidatedJson(CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: name.to_owned(),
                 subnet_cidr: cidr.to_owned(),
                 internet_enabled: true,
@@ -785,6 +831,7 @@ mod tests {
                 State(state.clone()),
                 extension(),
                 ValidatedJson(CreateMicroNetworkRequest {
+                    dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                     name: "clash".to_owned(),
                     subnet_cidr: cidr.to_owned(),
                     internet_enabled: true,
@@ -807,6 +854,7 @@ mod tests {
             State(state.clone()),
             extension(),
             ValidatedJson(CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "other".to_owned(),
                 subnet_cidr: "172.30.0.0/24".to_owned(),
                 internet_enabled: true,
@@ -845,6 +893,7 @@ mod tests {
             State(state.clone()),
             extension(),
             ValidatedJson(CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "prod".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
@@ -873,6 +922,7 @@ mod tests {
             State(state),
             extension(),
             ValidatedJson(CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "stage".to_owned(),
                 subnet_cidr: "172.32.0.0/24".to_owned(),
                 internet_enabled: true,
@@ -895,6 +945,7 @@ mod tests {
             State(state.clone()),
             extension(),
             ValidatedJson(CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "public".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
@@ -932,6 +983,7 @@ mod tests {
                 State(state.clone()),
                 extension(),
                 ValidatedJson(CreateMicroNetworkRequest {
+                    dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                     name: "bad".to_owned(),
                     subnet_cidr: "172.31.0.0/24".to_owned(),
                     internet_enabled: true,
@@ -964,6 +1016,7 @@ mod tests {
             State(state.clone()),
             extension(),
             ValidatedJson(CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "prod".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
@@ -982,6 +1035,7 @@ mod tests {
             State(state.clone()),
             extension(),
             ValidatedJson(CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "clash".to_owned(),
                 subnet_cidr: "172.32.0.0/24".to_owned(),
                 internet_enabled: true,
@@ -1008,6 +1062,7 @@ mod tests {
             State(state.clone()),
             extension(),
             ValidatedJson(CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "prod".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
@@ -1406,6 +1461,7 @@ mod tests {
             State(state.clone()),
             extension(),
             ValidatedJson(CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "doomed".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
@@ -1438,6 +1494,7 @@ mod tests {
     #[test]
     fn validate_create_reports_both_fields_independently() {
         let fields = validate_create(&CreateMicroNetworkRequest {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             name: String::new(),
             subnet_cidr: "not-a-cidr".to_owned(),
             internet_enabled: true,
@@ -1453,6 +1510,7 @@ mod tests {
     fn validate_create_rejects_a_prefix_outside_the_accepted_range() {
         for cidr in ["172.31.0.0/8", "172.31.0.0/30"] {
             let fields = validate_create(&CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "prod".to_owned(),
                 subnet_cidr: cidr.to_owned(),
                 internet_enabled: true,
@@ -1467,6 +1525,7 @@ mod tests {
         }
         for cidr in ["172.31.0.0/16", "172.31.0.0/24", "172.31.0.0/28"] {
             let fields = validate_create(&CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "prod".to_owned(),
                 subnet_cidr: cidr.to_owned(),
                 internet_enabled: true,
@@ -1513,6 +1572,7 @@ mod tests {
             State(state.clone()),
             extension(),
             ValidatedJson(CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "prod".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
@@ -1552,6 +1612,7 @@ mod tests {
                 State(state.clone()),
                 extension(),
                 ValidatedJson(CreateMicroNetworkRequest {
+                    dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                     name: "prod".to_owned(),
                     subnet_cidr: "172.31.0.0/24".to_owned(),
                     internet_enabled: true,
@@ -1700,6 +1761,7 @@ mod tests {
     #[test]
     fn validate_create_and_update_reject_a_bad_uplink() {
         let fields = validate_create(&CreateMicroNetworkRequest {
+            dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
             name: "prod".to_owned(),
             subnet_cidr: "172.31.0.0/24".to_owned(),
             internet_enabled: true,

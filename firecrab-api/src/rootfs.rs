@@ -344,6 +344,33 @@ pub fn specialize_guest(
     Ok(())
 }
 
+/// Root-owned readiness input. A private resolver is tested with a DHCP-owned
+/// local record; external resolution is deliberately unavailable there.
+const PRIVATE_DNS_PROBE_PATH: &str = "/etc/firecrab/dns-probe";
+
+/// Install the network's recorded DNS readiness target without changing image pins.
+/// Called on the VM's owned disk on every native start, including retained disks.
+pub fn apply_dns_posture(
+    rootfs: &Path,
+    id: Uuid,
+    mode: firecrab_api_types::MicroNetworkDnsMode,
+) -> Result<(), RootfsError> {
+    remove_from_image(rootfs, PRIVATE_DNS_PROBE_PATH);
+    if mode == firecrab_api_types::MicroNetworkDnsMode::LegacyForward {
+        return Ok(());
+    }
+    if !guest_path_exists(rootfs, "/etc/firecrab") {
+        run_debugfs(rootfs, "mkdir /etc/firecrab")?;
+    }
+    let hostname = firecrab_helper_protocol::network::guest_hostname(id);
+    write_into_image(
+        rootfs,
+        PRIVATE_DNS_PROBE_PATH,
+        format!("{hostname}.internal\n").as_bytes(),
+    )?;
+    Ok(())
+}
+
 /// Guest path of the sysctl drop-in [`ipv6_sysctl_conf`] is written to.
 const IPV6_SYSCTL_PATH: &str = "/etc/sysctl.d/99-firecrab-ipv6.conf";
 
@@ -410,6 +437,16 @@ fn patch_oci_console(rootfs: &Path) {
         };
         if output.stdout != b"busybox\n" {
             refresh_native_serial_console(rootfs);
+            // Native OCI images use this managed worker too. Refresh it on
+            // the writable VM disk so pinned older images receive boot fixes.
+            if guest_path_exists(rootfs, "/etc/firecrab/rc.boot") {
+                let _ = write_into_image(
+                    rootfs,
+                    "/etc/firecrab/rc.boot",
+                    crate::oci::provision::boot_script_for(false).as_bytes(),
+                );
+                set_guest_file_mode(rootfs, "/etc/firecrab/rc.boot", "0100755");
+            }
             return;
         }
     }
@@ -794,10 +831,24 @@ if [ -n "$gw" ] && [ ! -e /run/systemd/resolve/stub-resolv.conf ]; then
   fi
 fi
 
+dns_probe=example.com
+private_dns=0
+if [ -r /etc/firecrab/dns-probe ]; then
+  dns_probe=$(cat /etc/firecrab/dns-probe)
+  private_dns=1
+fi
+
 dns_ok() {
-  getent hosts example.com >/dev/null 2>&1 && return 0
+  if [ "$private_dns" -eq 1 ]; then
+    [ -n "$gw" ] || return 1
+    if command -v nslookup >/dev/null 2>&1; then
+      nslookup "$dns_probe" "$gw" >/dev/null 2>&1 && return 0
+    fi
+  else
+    getent hosts "$dns_probe" >/dev/null 2>&1 && return 0
+  fi
   if [ -n "$gw" ] && command -v dig >/dev/null 2>&1; then
-    ans=$(dig +short +time=2 +tries=1 @"$gw" example.com A 2>/dev/null || true)
+    ans=$(dig +short +time=2 +tries=1 @"$gw" "$dns_probe" A 2>/dev/null || true)
     [ -n "$ans" ] && return 0
   fi
   return 1
@@ -821,9 +872,13 @@ const NETWORK_READY_OPENRC_PROBE: &str = r#"
 		[ -n "$ipv4" ] && break
 		sleep 1
 	done
+	dns_probe=example.com
+	if [ -r /etc/firecrab/dns-probe ]; then
+		dns_probe=$(cat /etc/firecrab/dns-probe)
+	fi
 	if [ -z "$ipv4" ]; then
 		echo "FIRECRAB_NETWORK_FAILED no-ipv4-address" >/dev/console
-	elif getent hosts example.com >/dev/null 2>&1; then
+	elif { [ -r /etc/firecrab/dns-probe ] && nslookup "$dns_probe" >/dev/null 2>&1; } || { [ ! -r /etc/firecrab/dns-probe ] && getent hosts "$dns_probe" >/dev/null 2>&1; }; then
 		echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
 	else
 		echo "FIRECRAB_NETWORK_FAILED dns-unreachable" >/dev/console
@@ -1668,6 +1723,45 @@ mod tests {
     }
 
     #[test]
+    fn private_dns_readiness_uses_the_owned_local_name_and_legacy_removes_the_marker() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("private-dns.ext4");
+        assert!(
+            Command::new("mkfs.ext4")
+                .args(["-q", "-F"])
+                .arg(&rootfs)
+                .arg("8M")
+                .status()
+                .unwrap()
+                .success()
+        );
+        run_debugfs(&rootfs, "mkdir /etc").unwrap();
+        let id = Uuid::from_u128(414);
+        apply_dns_posture(
+            &rootfs,
+            id,
+            firecrab_api_types::MicroNetworkDnsMode::PrivateOnly,
+        )
+        .unwrap();
+        assert_eq!(
+            debugfs_cat(&rootfs, PRIVATE_DNS_PROBE_PATH),
+            format!(
+                "{}.internal\n",
+                firecrab_helper_protocol::network::guest_hostname(id)
+            )
+        );
+        apply_dns_posture(
+            &rootfs,
+            id,
+            firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
+        )
+        .unwrap();
+        assert!(!guest_path_exists(&rootfs, PRIVATE_DNS_PROBE_PATH));
+        assert!(network_ready_script().contains("nslookup \"$dns_probe\" \"$gw\""));
+        assert!(network_ready_openrc().contains("nslookup \"$dns_probe\""));
+    }
+
+    #[test]
     fn specialize_guest_writes_the_deterministic_hostname() {
         let directory = tempdir().unwrap();
         let id = Uuid::new_v4();
@@ -1953,7 +2047,7 @@ mod tests {
 
     #[test]
     fn specialize_guest_upgrades_old_oci_dhcp_hooks_and_preserves_native_init() {
-        for init in ["busybox", "systemd"] {
+        for init in ["busybox", "systemd", "openrc"] {
             let directory = tempdir().unwrap();
             let rootfs = directory.path().join("rootfs.ext4");
             real_rootfs_with_guest_dirs(&rootfs);
@@ -1975,10 +2069,14 @@ mod tests {
             assert!(!updated.contains("ip addr flush"), "{init}: {updated}");
             let metadata = run_debugfs(&rootfs, &format!("stat {hook}")).unwrap();
             assert!(String::from_utf8_lossy(&metadata.stdout).contains("0755"));
-            if init == "systemd" {
+            if init != "busybox" {
                 assert_eq!(
                     debugfs_cat(&rootfs, "/etc/firecrab/rc.boot"),
-                    "native boot runtime\n"
+                    crate::oci::provision::boot_script_for(false)
+                );
+                assert!(
+                    !guest_path_exists(&rootfs, "/etc/inittab"),
+                    "native init must not receive a BusyBox inittab"
                 );
             }
         }

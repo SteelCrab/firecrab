@@ -23,6 +23,23 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- AI Sandbox gains pinned, role-based environments, separate readiness checks,
+  scoped service discovery, Docker/nspawn execution and retained Workspaces.
+  Projects accept local Git refs, selected skills and reference files. Assigned
+  agents share dependency results through the existing task engine with bounded
+  explicit retries. Command-backed tests and downloadable artifacts retain their
+  task/attempt identities. Dashboard, CLI and local stdio MCP share these REST
+  contracts. Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
+- Saved Sandbox preview bindings retain fixed addresses and immutable execution
+  references. Explicit successor bindings retarget the same URL. Helper health,
+  public HTTPS/WebSocket verification, local removal and remote retirement are
+  reported separately. Canvas work waits for completed Sandbox implementation
+  and direct QA acceptance. Bounded commands do not provide interactive PTY.
+  Explicit shutdown checks require a fresh inactive connector observation and
+  verify the saved HTTPS address without following redirects. Dashboard, CLI
+  and MCP retain the result separately from remote retirement.
+
 - Service-scoped CI Deploy tokens, image-only Nginx endpoints, CLI and GitHub Action
   preserve exact operation outcomes, with expiry/revocation and one-time Dashboard controls.
 
@@ -46,6 +63,12 @@ Entries land here as work merges, and move under the next version heading when t
   Private listeners support HTTP/1.1, HTTP/2 and WebSockets, preserve source and
   destination security-group rules, and stay outside public tunnel configuration.
   The bundled ingress gains HTTP/2 and the port-binding capability.
+
+- An opt-in Sandbox recovery gate verifies real-model command timeouts,
+  cancellation, disconnected admission, controller crashes, explicit retries and
+  guest reboots on a disposable API host. Ownership and socket checks protect
+  other controllers; retained data and borrowed resources survive task cleanup.
+  Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
 
 - Replicated controller services declare stateless or shared external application
   state and distribute version-pinned PipeSecrets through encrypted deployment
@@ -280,6 +303,19 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
+- Alpine Sandbox cleanup accepts the owned user's explicit primary-group
+  membership after verifying its durable account records. Foreign or shared
+  membership still blocks cleanup and preserves the attempt for reconciliation.
+
+- Private Sandbox VM names follow IPAM allocations instead of expiring DHCP
+  leases. A separate DNS hosts file preserves existing VM names through private
+  resolver restart, network changes and service-record refresh. Tracked in
+  [#414](https://github.com/SteelCrab/firecrab/issues/414).
+
+- Sandbox CLI and MCP artifact downloads reject a task response whose ID differs
+  from the requested task. Artifact ownership and download URLs remain bound to
+  that task and its attempt. Existing output files retain their original bytes.
+
 - Gateway MAC addresses remain stable when MicroVM TAP ports join or leave.
   Stopping a service no longer strands surviving guests' cached gateway
   neighbors or delays their internal DNS requests.
@@ -311,6 +347,11 @@ Entries land here as work merges, and move under the next version heading when t
   allowing current API sources to compile in the management VM.
 - Sandbox live QA checks API-visible source paths before model usage and accepts
   successful task responses with nullable or textual task-error fields (#414).
+
+- Sandbox reconciliation restores interrupted command output and confirmed exit
+  status before guest cleanup. Unknown exits remain unknown. A failed checkpoint
+  retains guest evidence, and successful reconciliation clears stale restart errors.
+  Tracked in [#414](https://github.com/SteelCrab/firecrab/issues/414).
 
 - OCI guests recreate image-declared `/run` directories with `systemd-tmpfiles`
   before app services on every boot. MariaDB can restart after tmpfs clears

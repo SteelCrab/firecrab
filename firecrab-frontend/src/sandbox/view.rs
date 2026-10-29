@@ -34,16 +34,23 @@ pub fn icon(name: &str) -> String {
         "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.65\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"{path}\"/></svg>"
     )
 }
-fn disabled(value: bool) -> &'static str {
+pub(super) fn disabled(value: bool) -> &'static str {
     if value { " disabled" } else { "" }
 }
-fn selected(value: bool) -> &'static str {
+pub(super) fn selected(value: bool) -> &'static str {
     if value { " selected" } else { "" }
 }
 fn checked(value: bool) -> &'static str {
     if value { " checked" } else { "" }
 }
-fn btn(label: &str, action: &str, id: &str, glyph: &str, class: &str, locked: bool) -> String {
+pub(super) fn btn(
+    label: &str,
+    action: &str,
+    id: &str,
+    glyph: &str,
+    class: &str,
+    locked: bool,
+) -> String {
     format!(
         "<button type=\"button\" id=\"{}\" class=\"{class}\" aria-label=\"{}\" data-action=\"{action}\" data-id=\"{}\"{}>{}{}</button>",
         escape(&format!("{action}-{id}")),
@@ -84,7 +91,7 @@ fn tab(label: &str, id: &str, action: &str, panel: &str, chosen: bool, glyph: &s
         format_args!("{}{count}", escape(caption))
     )
 }
-fn banner(error: &str) -> String {
+pub(super) fn banner(error: &str) -> String {
     if error.is_empty() {
         String::new()
     } else {
@@ -199,18 +206,24 @@ pub fn content(a: &App) -> String {
     if let Some(r) = &s.review {
         review(a, r, &mut out);
     }
+    if let Some(editor) = &s.resource_editor {
+        resources::editor(a, editor, &mut out);
+    }
     out
 }
 fn workspace(a: &App, p: &Value, out: &mut String) {
     let s = &a.sandbox;
     let running = s.tasks.iter().find(|t| active(t));
     let locked = s.busy || running.is_some();
-    let vm = a
-        .vms
-        .iter()
-        .find(|v| v.id == text(&p["spec"], "vmId"))
-        .map(|v| v.name.as_str())
-        .unwrap_or(tr(a, "Conversation workspace", "대화 작업 공간"));
+    let vm = if !text(&p["spec"], "environmentId").is_empty() {
+        tr(a, "Managed environment", "관리형 환경")
+    } else {
+        a.vms
+            .iter()
+            .find(|v| v.id == text(&p["spec"], "vmId"))
+            .map(|v| v.name.as_str())
+            .unwrap_or(tr(a, "Conversation workspace", "대화 작업 공간"))
+    };
     let _ = write!(
         out,
         "<header class=\"sb-workspace-header\"><div class=\"sb-project-heading\">{}<div><h2>{}</h2><span>{}</span></div></div><div class=\"sb-row\">{}{}</div></header><div class=\"sb-tabs\" role=\"tablist\" aria-label=\"{}\">{}{}</div>{}<div class=\"sb-content\" id=\"sb-panel\" role=\"tabpanel\" aria-labelledby=\"sb-{}-tab\">",
@@ -266,6 +279,7 @@ fn workspace(a: &App, p: &Value, out: &mut String) {
             tr(a, "Loading…", "불러오는 중…")
         ));
     }
+    resources::content(a, out);
     if s.tab == "tasks" {
         board(a, out);
     } else {
@@ -377,9 +391,11 @@ fn workspace(a: &App, p: &Value, out: &mut String) {
             "프로젝트 설정에서 모델을 검증하고 선택한다",
         )
     };
+    let _ = write!(out, "</div></div>",);
+    resources::coordination(a, out);
     let _ = write!(
         out,
-        "</div></div><div class=\"sb-composer-note\"><span>{}{note}</span><kbd>⌘ / Ctrl ↵</kbd></div></form>",
+        "<div class=\"sb-composer-note\"><span>{}{note}</span><kbd>⌘ / Ctrl ↵</kbd></div></form>",
         icon(if s.kind == "code" {
             "terminal"
         } else {
@@ -544,22 +560,58 @@ fn board(a: &App, out: &mut String) {
             );
         }
         for t in tasks {
+            let tests = t["testCount"].as_u64().unwrap_or(0);
+            let failed = t["failedTestCount"].as_u64();
+            let agent = text(&t["request"]["coordination"], "assignedAgent");
+            let test_label = if tests == 0 {
+                tr(a, "No tests recorded", "기록된 테스트 없음").into()
+            } else if failed.is_some_and(|failed| failed > 0) {
+                format!(
+                    "{} {}/{tests}",
+                    tr(a, "Tests failed", "테스트 실패"),
+                    failed.unwrap()
+                )
+            } else if failed == Some(0) {
+                format!("{} {tests}", tr(a, "Tests passed", "테스트 통과"))
+            } else {
+                format!("{} {tests}", tr(a, "Tests recorded", "기록된 테스트"))
+            };
             let _ = write!(
                 out,
-                "<button type=\"button\" id=\"sb-card-{}\" class=\"sb-task-card\" data-action=\"sb-review\" data-id=\"{}\"><span class=\"sb-task-state {}\">{}{}</span><strong>{}</strong><span class=\"sb-card-meta\">{}<span>{} {}</span></span><span class=\"sb-error-text\">{}</span></button>",
+                "<button type=\"button\" id=\"sb-card-{}\" class=\"sb-task-card\" data-action=\"sb-review\" data-id=\"{}\"><span class=\"sb-task-state {}\">{}{}</span><strong>{}</strong><span class=\"sb-card-meta\">{}<span>{} {}</span></span><span class=\"sb-card-meta\"><span>{}: {}</span><span>{}: {}</span></span><span class=\"sb-card-tests {}\">{}</span><span class=\"sb-error-text\">{}</span></button>",
                 escape(text(t, "id")),
                 escape(text(t, "id")),
                 escape(text(t, "state")),
                 icon(if matches!(text(t, "state"), "failed" | "interrupted") {
                     "circle-x"
-                } else {
+                } else if text(t, "state") == "result" {
+                    "diff"
+                } else if text(t, "state") == "merged" {
                     "circle-check"
+                } else {
+                    "refresh"
                 }),
                 state_label(a, t),
                 escape(text(&t["request"], "input")),
                 escape(text(&t["selection"], "model")),
                 t["changeCount"].as_u64().unwrap_or(0),
                 tr(a, "files", "개 파일"),
+                tr(a, "Agent", "에이전트"),
+                if agent.is_empty() {
+                    tr(a, "Unassigned", "미지정").into()
+                } else {
+                    escape(agent)
+                },
+                tr(a, "Artifacts", "파일 결과"),
+                t["artifactCount"].as_u64().unwrap_or(0),
+                if failed.is_some_and(|failed| failed > 0) {
+                    "failed"
+                } else if tests > 0 && failed == Some(0) {
+                    "passed"
+                } else {
+                    "none"
+                },
+                test_label,
                 escape(text(t, "error"))
             );
         }
@@ -567,7 +619,7 @@ fn board(a: &App, out: &mut String) {
     }
     out.push_str("</div>");
 }
-fn field(label: &str, id: &str, value: &str, extra: &str, locked: bool) -> String {
+pub(super) fn field(label: &str, id: &str, value: &str, extra: &str, locked: bool) -> String {
     format!(
         "<label for=\"{id}\">{}<input id=\"{id}\" value=\"{}\" {extra}{}></label>",
         escape(label),
@@ -743,13 +795,83 @@ fn editor(a: &App, e: &Editor, out: &mut String) {
             escape(&vm.state)
         );
     }
+    out.push_str("</select></label>");
     let _ = write!(
         out,
-        "</select></label><p class=\"sb-hint\">{}</p></fieldset><label for=\"sb-instructions\">{}<textarea id=\"sb-instructions\" rows=\"3\" maxlength=\"16384\"{}>{}</textarea></label><footer class=\"sb-dialog-footer\">{}<button id=\"sb-save\" type=\"submit\" class=\"btn primary\"{}>{}</button></footer></form></dialog>",
+        "<label for=\"sb-environment\">{}<select id=\"sb-environment\"><option value=\"\">{}</option>",
+        tr(a, "Managed environment", "관리형 환경"),
+        tr(a, "Use selected MicroVM", "선택한 MicroVM 사용")
+    );
+    for environment in &a.sandbox.environments {
+        if environment["state"] == "deleted" {
+            continue;
+        }
+        let id = text(environment, "id");
+        let _ = write!(
+            out,
+            "<option value=\"{}\"{}>{} · {}</option>",
+            escape(id),
+            selected(e.spec["environmentId"] == id),
+            escape(&id.chars().take(8).collect::<String>()),
+            escape(resources::status(a, text(environment, "state")))
+        );
+    }
+    let _ = write!(
+        out,
+        "</select></label><p class=\"sb-hint\">{}</p></fieldset>",
         tr(
             a,
             "Files are edited in an isolated task branch. Commands run as a dedicated user inside this MicroVM. Your source changes only when you apply reviewed files.",
             "파일은 별도 작업 브랜치에서 수정한다. 명령은 이 MicroVM의 전용 사용자로 실행한다. 검토한 파일을 반영할 때 원본이 변경된다."
+        ),
+    );
+    let context = &e.spec["context"];
+    let _ = write!(
+        out,
+        "<details id=\"sb-project-context\" class=\"sb-fieldset\"><summary>{}</summary>{}",
+        tr(a, "Project context", "프로젝트 문맥"),
+        field(
+            tr(a, "Git ref", "Git 참조"),
+            "sb-git-ref",
+            text(context, "gitRef"),
+            "placeholder=\"HEAD\"",
+            e.busy
+        )
+    );
+    for (key, id, en, ko) in [
+        (
+            "selectedSkills",
+            "sb-skills",
+            "Selected skill paths, one per line",
+            "선택한 스킬 경로, 한 줄에 하나",
+        ),
+        (
+            "references",
+            "sb-references",
+            "Reference file paths, one per line",
+            "참조 파일 경로, 한 줄에 하나",
+        ),
+    ] {
+        let value = list(&context[key])
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = write!(
+            out,
+            "<label for=\"{id}\">{}<textarea id=\"{id}\" rows=\"2\"{}>{}</textarea></label>",
+            tr(a, en, ko),
+            disabled(e.busy),
+            escape(&value)
+        );
+    }
+    let _ = write!(
+        out,
+        "<p class=\"sb-hint\">{}</p></details><label for=\"sb-instructions\">{}<textarea id=\"sb-instructions\" rows=\"3\" maxlength=\"16384\"{}>{}</textarea></label><footer class=\"sb-dialog-footer\">{}<button id=\"sb-save\" type=\"submit\" class=\"btn primary\"{}>{}</button></footer></form></dialog>",
+        tr(
+            a,
+            "Paths must be inside this project's source directory.",
+            "경로는 이 프로젝트의 원본 디렉터리 안에 있어야 한다."
         ),
         tr(a, "Project instructions", "프로젝트 지침"),
         disabled(e.busy),
@@ -841,6 +963,7 @@ fn review(a: &App, r: &Review, out: &mut String) {
         banner(&r.load_error),
         banner(text(task, "error"))
     );
+    resources::result(a, task, out);
     if r.tab == "changes" {
         if changes.is_empty() {
             let _ = write!(

@@ -795,6 +795,48 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // Model verification and explicit guest recovery need longer bounded HTTP waits.
     let sandbox = Router::new()
         .route(
+            "/api/ai-sandbox/tunnels",
+            get(handlers::sandbox_tunnels::inventory),
+        )
+        .route(
+            "/api/ai-sandbox/tunnels/{id}/retarget",
+            post(handlers::sandbox_tunnels::retarget),
+        )
+        .merge(handlers::sandbox_environments::routes())
+        .merge(handlers::sandbox_guest::routes())
+        .route(
+            "/api/ai-sandbox/tunnel-addresses",
+            get(handlers::sandbox_tunnels::addresses),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{project}/tunnels",
+            get(handlers::sandbox_tunnels::list),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{project}/tunnels/{id}",
+            axum::routing::put(handlers::sandbox_tunnels::save),
+        )
+        .route(
+            "/api/ai-sandbox/tunnels/{id}",
+            get(handlers::sandbox_tunnels::get).delete(handlers::sandbox_tunnels::delete),
+        )
+        .route(
+            "/api/ai-sandbox/tunnels/{id}/publish",
+            post(handlers::sandbox_tunnels::publish),
+        )
+        .route(
+            "/api/ai-sandbox/tunnels/{id}/reconcile",
+            post(handlers::sandbox_tunnels::reconcile),
+        )
+        .route(
+            "/api/ai-sandbox/tunnels/{id}/stop",
+            post(handlers::sandbox_tunnels::stop),
+        )
+        .route(
+            "/api/ai-sandbox/tunnels/{id}/verify",
+            post(handlers::sandbox_tunnels::verify),
+        )
+        .route(
             "/api/ai-sandbox/access/{principal}",
             get(handlers::ai_sandbox::get_access)
                 .put(handlers::ai_sandbox::set_access)
@@ -841,6 +883,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/ai-sandbox/tasks/{id}/apply",
             post(handlers::ai_sandbox::apply_task),
+        )
+        .route(
+            "/api/ai-sandbox/tasks/{id}/artifacts/{artifact}",
+            get(handlers::ai_sandbox::get_artifact),
         )
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))

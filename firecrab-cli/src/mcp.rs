@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 const MAX_MESSAGE: usize = 65_536;
 const PROTOCOL: &str = "2025-11-25";
+mod sandbox;
 
 #[cfg(test)]
 #[path = "mcp_tests.rs"]
@@ -41,6 +42,8 @@ struct NetworkCreate {
     operation_id: Uuid,
     name: String,
     subnet_cidr: String,
+    #[serde(default)]
+    internet_enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +56,12 @@ struct VmCreate {
     cpu: u8,
     ram: u32,
     disk_gb: u16,
+    #[serde(default = "isolated_egress")]
+    egress_policy: EgressPolicy,
+}
+
+fn isolated_egress() -> EgressPolicy {
+    EgressPolicy::Isolated
 }
 
 #[derive(Deserialize)]
@@ -196,6 +205,9 @@ impl Session {
         if !matching.is_empty() {
             return Err("A resource with this operation name already exists; ownership cannot be recovered in a new session".into());
         }
+        if self.operations.len() >= 256 {
+            return Err("This MCP session reached its 256 creation-operation limit; inspect and clean up owned resources before starting another session".into());
+        }
         self.operations.insert(
             operation,
             Creation {
@@ -244,9 +256,10 @@ impl Session {
             "network_create" => {
                 let a: NetworkCreate = parse(args)?;
                 let spec = CreateMicroNetworkRequest {
+                    dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                     name: resource_name(&a.name, a.operation_id)?,
                     subnet_cidr: a.subnet_cidr,
-                    internet_enabled: true,
+                    internet_enabled: a.internet_enabled,
                     uplink: None,
                     ipv6_cidr: None,
                     ipv6_address_mode: None,
@@ -268,7 +281,7 @@ impl Session {
                     cpu: a.cpu,
                     ram: a.ram,
                     disk_gb: a.disk_gb,
-                    egress_policy: EgressPolicy::Internet,
+                    egress_policy: a.egress_policy,
                     storage_root: None,
                     block_storages: vec![],
                     shell_ids: vec![],
@@ -299,12 +312,19 @@ impl Session {
                 }
                 let deadline = Instant::now() + Duration::from_secs(a.timeout_seconds);
                 loop {
-                    let vm: VmResponse = api(client.get(&format!("/api/vms/{}", a.id)))?;
+                    let remaining = deadline
+                        .saturating_duration_since(Instant::now())
+                        .max(Duration::from_millis(1));
+                    let vm: VmResponse =
+                        api(client.get_with_timeout(&format!("/api/vms/{}", a.id), remaining))?;
                     let reached = vm.state == a.state;
                     if reached || vm.state == VmState::Error || Instant::now() >= deadline {
                         return Ok(json!({ "reached": reached, "vm": vm }));
                     }
-                    std::thread::sleep(Duration::from_millis(500));
+                    std::thread::sleep(
+                        Duration::from_millis(250)
+                            .min(deadline.saturating_duration_since(Instant::now())),
+                    );
                 }
             }
             "vm_delete" | "network_delete" => {
@@ -317,9 +337,17 @@ impl Session {
                 if !self.owned.contains(&(path.into(), a.id)) {
                     return Err("Deletion requires a resource created by this MCP session".into());
                 }
-                api(client.delete(&format!("{path}/{}", a.id)))?;
-                self.owned.remove(&(path.into(), a.id));
-                Ok(json!({ "deleted": a.id }))
+                let accepted = client.delete(&format!("{path}/{}", a.id)).is_ok();
+                let absent = matches!(
+                    client.get::<Value>(&format!("{path}/{}", a.id)),
+                    Err(crate::api_client::ApiError::Http { status: 404, .. })
+                );
+                if absent {
+                    self.owned.remove(&(path.into(), a.id));
+                }
+                Ok(
+                    json!({ "id":a.id,"deleted":absent.then_some(a.id), "deleteAccepted":accepted,"confirmedAbsent":absent,"owned":!absent }),
+                )
             }
             "owned_resources" => {
                 let _: Empty = parse(args)?;
@@ -330,7 +358,7 @@ impl Session {
                     .collect();
                 rows.sort_by_key(Value::to_string);
                 Ok(
-                    json!({ "resources": rows, "retention": "No automatic deletion on EOF or disconnect" }),
+                    json!({ "resources": rows, "operations":self.operations.iter().map(|(id,op)| json!({"operationId":id,"resource":op.path,"id":op.id,"outcome":if op.id.is_some(){"confirmed"}else{"uncertain"}})).collect::<Vec<_>>(), "retention": "No automatic deletion on EOF or disconnect" }),
                 )
             }
             "vm_reassign_network" => Err(
@@ -454,7 +482,7 @@ impl Session {
                     client.post::<_, AiResponse>("/api/pipe/ai/responses", &a)
                 )?)
             }
-            _ => Err("Unknown tool".into()),
+            _ => sandbox::call(client, name, args),
         }
     }
 
@@ -578,9 +606,9 @@ fn catalog() -> Vec<Value> {
         ),
         (
             "network_create",
-            "Create an owned network. Reuse operationId after uncertainty; never blindly retry.",
+            "Create an owned network. internetEnabled defaults to false. Set it explicitly when needed. Reuse operationId after uncertainty; never blindly retry.",
             schema(
-                json!({"operationId":uuid,"name":string,"subnetCidr":string}),
+                json!({"operationId":uuid,"name":string,"subnetCidr":string,"internetEnabled":{"type":"boolean","default":false}}),
                 &["operationId", "name", "subnetCidr"],
             ),
             false,
@@ -588,9 +616,9 @@ fn catalog() -> Vec<Value> {
         ),
         (
             "vm_create",
-            "Create an owned VM on an explicit network. Reuse operationId to reconcile uncertainty.",
+            "Create an owned VM on an explicit network. egressPolicy defaults to isolated. Set internet explicitly only when authorized. Reuse operationId to reconcile uncertainty.",
             schema(
-                json!({"operationId":uuid,"name":string,"template":string,"microNetworkId":uuid,"cpu":{"type":"integer","minimum":1},"ram":{"type":"integer","minimum":1},"diskGb":{"type":"integer","minimum":1}}),
+                json!({"operationId":uuid,"name":string,"template":string,"microNetworkId":uuid,"cpu":{"type":"integer","minimum":1},"ram":{"type":"integer","minimum":1},"diskGb":{"type":"integer","minimum":1},"egressPolicy":{"enum":["isolated","internet"],"default":"isolated"}}),
                 &[
                     "operationId",
                     "name",
@@ -709,11 +737,11 @@ fn catalog() -> Vec<Value> {
         ),
     ];
     let project_spec = schema(
-        json!({"name":string,"sourcePath":{"type":["string","null"]},"vmId":{"anyOf":[uuid,{"type":"null"}]},"selection":{"anyOf":[selection,{"type":"null"}]},"instructions":{"type":"string"}}),
+        json!({"name":string,"sourcePath":{"type":["string","null"]},"vmId":{"anyOf":[uuid,{"type":"null"}]},"environmentId":{"anyOf":[uuid,{"type":"null"}]},"selection":{"anyOf":[selection,{"type":"null"}]},"instructions":{"type":"string"},"context":sandbox::context_schema()}),
         &["name"],
     );
     let request = schema(
-        json!({"kind":{"enum":["chat","code"]},"input":{"type":"string","minLength":1,"maxLength":32768},"selection":{"anyOf":[selection,{"type":"null"}]},"retryOf":{"anyOf":[uuid,{"type":"null"}]}}),
+        json!({"kind":{"enum":["chat","code"]},"input":{"type":"string","minLength":1,"maxLength":32768},"selection":{"anyOf":[selection,{"type":"null"}]},"retryOf":{"anyOf":[uuid,{"type":"null"}]},"coordination":sandbox::coordination_schema(),"environmentRole":{"type":["string","null"]}}),
         &["kind", "input"],
     );
     tools.extend([
@@ -734,7 +762,7 @@ fn catalog() -> Vec<Value> {
     tools.into_iter().map(|(name, description, input, read, destructive)| json!({
         "name":name,"description":description,"inputSchema":input,"outputSchema":output_schema(name),
         "annotations":{"readOnlyHint":read,"destructiveHint":destructive,"openWorldHint":true}
-    })).collect()
+    })).chain(sandbox::catalog()).collect()
 }
 
 fn sandbox_policy_schema() -> Value {
@@ -776,7 +804,7 @@ fn output_schema(name: &str) -> Value {
     );
     // Known REST properties are typed; additive lifecycle metadata remains compatible.
     let network = json!({"type":"object","properties":{"id":uuid,"name":string,"subnetCidr":string,"gateway":string,"internetEnabled":{"type":"boolean"}},"required":["id","name","subnetCidr","gateway","internetEnabled"]});
-    let vm = json!({"type":"object","properties":{"id":uuid,"name":string,"state":{"enum":["created","starting","running","stopping","stopped","error"]},"template":string,"microNetworkId":uuid},"required":["id","name","state","template","microNetworkId"]});
+    let vm = json!({"type":"object","properties":{"id":uuid,"name":string,"state":{"enum":["created","starting","running","pausing","paused","resuming","stopping","stopped","error"]},"template":string,"microNetworkId":uuid},"required":["id","name","state","template","microNetworkId"]});
     let array = |item: Value| schema(json!({"items":{"type":"array","items":item}}), &["items"]);
     let create = |item: Value| json!({"type":"object","anyOf":[item.clone(),schema(json!({"outcome":{"const":"uncertain"},"candidate":item,"owned":{"const":false},"message":string}), &["outcome","candidate","owned","message"])]});
     match name {
@@ -795,10 +823,19 @@ fn output_schema(name: &str) -> Value {
             json!({"reached":{"type":"boolean"},"vm":vm}),
             &["reached", "vm"],
         ),
-        "vm_delete" | "network_delete" => schema(json!({"deleted":uuid}), &["deleted"]),
+        "vm_delete" | "network_delete" => schema(
+            json!({"id":uuid,"deleted":{"anyOf":[uuid,{"type":"null"}]},"deleteAccepted":{"type":"boolean"},"confirmedAbsent":{"type":"boolean"},"owned":{"type":"boolean"}}),
+            &[
+                "id",
+                "deleted",
+                "deleteAccepted",
+                "confirmedAbsent",
+                "owned",
+            ],
+        ),
         "owned_resources" => schema(
-            json!({"resources":{"type":"array","items":schema(json!({"resource":{"enum":["/api/vms","/api/micro-networks"]},"id":uuid}), &["resource","id"])},"retention":string}),
-            &["resources", "retention"],
+            json!({"resources":{"type":"array","items":schema(json!({"resource":{"enum":["/api/vms","/api/micro-networks"]},"id":uuid}), &["resource","id"])},"operations":{"type":"array","items":schema(json!({"operationId":uuid,"resource":string,"id":{"type":["string","null"]},"outcome":{"enum":["confirmed","uncertain"]}}), &["operationId","resource","id","outcome"])},"retention":string}),
+            &["resources", "operations", "retention"],
         ),
         "ai_connections_list" => array(connection),
         "ai_model_verify" => connection,
@@ -810,7 +847,7 @@ fn output_schema(name: &str) -> Value {
             json!({"selection":selection,"text":string}),
             &["selection", "text"],
         ),
-        _ => json!({"type":"object"}),
+        _ => sandbox::output_schema(name),
     }
 }
 

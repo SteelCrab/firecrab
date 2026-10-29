@@ -135,6 +135,60 @@ impl ApiClient {
         Self::decode_json(resp)
     }
 
+    /// Per-poll deadlines keep a multi-request wait within the caller's total bound.
+    pub fn get_with_timeout<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        timeout: Duration,
+    ) -> Result<T, ApiError> {
+        let response = self
+            .client
+            .get(self.url(path))
+            .timeout(timeout)
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::decode_json(response)
+    }
+
+    /// Bound binary artifact reads before decoding or presenting them to a model.
+    pub fn get_bytes_bounded(&self, path: &str, limit: usize) -> Result<Vec<u8>, ApiError> {
+        use std::io::Read;
+        let response = self
+            .client
+            .get(self.url(path))
+            .timeout(DEFAULT_REQUEST_TIMEOUT)
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        let response = Self::ensure_success(response)?;
+        let mut bytes = Vec::new();
+        response
+            .take(limit.saturating_add(1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ApiError::Unreachable("Artifact download failed".into()))?;
+        if bytes.len() > limit {
+            return Err(ApiError::Unreachable(
+                "Artifact exceeds this client's download bound".into(),
+            ));
+        }
+        Ok(bytes)
+    }
+
+    /// Explicit final-deletion authorization belongs in typed JSON, never a query string.
+    pub fn delete_with_body<B: Serialize + ?Sized, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, ApiError> {
+        let response = self
+            .client
+            .delete(self.url(path))
+            .json(body)
+            .timeout(Duration::from_secs(185))
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::decode_json(response)
+    }
+
     /// Sends a JSON `GET` request with URL-encoded query parameters and
     /// deserializes any successful 2xx response body.
     pub fn get_query<Q, T>(&self, path: &str, query: &Q) -> Result<T, ApiError>
@@ -191,6 +245,21 @@ impl ApiClient {
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(resp)
+    }
+    /// A successful signal accepts no JSON body in its response and proves no termination.
+    pub fn post_no_content<B: Serialize + ?Sized>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<(), ApiError> {
+        let response = self
+            .client
+            .post(self.url(path))
+            .json(body)
+            .timeout(Duration::from_secs(185))
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::ensure_success(response).map(|_| ())
     }
 
     /// Sends a body-less `POST` with an `Idempotency-Key` header when `key`

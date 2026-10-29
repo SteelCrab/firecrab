@@ -17,7 +17,16 @@ pub use cluster::*;
 mod cluster_services;
 pub use cluster_services::*;
 mod ai_sandbox;
+mod sandbox_tunnel;
+pub use sandbox_tunnel::*;
+mod sandbox_control;
+pub use sandbox_control::*;
+mod sandbox_canvas;
+pub use sandbox_canvas::*;
 mod block_storage;
+mod network_dns;
+mod sandbox_environment;
+mod sandbox_guest;
 pub use block_storage::*;
 mod auto_deploy;
 pub use auto_deploy::{AutoDeployPause, AutoDeployPolicy, AutoDeployStatus};
@@ -36,11 +45,14 @@ pub use micro_services::{
     MicroServiceSpec, RetryServiceRequest, RollbackServiceRequest, ServiceInstance, ServicePhase,
     ServiceRouteTransition, ServiceRuntime, ServiceUpdate, UpdateServiceRequest,
 };
+pub use network_dns::*;
 pub use pipe_ai::*;
 pub use pipe_storage::{
     PipeStorageResponse, PipeStorageSpec, StorageCredentialRef, StorageObject, StorageObjectPage,
     StorageServiceRef,
 };
+pub use sandbox_environment::*;
+pub use sandbox_guest::*;
 pub use schedules::*;
 pub use security_groups::*;
 
@@ -815,6 +827,9 @@ pub struct CreateMicroNetworkRequest {
     /// network it expects.
     #[serde(default = "internet_enabled_default")]
     pub internet_enabled: bool,
+    /// DNS resolver posture. Omission preserves gateway forwarding for existing clients.
+    #[serde(default)]
+    pub dns_mode: MicroNetworkDnsMode,
     /// Host NIC this network should masquerade out of. Omitted or `null`
     /// means the host default-route iface. An empty string is rejected by
     /// the API (400), not stored as auto.
@@ -875,6 +890,9 @@ pub struct MicroNetworkResponse {
     /// closed network: no NAT, and nothing routed out of it
     /// (`public-docs/guides/networking.md`).
     pub internet_enabled: bool,
+    /// Stored DNS posture, independently enforced from routed egress policy.
+    #[serde(default)]
+    pub dns_mode: MicroNetworkDnsMode,
     /// Stored host NIC for NAT, or `null` to use the host default route.
     pub uplink: Option<String>,
     /// The network's IPv6 prefix, or `null` for a network created before
@@ -2592,6 +2610,7 @@ mod tests {
     #[test]
     fn a_dual_stack_micro_network_response_carries_its_v6_plan() {
         let response = MicroNetworkResponse {
+            dns_mode: crate::MicroNetworkDnsMode::LegacyForward,
             id: Uuid::from_u128(0x1234),
             name: "prod".to_owned(),
             subnet_cidr: "172.31.0.0/24".to_owned(),
@@ -2617,6 +2636,7 @@ mod tests {
     #[test]
     fn micro_network_response_round_trips() {
         let response = MicroNetworkResponse {
+            dns_mode: crate::MicroNetworkDnsMode::LegacyForward,
             id: Uuid::from_u128(0x1234),
             name: "prod".to_owned(),
             subnet_cidr: "172.31.0.0/24".to_owned(),

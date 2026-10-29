@@ -149,7 +149,7 @@ test("shows a pool create form with image, network, capacity and lease settings"
   page,
 }) => {
   await openEnglish(page, "/#/pools");
-  await page.locator('.screen-header [data-action="create"][data-id="pools"]').click();
+  await page.locator(".screen-header").getByRole("button", { name: "New pool", exact: true }).click();
   await page.locator("#editor").getByText("Advanced settings", { exact: true }).click();
   for (const field of [
     "name",
@@ -180,7 +180,7 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
 
   await openEnglish(page, "/#/pools");
   const panel = poolsPanel(page);
-  await page.locator('.screen-header [data-action="create"][data-id="pools"]').click();
+  await page.locator(".screen-header").getByRole("button", { name: "New pool", exact: true }).click();
   await expect(
     page.locator(`#field-template option[value="${alias}"]`),
   ).toHaveCount(1, {
@@ -209,8 +209,7 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
     .locator("table.pool-table tbody tr")
     .filter({ hasText: POOL_E2E_NAME });
   await expect(row).toBeVisible();
-  // Ready members out of all members.
-  await expect(row).toContainText("0 / 0");
+  await expect(row.getByRole("cell", { name: "0 / 0", exact: true })).toBeVisible();
   const created = (await api.listPools()).find(
     (pool) => pool.name === POOL_E2E_NAME,
   );
@@ -238,7 +237,7 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
     expect(dialog.message()).toContain("Delete");
     await dialog.accept();
   });
-  await row.getByRole("cell").first().click();
+  await row.click();
   await page.getByRole("button", { name: "Delete pool", exact: true }).click();
   await expect(row).toHaveCount(0, { timeout: 30_000 });
 });

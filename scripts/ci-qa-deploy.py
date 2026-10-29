@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Real MicroVM/Nginx Deploy acceptance on an empty, disposable Linux CI host.
 
-Uses locally built OCI images and a private, fake Auth fixture. It never contacts
-GitHub/GHCR and does not establish external-registry or public TLS acceptance.
+Uses locally built OCI images and a private, fake Auth fixture. The optional
+public Tunnel mode contacts the production connection service and requires
+separate target approval and two disposable dashboard-issued tokens.
 """
 
 import argparse
@@ -20,6 +21,7 @@ import platform
 import socket
 import sqlite3
 import subprocess
+import sys
 import tarfile
 import threading
 import time
@@ -33,6 +35,10 @@ from deploy_recovery_qa import run_recovery
 from deploy_queue_qa import run_queue
 from deploy_ci_qa import run_ci
 from deploy_observation_qa import run_observation
+from public_tunnel_credentials import load_credentials, verify_registration
+from public_tunnel_fixture import image_fixture as public_image_fixture, static_elf_arch
+from public_tunnel_setup import run_fixture_services
+from public_tunnel_acceptance import run_public
 
 
 def digest(data):
@@ -224,7 +230,7 @@ def require_empty_host(api):
 
 def run(args, evidence):
     assert args.disposable_host and os.geteuid() == 0 and Path("/dev/kvm").exists()
-    required_cpus = 4 if args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability else 3
+    required_cpus = 4 if args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability or args.public_tunnel else 3
     assert int(subprocess.check_output(["nproc"], text=True)) >= required_cpus, f"{required_cpus} CPUs required for the selected rolling-surge acceptance"
     if args.fifteen_services:
         evidence["host"] = host_evidence(args.images)
@@ -232,12 +238,25 @@ def run(args, evidence):
     api = Api(args.api)
     api.ready()
     require_empty_host(api)
+    credentials = load_credentials(args.public_token) if args.public_tunnel else None
+    if args.public_tunnel:
+        evidence["publicTarget"] = {"hostname": platform.node(), "architecture": platform.machine(),
+                                    "addresses": [credential.label for credential in credentials]}
+        evidence["publicRegistration"] = [verify_registration(credential) for credential in credentials]
     if args.secret_rotation or args.replica_recovery:
         assert not api.call("GET", "/api/secrets"), "refusing existing Secrets"
         assert not api.call("GET", "/api/secrets/connections"), "refusing existing Secret connections"
     unit = "firecrab-ingress.service"
     fixtures = [image_fixture(Path(args.busybox).read_bytes(), label, label != "bad") for label in ["A", "B", "bad", "C"]]
-    registry = Registry(fixtures)
+    public_fixtures = []
+    if args.public_tunnel:
+        binary = args.public_fixture_binary.read_bytes()
+        expected_arch = {"aarch64": "arm64", "arm64": "arm64", "x86_64": "amd64", "amd64": "amd64"}.get(platform.machine())
+        if expected_arch is None or static_elf_arch(binary) != expected_arch:
+            raise ValueError("fixture architecture must match the host")
+        public_fixtures = [public_image_fixture(binary, label) for label in ["A", "B"]]
+    all_fixtures = fixtures + public_fixtures
+    registry = Registry(all_fixtures)
     images = Path(args.images)
     registrations = images / ".templates.json"
     database = Path(args.database)
@@ -318,7 +337,7 @@ def run(args, evidence):
         api.call("DELETE", service_path())
 
     try:
-        for digest_value, _, _ in fixtures:
+        for digest_value, _, _ in all_fixtures:
             result = api.call("POST", "/api/oci/import", {"reference": f"{registry.address}/team/deploy-qa@{digest_value}"})
             alias = result["alias"]
             aliases.append(alias)
@@ -327,7 +346,7 @@ def run(args, evidence):
         subprocess.run(["systemctl", "stop", "firecrab-api.service"], check=True)
         try:
             entries = json.loads(registrations.read_text())
-            for source_alias, (digest_value, _, _) in zip(aliases.copy(), fixtures):
+            for source_alias, (digest_value, _, _) in zip(aliases.copy(), all_fixtures):
                 spec = next(entry.copy() for entry in entries if entry["alias"] == source_alias)
                 spec["alias"] = "ghcr.io-team-deploy-qa-sha256-" + digest_value.split(":")[1][:12]
                 assert spec["version"] == digest_value
@@ -416,7 +435,7 @@ def run(args, evidence):
         assert len(samples) > 20 and not failures, {"samples": len(samples), "failures": failures[:10]}
         print(f"PASS unhealthy candidate stays out of traffic; {len(samples)} continuous HTTP requests, zero errors", flush=True)
         evidence["coreRequests"] = len(samples)
-        if args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability:
+        if args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability or args.public_tunnel:
             stop.set()
             loader.join(timeout=10)
             stop_service()
@@ -435,7 +454,10 @@ def run(args, evidence):
                 run_ci(api, wait_for, traffic, network, spec_a, fixtures, ingress_port, evidence)
             if args.observability:
                 run_observation(api, wait_for, traffic, network, spec_a, ingress_port, evidence)
+            if args.public_tunnel:
+                run_fixture_services(api, wait_for, network, spec_a, public_fixtures, credentials, evidence, run_public)
     finally:
+        original_error = sys.exc_info()[0] is not None
         stop.set()
         if loader: loader.join(timeout=10)
         for address in held_ips:
@@ -464,10 +486,17 @@ def run(args, evidence):
             for name in ["manifest.json", "ingress.conf"]:
                 cleanup("Pipe file " + name, lambda name=name: (Path(args.config) / "pipe" / name).unlink(missing_ok=True))
         registry.close()
-        assert not cleanup_errors, cleanup_errors
+        evidence["cleanupErrors"] = cleanup_errors
+        if cleanup_errors and not original_error:
+            raise RuntimeError("Deploy QA cleanup failed; see report")
     assert not api.call("GET", "/api/vms") and not api.call("GET", "/api/micro-services")
-    evidence["allResourcesRemoved"] = True
-    print("PASS all dedicated Deploy QA VMs, services, routes, network, fixture images and credentials removed", flush=True)
+    if args.public_tunnel:
+        evidence["deployFixtureResourcesRemoved"] = True
+        evidence["allResourcesRemoved"] = False
+        print("PASS Deploy QA fixtures removed; public reservations and token files require operator cleanup", flush=True)
+    else:
+        evidence["allResourcesRemoved"] = True
+        print("PASS all dedicated Deploy QA VMs, services, routes, network, fixture images and credentials removed", flush=True)
 
 
 if __name__ == "__main__":
@@ -486,14 +515,27 @@ if __name__ == "__main__":
     parser.add_argument("--queue-controls", action="store_true", help="run live queued cancellation, rollback priority and API restart acceptance")
     parser.add_argument("--ci-deploy", action="store_true", help="run scoped CLI/Action acceptance through private verified TLS and Nginx")
     parser.add_argument("--observability", action="store_true", help="run isolated app logs, API restart, events and OTLP acceptance")
+    parser.add_argument("--public-tunnel", action="store_true", help="run explicitly approved public Tunnel acceptance")
+    parser.add_argument("--public-target-approved", action="store_true", help="confirm separate approval for the host and public test addresses")
+    parser.add_argument("--public-token", nargs=2, action="append", metavar=("LABEL", "PRIVATE_FILE"), help="owned qa- label and private token file; repeat twice")
+    parser.add_argument("--public-fixture-binary", type=Path, help="statically linked Linux public Tunnel fixture")
     parser.add_argument("--report", type=Path, help="write measured evidence even when acceptance fails")
     args = parser.parse_args()
-    if (args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability) and not args.report:
+    if (args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability or args.public_tunnel) and not args.report:
         parser.error("extended acceptance requires --report")
+    if args.public_tunnel:
+        if not args.public_target_approved or not args.public_fixture_binary or not args.public_token or len(args.public_token) != 2:
+            parser.error("public Tunnel acceptance requires explicit target approval, a fixture binary, and exactly two token files")
+        if args.api != "http://127.0.0.1:5523" or args.config != "/etc/firecrab" or args.database != "/var/lib/firecrab/data/firecrab.db" or args.images != "/var/lib/firecrab/images":
+            parser.error("public Tunnel acceptance requires the default disposable host paths and API")
+        if args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability:
+            parser.error("public Tunnel acceptance cannot be combined with other extended modes")
+    elif args.public_target_approved or args.public_fixture_binary or args.public_token:
+        parser.error("public Tunnel options require --public-tunnel")
     evidence = {"status": "failed", "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}
     try:
         run(args, evidence)
-        evidence["status"] = "passed"
+        evidence["status"] = "pending_operator_verification" if args.public_tunnel else "passed"
     except BaseException as error:
         evidence["error"] = str(error)
         raise

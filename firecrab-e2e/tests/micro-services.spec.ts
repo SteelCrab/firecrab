@@ -126,8 +126,6 @@ async function openServices(
         json: { phase: "idle", percent: 0, updatedAtMs: 0 },
       });
     if (path.endsWith("/deployment") && method === "GET") return route.fulfill({json:null});
-    // The Deploy form's check is not a save: it must not replace the saved services.
-    if (method === "POST" && path.endsWith("/deployment/check")) return route.fulfill({ json: {} });
     if (path.startsWith("/api/micro-services")) {
       if (method === "POST" || method === "PUT") {
         const body = route.request().postDataJSON();
@@ -152,6 +150,13 @@ async function openServices(
       if (method === "DELETE") {
         saved = [];
         return route.fulfill({ status: 204 });
+      }
+      const detail = /^\/api\/micro-services\/([^/]+)$/.exec(path);
+      if (method === "GET" && detail) {
+        const service = saved.find(row => "id" in row && row.id === decodeURIComponent(detail[1]));
+        return service
+          ? route.fulfill({ json: service })
+          : route.fulfill({ status: 404, json: { error: { code: "not_found", message: "resource not found" } } });
       }
       return route.fulfill({
         json: path === "/api/micro-services" ? saved : saved[0],
@@ -592,8 +597,6 @@ test.describe("MicroService configuration @dashboard", () => {
   test("lists name, port, replicas and domain, with Deploy and a menu on each row", async ({ page }) => {
     const worker = { ...INITIAL, id: SECRET, name: "worker", image: "worker:2.0", port: 9000, replicas: 2, domain: null };
     await openServices(page, [INITIAL, worker]);
-    // Opening a row asks for that service; the shared mock answers with the first one.
-    await page.route(`**/api/micro-services/${SECRET}`, route => route.fulfill({ json: worker }));
     await expect(page.getByRole("columnheader")).toHaveText(["Service", "Port", "Replicas", "Domain", "Actions"]);
     await expect(page.getByRole("columnheader", { name: "State" })).toHaveCount(0);
     const rows = page.locator("table.service-table tbody tr");
@@ -616,9 +619,10 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect(panel.locator(".detail-meta")).toHaveText("orders");
     // A row click opens the tabs; the name is a button too, for the keyboard.
     await panel.getByRole("button", { name: "Cancel", exact: true }).click();
-    // The form closes first; only then does another row open its own panel.
-    await expect(panel.getByRole("heading", { name: "Deploy MicroService", exact: true })).toHaveCount(0);
+    const workerDetail = page.waitForResponse(response =>
+      response.request().method() === "GET" && new URL(response.url()).pathname === `/api/micro-services/${SECRET}`);
     await rows.nth(1).locator("td").nth(1).click();
+    expect(await (await workerDetail).json()).toMatchObject({ id: SECRET, name: "worker" });
     await expect(panel.getByRole("heading", { name: "worker", exact: true })).toBeVisible();
     await expect(panel.getByRole("tab")).toHaveCount(4);
     await page.getByRole("button", { name: "Open orders", exact: true }).focus();

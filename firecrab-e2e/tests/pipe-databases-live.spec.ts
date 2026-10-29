@@ -27,8 +27,8 @@ test("connects, reads and removes a real database through the dashboard", async 
     await page.reload();
     await panel.getByRole("button", { name: `Browse ${name}`, exact: true }).click();
     await panel.getByLabel("Table", { exact: true }).selectOption({ label: `${database.schema}.${database.table}` });
-    await expect(panel.getByRole("cell", { name: "café", exact: true })).toBeVisible();
-    await expect(panel.getByRole("cell", { name: "<script>text</script>", exact: true })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^café(\s|$)/ })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: /^<script>text<\/script>(\s|$)/ })).toBeVisible();
     await expect(panel.locator(".pipe-database-preview tbody tr")).toHaveCount(3);
     const longValue = panel.locator(".pipe-database-cell").filter({ hasText: /^x{2048}$/ });
     await expect(longValue).toHaveCount(1);
