@@ -1,8 +1,13 @@
 # microManager installation and runtime TOML
 
-[packaging/micromanager.toml](../../packaging/micromanager.toml) defines Debian, Firecrab, Firecracker, kernels, platform images, URLs, and checksums.
+[packaging/micromanager.toml](../../packaging/micromanager.toml) defines Debian, Firecracker, kernels, platform images, URLs, and checksums.
 The CLI embeds it at build time.
-Maintainers change the manifest and build a new CLI to publish different installation inputs.
+Debian, Firecracker and kernels use these bundled defaults. Explicit installs
+resolve the latest stable Firecrab release and SHA256SUMS from GitHub before
+downloading or stopping services. Firecrab has no bundled version or download URL.
+The resolved release is
+recorded only after a successful installation, for both primary and private
+development environments.
 macOS uses ARM64 assets; Windows selects x86_64 or ARM64.
 
 ## Runtime settings
@@ -73,15 +78,15 @@ CLI's VM/API startup readiness deadline.
 
 Runtime edits do not change the installation fingerprint or require OS
 reprovisioning. `install` and `reinstall` retain the current runtime settings while
-selecting release inputs from the new CLI. Invalid settings fail before stopping
+selecting the latest stable Firecrab release. Invalid settings fail before stopping
 the service. Preserve the rest of the installed TOML when editing.
 
 ## Command behavior
 
 | Command | Manifest behavior |
 | --- | --- |
-| First `service install` | Install from the bundled TOML |
-| `service install` on a legacy or changed installation | Migrate to the bundled TOML |
+| First `service install` | Resolve the latest stable Firecrab release; use bundled OS defaults |
+| `service install` on a legacy or changed installation | Resolve the latest stable Firecrab release and migrate explicitly |
 | `service install` with a completed matching manifest | Reuse the installation |
 | `service reinstall` | Clear registration, old scripts, installed TOML, and completion records; provision again |
 | `start`, `stop`, `status`, `dev`, `repair` | Use existing assets and provisioning state |
@@ -90,7 +95,8 @@ the service. Preserve the rest of the installed TOML when editing.
 
 Updating the CLI alone does not migrate existing installations.
 `service dev` installs only when the management VM is missing.
-An installation without `<managed-home>/micromanager.toml` uses legacy pins for validation and offline repair.
+An installation without `<managed-home>/micromanager.toml` needs an explicit install to record its release inputs.
+macOS offline OS repair retains its frozen OS image fallback; it does not select a Firecrab release.
 
 ## Install and migrate
 
@@ -100,12 +106,17 @@ firecrab service install
 firecrab service reinstall
 ```
 
-Both commands validate the bundled TOML and artifact checksums.
+Both commands validate the OS defaults, resolve one latest stable Firecrab tag,
+and verify the matching installer and host bundle against that tag's SHA256SUMS.
+Lookup or checksum failures stop installation; there is no fallback to v0.2.2.
 The guest reports its manifest fingerprint after provisioning and the nested workload check.
 The CLI saves `<managed-home>/micromanager.toml` only after the resident service and localhost API are healthy.
 Failures do not publish a new installed manifest.
 The release sections record installation inputs for validation and repair.
-The next explicit installation selects the new CLI’s bundled release inputs and retains the editable runtime settings.
+The next explicit installation resolves the latest stable Firecrab release and
+retains the editable runtime settings. Ordinary starts and repairs keep the
+recorded tag and checksums. Private development installs resolve the same
+latest stable release and retain their own runtime policies and ownership.
 
 ### macOS
 

@@ -1,7 +1,7 @@
 {
   "name": "firecrab-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.4.1",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",

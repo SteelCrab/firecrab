@@ -27,9 +27,11 @@ curl -fsS http://127.0.0.1:5523/api/host
 Require `doctor` to report `ready: true` before installation.
 `doctor --json` includes checks and suggested fixes.
 
-Installation downloads about 306 MiB of pinned Debian 13 ARM64, Firecracker v1.17.0, and Firecrab v0.2.2 assets.
+Installation downloads pinned Debian 13 ARM64 and Firecracker v1.17.0 assets,
+then selects the latest stable Firecrab release from GitHub.
 It verifies checksums, provisions the manifest-selected kernel, and checks nested Firecracker and resident boot before saving the installed manifest.
-`install` and `reinstall` select the bundled [release manifest](../reference/micromanager-manifest.md).
+`install` and `reinstall` resolve Firecrab's tag and SHA256SUMS before changing
+services, then save the exact inputs in the [release manifest](../reference/micromanager-manifest.md).
 Existing installations migrate only on an explicit install or reinstall.
 Interactive installs show pending downloads and ask first; `--yes` skips that prompt.
 Interrupted downloads resume on the next run.
@@ -43,6 +45,12 @@ first install whose binaries already exist, rerun `~/.local/bin/firecrab service
 (or the CLI in the configured install directory). Verified downloads are reused.
 
 ## Service commands
+
+Update the managed guest from the Mac with `firecrab update --check` and
+`firecrab update --apply`. Apply installs the release API, CLI, helper,
+dashboard and units together and removes development service overrides.
+It keeps VM disks and application data. The native Mac CLI and signed helper
+are installed separately with the CLI installer.
 
 | Command | Effect |
 | --- | --- |

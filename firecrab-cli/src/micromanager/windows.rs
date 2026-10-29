@@ -95,7 +95,7 @@ pub fn run(command: Command) -> Result<i32, Error> {
             let installed = manifest::Manifest::installed(&layout.managed_home)?;
             let host = match &installed {
                 Some(manifest) => provision::host_from_manifest(manifest, std::env::consts::ARCH)?,
-                None => provision::host()?.clone(),
+                None => return Err(Error::Unhealthy("installed manifest is missing; run `firecrab service install` to install the latest stable release".into())),
             };
             run_validate(&host, &layout)
         }

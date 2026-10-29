@@ -133,12 +133,12 @@ enum Command {
         json: bool,
     },
     /// Check for a newer firecrab release, and optionally install it.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     Update {
         /// Only report whether a newer release exists (the default).
         #[arg(long)]
         check: bool,
-        /// Download the matching host bundle and hand the swap to the helper.
+        /// Install the latest release for this host or its managed Debian guest.
         #[arg(long, conflicts_with = "check")]
         apply: bool,
         /// Emit the report as JSON instead of the human format.
@@ -147,6 +147,7 @@ enum Command {
         /// Keep a record of the run's progress at PATH, which the API serves as
         /// `GET /api/update/progress`. The API's updater passes it.
         #[arg(long, value_name = "PATH", hide = true, requires = "apply")]
+        #[cfg(target_os = "linux")]
         progress_file: Option<std::path::PathBuf>,
     },
     /// Manage MicroVMs through the host API.
@@ -265,6 +266,16 @@ fn run(cli: Cli) -> i32 {
             json,
             progress_file,
         } => run_update(check, apply, json, progress_file),
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        Command::Update { check, apply, json } => {
+            match micromanager::run_update(check, apply, json) {
+                Ok(code) => code,
+                Err(error) => {
+                    eprintln!("[ERROR] {error}");
+                    1
+                }
+            }
+        }
         Command::Volume { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 volume::run(client, command)
@@ -608,6 +619,30 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn cli_rejects_check_and_apply_together() {
+        assert!(Cli::try_parse_from(["firecrab", "update", "--check", "--apply"]).is_err());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn managed_hosts_expose_update_with_check_as_the_default() {
+        assert!(matches!(
+            Cli::try_parse_from(["firecrab", "update"]).unwrap().command,
+            Command::Update {
+                check: false,
+                apply: false,
+                json: false
+            }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["firecrab", "update", "--apply", "--json"])
+                .unwrap()
+                .command,
+            Command::Update {
+                check: false,
+                apply: true,
+                json: true
+            }
+        ));
         assert!(Cli::try_parse_from(["firecrab", "update", "--check", "--apply"]).is_err());
     }
 

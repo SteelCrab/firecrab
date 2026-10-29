@@ -120,9 +120,9 @@ See [CLI endpoint selection](../reference/cli.md#host-profiles).
 Each linked worktree provisions fresh OS and data disks with separate SSH keys, source caches, logs, and VM identity.
 It does not attach the primary environment's disks or share its managed home.
 Each instance has a separate launchd label and API tunnel.
-Explicit installation and reinstallation of a private instance use the verified v0.3.1 release baseline.
-This release preserves catalog-image startup files when development cleanup restores the release.
-The primary installation's release pins remain unchanged.
+Explicit installation and reinstallation resolve the latest stable Firecrab release and verify its checksums.
+Each private instance records the selected release in its own manifest.
+Development cleanup restores that instance's installed release. The primary installation is unchanged.
 Its plist stays in its own runtime directory and is loaded explicitly.
 Private instances are not all scheduled to boot at the next login.
 

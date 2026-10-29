@@ -3,7 +3,7 @@
   <a href="https://codecov.io/gh/SteelCrab/firecrab"><img alt="Codecov" src="https://codecov.io/gh/SteelCrab/firecrab/branch/main/graph/badge.svg"></a>
   <a href="https://www.linux.org"><img alt="Linux" src="https://img.shields.io/badge/platform-linux-blue?logo=linux&logoColor=white"></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.3.1-informational"></a>
+  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.4.0-informational"></a>
 </p>
 
 ```text
@@ -138,7 +138,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-**Batasan Windows:** guest v0.2.2 yang saat ini dipatok mendukung API, image, dan jaringan, tetapi tidak dapat memulai MicroVM pada WSL2 standar. Perbaikan net-helper memerlukan rilis guest baru yang dipatok; VM nginx lokal juga terdampak. CLI Windows tetap dapat mengelola host Linux jarak jauh yang didukung.
+**Windows:** instalasi memilih rilis stabil Firecrab terbaru. Gunakan `firecrab update --apply` untuk memperbarui guest terkelola yang sudah ada. KVM bertingkat diperlukan. Lihat [panduan Windows](public-docs/getting-started/windows.md).
 
 </details>
 
@@ -179,7 +179,7 @@ firecrab service debug --logs --tail 100
 firecrab service stop
 ```
 
-**Batasan Windows:** guest v0.2.2 yang saat ini dipatok mendukung API, image, dan jaringan, tetapi tidak dapat memulai MicroVM pada WSL2 standar. Perbaikan net-helper memerlukan rilis guest baru yang dipatok; VM nginx lokal juga terdampak. CLI Windows tetap dapat mengelola host Linux jarak jauh yang didukung.
+**Windows:** instalasi memilih rilis stabil Firecrab terbaru. Gunakan `firecrab update --apply` untuk memperbarui guest terkelola yang sudah ada. KVM bertingkat diperlukan. Lihat [panduan Windows](public-docs/getting-started/windows.md).
 
 Saat sehat, buka `http://127.0.0.1:5523/`. Buat MicroNetwork, pilih image terpasang, buat dan mulai VM, lalu buka Terminal setelah `running`. Untuk host jarak jauh, atur [profil host CLI](public-docs/reference/cli.md#host-profiles).
 

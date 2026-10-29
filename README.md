@@ -3,7 +3,7 @@
   <a href="https://codecov.io/gh/SteelCrab/firecrab"><img alt="Codecov" src="https://codecov.io/gh/SteelCrab/firecrab/branch/main/graph/badge.svg"></a>
   <a href="https://www.linux.org"><img alt="Linux" src="https://img.shields.io/badge/platform-linux-blue?logo=linux&logoColor=white"></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.3.1-informational"></a>
+  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.4.0-informational"></a>
 </p>
 
 ```text
@@ -140,7 +140,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-**Windows limitation:** the currently pinned v0.2.2 guest supports the API, images, and networks, but cannot start MicroVMs on stock WSL2. The net-helper fix needs a newer pinned guest release; local nginx VM execution is affected too. The Windows CLI can still manage a supported remote Linux host.
+**Windows:** installation selects the latest stable Firecrab guest. Run `firecrab update --apply` to upgrade an existing managed guest. Nested KVM is required; see the [Windows guide](public-docs/getting-started/windows.md).
 
 </details>
 
@@ -181,7 +181,7 @@ firecrab service debug --logs --tail 100
 firecrab service stop
 ```
 
-**Windows limitation:** the currently pinned v0.2.2 guest supports the API, images, and networks, but cannot start MicroVMs on stock WSL2. The net-helper fix needs a newer pinned guest release; local nginx VM execution is affected too. The Windows CLI can still manage a supported remote Linux host.
+**Windows:** installation selects the latest stable Firecrab guest. Run `firecrab update --apply` to upgrade an existing managed guest. Nested KVM is required; see the [Windows guide](public-docs/getting-started/windows.md).
 
 When healthy, open `http://127.0.0.1:5523/`. Create a MicroNetwork, choose an installed image, create and start a VM, then open Terminal after `running`. For a remote host, configure a [CLI host profile](public-docs/reference/cli.md#host-profiles).
 

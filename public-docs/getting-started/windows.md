@@ -31,7 +31,8 @@ Require `doctor` to report `ready: true` for runtime tests.
 With no WSL distribution yet, KVM is unverified until installation imports Debian.
 A cold WSL2 start can also take about 25 seconds to load `kvm_intel`.
 
-Installation verifies pinned Debian 13 WSL rootfs, Firecracker v1.17.0, and Firecrab v0.2.2 downloads.
+Installation verifies pinned Debian 13 WSL rootfs and Firecracker v1.17.0,
+then resolves the latest stable Firecrab release and its published SHA256SUMS.
 It imports only `firecrab-debian`, provisions systemd services, and boots a nested BusyBox workload.
 The exact Debian kernel selected by the [release manifest](../reference/micromanager-manifest.md) boots the nested test.
 A per-user scheduled task then keeps Debian running and checks the localhost API before saving the installed TOML.
@@ -40,13 +41,15 @@ Interrupted downloads resume; failed provisioning is retried by the next install
 
 ## Known limitation
 
-The pinned Firecrab v0.2.2 guest bundle cannot start workload MicroVMs on stock WSL2.
+The older Firecrab v0.2.2 guest bundle cannot start workload MicroVMs on stock WSL2.
 Its helper requires nftables `bridge` support and conflicts with WSL's loopback DNS listener.
 The API, images, and networks still work.
 
-The current source helper uses `netdev` rules and keeps dnsmasq off loopback.
-Deploy it with [service dev](../development/micromanager.md#windows) to run workloads.
-`service dev --restore` selects the installed binaries and restores their release limitations.
+Current releases use `netdev` rules and keep dnsmasq off loopback.
+Run `firecrab update --check`, then `firecrab update --apply` from Windows
+to update the managed guest. Apply installs matching API, CLI, helper,
+dashboard and units and removes development overrides without deleting VM data.
+The native Windows CLI is installed separately with the CLI installer.
 Source lab passes do not establish stock-release or physical-Windows compatibility.
 
 ## Service commands

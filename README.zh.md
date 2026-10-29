@@ -3,7 +3,7 @@
   <a href="https://codecov.io/gh/SteelCrab/firecrab"><img alt="Codecov" src="https://codecov.io/gh/SteelCrab/firecrab/branch/main/graph/badge.svg"></a>
   <a href="https://www.linux.org"><img alt="Linux" src="https://img.shields.io/badge/platform-linux-blue?logo=linux&logoColor=white"></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.3.1-informational"></a>
+  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.4.0-informational"></a>
 </p>
 
 ```text
@@ -138,7 +138,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-**Windows 限制：** 当前固定的 v0.2.2 来宾在标准 WSL2 中支持 API、镜像与网络，但无法启动 MicroVM。需要包含 net-helper 修复的新来宾发行版；本地 nginx VM 也受影响。Windows CLI 仍可管理受支持的远程 Linux 主机。
+**Windows：** 安装时选择最新稳定版 Firecrab 来宾。使用 `firecrab update --apply` 更新现有托管来宾。需要嵌套 KVM。请参阅 [Windows 指南](public-docs/getting-started/windows.md)。
 
 </details>
 
@@ -179,7 +179,7 @@ firecrab service debug --logs --tail 100
 firecrab service stop
 ```
 
-**Windows 限制：** 当前固定的 v0.2.2 来宾在标准 WSL2 中支持 API、镜像与网络，但无法启动 MicroVM。需要包含 net-helper 修复的新来宾发行版；本地 nginx VM 也受影响。Windows CLI 仍可管理受支持的远程 Linux 主机。
+**Windows：** 安装时选择最新稳定版 Firecrab 来宾。使用 `firecrab update --apply` 更新现有托管来宾。需要嵌套 KVM。请参阅 [Windows 指南](public-docs/getting-started/windows.md)。
 
 状态正常时打开 `http://127.0.0.1:5523/`。创建 MicroNetwork，选择已安装镜像，创建并启动 VM，待状态为 `running` 后打开终端。远程主机请配置 [CLI 主机配置](public-docs/reference/cli.md#host-profiles)。
 

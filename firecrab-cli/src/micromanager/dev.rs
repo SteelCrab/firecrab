@@ -54,7 +54,6 @@ const OPTIONAL_SOURCE_INPUTS: &[&str] = &[
     "firecrab-pki",
     "examples/stacks/basic.yaml",
     "packaging/micromanager.toml",
-    "packaging/micromanager-dev.toml",
     "packaging/systemd/firecrab-quick-tunnel.service",
     "packaging/systemd/firecrab-address-updater.service",
 ];
