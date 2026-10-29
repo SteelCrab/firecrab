@@ -102,4 +102,68 @@ mod tests {
         assert_eq!(result.threat_detection, "unavailable");
         assert_eq!(result.ai_analysis, "unavailable");
     }
+    #[tokio::test]
+    async fn coverage_lists_deployment_identity_without_sensitive_configuration() {
+        use firecrab_api_types::{MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec};
+        use serde_json::json;
+
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::with_db_file(
+            TemplateRegistry::from_specs(root.path(), std::iter::empty()).unwrap(),
+            root.path().join("state.db"),
+        )
+        .await
+        .unwrap();
+        let service_id = Uuid::new_v4();
+        let deployment_id = Uuid::new_v4();
+        let spec: MicroServiceSpec = serde_json::from_value(json!({
+            "name": "orders", "image": "example.test/orders:v1", "port": 8080,
+            "ram": 128, "cpu": 1, "env": {"PRIVATE_VALUE": "secret-value"}
+        }))
+        .unwrap();
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse {
+                id: service_id,
+                spec: spec.clone(),
+            })
+            .unwrap();
+        let undeployed: MicroServiceSpec = serde_json::from_value(json!({
+            "name": "not-deployed", "image": "example.test/other:v1", "port": 8080,
+            "ram": 128, "cpu": 1
+        }))
+        .unwrap();
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse {
+                id: Uuid::new_v4(),
+                spec: undeployed,
+            })
+            .unwrap();
+        let deployment: MicroServiceDeployment = serde_json::from_value(json!({
+            "id": deployment_id, "serviceId": service_id, "phase": "running", "spec": spec,
+            "request": {"hostPort": 0}, "digest": "sha256:1234", "instances": [], "log": [], "error": null
+        })).unwrap();
+        state.store.save_service_deployment(&deployment).unwrap();
+        let coverage = get(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Caller::default(),
+        )
+        .await
+        .unwrap()
+        .0;
+        let result = serde_json::to_value(coverage).unwrap();
+        assert_eq!(result["services"].as_array().unwrap().len(), 1);
+        assert_eq!(result["services"][0]["id"], service_id.to_string());
+        assert_eq!(
+            result["services"][0]["deploymentId"],
+            deployment_id.to_string()
+        );
+        assert_eq!(result["services"][0]["name"], "orders");
+        assert_eq!(result["services"][0]["digest"], "sha256:1234");
+        assert_eq!(result["services"][0]["replicas"], 0);
+        assert!(!result.to_string().contains("secret-value"));
+        assert_eq!(result["cveScan"], "unavailable");
+    }
 }
