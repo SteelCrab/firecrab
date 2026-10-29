@@ -78,6 +78,9 @@ pub fn allowed(path: &str) -> bool {
             ".codex",
             ".claude",
             ".gnupg",
+            ".kube",
+            ".pki",
+            ".terraform",
             "node_modules",
             "target",
             ".venv",
@@ -90,6 +93,8 @@ pub fn allowed(path: &str) -> bool {
             ".npm",
             ".pnpm-store",
             ".rustup",
+            ".m2",
+            ".gradle",
             "__pycache__",
             ".pytest_cache",
             ".mypy_cache",
@@ -102,6 +107,8 @@ pub fn allowed(path: &str) -> bool {
             || lower == "credentials.json"
             || lower.ends_with(".pem")
             || lower.ends_with(".key")
+            || lower.ends_with(".p12")
+            || lower.ends_with(".pfx")
             || lower == "auth.json"
             || lower == "id_rsa"
             || lower == "id_ed25519"
@@ -142,17 +149,110 @@ fn preserve_owner(file: &File, owner: &fs::Metadata) -> io::Result<()> {
 }
 
 impl Root {
-    /// Open a trusted, explicit root directory without following its final symlink.
-    pub fn open(path: &Path) -> io::Result<Self> {
-        let name = cstr(path.to_str().ok_or_else(denied)?)?;
-        // SAFETY: valid NUL-terminated path and standard open flags.
-        let fd = unsafe {
-            libc::open(
+    /// Git metadata is not a file-tool capability. These helpers retain the same fd/link boundary.
+    pub(super) fn metadata_owner(&self) -> io::Result<u32> {
+        Ok(self.dir.metadata()?.uid())
+    }
+    pub(super) fn metadata_directory(&self, path: &str) -> io::Result<Self> {
+        let mut dir = self.dir.try_clone()?;
+        for part in metadata_components(path)? {
+            // SAFETY: every component is checked and resolved under an owned directory fd.
+            dir = from_fd(unsafe {
+                libc::openat(
+                    dir.as_raw_fd(),
+                    part.as_ptr(),
+                    libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+                )
+            })?;
+        }
+        Ok(Self { dir })
+    }
+    pub(super) fn metadata_read(&self, path: &str, limit: usize) -> io::Result<Vec<u8>> {
+        let mut parts = metadata_components(path)?;
+        let name = parts.pop().ok_or_else(denied)?;
+        let mut dir = self.dir.try_clone()?;
+        for part in parts {
+            // SAFETY: no path component may traverse a symlink or leave this authority.
+            dir = from_fd(unsafe {
+                libc::openat(
+                    dir.as_raw_fd(),
+                    part.as_ptr(),
+                    libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+                )
+            })?;
+        }
+        // SAFETY: the final regular file is opened without following links or blocking on a FIFO.
+        let file = from_fd(unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
                 name.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+            )
+        })?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.nlink() != 1 {
+            return Err(denied());
+        }
+        let mut bytes = Vec::new();
+        file.take((limit + 1) as u64).read_to_end(&mut bytes)?;
+        if bytes.len() > limit {
+            return Err(io::Error::other(
+                "Git metadata exceeds its bounded copy limit",
+            ));
+        }
+        Ok(bytes)
+    }
+    pub(super) fn metadata_entries(&self, limit: usize) -> io::Result<Vec<(String, fs::FileType)>> {
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(self.command_directory())? {
+            let entry = entry?;
+            if entries.len() >= limit {
+                return Err(io::Error::other(
+                    "Git metadata has too many directory entries",
+                ));
+            }
+            let name = entry.file_name().into_string().map_err(|_| denied())?;
+            entries.push((name, entry.file_type()?));
+        }
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(entries)
+    }
+    /// Anchor a child process working directory to this opened authority before exec closes the fd.
+    pub fn command_directory(&self) -> PathBuf {
+        PathBuf::from(format!("/proc/self/fd/{}", self.dir.as_raw_fd()))
+    }
+    /// Open an absolute authority from / without following links in any component.
+    /// API sources and controller-owned roots are canonicalized before this boundary.
+    pub fn open(path: &Path) -> io::Result<Self> {
+        if !path.is_absolute() {
+            return Err(denied());
+        }
+        let root = cstr("/")?;
+        // SAFETY: / is a fixed root authority, never a caller-controlled symlink.
+        let mut dir = from_fd(unsafe {
+            libc::open(
+                root.as_ptr(),
                 libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
             )
-        };
-        Ok(Self { dir: from_fd(fd)? })
+        })?;
+        for component in path.components() {
+            let part = match component {
+                Component::RootDir => continue,
+                Component::Normal(part) => part,
+                _ => return Err(denied()),
+            };
+            let name = cstr(part.to_str().ok_or_else(denied)?)?;
+            // SAFETY: each checked component resolves relative to an already-open directory;
+            // ancestor replacement cannot redirect the next open through a symlink.
+            dir = from_fd(unsafe {
+                libc::openat(
+                    dir.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+                )
+            })?;
+        }
+        Ok(Self { dir })
     }
     /// Walk parent directories with no-follow flags and return the final relative name.
     fn parent(&self, path: &str, create: bool) -> io::Result<(File, CString)> {
@@ -374,6 +474,23 @@ impl Root {
         }
         Ok(())
     }
+}
+
+fn metadata_components(path: &str) -> io::Result<Vec<CString>> {
+    if path.is_empty()
+        || path.len() > 1000
+        || path.contains('\\')
+        || path.chars().any(char::is_control)
+    {
+        return Err(denied());
+    }
+    Path::new(path)
+        .components()
+        .map(|part| match part {
+            Component::Normal(part) => cstr(part.to_str().ok_or_else(denied)?),
+            _ => Err(denied()),
+        })
+        .collect()
 }
 
 /// Copy a bounded snapshot. All destination paths are confined independently.

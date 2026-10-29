@@ -249,6 +249,7 @@ async fn execute(
                 state.clone(),
                 request_id,
                 CreateMicroNetworkRequest {
+                    dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                     name: desired.name.clone(),
                     subnet_cidr: desired.subnet_cidr.clone(),
                     internet_enabled: desired.internet_enabled,

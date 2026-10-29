@@ -177,6 +177,7 @@ async fn run() -> Result<(), StartupError> {
     reconcile::reconcile(&state).await;
     service_runtime::recover(&state).await;
     queues::recover(&state).await;
+    ai_sandbox::environment::start_maintenance(state.clone());
     service_observation::start(state.clone());
     service_runtime::recovery::start(state.clone());
     service_runtime::deploy::rotation::start(state.clone());

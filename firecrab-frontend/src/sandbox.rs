@@ -1,5 +1,6 @@
 //! AI Sandbox's browser state and REST lifecycle. Provider secrets never enter this module.
 mod actions;
+mod resources;
 mod view;
 use crate::{
     App, Shared, api, document, element,
@@ -42,6 +43,14 @@ pub struct State {
     since: Option<u64>,
     older_end: bool,
     opener: String,
+    environments: Vec<Value>,
+    previews: Vec<Value>,
+    resource_error: String,
+    resources_polling: bool,
+    resources_at: f64,
+    resource_editor: Option<resources::Editor>,
+    coordination: Value,
+    environment_role: String,
 }
 struct Editor {
     id: String,
@@ -90,7 +99,9 @@ fn live(app: &Shared, generation: u64) -> bool {
     a.generation == generation && a.route == "ai-sandbox"
 }
 fn dirty(app: &mut App) {
-    app.dirty = !app.sandbox.input.trim().is_empty() || app.sandbox.editor.is_some();
+    app.dirty = !app.sandbox.input.trim().is_empty()
+        || app.sandbox.editor.is_some()
+        || app.sandbox.resource_editor.is_some();
 }
 fn effective(s: &State) -> Value {
     if s.selection.is_null() {
@@ -124,6 +135,24 @@ fn can_send(a: &App) -> bool {
     if verified(s, &effective(s), code).is_none() {
         return false;
     }
+    if code && project(s).is_some_and(|p| p["spec"]["environmentId"].is_string()) {
+        if s.environment_role.is_empty() {
+            return false;
+        }
+        return project(s).is_some_and(|p| {
+            !text(&p["spec"], "sourcePath").is_empty()
+                && s.environments.iter().any(|e| {
+                    e["id"] == p["spec"]["environmentId"]
+                        && e["state"] == "ready"
+                        && list(&e["roles"]).iter().any(|r| {
+                            (s.environment_role.is_empty() || r["role"] == s.environment_role)
+                                && r["agent"] == "ready"
+                                && r["network"] == "ready"
+                                && r["application"] == "ready"
+                        })
+                })
+        });
+    }
     !code
         || project(s).is_some_and(|p| {
             p["spec"]["sourcePath"].is_string()
@@ -133,6 +162,19 @@ fn can_send(a: &App) -> bool {
         })
 }
 fn summary(mut task: Value) -> Value {
+    // Older saved responses omit the additive defaults in the current wire contract.
+    if let Some(request) = task["request"].as_object_mut() {
+        request
+            .entry("coordination")
+            .or_insert_with(|| json!({"dependencies":[],"assignedAgent":null,"retryLimit":3}));
+        request.entry("environmentRole").or_insert(Value::Null);
+    }
+    if let Some(object) = task.as_object_mut() {
+        object.entry("retryRoot").or_insert(Value::Null);
+        for key in ["retryNumber", "testCount", "artifactCount"] {
+            object.entry(key).or_insert(json!(0));
+        }
+    }
     if task.get("events").is_some() {
         task["eventCount"] = json!(list(&task["events"]).len());
         task["lastTool"] = task["events"]
@@ -144,9 +186,33 @@ fn summary(mut task: Value) -> Value {
     if task.get("changes").is_some() {
         task["changeCount"] = json!(list(&task["changes"]).len());
     }
+    for (field, count) in [("tests", "testCount"), ("artifacts", "artifactCount")] {
+        if task.get(field).is_some() {
+            task[count] = json!(list(&task[field]).len());
+        }
+    }
+    if task.get("tests").is_some() {
+        task["failedTestCount"] = json!(
+            list(&task["tests"])
+                .iter()
+                .filter(|test| test["passed"] == false)
+                .count()
+        );
+    } else if task.get("events").is_some() {
+        task["failedTestCount"] = json!(0);
+    }
     if let Some(o) = task.as_object_mut() {
         o.remove("events");
         o.remove("changes");
+        for key in [
+            "tests",
+            "artifacts",
+            "environment",
+            "gitCommit",
+            "dependencyResults",
+        ] {
+            o.remove(key);
+        }
     }
     task
 }
@@ -171,6 +237,11 @@ fn update_task(a: &mut App, task: Value) {
         r.task = Some(task);
     }
 }
+fn render_after_event(app: &Shared) {
+    // Removing a focused input can emit change again before the current closure returns.
+    let app = app.clone();
+    spawn_local(async move { render(&app) });
+}
 /// Render preserves editing focus, selection and scroll positions across asynchronous updates.
 pub(super) fn render(app: &Shared) {
     if app.borrow().route != "ai-sandbox" {
@@ -189,7 +260,7 @@ pub(super) fn render(app: &Shared) {
             None
         }
     });
-    let scroll: Vec<_> = ["sb-panel", "sb-review-panel"]
+    let scroll: Vec<_> = ["sb-panel", "sb-review-panel", "sb-resource-dialog"]
         .iter()
         .filter_map(|id| element(id).map(|n| (*id, n.scroll_top())))
         .collect();
@@ -212,7 +283,11 @@ pub(super) fn render(app: &Shared) {
         );
     }
     app.borrow_mut().rendering = false;
-    for id in ["sb-project-dialog", "sb-review-dialog"] {
+    for id in [
+        "sb-project-dialog",
+        "sb-review-dialog",
+        "sb-resource-dialog",
+    ] {
         if let Some(dialog) = element(id).and_then(|n| n.dyn_into::<HtmlDialogElement>().ok())
             && !dialog.open()
         {
@@ -249,6 +324,7 @@ fn close_dialog(app: &Shared) {
         let mut a = app.borrow_mut();
         a.sandbox.editor = None;
         a.sandbox.review = None;
+        a.sandbox.resource_editor = None;
         dirty(&mut a);
         std::mem::take(&mut a.sandbox.opener)
     };
@@ -333,6 +409,7 @@ pub fn tick(app: &Shared) {
         return;
     }
     poll_review(app);
+    resources::tick(app, false);
     let mut a = app.borrow_mut();
     let s = &mut a.sandbox;
     if s.project.is_empty() || s.polling {

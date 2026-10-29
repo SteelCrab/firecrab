@@ -3,6 +3,118 @@ use crate::shell::FakeCommandRunner;
 use std::os::unix::fs::symlink;
 
 #[test]
+fn direct_connector_inspection_reports_orphan_state_without_manifest_or_journal_queries() {
+    let id = uuid::Uuid::new_v4();
+    let unit = quick_tunnel_unit(id);
+    for (exit, text, load, active, pid) in [
+        (
+            0,
+            "LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=42\n",
+            "loaded",
+            "active",
+            42,
+        ),
+        (
+            0,
+            "LoadState=loaded\nActiveState=inactive\nSubState=dead\nMainPID=0\n",
+            "loaded",
+            "inactive",
+            0,
+        ),
+        (
+            4,
+            "LoadState=not-found\nActiveState=inactive\nSubState=dead\nMainPID=0\n",
+            "not-found",
+            "inactive",
+            0,
+        ),
+    ] {
+        let mut runner = FakeCommandRunner::new();
+        runner.set(
+            "systemctl",
+            &[
+                "show",
+                "--property=LoadState,ActiveState,SubState,MainPID",
+                &unit,
+            ],
+            exit,
+            text,
+            "",
+        );
+        let snapshot = quick_unit_request(&runner, &serde_json::to_vec(&id).unwrap()).unwrap();
+        assert!(snapshot.config.is_none() && snapshot.quick_tunnels.is_empty());
+        assert_eq!(
+            snapshot.units,
+            vec![UnitStatus {
+                unit: unit.clone(),
+                load_state: load.into(),
+                active_state: active.into(),
+                sub_state: if pid == 0 { "dead" } else { "running" }.into(),
+                main_pid: pid
+            }]
+        );
+        assert_eq!(
+            runner.calls(),
+            vec![format!(
+                "systemctl show --property=LoadState,ActiveState,SubState,MainPID {unit}"
+            )]
+        );
+    }
+}
+
+#[test]
+fn direct_connector_lookup_rejects_failed_partial_duplicate_or_invalid_pid_output() {
+    let id = uuid::Uuid::new_v4();
+    let unit = quick_tunnel_unit(id);
+    for (exit, text) in [
+        (
+            1,
+            "LoadState=loaded\nActiveState=inactive\nSubState=dead\nMainPID=0\n",
+        ),
+        (1, ""),
+        (
+            0,
+            "LoadState=not-found\nActiveState=inactive\nSubState=dead\n",
+        ),
+        (
+            0,
+            "LoadState=loaded\nActiveState=inactive\nSubState=dead\nMainPID=invalid\n",
+        ),
+        (
+            0,
+            "LoadState=loaded\nActiveState=inactive\nSubState=dead\nMainPID=0\nMainPID=42\n",
+        ),
+    ] {
+        let mut runner = FakeCommandRunner::new();
+        runner.set(
+            "systemctl",
+            &[
+                "show",
+                "--property=LoadState,ActiveState,SubState,MainPID",
+                &unit,
+            ],
+            exit,
+            text,
+            "private error must not become unit evidence",
+        );
+        assert!(quick_unit_snapshot(&runner, id).is_err());
+    }
+}
+
+#[test]
+fn direct_connector_input_accepts_only_one_bounded_uuid_before_any_host_query() {
+    let runner = FakeCommandRunner::new();
+    for input in [
+        b"\"sshd.service\"".to_vec(),
+        br#"{"id":"00000000-0000-4000-8000-000000000001","unit":"sshd.service"}"#.to_vec(),
+        vec![b' '; 65],
+    ] {
+        assert!(quick_unit_request(&runner, &input).is_err());
+    }
+    assert!(runner.calls().is_empty());
+}
+
+#[test]
 fn secret_replacement_is_private_and_removal_is_idempotent() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("credentials.json");

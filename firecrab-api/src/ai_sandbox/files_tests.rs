@@ -15,6 +15,10 @@ fn paths_and_symlinks_cannot_escape_or_expose_credentials() {
         "config/.env.prod",
         ".ssh/id_ed25519",
         ".aws/credentials",
+        ".kube/config",
+        ".pki/private/cert",
+        "certs/client.p12",
+        "certs/client.pfx",
         ".netrc",
     ] {
         assert!(root.read(path).is_err(), "{path}");
@@ -99,6 +103,8 @@ fn generated_caches_are_excluded_while_project_cargo_configuration_remains_avail
         ".npm/cache/data",
         ".cargo/registry/cache/package",
         ".cargo/git/db/pkg",
+        ".m2/repository/dependency.jar",
+        ".gradle/caches/build.bin",
         ".yarn/cache/pkg.zip",
         "src/__pycache__/compiled.pyc",
     ] {

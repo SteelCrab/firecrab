@@ -1295,6 +1295,17 @@ async fn stop_vm_inner(
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
     let guard = state.lock_vm(id).await;
+    ensure_no_active_sandbox_previews(&state, id, request_id.0)?;
+    let workspace_claim = crate::ai_sandbox::environment::quiesce_for_vm_stop(&state, id)
+        .await
+        .map_err(|reason| {
+            tracing::warn!(vm_id = %id, error = %reason, "Workspace stop retained the running guest");
+            AppError::conflict(
+                "workspace_sync_unconfirmed",
+                "Restore guest sync and finish or reconcile tasks before retrying Workspace stop; VM retained",
+                request_id.0,
+            )
+        })?;
     let (claimed, previous) = claim_transition(&state, id, VmState::Stopping, request_id.0)?;
     if let Err(error) = persist_update(&state, &claimed, request_id.0).await {
         set_memory_state(&state, id, previous);
@@ -1303,6 +1314,7 @@ async fn stop_vm_inner(
 
     // The exit monitor takes this lock before signaling completion. Stopping
     // rejects other lifecycle requests while we wait without the lock.
+    drop(workspace_claim);
     drop(guard);
     let entry = state
         .processes
@@ -1352,6 +1364,7 @@ pub async fn delete_vm(
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
     let _guard = state.lock_vm(id).await;
+    ensure_no_active_sandbox_previews(&state, id, request_id.0)?;
     if state
         .store
         .managed_database_rabbitmq()
@@ -1487,6 +1500,25 @@ pub async fn delete_vm(
     }
     tracing::info!(request_id = %request_id.0, vm_id = %id, "vm deleted");
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn ensure_no_active_sandbox_previews(
+    state: &AppState,
+    vm: Uuid,
+    request: Uuid,
+) -> Result<(), AppError> {
+    if state
+        .store
+        .sandbox_vm_has_live_tunnels(vm)
+        .map_err(|_| AppError::internal(request))?
+    {
+        return Err(AppError::conflict(
+            "sandbox_preview_in_use",
+            "Stop or reconcile this VM's Sandbox previews before stopping or deleting the VM",
+            request,
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn parse_id(id: &str, request_id: Uuid) -> Result<Uuid, AppError> {
@@ -1688,6 +1720,13 @@ async fn finish_run_start(
         guest_env.extend(queue_env);
         rootfs::specialize_guest(&rootfs, record.id, &guest_env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
+        let dns_mode = store_for_shells
+            .micro_network(record.micro_network_id)
+            .map_err(|_| "Cannot read guest DNS posture")?
+            .ok_or("Guest MicroNetwork does not exist")?
+            .dns_mode;
+        rootfs::apply_dns_posture(&rootfs, record.id, dns_mode)
+            .map_err(|error| format!("guest DNS specialization failed: {error}"))?;
         // Only deployment-owned VMs get the isolated app log channel. A log
         // setup failure must not stop a running service from being replaced.
         let mut app_log_failed = false;
@@ -2370,7 +2409,9 @@ pub(crate) async fn micro_network_specs(state: &AppState) -> Result<Vec<MicroNet
         .into_iter()
         .map(|network| {
             SubnetSpec::from_micro_network(&network)
-                .map(|subnet| subnet.helper_spec(network.internet_enabled, network.uplink))
+                .map(|subnet| {
+                    subnet.helper_spec(network.internet_enabled, network.uplink, network.dns_mode)
+                })
                 .ok_or_else(|| {
                     format!(
                         "micro network {} has an unparseable subnet {:?}",
@@ -3173,6 +3214,23 @@ pub(crate) mod test_support {
     }
 
     pub(crate) fn seed_vm(state: &AppState, vm: &VmRecord) {
+        // A VM with a lease must also belong to a real persisted network.
+        // Keep unknown-network failure fixtures explicit rather than weakening
+        // the production DNS-posture lookup during VM specialization.
+        let legacy = SubnetSpec::legacy_default_subnet(Uuid::from_u128(1));
+        if vm.micro_network_id == legacy.micro_network_id
+            && state
+                .store
+                .micro_network(legacy.micro_network_id)
+                .unwrap()
+                .is_none()
+        {
+            let network: firecrab_api_types::MicroNetworkResponse = serde_json::from_value(serde_json::json!({
+                "id":legacy.micro_network_id,"name":"fixture-default","subnetCidr":"172.30.0.0/24",
+                "gateway":legacy.gateway(),"internetEnabled":true,"dnsMode":"legacy_forward"
+            })).unwrap();
+            state.store.insert_micro_network(&network).unwrap();
+        }
         state.store.insert(vm).unwrap();
         state.vms.lock().unwrap().insert(vm.id, vm.clone());
         state
@@ -4869,6 +4927,7 @@ while True:
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             ValidatedJson(firecrab_api_types::CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "test-net".to_owned(),
                 subnet_cidr: "172.30.0.0/24".to_owned(),
                 internet_enabled: true,
@@ -5260,6 +5319,7 @@ while True:
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             ValidatedJson(firecrab_api_types::CreateMicroNetworkRequest {
+                dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                 name: "prod".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,

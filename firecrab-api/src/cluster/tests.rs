@@ -654,6 +654,7 @@ impl World {
             state
                 .store
                 .insert_micro_network(&MicroNetworkResponse {
+                    dns_mode: firecrab_api_types::MicroNetworkDnsMode::LegacyForward,
                     id: report.networks[0].id,
                     name: "private".into(),
                     subnet_cidr: "172.30.0.0/24".into(),

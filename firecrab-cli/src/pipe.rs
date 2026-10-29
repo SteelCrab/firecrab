@@ -91,6 +91,10 @@ pub enum Command {
     #[cfg(target_os = "linux")]
     #[command(hide = true)]
     QuickManage,
+    /// Read one fixed connector unit from a bounded JSON UUID on stdin.
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    QuickInspect,
     #[cfg(target_os = "linux")]
     #[command(hide = true)]
     ApplyManaged,
@@ -198,6 +202,8 @@ pub fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
         Command::QuickConnect => quick::connect(),
         #[cfg(target_os = "linux")]
         Command::QuickManage => quick::manage(),
+        #[cfg(target_os = "linux")]
+        Command::QuickInspect => host::inspect_quick(),
         #[cfg(target_os = "linux")]
         Command::Inspect => host::inspect(),
         #[cfg(target_os = "linux")]

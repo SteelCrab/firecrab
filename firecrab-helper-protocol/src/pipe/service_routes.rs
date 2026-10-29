@@ -573,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn internal_ingress_intersects_group_peers_and_app_ports_with_the_network() {
+    fn private_only_internal_ingress_retains_dns_and_group_policy_across_recovery() {
         let mut request = internal();
         let group = serde_json::from_value(serde_json::json!({
             "id":Uuid::from_u128(9),"micro_network_id":Uuid::from_u128(8),
@@ -584,11 +584,23 @@ mod tests {
                 {"direction":"ingress","protocol":"tcp","port_from":80,"port_to":80,"peer_address":"172.30.0.0","peer_prefix":24}
             ]
         })).unwrap();
-        if let ServiceRouteRequest::PublishInternal { security_group, .. } = &mut request {
+        if let ServiceRouteRequest::PublishInternal {
+            security_group,
+            network,
+            ..
+        } = &mut request
+        {
             *security_group = Some(group);
+            network.internet_enabled = false;
+            network.dns_mode = firecrab_api_types::MicroNetworkDnsMode::PrivateOnly;
         }
         let next = request.updated_config(&config()).unwrap();
         let route = next.routes.last().unwrap();
+        assert_eq!(next.internal_dns_hosts(), "172.30.0.1 web.internal\n");
+        assert_eq!(
+            route.network.as_ref().unwrap().dns_mode,
+            firecrab_api_types::MicroNetworkDnsMode::PrivateOnly
+        );
         assert_eq!(
             allowed_sources(route, route.network.as_ref().unwrap()),
             vec!["172.30.0.10/32"]
@@ -603,13 +615,20 @@ mod tests {
         .updated_config(&next)
         .unwrap();
         let paused = suspended.routes.last().unwrap();
+        assert_eq!(paused.owner, route.owner);
+        assert_eq!(paused.network, route.network);
+        assert_eq!(paused.security_group, route.security_group);
+        assert_eq!(suspended.internal_dns_hosts(), next.internal_dns_hosts());
         assert_eq!(paused.service_port, Some(8080));
         assert_eq!(
             allowed_sources(paused, paused.network.as_ref().unwrap()),
             vec!["172.30.0.10/32"]
         );
-        assert!(suspended.nginx().contains("allow 172.30.0.10/32;"));
-        assert!(suspended.nginx().contains("try_files /unready =503;"));
+        let nginx = suspended.nginx();
+        assert!(nginx.contains("listen 172.30.0.1:80; server_name web.internal;"));
+        assert!(!nginx.contains("listen 127.0.0.1:8080; server_name web.internal;"));
+        assert!(nginx.contains("allow 172.30.0.10/32;\n    deny all;"));
+        assert!(nginx.contains("try_files /unready =503;"));
         let restored = ServiceRouteRequest::Replace {
             expected_owner: owner(),
             expected_upstreams: vec![],

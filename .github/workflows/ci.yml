@@ -46,6 +46,7 @@ jobs:
           ./scripts/build-ingress.sh target/ingress
           ./scripts/build-guest-console.sh target/ingress
           python3 scripts/test-guest-console.py
+          sudo python3 scripts/test-sandbox-user.py
           python3 scripts/test-guest-app-log.py
 
       - name: Verify bundled ingress installation
@@ -88,6 +89,20 @@ jobs:
 
       - name: Sandbox live QA evidence and ownership guards
         run: python3 scripts/test-ci-qa-ai-sandbox.py
+
+      - name: Sandbox recovery QA ownership and fault guards
+        run: python3 scripts/test-ci-qa-ai-sandbox-recovery.py
+
+      - name: Sandbox coordination QA evidence guards
+        run: python3 scripts/test-ci-qa-ai-sandbox-coordination.py
+
+      - name: Sandbox prepared image and environment fixture guards
+        run: |
+          python3 scripts/test-sandbox-environment-seed.py
+          python3 scripts/test-sandbox-oci-archive.py
+          python3 scripts/test-sandbox-oci-startup.py
+          setpriv --no-new-privs python3 scripts/test-qa-sandbox-http-ws.py
+          python3 scripts/test-qa-sandbox-openrc-v1.py
 
       - name: Database QA guards and cleanup contract
         run: python3 scripts/test-pipe-databases-qa.py

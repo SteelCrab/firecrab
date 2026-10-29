@@ -105,6 +105,7 @@ test.describe("pool dashboard @dashboard", () => {
     await form.getByLabel("Name", { exact: true }).fill("build-runners");
     await form.getByRole("button", { name: "Create pool", exact: true }).click();
     await expect(page.getByRole("row", { name: /^build-runners(\s|$)/ })).toBeVisible();
+    await expect(page.getByRole("row", { name: /^build-runners(\s|$)/ }).getByRole("cell", { name: "0 / 0", exact: true })).toBeVisible();
     expect(request).toMatchObject({ template: "ubuntu", diskGb: 8, cpu: 1, ram: 512, minReady: 2, maxSize: 4, leaseTtlSeconds: 600, microNetworkId: "default" });
     await expect(form).toHaveCount(0);
   });

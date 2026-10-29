@@ -29,10 +29,10 @@ async function removeLogin(): Promise<void> {
   ).toBe(true);
 }
 
-async function openCards(page: Page) {
+async function openOverview(page: Page) {
   await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
   await page.goto("/#/pipe");
-  return page.locator("#content");
+  return page.locator("#content .pipe-group");
 }
 
 test.describe("Pipe registries against the API", () => {
@@ -45,12 +45,12 @@ test.describe("Pipe registries against the API", () => {
   });
   test.afterEach(removeLogin);
 
-  test("B18 lists Account, AI and Registry cards and shows the API login list", async ({
+  test("B18 lists Account, AI and Registry destinations and shows the API login list", async ({
     page,
   }) => {
     const { rows } = await connections();
-    const pipe = await openCards(page);
-    await expect(pipe.locator("a.wasm-card")).toHaveCount(9);
+    const pipe = await openOverview(page);
+    await expect(pipe.locator("a.pipe-row")).toHaveCount(9);
     await expect(pipe.getByRole("link", { name: /^Account/ })).toBeVisible();
     await expect(pipe.getByRole("link", { name: /^Pipe AI/ })).toBeVisible();
     const card = pipe.getByRole("link", { name: /^Registry/ });
@@ -70,7 +70,7 @@ test.describe("Pipe registries against the API", () => {
   test("B19 saves an ECR login without exposing the secret and removes it", async ({
     page,
   }) => {
-    const pipe = await openCards(page);
+    const pipe = await openOverview(page);
     await pipe.getByRole("link", { name: /^Registry/ }).click();
     const panel = page.locator("#content");
     await panel.getByRole("button", { name: "Connect registry" }).click();

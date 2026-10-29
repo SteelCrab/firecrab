@@ -309,6 +309,7 @@ pub async fn save_project(
                 .iter()
                 .any(|p| canonical.starts_with(p))
             || canonical.starts_with(&state.sandbox.root)
+            || state.sandbox.root.starts_with(&canonical)
         {
             return Err(invalid(
                 id,
@@ -319,6 +320,38 @@ pub async fn save_project(
         spec.source_path = Some(canonical.to_string_lossy().into_owned());
     } else {
         spec.source_path = None;
+    }
+    ai_sandbox::context::validate(&spec).map_err(|e| invalid(id, "context", e))?;
+    if let Some(environment_id) = spec.environment_id {
+        if spec.vm_id.is_some() {
+            return Err(invalid(
+                id,
+                "environmentId",
+                "Select a managed Environment or a borrowed MicroVM",
+            ));
+        }
+        let environment = state
+            .store
+            .sandbox_environment(environment_id)
+            .map_err(|_| AppError::internal(id.0))?
+            .filter(|environment| environment.project_id == key)
+            .ok_or_else(|| {
+                invalid(
+                    id,
+                    "environmentId",
+                    "Environment must belong to this project",
+                )
+            })?;
+        if matches!(
+            environment.state,
+            SandboxEnvironmentState::Deleted | SandboxEnvironmentState::CleanupPending
+        ) {
+            return Err(invalid(
+                id,
+                "environmentId",
+                "Select an Environment that is not being deleted",
+            ));
+        }
     }
     caller.settings(&state, &spec).map_err(|e| denied(id, e))?;
     if let Some(selection) = &spec.selection {
@@ -340,6 +373,17 @@ pub async fn save_project(
         ));
     }
     if let Some(vm) = spec.vm_id {
+        if state
+            .store
+            .sandbox_environment_owns_vm(vm)
+            .map_err(|_| AppError::internal(id.0))?
+        {
+            return Err(invalid(
+                id,
+                "vmId",
+                "Managed Environment VMs must use their owning Environment binding",
+            ));
+        }
         if state
             .store
             .cluster_worker(vm)
@@ -420,6 +464,30 @@ pub async fn delete_project(
             id,
             "sandbox_busy",
             "Cancel active work and reconcile guest resources before deleting this project",
+        ));
+    }
+    if state
+        .store
+        .sandbox_environments(key)
+        .map_err(|_| AppError::internal(id.0))?
+        .iter()
+        .any(|environment| environment.state != SandboxEnvironmentState::Deleted)
+    {
+        return Err(error(
+            id,
+            "sandbox_environment_retained",
+            "Delete owned Environments explicitly before deleting their project",
+        ));
+    }
+    if state
+        .store
+        .sandbox_project_has_live_tunnels(key)
+        .map_err(|_| AppError::internal(id.0))?
+    {
+        return Err(error(
+            id,
+            "sandbox_tunnel_retained",
+            "Stop and delete active preview bindings before deleting their project",
         ));
     }
     let owned = state.sandbox.root.join(key.to_string());
@@ -719,12 +787,36 @@ pub async fn create_task(
         }
         return Ok((StatusCode::OK, Json(previous.task)));
     }
+    ai_sandbox::coordination::validate(&input).map_err(|e| invalid(id, "coordination", e))?;
+    let serialized = serde_json::to_string(&input).map_err(|_| AppError::internal(id.0))?;
+    if ai_sandbox::redact(&accounts, &serialized) != serialized {
+        return Err(invalid(
+            id,
+            "coordination",
+            "Task settings must not contain provider credentials",
+        ));
+    }
+    if let Some(prior) = input.retry_of {
+        task(&state, id, prior, caller, SandboxPermission::Execute).await?;
+    }
+    let (retry_root, retry_number) =
+        ai_sandbox::coordination::retry(&state.store, project_id, key, &input)
+            .map_err(|e| invalid(id, "retryOf", e))?;
+    ai_sandbox::coordination::dependencies(
+        &state,
+        caller,
+        project_id,
+        project.spec.source_path.as_deref(),
+        &input,
+    )
+    .map_err(|e| invalid(id, "dependencies", e))?;
     let store = state.store.clone();
-    if db(id, move || store.sandbox_pending_count()).await? >= 16 {
+    let admission_limit = ai_sandbox::coordination::admission_limit(&input);
+    if db(id, move || store.sandbox_pending_count()).await? >= admission_limit {
         return Err(error(
             id,
             "sandbox_queue_full",
-            "The controller already has 16 pending attempts; finish or reconcile one before starting another",
+            "Pending attempt limit reached; dependency waiters reserve one slot for an explicit retry",
         ));
     }
     if input.input.is_empty() || input.input.len() > 32768 {
@@ -738,38 +830,14 @@ pub async fn create_task(
             "This project reached its 500-task limit",
         ));
     }
-    let store = state.store.clone();
-    if db(id, move || store.sandbox_project_busy(project_id)).await? {
+    if !ai_sandbox::coordination::queued_allowed(&state.store, project_id, &input)
+        .map_err(|e| invalid(id, "dependencies", e))?
+    {
         return Err(error(
             id,
             "sandbox_busy",
             "Finish or reconcile the current task before starting another",
         ));
-    }
-    if let Some(retry) = input.retry_of {
-        let store = state.store.clone();
-        let prior = db(id, move || store.sandbox_task(retry))
-            .await?
-            .filter(|t| t.task.project_id == project_id)
-            .ok_or_else(|| {
-                invalid(
-                    id,
-                    "retryOf",
-                    "Previous task does not belong to this project",
-                )
-            })?;
-        if !matches!(
-            prior.task.state,
-            SandboxTaskState::Failed | SandboxTaskState::Cancelled | SandboxTaskState::Interrupted
-        ) || prior.guest_pending
-            || prior.guest_staged
-        {
-            return Err(error(
-                id,
-                "sandbox_retry_blocked",
-                "Reconcile the previous attempt before retrying",
-            ));
-        }
     }
     let selection = input
         .selection
@@ -794,6 +862,18 @@ pub async fn create_task(
     ai_sandbox::proof(&state, &selection, input.kind == SandboxTaskKind::Code)
         .map_err(|e| invalid(id, "selection", e))?;
     let mut runtime = None;
+    let mut environment_ref = None;
+    let mut execution_mode = None;
+    let mut captured_project = project.spec.clone();
+    if input.environment_role.is_some()
+        && (input.kind != SandboxTaskKind::Code || project.spec.environment_id.is_none())
+    {
+        return Err(invalid(
+            id,
+            "environmentRole",
+            "An Environment role requires a code task bound to a managed Environment",
+        ));
+    }
     if input.kind == SandboxTaskKind::Code {
         caller
             .settings(&state, &project.spec)
@@ -805,16 +885,78 @@ pub async fn create_task(
                 "Select a project source directory for code tasks",
             ));
         }
-        let vm = project
-            .spec
-            .vm_id
-            .ok_or_else(|| invalid(id, "vmId", "Select a MicroVM for code tasks"))?;
-        runtime = Some(ai_sandbox::guest::binding(&state, vm).map_err(|e| invalid(id, "vmId", e))?);
+        if let Some(environment_id) = project.spec.environment_id {
+            let environment = state
+                .store
+                .sandbox_environment(environment_id)
+                .map_err(|_| AppError::internal(id.0))?
+                .filter(|environment| environment.project_id == project_id)
+                .ok_or_else(|| {
+                    invalid(
+                        id,
+                        "environmentId",
+                        "Environment must belong to this project",
+                    )
+                })?;
+            let (reference, binding, mode) = ai_sandbox::environment::binding(
+                &state,
+                environment.id,
+                input.environment_role.as_deref(),
+            )
+            .map_err(|e| invalid(id, "environmentId", e))?;
+            caller
+                .require(
+                    &state,
+                    &SandboxResource::Vm { id: binding.vm_id },
+                    SandboxPermission::Execute,
+                )
+                .map_err(|e| denied(id, e))?;
+            captured_project.vm_id = Some(binding.vm_id);
+            runtime = Some(binding);
+            environment_ref = Some(reference);
+            execution_mode = Some(mode);
+        } else {
+            let vm = project
+                .spec
+                .vm_id
+                .ok_or_else(|| invalid(id, "vmId", "Select a MicroVM for code tasks"))?;
+            runtime =
+                Some(ai_sandbox::guest::binding(&state, vm).map_err(|e| invalid(id, "vmId", e))?);
+        }
     }
     let timestamp = ai_sandbox::now();
+    let spec = project.spec.clone();
+    let git_commit = tokio::task::spawn_blocking(move || ai_sandbox::context::resolve(&spec))
+        .await
+        .map_err(|_| AppError::internal(id.0))?
+        .map_err(|e| invalid(id, "gitRef", e))?;
+    if matches!(
+        execution_mode,
+        Some(SandboxExecutionMode::PersistentWorkspace)
+    ) && let Some(runtime) = runtime
+        && let Some(origin) = state
+            .store
+            .sandbox_workspace_origin(runtime.vm_id)
+            .map_err(|_| AppError::internal(id.0))?
+        && (origin.project.source_path != captured_project.source_path
+            || origin.task.git_commit != git_commit)
+    {
+        return Err(error(
+            id,
+            "sandbox_workspace_source_changed",
+            "Retained Workspace source or Git base changed. Restore its original source/ref or explicitly select a new Environment.",
+        ));
+    }
     let saved = SavedTask {
         caller,
         task: SandboxTask {
+            git_commit,
+            retry_root: Some(retry_root),
+            retry_number,
+            dependency_results: vec![],
+            tests: vec![],
+            artifacts: vec![],
+            environment: environment_ref,
             id: key,
             project_id,
             attempt_id: Uuid::new_v4(),
@@ -830,12 +972,14 @@ pub async fn create_task(
             events: vec![],
             changes: vec![],
         },
-        project: project.spec,
+        project: captured_project,
         workspace: None,
         guest: runtime,
         guest_pending: false,
         guest_command: None,
         guest_staged: false,
+        results_exported: false,
+        execution_mode,
     };
     caller
         .task(&state, &saved, SandboxPermission::Execute)
@@ -900,8 +1044,19 @@ pub async fn reconcile_task(
         .await
         .map_err(|e| invalid(id, "guest", e))?;
     if let Some(path) = &saved.workspace {
-        saved.task.changes =
-            ai_sandbox::workspace::changes(path).map_err(|e| invalid(id, "workspace", e))?;
+        saved.task.changes = match ai_sandbox::workspace::changes(path) {
+            Ok(changes) => changes,
+            // Preparation checkpoints precede every provider/tool action. A partial initial
+            // snapshot has no produced outputs to recover and remains retained for inspection.
+            Err(_)
+                if saved.task.events.is_empty()
+                    && saved.task.result.is_empty()
+                    && saved.task.artifacts.is_empty() =>
+            {
+                Vec::new()
+            }
+            Err(error) => return Err(invalid(id, "workspace", error)),
+        };
     }
     let connections = state
         .store
@@ -919,11 +1074,46 @@ pub async fn reconcile_task(
     }
     saved.task.state = SandboxTaskState::Cancelled;
     saved.task.updated_at = ai_sandbox::now();
+    saved.task.error_code = None;
     saved.task.error = Some("Interrupted attempt reconciled; retry creates a new attempt".into());
+    saved.results_exported = true;
+    ai_sandbox::artifacts::verify_export(&saved).map_err(|e| invalid(id, "artifacts", e))?;
     let store = state.store.clone();
     let copy = saved.clone();
     db(id, move || store.save_sandbox_task(&copy)).await?;
     Ok(Json(saved.task))
+}
+
+/// Download only immutable exported bytes owned by the authorized task and attempt.
+pub async fn get_artifact(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    caller: Caller,
+    Path((key, artifact)): Path<(Uuid, Uuid)>,
+) -> Result<([(axum::http::header::HeaderName, &'static str); 2], Vec<u8>), AppError> {
+    let saved = task(&state, id, key, caller, SandboxPermission::Read).await?;
+    if !saved
+        .task
+        .artifacts
+        .iter()
+        .any(|record| record.id == artifact)
+    {
+        return Err(AppError::not_found(id.0));
+    }
+    let bytes = tokio::task::spawn_blocking(move || ai_sandbox::artifacts::read(&saved, artifact))
+        .await
+        .map_err(|_| AppError::internal(id.0))?
+        .map_err(|e| invalid(id, "artifact", e))?;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "application/octet-stream"),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                "attachment; filename=artifact.bin",
+            ),
+        ],
+        bytes,
+    ))
 }
 /// Apply selected reviewed files only if their original contents still match the task snapshot.
 pub async fn apply_task(

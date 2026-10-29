@@ -658,6 +658,30 @@ pub(crate) const PATH_APPLETS: &[&str] = &[
     "nslookup",
     "vi",
     "sh",
+    // The authenticated Sandbox shell uses the injected static toolbox on distroless guests.
+    "awk",
+    "base64",
+    "cat",
+    "chmod",
+    "chown",
+    "chgrp",
+    "cp",
+    "cut",
+    "env",
+    "flock",
+    "head",
+    "id",
+    "mkdir",
+    "mkfifo",
+    "mv",
+    "rm",
+    "sed",
+    "sleep",
+    "sync",
+    "tar",
+    "timeout",
+    "touch",
+    "wc",
 ];
 
 /// Directories a login shell searches, in the usual Unix order.
@@ -936,10 +960,14 @@ if [ -z "$ipv4" ]; then
   exit 0
 fi
 
+dns_probe=example.com
+if [ -r /etc/firecrab/dns-probe ]; then
+  dns_probe=$($BB cat /etc/firecrab/dns-probe)
+fi
 dns_ok=0
 tries=0
 while [ "$tries" -lt 15 ]; do
-  if $BB nslookup example.com >/dev/null 2>&1; then
+  if $BB nslookup "$dns_probe" >/dev/null 2>&1; then
     dns_ok=1
     break
   fi
@@ -956,14 +984,20 @@ echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
 
 {prepare_runtime}
 
-# The image carries its application dependencies. Start it before optional
-# operational tools, which may be unavailable on an isolated network.
+# The image carries its application dependencies. Preinstalled SSH must also
+# work on an isolated network, before optional package downloads complete.
 $BB mkdir -p /run/firecrab
+prestarted_sshd_pid=""
 for service in {services}/*; do
   [ -x "$service" ] || continue
   name=${{service##*/}}
-  [ "$name" = app ] || continue
+  case "$name" in
+    app) ;;
+    sshd) [ -x /usr/sbin/sshd ] || continue ;;
+    *) continue ;;
+  esac
   $BB setsid "$service" >/dev/console 2>&1 &
+  [ "$name" != sshd ] || prestarted_sshd_pid=$!
   echo $! > /run/firecrab/$name.pid
   [ "$name" = app ] && echo $! > /run/firecrab-app.pid
 done
@@ -975,11 +1009,14 @@ done
 
 {prepare_runtime}
 
-# SSH and other operational services need the packages installed above.
+# A missing or failed SSH service can now use the installed packages.
 for service in {services}/*; do
   [ -x "$service" ] || continue
   name=${{service##*/}}
   [ "$name" != app ] || continue
+  if [ "$name" = sshd ] && [ -n "$prestarted_sshd_pid" ] && $BB kill -0 "$prestarted_sshd_pid" 2>/dev/null; then
+    continue
+  fi
   $BB setsid "$service" >/dev/console 2>&1 &
   echo $! > /run/firecrab/$name.pid
 done

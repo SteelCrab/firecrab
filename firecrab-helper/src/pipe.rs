@@ -95,6 +95,7 @@ async fn execute(
         Ok(output.stdout)
     };
     let timeout = match action {
+        "quick-inspect" => 5,
         "firecrab-manage" => 450,
         "quick-connect" | "quick-manage" => 450,
         "cloudflare-connect" => 420,
@@ -136,6 +137,17 @@ async fn run_with_cli(cli: &Path, request: Operation) -> Result<Snapshot, Helper
             .await?;
         }
         Operation::Inspect => {}
+        Operation::InspectQuickTunnel { id } => {
+            return serde_json::from_slice(
+                &execute(
+                    cli,
+                    "quick-inspect",
+                    Some(serde_json::to_vec(&id).map_err(failure)?),
+                )
+                .await?,
+            )
+            .map_err(failure);
+        }
         Operation::DisconnectCloudflare => {
             execute(cli, "cloudflare-disconnect", None).await?;
         }
@@ -219,6 +231,58 @@ mod tests {
     use super::*;
     use firecrab_helper_protocol::pipe::{Service, ServiceAction, ServiceRequest};
     use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn direct_unit_inspection_uses_only_uuid_stdin_and_never_falls_back_to_manifest_snapshot()
+    {
+        for unsupported in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let cli = directory.path().join("firecrab");
+            let script = if unsupported {
+                r#"#!/bin/sh
+location="${0%/*}"
+printf '%s\n' "$*" >> "$location/calls"
+cat > "$location/request.json"
+printf "error: unrecognized subcommand 'quick-inspect'\n" >&2
+exit 2
+"#
+            } else {
+                r#"#!/bin/sh
+location="${0%/*}"
+printf '%s\n' "$*" >> "$location/calls"
+case "$1:$2" in
+  pipe:quick-inspect) cat > "$location/request.json"; cat "$location/snapshot.json" ;;
+  *) exit 23 ;;
+esac
+"#
+            };
+            std::fs::write(&cli, script).unwrap();
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let id = uuid::Uuid::new_v4();
+            let expected: Snapshot = serde_json::from_value(serde_json::json!({
+                "config":null,"units":[{"unit":firecrab_helper_protocol::pipe::quick_tunnel_unit(id),"loadState":"loaded","activeState":"active","subState":"running","mainPid":42}],"nginxAvailable":false,"cloudflaredAvailable":false
+            })).unwrap();
+            std::fs::write(
+                directory.path().join("snapshot.json"),
+                serde_json::to_vec(&expected).unwrap(),
+            )
+            .unwrap();
+            let response = run_with_cli(&cli, Operation::InspectQuickTunnel { id }).await;
+            if unsupported {
+                assert!(response.is_err());
+            } else {
+                assert_eq!(response.unwrap(), expected);
+            }
+            assert_eq!(
+                std::fs::read(directory.path().join("calls")).unwrap(),
+                b"pipe quick-inspect\n"
+            );
+            assert_eq!(
+                std::fs::read(directory.path().join("request.json")).unwrap(),
+                serde_json::to_vec(&id).unwrap()
+            );
+        }
+    }
 
     #[cfg(target_os = "linux")]
     #[tokio::test]

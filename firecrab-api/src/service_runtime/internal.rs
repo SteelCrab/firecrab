@@ -61,7 +61,7 @@ pub(super) async fn publish(
         )?,
         owner: owner(deployment),
         name: deployment.spec.name.clone(),
-        network: subnet.helper_spec(network.internet_enabled, network.uplink),
+        network: subnet.helper_spec(network.internet_enabled, network.uplink, network.dns_mode),
         upstreams,
     };
     deployment.internal_route_owned = true;

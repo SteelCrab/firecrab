@@ -61,6 +61,11 @@ Record VM ID, boot identity, source path, task ID, and attempt ID without creden
 9. Disconnect/replace the account and confirm subsequent inference requires current verification.
 10. Delete only the QA project and resources created explicitly for this check. Preserve borrowed resources and user source.
 
+Use the [recovery acceptance gate](ai-sandbox-recovery-qa.md) to reproduce command
+timeouts, cancellation, disconnected admission, controller crash and a real guest
+reboot through the existing REST lifecycle. Its faults require a dedicated API
+host and explicit ownership controls.
+
 ## Recorded local evidence, 2026-10-25
 
 - Linux Sandbox: **22 passed**, including the disposable-root shell contract, bounded file ownership/modes, private-database exclusion, indexed task summaries, atomic projection/checkpoint rollback, disconnected HTTP admission, early cancellation, native provider protocols and source conflicts.
