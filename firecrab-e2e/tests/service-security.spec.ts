@@ -10,7 +10,9 @@ test("Security shows deployment identity and never reports unavailable scans as 
       cveScan: "unavailable", threatDetection: "unavailable", aiAnalysis: "unavailable"
     } }
   });
-  await expect(page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Security", exact: true })).toHaveAttribute("aria-current", "page");
+  const security = page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Security", exact: true });
+  await expect(security).toHaveAttribute("aria-current", "page");
+  await expect(security.locator("xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' sidebar-group ')][1]").locator(".sidebar-group-label")).toHaveText("AI");
   await expect(page.getByText("orders-api", { exact: true })).toBeVisible();
   await expect(page.getByText("deploy-1", { exact: true })).toBeVisible();
   await expect(page.getByText("Not scanned", { exact: true })).toBeVisible();

@@ -535,7 +535,7 @@ pub fn page(app: &App) -> String {
         "storages" | "volumes" | "images" | "kernels" | "secrets" | "queues" => {
             tr(app, "Data", "데이터")
         }
-        "ai-sandbox" => "AI",
+        "ai-sandbox" | "security" => "AI",
         _ => tr(app, "System", "시스템"),
     };
     let meters = host_meters(app);
