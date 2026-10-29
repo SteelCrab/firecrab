@@ -8,6 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
+| [0.4.0](#040---2026-10-30) | 2026-10-30 | [Changes since v0.3.1](https://github.com/SteelCrab/firecrab/compare/v0.3.1...v0.4.0) |
 | [0.3.1](#031---2026-10-06) | 2026-10-06 | [#123], [#314], [#315], [#318], [#324], [#330], [#331], [#332], [#333], [#343], [#351], [#358], [#359], [#360], [#368], [#378] |
 | [0.3.0](#030---2026-09-29) | 2026-09-29 | [#210], [#266], [#287], [#290], [#294], [#295], [#297], [#312] |
 | [0.2.2](#022---2026-09-15) | 2026-09-15 | [#269], [#270], [#272], [88ba35d], [729bb47] |
@@ -20,6 +21,8 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 ## [Unreleased]
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
+
+## [0.4.0] - 2026-10-30
 
 ### Added
 
@@ -966,7 +969,8 @@ network helper.
 - Changelog validation is part of the documentation CI job so a release
   cannot drop a required section.
 
-[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.3.1...main
+[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.4.0...main
+[0.4.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.4.0
 [0.3.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.3.1
 [0.3.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.3.0
 [0.2.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.2.2
