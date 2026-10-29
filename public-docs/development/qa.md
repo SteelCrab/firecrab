@@ -105,9 +105,13 @@ fixture services and checks registration, HTTPS, WebSocket echo, VM and Nginx
 targets, retargeting, API restart, and address isolation. At each prompt, revoke
 the named test token through an authorized dashboard operator method and press
 Enter. The current dashboard UI may not expose a revoke button. Stop if the
-operator cannot revoke the token; rotating or deleting it is not proof of token
-revocation. A 401/410 registration response alone cannot distinguish revocation
-from expiry. Confirm the dashboard's revoked state separately.
+operator cannot revoke the token; rotating the token or deleting the address is
+not proof of individual token revocation. A 401/410 registration response alone
+cannot distinguish revocation from expiry or address deletion. Separately
+confirm the revocation action and that the address remains reserved without an
+active token. The runner restarts the address updater and observes two rejected
+refreshes at least 30 seconds apart. It then checks registration and public
+access again while retaining the peer.
 
 The report records measured stages and local cleanup errors, but its final
 public status remains `pending_operator_verification`. Confirm both token

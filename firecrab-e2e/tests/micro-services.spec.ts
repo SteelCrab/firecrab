@@ -151,6 +151,13 @@ async function openServices(
         saved = [];
         return route.fulfill({ status: 204 });
       }
+      const detail = /^\/api\/micro-services\/([^/]+)$/.exec(path);
+      if (method === "GET" && detail) {
+        const service = saved.find(row => "id" in row && row.id === decodeURIComponent(detail[1]));
+        return service
+          ? route.fulfill({ json: service })
+          : route.fulfill({ status: 404, json: { error: { code: "not_found", message: "resource not found" } } });
+      }
       return route.fulfill({
         json: path === "/api/micro-services" ? saved : saved[0],
       });
@@ -612,7 +619,10 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect(panel.locator(".detail-meta")).toHaveText("orders");
     // A row click opens the tabs; the name is a button too, for the keyboard.
     await panel.getByRole("button", { name: "Cancel", exact: true }).click();
+    const workerDetail = page.waitForResponse(response =>
+      response.request().method() === "GET" && new URL(response.url()).pathname === `/api/micro-services/${SECRET}`);
     await rows.nth(1).locator("td").nth(1).click();
+    expect(await (await workerDetail).json()).toMatchObject({ id: SECRET, name: "worker" });
     await expect(panel.getByRole("heading", { name: "worker", exact: true })).toBeVisible();
     await expect(panel.getByRole("tab")).toHaveCount(4);
     await page.getByRole("button", { name: "Open orders", exact: true }).focus();

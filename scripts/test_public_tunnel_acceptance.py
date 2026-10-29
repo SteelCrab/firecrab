@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import threading
 import time
@@ -39,6 +40,7 @@ class AcceptanceTest(unittest.TestCase):
         self.failed_connect = None
         self.failed_delete = None
         self.revoked = []
+        self.updater_checks = []
         self.evidence = {}
 
         def run_cli(cli, *args, credential=None):
@@ -66,6 +68,9 @@ class AcceptanceTest(unittest.TestCase):
             patch.object(acceptance, "ready", return_value=True),
             patch.object(acceptance, "wait_offline", return_value=True),
             patch.object(acceptance, "restart_api", return_value=3),
+            patch.object(acceptance, "verify_updater_rejection",
+                         side_effect=lambda api, wait, credential, peer:
+                         self.updater_checks.append((credential.label, peer.label if peer else None))),
             patch("builtins.input", return_value=""),
         ]
         for item in patches:
@@ -91,7 +96,8 @@ class AcceptanceTest(unittest.TestCase):
         self.assertEqual(result["status"], "pending_operator_verification")
         self.assertEqual(result["connectionChecks"], "passed")
         self.assertEqual(result["dashboardRevocations"], "operator_verification_required")
-        self.assertEqual(self.revoked, ["qa-test-a", "qa-test-b"])
+        self.assertEqual(self.revoked, ["qa-test-a", "qa-test-a", "qa-test-b", "qa-test-a", "qa-test-b"])
+        self.assertEqual(self.updater_checks, [("qa-test-a", "qa-test-b"), ("qa-test-b", None)])
         self.assertEqual(result["tokenAuthentication"], {"qa-test-a": "registration_rejected", "qa-test-b": "registration_rejected"})
         self.assertEqual(result["dashboardReservations"], "operator_cleanup_required")
         self.assertEqual(self.read_bindings(), [])
@@ -137,6 +143,160 @@ class AcceptanceTest(unittest.TestCase):
         self.assertEqual(result["connectionChecks"], "not_completed")
         self.assertEqual(result["tokenAuthentication"]["qa-test-a"], "accepted")
         self.assertEqual(self.read_bindings(), [])
+
+    def test_failed_updater_check_cannot_pass_acceptance(self):
+        with patch.object(acceptance, "verify_updater_rejection",
+                          side_effect=acceptance.AcceptanceError("updater restored access")):
+            with self.assertRaisesRegex(acceptance.AcceptanceError, "updater restored access"):
+                self.run_acceptance()
+        self.assertEqual(self.evidence["publicTunnel"]["status"], "failed")
+        self.assertEqual(self.evidence["publicTunnel"]["connectionChecks"], "not_completed")
+        self.assertEqual(self.read_bindings(), [])
+
+
+class UpdaterRejectionTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.store = Path(self.directory.name) / "addresses.json"
+        self.primary = Credential("qa-test-a", "/private/a", "a" * 64)
+        self.peer = Credential("qa-test-b", "/private/b", "b" * 64)
+        self.store.write_text(json.dumps({"endpoint": acceptance.ENDPOINT, "protocol": "register_v1",
+                                         "bindings": [
+                                             {"subdomain": self.primary.label, "token": self.primary.token,
+                                              "ownedConnector": True, "connectorId": "connector-a"},
+                                             {"subdomain": self.peer.label, "token": self.peer.token,
+                                              "ownedConnector": True, "connectorId": "connector-b"},
+                                         ]}))
+        self.active = True
+        self.pid = "123"
+        self.now = 0.0
+        self.commands = []
+        self.snapshots = [
+            {"subdomain": self.primary.label, "connectorId": "connector-a", "connected": False,
+             "error": acceptance.REVOKED_ERROR},
+            {"subdomain": self.peer.label, "connectorId": "connector-b", "connected": True},
+        ]
+        self.api = MagicMock()
+        self.api.call.side_effect = lambda *args: {"firecrabTunnels": self.snapshots}
+        self.wait_count = 0
+
+    def systemctl(self, command, **kwargs):
+        self.commands.append(command[1])
+        if command[1] == "stop":
+            self.active = False
+        elif command[1] == "start":
+            self.active = True
+        if "--property=MainPID" in command:
+            return MagicMock(stdout=(self.pid if self.active else "0") + "\n")
+        return MagicMock(stdout=("active" if self.active else "inactive") + "\n")
+
+    def update_store(self):
+        # The real updater atomically replaces its saved ownership file.
+        replacement = self.store.with_suffix(".new")
+        replacement.write_text(self.store.read_text())
+        replacement.replace(self.store)
+
+    def wait_for(self, check, timeout, message):
+        self.wait_count += 1
+        self.assertFalse(check(), "an unchanged file cannot prove an updater refresh")
+        self.update_store()
+        if self.wait_count == 2:
+            self.now += 30
+        result = check()
+        if not result:
+            raise acceptance.AcceptanceError(message)
+        return result
+
+    def run_check(self):
+        with patch.object(acceptance, "STORE", self.store), \
+                patch.object(acceptance.time, "monotonic", side_effect=lambda: self.now), \
+                patch.object(acceptance.subprocess, "run", side_effect=self.systemctl):
+            acceptance.verify_updater_rejection(self.api, self.wait_for, self.primary, self.peer)
+
+    def test_restart_and_next_refresh_reject_token_and_keep_peer(self):
+        self.run_check()
+        self.assertEqual(self.wait_count, 2)
+        self.assertEqual([command for command in self.commands if command in ("stop", "start")],
+                         ["stop", "start"])
+
+    def test_network_error_cannot_pass_as_token_rejection(self):
+        self.snapshots[0]["error"] = "Cannot reach the Firecrab connection service"
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "did not reject"):
+            self.run_check()
+        self.assertTrue(self.active)
+
+    def test_peer_disconnection_fails_the_check(self):
+        self.snapshots[1]["connected"] = False
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "did not reject"):
+            self.run_check()
+
+    def test_second_refresh_must_still_reject(self):
+        original_wait = self.wait_for
+
+        def wait_for(check, timeout, message):
+            if self.wait_count == 1:
+                self.snapshots[0]["connected"] = True
+            return original_wait(check, timeout, message)
+
+        self.wait_for = wait_for
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "next refresh"):
+            self.run_check()
+
+    def test_changed_snapshot_during_api_read_is_not_accepted(self):
+        def race(*args):
+            self.update_store()
+            return {"firecrabTunnels": self.snapshots}
+
+        self.api.call.side_effect = race
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "did not reject"):
+            self.run_check()
+
+    def test_updater_auto_restart_cannot_count_as_periodic_refresh(self):
+        original_wait = self.wait_for
+
+        def wait_for(check, timeout, message):
+            if self.wait_count == 1:
+                self.pid = "456"
+            return original_wait(check, timeout, message)
+
+        self.wait_for = wait_for
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "restarted during"):
+            self.run_check()
+
+    def test_early_write_cannot_count_as_a_periodic_refresh(self):
+        original_wait = self.wait_for
+
+        def wait_for(check, timeout, message):
+            if self.wait_count == 0:
+                return original_wait(check, timeout, message)
+            self.wait_count += 1
+            self.now += 1
+            self.update_store()
+            self.assertFalse(check())
+            self.now += 29
+            self.assertFalse(check(), "an early write cannot pass just by waiting")
+            self.update_store()
+            return check()
+
+        self.wait_for = wait_for
+        self.run_check()
+        self.assertEqual(self.wait_count, 2)
+
+    def test_timed_out_stop_still_attempts_restart(self):
+        original_systemctl = self.systemctl
+
+        def timeout(command, **kwargs):
+            if command[1] == "stop":
+                self.active = False
+                raise subprocess.TimeoutExpired(command, 120)
+            return original_systemctl(command, **kwargs)
+
+        self.systemctl = timeout
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "service command failed"):
+            self.run_check()
+        self.assertTrue(self.active)
+        self.assertIn("start", self.commands)
 
 
 class SecretTransportTest(unittest.TestCase):

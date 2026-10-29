@@ -23,9 +23,10 @@ an alternative registry. The client supports both protocols.
    64-character hexadecimal value. The server stores its SHA-256 digest.
 4. Keep the token privately. Its original value is displayed only on issuance.
 
-Anyone holding a token can control its assigned address. Use the dashboard's
-token controls to revoke or rotate it. Expired and revoked tokens cannot refresh
-the connection. The address remains owned by the dashboard account.
+Anyone holding a token can control its assigned address. The dashboard can
+rotate a token, which invalidates the previous token. Its interface may not offer
+a separate revoke control. Expired and revoked tokens cannot refresh the
+connection. The address remains owned by the dashboard account.
 
 ## Connect an address
 
@@ -53,9 +54,11 @@ host; it never reloads the token into the browser.
 Deleting a local Firecrab connection removes its exclusively owned connector.
 A reused user connector remains. Production dashboard reservations and remote
 mappings stay under dashboard control. A mapping to a running reused connector
-can still serve requests after local removal; revoke its token in the dashboard
-to disable the fixed address. The standalone registry marks removed addresses
-offline while retaining dashboard-issued token reservations.
+can still serve requests after local removal. Use an authorized dashboard
+operator method to revoke its token, and confirm that the fixed address is
+offline. Token rotation alone does not prove that public traffic has stopped.
+The standalone registry marks removed addresses offline while retaining
+dashboard-issued token reservations.
 
 ## Ownership and continuity
 
@@ -179,8 +182,9 @@ cannot restore access.
 
 Record the test host, address labels, stages, results, and cleanup outcome without
 credentials. Keep tokens in private files and never in command arguments, reports,
-or logs. Remove only the test-owned local connections. Revoke the test tokens in
-the dashboard and confirm the public addresses no longer serve test traffic.
+or logs. Remove only the test-owned local connections. Revoke the test tokens
+through an authorized dashboard operator method and confirm the public addresses
+no longer serve test traffic.
 Check and remove test-owned dashboard reservations separately if permitted;
 local disconnect does not remove them. Always report any unfinished cleanup.
 

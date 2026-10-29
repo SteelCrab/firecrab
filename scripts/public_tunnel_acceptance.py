@@ -28,6 +28,8 @@ _probe_spec.loader.exec_module(probe)
 
 STORE = Path("/etc/firecrab/pipe/firecrab-addresses.json")
 ENDPOINT = "https://tunnel.firecrab.dev"
+UPDATER = "firecrab-address-updater.service"
+REVOKED_ERROR = "The connection token is invalid or revoked"
 
 
 class AcceptanceError(Exception):
@@ -178,6 +180,87 @@ def ready(wait_for, credential, expected):
 def wait_offline(wait_for, credential):
     return wait_for(limited(lambda: public_offline(credential)), timeout=180,
                     message="public address did not become offline")
+
+
+def verify_updater_rejection(api, wait_for, credential, peer):
+    """Observe two updater writes after restart, including a periodic retry."""
+    connector = owned_binding(STORE, credential)
+    peer_connector = owned_binding(STORE, peer) if peer else None
+    if connector is None or (peer and peer_connector is None):
+        raise AcceptanceError("test address ownership disappeared before updater restart")
+
+    def systemctl(*args):
+        try:
+            result = subprocess.run(["systemctl", *args, UPDATER], check=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    text=True, timeout=120)
+            return result.stdout.strip()
+        except (OSError, subprocess.SubprocessError) as error:
+            raise AcceptanceError("address updater service command failed") from error
+
+    if systemctl("show", "--property=ActiveState", "--value") != "active":
+        raise AcceptanceError("address updater was not active")
+    try:
+        systemctl("stop")
+        if systemctl("show", "--property=ActiveState", "--value") != "inactive":
+            raise AcceptanceError("address updater did not stop")
+        previous_inode = STORE.stat().st_ino
+    except BaseException as error:
+        try:
+            systemctl("start")
+        except AcceptanceError:
+            raise AcceptanceError("updater stop or verification failed; service restart also failed") from error
+        raise
+    else:
+        systemctl("start")
+    pid = systemctl("show", "--property=MainPID", "--value")
+    if not pid.isdigit() or int(pid) == 0:
+        raise AcceptanceError("address updater did not start")
+
+    def updated_after(inode):
+        try:
+            current_inode = STORE.stat().st_ino
+        except FileNotFoundError:
+            return False
+        if current_inode == inode:
+            return False
+        addresses = api.call("GET", "/api/pipe").get("firecrabTunnels") or []
+        matches = [item for item in addresses if item.get("subdomain") == credential.label]
+        if (len(matches) != 1 or matches[0].get("connectorId") != connector
+                or matches[0].get("connected") is not False
+                or matches[0].get("error") != REVOKED_ERROR):
+            return False
+        if peer:
+            peers = [item for item in addresses if item.get("subdomain") == peer.label]
+            if (len(peers) != 1 or peers[0].get("connectorId") != peer_connector
+                    or peers[0].get("connected") is not True):
+                return False
+        try:
+            if STORE.stat().st_ino != current_inode:
+                return False
+        except FileNotFoundError:
+            return False
+        if systemctl("show", "--property=MainPID", "--value") != pid:
+            raise AcceptanceError("address updater restarted during token verification")
+        return current_inode
+
+    first = wait_for(lambda: updated_after(previous_inode), timeout=180,
+                     message="updater did not reject the token after restart")
+    first_observed = time.monotonic()
+
+    def periodic_refresh():
+        nonlocal first
+        inode = updated_after(first)
+        if not inode:
+            return False
+        first = inode
+        return inode if time.monotonic() - first_observed >= 30 else False
+
+    wait_for(periodic_refresh, timeout=180,
+             message="updater did not reject the token on its next refresh")
+    if (systemctl("show", "--property=ActiveState", "--value") != "active"
+            or systemctl("show", "--property=MainPID", "--value") != pid):
+        raise AcceptanceError("address updater did not remain active")
 
 
 def limited(check):
@@ -334,6 +417,7 @@ def run_public(api, wait_for, service_a, service_b, credentials, evidence):
         ready(wait_for, primary, b"fixture-A")
         metrics["stages"].append("disconnect and reconnect preserve the peer address")
 
+        rejected = []
         for credential, other in ((primary, peer), (peer, None)):
             print(f"Revoke test token for {credential.label} in the dashboard, then press Enter.", flush=True)
             input()
@@ -342,7 +426,15 @@ def run_public(api, wait_for, service_a, service_b, credentials, evidence):
             wait_offline(wait_for, credential)
             if other:
                 ready(wait_for, other, b"fixture-B")
+            verify_updater_rejection(api, wait_for, credential, other)
+            rejected.append(credential)
+            for prior in rejected:
+                verify_revoked(prior)
+                wait_offline(wait_for, prior)
+            if other:
+                ready(wait_for, other, b"fixture-B")
             metrics["stages"].append("registration rejected and public address offline after operator action: " + credential.label)
+            metrics["stages"].append("updater restart and periodic retry retained token rejection: " + credential.label)
         metrics["connectionChecks"] = "passed"
         metrics["status"] = "pending_operator_verification"
     finally:
