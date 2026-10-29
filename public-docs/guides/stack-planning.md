@@ -97,7 +97,12 @@ Removed declarations appear last in reverse dependency order.
 | `replace` | Immutable fields differ, a disk would shrink, or a network dependency would be replaced |
 | `deploy` | Saved service configuration matches but its deployment configuration or placement differs |
 | `retain` | A binding remains after its declaration was removed; pruning is disabled |
+| `delete` | An exact owned declaration was removed and `lifecycle.prune` explicitly enables deletion |
 | `blocked` | Ownership, an unavailable bound resource, a conflicting name, or a busy service prevents planning |
+
+The plan exposes the reviewed `lifecycle` policy when any destructive flag is enabled.
+Apply requires explicit replacement permission for `replace` entries and checks external dependencies before destruction.
+See [replacement and pruning](stack-lifecycle.md) for execution order, retained disks and recovery.
 
 For example, a new network produces an entry such as:
 
@@ -154,5 +159,5 @@ An omitted VM `storageRoot` preserves existing placement during comparison; new 
 Template availability and immutable content identity, registry resolution, capacity, free ports, and conflicts outside the declared configuration still require later host validation.
 The planner does not authorize replacement or data deletion.
 
-Native apply supports explicit creation, updates and service deployment with durable status.
-Automatic replacement/pruning, dashboard stack status and continuous Git reconciliation remain follow-up work.
+Native apply supports creation, updates, service deployment and opt-in replacement/pruning with durable status.
+Git synchronization reuses these operations. Dashboard stack status and full Linux/KVM Git-to-runtime verification remain follow-up work.

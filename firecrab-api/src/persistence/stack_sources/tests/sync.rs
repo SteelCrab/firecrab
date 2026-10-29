@@ -31,6 +31,7 @@ fn operation(record: &StackRecord, source: &GitSourceStatus) -> (GitCheck, Apply
     assert_eq!(change.action, Action::Create);
     change.resource_id = Some(Uuid::new_v4());
     let status = ApplyStatus {
+        lifecycle: Default::default(),
         inputs: Default::default(),
         git_revision: check.revision(),
         operation_id: check.id,
@@ -38,6 +39,8 @@ fn operation(record: &StackRecord, source: &GitSourceStatus) -> (GitCheck, Apply
         name: record.name.clone(),
         state: ApplyState::Queued,
         changes: vec![ApplyStep {
+            replacement_for: None,
+            vm_disk: None,
             change,
             state: StepState::Pending,
         }],

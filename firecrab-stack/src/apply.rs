@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::{Change, GitRevision, PlanInputs, Stack};
+use crate::{Change, GitRevision, LifecyclePolicy, PlanInputs, Stack, VmDiskIdentity};
 
 /// Apply one reviewed observation with an operator-known retry identity.
 #[derive(Deserialize, Serialize)]
@@ -87,6 +87,12 @@ impl StepState {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyStep {
+    /// Previous UUID for a replacement create. The delete step precedes this step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_for: Option<Uuid>,
+    /// Disk identity reviewed before deletion; lifecycle.deleteVmDisks controls retention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vm_disk: Option<VmDiskIdentity>,
     /// Original action and exact UUID, reserved before creation starts.
     #[serde(flatten)]
     pub change: Change,
@@ -110,6 +116,9 @@ pub struct ApplyFailure {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyStatus {
+    /// Reviewed destructive policy captured before mutation.
+    #[serde(default, skip_serializing_if = "LifecyclePolicy::is_default")]
+    pub lifecycle: LifecyclePolicy,
     /// Exact template and service content identities accepted with this operation.
     #[serde(default)]
     pub inputs: PlanInputs,

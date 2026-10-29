@@ -168,7 +168,7 @@ pub(crate) fn inventory(
     for service in store.list_micro_services()? {
         let deployment = store.service_deployment(service.id)?;
         if let Some(deployment) = &deployment {
-            service_vms.extend(deployment.instances.iter().map(|instance| instance.vm_id));
+            service_vms.extend(deployment.owned_vm_ids());
         }
         services.push(ServiceSnapshot {
             service,
@@ -189,6 +189,7 @@ pub(crate) fn inventory(
                 template_rootfs_sha256: vm.template_rootfs_sha256,
                 template_boot_args_sha256: vm.template_boot_args_sha256,
                 template_pin: store.stack_vm_pin(vm.id, false)?,
+                disk_generation: vm.disk_generation,
                 cpu: vm.cpu,
                 ram: vm.ram,
                 disk_gb: vm.disk_gb,

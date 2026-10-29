@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::body::Body;
 use axum::http::Request;
-use firecrab_stack::{Binding, ResourceKind, Stack};
+use firecrab_stack::{ApplyStep, Binding, ResourceKind, Stack};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -12,6 +12,7 @@ use crate::server::{HttpConfig, build_router};
 use crate::templates::TemplateRegistry;
 
 mod inputs;
+mod lifecycle;
 
 async fn fixture(
     root: &std::path::Path,
@@ -262,6 +263,7 @@ async fn stack_apply_restart_preserves_reservations_guards_ownership_and_cleans_
     let id = Uuid::new_v4();
     let resource_id = Uuid::new_v4();
     let status = ApplyStatus {
+        lifecycle: Default::default(),
         inputs: Default::default(),
         git_revision: None,
         operation_id: id,
@@ -269,6 +271,8 @@ async fn stack_apply_restart_preserves_reservations_guards_ownership_and_cleans_
         name: "demo".into(),
         state: ApplyState::Queued,
         changes: vec![ApplyStep {
+            replacement_for: None,
+            vm_disk: None,
             change: firecrab_stack::Change {
                 kind: ResourceKind::Network,
                 key: "app".into(),

@@ -2,7 +2,7 @@
 
 Connect one registered stack to a GitHub repository and compare its declared configuration periodically, even when the commit is unchanged.
 The default mode only detects drift. Explicit synchronization and opt-in automatic mode reuse [native YAML apply](stack-apply.md).
-Each run resolves an exact commit and verifies one manifest blob. Replacement and pruning remain disabled.
+Each run resolves an exact commit and verifies one manifest blob. Replacement and pruning require explicit manifest policies.
 
 ## Configure a source
 
@@ -72,6 +72,9 @@ Source provenance and native apply admission are committed in the same transacti
 A request timeout or lost response does not create a second operation.
 A plan containing only `noop`/`retain` actions starts no apply operation, deployment, or extra restart.
 Standalone VM creation still leaves the VM stopped; updates to an already running VM retain the native stop/restart rules.
+The manifest's [lifecycle policy](stack-lifecycle.md) enables replacement, pruning and optional VM disk deletion separately.
+Automatic mode treats a commit enabling those flags as authorization for future destructive synchronization.
+Standalone VM disks are retained by default. `allowStop` alone does not enable destructive policies.
 
 ## Private repositories
 
@@ -197,7 +200,7 @@ These placeholders are not valid pins. Copy real hashes, including the initrd ha
 The exact version and all hashes must match an installed template.
 Changing the current alias does not change an explicit pin while the approved version remains installed.
 A missing or changed version blocks synchronization. There is no fallback to another image.
-An existing VM with different recorded template content requires replacement, which remains disabled.
+An existing VM with different recorded template content requires explicit `lifecycle.replace: true`.
 Templates are checked before apply mutations. Later VM starts also check their journaled approval.
 Local plans without `templatePin` select the current alias and bind its resolved hashes into the plan fingerprint.
 Service declarations continue to require an OCI SHA256 digest; the registry verifies that digest before deployment.
@@ -219,7 +222,7 @@ Automatic mode restores supported declared fields at the same Git commit; stop p
 Edits after a plan or during apply invalidate the affected observation and stop further execution.
 Undeclared fields, VM lifecycle state and guest data remain outside drift correction.
 
-Destructive policies, dashboard Git status, and full Linux/KVM Git-to-runtime verification remain tracked in [#437](https://github.com/SteelCrab/firecrab/issues/437).
+Follow-up work remains tracked in [#437](https://github.com/SteelCrab/firecrab/issues/437).
 
 ## Repository layout and CI
 

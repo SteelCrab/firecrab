@@ -126,8 +126,18 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    delete_from_stack(state, request_id.0, id, None).await
+}
+
+pub(crate) async fn delete_from_stack(
+    state: AppState,
+    request_id: Uuid,
+    id: Uuid,
+    operation: Option<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let request_id = RequestId(request_id);
     let _claim = state.service_mutations.lock().await;
-    ensure_stack_writer(&state, id, None, request_id.0).await?;
+    ensure_stack_writer(&state, id, operation, request_id.0).await?;
     crate::service_runtime::ensure_editable(&state, id, request_id.0).await?;
     if state
         .store

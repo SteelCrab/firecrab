@@ -99,6 +99,10 @@ impl Store {
                 .instances
                 .iter()
                 .any(|instance| instance.vm_id == id)
+                || deployment
+                    .update
+                    .as_ref()
+                    .is_some_and(|u| u.retiring.contains(&id))
             {
                 return Ok(Some(deployment));
             }

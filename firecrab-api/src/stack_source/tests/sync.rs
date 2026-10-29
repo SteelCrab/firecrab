@@ -50,6 +50,51 @@ async fn run(state: &AppState, github: &Github, trigger: SourceTrigger) -> GitSo
 }
 
 #[tokio::test]
+async fn automatic_pruning_requires_an_explicit_valid_manifest_and_never_follows_git_failures() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, calls) = automatic(root.path(), None).await;
+    let remote=Arc::new(Mutex::new(Remote {first:format!("{YAML}\nlifecycle:\n  prune: true\n").into_bytes(),second:b"apiVersion: firecrab.dev/v1alpha1\nkind: Stack\nname: demo\nlifecycle:\n  prune: true\n".to_vec(),..Default::default()}));
+    let (github, task) = github(remote.clone()).await;
+    let created = run(&state, &github, SourceTrigger::Poll).await;
+    assert_eq!(
+        created.latest.as_ref().unwrap().state,
+        GitCheckState::Applied
+    );
+    let original = state.store.list_micro_networks().unwrap();
+    let before = calls.lock().unwrap().len();
+    remote.lock().unwrap().code = Some(StatusCode::UNAUTHORIZED);
+    let failed = run(&state, &github, SourceTrigger::Poll).await;
+    assert_eq!(failed.latest.as_ref().unwrap().state, GitCheckState::Failed);
+    assert_eq!(state.store.list_micro_networks().unwrap(), original);
+    assert_eq!(calls.lock().unwrap().len(), before);
+    {
+        let mut r = remote.lock().unwrap();
+        r.code = None;
+        r.head_b = true;
+    }
+    let pruned = run(&state, &github, SourceTrigger::Poll).await;
+    assert_eq!(
+        pruned.latest.as_ref().unwrap().state,
+        GitCheckState::Applied
+    );
+    assert!(state.store.list_micro_networks().unwrap().is_empty());
+    assert!(
+        state
+            .store
+            .stack("demo")
+            .unwrap()
+            .unwrap()
+            .bindings
+            .is_empty()
+    );
+    let before = calls.lock().unwrap().len();
+    let noop = run(&state, &github, SourceTrigger::Poll).await;
+    assert_eq!(noop.latest.as_ref().unwrap().state, GitCheckState::InSync);
+    assert_eq!(calls.lock().unwrap().len(), before);
+    task.abort();
+}
+
+#[tokio::test]
 async fn git_vm_checks_require_an_explicit_pin_and_never_follow_a_repointed_alias() {
     let root = tempfile::tempdir().unwrap();
     let (state, calls) = automatic(root.path(), None).await;
@@ -282,6 +327,56 @@ async fn failed_git_reads_never_apply_or_turn_into_empty_stacks() {
         );
         task.abort();
     }
+}
+
+#[tokio::test]
+async fn automatic_replacement_requires_manifest_policy_and_tracks_each_commit_without_replay() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, calls) = automatic(root.path(), None).await;
+    let yaml = format!("{YAML}lifecycle:\n  replace: true\n");
+    let remote = Arc::new(Mutex::new(Remote {
+        first: yaml.as_bytes().to_vec(),
+        second: yaml
+            .replace("172.31.20.0/24", "172.31.40.0/24")
+            .into_bytes(),
+        ..Remote::default()
+    }));
+    let (github, task) = github(remote.clone()).await;
+    let first = run(&state, &github, SourceTrigger::Poll).await;
+    assert_eq!(first.latest.as_ref().unwrap().state, GitCheckState::Applied);
+    let old = state.store.list_micro_networks().unwrap()[0].id;
+    remote.lock().unwrap().head_b = true;
+    let replaced = run(&state, &github, SourceTrigger::Poll).await;
+    assert_eq!(
+        replaced.latest.as_ref().unwrap().state,
+        GitCheckState::Applied
+    );
+    let operation = replaced.last_apply.as_ref().unwrap();
+    assert_eq!(operation.git_revision.as_ref().unwrap().commit, COMMIT_B);
+    assert!(
+        operation
+            .changes
+            .iter()
+            .any(|s| s.replacement_for == Some(old))
+    );
+    let current = state.store.list_micro_networks().unwrap()[0].id;
+    assert_ne!(old, current);
+    let count = calls.lock().unwrap().len();
+    let noop = run(&state, &github, SourceTrigger::Poll).await;
+    assert_eq!(noop.latest.as_ref().unwrap().state, GitCheckState::InSync);
+    assert_eq!(calls.lock().unwrap().len(), count);
+    remote.lock().unwrap().head_b = false;
+    let reverted = run(&state, &github, SourceTrigger::Poll).await;
+    assert_eq!(
+        reverted.latest.as_ref().unwrap().state,
+        GitCheckState::Applied
+    );
+    assert_eq!(
+        reverted.successful_revision.as_ref().unwrap().commit,
+        COMMIT_A
+    );
+    assert_ne!(state.store.list_micro_networks().unwrap()[0].id, current);
+    task.abort();
 }
 
 #[tokio::test]

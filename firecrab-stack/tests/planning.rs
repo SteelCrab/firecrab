@@ -132,6 +132,7 @@ fn fixture() -> (Stack, StackRecord, Inventory) {
         template_rootfs_sha256: pin.rootfs_sha256.clone(),
         template_boot_args_sha256: pin.boot_args_sha256.clone(),
         template_pin: Some(pin.clone()),
+        disk_generation: None,
         cpu: desired.cpu,
         ram: desired.ram,
         disk_gb: desired.disk_gb,
@@ -254,7 +255,7 @@ fn changing_an_immutable_network_propagates_to_vms_and_deployments() {
     let result = plan(&stack, &record, &inventory).unwrap();
     assert_eq!(
         result.changes.iter().map(|c| c.action).collect::<Vec<_>>(),
-        [Action::Replace, Action::Replace, Action::Deploy]
+        [Action::Replace, Action::Replace, Action::Replace]
     );
     assert_eq!(result.changes[1].fields, ["network"]);
 }
@@ -405,6 +406,27 @@ fn unfinished_deploy_recovery_blocks_noop_sync_and_is_part_of_approval() {
 }
 
 #[test]
+fn pending_replica_repair_blocks_planning_and_changes_approval() {
+    let (stack, record, mut inventory) = fixture();
+    let ready = plan(&stack, &record, &inventory).unwrap();
+    let deployment = inventory.services[0].deployment.as_mut().unwrap();
+    deployment.recovery = Some(Box::new(firecrab_api_types::ServiceRecovery {
+        repair: Some(firecrab_api_types::ReplicaRepair {
+            id: Uuid::new_v4(),
+            vm_id: Uuid::new_v4(),
+            replacement_id: None,
+            stage: firecrab_api_types::ReplicaRepairStage::Paused,
+            transition: None,
+        }),
+        ..Default::default()
+    }));
+    let pending = plan(&stack, &record, &inventory).unwrap();
+    assert!(pending.blocked);
+    assert_eq!(pending.changes[2].action, Action::Blocked);
+    assert_ne!(pending.fingerprint, ready.fingerprint);
+}
+
+#[test]
 fn duplicate_ownership_and_mismatched_stack_identity_are_rejected() {
     let (stack, mut record, inventory) = fixture();
     record.bindings.push(record.bindings[0].clone());
@@ -450,6 +472,23 @@ fn template_pin() -> firecrab_stack::TemplatePin {
         initrd_sha256: None,
         boot_args_sha256: "c".repeat(64),
     }
+}
+
+#[test]
+fn destructive_approval_includes_disk_identity_without_turning_vm_starts_into_ordinary_drift() {
+    let (mut stack, record, mut inventory) = fixture();
+    let ordinary = plan(&stack, &record, &inventory).unwrap();
+    inventory.vms[0].disk_generation = Some(Uuid::new_v4());
+    assert_eq!(
+        plan(&stack, &record, &inventory).unwrap().fingerprint,
+        ordinary.fingerprint
+    );
+    stack.lifecycle.prune = true;
+    let reviewed = plan(&stack, &record, &inventory).unwrap();
+    inventory.vms[0].disk_generation = Some(Uuid::new_v4());
+    let changed = plan(&stack, &record, &inventory).unwrap();
+    assert_ne!(reviewed.fingerprint, changed.fingerprint);
+    assert!(changed.changes.iter().all(|c| c.action == Action::Noop));
 }
 
 #[test]

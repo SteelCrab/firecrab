@@ -1363,6 +1363,17 @@ pub async fn delete_vm(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    delete_vm_with_disk_policy(state, request_id, id, false, None).await
+}
+
+/// Stack lifecycle work preserves standalone disk artifacts unless explicitly opted out.
+pub(crate) async fn delete_vm_with_disk_policy(
+    state: AppState,
+    request_id: RequestId,
+    id: Uuid,
+    retain_disks: bool,
+    stack_operation: Option<Uuid>,
+) -> Result<StatusCode, AppError> {
     let _guard = state.lock_vm(id).await;
     ensure_no_active_sandbox_previews(&state, id, request_id.0)?;
     if state
@@ -1389,6 +1400,28 @@ pub async fn delete_vm(
         .vm_block_storages(id)
         .map_err(|error| crate::handlers::block_storage::persistence_error(error, request_id.0))?
         .is_empty();
+    if let Some(operation) = stack_operation {
+        state
+            .store
+            .guard_stack_delete_resource(operation, firecrab_stack::ResourceKind::Vm, id)
+            .map_err(|_| {
+                AppError::conflict(
+                    "stale_stack_plan",
+                    "stack ownership or disk identity changed before VM deletion",
+                    request_id.0,
+                )
+            })?;
+        if has_volumes
+            || crate::network_policy::vm_is_active(&state, &vm)
+                .map_err(|_| AppError::internal(request_id.0))?
+        {
+            return Err(AppError::conflict(
+                "stack_vm_in_use",
+                "stop the exact VM and detach external volumes before deleting it",
+                request_id.0,
+            ));
+        }
+    }
     if (vm.security_group_id.is_some() || has_volumes)
         && crate::network_policy::vm_is_active(&state, &vm)
             .map_err(|_| AppError::internal(request_id.0))?
@@ -1451,9 +1484,13 @@ pub async fn delete_vm(
     let artifact_paths =
         crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&removed.storage_root), id);
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
-        // Runtime dirs first conceptually (owned by this VM only), then the
-        // whole tree including disks — one remove_dir_all covers both.
-        if let Err(error) = crate::artifacts::remove_vm_artifacts(&artifact_paths) {
+        // Retaining the VM keeps its private artifact tree, including runtime
+        // logs and disks. Otherwise remove the whole tree before its record.
+        if let Err(error) = if retain_disks {
+            Ok(())
+        } else {
+            crate::artifacts::remove_vm_artifacts(&artifact_paths)
+        } {
             return Err(format!(
                 "failed to remove {}: {error}",
                 artifact_paths.dir.display()

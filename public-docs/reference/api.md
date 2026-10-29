@@ -147,6 +147,7 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | Git source synchronization | `GET, PUT /api/stacks/{name}/source`, `POST /api/stacks/{name}/source/check`, `POST /api/stacks/{name}/source/sync`, `GET /api/stacks/{name}/source/history`; detect-only by default, opt-in automatic apply and explicit recovery; see [Git source synchronization](../guides/stack-git-source.md#rest) |
 
 Stack plans and apply status expose redacted `inputs.templates` and `inputs.serviceDigests` identities.
+Optional `lifecycle` permissions control replacement, pruning and VM disk deletion. Delete steps record `vmDisk`; replacement creates record `replacementFor`. See [lifecycle policies](../guides/stack-lifecycle.md).
 Git VM declarations require `templatePin`; direct apply and service mutations return `409 stack_source_managed` while Git owns synchronization.
 See [immutable inputs and controller ownership](../guides/stack-git-source.md#immutable-inputs-and-controller-ownership).
 | MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/deployment/check`, `POST /api/micro-services/{id}/stop` |
