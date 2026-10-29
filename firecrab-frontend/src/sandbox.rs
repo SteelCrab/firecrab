@@ -532,4 +532,5 @@ fn poll_review(app: &Shared) {
 }
 
 #[cfg(test)]
+#[path = "../tests/unit/sandbox/mod.rs"]
 mod tests;

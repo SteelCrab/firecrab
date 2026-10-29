@@ -20,7 +20,7 @@ const PROTOCOL: &str = "2025-11-25";
 mod sandbox;
 
 #[cfg(test)]
-#[path = "mcp_tests.rs"]
+#[path = "../tests/unit/mcp/mod.rs"]
 mod tests;
 
 #[derive(Default)]

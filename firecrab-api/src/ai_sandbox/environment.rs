@@ -21,7 +21,7 @@ use std::{
 use uuid::Uuid;
 
 #[cfg(test)]
-#[path = "environment_tests.rs"]
+#[path = "../../tests/unit/ai_sandbox/environment.rs"]
 mod tests;
 
 // The existing network API acquires network_mutations during service resync.

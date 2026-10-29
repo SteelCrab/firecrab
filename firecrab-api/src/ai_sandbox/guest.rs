@@ -1448,5 +1448,5 @@ esac
 "#;
 
 #[cfg(test)]
-#[path = "guest_tests.rs"]
+#[path = "../../tests/unit/ai_sandbox/guest.rs"]
 mod tests;

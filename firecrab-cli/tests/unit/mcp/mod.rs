@@ -1,5 +1,5 @@
 use super::*;
-#[path = "mcp_sandbox_tests.rs"]
+#[path = "sandbox.rs"]
 mod sandbox_resources;
 use std::{
     io::{BufReader, Read},

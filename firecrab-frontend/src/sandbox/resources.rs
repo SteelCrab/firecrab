@@ -1638,5 +1638,5 @@ fn preview_editor(a: &App, e: &Editor, out: &mut String) {
 }
 
 #[cfg(test)]
-#[path = "resources_tests.rs"]
+#[path = "../../tests/unit/sandbox/resources.rs"]
 mod tests;
