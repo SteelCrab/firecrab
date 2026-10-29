@@ -26,6 +26,8 @@ mod queues;
 pub(crate) use cluster::ClusterError;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod ai_sandbox;
+mod canvas_messages;
+pub(crate) use canvas_messages::SaveMessage;
 pub(crate) mod auto_deploy;
 pub(crate) mod ci_deploy;
 mod deploy_images;
@@ -806,6 +808,7 @@ impl Store {
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
         conn.execute_batch(ai_sandbox::SCHEMA)?;
+        conn.execute_batch(canvas_messages::SCHEMA)?;
         conn.execute_batch(sandbox_tunnels::SCHEMA)?;
         conn.execute_batch(sandbox_environments::SCHEMA)?;
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;

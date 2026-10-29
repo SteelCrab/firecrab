@@ -46,6 +46,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Route domains and paths across apps | [Pipe ingress and tunnel](guides/pipe.md) |
 | Connect AWS and GitHub accounts to Pipe services | [Auth](guides/pipe-auth.md) |
 | Select models, converse, and run isolated project tasks in a MicroVM | [AI Sandbox](guides/ai-sandbox.md) |
+| View AI tasks and exchange project-scoped messages | [AI Canvas](guides/ai-canvas.md) |
 | Manage AI account connections and use shared CLI/MCP integration APIs | [Pipe AI](guides/pipe-ai.md) |
 | Connect and browse an existing database | [Pipe databases](guides/pipe-databases.md) |
 | Connect an existing Amazon S3 bucket and manage files | [PipeStorage](guides/pipe-storage.md) |

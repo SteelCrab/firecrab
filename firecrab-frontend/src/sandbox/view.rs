@@ -138,9 +138,14 @@ pub fn content(a: &App) -> String {
     }
     let _ = write!(
         out,
-        "</div><a href=\"#/pipe/ai\" class=\"sb-account-link\">{}<span>Pipe AI</span>{}</a></aside><section class=\"sb-workspace\" aria-label=\"AI Sandbox\">",
+        "</div><a href=\"#/pipe/ai\" class=\"sb-account-link\">{}<span>Pipe AI</span>{}</a></aside><section class=\"sb-workspace\" aria-label=\"{}\">",
         icon("shield"),
-        icon("arrow")
+        icon("arrow"),
+        if a.route == "ai-canvas" {
+            "AI Canvas"
+        } else {
+            "AI Sandbox"
+        }
     );
     if !s.error.is_empty() {
         let _ = write!(
@@ -165,7 +170,11 @@ pub fn content(a: &App) -> String {
         );
     }
     if let Some(p) = project(s) {
-        workspace(a, p, &mut out);
+        if a.route == "ai-canvas" {
+            canvas_workspace(a, p, &mut out);
+        } else {
+            workspace(a, p, &mut out);
+        }
     } else if s.projects.is_some() {
         let _ = write!(
             out,
@@ -211,6 +220,116 @@ pub fn content(a: &App) -> String {
     }
     out
 }
+
+/// Canvas presents the existing Sandbox conversation and task records together.
+fn canvas_workspace(a: &App, p: &Value, out: &mut String) {
+    let s = &a.sandbox;
+    let locked = s.busy || s.tasks.iter().any(active);
+    let target = if !text(&p["spec"], "environmentId").is_empty() {
+        tr(a, "Managed environment", "관리형 환경")
+    } else {
+        a.vms
+            .iter()
+            .find(|v| v.id == text(&p["spec"], "vmId"))
+            .map(|v| v.name.as_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(tr(a, "Conversation workspace", "대화 작업 공간"))
+    };
+    let _ = write!(
+        out,
+        "<header class=\"canvas-project-header\"><div class=\"canvas-project-name\">{}<div><p>{}</p><h2>{}</h2><span>{}</span></div></div><div class=\"canvas-project-actions\">{}</div></header>{}<div class=\"canvas-workspace\"><section class=\"canvas-conversation\" aria-label=\"{}\"><header class=\"canvas-panel-header\"><div>{}<h3>{}</h3></div><span>{}</span></header><div id=\"sb-panel\" class=\"canvas-conversation-scroll\">",
+        icon("folder"),
+        tr(a, "PROJECT", "프로젝트"),
+        escape(text(&p["spec"], "name")),
+        escape(target),
+        btn(
+            tr(a, "Project settings", "프로젝트 설정"),
+            "sb-settings",
+            "",
+            "settings",
+            "icon-btn",
+            locked,
+        ),
+        banner(&s.task_error),
+        tr(a, "Conversation", "대화"),
+        icon("message"),
+        tr(a, "Conversation", "대화"),
+        tr(a, "AI Sandbox project", "AI Sandbox 프로젝트"),
+    );
+    if !s.tasks_loaded && s.task_error.is_empty() {
+        let _ = write!(
+            out,
+            "<p class=\"canvas-loading\">{}</p>",
+            tr(a, "Loading…", "불러오는 중…")
+        );
+    }
+    messages(a, out);
+    out.push_str("</div>");
+    composer(a, p, out);
+    let _ = write!(
+        out,
+        "</section><aside class=\"canvas-activity\" aria-label=\"{}\"><header class=\"canvas-panel-header\"><div>{}<h3>{}</h3></div><span class=\"canvas-count\">{}</span></header><div id=\"canvas-task-panel\" class=\"canvas-activity-scroll\">",
+        tr(a, "Project tasks", "프로젝트 작업"),
+        icon("board"),
+        tr(a, "Tasks", "작업"),
+        if s.tasks_loaded {
+            s.tasks.len().to_string()
+        } else {
+            "…".into()
+        },
+    );
+    if s.tasks_loaded && s.tasks.is_empty() {
+        let _ = write!(
+            out,
+            "<div class=\"canvas-empty-tasks\">{}<p>{}</p><span>{}</span></div>",
+            icon("board"),
+            tr(a, "No tasks yet", "아직 작업이 없다"),
+            tr(
+                a,
+                "Messages and code tasks appear here.",
+                "대화와 코드 작업이 여기에 표시된다."
+            ),
+        );
+    }
+    for task in s.tasks.iter().rev() {
+        let _ = write!(
+            out,
+            "<button type=\"button\" id=\"sb-card-{}\" class=\"canvas-task\" data-action=\"sb-review\" data-id=\"{}\"><span class=\"canvas-task-top\"><span class=\"sb-task-state {}\">{}{}</span><span>{}</span></span><strong>{}</strong><span class=\"canvas-task-meta\">{} · {}</span></button>",
+            escape(text(task, "id")),
+            escape(text(task, "id")),
+            escape(text(task, "state")),
+            icon(if active(task) {
+                "refresh"
+            } else if matches!(text(task, "state"), "failed" | "interrupted") {
+                "circle-x"
+            } else {
+                "circle-check"
+            }),
+            state_label(a, task),
+            if task["request"]["kind"] == "code" {
+                tr(a, "Code", "코드")
+            } else {
+                tr(a, "Chat", "대화")
+            },
+            escape(text(&task["request"], "input")),
+            escape(text(&task["selection"], "model")),
+            if task["request"]["kind"] == "code" {
+                format!(
+                    "{} {}",
+                    task["changeCount"].as_u64().unwrap_or(0),
+                    tr(a, "files", "개 파일")
+                )
+            } else {
+                tr(a, "Conversation", "대화").into()
+            },
+        );
+    }
+    resources::content(a, out);
+    out.push_str("</div>");
+    canvas::content(a, out);
+    out.push_str("</aside></div>");
+}
+
 fn workspace(a: &App, p: &Value, out: &mut String) {
     let s = &a.sandbox;
     let running = s.tasks.iter().find(|t| active(t));
@@ -278,9 +397,16 @@ fn workspace(a: &App, p: &Value, out: &mut String) {
     } else {
         messages(a, out);
     }
+    out.push_str("</div>");
+    composer(a, p, out);
+}
+
+fn composer(a: &App, p: &Value, out: &mut String) {
+    let s = &a.sandbox;
+    let running = s.tasks.iter().find(|t| active(t));
     let _ = write!(
         out,
-        "</div><form id=\"sb-composer\" class=\"sb-composer\"><div class=\"sb-composer-box\"><label class=\"sr-only\" for=\"sb-input\">{}</label><textarea id=\"sb-input\" rows=\"3\" maxlength=\"32768\" placeholder=\"{}\">{}</textarea><div class=\"sb-composer-tools\"><div class=\"sb-row\"><select id=\"sb-kind\" class=\"sb-kind\" aria-label=\"{}\"><option value=\"chat\"{}>{}</option><option value=\"code\"{}>{}</option></select><select id=\"sb-selection\" class=\"sb-model-select\" aria-label=\"{}\"><option value=\"\"{}>{}</option>",
+        "<form id=\"sb-composer\" class=\"sb-composer\"><div class=\"sb-composer-box\"><label class=\"sr-only\" for=\"sb-input\">{}</label><textarea id=\"sb-input\" rows=\"3\" maxlength=\"32768\" placeholder=\"{}\">{}</textarea><div class=\"sb-composer-tools\"><div class=\"sb-row\"><select id=\"sb-kind\" class=\"sb-kind\" aria-label=\"{}\"><option value=\"chat\"{}>{}</option><option value=\"code\"{}>{}</option></select><select id=\"sb-selection\" class=\"sb-model-select\" aria-label=\"{}\"><option value=\"\"{}>{}</option>",
         tr(a, "Message or task", "대화 또는 작업 내용"),
         if s.kind == "code" {
             tr(

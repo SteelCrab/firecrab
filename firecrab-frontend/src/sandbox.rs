@@ -1,5 +1,6 @@
 //! AI Sandbox's browser state and REST lifecycle. Provider secrets never enter this module.
 mod actions;
+mod canvas;
 mod resources;
 mod view;
 use crate::{
@@ -20,6 +21,7 @@ use web_sys::{
 
 #[derive(Default)]
 pub struct State {
+    canvas: canvas::State,
     projects: Option<Vec<Value>>,
     accounts: Vec<Value>,
     catalogs: BTreeMap<String, Value>,
@@ -94,12 +96,16 @@ fn project(state: &State) -> Option<&Value> {
         .iter()
         .find(|p| text(p, "id") == state.project)
 }
+pub(crate) fn is_route(route: &str) -> bool {
+    matches!(route, "ai-sandbox" | "ai-canvas")
+}
 fn live(app: &Shared, generation: u64) -> bool {
     let a = app.borrow();
-    a.generation == generation && a.route == "ai-sandbox"
+    a.generation == generation && is_route(&a.route)
 }
 fn dirty(app: &mut App) {
     app.dirty = !app.sandbox.input.trim().is_empty()
+        || !app.sandbox.canvas.input.trim().is_empty()
         || app.sandbox.editor.is_some()
         || app.sandbox.resource_editor.is_some();
 }
@@ -244,7 +250,7 @@ fn render_after_event(app: &Shared) {
 }
 /// Render preserves editing focus, selection and scroll positions across asynchronous updates.
 pub(super) fn render(app: &Shared) {
-    if app.borrow().route != "ai-sandbox" {
+    if !is_route(&app.borrow().route) {
         return;
     }
     let focus = document()
@@ -260,10 +266,18 @@ pub(super) fn render(app: &Shared) {
             None
         }
     });
-    let scroll: Vec<_> = ["sb-panel", "sb-review-panel", "sb-resource-dialog"]
-        .iter()
-        .filter_map(|id| element(id).map(|n| (*id, n.scroll_top())))
-        .collect();
+    let chat_at_bottom = element("canvas-chat-log")
+        .is_none_or(|n| n.scroll_height() - n.client_height() - n.scroll_top() <= 24);
+    let scroll: Vec<_> = [
+        "sb-panel",
+        "canvas-task-panel",
+        "canvas-chat-log",
+        "sb-review-panel",
+        "sb-resource-dialog",
+    ]
+    .iter()
+    .filter_map(|id| element(id).map(|n| (*id, n.scroll_top())))
+    .collect();
     let details = document()
         .query_selector_all("#content details[id]")
         .ok()
@@ -298,6 +312,9 @@ pub(super) fn render(app: &Shared) {
         if let Some(n) = element(id) {
             n.set_scroll_top(top);
         }
+    }
+    if chat_at_bottom && let Some(n) = element("canvas-chat-log") {
+        n.set_scroll_top(n.scroll_height());
     }
     for (id, open) in details {
         if let Some(n) = element(&id) {
@@ -339,7 +356,12 @@ pub fn load(app: Shared) {
     spawn_local(async move {
         let result = async {
             let projects = api::request("GET", "/api/ai-sandbox/projects", None).await?;
-            let accounts = api::request("GET", "/api/pipe/ai/connections", None).await?;
+            let accounts =
+                match api::request_detailed("GET", "/api/pipe/ai/connections", None, None).await {
+                    Ok(accounts) => accounts,
+                    Err(error) if error.status == Some(403) => json!([]),
+                    Err(error) => return Err(error.to_string()),
+                };
             let mut catalogs = BTreeMap::new();
             for account in list(&accounts) {
                 let id = text(account, "id");
@@ -405,8 +427,11 @@ pub fn load(app: Shared) {
 }
 /// One application-owned polling timer, guarded by route, project and mutation revision.
 pub fn tick(app: &Shared) {
-    if app.borrow().route != "ai-sandbox" {
+    if !is_route(&app.borrow().route) {
         return;
+    }
+    if app.borrow().route == "ai-canvas" {
+        canvas::tick(app);
     }
     poll_review(app);
     resources::tick(app, false);

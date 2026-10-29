@@ -865,6 +865,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::ai_sandbox::tasks),
         )
         .route(
+            "/api/ai-sandbox/projects/{project}/canvas/messages",
+            get(handlers::ai_sandbox::canvas_messages),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{project}/canvas/messages/{message}",
+            axum::routing::put(handlers::ai_sandbox::save_canvas_message),
+        )
+        .route(
             "/api/ai-sandbox/projects/{project}/tasks/{id}",
             axum::routing::put(handlers::ai_sandbox::create_task),
         )

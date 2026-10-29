@@ -4,18 +4,23 @@ const connection = "11111111-1111-4111-8111-111111111111", vm = "33333333-3333-4
 const selection = { connectionId: connection, model: "qa-native-model" };
 const pin = {name:"ubuntu-26.04",version:"2026.10",kernelSha256:"1".repeat(64),rootfsSha256:"2".repeat(64),initrdSha256:null,bootArgsSha256:"3".repeat(64)};
 const project: Project = { id: "22222222-2222-4222-8222-222222222222", spec: { name: "Firecrab Dashboard", sourcePath: "/workspaces/firecrab-demo", vmId: vm, selection, instructions: "Keep the interface simple." }, createdAt: 1 };
-async function open(page: Page, options: { locale?: "en" | "ko"; empty?: boolean; hold?: boolean; failed?: boolean; failSaveOnce?: boolean } = {}) {
+async function open(page: Page, options: { locale?: "en" | "ko"; empty?: boolean; hold?: boolean; failed?: boolean; failSaveOnce?: boolean; canvas?: boolean; failCanvasOnce?: boolean; readOnlyCanvas?: boolean; initialCanvasMessages?: number; accountsForbidden?: boolean; delayFirstCanvasResponse?: boolean } = {}) {
   let projects = options.empty ? [] : [structuredClone(project)], tasks: SandboxTask[] = [], failure = options.failed, conflict = false, verified = !options.empty;
   const starts: TaskInput[] = []; const saves: string[] = []; let saveFailed = false;
+  const sharedMessages: {id:string;projectId:string;author:string;text:string;sequence:number;createdAt:number}[] = [];
+  for (let index = 1; index <= (options.initialCanvasMessages ?? 0); index++) sharedMessages.push({id:crypto.randomUUID(),projectId:project.id,author:"local",text:`message ${index}`,sequence:index,createdAt:index});
+  let canvasFailed = false;
+  let canvasDelayed = false;
+  let delayedFinished = false;
   const environmentSpecs: Record<string,unknown>[] = [], previewSpecs: Record<string,unknown>[] = [];
   const environments: Record<string,unknown>[] = [], previews: Record<string,unknown>[] = [];
   const retargets: {previous:string;request:Record<string,unknown>}[]=[];
-  await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
+  await page.context().route(/^https?:\/\/[^/]+\/api\//, async route => {
     const path = new URL(route.request().url()).pathname, method = route.request().method();
     const respond = (json: unknown, status = 200) => route.fulfill({ json, status });
     if (path === "/api/vms") return respond([{ id: vm, name: "sandbox-dev", template: "alpine-3.24.1", diskGb: 1, state: "running", purpose: "instance", cpu: 1, ram: 512, usageHistory: [], startupTimeline: [], env: {}, shellRefs: [], portForwards: [] }]);
     if (path === "/api/update") return respond({ current: "0.3.1", latest: "0.3.1", updateAvailable: false });
-    if (path === "/api/pipe/ai/connections") return respond([{ id: connection, name: "QA connected account", provider: "openai", authentication: "api_key", endpoint: "https://api.openai.com/v1/responses", models: [], streaming: false, toolCalls: false }]);
+    if (path === "/api/pipe/ai/connections") return options.accountsForbidden ? respond({error:{message:"Permission denied"}},403) : respond([{ id: connection, name: "QA connected account", provider: "openai", authentication: "api_key", endpoint: "https://api.openai.com/v1/responses", models: [], streaming: false, toolCalls: false }]);
     if (path.endsWith("/models")) return respond({ discoveryAvailable: true, models: [{ id: selection.model, name: "QA native model", verified, toolsVerified: verified }] });
     if (path.includes("/connections/") && path.endsWith("/verify")) { verified = true; return respond({ id: selection.model, name: "QA native model", verified: true, toolsVerified: true }); }
     if (path === "/api/ai-sandbox/projects") return failure ? respond({ error: { message: "Sandbox temporarily unavailable" } }, 503) : respond(projects);
@@ -23,6 +28,20 @@ async function open(page: Page, options: { locale?: "en" | "ko"; empty?: boolean
     if (path === "/api/ai-sandbox/tunnel-addresses") return respond([{subdomain:"qa-preview",publicUrl:"https://qa-preview.firecrab.dev",connected:false,claimedBy:previews.find(p=>p.state!=="deleted"&&p.state!=="superseded")?.id??null}]);
     if (/\/projects\/[^/]+\/environments$/.test(path)) return respond(environments);
     if (/\/projects\/[^/]+\/tunnels$/.test(path)) return respond(previews);
+    if (/\/projects\/[^/]+\/canvas\/messages$/.test(path)) {
+      const after = Number(new URL(route.request().url()).searchParams.get("after") ?? 0);
+      return respond({messages:sharedMessages.filter(message => message.sequence > after).slice(0, 200),canWrite:!options.readOnlyCanvas});
+    }
+    if (/\/projects\/[^/]+\/canvas\/messages\/[^/]+$/.test(path)) {
+      if (options.readOnlyCanvas) return respond({error:{message:"Permission denied"}},403);
+      const id = path.split("/").at(-1)!, text = route.request().postDataJSON().text as string;
+      let message = sharedMessages.find(item => item.id === id);
+      if (message && message.text !== text) return respond({error:{message:"Message ID conflict"}},409);
+      if (!message) { message = {id,projectId:project.id,author:"local",text,sequence:sharedMessages.length+1,createdAt:Date.now()}; sharedMessages.push(message); }
+      if (options.failCanvasOnce && !canvasFailed) { canvasFailed=true; return route.abort("failed"); }
+      if (options.delayFirstCanvasResponse && !canvasDelayed) { canvasDelayed=true; await new Promise(resolve => setTimeout(resolve, 6000)); delayedFinished=true; }
+      return respond(message);
+    }
     if (/\/projects\/[^/]+\/environments\/[^/]+$/.test(path)) {
       const id=path.split("/").at(-1)!;
       if(method==="PUT") {
@@ -67,10 +86,119 @@ async function open(page: Page, options: { locale?: "en" | "ko"; empty?: boolean
     }
     return route.fulfill({ status: 404 });
   });
-  await page.addInitScript(locale => localStorage.setItem("firecrab.locale", locale), options.locale ?? "en"); await page.goto("/#/ai-sandbox");
+  await page.context().addInitScript(locale => localStorage.setItem("firecrab.locale", locale), options.locale ?? "en"); await page.goto(options.canvas ? "/#/ai-canvas" : "/#/ai-sandbox");
   await expect(page.locator("#root")).toHaveAttribute("data-engine", "wasm");
-  return { starts, saves, environmentSpecs, previewSpecs, retargets, get projects(){return projects;},get tasks(){return tasks;}, recover() { failure = false; }, conflict(value: boolean) { conflict = value; }, interrupt() { const task = tasks.at(-1)!; task.state = "interrupted"; task.error = "Guest outcome needs reconciliation"; task.updatedAt++; } };
+  return { starts, saves, sharedMessages, environmentSpecs, previewSpecs, retargets, get projects(){return projects;},get tasks(){return tasks;}, get delayedFinished(){return delayedFinished;}, recover() { failure = false; }, conflict(value: boolean) { conflict = value; }, interrupt() { const task = tasks.at(-1)!; task.state = "interrupted"; task.error = "Guest outcome needs reconciliation"; task.updatedAt++; } };
 }
+
+test.describe("AI Canvas @dashboard", () => {
+  test("shows conversation and task results together using the Sandbox lifecycle", async ({ page }, info) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const mock = await open(page, { canvas: true, locale: "ko" });
+    await expect(page.getByRole("heading", { name: "AI Canvas", exact: true })).toBeVisible();
+    const input = page.getByRole("textbox", { name: "대화 또는 작업 내용", exact: true });
+    await input.fill("헬스 체크 기능을 어떻게 구현할까?");
+    await page.getByRole("button", { name: "메시지 전송", exact: true }).click();
+    const conversation = page.getByRole("region", { name: "대화", exact: true });
+    const tasks = page.getByRole("complementary", { name: "프로젝트 작업" });
+    await expect(conversation.getByText("Start with a small health endpoint.", { exact: false })).toBeVisible();
+    await expect(tasks.getByRole("button", { name: /헬스 체크 기능을 어떻게 구현할까/ })).toBeVisible();
+    await page.getByRole("combobox", { name: "실행 모드" }).selectOption("code");
+    await input.fill("헬스 체크 엔드포인트와 테스트를 추가해줘");
+    await page.getByRole("button", { name: "코드 작업 실행", exact: true }).click();
+    const codeTask = tasks.getByRole("button", { name: /헬스 체크 엔드포인트와 테스트를 추가해줘/ });
+    await expect(codeTask).toBeVisible();
+    const shared = page.getByRole("region", { name: "공유 대화" });
+    await shared.getByRole("textbox", { name: "공유 메시지" }).fill("테스트 결과를 함께 확인해요.");
+    await shared.getByRole("button", { name: "전송", exact: true }).click();
+    await expect(shared.getByText("테스트 결과를 함께 확인해요.")).toBeVisible();
+    await page.screenshot({ path: info.outputPath("ai-canvas-desktop-ko.png"), fullPage: true });
+    await codeTask.click();
+    const dialog = page.getByRole("dialog", { name: "작업 결과", exact: true });
+    await expect(dialog.getByText("src/health.ts", { exact: true })).toBeVisible();
+    await dialog.getByRole("button", { name: "닫기", exact: true }).click();
+    await page.reload();
+    await expect(page.getByRole("complementary", { name: "프로젝트 작업" }).getByRole("button", { name: /헬스 체크 엔드포인트와 테스트를 추가해줘/ })).toBeVisible();
+    expect(mock.starts.map(start => start.kind)).toEqual(["chat", "code"]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+
+  test("synchronizes shared messages across two clients and reconciles an uncertain response", async ({ page, context }) => {
+    const mock = await open(page, { canvas: true, failCanvasOnce: true });
+    const second = await context.newPage();
+    await second.goto("/#/ai-canvas");
+    const sender = page.getByRole("region", { name: "Shared chat" });
+    await sender.getByRole("textbox", { name: "Shared message" }).fill("<status> ready");
+    await sender.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(sender.getByText("<status> ready", { exact: true })).toBeVisible();
+    await expect(second.getByRole("region", { name: "Shared chat" }).getByText("<status> ready", { exact: true })).toBeVisible();
+    expect(mock.sharedMessages).toHaveLength(1);
+    await page.reload();
+    await expect(page.getByRole("region", { name: "Shared chat" }).getByText("<status> ready", { exact: true })).toBeVisible();
+    expect(mock.sharedMessages).toHaveLength(1);
+  });
+
+  test("shows a read-only shared conversation without permitting a message", async ({ page }) => {
+    await open(page, { canvas: true, readOnlyCanvas: true });
+    const chat = page.getByRole("region", { name: "Shared chat" });
+    await expect(chat.getByRole("textbox", { name: "Shared message" })).toBeDisabled();
+    await expect(chat.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await expect(chat.getByPlaceholder("Read-only access")).toBeVisible();
+  });
+
+  test("a late send response does not block or overwrite the next message", async ({ page }) => {
+    const mock = await open(page, { canvas: true, delayFirstCanvasResponse: true });
+    const chat = page.getByRole("region", { name: "Shared chat" });
+    const input = chat.getByRole("textbox", { name: "Shared message" });
+    await input.fill("First message");
+    await chat.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(chat.getByText("First message", { exact: true })).toBeVisible();
+    await expect(input).toBeEnabled();
+    await input.fill("Second message");
+    await chat.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(chat.getByText("Second message", { exact: true })).toBeVisible();
+    await expect.poll(() => mock.sharedMessages.length).toBe(2);
+    await expect.poll(() => mock.delayedFinished).toBe(true);
+    await expect(input).toHaveValue("");
+  });
+
+  test("a delegated reader can open chat without access to account management", async ({ page }) => {
+    await open(page, { canvas: true, readOnlyCanvas: true, accountsForbidden: true, initialCanvasMessages: 1 });
+    await expect(page.getByRole("region", { name: "Shared chat" }).getByText("message 1", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Shared chat" }).getByRole("textbox", { name: "Shared message" })).toBeDisabled();
+  });
+
+  test("explains the UTF-8 byte limit before sending a message", async ({ page }) => {
+    await open(page, { canvas: true });
+    const chat = page.getByRole("region", { name: "Shared chat" });
+    const input = chat.getByRole("textbox", { name: "Shared message" });
+    await expect(input).toBeEnabled();
+    await input.fill("한".repeat(1400));
+    await expect(chat.getByText("Use at most 4,096 UTF-8 bytes.")).toBeVisible();
+    await expect(chat.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await input.fill("Valid message");
+    await expect(chat.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
+  });
+
+  test("catches up multiple message pages and keeps the newest messages", async ({ page }) => {
+    await open(page, { canvas: true, initialCanvasMessages: 201 });
+    const chat = page.getByRole("region", { name: "Shared chat" });
+    await expect(chat.getByText("message 201", { exact: true })).toBeVisible();
+    await expect(chat.getByText("message 1", { exact: true })).toHaveCount(0);
+    expect(await chat.locator(".canvas-chat-message").count()).toBe(200);
+  });
+
+  test("remains usable on a narrow screen", async ({ page }, info) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, { canvas: true, locale: "ko" });
+    const input = page.getByRole("textbox", { name: "대화 또는 작업 내용", exact: true });
+    await input.fill("다음 작업을 계획해줘");
+    await page.getByRole("button", { name: "메시지 전송", exact: true }).click();
+    await expect(page.getByRole("complementary", { name: "프로젝트 작업" }).getByRole("button", { name: /다음 작업을 계획해줘/ })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath("ai-canvas-mobile-ko.png"), fullPage: true });
+  });
+});
 
 test.describe("AI Sandbox @dashboard", () => {
   for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) test(`${locale} conversation, code review and apply at ${width}px`, async ({ page }, info) => {

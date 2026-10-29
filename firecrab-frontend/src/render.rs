@@ -433,7 +433,7 @@ pub fn page(app: &App) -> String {
             .filter(|(_, category, _, _)| *category == group)
         {
             let _ = category;
-            let nav_icon = if *id == "ai-sandbox" {
+            let nav_icon = if *id == "ai-sandbox" || *id == "ai-canvas" {
                 crate::sandbox::icon("bot")
             } else {
                 navigation_icon(id)
@@ -509,7 +509,7 @@ pub fn page(app: &App) -> String {
             "create",
             "oci",
         ),
-        "ai-sandbox" => format!(
+        "ai-sandbox" | "ai-canvas" => format!(
             "<button type=\"button\" class=\"btn primary\" data-action=\"sb-new\" data-id=\"\">{}</button>",
             tr(app, "New project", "새 프로젝트")
         ),
@@ -535,7 +535,7 @@ pub fn page(app: &App) -> String {
         "storages" | "volumes" | "images" | "kernels" | "secrets" | "queues" => {
             tr(app, "Data", "데이터")
         }
-        "ai-sandbox" => "AI",
+        "ai-sandbox" | "ai-canvas" => "AI",
         _ => tr(app, "System", "시스템"),
     };
     let meters = host_meters(app);
@@ -748,7 +748,7 @@ pub fn content(app: &App) -> String {
         ),
         "pipe/storage" => crate::advanced::storage::content(app),
         "pipe/ai" => crate::advanced::ai::content(app),
-        "ai-sandbox" => crate::sandbox::content(app),
+        "ai-sandbox" | "ai-canvas" => crate::sandbox::content(app),
         "host" => host(app),
         "pipe" => pipe_overview(app),
         route if route.starts_with("pipe/") => pipe(app, route.trim_start_matches("pipe/")),

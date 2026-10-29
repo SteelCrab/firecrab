@@ -1,6 +1,9 @@
 use super::*;
 
 pub fn input(app: &Shared, node: &Element) -> bool {
+    if canvas::input(app, node) {
+        return true;
+    }
     let id = node.id();
     if !id.starts_with("sb-") {
         return false;
@@ -213,6 +216,7 @@ pub fn change(app: &Shared, node: &Element) -> bool {
 pub fn submit(app: &Shared, id: &str) -> bool {
     match id {
         "sb-composer" => send(app, None),
+        "canvas-chat-form" => canvas::send(app),
         "sb-project-form" => save_project(app),
         "sb-resource-form" => resources::save(app),
         _ => return false,
@@ -220,7 +224,7 @@ pub fn submit(app: &Shared, id: &str) -> bool {
     true
 }
 pub fn key(app: &Shared, event: &KeyboardEvent) -> bool {
-    if app.borrow().route != "ai-sandbox" {
+    if !is_route(&app.borrow().route) {
         return false;
     }
     if (event.meta_key() || event.ctrl_key())
@@ -432,7 +436,7 @@ fn choose_project(app: &Shared, id: &str) {
     if a.sandbox.busy {
         return;
     }
-    if !a.sandbox.input.trim().is_empty()
+    if (!a.sandbox.input.trim().is_empty() || !a.sandbox.canvas.input.trim().is_empty())
         && !window()
             .confirm_with_message(tr(
                 &a,
@@ -444,6 +448,7 @@ fn choose_project(app: &Shared, id: &str) {
         return;
     }
     let s = &mut a.sandbox;
+    s.canvas = canvas::State::default();
     s.project = id.into();
     s.tasks.clear();
     s.tasks_loaded = false;
@@ -465,12 +470,13 @@ fn choose_project(app: &Shared, id: &str) {
     s.older_end = false;
     s.stopping.clear();
     dirty(&mut a);
+    let route = a.route.clone();
     drop(a);
     let _ = window().history().and_then(|h| {
         h.replace_state_with_url(
             &JsValue::NULL,
             "",
-            Some(&format!("#/ai-sandbox?project={}", api::encode(id))),
+            Some(&format!("#/{route}?project={}", api::encode(id))),
         )
     });
     render(app);

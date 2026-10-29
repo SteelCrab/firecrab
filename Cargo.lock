@@ -1130,6 +1130,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "firecrab-canvas"
+version = "0.3.1"
+dependencies = [
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "firecrab-cli"
 version = "0.3.1"
 dependencies = [

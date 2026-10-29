@@ -9,6 +9,7 @@ import './wasm.css';
 import './styles/pipe-ai.css';
 import './styles/pipe-database.css';
 import './styles/ai-sandbox.css';
+import './styles/ai-canvas.css';
 import './styles/queues.css';
 import './styles/services.css';
 import './styles/screens.css';

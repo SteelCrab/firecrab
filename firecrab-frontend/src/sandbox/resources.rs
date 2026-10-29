@@ -23,7 +23,7 @@ pub(super) struct Editor {
 
 pub(super) fn tick(app: &Shared, force: bool) {
     let mut a = app.borrow_mut();
-    if a.route != "ai-sandbox"
+    if !is_route(&a.route)
         || a.sandbox.project.is_empty()
         || a.sandbox.resources_polling
         || (!force && js_sys::Date::now() - a.sandbox.resources_at < 10_000.0)

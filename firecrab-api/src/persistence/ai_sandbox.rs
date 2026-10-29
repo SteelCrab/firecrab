@@ -153,6 +153,10 @@ impl Store {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         tx.execute(
+            "DELETE FROM canvas_messages WHERE project_id=?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
             "DELETE FROM ai_sandbox_admissions WHERE task_id IN (SELECT id FROM ai_sandbox_tasks WHERE project_id=?1)",
             [id.to_string()],
         )?;

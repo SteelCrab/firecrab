@@ -6,6 +6,42 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// One participant message in a Sandbox project's shared Canvas conversation.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxCanvasMessage {
+    /// Client-generated idempotency key, unique within the project.
+    pub id: Uuid,
+    /// Project whose grants authorize this message.
+    pub project_id: Uuid,
+    /// Identity derived from the authenticated transport.
+    pub author: crate::SandboxPrincipal,
+    /// Plain text. Clients render this as text, never as HTML.
+    pub text: String,
+    /// Monotonic cursor within this project, retained across project ID reuse.
+    pub sequence: u64,
+    /// Creation time in Unix milliseconds.
+    pub created_at: u64,
+}
+
+/// Text for an idempotent Canvas message submission.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxCanvasMessageInput {
+    /// Plain text, bounded by the server.
+    pub text: String,
+}
+
+/// One authorized page and the caller's current project write capability.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxCanvasMessagePage {
+    /// Ordered messages after the requested cursor, capped by the server.
+    pub messages: Vec<SandboxCanvasMessage>,
+    /// Current project write grant; this is not an agent execution grant.
+    pub can_write: bool,
+}
+
 /// Canvas roles restrict an already authorized transport caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]

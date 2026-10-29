@@ -419,6 +419,8 @@ Every operation checks [Sandbox caller/resource permissions](../guides/sandbox-a
 | POST | `/api/ai-sandbox/connections/{id}/verify` | `{model,tools}`; complete text probe and optional harmless native tool round trip |
 | GET | `/api/ai-sandbox/projects/{id}/tasks` | Last 50 `SandboxTaskSummary` records without file contents/tool logs; `before=TASK_UUID` pages older records; `since=MILLISECONDS` returns updated records |
 | PUT | `/api/ai-sandbox/projects/{project}/tasks/{id}` | `{kind:"chat"\|"code",input,selection?,retryOf?}`; durable, idempotent task admission; same id with different request conflicts |
+| GET | `/api/ai-sandbox/projects/{project}/canvas/messages?after=SEQUENCE` | Up to 200 shared messages after the cursor, plus the caller's `canWrite` value; project read grant required |
+| PUT | `/api/ai-sandbox/projects/{project}/canvas/messages/{id}` | `{text}`; append one immutable message with project read and write grants; an identical ID, author, and text retries safely |
 | GET | `/api/ai-sandbox/tasks/{id}` | Complete `SandboxTask`: effective selection, immutable attempt, durable state, actual events, reviewable changes and apply flags |
 | POST | `/api/ai-sandbox/tasks/{id}/cancel` | Request cancellation; poll until confirmed terminal state |
 | POST | `/api/ai-sandbox/tasks/{id}/reconcile` | Explicitly recover an interrupted attempt without replaying commands |
@@ -430,6 +432,7 @@ Projects expose a server-derived `owner`. Tasks and summaries include the origin
 Project settings and model overrides use `{connectionId,model}`. Tool-capable code tasks require the separate native-tool proof.
 Source paths refer to the API host. Borrowed VMs require a current boot/network binding and authenticated operator SSH.
 See [AI Sandbox](../guides/ai-sandbox.md) for provider contracts, limits, source isolation, and recovery.
+See [AI Canvas](../guides/ai-canvas.md) for shared message limits and current workspace capabilities.
 
 ## Errors
 

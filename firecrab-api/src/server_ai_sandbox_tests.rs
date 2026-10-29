@@ -18,6 +18,9 @@ mod access_tests;
 #[path = "server_ai_sandbox_coordination_tests.rs"]
 mod coordination_tests;
 
+#[path = "server_ai_canvas_tests.rs"]
+mod canvas_tests;
+
 #[derive(Clone, Default)]
 struct Provider {
     requests: Arc<Mutex<Vec<Value>>>,

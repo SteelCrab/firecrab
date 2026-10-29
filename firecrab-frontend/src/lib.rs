@@ -177,7 +177,7 @@ fn render_page(app: &Shared) {
     update_host(app);
     vm_list::cache(app);
     render_detail(app);
-    if app.borrow().route == "ai-sandbox" {
+    if sandbox::is_route(&app.borrow().route) {
         sandbox::render(app);
     }
 }
@@ -220,7 +220,7 @@ fn update_summary(app: &Shared) {
 
 fn render_content(app: &Shared) {
     deploy::discard_credentials(&mut app.borrow_mut());
-    if app.borrow().route == "ai-sandbox" {
+    if sandbox::is_route(&app.borrow().route) {
         sandbox::render(app);
         return;
     }
@@ -543,7 +543,7 @@ pub fn start() -> Result<(), JsValue> {
         details::tick(&poll);
         observability::tick(&poll);
         volumes::tick(&poll);
-        if poll.borrow().route == "ai-sandbox" {
+        if sandbox::is_route(&poll.borrow().route) {
             sandbox::tick(&poll);
             return;
         }
@@ -621,7 +621,7 @@ fn load_route(app: Shared) {
         terminal::start(app.clone(), id);
         return;
     }
-    if route == "ai-sandbox" {
+    if sandbox::is_route(&route) {
         sandbox::load(app);
         return;
     }
@@ -736,7 +736,7 @@ fn refresh(app: Shared) {
         stacks::refresh(app);
         return;
     }
-    if app.borrow().route == "ai-sandbox" {
+    if sandbox::is_route(&app.borrow().route) {
         sandbox::load(app);
         return;
     }

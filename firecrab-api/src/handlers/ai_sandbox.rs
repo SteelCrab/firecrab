@@ -751,6 +751,104 @@ pub async fn get_task(
     ))
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasMessageQuery {
+    #[serde(default)]
+    after: u64,
+}
+
+/// List one bounded page of project-scoped Canvas messages.
+pub async fn canvas_messages(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    caller: Caller,
+    Path(project_id): Path<Uuid>,
+    Query(query): Query<CanvasMessageQuery>,
+) -> Result<Json<SandboxCanvasMessagePage>, AppError> {
+    if query.after > i64::MAX as u64 {
+        return Err(invalid(id, "after", "Message cursor is out of range"));
+    }
+    let _claim = state.sandbox.admission.lock().await;
+    project(&state, id, project_id, caller, SandboxPermission::Read).await?;
+    let can_write = caller
+        .allowed(
+            &state,
+            &SandboxResource::Project { id: project_id },
+            SandboxPermission::Write,
+        )
+        .map_err(|e| denied(id, e))?;
+    let store = state.store.clone();
+    let messages = db(id, move || store.canvas_messages(project_id, query.after)).await?;
+    Ok(Json(SandboxCanvasMessagePage {
+        messages,
+        can_write,
+    }))
+}
+
+/// Append one immutable message. Repeating the same identity never duplicates it.
+pub async fn save_canvas_message(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    caller: Caller,
+    Path((project_id, message_id)): Path<(Uuid, Uuid)>,
+    ValidatedJson(input): ValidatedJson<SandboxCanvasMessageInput>,
+) -> Result<Json<SandboxCanvasMessage>, AppError> {
+    let text = input.text.trim().to_owned();
+    if message_id.is_nil() || text.is_empty() || text.len() > 4096 || text.contains('\0') {
+        return Err(invalid(
+            id,
+            "text",
+            "Use a message ID and 1–4096 bytes of text",
+        ));
+    }
+    let _claim = state.sandbox.admission.lock().await;
+    caller
+        .require_all(
+            &state,
+            &[
+                (
+                    SandboxResource::Project { id: project_id },
+                    SandboxPermission::Read,
+                ),
+                (
+                    SandboxResource::Project { id: project_id },
+                    SandboxPermission::Write,
+                ),
+            ],
+        )
+        .map_err(|e| denied(id, e))?;
+    project(&state, id, project_id, caller, SandboxPermission::Read).await?;
+    let store = state.store.clone();
+    let connections = db(id, move || store.ai_connections()).await?;
+    if ai_sandbox::redact(&connections, &text) != text {
+        return Err(invalid(
+            id,
+            "text",
+            "Do not include connected account credentials in shared messages",
+        ));
+    }
+    let store = state.store.clone();
+    let author = caller.principal;
+    let saved = db(id, move || {
+        store.save_canvas_message(project_id, message_id, author, &text, ai_sandbox::now())
+    })
+    .await?;
+    match saved {
+        crate::persistence::SaveMessage::Saved(message) => Ok(Json(message)),
+        crate::persistence::SaveMessage::Conflict => Err(error(
+            id,
+            "canvas_message_conflict",
+            "Message ID already belongs to another message",
+        )),
+        crate::persistence::SaveMessage::Full => Err(error(
+            id,
+            "canvas_message_limit",
+            "This project's Canvas message limit was reached",
+        )),
+    }
+}
+
 /// Persist admission before dispatch. Repeating an identical task id never starts another attempt.
 pub async fn create_task(
     State(state): State<AppState>,
