@@ -6,6 +6,7 @@ pub const VIEWS: &[(&str, &str, &str, &str)] = &[
     ("pools", "compute", "Pools", "풀"),
     ("schedules", "compute", "Schedules", "스케줄러"),
     ("services", "compute", "MicroService", "MicroService"),
+    ("stacks", "compute", "Stack", "Stack"),
     ("cluster", "compute", "Cluster", "클러스터"),
     ("networks", "network", "Networks", "네트워크"),
     ("security-groups", "network", "Security groups", "보안그룹"),

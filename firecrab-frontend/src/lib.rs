@@ -11,6 +11,7 @@ mod notes;
 mod observability;
 mod render;
 mod sandbox;
+mod stacks;
 mod terminal;
 mod updates;
 mod vm_list;
@@ -731,6 +732,10 @@ fn load_route(app: Shared) {
     }
 }
 fn refresh(app: Shared) {
+    if app.borrow().route == "stacks" {
+        stacks::refresh(app);
+        return;
+    }
     if app.borrow().route == "ai-sandbox" {
         sandbox::load(app);
         return;
@@ -1588,6 +1593,7 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
         return;
     }
     match action {
+        "stack-refresh" => stacks::refresh(app),
         "palette" => open_palette(&app),
         "palette-close" => set_html("palette-root", ""),
         "menu" => set_navigation(button.get_attribute("aria-expanded").as_deref() != Some("true")),

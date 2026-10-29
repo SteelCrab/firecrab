@@ -190,3 +190,14 @@
 .pipe-card h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .pipe-card p { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.55; }
 @media (hover: hover) { .pipe-card:hover { border-color: var(--border-strong); background: var(--bg-subtle); } }
+
+.stack-list { display: grid; gap: 16px; }
+.stack-card h2 { margin: 0 0 16px; font-size: 16px; }
+.stack-status { display: grid; grid-template-columns: minmax(100px, 160px) minmax(0, 1fr); gap: 8px 16px; margin: 0; }
+.stack-status dt { color: var(--text-2); }
+.stack-status dd { margin: 0; overflow-wrap: anywhere; }
+.stack-guidance { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 12px; }
+.stack-guidance h3 { font-size: 14px; margin: 0 0 8px; }
+.stack-guidance p { margin: 6px 0; }
+.stack-guidance code { overflow-wrap: anywhere; }
+@media (max-width: 600px) { .stack-status { grid-template-columns: 1fr; gap: 4px; } .stack-status dd { margin-bottom: 8px; } }

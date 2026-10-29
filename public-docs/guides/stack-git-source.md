@@ -115,6 +115,8 @@ They never become an empty declaration or trigger resource deletion.
 
 ## Read observations
 
+The dashboard **Stack** view shows source status, desired, attempted and applied commits, errors and recovery guidance. It does not submit recovery or change Git revisions; inspect the operation and use the documented commands when needed.
+
 | Field | Meaning |
 | --- | --- |
 | `latest.source` | Source configuration captured for this check; history preserves earlier generations' repository, ref, path, and credential reference |
@@ -219,7 +221,7 @@ Automatic mode restores supported declared fields at the same Git commit; stop p
 Edits after a plan or during apply invalidate the affected observation and stop further execution.
 Undeclared fields, VM lifecycle state and guest data remain outside drift correction.
 
-Destructive policies, dashboard Git status, and full Linux/KVM Git-to-runtime verification remain tracked in [#437](https://github.com/SteelCrab/firecrab/issues/437).
+Follow-up work remains tracked in [#437](https://github.com/SteelCrab/firecrab/issues/437).
 
 ## Repository layout and CI
 
