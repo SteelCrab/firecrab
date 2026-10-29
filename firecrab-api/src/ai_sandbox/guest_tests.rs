@@ -119,6 +119,295 @@ fn versioned_shell_parses_for_every_execution_mode_and_operation() {
     }
 }
 
+#[tokio::test]
+async fn queries_refuse_missing_state_without_initializing_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    for action in ["processes", "status", "recover", "export"] {
+        for existing_root in [false, true] {
+            let root = directory.path().join(format!("{action}-{existing_root}"));
+            if existing_root {
+                std::fs::create_dir_all(root.join(".control/locks")).unwrap();
+            }
+            let input = String::from_utf8(script(action, Uuid::new_v4(), None, "", 0)).unwrap();
+            // The root/tool capability probes are unrelated to the missing-state
+            // guard. Keep the production filesystem/dispatch code intact so this
+            // regression can also run on an unprivileged developer host.
+            let (prefix, rest) = input.split_once("[ \"$(id -u)\" = 0 ] || exit 80").unwrap();
+            let (_, dispatch) = rest
+                .split_once("[ \"$action\" != probe ] || exit 0")
+                .unwrap();
+            let input = format!("{prefix}\nlock() {{ return 1; }}\n{dispatch}");
+            let result = local_script(&root, action, 0, input.into_bytes())
+                .await
+                .unwrap();
+            assert_eq!(
+                result.code,
+                77,
+                "{action}: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert!(result.stdout.is_empty());
+            if existing_root {
+                assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+                assert_eq!(std::fs::read_dir(root.join(".control")).unwrap().count(), 1);
+                assert_eq!(
+                    std::fs::read_dir(root.join(".control/locks"))
+                        .unwrap()
+                        .count(),
+                    0
+                );
+            } else {
+                assert!(!root.exists(), "{action} initialized missing state");
+            }
+        }
+    }
+}
+
+// Run the real generated shell only in the existing disposable Linux fixture.
+#[tokio::test]
+#[ignore = "requires FIRECRAB_SANDBOX_GUEST_QA=1 in an isolated disposable root container"]
+async fn guest_queries_preserve_control_and_do_not_recreate_cleaned_attempt() {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
+
+    assert_eq!(
+        std::env::var("FIRECRAB_SANDBOX_GUEST_QA").as_deref(),
+        Ok("1")
+    );
+    assert_eq!(unsafe { libc::geteuid() }, 0);
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let root = directory.path().join("guest");
+    let source = directory.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("kept.txt"), "retained").unwrap();
+    let id = Uuid::new_v4();
+    let invocation = Some(Uuid::new_v4());
+    let archive = STANDARD.encode(workspace::archive(&source).unwrap());
+    assert_eq!(
+        local_invocation(&root, "stage", id, invocation, &archive, 0)
+            .await
+            .unwrap()
+            .code,
+        0
+    );
+    assert_eq!(
+        local_invocation(
+            &root,
+            "run",
+            id,
+            invocation,
+            &STANDARD.encode("printf retained"),
+            3
+        )
+        .await
+        .unwrap()
+        .code,
+        0
+    );
+    let base = root.join(id.simple().to_string());
+    let control = base.join("control");
+    let lock = root.join(".control/locks").join(id.simple().to_string());
+    // Nonempty lock bytes make accidental truncation observable without a clock race.
+    std::fs::write(&lock, "existing-lock").unwrap();
+    let paths = [
+        root.clone(),
+        root.join(".control"),
+        root.join(".control/locks"),
+        base.clone(),
+        control.clone(),
+        control.join("owner"),
+        lock.clone(),
+    ];
+    let snapshot = || {
+        paths
+            .iter()
+            .map(|path| {
+                let info = path.symlink_metadata().unwrap();
+                (
+                    info.dev(),
+                    info.ino(),
+                    info.mode(),
+                    info.uid(),
+                    info.gid(),
+                    info.nlink(),
+                    info.len(),
+                    info.mtime(),
+                    info.mtime_nsec(),
+                    info.ctime(),
+                    info.ctime_nsec(),
+                    if info.is_file() {
+                        std::fs::read(path).unwrap()
+                    } else {
+                        vec![]
+                    },
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = snapshot();
+    for action in ["processes", "status", "recover", "export"] {
+        let result = local_invocation(&root, action, id, invocation, "", 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            result.code,
+            0,
+            "{action}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(
+            snapshot(),
+            before,
+            "{action} changed existing control state"
+        );
+    }
+
+    // A read-only descriptor must still serialize with the lifecycle writer.
+    let held = std::fs::File::open(&lock).unwrap();
+    assert_eq!(unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX) }, 0);
+    let reached = directory.path().join("query-reached-lock");
+    let input = String::from_utf8(script("processes", id, invocation, "", 0))
+        .unwrap()
+        .replace(
+            "lock -w 10 9 || exit 81",
+            &format!("touch '{}'\nlock -w 10 9 || exit 81", reached.display()),
+        );
+    let pending = {
+        let root = root.clone();
+        tokio::spawn(async move { local_script(&root, "processes", 0, input.into_bytes()).await })
+    };
+    for _ in 0..200 {
+        if reached.exists() {
+            break;
+        }
+        assert!(
+            !pending.is_finished(),
+            "query ended before acquiring its lock"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(reached.exists());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !pending.is_finished(),
+        "query bypassed the existing lifecycle lock"
+    );
+    assert_eq!(unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_UN) }, 0);
+    assert_eq!(pending.await.unwrap().unwrap().code, 0);
+    assert_eq!(snapshot(), before);
+
+    let unknown = Uuid::new_v4();
+    assert_eq!(
+        local(&root, "processes", unknown, "", 0)
+            .await
+            .unwrap()
+            .code,
+        77
+    );
+    assert!(!root.join(unknown.simple().to_string()).exists());
+    assert!(
+        !root
+            .join(".control/locks")
+            .join(unknown.simple().to_string())
+            .exists()
+    );
+    assert_eq!(snapshot(), before);
+
+    let owner = control.join("owner");
+    let original_owner = std::fs::read(&owner).unwrap();
+    let owner_permissions = owner.metadata().unwrap().permissions();
+    std::fs::remove_file(&owner).unwrap();
+    let result = local(&root, "processes", id, "", 0).await.unwrap();
+    assert_eq!(result.code, 77);
+    assert!(!owner.exists(), "query repaired a missing owner record");
+    assert!(control.is_dir());
+    assert_eq!(std::fs::read(&lock).unwrap(), b"existing-lock");
+    std::fs::write(&owner, original_owner).unwrap();
+    std::fs::set_permissions(&owner, owner_permissions).unwrap();
+
+    // Pause the actual cleanup while it owns the lifecycle lock. The query
+    // must wait, then observe the removed control instead of recreating it.
+    let cleanup_ready = directory.path().join("cleanup-holds-lock");
+    let cleanup_release = directory.path().join("cleanup-release");
+    let input = String::from_utf8(script("cleanup", id, invocation, "", 0))
+        .unwrap()
+        .replace(
+            "rm -rf \"$base\"",
+            &format!(
+                "touch '{}'\nwhile [ ! -e '{}' ]; do tool sleep 0.01; done\nrm -rf \"$base\"",
+                cleanup_ready.display(),
+                cleanup_release.display()
+            ),
+        );
+    let cleanup = {
+        let root = root.clone();
+        tokio::spawn(async move { local_script(&root, "cleanup", 0, input.into_bytes()).await })
+    };
+    for _ in 0..200 {
+        if cleanup_ready.exists() {
+            break;
+        }
+        assert!(
+            !cleanup.is_finished(),
+            "cleanup stopped before removing its base"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(cleanup_ready.exists());
+    let query_ready = directory.path().join("query-waits-for-cleanup");
+    let input = String::from_utf8(script("processes", id, invocation, "", 0))
+        .unwrap()
+        .replace(
+            "lock -w 10 9 || exit 81",
+            &format!("touch '{}'\nlock -w 10 9 || exit 81", query_ready.display()),
+        );
+    let query = {
+        let root = root.clone();
+        tokio::spawn(async move { local_script(&root, "processes", 0, input.into_bytes()).await })
+    };
+    for _ in 0..200 {
+        if query_ready.exists() {
+            break;
+        }
+        assert!(!query.is_finished());
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(query_ready.exists());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!query.is_finished(), "query did not wait for cleanup");
+    std::fs::write(&cleanup_release, "release").unwrap();
+    assert_eq!(cleanup.await.unwrap().unwrap().code, 0);
+    assert_eq!(query.await.unwrap().unwrap().code, 77);
+    assert!(!base.exists());
+    // Cleanup is a writer. Only subsequent queries must preserve its lock state.
+    std::fs::write(&lock, "cleaned-lock").unwrap();
+    let cleaned_lock = std::fs::read(&lock).unwrap();
+    for action in ["processes", "status", "recover", "export"] {
+        for _ in 0..2 {
+            let result = local_invocation(&root, action, id, invocation, "", 0)
+                .await
+                .unwrap();
+            assert_eq!(result.code, 77, "{action} normalized a missing attempt");
+            assert!(result.stdout.is_empty());
+            assert!(!base.exists(), "{action} recreated the cleaned attempt");
+            assert_eq!(std::fs::read(&lock).unwrap(), cleaned_lock);
+        }
+    }
+    let missing_root = directory.path().join("never-staged");
+    assert_eq!(
+        local(&missing_root, "processes", Uuid::new_v4(), "", 0)
+            .await
+            .unwrap()
+            .code,
+        77
+    );
+    assert!(
+        !missing_root.exists(),
+        "query initialized an unknown guest root"
+    );
+}
+
 // Local Linux process fixture. A managed-MicroVM stop/resume still requires separate live evidence.
 #[tokio::test]
 #[ignore = "requires FIRECRAB_SANDBOX_GUEST_QA=1 in an isolated disposable root container"]
@@ -524,6 +813,28 @@ async fn guest_shell_enforces_identity_limits_retention_export_and_cancel() {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
     assert!(marker.exists());
+    let mut observed = false;
+    for _ in 0..100 {
+        let processes = local(&base, "processes", id, "", 0).await.unwrap();
+        assert_eq!(processes.code, 0);
+        if !processes.stdout.is_empty() {
+            let text = String::from_utf8(processes.stdout).unwrap();
+            for process in text.lines() {
+                let fields = process.split_whitespace().collect::<Vec<_>>();
+                assert_eq!(fields.len(), 4);
+                assert!(fields[0].parse::<u32>().unwrap() > 1);
+                assert!(fields[1].parse::<u64>().unwrap() > 0);
+                assert!(!Uuid::parse_str(fields[2]).unwrap().is_nil());
+            }
+            observed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        observed,
+        "active attempt processes disappeared from the query"
+    );
     let cancelled = local(&base, "cancel", id, "", 0).await.unwrap();
     assert_eq!(
         cancelled.code,

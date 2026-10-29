@@ -982,10 +982,23 @@ elif [ -x /etc/firecrab/busybox ] && /etc/firecrab/busybox tar --exclude=null -c
 else printf 'Sandbox requires tar with --exclude support. Install GNU tar in the selected development VM.\n' >&2; exit 80; fi
 archive_tar() { if [ "$tar_program" = /etc/firecrab/busybox ]; then "$tar_program" tar "$@"; else "$tar_program" "$@"; fi; }
 [ "$action" != probe ] || exit 0
-mkdir -p "$meta/locks" "$meta/fences"
-chmod 711 "$root" "$meta" "$meta/fences"
-chmod 700 "$meta/locks"
-exec 9>"$meta/locks/$id"
+readonly=false
+case "$action" in processes|status|recover|export) readonly=true;; esac
+if [ "$readonly" = true ]; then
+  # Queries must not recreate a cleaned attempt or truncate its existing lock.
+  for directory in "$root" "$meta" "$meta/locks"; do
+    [ -d "$directory" ] && [ ! -L "$directory" ] || exit 77
+  done
+  [ -f "$meta/locks/$id" ] && [ ! -L "$meta/locks/$id" ] || exit 77
+  exec 9<"$meta/locks/$id"
+  [ "$(tool stat -L -c '%u:%g:%a:%h' /proc/self/fd/9)" = 0:0:600:1 ] || exit 70
+  [ "$(tool stat -L -c '%d:%i' /proc/self/fd/9)" = "$(tool stat -c '%d:%i' "$meta/locks/$id")" ] || exit 70
+else
+  mkdir -p "$meta/locks" "$meta/fences"
+  chmod 711 "$root" "$meta" "$meta/fences"
+  chmod 700 "$meta/locks"
+  exec 9>"$meta/locks/$id"
+fi
 lock -w 10 9 || exit 81
 case "$action" in stage|run) [ ! -e "$fence" ] || exit 71;; esac
 lock_accounts() {
@@ -1000,10 +1013,19 @@ lock_accounts() {
   lock -w 10 8 || exit 81
 }
 case "$action" in stage|cleanup) lock_accounts;; esac
-mkdir -p "$control"
-chmod 711 "$base"
-if [ -f "$control/owner" ]; then [ "$(cat "$control/owner")" = "$id" ] || exit 70; fi
-printf '%s' "$id" >"$control/owner"
+if [ "$readonly" = true ]; then
+  for directory in "$base" "$control"; do
+    [ -d "$directory" ] && [ ! -L "$directory" ] || exit 77
+  done
+  [ -f "$control/owner" ] && [ ! -L "$control/owner" ] || exit 77
+  [ "$(tool stat -c '%u:%g:%a:%h' "$control/owner")" = 0:0:600:1 ] || exit 70
+  [ "$(cat "$control/owner")" = "$id" ] || exit 70
+else
+  mkdir -p "$control"
+  chmod 711 "$base"
+  if [ -f "$control/owner" ]; then [ "$(cat "$control/owner")" = "$id" ] || exit 70; fi
+  printf '%s' "$id" >"$control/owner"
+fi
 boot=$(cat /proc/sys/kernel/random/boot_id)
 group_exists() { tool awk -F: -v name="$user" '$1==name {found=1} END {exit !found}' /etc/group; }
 group_registration() {
