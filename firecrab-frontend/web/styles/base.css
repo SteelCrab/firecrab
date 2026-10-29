@@ -53,8 +53,8 @@ body {
 .btn:active:not(:disabled) { transform: scale(0.97); }
 .btn:disabled { color: var(--text-4); cursor: default; }
 .btn:disabled svg { color: var(--text-4); }
-.btn.primary { background: var(--text); border-color: var(--text); color: #ffffff; }
-.btn.primary svg { color: #ffffff; }
+.btn.primary { background: var(--text); border-color: var(--text); color: var(--on-dark); }
+.btn.primary svg { color: var(--on-dark); }
 .btn.primary:disabled { background: var(--text-4); border-color: var(--text-4); }
 .btn.ghost { border-color: transparent; background: none; color: var(--text-2); }
 .btn.danger, .btn.danger svg { color: var(--red-ink); }
@@ -81,10 +81,10 @@ body {
 .icon-btn.danger:not(:disabled) { color: var(--red-ink); }
 
 @media (hover: hover) and (pointer: fine) {
-  .btn:hover:not(:disabled) { background: var(--bg-subtle); border-color: #cfcfd6; }
-  .btn.primary:hover:not(:disabled) { background: #2c2c32; border-color: #2c2c32; }
+  .btn:hover:not(:disabled) { background: var(--bg-subtle); border-color: var(--text-5); }
+  .btn.primary:hover:not(:disabled) { background: var(--ink-hover); border-color: var(--ink-hover); }
   .btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
-  .btn.danger:hover:not(:disabled) { border-color: #f0b4b4; background: var(--red-soft); }
+  .btn.danger:hover:not(:disabled) { border-color: var(--line-red); background: var(--red-soft); }
   .icon-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
   .icon-btn.danger:hover:not(:disabled) { background: var(--red-soft); color: var(--red-ink); }
 }
@@ -214,7 +214,7 @@ kbd {
 .segmented button[aria-pressed="true"] {
   background: var(--bg);
   color: var(--text);
-  box-shadow: 0 1px 2px rgba(17, 17, 26, 0.08), 0 0 0 1px var(--border);
+  box-shadow: var(--shadow-xs), 0 0 0 1px var(--border);
 }
 
 /* Alert box */
@@ -230,8 +230,8 @@ kbd {
   font-size: 12.5px;
 }
 .alert svg { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
-.alert.error { border-color: #f6caca; background: var(--red-soft); color: var(--red-ink); }
-.alert.warn { border-color: #f4d9a8; background: var(--amber-soft); color: var(--amber-ink); }
+.alert.error { border-color: var(--line-red); background: var(--red-soft); color: var(--red-ink); }
+.alert.warn { border-color: var(--line-amber); background: var(--amber-soft); color: var(--amber-ink); }
 
 @media (prefers-reduced-motion: reduce) {
   .btn, .icon-btn, .input, .field :where(input, select, textarea) { transition: none; }

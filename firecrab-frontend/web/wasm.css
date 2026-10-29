@@ -68,21 +68,21 @@
 .wasm-timeline .failed,.wasm-diagnostic { color:var(--red-ink); overflow-wrap:anywhere; }
 .wasm-tooltip { position:fixed; z-index:40; width:300px; padding:14px; border:1px solid var(--border); border-radius:8px; background:var(--bg); box-shadow:var(--shadow-md); pointer-events:none; }
 .wasm-tooltip .btn { display:none; }
-.wasm-palette-backdrop { position:fixed; inset:0; z-index:45; background:#0004; }
+.wasm-palette-backdrop { position:fixed; inset:0; z-index:45; background:var(--scrim); }
 .wasm-palette { position:fixed; top:15%; z-index:46; box-shadow:var(--shadow-md); max-height:70vh; overflow:auto; }
 .palette-item { display:block; width:100%; text-align:left; padding:10px; border:0; background:transparent; color:var(--text); border-radius:4px; }
 .palette-item[aria-selected=true] { background:var(--accent-soft); }
 [aria-invalid=true] { border-color:var(--red)!important; }
 @media(max-width:767px) { .wasm-panel { position:fixed; inset:48px 0 0; width:100%!important; z-index:20; } .wasm-panel-resize { display:none; } }
 .wasm-console-layout { display:flex; flex:1; min-height:0; min-width:0; gap:12px; }
-#terminal-surface { flex:1; min-height:0; min-width:0; display:flex; background:#18181b; padding:8px; }
+#terminal-surface { flex:1; min-height:0; min-width:0; display:flex; background:var(--text); padding:8px; }
 #terminal { width:100%; height:100%; }
 #console-inspector { flex:0 0 340px; overflow:auto; padding:16px; border-left:1px solid var(--border); }
 #console-ssh { flex:1; overflow:auto; }
 .console-exit-only { position:fixed; top:8px; right:8px; z-index:30; }
 [hidden] { display:none!important; }
 @media(max-width:767px){.wasm-console-layout{flex-direction:column;overflow:auto;}#terminal-surface{min-height:55vh;}#console-inspector{flex:none;border-left:0;border-top:1px solid var(--border);}}
-.wasm-modal { position:fixed; z-index:55; top:7vh; width:min(760px,92vw); max-height:85vh; overflow:auto; border:1px solid var(--border); border-radius:12px; padding:24px; background:var(--bg); color:var(--text); box-shadow:0 0 0 100vmax #0005; }
+.wasm-modal { position:fixed; z-index:55; top:7vh; width:min(760px,92vw); max-height:85vh; overflow:auto; border:1px solid var(--border); border-radius:12px; padding:24px; background:var(--bg); color:var(--text); box-shadow:0 0 0 100vmax var(--scrim); }
 .wasm-modal pre { white-space:pre-wrap; overflow-wrap:anywhere; }
 .wasm-modal progress { width:100%; }
 

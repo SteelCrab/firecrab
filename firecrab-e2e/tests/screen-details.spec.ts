@@ -162,6 +162,9 @@ test.describe("list screens with a detail panel", () => {
     await page.getByRole("cell", { name: /web-init/ }).click();
     const detail = panel(page, "Shell detail");
     await expect(detail.getByRole("heading", { name: "web-init" })).toBeVisible();
+    await expect(detail.getByRole("tab", { name: /^Content/ })).toHaveAttribute("aria-selected", "true");
+    await expect(detail.getByRole("region", { name: "Latest revision" })).toContainText("echo hello");
+    await detail.getByRole("tab", { name: /^Revisions/ }).click();
     await expect(detail.getByRole("region", { name: "Revisions" })).toContainText("v2");
     await expect(detail.getByRole("region", { name: "Revisions" })).toContainText("v1");
     await detail.getByRole("button", { name: "Publish revision", exact: true }).click();

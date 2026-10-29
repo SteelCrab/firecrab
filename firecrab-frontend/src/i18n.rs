@@ -319,6 +319,12 @@ pub fn t(value: &str) -> &str {
         "Allow internet" => "인터넷 허용",
         "Create MicroVM" => "MicroVM 만들기",
         "Create MicroService" => "서비스 만들기",
+        "Selection" => "선택",
+        "selected" => "선택됨",
+        "Clear selection" => "선택 해제",
+        "Content" => "내용",
+        "No script yet." => "아직 스크립트가 없습니다.",
+        "No revisions yet." => "아직 리비전이 없습니다.",
         "No secrets yet" => "아직 Secret이 없습니다",
         "Store values your services need, such as passwords and tokens." => {
             "서비스에 필요한 비밀번호나 토큰 같은 값을 보관합니다."

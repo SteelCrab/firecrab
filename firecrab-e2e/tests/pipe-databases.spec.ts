@@ -325,7 +325,7 @@ test.describe("PIPE databases @dashboard", () => {
       expect(mock.checks[0]).toMatchObject({ name: "Application DB", provider, uri });
       await panel.getByRole("button", { name: "Save connection", exact: true }).click();
       await expect(panel.getByRole("cell", { name: /^Application\ DB(\s|$)/ })).toBeVisible();
-      await expect(panel.getByRole("cell", { name: engine, exact: true })).toBeVisible();
+      await expect(panel.getByRole("cell", { name: new RegExp(`^Application DB\\s*${engine} · `) })).toBeVisible();
       await expect(field).toHaveCount(0);
       await expect(panel).not.toContainText("private-password");
       expect(mock.creates[0]).toEqual(mock.checks[0]);

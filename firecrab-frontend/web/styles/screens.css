@@ -3,8 +3,8 @@
 
 /* A reserved resource: a thin bar and "used / total"; amber from 80 %. */
 .meter { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.meter-bar { position: relative; flex: none; width: 56px; height: 4px; border-radius: 2px; background: #efeff2; overflow: hidden; }
-.meter-bar i { position: absolute; inset: 0 auto 0 0; background: #3f3f46; }
+.meter-bar { position: relative; flex: none; width: 56px; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
+.meter-bar i { position: absolute; inset: 0 auto 0 0; background: var(--meter); }
 .meter-bar[data-warn="true"] i { background: var(--amber); }
 .meter-label { color: var(--text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
@@ -97,3 +97,13 @@
 .secret-table .secret-check { width: 40px; }
 .secret-table code { color: var(--text-3); font-size: 12.5px; }
 .secret-tabs { margin-bottom: 8px; }
+
+/* Secrets: the selection bar shows while a secret is checked. The count is a CSS counter over the
+   checked boxes; its words are the bar's data-label. */
+.secrets-page { counter-reset: secret-selected; }
+.secret-table input[data-secret-id]:checked { counter-increment: secret-selected; }
+.secret-selection { display: none; position: sticky; bottom: 0; z-index: 1; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 0; border-top: 1px solid var(--border); background: var(--bg); }
+.secrets-page:has(.secret-table input[data-secret-id]:checked) .secret-selection { display: flex; }
+.secret-selection-count::before { content: counter(secret-selected) " " attr(data-label); font-size: 12.5px; font-weight: 600; }
+.secret-selection label { margin-left: auto; color: var(--text-3); font-size: 12.5px; }
+.secret-selection select { width: auto; min-width: 220px; }

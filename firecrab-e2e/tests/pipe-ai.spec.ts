@@ -195,7 +195,7 @@ test.describe("Pipe AI accounts @dashboard", () => {
             exact: true,
           })
           .click();
-        await expect(panel.locator(".pipe-ai-connections strong")).toHaveText(
+        await expect(panel.locator(".pipe-ai-table .cell-name b")).toHaveText(
           "Anthropic",
         );
         expect(mock.writes[0]).toEqual({
@@ -234,7 +234,7 @@ test.describe("Pipe AI accounts @dashboard", () => {
             exact: true,
           })
           .click();
-        await expect(panel.locator(".pipe-ai-connections strong")).toHaveText(
+        await expect(panel.locator(".pipe-ai-table .cell-name b")).toHaveText(
           "Anthropic",
         );
         await expect(panel).not.toContainText("test-private-key");
@@ -260,7 +260,7 @@ test.describe("Pipe AI accounts @dashboard", () => {
             exact: true,
           })
           .click();
-        await expect(panel.locator(".pipe-ai-connections")).toHaveCount(0);
+        await expect(panel.locator(".pipe-ai-table")).toHaveCount(0);
       });
 
   test("saves a masked API key without a model or browser persistence", async ({
@@ -282,7 +282,7 @@ test.describe("Pipe AI accounts @dashboard", () => {
     await panel
       .getByRole("button", { name: "Verify and save", exact: true })
       .click();
-    await expect(panel.locator(".pipe-ai-connections strong")).toHaveText(
+    await expect(panel.locator(".pipe-ai-table .cell-name b")).toHaveText(
       "API account",
     );
     expect(mock.writes[0]).toEqual({
@@ -303,7 +303,7 @@ test.describe("Pipe AI accounts @dashboard", () => {
       ),
     ).not.toContain("test-private-key");
     await page.reload();
-    await expect(panel.locator(".pipe-ai-connections strong")).toHaveText(
+    await expect(panel.locator(".pipe-ai-table .cell-name b")).toHaveText(
       "API account",
     );
     expect(mock.unexpectedAiRequests).toEqual([]);
@@ -324,7 +324,7 @@ test.describe("Pipe AI accounts @dashboard", () => {
     await expect(panel.getByRole("alert")).toContainText(
       "Provider authentication was rejected",
     );
-    await expect(panel.locator(".pipe-ai-connections strong")).toHaveText(
+    await expect(panel.locator(".pipe-ai-table .cell-name b")).toHaveText(
       "Personal AI",
     );
     await expect(
@@ -341,7 +341,7 @@ test.describe("Pipe AI accounts @dashboard", () => {
   }) => {
     const mock = await open(page, { connected: true });
     const panel = page.getByRole("region", { name: "Pipe AI", exact: true });
-    await expect(panel.locator(".pipe-ai-connections strong")).toHaveText(
+    await expect(panel.locator(".pipe-ai-table .cell-name b")).toHaveText(
       "Personal AI",
     );
     await expect(panel.getByText("Connected", { exact: true })).toBeVisible();
@@ -383,7 +383,7 @@ test.describe("Pipe AI accounts @dashboard", () => {
           "ChatGPT plan usage permission was not granted",
         );
       else {
-        await expect(panel.locator(".pipe-ai-connections strong")).toHaveText(
+        await expect(panel.locator(".pipe-ai-table .cell-name b")).toHaveText(
           "My ChatGPT",
         );
         await expect(
@@ -409,19 +409,19 @@ test.describe("Pipe AI accounts @dashboard", () => {
     await expect(
       panel.getByRole("button", { name: "Connect ChatGPT", exact: true }),
     ).toBeVisible();
-    await expect(panel.locator(".pipe-ai-connections")).toHaveCount(0);
+    await expect(panel.locator(".pipe-ai-table")).toHaveCount(0);
   });
 
   test("disconnects only the selected account", async ({ page }) => {
     await open(page, { connected: true, extraConnection: true });
     const panel = page.getByRole("region", { name: "Pipe AI", exact: true });
     const account = panel
-      .locator(".pipe-ai-connections li")
+      .locator(".pipe-ai-table tbody tr")
       .filter({ hasText: "Personal AI" });
     await account
       .getByRole("button", { name: "Disconnect", exact: true })
       .click();
-    await expect(panel.locator(".pipe-ai-connections strong")).toHaveText([
+    await expect(panel.locator(".pipe-ai-table .cell-name b")).toHaveText([
       "Other account",
     ]);
     await expect(
@@ -491,7 +491,7 @@ test.describe("Pipe AI accounts @dashboard", () => {
           name: "Pipe AI",
           exact: true,
         });
-        await expect(panel.locator(".pipe-ai-connections strong")).toHaveText(
+        await expect(panel.locator(".pipe-ai-table .cell-name b")).toHaveText(
           "Personal AI",
         );
         const disconnect = panel.getByRole("button", {

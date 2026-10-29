@@ -33,7 +33,7 @@
 .service-update .mono { color: var(--text); font-size: 12px; }
 /* One cell per replica: healthy, the next one in progress, the rest waiting. */
 .service-progress { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; margin-top: 10px; }
-.service-progress i { height: 6px; border-radius: 3px; background: #efeff2; }
+.service-progress i { height: 6px; border-radius: 3px; background: var(--track); }
 .service-progress i[data-state="ok"] { background: var(--green); }
 .service-progress i[data-state="busy"] { background: var(--amber); }
 .service-panel .wasm-log { max-height: 160px; margin: 10px 0 0; padding: 10px 12px; border-radius: var(--radius); background: var(--bg-subtle); font: 11.5px/1.7 var(--mono); }

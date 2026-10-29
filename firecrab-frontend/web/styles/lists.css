@@ -28,7 +28,7 @@
 .wasm-table :where(td.mono, td > .mono) { color: var(--text-2); font-size: 12px; }
 .wasm-table tbody tr[data-id] { cursor: pointer; }
 @media (hover: hover) { .wasm-table tbody tr:hover td { background: var(--bg-subtle); } }
-.wasm-table tbody tr[aria-selected="true"] td { background: #f6f6f8; }
+.wasm-table tbody tr[aria-selected="true"] td { background: var(--bg-selected); }
 .wasm-table tbody tr[aria-selected="true"] td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 
 /* Row actions: icon buttons that show on hover, selection and focus, and always where there is no hover. */

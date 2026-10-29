@@ -29,8 +29,8 @@
   white-space: nowrap;
 }
 .vm-summary-value small { margin-left: 3px; color: var(--text-4); font-size: 13px; font-weight: 500; letter-spacing: 0; line-height: 1; }
-.vm-summary-bar { display: block; height: 4px; margin-top: 6px; overflow: hidden; border-radius: 2px; background: #efeff2; }
-.vm-summary-bar i { display: block; height: 100%; border-radius: inherit; background: #3f3f46; }
+.vm-summary-bar { display: block; height: 4px; margin-top: 6px; overflow: hidden; border-radius: 2px; background: var(--track); }
+.vm-summary-bar i { display: block; height: 100%; border-radius: inherit; background: var(--meter); }
 .vm-summary-bar.warn i { background: var(--amber); }
 
 /* Toolbar */
@@ -195,10 +195,10 @@ table.vm-list { table-layout: fixed; }
   color: var(--text-4);
 }
 .vm-timeline-dot svg { width: 11px; height: 11px; stroke-width: 2.5; }
-.vm-timeline-step.succeeded .vm-timeline-dot { border-color: #bfe5cd; background: var(--green-soft); color: var(--green-ink); }
-.vm-timeline-step.running .vm-timeline-dot { border-color: #f4d9a8; background: var(--amber-soft); color: var(--amber-ink); }
+.vm-timeline-step.succeeded .vm-timeline-dot { border-color: var(--line-green); background: var(--green-soft); color: var(--green-ink); }
+.vm-timeline-step.running .vm-timeline-dot { border-color: var(--line-amber); background: var(--amber-soft); color: var(--amber-ink); }
 .vm-timeline-step.running .vm-timeline-dot svg { animation: spin 0.9s linear infinite; }
-.vm-timeline-step.failed .vm-timeline-dot { border-color: #f6caca; background: var(--red-soft); color: var(--red-ink); }
+.vm-timeline-step.failed .vm-timeline-dot { border-color: var(--line-red); background: var(--red-soft); color: var(--red-ink); }
 .vm-timeline-step.pending { color: var(--text-3); }
 .vm-timeline-time { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
 .vm-timeline-detail { grid-column: 2 / -1; padding-bottom: 6px; color: var(--red-ink); font-size: 12px; overflow-wrap: anywhere; }

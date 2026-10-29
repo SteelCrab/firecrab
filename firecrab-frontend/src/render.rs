@@ -31,8 +31,6 @@ pub enum Icon {
     Delete,
     Close,
     AiKey,
-    Sparkles,
-    Connected,
     Start,
     Stop,
     Pause,
@@ -82,10 +80,6 @@ impl Icon {
             Self::AiKey => {
                 "M21 8a5 5 0 1 1-10 0 5 5 0 0 1 10 0ZM12.5 11.5 3 21H2v-3l3-3h3v-3l4.5-.5M16 7h.01"
             }
-            Self::Sparkles => {
-                "m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3ZM20 2v4M18 4h4"
-            }
-            Self::Connected => "M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9ZM8 12l3 3 5-6",
             Self::Start => "M8 5v14l11-7z",
             Self::Stop => "M7 7h10v10H7z",
             Self::Pause => "M8 5v14M16 5v14",
@@ -1379,6 +1373,19 @@ fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> Stri
                 ),
                 String::new(),
             ),
+            "pipe/registry" => (
+                tr(
+                    app,
+                    "No registries connected",
+                    "연결한 레지스트리가 없습니다",
+                ),
+                tr(
+                    app,
+                    "Connect a registry to pull private images.",
+                    "레지스트리를 연결하면 비공개 이미지를 가져올 수 있습니다.",
+                ),
+                String::new(),
+            ),
             "shells" => (
                 tr(app, "No shells yet", "아직 Shell이 없습니다"),
                 tr(
@@ -1784,7 +1791,7 @@ fn vm_detail_actions(app: &App, data: &Value) -> String {
         primary.push_str(&icon_request("Delete", &format!("/api/vms/{encoded}")));
     }
     if queue {
-        primary.push_str("<a class=\"btn\" href=\"#/queues\">Queue</a>");
+        primary.push_str(&icon_link("Queue", "#/queues", false, Icon::Open));
     }
     let mut menu = String::new();
     if !pool && state == "pausing" {
@@ -1931,13 +1938,6 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
                 Icon::Edit,
             ));
             out.push_str(&icon_request("Delete", &format!("/api/shells/{encoded}")));
-            for revision in list(&data["revisions"]) {
-                out.push_str(&button(
-                    &format!("Revision {}", revision["version"]),
-                    "shell-revision",
-                    &format!("{id}/{}", text(revision, "id")),
-                ));
-            }
         }
         "images" => {
             let alias = encode(text(data, "alias"));
@@ -2434,8 +2434,18 @@ fn pipe(app: &App, card: &str) -> String {
         }
         "registry" => {
             out.push_str(&button("Connect registry", "create", "registry"));
-            out.push_str(&button("Pull image", "create", "registry-pull"));
-            out.push_str(&button("Cached images", "registry-images", ""));
+            out.push_str(&icon_button(
+                "Pull image",
+                "create",
+                "registry-pull",
+                Icon::Download,
+            ));
+            out.push_str(&icon_button(
+                "Cached images",
+                "registry-images",
+                "",
+                Icon::Logs,
+            ));
         }
         "database" => out.push_str(&button("Connect database", "create", "database")),
         "quick-tunnel" | "firecrab-tunnel" | "named-tunnel" => {
@@ -3155,7 +3165,9 @@ mod icon_button_tests {
             &app("vms"),
             &json!({"id": "vm-1", "name": "q", "state": "stopped", "purpose": "queue"}),
         );
-        assert!(queue.contains("<a class=\"btn\" href=\"#/queues\">Queue</a>"));
+        assert!(queue.contains(
+            "<a class=\"icon-btn\" href=\"#/queues\" aria-label=\"Queue\" title=\"Queue\">"
+        ));
     }
 
     #[test]
