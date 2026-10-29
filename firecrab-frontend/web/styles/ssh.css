@@ -13,7 +13,7 @@
   margin-top: 1px;
   border-radius: 50%;
   background: var(--text);
-  color: #ffffff;
+  color: var(--on-dark);
   font: 600 11px/1 var(--font);
 }
 .ssh-step-title { margin: 0; font-size: 13px; font-weight: 600; }

@@ -55,7 +55,7 @@
 .s3-hint a { color: var(--text-2); text-underline-offset: 3px; }
 .s3-bound-note { border-top: 1px solid var(--border); padding-top: 16px; }
 .s3-connection-note { margin-top: 14px; }
-.s3-dialog { box-sizing: border-box; width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 24px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text); box-shadow: var(--shadow-lg, 0 16px 60px #0002); overflow-y: auto; }
+.s3-dialog { box-sizing: border-box; width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 24px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); overflow-y: auto; }
 .s3-dialog::backdrop { background: rgb(15 18 23 / 30%); }
 .s3-dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; }
 .s3-dialog-head h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.02em; }

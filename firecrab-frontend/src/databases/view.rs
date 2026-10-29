@@ -1,4 +1,5 @@
 use super::*;
+use crate::render::{Icon, empty_state, icon_button, name_cell, status_dot};
 use std::fmt::Write;
 fn button(label: &str, action: &str, id: &str, disabled: bool) -> String {
     let html = crate::render::button(label, action, id);
@@ -66,23 +67,22 @@ pub fn content(app: &App) -> String {
         out.push_str(&form.html(app.busy, &app.field_errors));
     }
     if list(&app.resource).is_empty() && !editing && app.connection_error.is_empty() {
-        let _ = write!(
-            out,
-            "<p>{}</p>",
+        out.push_str(&empty_state(
+            "pipe",
+            tr("No databases connected", "연결한 DB가 없습니다"),
             tr(
-                "No database connections. Add a local DB URI, Supabase or Amazon RDS database.",
-                "DB 연결이 없다. 로컬 DB URI, Supabase 또는 Amazon RDS DB를 추가한다."
-            )
-        );
+                "Add a local DB URI, Supabase or Amazon RDS database.",
+                "로컬 DB URI, Supabase 또는 Amazon RDS DB를 추가하세요.",
+            ),
+            "",
+        ));
     }
     if app.connection_error.is_empty() && !list(&app.resource).is_empty() {
         let _ = write!(
             out,
-            "<div class=\"table-scroll\"><table class=\"wasm-table pipe-database-table\" aria-label=\"{}\"><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th><th>TLS</th><th>{}</th></tr></thead><tbody>",
+            "<div class=\"table-scroll\"><table class=\"wasm-table pipe-database-table\" aria-label=\"{}\"><thead><tr><th>{}</th><th class=\"col-secondary\">{}</th><th>TLS</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
             tr("Saved databases", "저장한 DB"),
             tr("Name", "이름"),
-            tr("Source", "위치"),
-            tr("Engine", "엔진"),
             tr("Database address", "DB 주소"),
             tr("Actions", "작업")
         );
@@ -94,37 +94,39 @@ pub fn content(app: &App) -> String {
                 "rds" => "Amazon RDS",
                 _ => "Supabase",
             };
-            let tls = match text(db, "tlsMode") {
-                "verify_full" => tr("Verified", "검증"),
-                "require" => tr("Encrypted", "암호화"),
-                _ => tr("Disabled", "사용 안 함"),
+            let engine = if text(db, "engine") == "postgres" {
+                "PostgreSQL"
+            } else {
+                "MySQL"
             };
-            let browse = button(tr("Browse", "조회"), "db-browse", id, locked || editing).replace(
-                "type=\"button\"",
-                &format!(
-                    "type=\"button\" aria-label=\"{}\"",
-                    escape(&format!("Browse {name}"))
-                ),
-            );
-            let menu = button("⋯", "db-menu", id, locked || editing).replace(
-                "type=\"button\"",
-                &format!(
-                    "type=\"button\" aria-label=\"{}\"",
-                    escape(&format!("{name} actions"))
-                ),
-            );
+            let (tone, tls) = match text(db, "tlsMode") {
+                "verify_full" => ("ok", tr("Verified", "검증")),
+                "require" => ("ok", tr("Encrypted", "암호화")),
+                _ => ("off", tr("Disabled", "사용 안 함")),
+            };
+            let blocked = locked || editing;
+            let browse = icon_button(&format!("Browse {name}"), "db-browse", id, Icon::Open);
+            let menu = icon_button(&format!("{name} actions"), "db-menu", id, Icon::More);
+            let (browse, menu) = if blocked {
+                (
+                    browse.replace("type=\"button\"", "type=\"button\" disabled"),
+                    menu.replace("type=\"button\"", "type=\"button\" disabled"),
+                )
+            } else {
+                (browse, menu)
+            };
             let _ = write!(
                 out,
-                "<tr><td>{}</td><td>{source}</td><td>{}</td><td class=\"mono\">{}:{}/{}</td><td>{tls}</td><td><div class=\"wasm-actions\">{browse}{menu}</div></td></tr>",
-                escape(name),
-                if text(db, "engine") == "postgres" {
-                    "PostgreSQL"
-                } else {
-                    "MySQL"
-                },
-                escape(text(db, "host")),
-                db["port"].as_u64().unwrap_or(0),
-                escape(text(db, "database"))
+                "<tr data-id=\"{}\"><td>{}</td><td class=\"col-secondary mono\" title=\"{address}\">{address}</td><td>{}</td><td class=\"row-actions\">{browse}{menu}</td></tr>",
+                escape(id),
+                name_cell(name, &format!("{engine} · {source}"), "", false),
+                status_dot(tone, tls),
+                address = format_args!(
+                    "{}:{}/{}",
+                    escape(text(db, "host")),
+                    db["port"].as_u64().unwrap_or(0),
+                    escape(text(db, "database"))
+                ),
             );
         }
         out.push_str("</tbody></table></div>");

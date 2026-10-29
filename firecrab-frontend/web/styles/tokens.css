@@ -32,6 +32,15 @@
   --red-soft: #fdeded;
   --red-ink: #b91c1c;
   --gray-soft: #f1f1f3;
+  --track: #efeff2;
+  --meter: #3f3f46;
+  --bg-selected: #f6f6f8;
+  --on-dark: #ffffff;
+  --ink-hover: #2c2c32;
+  --line-green: #bfe5cd;
+  --line-amber: #f4d9a8;
+  --line-red: #f6caca;
+  --scrim: rgba(24, 24, 27, 0.3);
   --indigo-soft: #eef0ff;
   --indigo-ink: #4f46e5;
 

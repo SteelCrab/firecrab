@@ -6,7 +6,7 @@
 .sb-project-list { flex: 1; overflow: auto; min-height: 0; }
 .sb-project { display: flex; width: 100%; gap: 10px; align-items: center; padding: 10px; margin-bottom: 4px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text-2); text-align: left; font-size: 12px; cursor: pointer; }
 .sb-project span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sb-project[aria-current="page"] { background: var(--bg); border-color: var(--border); color: var(--text); box-shadow: 0 1px 2px #00000004; }
+.sb-project[aria-current="page"] { background: var(--bg); border-color: var(--border); color: var(--text); box-shadow: var(--shadow-xs); }
 .sb-account-link { display: flex; align-items: center; gap: 8px; padding: 10px; border-top: 1px solid var(--border); color: var(--text-3); font-size: 12px; text-decoration: none; }
 .sb-account-link span { flex: 1; }
 .sb-workspace { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
@@ -24,7 +24,7 @@
 .sb-welcome h2 { font-size: clamp(20px, 2.5vw, 27px); font-weight: 550; letter-spacing: -.04em; margin: 2px 0 0; }
 .sb-welcome > p { max-width: 390px; font-size: 13px; color: var(--text-3); line-height: 1.8; margin: 0 0 8px; }
 .sb-welcome a { font-size: 12px; color: var(--text-3); }
-.sb-welcome-icon { display: grid; place-items: center; width: 56px; height: 56px; border: 1px solid var(--border); border-radius: 17px; box-shadow: 0 3px 12px #00000005; }
+.sb-welcome-icon { display: grid; place-items: center; width: 56px; height: 56px; border: 1px solid var(--border); border-radius: 17px; box-shadow: var(--shadow-xs); }
 .sb-welcome-icon svg { width: 27px; height: 27px; }
 .sb-messages { max-width: 850px; margin: auto; padding: 28px clamp(16px, 4vw, 48px); }
 .sb-conversation-empty { display: flex; align-items: center; flex-direction: column; padding: 65px 0 40px; text-align: center; }
@@ -47,8 +47,8 @@
 .sb-message-actions .btn { font-size: 11px; }
 .sb-progress { display: flex; align-items: center; gap: 8px; color: var(--text-3); font-size: 12px; padding-top: 12px; }
 .sb-composer { flex-shrink: 0; width: min(100%, 850px); margin: auto; padding: 12px clamp(16px, 4vw, 48px) 18px; box-sizing: border-box; }
-.sb-composer-box { border: 1px solid var(--border-strong); border-radius: 13px; padding: 14px; box-shadow: 0 3px 14px #00000004; }
-.sb-composer-box:focus-within { border-color: var(--text-3); box-shadow: 0 0 0 2px #00000003; }
+.sb-composer-box { border: 1px solid var(--border-strong); border-radius: 13px; padding: 14px; box-shadow: var(--shadow-xs); }
+.sb-composer-box:focus-within { border-color: var(--text-3); box-shadow: 0 0 0 3px var(--accent-ring); }
 .sb-composer textarea { display: block; width: 100%; min-height: 65px; max-height: 180px; resize: vertical; border: none; outline: none; box-shadow: none; padding: 2px 0 12px; background: transparent; color: var(--text); font: inherit; font-size: 13px; line-height: 1.7; box-sizing: border-box; }
 .sb-composer-tools { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .sb-composer-tools .sb-row { min-width: 0; flex-wrap: wrap; }
@@ -65,7 +65,7 @@
 .sb-board-column { min-width: 0; }
 .sb-board-column > h3 { display: flex; align-items: center; justify-content: space-between; font-size: 11px; font-weight: 600; margin: 0 0 15px; color: var(--text-2); }
 .sb-board-column > h3 > span { color: var(--text-3); background: var(--bg-subtle); padding: 2px 6px; border-radius: 4px; }
-.sb-task-card { display: flex; flex-direction: column; gap: 13px; text-align: left; width: 100%; padding: 15px; margin-bottom: 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); box-shadow: 0 2px 4px #00000003; cursor: pointer; overflow: hidden; }
+.sb-task-card { display: flex; flex-direction: column; gap: 13px; text-align: left; width: 100%; padding: 15px; margin-bottom: 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); box-shadow: var(--shadow-xs); cursor: pointer; overflow: hidden; }
 .sb-task-card > strong { font-size: 12px; font-weight: 500; line-height: 1.8; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; }
 .sb-task-state { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-3); }
 .sb-task-state svg { width: 13px; height: 13px; }
@@ -77,8 +77,8 @@
 .sb-card-meta { display: flex; justify-content: space-between; gap: 6px; font-size: 9px; color: var(--text-3); flex-wrap: wrap; }
 .sb-column-empty { border: 1px dashed var(--border); border-radius: 8px; color: var(--text-4); font-size: 11px; text-align: center; padding: 25px 6px; }
 .sb-banner { margin: 12px 20px 0; display: flex; justify-content: space-between; align-items: flex-start; font-size: 12px; }
-.sb-dialog { width: min(600px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 0; border: 1px solid var(--border-strong); border-radius: 13px; background: var(--bg); color: var(--text); box-shadow: 0 24px 100px #00000030; overflow: auto; }
-.sb-dialog::backdrop { background: #18181b50; }
+.sb-dialog { width: min(600px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 0; border: 1px solid var(--border-strong); border-radius: 13px; background: var(--bg); color: var(--text); box-shadow: var(--shadow-pop); overflow: auto; }
+.sb-dialog::backdrop { background: var(--scrim); }
 .sb-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 17px 21px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 1; }
 .sb-dialog-header h2 { display: flex; gap: 9px; align-items: center; margin: 0; font-size: 14px; font-weight: 600; }
 .sb-project-form { display: flex; flex-direction: column; gap: 19px; padding: 21px; }

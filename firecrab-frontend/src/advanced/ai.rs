@@ -1,7 +1,7 @@
 use crate::{
     App, Shared, api,
     model::{escape, list, text},
-    render::{Icon, button},
+    render::{Icon, button, empty_state, icon_button, name_cell, status_dot},
     render_content, window,
 };
 use serde_json::{Value, json};
@@ -29,6 +29,16 @@ fn tr<'a>(en: &'a str, ko: &'a str) -> &'a str {
         en
     }
 }
+fn icon_action(en: &str, ko: &str, action: &str, id: &str, disabled: bool, icon: Icon) -> String {
+    icon_button(tr(en, ko), action, id, icon).replace(
+        "type=\"button\"",
+        if disabled {
+            "type=\"button\" disabled"
+        } else {
+            "type=\"button\""
+        },
+    )
+}
 fn action(en: &str, ko: &str, action: &str, id: &str, disabled: bool) -> String {
     button(tr(en, ko), action, id).replace(
         "type=\"button\"",
@@ -45,12 +55,7 @@ pub fn content(app: &App) -> String {
     let locked = s.busy || s.login.is_some();
     let rows = list(&app.resource);
     let mut out = format!(
-        "<p><a href=\"#/pipe\">← Pipe</a></p><section class=\"pipe-ai\" aria-label=\"Pipe AI\"><header class=\"pipe-ai-heading\"><div class=\"pipe-ai-title\"><span class=\"pipe-ai-mark\" aria-hidden=\"true\">{}</span><div><h2>Pipe AI</h2><p>{}</p></div></div>{}</header>",
-        Icon::Sparkles.svg(),
-        tr(
-            "Connect and manage your AI accounts.",
-            "AI 서비스 계정을 연결하고 관리한다."
-        ),
+        "<section class=\"pipe-ai\" aria-label=\"Pipe AI\"><header class=\"pipe-ai-heading\">{}</header>",
         if !rows.is_empty() {
             action(
                 "Add connection",
@@ -79,7 +84,19 @@ pub fn content(app: &App) -> String {
     } else if !app.connection_error.is_empty() {
         out.push_str(&action("Retry", "다시 시도", "ai-retry", "", locked));
     } else if rows.is_empty() && !editing {
-        out.push_str(&format!("<div class=\"pipe-ai-welcome\"><h3>{}</h3><p>{}</p><div class=\"wasm-actions\">{}{}</div><p>{}</p></div>", tr("Connect your AI account", "AI 계정을 연결한다"), tr("Sign in with ChatGPT, or connect an OpenAI or Anthropic API key.", "ChatGPT 로그인 또는 OpenAI·Anthropic API 키로 연결한다."),action("Connect ChatGPT", "ChatGPT 연결", "ai-edit-chatgpt", "", locked),action("Use API key", "API 키로 연결", "ai-edit-key", "", locked),tr("Credentials are stored only on the API host.", "인증 정보는 API 호스트에서만 저장한다.")));
+        out.push_str(&empty_state(
+            "pipe",
+            tr("Connect an AI account", "AI 계정을 연결한다"),
+            tr(
+                "Sign in with ChatGPT or use an OpenAI or Anthropic API key. Credentials stay on the API host.",
+                "ChatGPT로 로그인하거나 OpenAI·Anthropic API 키를 씁니다. 인증 정보는 API 호스트에만 저장됩니다.",
+            ),
+            &format!(
+                "{}{}",
+                action("Connect ChatGPT", "ChatGPT 연결", "ai-edit-chatgpt", "", locked),
+                action("Use API key", "API 키로 연결", "ai-edit-key", "", locked)
+            ),
+        ));
     }
     if editing {
         let disabled = if locked { " disabled" } else { "" };
@@ -113,7 +130,13 @@ pub fn content(app: &App) -> String {
         out.push_str("</form>");
     }
     if !rows.is_empty() {
-        out.push_str(&format!("<div class=\"panel pipe-ai-accounts\" aria-label=\"{}\"><div class=\"pipe-ai-section-head\"><h3>{}{}</h3><span class=\"pipe-ai-count\">{}</span></div><ul class=\"pipe-ai-connections\">",tr("AI connections","AI 연결 목록"),Icon::AiKey.svg(),tr("Connected accounts","연결한 계정"),rows.len()));
+        out.push_str(&format!(
+            "<div class=\"table-scroll\"><table class=\"wasm-table pipe-ai-table\" aria-label=\"{}\"><thead><tr><th>{}</th><th class=\"col-secondary\">{}</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
+            tr("AI connections", "AI 연결 목록"),
+            tr("Connection", "연결"),
+            tr("Status", "상태"),
+            crate::i18n::t("Actions")
+        ));
         for row in rows {
             let chatgpt = row["authentication"] == "chatgpt";
             let method = if chatgpt {
@@ -130,14 +153,34 @@ pub fn content(app: &App) -> String {
                 )
             };
             let id = text(row, "id");
-            let icon = if chatgpt {
-                include_str!("../../public/chatgpt.svg").to_owned()
+            let off = locked || editing;
+            let renew = if chatgpt {
+                icon_action(
+                    "Sign in again",
+                    "다시 로그인",
+                    "ai-edit-chatgpt",
+                    id,
+                    off,
+                    Icon::Retry,
+                )
             } else {
-                Icon::AiKey.svg()
+                icon_action(
+                    "Replace API key",
+                    "API 키 교체",
+                    "ai-edit-key",
+                    id,
+                    off,
+                    Icon::AiKey,
+                )
             };
-            out.push_str(&format!("<li><span class=\"pipe-ai-account-icon\" aria-hidden=\"true\">{}</span><div class=\"pipe-ai-account-info\"><strong>{}</strong><p class=\"pipe-ai-hint\">{}</p></div><span class=\"badge running\">{}{}</span><div class=\"pipe-ai-manage\">{}{}</div></li>",icon,escape(text(row,"name")),method,Icon::Connected.svg(),tr("Connected","연결됨"),if chatgpt{action("Sign in again","다시 로그인","ai-edit-chatgpt",id,locked||editing)}else{action("Replace API key","API 키 교체","ai-edit-key",id,locked||editing)},action("Disconnect","연결 해제","ai-disconnect",id,locked||editing)));
+            out.push_str(&format!(
+                "<tr><td>{}</td><td class=\"col-secondary\">{}</td><td class=\"row-actions\">{renew}{}</td></tr>",
+                name_cell(text(row, "name"), &method, "", false),
+                status_dot("ok", tr("Connected", "연결됨")),
+                icon_action("Disconnect", "연결 해제", "ai-disconnect", id, off, Icon::Delete)
+            ));
         }
-        out.push_str("</ul></div>");
+        out.push_str("</tbody></table></div>");
         if !editing {
             out.push_str(&format!(
                 "<p>{}</p>",
@@ -444,7 +487,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn account_rows_keep_the_icon_info_status_and_actions_in_their_grid_columns() {
+    fn account_rows_keep_the_name_status_and_actions_in_their_table_columns() {
         for locale in ["en", "ko"] {
             crate::i18n::set(locale);
             let name = format!("sandbox-recovery-{}<&>", "a".repeat(70));
@@ -459,35 +502,41 @@ mod tests {
                 ..Default::default()
             };
             let html = content(&app);
-            assert!(html.contains("<div class=\"pipe-ai-title\"><span class=\"pipe-ai-mark\""));
-            assert!(html.contains("<div><h2>Pipe AI</h2><p>"));
-            assert!(html.contains("<span class=\"pipe-ai-count\">3</span>"));
+            assert!(!html.contains("<h2>Pipe AI</h2>"));
             assert!(html.contains(&escape(&name)));
             assert!(!html.contains(&name));
-            let list = html
-                .split("<ul class=\"pipe-ai-connections\">")
+            let body = html
+                .split("<tbody>")
                 .nth(1)
                 .unwrap()
-                .split("</ul>")
+                .split("</tbody>")
                 .next()
                 .unwrap();
-            let rows = list
-                .split("</li>")
+            let rows = body
+                .split("</tr>")
                 .filter(|row| !row.is_empty())
                 .collect::<Vec<_>>();
             assert_eq!(rows.len(), 3);
             for row in &rows {
-                assert!(row.starts_with("<li><span class=\"pipe-ai-account-icon\""));
-                let icon = row.find("pipe-ai-account-icon").unwrap();
-                let info = row.find("pipe-ai-account-info").unwrap();
-                let status = row.find("badge running").unwrap();
-                let actions = row.find("pipe-ai-manage").unwrap();
-                assert!(icon < info && info < status && status < actions);
+                assert!(row.starts_with("<tr><td><div class=\"cell-name\">"));
+                let info = row.find("cell-name").unwrap();
+                let status = row.find("status-dot").unwrap();
+                let actions = row.find("row-actions").unwrap();
+                assert!(info < status && status < actions);
                 assert!(row.contains("ai-disconnect"));
+                assert!(row.contains(if locale == "ko" {
+                    "연결됨"
+                } else {
+                    "Connected"
+                }));
             }
-            assert!(rows[0].contains("class=\"chatgpt-icon\""));
-            assert!(!rows[1].contains("class=\"chatgpt-icon\""));
-            assert!(!rows[2].contains("class=\"chatgpt-icon\""));
+            assert!(rows[0].contains(if locale == "ko" {
+                "ChatGPT 계정"
+            } else {
+                "ChatGPT account"
+            }));
+            assert!(rows[0].contains("ai-edit-chatgpt"));
+            assert!(rows[1].contains("ai-edit-key"));
             assert!(rows[1].contains(if locale == "ko" {
                 "Anthropic API 키"
             } else {

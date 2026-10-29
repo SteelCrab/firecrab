@@ -163,7 +163,12 @@ pub fn content(app: &App) -> String {
             }
             out.push_str("</tbody></table></div>");
         }
-        out.push_str("<div class=\"secret-export\"><label for=\"upload-destination\">Upload destination</label><select id=\"upload-destination\">");
+        // The bar shows only while a secret is checked: its count and the destination.
+        out.push_str(&format!(
+            "<div class=\"secret-export secret-selection\" role=\"group\" aria-label=\"{}\"><span class=\"secret-selection-count\" data-label=\"{}\"></span><label for=\"upload-destination\">Upload destination</label><select id=\"upload-destination\">",
+            t("Selection"),
+            t("selected")
+        ));
         for link in list(
             app.cache
                 .get("/api/secrets/connections")
@@ -185,6 +190,12 @@ pub fn content(app: &App) -> String {
             "Preview",
             "secret-export",
             "",
+        ));
+        out.push_str(&icon_button(
+            "Clear selection",
+            "secret-selection-clear",
+            "",
+            Icon::Close,
         ));
         out.push_str("</div></section>");
     }
@@ -365,6 +376,20 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
         "secret-plan-close" => {
             app.borrow_mut().advanced.plan = None;
             render_plan(app);
+            return true;
+        }
+        "secret-selection-clear" => {
+            if let Ok(nodes) = crate::document().query_selector_all("input[data-secret-id]:checked")
+            {
+                for i in 0..nodes.length() {
+                    if let Some(el) = nodes
+                        .item(i)
+                        .and_then(|el| el.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    {
+                        el.set_checked(false);
+                    }
+                }
+            }
             return true;
         }
         _ => {}

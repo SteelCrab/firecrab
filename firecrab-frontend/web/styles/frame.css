@@ -174,8 +174,8 @@
   font-size: 12.5px;
 }
 .banner > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.banner.error { border-color: #f6caca; background: var(--red-soft); color: var(--red-ink); }
-.banner.info { border-color: #bfe5cd; background: var(--green-soft); color: var(--green-ink); }
+.banner.error { border-color: var(--line-red); background: var(--red-soft); color: var(--red-ink); }
+.banner.info { border-color: var(--line-green); background: var(--green-soft); color: var(--green-ink); }
 .banner .dismiss { width: 24px; height: 24px; color: inherit; }
 .banner .dismiss svg { width: 14px; height: 14px; }
 

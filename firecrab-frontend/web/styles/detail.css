@@ -58,7 +58,6 @@
 .btn + .props { margin-top: 12px; }
 .props + .detail-sec { margin-top: 16px; }
 .props dd { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 24px; margin: 0; padding: 0; }
-.props dd .btn { height: 22px; margin-left: auto; padding: 0 6px; font-size: 11.5px; }
 .props dd.editing { display: block; }
 .prop-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prop-value .mono { font-size: 12px; }
@@ -149,3 +148,6 @@
 .screen.has-panel .col-detail { display: none; }
 .vm-table .actions { white-space: nowrap; }
 .vm-table .actions .btn { height: var(--control-height-sm); padding: 0 8px; font-size: 12px; }
+
+/* A script or a block of code in a panel. */
+.codeblock { margin: 0; padding: 12px; overflow: auto; border-radius: var(--radius); background: var(--bg-subtle); font: 12px/1.6 var(--mono); white-space: pre; }

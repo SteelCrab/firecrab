@@ -1,7 +1,7 @@
 use crate::{
     App, Shared, api, element,
     model::{escape, list, text},
-    render::{button, request},
+    render::{Icon, button, empty_state, icon_button, icon_request_with},
     render_content, render_messages, window,
 };
 use serde_json::{Value, json};
@@ -53,45 +53,92 @@ pub fn content(app: &App) -> String {
         }
         out.push_str(&format!("<div class=\"wasm-form wasm-card\"><label>File<input id=\"storage-file\" type=\"file\"></label><label>File name<input id=\"storage-name\" value=\"{}\"></label><label><input id=\"storage-overwrite\" type=\"checkbox\" {}>Allow overwrite</label>{}{}</div></section>",escape(&s.name),if s.overwrite{"checked"}else{""},crate::render::icon_button("Upload","storage-upload",id,crate::render::Icon::Upload),button("Cancel upload","storage-clear","")));
     } else {
+        let ko = app.locale == "ko";
         out.push_str(&button("Connect bucket", "create", "pipe-storage"));
-        for connection in list(&app.resource) {
-            let name = text(connection, "name");
-            let id = text(connection, "id");
-            let bound = !list(&connection["services"]).is_empty();
-            let disabled = |html: String| {
-                if bound {
-                    html.replace("type=\"button\"", "type=\"button\" disabled")
+        let rows = list(&app.resource);
+        if rows.is_empty() {
+            out.push_str(&empty_state(
+                "storage",
+                if ko {
+                    "연결한 버킷이 없습니다"
                 } else {
-                    html
-                }
-            };
+                    "No buckets connected"
+                },
+                if ko {
+                    "AWS S3 버킷을 연결하면 파일을 보고 올릴 수 있습니다."
+                } else {
+                    "Connect an AWS S3 bucket to browse and upload files."
+                },
+                "",
+            ));
+        } else {
             out.push_str(&format!(
-                "<article class=\"wasm-card\"><h3>{}</h3><p>{} · {}</p>{}{}{}{}",
-                button(&format!("Open files in {name}"), "storage-browse", id),
-                escape(text(connection, "bucket")),
-                escape(text(connection, "prefix")),
-                button("Check connection", "storage-verify", id),
-                disabled(button("Edit connection", "storage-edit", id)),
-                disabled(request(
-                    "Disconnect",
-                    "DELETE",
-                    &format!("/api/pipe/storage/{}", api::encode(id)),
-                    Value::Null
-                )),
-                if bound {
+                "<div class=\"table-scroll\"><table class=\"wasm-table storage-table\" aria-label=\"{}\"><thead><tr><th>{}</th><th class=\"col-secondary\">{}</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
+                if ko { "S3 연결" } else { "S3 connections" },
+                if ko { "연결" } else { "Connection" },
+                if ko { "접두사" } else { "Prefix" },
+                crate::i18n::t("Actions")
+            ));
+            for connection in rows {
+                let name = text(connection, "name");
+                let id = text(connection, "id");
+                let services = list(&connection["services"]);
+                let bound = !services.is_empty();
+                let disabled = |html: String| {
+                    if bound {
+                        html.replace("type=\"button\"", "type=\"button\" disabled")
+                    } else {
+                        html
+                    }
+                };
+                let used = services
+                    .iter()
+                    .map(|s| text(s, "name").to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sub = if bound {
                     format!(
-                        "<p>Used by {}. Unbind these services before editing or disconnecting.</p>",
-                        list(&connection["services"])
-                            .iter()
-                            .map(|s| escape(text(s, "name")))
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        "{} · {} {used}",
+                        text(connection, "bucket"),
+                        if ko { "사용 중:" } else { "Used by" }
                     )
                 } else {
-                    String::new()
-                }
-            ));
-            out.push_str("</article>");
+                    text(connection, "bucket").to_string()
+                };
+                out.push_str(&format!(
+                    "<tr data-id=\"{}\"><td><div class=\"cell-name\"><b><button type=\"button\" class=\"cell-link\" aria-label=\"Open files in {}\" title=\"{}\" data-action=\"storage-browse\" data-id=\"{}\">{}</button></b><span class=\"cell-sub\" data-tone=\"\">{}</span></div></td><td class=\"col-secondary mono\">{}</td><td class=\"row-actions\">{}{}{}</td></tr>",
+                    escape(id),
+                    escape(name),
+                    escape(&format!("Open files in {name}")),
+                    escape(id),
+                    escape(name),
+                    escape(&sub),
+                    escape(text(connection, "prefix")),
+                    icon_button("Check connection", "storage-verify", id, Icon::Retry),
+                    disabled(icon_button("Edit connection", "storage-edit", id, Icon::Edit)),
+                    disabled(icon_request_with(
+                        "Disconnect",
+                        "DELETE",
+                        &format!("/api/pipe/storage/{}", api::encode(id)),
+                        Value::Null,
+                        Icon::Delete
+                    ))
+                ));
+            }
+            out.push_str("</tbody></table></div>");
+            if list(&app.resource)
+                .iter()
+                .any(|c| !list(&c["services"]).is_empty())
+            {
+                out.push_str(&format!(
+                    "<p class=\"detail-note\">{}</p>",
+                    if ko {
+                        "서비스가 쓰는 연결은 서비스에서 먼저 해제해야 수정하거나 연결을 끊을 수 있습니다."
+                    } else {
+                        "Unbind these services before editing or disconnecting."
+                    }
+                ));
+            }
         }
     }
     out.push_str("</fieldset></section>");

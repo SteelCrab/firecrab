@@ -37,6 +37,7 @@ const VM_TABS: [(&str, &str); 5] = [
     ("env", "Environment"),
     ("logs", "Log"),
 ];
+const SHELL_TABS: [(&str, &str); 2] = [("content", "Content"), ("revisions", "Revisions")];
 const SERVICE_TABS: [(&str, &str); 4] = [
     ("overview", "Overview"),
     ("instances", "Instances"),
@@ -49,6 +50,8 @@ fn panel_tabs(button_id: &str) -> Option<(&'static str, &'static [(&'static str,
         Some(("vm", &VM_TABS))
     } else if button_id.starts_with("service-tab-") {
         Some(("service", &SERVICE_TABS))
+    } else if button_id.starts_with("shell-tab-") {
+        Some(("shell", &SHELL_TABS))
     } else {
         None
     }
@@ -148,6 +151,10 @@ pub fn panel(app: &App) -> String {
     }
     if app.route == "services" && app.detail.is_some() && app.form.is_none() {
         out.push_str(&service_panel(app));
+        return out;
+    }
+    if app.route == "shells" && app.detail.is_some() && app.form.is_none() {
+        out.push_str(&shell_panel(app));
         return out;
     }
     if let Some(form) = &app.form {
@@ -330,6 +337,96 @@ pub fn panel(app: &App) -> String {
         app.detail_result
     ));
     out
+}
+
+/// The panel of a selected shell: the head, the Content and Revisions tabs. A form replaces it.
+fn shell_panel(app: &App) -> String {
+    let data = app.detail.as_ref().unwrap_or(&Value::Null);
+    let tab = if app.detail_tab == "revisions" {
+        "revisions"
+    } else {
+        "content"
+    };
+    let revisions = list(&data["revisions"]);
+    let body = if tab == "revisions" {
+        shell_revisions(data)
+    } else {
+        shell_content(data)
+    };
+    let meta = match data["latestVersion"].as_u64() {
+        Some(version) => format!("<span class=\"mono\">v{version}</span>"),
+        None => String::new(),
+    };
+    format!(
+        "<section role=\"region\" aria-label=\"Detail\" class=\"wasm-panel-body detail-body shell-panel\">{}{}<div class=\"detail-content\">{}<div id=\"detail-result\" class=\"detail-result\">{}</div></div></section>",
+        panel_head(
+            kind(app),
+            text(data, "name"),
+            false,
+            &meta,
+            &render::detail_actions(app, data)
+        ),
+        tab_list(
+            "shell",
+            "Shell detail sections",
+            &SHELL_TABS,
+            tab,
+            &[("revisions", revisions.len())]
+        ),
+        tab_panel("shell", tab, &body),
+        app.detail_result
+    )
+}
+/// The latest script in a code block, with a copy icon.
+fn shell_content(data: &Value) -> String {
+    let content = text(data, "latestContent");
+    let description = text(data, "description");
+    let mut out = String::new();
+    if !description.is_empty() {
+        out.push_str(&format!(
+            "<p class=\"detail-note\">{}</p>",
+            escape(description)
+        ));
+    }
+    let copy = if content.is_empty() {
+        String::new()
+    } else {
+        render::icon_button("Copy", "copy-text", content, render::Icon::Copy)
+    };
+    let script = if content.is_empty() {
+        format!("<p class=\"detail-note\">{}</p>", t("No script yet."))
+    } else {
+        format!("<pre class=\"codeblock\">{}</pre>", escape(content))
+    };
+    out.push_str(&section("Latest revision", &copy, &script));
+    out
+}
+/// Every revision, each with the button that shows it.
+fn shell_revisions(data: &Value) -> String {
+    let id = text(data, "id");
+    let rows = list(&data["revisions"])
+        .iter()
+        .map(|revision| {
+            format!(
+                "<li><span class=\"mono detail-list-main\">v{}</span>{}</li>",
+                revision["version"],
+                render::button(
+                    &format!("Revision {}", revision["version"]),
+                    "shell-revision",
+                    &format!("{id}/{}", text(revision, "id"))
+                )
+            )
+        })
+        .collect::<String>();
+    if rows.is_empty() {
+        format!("<p class=\"detail-note\">{}</p>", t("No revisions yet."))
+    } else {
+        section(
+            "Revisions",
+            "",
+            &format!("<ul class=\"detail-list\">{rows}</ul>"),
+        )
+    }
 }
 
 /// The panel of a selected MicroService: the head, four tabs and the open tab. A form replaces it.
