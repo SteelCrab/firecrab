@@ -70,6 +70,9 @@ jobs:
       - name: Shared source development deployment contract
         run: python3 scripts/test-micromanager-dev.py
 
+      - name: Managed update regression checks
+        run: python3 scripts/test-micromanager-update.py
+
       - name: Guest QA failure and cleanup contract
         run: |
           python3 scripts/test-ci-qa-guest.py
@@ -328,6 +331,9 @@ jobs:
 
       - name: Source development deployment contract
         run: python3 scripts/test-micromanager-dev.py
+
+      - name: Managed update regression checks
+        run: python3 scripts/test-micromanager-update.py
 
       - name: Verify hosted-runner diagnostic contract
         run: |

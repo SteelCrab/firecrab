@@ -1,5 +1,6 @@
-# Release inputs for explicit `service install` and `service reinstall`.
-# The CLI embeds this file and saves a validated copy after provisioning.
+# OS/Firecracker defaults and the legacy Firecrab recovery snapshot.
+# Explicit installs replace [firecrab] with the latest stable GitHub release
+# and its verified SHA256SUMS before downloading or stopping any services.
 schema_version = 1
 
 # Editable in <managed-home>/micromanager.toml. Applied on the next service start.

@@ -1168,13 +1168,6 @@ mod tests {
             36002,
         );
         assert_eq!(
-            installation_manifest(&instance.primary_home)
-                .unwrap()
-                .firecrab
-                .version,
-            "v0.2.2"
-        );
-        assert_eq!(
             installation_manifest(&instance.managed_home)
                 .unwrap()
                 .firecrab

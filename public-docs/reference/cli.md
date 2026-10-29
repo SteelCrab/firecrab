@@ -239,10 +239,8 @@ firecrab update --check --json
 sudo firecrab update --apply
 ```
 
-With no flag, `update` performs a check without downloads or elevated privilege.
-A successful check exits `0` whether or not a newer release exists.
-Failed checks exit `1`; JSON retains an `error` and omits `latest`.
-JSON includes release notes when available.
+With no flag, `update` performs a check without downloads or elevated privilege. A successful check exits `0` whether or not a newer release exists.
+Failed checks exit `1`; JSON retains an `error` and omits `latest`. JSON includes release notes when available.
 
 Apply stages a SHA-256-verified host bundle under `$DATADIR/updates/<uuid>`.
 `--apply` displays each stage with a gauge and overall percent.
@@ -255,6 +253,8 @@ Systemd unit files require an installer rerun; see [Operations](../guides/operat
 | `FIRECRAB_RELEASE_API` | GitHub latest-release endpoint |
 | `FIRECRAB_RELEASE_BASE` | GitHub release asset root |
 | `FIRECRAB_LIBC` | Build target (`gnu` or `musl`) |
+
+On macOS and Windows, the same `update --check` and `update --apply` flags target the running managed guest. Apply verifies the latest release installer, upgrades API/CLI/helper/dashboard/units together, and removes development overrides. An active development build blocks apply. Failed installation restores previous development settings; VM data is kept. Native CLI updates use the separate CLI installer. See [macOS](../getting-started/macos.md#service-commands) and [Windows](../getting-started/windows.md#known-limitation).
 
 ## Related
 

@@ -19,6 +19,8 @@ mod manifest;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod os_repair;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod release;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod resource;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod resource_server;
@@ -32,6 +34,8 @@ mod settings_tui;
 mod sleepy;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod snapshot;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod update;
 // Everything but the `wsl.exe` and `schtasks.exe` calls is plain Rust, so the
 // Windows backend also builds and runs its tests on the Linux CI runner.
 #[cfg(any(target_os = "windows", test))]
@@ -51,6 +55,9 @@ pub(crate) use macos::run_guest_command;
 pub use windows::run;
 #[cfg(target_os = "windows")]
 pub(crate) use windows::run_guest_command;
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub use update::run as run_update;
 
 /// Use the activated controller port, preserving the old port until settings
 /// are applied. Explicit API flags and saved remote hosts take precedence.

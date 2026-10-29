@@ -95,6 +95,8 @@ pub struct Artifact {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Release(#[from] super::release::Error),
     #[error("invalid microManager TOML: {0}")]
     Parse(#[from] toml::de::Error),
     #[error("invalid microManager manifest: {0}")]
@@ -117,23 +119,28 @@ impl Manifest {
         Self::parse(BUNDLED)
     }
 
-    /// An explicit installation replaces release pins, but keeps host policies.
+    /// Resolve the latest stable Firecrab once, retaining host policies.
     pub fn for_install(home: &Path) -> Result<Self, Error> {
+        let release = super::release::latest()?.firecrab()?;
+        super::report!("[RELEASE] selected Firecrab {}", release.version);
+        Self::for_install_with_release(home, release)
+    }
+
+    fn for_install_with_release(home: &Path, release: Firecrab) -> Result<Self, Error> {
         let mut manifest = Self::bundled()?;
+        manifest.firecrab = release;
         if let Some(installed) = Self::installed(home)? {
             manifest.runtime = Some(installed.runtime.unwrap_or_default());
         }
+        manifest.validate()?;
         Ok(manifest)
     }
 
     /// Explicit private installs use their own verified release pins.
     #[cfg(any(target_os = "macos", test))]
     pub fn for_development_install(home: &Path) -> Result<Self, Error> {
-        let mut manifest = Self::for_install(home)?;
         let release: DevelopmentRelease = toml::from_str(DEVELOPMENT)?;
-        manifest.firecrab = release.firecrab;
-        manifest.validate()?;
-        Ok(manifest)
+        Self::for_install_with_release(home, release.firecrab)
     }
 
     fn parse(text: &str) -> Result<Self, Error> {
@@ -418,7 +425,9 @@ mod tests {
         loaded
             .verify_provisioned(&marker, "kernel", &loaded.macos.kernel_version)
             .unwrap();
-        let next_install = Manifest::for_install(home.path()).unwrap();
+        let next_install =
+            Manifest::for_install_with_release(home.path(), Manifest::bundled().unwrap().firecrab)
+                .unwrap();
         assert_eq!(next_install.runtime, loaded.runtime);
         assert_eq!(
             next_install.macos.kernel_version,
@@ -429,7 +438,9 @@ mod tests {
     #[test]
     fn development_installs_keep_primary_pins_and_preserve_installed_policies() {
         let home = tempfile::tempdir().unwrap();
-        let primary = Manifest::for_install(home.path()).unwrap();
+        let primary =
+            Manifest::for_install_with_release(home.path(), Manifest::bundled().unwrap().firecrab)
+                .unwrap();
         assert_eq!(primary.firecrab.version, "v0.2.2");
         assert_eq!(Manifest::bundled().unwrap().firecrab.version, "v0.2.2");
 
@@ -477,7 +488,10 @@ mod tests {
         assert_eq!(reinstalled.firecrab.version, "v0.3.1");
         assert_eq!(reinstalled.runtime, installed.runtime);
         assert_eq!(
-            Manifest::for_install(home.path()).unwrap().firecrab.version,
+            Manifest::for_install_with_release(home.path(), Manifest::bundled().unwrap().firecrab)
+                .unwrap()
+                .firecrab
+                .version,
             "v0.2.2"
         );
     }
@@ -495,6 +509,35 @@ mod tests {
             ..parsed
         };
         assert_eq!(with_defaults.fingerprint().unwrap(), original);
+    }
+
+    #[test]
+    fn a_resolved_release_replaces_legacy_pins_without_migrating_installed_data() {
+        let home = tempfile::tempdir().unwrap();
+        let mut old = Manifest::bundled().unwrap();
+        old.runtime.as_mut().unwrap().auto_restart = false;
+        old.save(home.path()).unwrap();
+        let mut release = old.firecrab.clone();
+        release.version = "v9.8.7".into();
+        for artifact in [
+            &mut release.installer,
+            &mut release.aarch64,
+            &mut release.x86_64,
+        ] {
+            artifact.url = artifact.url.replace("v0.2.2", "v9.8.7");
+            artifact.digest = "a".repeat(64);
+        }
+        let selected = Manifest::for_install_with_release(home.path(), release).unwrap();
+        assert_eq!(selected.firecrab.version, "v9.8.7");
+        assert_eq!(selected.runtime, old.runtime);
+        assert_eq!(
+            Manifest::installed(home.path())
+                .unwrap()
+                .unwrap()
+                .firecrab
+                .version,
+            "v0.2.2"
+        );
     }
 
     #[test]

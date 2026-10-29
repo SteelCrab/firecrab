@@ -39,6 +39,9 @@ jobs:
           # Match CI's isolation for helper fork/exec and TCP port-release tests.
           cargo test -p firecrab-helper --release --locked -- --test-threads=1
 
+      - name: Managed update regression checks
+        run: python3 scripts/test-micromanager-update.py
+
       - name: CLI installer contract
         run: bash scripts/test-install-cli-release.sh
 
@@ -308,6 +311,7 @@ jobs:
       - name: M2Image release compliance contracts
         run: |
           shellcheck \
+            scripts/micromanager/update-guest.sh \
             install-cli.sh \
             scripts/build-micromanager-macos.sh \
             scripts/test-install-cli-release.sh \
