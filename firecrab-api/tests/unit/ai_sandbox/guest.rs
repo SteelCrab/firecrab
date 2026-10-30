@@ -1,6 +1,9 @@
 use super::super::files;
 use super::*;
 
+#[path = "guest_crun.rs"]
+mod crun;
+
 async fn local(
     root: &Path,
     action: &str,
@@ -1135,6 +1138,7 @@ async fn guest_transport_recovers_interrupted_output_before_owned_cleanup() {
         String::from_utf8_lossy(&probe.stderr),
         std::fs::read_to_string(dir.path().join("sshd.log")).unwrap()
     );
+    crun::unavailable_engine_keeps_the_attempt_unmodified(&state, &mut saved).await;
     assert!(recover(&state, &saved).await.unwrap().is_none());
     let invocation = saved.guest_command.take();
     assert!(recover(&state, &saved).await.unwrap().is_none());
