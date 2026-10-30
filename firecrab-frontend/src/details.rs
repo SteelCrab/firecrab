@@ -290,6 +290,8 @@ pub fn panel(app: &App) -> String {
             ));
         } else if app.route == "storages" {
             out.push_str(&storage_location(data));
+        } else if app.route == "networks" {
+            out.push_str(&network_details(data));
         } else if app.route == "kernels" {
             out.push_str(&crate::kernels::panel(app, data));
         } else if let Some(body) = crate::advanced::detail(app, data) {
@@ -327,7 +329,12 @@ pub fn panel(app: &App) -> String {
                     .map(|vm| button(&vm.name, "navigate-vm", &vm.id))
                     .collect::<String>()
             };
-            let members = if app.route == "storages" && members.is_empty() {
+            let members = if app.route == "networks" && members.is_empty() {
+                format!(
+                    "<p class=\"detail-note\">{}</p>",
+                    t("No MicroVMs connected.")
+                )
+            } else if app.route == "storages" && members.is_empty() {
                 format!(
                     "<p class=\"detail-note\">{}</p>",
                     t("No MicroVM disks use this location yet.")
@@ -361,6 +368,162 @@ pub fn panel(app: &App) -> String {
         app.detail_result
     ));
     out
+}
+
+fn network_details(data: &Value) -> String {
+    let subnet = &data["subnet"];
+    let fallback = |object: &Value, key: &str, top: &str| {
+        let nested = text(object, key);
+        if nested.is_empty() {
+            text(data, top).to_owned()
+        } else {
+            nested.to_owned()
+        }
+    };
+    let mut settings = String::new();
+    for (label, value) in [
+        ("IPv4 subnet", fallback(subnet, "cidr", "subnetCidr")),
+        ("Gateway", fallback(subnet, "gateway", "gateway")),
+    ] {
+        if !value.is_empty() {
+            settings.push_str(&copyable(label, &value));
+        }
+    }
+    if let Some(enabled) = data["internetEnabled"]
+        .as_bool()
+        .or_else(|| data["nat"]["enabled"].as_bool())
+    {
+        settings.push_str(&property(
+            "Internet access",
+            t(if enabled { "Allowed" } else { "Blocked" }),
+        ));
+    }
+    let dns = match text(data, "dnsMode") {
+        "legacy_forward" => t("Host DNS forwarding"),
+        "private_only" => t("Private DNS only"),
+        other => other,
+    };
+    if !dns.is_empty() {
+        settings.push_str(&property("DNS mode", dns));
+    }
+    if let (Some(used), Some(total)) = (
+        subnet["allocatedAddresses"].as_u64(),
+        subnet["usableAddresses"].as_u64(),
+    ) {
+        settings.push_str(&property(
+            "IPv4 addresses used",
+            &format!("{used} / {total}"),
+        ));
+    }
+    let mut html = section(
+        "Network settings",
+        "",
+        &format!("<dl class=\"props\">{settings}</dl>"),
+    );
+    let mut ipv6 = String::new();
+    for (label, value) in [
+        ("IPv6 subnet", fallback(subnet, "ipv6Cidr", "ipv6Cidr")),
+        (
+            "IPv6 gateway",
+            fallback(subnet, "ipv6Gateway", "ipv6Gateway"),
+        ),
+        (
+            "IPv6 address mode",
+            fallback(subnet, "ipv6AddressMode", "ipv6AddressMode"),
+        ),
+        (
+            "IPv6 outbound",
+            fallback(subnet, "ipv6Egress", "ipv6Egress"),
+        ),
+    ] {
+        if !value.is_empty() {
+            let display = match value.as_str() {
+                "slaac" => "SLAAC",
+                "dhcpv6" => "DHCPv6",
+                "nat66" => "NAT66",
+                "direct" => t("Direct routing"),
+                _ => &value,
+            };
+            ipv6.push_str(&property(label, display));
+        }
+    }
+    if !ipv6.is_empty() {
+        html.push_str(&section(
+            "IPv6",
+            "",
+            &format!("<dl class=\"props\">{ipv6}</dl>"),
+        ));
+    }
+    let firewall = &data["firewall"];
+    let mut security = String::new();
+    for (key, label, yes, no) in [
+        (
+            "eastWestBlocked",
+            "Within this network",
+            "Blocked",
+            "Allowed",
+        ),
+        (
+            "crossNetworkBlocked",
+            "Other networks",
+            "Blocked",
+            "Allowed",
+        ),
+        (
+            "antiSpoofing",
+            "IP spoofing protection",
+            "Enabled",
+            "Disabled",
+        ),
+    ] {
+        if let Some(value) = firewall[key].as_bool() {
+            security.push_str(&property(label, t(if value { yes } else { no })));
+        }
+    }
+    let egress = match text(firewall, "defaultEgress") {
+        "internet" => t("Internet"),
+        "isolated" => t("Isolated"),
+        other => other,
+    };
+    if !egress.is_empty() {
+        security.push_str(&property("Default VM outbound", egress));
+    }
+    if !security.is_empty() {
+        html.push_str(&section(
+            "Traffic and security",
+            "",
+            &format!("<dl class=\"props\">{security}</dl>"),
+        ));
+    }
+    let mut technical = String::new();
+    for (label, value) in [
+        ("Network ID", text(data, "id")),
+        ("Bridge", text(&data["bridge"], "name")),
+        ("DHCP service", text(subnet, "dhcp")),
+        ("Uplink", text(&data["nat"], "uplink")),
+        ("NAT source subnet", text(&data["nat"], "sourceCidr")),
+        (
+            "IPv6 NAT source subnet",
+            text(&data["nat"], "ipv6SourceCidr"),
+        ),
+    ] {
+        if !value.is_empty() {
+            technical.push_str(&copyable(label, value));
+        }
+    }
+    if let Some(count) = data["bridge"]["attachedTaps"].as_u64() {
+        technical.push_str(&property("Active VM interfaces", &count.to_string()));
+    }
+    if let Some(enabled) = data["nat"]["enabled"].as_bool() {
+        technical.push_str(&property(
+            "NAT",
+            t(if enabled { "Enabled" } else { "Disabled" }),
+        ));
+    }
+    if !technical.is_empty() {
+        html.push_str(&format!("<details id=\"network-advanced\" class=\"network-advanced\"><summary>{}</summary><dl class=\"props\">{technical}</dl></details>", escape(t("Technical details"))));
+    }
+    html
 }
 
 fn storage_location(data: &Value) -> String {

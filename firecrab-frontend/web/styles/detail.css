@@ -52,6 +52,9 @@
 .oci-inspection-details { margin-top: .5rem; padding-top: .5rem; border-top: 1px solid var(--border); }
 .oci-inspection-details summary { width: fit-content; color: var(--text-2); font-size: .6875rem; cursor: pointer; }
 .oci-inspection-details[open] summary { margin-bottom: .625rem; }
+.network-advanced { margin: 0 0 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-soft); }
+.network-advanced summary { width: fit-content; color: var(--text-2); font-size: .75rem; cursor: pointer; }
+.network-advanced[open] summary { margin-bottom: .75rem; }
 
 /* Sections have no frame: a soft rule under each, none under the last. */
 .detail-sec { margin: 0 0 1rem; padding: 0 0 1rem; border: 0; border-bottom: 1px solid var(--border-soft); background: none; }

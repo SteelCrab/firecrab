@@ -404,6 +404,42 @@ test('network, storage and Shell creation send the expected wire fields', async 
   }
 });
 
+test('network detail groups IPv4, security and technical information and shows IPv6 only when configured', async () => {
+  const details = {
+    id:'network-1', name:'default', subnet:{cidr:'10.42.0.0/16', gateway:'10.42.0.1', usableAddresses:65533, allocatedAddresses:2, dhcp:'dnsmasq on mnb-test'},
+    bridge:{name:'mnb-test', attachedTaps:1}, nat:{enabled:true, uplink:'eth0', sourceCidr:'10.42.0.0/16'},
+    firewall:{eastWestBlocked:false, crossNetworkBlocked:true, antiSpoofing:true, defaultEgress:'internet'}, vms:[],
+  };
+  fixture.handlers.set('GET /api/micro-networks/network-1', ({ send }) => send(200, details));
+  await open('networks');
+  await page.getByRole('button', { name:'Details', exact:true }).click();
+  const panel = page.getByRole('complementary', { name:'MicroNetwork detail' });
+  const settings = panel.getByRole('region', { name:'Network settings' });
+  await expect(settings).toContainText('10.42.0.0/16');
+  await expect(settings).toContainText('10.42.0.1');
+  await expect(settings).toContainText('2 / 65533');
+  const security = panel.getByRole('region', { name:'Traffic and security' });
+  await expect(security.locator('.wasm-property').filter({hasText:'Within this network'})).toContainText('Allowed');
+  await expect(security.locator('.wasm-property').filter({hasText:'Other networks'})).toContainText('Blocked');
+  await expect(panel.getByRole('heading', { name:'IPv6', exact:true })).toHaveCount(0);
+  await expect(panel).toContainText('No MicroVMs connected.');
+  await expect(panel.locator('#network-advanced')).not.toHaveAttribute('open', '');
+  await panel.locator('#network-advanced > summary').click();
+  await expect(panel.locator('#network-advanced')).toContainText('mnb-test');
+  await page.setViewportSize({width:1360, height:900});
+  await expect(panel.locator('#network-advanced')).toHaveAttribute('open', '');
+
+  Object.assign(details.subnet, {ipv6Cidr:'fd00:42::/64', ipv6Gateway:'fd00:42::1', ipv6AddressMode:'slaac', ipv6Egress:'nat66'});
+  await page.reload();
+  await expect(page.locator('#content')).toHaveAttribute('data-loaded', 'true');
+  await page.getByRole('button', { name:'Details', exact:true }).click();
+  const ipv6 = panel.getByRole('region', { name:'IPv6', exact:true });
+  await expect(ipv6).toContainText('fd00:42::/64');
+  await expect(ipv6).toContainText('fd00:42::1');
+  await expect(ipv6).toContainText('SLAAC');
+  await expect(ipv6).toContainText('NAT66');
+});
+
 test('MicroService deployment collects hostPort instead of sending unsupported replicas', async () => {
   fixture.handlers.set('GET /api/micro-services/service-1/deployment', ({ send }) => send(200, null));
   await open('services');

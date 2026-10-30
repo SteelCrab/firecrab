@@ -310,6 +310,8 @@ fn panel_body() -> Option<Element> {
         .flatten()
 }
 fn render_detail(app: &Shared) {
+    let network_advanced_open =
+        element("network-advanced").is_some_and(|node| node.has_attribute("open"));
     let kernel_log_open =
         element("kernel-log-details").is_some_and(|node| node.has_attribute("open"));
     let kernel_log = element("kernel-install-log").map(|log| {
@@ -378,6 +380,12 @@ fn render_detail(app: &Shared) {
             }
             if more_open && let Some(menu) = element("vm-more-actions") {
                 let _ = menu.set_attribute("open", "");
+            }
+            if same_view
+                && network_advanced_open
+                && let Some(details) = element("network-advanced")
+            {
+                let _ = details.set_attribute("open", "");
             }
             if same_view
                 && scroll_top > 0
