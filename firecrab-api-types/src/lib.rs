@@ -10,6 +10,8 @@ use uuid::Uuid;
 
 mod queues;
 pub use queues::*;
+mod code_workspaces;
+pub use code_workspaces::*;
 mod pool;
 pub use pool::*;
 mod cluster;

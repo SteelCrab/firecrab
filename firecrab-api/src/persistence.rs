@@ -20,6 +20,7 @@ use crate::model::{Lease, VmRecord, VmState};
 mod block_storage;
 mod cluster;
 mod cluster_services;
+pub(crate) mod code_workspaces;
 mod database_services;
 mod pools;
 mod queues;
@@ -806,6 +807,7 @@ impl Store {
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
         conn.execute_batch(ai_sandbox::SCHEMA)?;
+        conn.execute_batch(code_workspaces::SCHEMA)?;
         conn.execute_batch(sandbox_tunnels::SCHEMA)?;
         conn.execute_batch(sandbox_environments::SCHEMA)?;
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;

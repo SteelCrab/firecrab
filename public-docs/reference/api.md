@@ -375,6 +375,27 @@ use `400 validation_failed` with a `cloudflare` field. An unavailable helper use
 See [token issuance and connection](../guides/cloudflare-tunnel.md) for permissions
 and manual verification. Actual public access requires a real Cloudflare domain.
 
+## CODE workspace configuration
+
+These operator-only routes persist configuration for #556. They create no VM,
+repository checkout, editor, or agent. Account references reuse existing Pipe AUTH
+and Pipe AI metadata. Read responses recompute account observations from a single
+database snapshot and never claim that an agent is authenticated.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/api/code/workspaces` | List configuration records by case-insensitive name |
+| GET | `/api/code/workspaces/{id}` | Read configuration, revision, timestamps, and current `connections` observations |
+| PUT | `/api/code/workspaces/{id}` | Save `{expectedRevision, spec}`; revision 0 creates, later writes must match the saved revision |
+| DELETE | `/api/code/workspaces/{id}?expectedRevision=N` | Delete only the matching configuration revision; return `204` |
+
+The specification contains `name`, `github: {account, owner, repository, branch}`,
+`runtime`, `resources: {cpu, ram, diskGb}`, and an optional
+`agent: {agent, connectionId}`. RAM is in MiB; disk is in GiB.
+Credentials and caller-supplied runtime/readiness fields are rejected.
+See [CODE workspace configuration](../guides/code-workspaces.md) for eligibility,
+connection states, limits, conflict/retry behavior, and the remaining integration work.
+
 ## Pipe AI
 
 These routes share the existing host REST policy and a 60-second request deadline.
