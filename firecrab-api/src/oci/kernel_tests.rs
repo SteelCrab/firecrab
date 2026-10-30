@@ -89,6 +89,19 @@ fn stable_selection_rejects_release_candidates_and_unexpected_source_hosts() {
 }
 
 #[test]
+fn recent_versions_use_published_releases_and_numeric_order() {
+    let digest = "a".repeat(64);
+    let sums = format!(
+        "{digest}  linux-7.1.9.tar.xz\n{digest}  linux-7.2.tar.xz\n{digest}  linux-7.2.1.tar.xz\n{digest}  linux-7.2.10.tar.xz\n{digest}  linux-7.3-rc1.tar.xz\ninvalid  linux-7.2.2.tar.xz\n"
+    );
+    assert_eq!(
+        kernel::parse_recent_versions(sums.as_bytes(), "7.2.1").unwrap(),
+        ["7.2.1", "7.2", "7.1.9"]
+    );
+    assert!(kernel::parse_recent_versions(sums.as_bytes(), "7.2.2").is_err());
+}
+
+#[test]
 fn source_checksum_matches_the_exact_archive_name() {
     let digest = "a".repeat(64);
     let sums = format!(
@@ -177,6 +190,16 @@ async fn kernel_catalog_reports_current_stable_and_independent_local_versions() 
         install_fixture_kernel(root, Architecture::HOST, version).await;
     }
     let (url, server) = fixture_server(releases("7.2.13")).await;
+    let cache = root.join(".oci/kernel");
+    tokio::fs::create_dir_all(&cache).await.unwrap();
+    let digest = "a".repeat(64);
+    let sums = ["7.2.13", "7.2.12", "7.2.11", "7.2.10"]
+        .iter()
+        .map(|version| format!("{digest}  linux-{version}.tar.xz\n"))
+        .collect::<String>();
+    tokio::fs::write(cache.join("sha256sums-v7.asc"), sums)
+        .await
+        .unwrap();
     let templates = TemplateRegistry::from_specs(root, std::iter::empty()).unwrap();
     let downloads = ImageInstallTracker::with_base_url(&url);
     let catalog = crate::kernel_manager::list(root, &templates, &downloads)
@@ -187,14 +210,14 @@ async fn kernel_catalog_reports_current_stable_and_independent_local_versions() 
             .iter()
             .map(|entry| entry.version.as_str())
             .collect::<Vec<_>>(),
-        ["7.2.13", "7.2.12", "7.2.2"]
+        ["7.2.13", "7.2.12", "7.2.11", "7.2.2"]
     );
     assert!(!catalog[0].installed);
     assert!(catalog[0].image_sha256.is_empty());
     assert!(
-        catalog[1..]
-            .iter()
-            .all(|entry| entry.installed && entry.image_sha256.len() == 64)
+        [1, 3]
+            .into_iter()
+            .all(|index| catalog[index].installed && catalog[index].image_sha256.len() == 64)
     );
     assert!(catalog.iter().all(|entry| {
         entry
