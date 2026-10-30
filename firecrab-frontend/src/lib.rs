@@ -697,12 +697,21 @@ fn load_route(app: Shared) {
                     state.vms = vms;
                 }
                 state.cache.insert(path.into(), value);
+                let volume_storage = path == "/api/storage"
+                    && state
+                        .form
+                        .as_ref()
+                        .is_some_and(|form| form.path == volumes::ENDPOINT);
                 let image_form = state.route == "images" && state.form.is_some();
                 let visible =
                     matches!(state.route.as_str(), "host" | "images" | "volumes" | "pipe")
                         && state.form.is_none();
                 drop(state);
-                if image_form {
+                if volume_storage {
+                    advanced::capture_form(&app);
+                    workflows::prepare_form(&app);
+                    render_editor(&app);
+                } else if image_form {
                     render_image_list(&app);
                 } else if visible {
                     render_content(&app);

@@ -1081,7 +1081,7 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
             vec![
                 Field::new("name", "Name", "text", ""),
                 Field::new("sizeGib", "Size (GiB)", "number", 10),
-                Field::new("storageRoot", "Storage", "nullable-select", "").optional(),
+                Field::new("storageRoot", "Storage", "select", ""),
             ],
             "volumes",
         ),
