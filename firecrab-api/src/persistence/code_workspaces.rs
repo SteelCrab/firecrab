@@ -23,6 +23,7 @@ pub(crate) enum WriteResult {
     Written(Box<CodeWorkspace>),
     Conflict,
     NameTaken,
+    RuntimeBound,
     Invalid(BTreeMap<String, String>),
 }
 
@@ -31,6 +32,7 @@ pub(crate) enum DeleteResult {
     Deleted,
     Missing,
     Conflict,
+    RuntimeBound,
 }
 
 fn corrupt() -> PersistenceError {
@@ -170,6 +172,9 @@ impl Store {
         if current_revision != input.expected_revision {
             return Ok(WriteResult::Conflict);
         }
+        if !super::code_runtime::configuration_allowed(&tx, id, &input.spec)? {
+            return Ok(WriteResult::RuntimeBound);
+        }
         let taken: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM code_workspaces WHERE name=?1 COLLATE NOCASE AND id<>?2)",
             params![input.spec.name, id.to_string()],
@@ -240,6 +245,13 @@ impl Store {
         let revision = u64::try_from(revision).map_err(|_| corrupt())?;
         if revision != expected_revision {
             return Ok(DeleteResult::Conflict);
+        }
+        if tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM code_runtimes WHERE workspace_id=?1)",
+            [id.to_string()],
+            |r| r.get::<_, bool>(0),
+        )? {
+            return Ok(DeleteResult::RuntimeBound);
         }
         tx.execute("DELETE FROM code_workspaces WHERE id=?1", [id.to_string()])?;
         tx.commit()?;

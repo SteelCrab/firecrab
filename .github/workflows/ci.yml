@@ -70,6 +70,9 @@ jobs:
       - name: IaC v0.4.0 service inventory
         run: python3 scripts/check-iac-inventory.py
 
+      - name: CODE guest checkout and recovery contract
+        run: python3 scripts/test-code-guest.py
+
       - name: Shared source development deployment contract
         run: python3 scripts/test-micromanager-dev.py
 

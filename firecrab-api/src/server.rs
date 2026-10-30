@@ -204,6 +204,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             crate::pool::guard::reject_pool_owned,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::code_runtime::guard::reject_vm_mutation,
         ));
 
     let rest = Router::new()
@@ -901,6 +905,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
 
     // Registry authentication and manifest GETs retain their bounded inspection deadline.
     let inspection = Router::new()
+        .merge(handlers::code_workspaces::runtime::routes())
         .route(
             "/api/pipe/database-rabbitmq",
             axum::routing::put(handlers::pipe_database_events::rabbitmq_save),
@@ -2088,6 +2093,10 @@ mod code_workspaces_tests;
 #[cfg(test)]
 #[path = "server_code_verification_tests.rs"]
 mod code_verification_tests;
+
+#[cfg(test)]
+#[path = "server_code_runtime_tests.rs"]
+mod code_runtime_tests;
 
 #[cfg(test)]
 #[path = "server_pipe_ai_tests.rs"]
