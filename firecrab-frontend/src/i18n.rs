@@ -508,6 +508,7 @@ pub fn t(value: &str) -> &str {
         "Status unavailable" => "상태 확인 불가",
         "Checking status…" => "상태 확인 중…",
         "Installing kernel" => "커널 설치 중",
+        "Not installed" => "설치 안 됨",
         "Installation failed" => "설치 실패",
         "Installation log" => "설치 로그",
         "Downloaded" => "다운로드됨",
