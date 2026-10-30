@@ -377,7 +377,7 @@ and manual verification. Actual public access requires a real Cloudflare domain.
 
 ## CODE workspace configuration
 
-These operator-only routes persist configuration for #556. They create no VM,
+These operator-only routes persist CODE configuration. They create no VM,
 repository checkout, editor, or agent. Account references reuse existing Pipe AUTH
 and Pipe AI metadata. Read responses recompute account observations from a single
 database snapshot and never claim that an agent is authenticated.
@@ -400,6 +400,24 @@ Explicit verification returns independent `github` and `ai` results with secret-
 failure reasons. It rejects stale revisions before provider requests and rejects
 configuration/account changes observed during requests with `409 code_workspace_bindings_changed`.
 The report does not verify clone success, model entitlement, or CLI-agent login.
+
+## CODE MicroVM runtime
+
+These operator-only routes use existing VM lifecycle APIs and a pinned guest SSH
+transport. Placement uses an installed image, existing internet-enabled network,
+and existing storage root. Lifecycle requests return pollable durable operations.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/api/code/workspaces/{id}/runtime` | Read durable operation state with fresh VM observations |
+| POST | `/api/code/workspaces/{id}/runtime` | Provision `{expectedRevision, template, microNetworkId, storageRoot}`; return `202` |
+| POST | `/api/code/workspaces/{id}/runtime/start` | Start/reconcile with `{expectedRevision}`; preserve the checkout and VM ID |
+| POST | `/api/code/workspaces/{id}/runtime/stop` | Confirm guest sync, then stop; return `202`, retain data |
+| POST | `/api/code/workspaces/{id}/runtime/detach` | Release a stopped/absent VM binding; retain the VM and disk |
+
+See [CODE MicroVM runtime](../guides/code-runtime.md) for image requirements,
+checkout credentials, phase meanings, restart recovery, ownership fences and
+retention. `ready` is a runtime/worktree observation and does not authenticate an agent.
 
 ## Pipe AI
 

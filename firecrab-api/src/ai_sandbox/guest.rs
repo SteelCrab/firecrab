@@ -177,6 +177,22 @@ fn ssh(state: &AppState, binding: &Binding, attempt: &Path) -> io::Result<Comman
     Ok(cmd)
 }
 
+/// CODE sends only a server-authored bootstrap over the existing pinned SSH transport.
+pub(crate) async fn code_bootstrap(
+    state: &AppState,
+    binding: &Binding,
+    directory: &Path,
+    input: Vec<u8>,
+) -> io::Result<Output> {
+    capture(
+        ssh(state, binding, directory)?,
+        input,
+        8192,
+        Duration::from_secs(900),
+    )
+    .await
+}
+
 async fn read_limited(mut reader: impl AsyncRead + Unpin, limit: usize) -> io::Result<Vec<u8>> {
     let mut output = Vec::new();
     let mut chunk = [0u8; 8192];

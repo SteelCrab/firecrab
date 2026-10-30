@@ -25,6 +25,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Add durable CODE MicroVM provisioning, start/stop and repository checkout.
+  Pin image placement, retain working files across resume, recover pending
+  operations, and protect bound VMs from ordinary mutation routes (#560).
 - Add an explicit CODE repository and AI AUTH verification API. Check the selected
   GitHub login and exact branch, verify provider credentials, refresh ChatGPT
   sessions without restoring removed accounts, and reject stale results (#556).

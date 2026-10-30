@@ -16,6 +16,7 @@ use axum::{
     http::StatusCode,
 };
 use firecrab_api_types::{CodeWorkspace, CodeWorkspaceDelete, CodeWorkspaceWrite};
+pub mod runtime;
 mod verification;
 pub use verification::verify;
 
@@ -44,6 +45,14 @@ fn conflict(id: RequestId) -> AppError {
     AppError::conflict(
         "code_workspace_revision_conflict",
         "Workspace changed; read its current revision before retrying",
+        id.0,
+    )
+}
+
+fn runtime_bound(id: RequestId) -> AppError {
+    AppError::conflict(
+        "code_runtime_bound",
+        "Stop and detach the runtime before changing its repository, tools, resources or deleting configuration",
         id.0,
     )
 }
@@ -90,6 +99,7 @@ pub async fn save(
     {
         WriteResult::Written(workspace) => Ok(Json(*workspace)),
         WriteResult::Conflict => Err(conflict(id)),
+        WriteResult::RuntimeBound => Err(runtime_bound(id)),
         WriteResult::NameTaken => Err(AppError::conflict(
             "code_workspace_name_taken",
             "Workspace name is already in use",
@@ -138,5 +148,6 @@ pub async fn delete(
         DeleteResult::Deleted => Ok(StatusCode::NO_CONTENT),
         DeleteResult::Missing => Err(AppError::not_found(id.0)),
         DeleteResult::Conflict => Err(conflict(id)),
+        DeleteResult::RuntimeBound => Err(runtime_bound(id)),
     }
 }

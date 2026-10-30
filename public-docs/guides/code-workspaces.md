@@ -2,7 +2,8 @@
 
 CODE persists workspace configuration and references to existing accounts.
 An explicit verification API checks repository reads and provider credentials.
-It does not provision a VM, clone a repository, launch an editor, or run an agent.
+Configuration and verification requests allocate no VM or agent resources.
+Use the separate [CODE runtime API](code-runtime.md) to provision a MicroVM and clone the repository.
 The local CODE UI mockup remains separate from these configuration APIs.
 
 ## Access and storage
@@ -111,6 +112,7 @@ A duplicate name returns `409 code_workspace_name_taken`.
 Invalid syntax, missing account references, or incompatible authentication returns `400 validation_failed` with field names.
 
 Delete metadata with `DELETE /api/code/workspaces/{id}?expectedRevision=1`, using the current revision.
+When a runtime is bound, stop and detach it first; bound configuration deletion returns `409 code_runtime_bound`.
 Deletion requires a positive revision and returns `204`; an absent record returns `404`.
 It remains possible to remove configuration after an account is disconnected.
 Deletion does not disconnect GitHub or AI AUTH accounts.

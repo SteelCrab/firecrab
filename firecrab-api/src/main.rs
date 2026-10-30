@@ -4,6 +4,7 @@ mod block_storage;
 mod bootstrap;
 mod ci_deploy;
 mod cluster;
+mod code_runtime;
 mod code_verification;
 mod console;
 mod console_replay;
@@ -180,6 +181,7 @@ async fn run() -> Result<(), StartupError> {
     service_runtime::recover(&state).await;
     queues::recover(&state).await;
     ai_sandbox::environment::start_maintenance(state.clone());
+    code_runtime::start_maintenance(state.clone());
     service_observation::start(state.clone());
     service_runtime::recovery::start(state.clone());
     service_runtime::deploy::rotation::start(state.clone());
