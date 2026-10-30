@@ -147,5 +147,7 @@ VM rebinding/deletion, disk loss and matched checkpoint integrity. Volume-header
 runtime records in those tests are fixtures. The Linux generated-shell test exercises
 real tar/base64/hash tools with fixture mount metadata; it is not a live MicroVM proof.
 Real MicroVM stop/start and controller-restart acceptance must be recorded separately.
+Use the [isolated Linux/KVM recovery gate](../development/project-workspace-recovery-qa.md)
+to record real database, volume, runtime, and file identities.
 See [Persistent data volumes](volumes.md) for the existing volume lifecycle and
 [Storage](storage.md#backup-and-retention) for controller-level backup requirements.

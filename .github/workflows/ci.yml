@@ -103,6 +103,9 @@ jobs:
       - name: Sandbox live QA evidence and ownership guards
         run: python3 scripts/test-ci-qa-ai-sandbox.py
 
+      - name: Project workspace live QA ownership guards
+        run: python3 scripts/test-ci-qa-project-workspace.py
+
       - name: Sandbox recovery QA ownership and fault guards
         run: python3 scripts/test-ci-qa-ai-sandbox-recovery.py
 
