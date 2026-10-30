@@ -34,6 +34,7 @@ mod pipe_databases;
 mod pipe_storage;
 mod pool;
 mod process_metrics;
+mod project_workspace;
 mod queues;
 mod reconcile;
 mod resource_limits;

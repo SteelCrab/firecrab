@@ -803,6 +803,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             post(handlers::sandbox_tunnels::retarget),
         )
         .merge(handlers::sandbox_environments::routes())
+        .merge(crate::project_workspace::routes())
         .merge(handlers::sandbox_guest::routes())
         .route(
             "/api/ai-sandbox/tunnel-addresses",

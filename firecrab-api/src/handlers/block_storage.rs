@@ -170,7 +170,11 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn require_inactive_user_vm(state: &AppState, id: Uuid, request: Uuid) -> Result<(), AppError> {
+pub(crate) fn require_inactive_user_vm(
+    state: &AppState,
+    id: Uuid,
+    request: Uuid,
+) -> Result<(), AppError> {
     if state
         .store
         .cluster_worker(id)
