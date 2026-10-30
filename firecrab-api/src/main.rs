@@ -45,7 +45,6 @@ mod service_log_collection;
 mod service_log_retention;
 mod service_observation;
 mod service_runtime;
-mod service_security;
 mod shells;
 mod stack_source;
 mod state;
