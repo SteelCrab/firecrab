@@ -23,13 +23,6 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
 
-### Added
-
-- Define the IaC coverage contract for all services shipped through v0.4.0,
-  including controller, Pipe and Sandbox configuration. A frozen API inventory
-  and CI check track missing Stack and Terraform coverage without claiming it
-  is implemented (#548).
-
 ## [0.4.1] - 2026-10-30
 
 Hotfix for macOS and Windows managed installations and updates.
