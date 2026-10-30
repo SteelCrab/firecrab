@@ -2455,9 +2455,9 @@ fn pipe(app: &App, card: &str) -> String {
     let mut out = "<div class=\"wasm-actions\">".to_string();
     match card {
         "auth" => {
+            out.push_str(&button("Connect Firecrab", "create", "firecrab"));
             out.push_str(&button("Connect GitHub", "create", "github"));
             out.push_str(&button("Connect AWS", "create", "aws"));
-            out.push_str(&button("Connect Firecrab", "create", "firecrab"));
         }
         "route" => {
             out.push_str(&button("Edit routes", "create", "route"));
@@ -2515,15 +2515,18 @@ fn pipe(app: &App, card: &str) -> String {
         ));
     }
     match card {
-        "auth" => out.push_str(&resource_table(
-            app,
-            &app.resource,
-            &[
-                ("provider", "Provider"),
-                ("account", "Account"),
-                ("registry", "Registry"),
-            ],
-        )),
+        "auth" => {
+            out.push_str(&crate::auth_setup::overview(app.locale == "ko"));
+            out.push_str(&resource_table(
+                app,
+                &app.resource,
+                &[
+                    ("provider", "Provider"),
+                    ("account", "Account"),
+                    ("registry", "Registry"),
+                ],
+            ));
+        }
         "registry" => out.push_str(&resource_table(
             app,
             &app.resource,

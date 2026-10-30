@@ -117,3 +117,21 @@
 @media (max-width: 767px) {
   .wasm-panel:has(.storage-detail-purpose, .storage-form-help) .detail-head { padding-left: 3.25rem; }
 }
+
+/* Provider instructions stay available while entering account credentials. */
+.auth-setup-overview { margin: 1.25rem 0; }
+.auth-setup-overview > h2 { margin: 0 0 .75rem; font-size: .9375rem; font-weight: 650; }
+.auth-setup-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr)); gap: .75rem; align-items: start; }
+.auth-setup { min-width: 0; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-subtle); word-break: keep-all; overflow-wrap: anywhere; }
+.auth-setup h3 { margin: 0 0 .75rem; font-size: .875rem; font-weight: 650; }
+.auth-setup summary { min-height: 44px; padding-block: .25rem; cursor: pointer; font-size: .8125rem; line-height: 1.6; font-weight: 600; }
+.auth-setup-steps { display: grid; gap: .5rem; margin: 0; padding-left: 1.25rem; font-size: .75rem; line-height: 1.6; }
+.auth-setup-steps li { padding-left: .125rem; }
+.auth-setup-steps li::marker { font-weight: 650; color: var(--text-3); }
+.auth-setup[open] > .auth-setup-steps { margin-top: .75rem; }
+.auth-setup-note { margin: .75rem 0 0; color: var(--text-2); font-size: .71875rem; line-height: 1.6; }
+.auth-setup-links { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin-top: .75rem; font-size: .71875rem; }
+.auth-setup-links a { min-width: 0; }
+@media (max-width: 767px) {
+  .wasm-panel:has(#editor .auth-setup) .detail-head { padding-left: 3.25rem; }
+}

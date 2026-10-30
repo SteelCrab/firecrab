@@ -165,9 +165,7 @@ impl Form {
         }
         let domain_deploy =
             self.title == "Deploy MicroService" && !text(&self.base, "domain").is_empty();
-        if self.path == "/api/pipe/auth/firecrab" {
-            html.push_str(&format!("<p class=\"wasm-wide\">{} <a href=\"https://console.firecrab.dev/#account\" target=\"_blank\" rel=\"noreferrer\">console.firecrab.dev</a>. {}</p>",crate::i18n::t("Issue an account integration token at"),crate::i18n::t("Open Account integration. The token verifies your account ID and email.")));
-        }
+        html.push_str(&crate::auth_setup::form_guide(&self.path));
         if domain_deploy {
             html.push_str(&format!("<p class=\"wasm-wide\">{} · Healthy replicas will connect to this domain automatically.</p><details class=\"form-advanced wasm-wide\"><summary>{}</summary>",escape(text(&self.base,"domain")),crate::i18n::t("Advanced settings")));
         }

@@ -1,5 +1,6 @@
 mod advanced;
 mod api;
+mod auth_setup;
 mod databases;
 mod deploy;
 mod details;
