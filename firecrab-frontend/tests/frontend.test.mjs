@@ -339,7 +339,7 @@ test('VM lifecycle actions refresh server state and deletion requires confirmati
 
 test('all thirteen main destinations and eight Pipe destinations load without React', async () => {
   await open();
-  for (const [route, title] of [['pools','Pools'],['schedules','Schedules'],['security-groups','Security groups'],['secrets','Secrets'],['services','MicroService'],['networks','Networks'],['storages','Storage'],['images','Images'],['kernels','Kernels'],['shells','Shells'],['host','Host'],['pipe','Pipe'],['vms','MicroVM']]) {
+  for (const [route, title] of [['pools','Pools'],['schedules','Schedules'],['security-groups','Security groups'],['secrets','Secrets'],['services','MicroService'],['networks','Networks'],['storages','VM disk storage'],['images','Images'],['kernels','Kernels'],['shells','Shells'],['host','Host'],['pipe','Pipe'],['vms','MicroVM']]) {
     await page.locator(`nav a.sidebar-item[href="#/${route}"]`).click();
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(title);
     await expect(page.locator('#content')).toHaveAttribute('data-loaded', 'true');
@@ -354,13 +354,13 @@ test('all thirteen main destinations and eight Pipe destinations load without Re
 test('network, storage and Shell creation send the expected wire fields', async () => {
   for (const [route, values, path] of [
     ['networks', { Name: 'net-from-wasm', 'IPv4 subnet (CIDR)': '172.31.30.0/24' }, '/api/micro-networks'],
-    ['storages', { Name: 'data', Directory: '/srv/data' }, '/api/micro-storages'],
+    ['storages', { Name: 'data', 'Host directory': '/srv/data' }, '/api/micro-storages'],
     ['shells', { Name: 'setup', 'Shell script': '#!/bin/sh\necho hello' }, '/api/shells'],
   ]) {
     await open(route);
-    await page.getByRole('button', { name: { networks: 'New network', storages: 'New storage', shells: 'New shell' }[route], exact: true }).click();
+    await page.getByRole('button', { name: { networks: 'New network', storages: 'Register disk location', shells: 'New shell' }[route], exact: true }).click();
     for (const [label, value] of Object.entries(values)) await page.getByLabel(label, { exact: true }).fill(value);
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.locator('#editor').getByRole('button', { name: route === 'storages' ? 'Register' : 'Save', exact: true }).click();
     await expect(page.locator('#editor')).toHaveCount(0);
     assert.equal(mutation(path).body.name, Object.values(values)[0]);
   }
@@ -404,7 +404,7 @@ test('image registration and OCI import expose completion', async () => {
   assert.deepEqual(mutation('/api/microregistry/register').body, { alias: 'ubuntu-24.04', version: '2026.09.1' });
   await page.getByRole('button', { name: 'Import OCI image', exact: true }).click();
   await page.getByLabel('OCI reference', { exact: true }).fill('nginx:1.27');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.locator('#editor').getByRole('button', { name: 'Import', exact: true }).click();
   await expect(page.locator('#editor')).toHaveCount(0);
   assert.equal(mutation('/api/oci/import').body.reference, 'nginx:1.27');
 });
@@ -675,7 +675,7 @@ test('panel resize persists, tooltip is shared, and narrow screens start without
   await detail(0);
   await page.getByRole('separator', { name: 'Resize detail panel' }).focus();
   await page.keyboard.press('ArrowLeft');
-  assert.equal(await page.evaluate(() => localStorage.getItem('firecrab.detailPanelWidth')), '400');
+  assert.equal(await page.evaluate(() => localStorage.getItem('firecrab.detailPanelWidth')), '600');
   await page.locator('[data-vm-tooltip]').first().hover();
   await expect(page.getByRole('tooltip')).toContainText('The VM is running.');
   await expect(page.getByRole('tooltip')).toHaveCount(1);
