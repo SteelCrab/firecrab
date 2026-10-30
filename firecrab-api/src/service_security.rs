@@ -86,6 +86,9 @@ pub(crate) async fn get(
     }))
 }
 
+/// Explicit, operator-requested explanation of aggregate activity.
+pub(crate) use analysis::explain;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +187,3 @@ mod tests {
         assert_eq!(result["cveScan"], "unavailable");
     }
 }
-
-/// Explicit, operator-requested explanation of aggregate activity.
-pub(crate) use analysis::explain;
