@@ -7,6 +7,7 @@ use crate::{
     render_content, render_editor, render_messages, set_html,
 };
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{Element, FormData, HtmlFormElement, HtmlInputElement, HtmlSelectElement};
@@ -17,6 +18,24 @@ pub struct State {
     metrics: Value,
     reveal: Option<(String, f64)>,
     reveal_generation: u64,
+    setup: Setup,
+    errors: BTreeMap<String, String>,
+}
+struct Setup {
+    network: String,
+    cpu: String,
+    ram: String,
+    disk: String,
+}
+impl Default for Setup {
+    fn default() -> Self {
+        Self {
+            network: String::new(),
+            cpu: "4".into(),
+            ram: "4096".into(),
+            disk: "8".into(),
+        }
+    }
 }
 fn title(value: &str) -> String {
     let mut chars = value.chars();
@@ -30,7 +49,8 @@ fn tr(ko: bool, en: &'static str, local: &'static str) -> &'static str {
 }
 fn input(name: &str, label: &str, value: &str, min: u32, max: u32) -> String {
     format!(
-        "<label class=\"field\"><span class=\"field-label\">{label}</span><input class=\"input\" name=\"{name}\" type=\"number\" value=\"{value}\" min=\"{min}\" max=\"{max}\" required></label>"
+        "<label class=\"field\"><span class=\"field-label\">{label}</span><input class=\"input\" name=\"{name}\" type=\"number\" value=\"{}\" min=\"{min}\" max=\"{max}\" required></label>",
+        escape(value)
     )
 }
 fn controls_disabled(app: &App) -> &'static str {
@@ -67,19 +87,26 @@ fn phase_label(phase: &str, ko: bool) -> String {
 }
 fn setup(app: &App, disabled: &str) -> String {
     let ko = app.locale == "ko";
+    let draft = &app.advanced.queues.setup;
     let mut options = format!(
         "<option value=\"\">{}</option>",
         tr(ko, "Select a network", "네트워크 선택")
     );
     for network in list(app.cache.get("/api/micro-networks").unwrap_or(&Value::Null)) {
         options.push_str(&format!(
-            "<option value=\"{}\">{}</option>",
+            "<option value=\"{}\"{}>{}</option>",
             escape(text(network, "id")),
+            if text(network, "id") == draft.network {
+                " selected"
+            } else {
+                ""
+            },
             escape(text(network, "name"))
         ));
     }
+    let errors = setup_errors(&app.advanced.queues.errors, ko);
     format!(
-        "<section class=\"queue-setup\" aria-labelledby=\"queue-setup-title\"><div class=\"queue-setup-copy\"><span class=\"queue-engine-icon\" aria-hidden=\"true\">{icon}</span><span class=\"queue-eyebrow\">RabbitMQ</span><h2 id=\"queue-setup-title\">{heading}</h2><p>{description}</p><p class=\"queue-setup-note\">{note}</p></div><form id=\"queue-engine-form\" class=\"queue-form\"><fieldset {disabled}><div class=\"queue-section-head\"><h3>{resources}</h3><p>{resource_note}</p></div><label class=\"field\"><span class=\"field-label\">MicroNetwork</span><select class=\"input\" name=\"microNetworkId\" required>{options}</select></label><div class=\"queue-engine-resources\">{cpu}{ram}{disk}</div><div class=\"queue-form-footer\"><button type=\"submit\" class=\"btn primary\">{install}</button></div></fieldset></form></section>",
+        "<section class=\"queue-setup\" aria-labelledby=\"queue-setup-title\"><div class=\"queue-setup-copy\"><span class=\"queue-engine-icon\" aria-hidden=\"true\">{icon}</span><span class=\"queue-eyebrow\">RabbitMQ</span><h2 id=\"queue-setup-title\">{heading}</h2><p>{description}</p><p class=\"queue-setup-note\">{note}</p></div><form id=\"queue-engine-form\" class=\"queue-form\"><fieldset {disabled}><div class=\"queue-section-head\"><h3>{resources}</h3><p>{resource_note}</p></div>{errors}<label class=\"field\"><span class=\"field-label\">MicroNetwork</span><select class=\"input\" name=\"microNetworkId\" required>{options}</select></label><div class=\"queue-engine-resources\">{cpu}{ram}{disk}</div><div class=\"queue-form-footer\"><button type=\"submit\" class=\"btn primary\">{install}</button></div></fieldset></form></section>",
         icon = crate::render::navigation_icon("queues"),
         heading = tr(ko, "Set up your queue engine", "큐 엔진 설치"),
         description = tr(
@@ -98,17 +125,60 @@ fn setup(app: &App, disabled: &str) -> String {
             "Choose the network and resources for the engine.",
             "엔진이 사용할 네트워크와 리소스를 선택합니다."
         ),
-        cpu = input("cpu", "CPU", "4", 1, 32),
+        cpu = input("cpu", "CPU", &draft.cpu, 1, 32),
         ram = input(
             "ram",
             tr(ko, "Memory (MiB)", "메모리 (MiB)"),
-            "4096",
+            &draft.ram,
             128,
             32768
         ),
-        disk = input("diskGb", tr(ko, "Disk (GiB)", "디스크 (GiB)"), "8", 4, 1024),
+        disk = input(
+            "diskGb",
+            tr(ko, "Disk (GiB)", "디스크 (GiB)"),
+            &draft.disk,
+            4,
+            1024
+        ),
         install = tr(ko, "Install RabbitMQ", "RabbitMQ 설치"),
     )
+}
+
+fn setup_errors(errors: &BTreeMap<String, String>, ko: bool) -> String {
+    if errors.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("<div class=\"queue-engine-error\" role=\"alert\"><ul>");
+    for (key, message) in errors {
+        let label = match key.as_str() {
+            "microNetworkId" => "MicroNetwork",
+            "cpu" => "CPU",
+            "ram" => tr(ko, "Memory", "메모리"),
+            "diskGb" => tr(ko, "Disk", "디스크"),
+            "storageRoot" => tr(ko, "VM disk storage", "VM 디스크 저장소"),
+            _ => key,
+        };
+        let detail = if ko && key == "storageRoot" && message.starts_with("not enough free space") {
+            "저장 공간이 부족하다. 디스크 크기를 줄이거나 저장 공간을 확보한다."
+        } else if ko
+            && key == "ram"
+            && message == "must be a power of two between 128 and 32768 MiB"
+        {
+            "128~32768 MiB 사이의 2의 거듭제곱을 입력한다. 예: 1024, 2048, 4096."
+        } else if ko && key == "microNetworkId" && message == "no MicroNetwork with this id exists"
+        {
+            "선택한 네트워크가 없다. 목록에서 다시 선택한다."
+        } else {
+            message
+        };
+        out.push_str(&format!(
+            "<li><strong>{}</strong>: {}</li>",
+            escape(label),
+            escape(detail)
+        ));
+    }
+    out.push_str("</ul></div>");
+    out
 }
 fn engine_card(app: &App, engine: &Value, disabled: &str) -> String {
     let ko = app.locale == "ko";
@@ -358,11 +428,14 @@ pub fn refresh(app: Shared) {
                 state.cache.insert("/api/queue/engine".into(), engine);
                 state.cache.insert("/api/micro-networks".into(), networks);
                 state.connection_error.clear();
-                if !list(&state.resource)
-                    .iter()
-                    .any(|q| text(q, "id") == state.advanced.queues.selected)
+                if !state.advanced.queues.selected.is_empty()
+                    && !list(&state.resource)
+                        .iter()
+                        .any(|q| text(q, "id") == state.advanced.queues.selected)
                 {
-                    state.advanced.queues = State::default();
+                    state.advanced.queues.selected.clear();
+                    state.advanced.queues.reveal = None;
+                    state.advanced.queues.reveal_generation += 1;
                 }
             }
             Err(error) => {
@@ -396,21 +469,74 @@ fn mutate(app: &Shared, method: &'static str, path: String, body: Option<Value>)
         return;
     }
     app.borrow_mut().busy = true;
+    app.borrow_mut().advanced.queues.errors.clear();
     let generation = app.borrow().generation;
     render_content(app);
     let app = app.clone();
     spawn_local(async move {
-        let result = api::request(method, &path, body.as_ref()).await;
+        let result = api::request_detailed(method, &path, body.as_ref(), None).await;
         let mut state = app.borrow_mut();
         if state.generation != generation {
             return;
         }
         state.busy = false;
-        state.error = result.err().unwrap_or_default();
+        match result {
+            Ok(_) => state.error.clear(),
+            Err(error) if path == "/api/queue/engine" && !error.fields.is_empty() => {
+                state.error.clear();
+                state.advanced.queues.errors = error.fields;
+            }
+            Err(error) => {
+                state.error = if error.fields.is_empty() {
+                    error.message
+                } else {
+                    format!(
+                        "{}: {}",
+                        error.message,
+                        error
+                            .fields
+                            .iter()
+                            .map(|(key, value)| format!("{key}: {value}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+            }
+        }
         drop(state);
         render_content(&app);
         refresh(app);
     });
+}
+
+/// Preserve setup inputs when polling or an installation error redraws the page.
+pub fn capture_setup_input(app: &Shared, target: &Element) -> bool {
+    if target
+        .closest("#queue-engine-form")
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return false;
+    }
+    let name = target.get_attribute("name").unwrap_or_default();
+    let value = if let Some(input) = target.dyn_ref::<HtmlInputElement>() {
+        input.value()
+    } else if let Some(select) = target.dyn_ref::<HtmlSelectElement>() {
+        select.value()
+    } else {
+        return false;
+    };
+    let mut state = app.borrow_mut();
+    let setup = &mut state.advanced.queues.setup;
+    match name.as_str() {
+        "microNetworkId" => setup.network = value,
+        "cpu" => setup.cpu = value,
+        "ram" => setup.ram = value,
+        "diskGb" => setup.disk = value,
+        _ => return false,
+    }
+    true
 }
 pub fn submit(app: &Shared, form: &HtmlFormElement) -> bool {
     if !["queue-engine-form", "queue-create-form"].contains(&form.id().as_str()) {

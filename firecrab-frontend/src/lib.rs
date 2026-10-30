@@ -1250,7 +1250,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 if deploy::change(&changed, &target) {
                     return;
                 }
-                if advanced::cluster::input(&changed, &target) {
+                if advanced::queues::capture_setup_input(&changed, &target)
+                    || advanced::cluster::input(&changed, &target)
+                {
                     return;
                 }
                 if target.id() == "field-hostPort" && advanced::services::change(&changed, &target)

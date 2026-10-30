@@ -19,6 +19,8 @@
 .queue-engine-copy h2 { margin-bottom: .125rem; }
 .queue-engine-error { margin-top: 1rem; padding: .75rem 1rem; border: 1px solid var(--line-red); border-radius: var(--radius); background: var(--red-soft); color: var(--red-ink); font-size: .75rem; line-height: 1.6; }
 .queue-engine-error strong { display: block; margin-bottom: .25rem; font-weight: 600; }
+.queue-engine-error ul { margin: 0; padding-left: 1.25rem; }
+.queue-engine-error li strong { display: inline; }
 .queue-engine .queue-engine-note { margin-top: .75rem; color: var(--text-3); font-size: .75rem; line-height: 1.6; }
 .queue-engine-log { margin-top: 1rem; border-top: 1px solid var(--border-soft); }
 .queue-engine-log summary { width: fit-content; padding-top: .75rem; color: var(--text-2); font-size: .75rem; cursor: pointer; }

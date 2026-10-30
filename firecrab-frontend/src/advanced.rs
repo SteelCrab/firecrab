@@ -103,7 +103,7 @@ pub fn dispatch(app: &Shared, action: &str, id: &str, button: &Element) -> bool 
         || security::dispatch(app, action, id)
 }
 pub fn change(app: &Shared, target: &Element) -> bool {
-    if cluster::input(app, target) {
+    if queues::capture_setup_input(app, target) || cluster::input(app, target) {
         return true;
     }
     if services::change(app, target) || ai::change(app, target) || storage::change(app, target) {

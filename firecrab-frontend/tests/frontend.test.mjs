@@ -64,6 +64,38 @@ test('schedule VM filter is hidden with no selectable VMs', async () => {
   await expect(page.locator('#content')).toContainText('orphan');
 });
 
+test('Queue setup preserves network and resources across refresh and shows validation details', async () => {
+  let engine = null;
+  fixture.handlers.set('GET /api/queue/engine', ({ send }) => send(200, engine));
+  fixture.handlers.set('GET /api/queues', ({ send }) => send(200, []));
+  fixture.handlers.set('POST /api/queue/engine', ({ body, send }) => {
+    if (body.diskGb === 8) return send(400, { error: { message:'request validation failed', fields:{ storageRoot:'not enough free space (need 8 GiB)', ram:'must be a power of two between 128 and 32768 MiB' } } });
+    engine = { phase:'installing', microNetworkId:body.microNetworkId, log:'' };
+    return send(202, engine);
+  });
+  await open('queues');
+  const form = page.locator('#queue-engine-form');
+  await form.getByLabel('MicroNetwork').selectOption('network-1');
+  await form.getByLabel('CPU').fill('2');
+  await form.getByLabel('Memory (MiB)').fill('2048');
+  fixture.state.networks[0].name = 'updated network';
+  await expect(form.getByRole('option', {name:'updated network'})).toBeAttached({timeout:10000});
+  await expect(form.getByLabel('MicroNetwork')).toHaveValue('network-1');
+  await expect(form.getByLabel('CPU')).toHaveValue('2');
+  await expect(form.getByLabel('Memory (MiB)')).toHaveValue('2048');
+  await form.getByRole('button', {name:'Install RabbitMQ'}).click();
+  await expect(form.getByRole('alert')).toContainText('not enough free space');
+  await expect(form.getByRole('alert')).toContainText('power of two');
+  await expect(form.getByLabel('MicroNetwork')).toHaveValue('network-1');
+  await expect(form.getByLabel('CPU')).toHaveValue('2');
+  await expect(form.getByLabel('Memory (MiB)')).toHaveValue('2048');
+  assert.deepEqual(mutation('/api/queue/engine').body, { microNetworkId:'network-1', cpu:2, ram:2048, diskGb:8 });
+  await form.getByLabel('Disk (GiB)').fill('4');
+  await form.getByRole('button', {name:'Install RabbitMQ'}).click();
+  await expect(page.getByRole('region', {name:'Queue engine'})).toContainText('Installing');
+  assert.deepEqual(mutation('/api/queue/engine').body, { microNetworkId:'network-1', cpu:2, ram:2048, diskGb:4 });
+});
+
 test('schedule VM filter appears after delayed VM loading and filters schedules', async () => {
   let release;
   const waiting = new Promise(resolve => { release = resolve; });
