@@ -2,7 +2,6 @@
 use crate::{
     App, Shared, api,
     model::{escape, list, text},
-    render::{Icon, icon_button},
 };
 use serde_json::{Value, json};
 use wasm_bindgen_futures::spawn_local;
@@ -157,8 +156,8 @@ fn setup_guide(app: &App) -> String {
         (
             tr(
                 app,
-                "Refresh this page to check the registered Stack.",
-                "이 화면을 새로고침해 등록된 Stack을 확인한다.",
+                "The registered Stack appears here automatically.",
+                "등록된 Stack이 이 화면에 자동으로 표시된다.",
             ),
             "",
         ),
@@ -178,15 +177,7 @@ fn setup_guide(app: &App) -> String {
 }
 
 pub fn content(app: &App) -> String {
-    let mut out = format!(
-        "<div class=\"wasm-actions\">{}</div>",
-        icon_button(
-            tr(app, "Refresh", "새로고침"),
-            "stack-refresh",
-            "",
-            Icon::Refresh
-        )
-    );
+    let mut out = String::new();
     let rows = list(&app.resource);
     if rows.is_empty() {
         if app.loaded && app.connection_error.is_empty() {

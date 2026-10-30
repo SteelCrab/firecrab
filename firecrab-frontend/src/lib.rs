@@ -1675,7 +1675,6 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
         return;
     }
     match action {
-        "stack-refresh" => stacks::refresh(app),
         "palette" => open_palette(&app),
         "palette-close" => set_html("palette-root", ""),
         "menu" => set_navigation(button.get_attribute("aria-expanded").as_deref() != Some("true")),

@@ -33,6 +33,26 @@ async function detail(index = 1) {
   await expect(page.getByRole('region', { name: 'Detail', exact: true })).toBeVisible();
 }
 
+test('Stack list updates automatically and recovers without a refresh button', async () => {
+  let stacks = [];
+  let unavailable = false;
+  fixture.handlers.set('GET /api/stacks', ({ send }) => unavailable
+    ? send(503, { error:{ message:'Stack service unavailable' } })
+    : send(200, stacks));
+  fixture.handlers.set('GET /api/stacks/qa-stack/source', ({ send }) => send(404, { error:{ message:'No source' } }));
+  await open('stacks');
+  await expect(page.getByRole('heading', { name:'Set up a Stack' })).toBeVisible();
+  await expect(page.locator('#content')).toContainText('The registered Stack appears here automatically.');
+  await expect(page.getByRole('button', { name:'Refresh', exact:true })).toHaveCount(0);
+  stacks = [{name:'qa-stack'}];
+  await expect(page.getByRole('heading', { name:'qa-stack', exact:true })).toBeVisible({timeout:10000});
+  unavailable = true;
+  await expect(page.locator('#root')).toContainText('Stack service unavailable', {timeout:10000});
+  unavailable = false;
+  await expect(page.locator('#root')).not.toContainText('Stack service unavailable', {timeout:10000});
+  await expect(page.getByRole('heading', { name:'qa-stack', exact:true })).toBeVisible();
+});
+
 test('schedule VM filter is hidden with no selectable VMs', async () => {
   fixture.state.vms = [];
   fixture.state.schedules = [{ id:'schedule-1', name:'orphan', vmId:'removed', timing:{kind:'cron', expression:'0 0 * * *', timeZone:'UTC'}, action:'start', enabled:true, lastRun:null }];
