@@ -89,3 +89,8 @@ A MicroStorage containing volumes cannot be deleted.
 For a consistent offline backup, stop the workload VM before copying its volume.
 Back up the SQLite database and storage roots together.
 See [Storage](storage.md#backup-and-retention).
+
+## Project workspaces
+
+[Persistent project workspaces](project-workspaces.md) binds a volume to an AI Sandbox
+project with a private project SQLite database and coordinated offline checkpoints.
