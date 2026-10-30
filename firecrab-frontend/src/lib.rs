@@ -401,6 +401,10 @@ fn render_detail(app: &Shared) {
 /// Marks the table row of the selected item, so the highlight shows before the next list render.
 /// The VM list keeps its own row cache (`vm_rows`).
 fn mark_selected_rows(app: &Shared) {
+    // Queue rows track their selection separately from the detail panel.
+    if app.borrow().route == "queues" {
+        return;
+    }
     let Ok(rows) = document().query_selector_all("#content tr[data-id]") else {
         return;
     };

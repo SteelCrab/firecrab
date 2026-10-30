@@ -6,10 +6,10 @@ const NETWORK_ID = "00000000-0000-0000-0000-000000000502";
 const VM_ID = "00000000-0000-0000-0000-000000000503";
 const initialEngine: QueueEngine = { vmId: VM_ID, microNetworkId: NETWORK_ID, phase: "running", image: "rabbitmq:4.3.7-management", error: null, log: "" };
 const initialQueue: ApplicationQueue = { id: QUEUE_ID, name: "notifications", phase: "ready", maxBytes: 64 * 1024 * 1024, deliveryLimit: 5, error: null, services: [] };
-async function open(page: Page, installed = true, bound = false) {
-  const state = { engine: installed ? { ...initialEngine } : null as QueueEngine | null, rows: installed ? [{ ...initialQueue, services: bound ? [{ id: "app", name: "mail-app", bindings: { NOTIFICATIONS: "consume" as const } }] : [] }] : [] as ApplicationQueue[], fail: false };
+async function open(page: Page, installed = true, bound = false, options: { phase?: string; locale?: string; empty?: boolean; error?: string; log?: string } = {}) {
+  const state = { engine: installed ? { ...initialEngine, phase: options.phase ?? "running", error: options.error ?? null, log: options.log ?? "" } : null as QueueEngine | null, rows: installed && !options.empty ? [{ ...initialQueue, services: bound ? [{ id: "app", name: "mail-app", bindings: { NOTIFICATIONS: "consume" as const } }] : [] }] : [] as ApplicationQueue[], fail: false };
   const writes: { path: string; body: unknown }[] = [];
-  await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
+  await page.addInitScript(locale => localStorage.setItem("firecrab.locale", locale), options.locale ?? "en");
   for (const url of ["https://fonts.googleapis.com/**", "https://cdn.jsdelivr.net/gh/orioncactus/pretendard@*/**"]) {
     await page.route(url, route => route.fulfill({ contentType: "text/css", body: "" }));
   }
@@ -35,6 +35,53 @@ async function open(page: Page, installed = true, bound = false) {
 }
 
 test.describe("Queue @dashboard", () => {
+  for (const width of [390, 1440]) {
+    test(`organizes engine setup without a disabled queue form at ${width}px`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 1000 });
+      await open(page, false);
+      await expect(page.getByRole("heading", { name: "Set up your queue engine", exact: true })).toBeVisible();
+      await expect(page.locator("#queue-create-form")).toHaveCount(0);
+      await expect(page.locator("#queue-engine-form fieldset")).toHaveCSS("border-top-width", "0px");
+      await expect(page.getByRole("combobox", { name: "MicroNetwork", exact: true })).toHaveCSS("height", width < 768 ? "44px" : "48px");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath("queue-setup.png"), fullPage: true });
+    });
+    test(`shows the queue list and selected activity at ${width}px`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: width >= 768 ? 1400 : 1100 });
+      await open(page);
+      await expect(page.getByRole("region", { name: "Queue engine", exact: true })).toBeVisible();
+      await expect(page.getByLabel("Queue name", { exact: true })).toHaveCSS("height", width < 768 ? "44px" : "48px");
+      await page.getByRole("button", { name: "notifications", exact: true }).click();
+      await expect(page.locator(".queue-table tr[aria-selected=true]")).toContainText("notifications");
+      const detail = page.getByRole("region", { name: "Queue detail", exact: true });
+      await expect(detail.getByRole("heading", { name: "notifications", exact: true })).toBeVisible();
+      await expect(detail.getByText("Unacknowledged", { exact: true })).toBeVisible();
+      await expect(page.getByText(/amqp:\/\//)).toHaveCount(0);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath("queue-activity.png"), fullPage: true });
+    });
+  }
+  test("puts a failed engine and recovery above the queue form", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await open(page, true, false, { phase: "failed", empty: true, error: "RabbitMQ image import failed", log: "Installing RabbitMQ\nMissing kernel build tool: make" });
+    const engine = page.getByRole("region", { name: "Queue engine", exact: true });
+    await expect(engine.getByText("The engine needs attention", { exact: true })).toBeVisible();
+    await expect(engine.getByRole("button", { name: "Start / recover", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Create Queue", exact: true })).toBeDisabled();
+    await expect(engine.locator(".queue-engine-log")).toHaveAttribute("open", "");
+    await expect(engine.locator(".queue-log")).toContainText("Missing kernel build tool: make");
+    await page.screenshot({ path: testInfo.outputPath("queue-recovery.png"), fullPage: true });
+  });
+  test("reads in Korean and keeps queue controls inside a phone", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 1000 });
+    await open(page, true, false, { locale: "ko" });
+    await expect(page.getByRole("heading", { name: "큐 생성", exact: true })).toBeVisible();
+    await expect(page.getByLabel("큐 이름", { exact: true })).toHaveCSS("height", "44px");
+    await page.getByRole("button", { name: "notifications", exact: true }).click();
+    await expect(page.getByText("처리 중 메시지", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("queue-korean-mobile.png"), fullPage: true });
+  });
   test("installs an independent engine and creates a named durable queue", async ({ page }) => {
     const { state, writes } = await open(page, false);
     await expect(page.getByRole("heading", { name: "Queue", exact: true }).first()).toBeVisible();

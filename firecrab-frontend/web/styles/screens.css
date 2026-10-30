@@ -89,9 +89,6 @@
 /* A name that is also the button that selects the row (Queue). */
 .cell-link { padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
 .cell-link:hover { text-decoration: underline; }
-.queue-create { padding: 12px 0; }
-.queue-detail { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
-.queue-detail h2 { margin: 0 0 12px; font-size: 13.5px; font-weight: 600; }
 
 /* Secrets: the checkbox column and the masked value. */
 .secret-table .secret-check { width: 2.5rem; }
