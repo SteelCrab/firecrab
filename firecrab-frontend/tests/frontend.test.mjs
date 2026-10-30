@@ -736,8 +736,9 @@ test('kernel install recovers an already-running conflict and gates deletion by 
   await expect(page.getByRole('button', { name: 'Build kernel', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
   await expect(page.locator('.kernel-in-use')).toContainText('nginx-1.27');
-  await expect(page.locator('.kernel-in-use')).toContainText('Change its kernel or delete the image');
-  await expect(page.locator('.kernel-in-use').getByRole('link', {name:'Manage images'})).toHaveAttribute('href', '#/images');
+  await expect(page.locator('.kernel-in-use svg')).toHaveCount(1);
+  await expect(page.locator('.kernel-in-use')).toHaveText('nginx-1.27');
+  await expect(page.locator('.kernel-in-use a')).toHaveCount(0);
   kernel.inUse = false;
   await expect(page.getByRole('button', { name: 'Delete', exact: true })).toBeEnabled({timeout:10000});
   await expect(page.locator('.kernel-in-use')).toHaveCount(0);

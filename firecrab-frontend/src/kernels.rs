@@ -143,32 +143,24 @@ pub fn panel(app: &App, data: &Value) -> String {
             .filter(|name| !name.is_empty())
             .map(escape)
             .collect::<Vec<_>>();
+        let label = if app.locale == "ko" {
+            "사용 중인 이미지"
+        } else {
+            "Images using this kernel"
+        };
         let names = if aliases.is_empty() {
-            String::new()
+            vec![escape(label)]
         } else {
-            format!(
-                "<p><strong>{}</strong> {}</p>",
-                if app.locale == "ko" {
-                    "사용 중인 이미지:"
-                } else {
-                    "Images using this kernel:"
-                },
-                aliases.join(", ")
-            )
+            aliases
         };
-        let message = if app.locale == "ko" {
-            "이미지가 이 커널을 사용 중이다. 이미지의 커널을 변경하거나 이미지를 삭제한 뒤 커널을 삭제할 수 있다."
-        } else {
-            "An image uses this kernel. Change its kernel or delete the image before deleting this kernel."
-        };
-        let link = if app.locale == "ko" {
-            "이미지 관리"
-        } else {
-            "Manage images"
-        };
+        let icon = render::navigation_icon("images");
+        let rows = names
+            .iter()
+            .map(|name| format!("<span class=\"kernel-image\">{icon}<span>{name}</span></span>"))
+            .collect::<String>();
         html.push_str(&format!(
-            "<div class=\"kernel-in-use\"><p>{}</p>{names}<a href=\"#/images\">{link}</a></div>",
-            escape(message)
+            "<div class=\"kernel-in-use\" role=\"group\" aria-label=\"{}\">{rows}</div>",
+            escape(label)
         ));
     }
     if let Some(snapshot) = snapshot {

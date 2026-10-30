@@ -24,9 +24,9 @@
 .props { grid-template-columns: minmax(6rem, 35%) minmax(0, 1fr); }
 .detail-top-actions { max-width: 75%; }
 .kernel-install { margin-top: 1rem; min-width: 0; }
-.kernel-in-use { margin: 1rem 0; padding: .75rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-subtle); font-size: .75rem; line-height: 1.6; }
-.kernel-in-use p { margin: 0 0 .5rem; }
-.kernel-in-use a { color: var(--text); text-decoration: underline; }
+.kernel-in-use { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin: 1rem 0; font-size: .8125rem; }
+.kernel-image { display: inline-flex; align-items: center; gap: .375rem; min-width: 0; overflow-wrap: anywhere; }
+.kernel-image svg { flex: none; color: var(--text-3); }
 .kernel-install summary { width: fit-content; cursor: pointer; padding: .375rem 0; color: var(--text-3); font-size: .75rem; }
 .kernel-install[open] summary { margin-bottom: .375rem; }
 .kernel-install-log { height: 12rem; max-height: 35vh; margin: 0; padding: .625rem; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-subtle); font: .583333rem/1.65 var(--mono); white-space: pre; }
