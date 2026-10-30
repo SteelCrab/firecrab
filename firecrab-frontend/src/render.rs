@@ -2043,8 +2043,13 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
             } else {
                 install.replacen("<button ", "<button disabled ", 1)
             });
-            if data["installed"] == true && enabled && data["inUse"] != true {
-                out.push_str(&icon_request("Delete", &format!("/api/kernels/{version}")));
+            if data["installed"] == true {
+                let delete = icon_request("Delete", &format!("/api/kernels/{version}"));
+                if enabled && data["inUse"] != true {
+                    out.push_str(&delete);
+                } else {
+                    out.push_str(&delete.replacen("<button ", "<button disabled ", 1));
+                }
             }
         }
         "pipe/auth" => {

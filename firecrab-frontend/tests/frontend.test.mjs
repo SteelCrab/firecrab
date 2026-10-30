@@ -731,9 +731,16 @@ test('kernel install recovers an already-running conflict and gates deletion by 
   await expect(page.locator('#root')).not.toContainText('HTTP 409');
   assert.equal(fixture.requests.filter(r => r.method === 'POST' && r.path.endsWith('/install')).length, 1);
   kernel.installed = true; kernel.inUse = true; status = 'succeeded';
+  fixture.state.images = [{alias:'nginx-1.27', installed:true, kernelVersion:'7.2.12'}];
   await expect(page.getByRole('cell', { name: 'Installed', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Build kernel', exact: true })).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
+  await expect(page.locator('.kernel-in-use')).toContainText('nginx-1.27');
+  await expect(page.locator('.kernel-in-use')).toContainText('Change its kernel or delete the image');
+  await expect(page.locator('.kernel-in-use').getByRole('link', {name:'Manage images'})).toHaveAttribute('href', '#/images');
+  kernel.inUse = false;
+  await expect(page.getByRole('button', { name: 'Delete', exact: true })).toBeEnabled({timeout:10000});
+  await expect(page.locator('.kernel-in-use')).toHaveCount(0);
 });
 
 test('kernel queue shows measured download progress, queued builds and verified completion', async () => {

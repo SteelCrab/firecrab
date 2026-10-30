@@ -30,11 +30,25 @@ pub fn refresh(app: &Shared) {
         .iter()
         .map(|row| text(row, "version").to_owned())
         .collect();
+    let needs_images = list(&state.resource).iter().any(|row| row["inUse"] == true);
     state.kernels.polling = Some(generation);
     drop(state);
     let app = app.clone();
     spawn_local(async move {
         let mut changed = false;
+        if needs_images {
+            let images = api::request("GET", "/api/images", None).await.ok();
+            let mut state = app.borrow_mut();
+            if state.generation != generation {
+                return;
+            }
+            changed |= state.cache.get("/api/images") != images.as_ref();
+            if let Some(images) = images {
+                state.cache.insert("/api/images".into(), images);
+            } else {
+                state.cache.remove("/api/images");
+            }
+        }
         for version in versions {
             let result = api::request(
                 "GET",
@@ -119,6 +133,44 @@ pub fn panel(app: &App, data: &Value) -> String {
         summary["status"] = t(status(app, data)).into();
     }
     let mut html = render::properties(&summary);
+    if data["installed"] == true && data["inUse"] == true {
+        let aliases = list(app.cache.get("/api/images").unwrap_or(&Value::Null))
+            .iter()
+            .filter(|image| {
+                image["installed"] == true && text(image, "kernelVersion") == text(data, "version")
+            })
+            .map(|image| text(image, "alias"))
+            .filter(|name| !name.is_empty())
+            .map(escape)
+            .collect::<Vec<_>>();
+        let names = if aliases.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "<p><strong>{}</strong> {}</p>",
+                if app.locale == "ko" {
+                    "사용 중인 이미지:"
+                } else {
+                    "Images using this kernel:"
+                },
+                aliases.join(", ")
+            )
+        };
+        let message = if app.locale == "ko" {
+            "이미지가 이 커널을 사용 중이다. 이미지의 커널을 변경하거나 이미지를 삭제한 뒤 커널을 삭제할 수 있다."
+        } else {
+            "An image uses this kernel. Change its kernel or delete the image before deleting this kernel."
+        };
+        let link = if app.locale == "ko" {
+            "이미지 관리"
+        } else {
+            "Manage images"
+        };
+        html.push_str(&format!(
+            "<div class=\"kernel-in-use\"><p>{}</p>{names}<a href=\"#/images\">{link}</a></div>",
+            escape(message)
+        ));
+    }
     if let Some(snapshot) = snapshot {
         if matches!(text(snapshot, "status"), "running" | "failed" | "succeeded") {
             html.push_str(&progress(snapshot));
