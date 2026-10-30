@@ -824,6 +824,35 @@ test('manager resource editor uses the controller ID header without borrowing fa
   assert.equal(saved.controller, 'controller-fixture'); assert.equal(saved.body.cpu, 6);
 });
 
+test('host screen assigns resource usage to the management VM only on managed platforms', async () => {
+  let os = 'macos';
+  fixture.handlers.set('GET /api/host', ({ send }) => send(200, {
+    uptimeSeconds:3600, loadAverage1m:1.25, memoryTotalMib:4096, memoryAvailableMib:3072,
+    diskTotalGib:16, diskAvailableGib:8,
+    platform:{ os, name:os === 'macos' ? 'macOS' : os === 'windows' ? 'Windows' : 'Linux',
+      architecture:'arm64', system:'Debian Linux', kernel:'6.12' },
+  }));
+  await open('host');
+  for (const platform of ['macos', 'windows']) {
+    if (platform !== os) { os = platform; await page.reload(); await expect(page.locator('#content')).toHaveAttribute('data-loaded', 'true'); }
+    const manager = page.getByRole('region', { name:'microManager', exact:true });
+    await expect(manager.getByRole('heading', { name:'Current usage' })).toBeVisible();
+    await expect(manager).toContainText('Usage of the Linux management VM, not the physical host.');
+    await expect(manager.locator('.host-resources')).toContainText('1.25');
+    await expect(manager.locator('.host-resources')).toContainText('8 / 16 GiB');
+    await expect(page.getByRole('region', { name:'Host resource usage' })).toHaveCount(0);
+    await expect(page.locator('#host-health')).toHaveText('Management VM healthy');
+    await expect(page.getByRole('heading', { name:'Host system' })).toBeVisible();
+    await expect(page.getByRole('heading', { name:'Management Linux' })).toBeVisible();
+  }
+  os = 'linux';
+  await page.reload();
+  await expect(page.locator('#content')).toHaveAttribute('data-loaded', 'true');
+  await expect(page.getByRole('region', { name:'Host resource usage' }).locator('.host-resources')).toContainText('1.25');
+  await expect(page.getByRole('region', { name:'microManager' })).toHaveCount(0);
+  await expect(page.locator('#host-health')).toHaveText('Host healthy');
+});
+
 test('development resource bootstrap uses its own origin instead of the primary controller', async () => {
   const endpoint = '/__firecrab_resources/api/service/resources';
   const primaryRequests = [];

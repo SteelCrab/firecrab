@@ -2683,6 +2683,9 @@ pub struct HostStatus {
     pub memory: String,
     pub disk: String,
 }
+fn managed_platform(host: &Value) -> bool {
+    matches!(text(&host["platform"], "os"), "macos" | "windows")
+}
 pub fn host_status(app: &App) -> HostStatus {
     let host = app.cache.get("/api/host").unwrap_or(&Value::Null);
     let percent = |total: &str, available: &str| -> Option<f64> {
@@ -2709,7 +2712,9 @@ pub fn host_status(app: &App) -> HostStatus {
     };
     HostStatus {
         ok: host.is_object(),
-        head: if host.is_object() {
+        head: if host.is_object() && managed_platform(host) {
+            tr(app, "Management VM healthy", "관리 VM 정상")
+        } else if host.is_object() {
             tr(app, "Host healthy", "호스트 정상")
         } else {
             tr(app, "Host status unavailable", "호스트 상태 확인 불가")
@@ -2722,9 +2727,10 @@ pub fn host_status(app: &App) -> HostStatus {
 pub fn host_meters(app: &App) -> String {
     let status = host_status(app);
     format!(
-        "<a class=\"host-status-link\" href=\"#/host\"><span class=\"host-status-head\"><span class=\"host-dot{}\" id=\"host-dot\" aria-hidden=\"true\"></span><span id=\"host-health\">{}</span></span><span class=\"host-status-values\">CPU <span class=\"host-meter-value\" id=\"host-load\">{}</span> · {} <span class=\"host-meter-value\" id=\"host-memory\">{}</span> · {} <span class=\"host-meter-value\" id=\"host-disk\">{}</span></span></a>",
+        "<a class=\"host-status-link\" href=\"#/host\"><span class=\"host-status-head\"><span class=\"host-dot{}\" id=\"host-dot\" aria-hidden=\"true\"></span><span id=\"host-health\">{}</span></span><span class=\"host-status-values\">{} <span class=\"host-meter-value\" id=\"host-load\">{}</span> · {} <span class=\"host-meter-value\" id=\"host-memory\">{}</span> · {} <span class=\"host-meter-value\" id=\"host-disk\">{}</span></span></a>",
         if status.ok { " ok" } else { "" },
         status.head,
+        tr(app, "Load", "부하"),
         status.load,
         tr(app, "Memory", "메모리"),
         status.memory,
@@ -2811,8 +2817,7 @@ fn host(app: &App) -> String {
             value
         )
     };
-    let _ = write!(
-        out,
+    let resources = format!(
         "<dl class=\"host-resources\">{}{}{}{}</dl>",
         item(
             "Uptime",
@@ -2837,40 +2842,69 @@ fn host(app: &App) -> String {
         ),
         item(
             "Disk",
-            format!("{disk_used} <small>/ {} GB</small>", gib_of("diskTotalGib"))
+            format!(
+                "{disk_used} <small>/ {} GiB</small>",
+                gib_of("diskTotalGib")
+            )
         ),
     );
-    // Guest system: what the platform says. Keys this screen does not know yet come last.
-    let mut guest = String::new();
+    let managed = managed_platform(host);
+    if !managed {
+        out.push_str(&format!(
+            "<section aria-label=\"{}\">{resources}</section>",
+            tr(app, "Host resource usage", "호스트 사용량")
+        ));
+    }
+    // The outer platform and the managed Linux system are separate machines.
+    let mut platform_rows = String::new();
     for (label, key) in [
         ("OS", "os"),
         ("Architecture", "architecture"),
         ("Virtualization", "virtualization"),
     ] {
         if !text(platform, key).is_empty() {
-            guest.push_str(&host_row(label, text(platform, key), "", ""));
+            platform_rows.push_str(&host_row(label, text(platform, key), "", ""));
         }
     }
+    let mut system_rows = String::new();
     for (key, value) in platform.as_object().into_iter().flatten() {
         if !matches!(
             key.as_str(),
             "os" | "name" | "version" | "architecture" | "virtualization"
         ) && let Some(value) = value.as_str().filter(|v| !v.is_empty())
         {
-            guest.push_str(&host_row(key, value, "", ""));
+            let row = host_row(key, value, "", "");
+            if managed {
+                system_rows.push_str(&row);
+            } else {
+                platform_rows.push_str(&row);
+            }
         }
     }
     out.push_str(&host_section(
-        tr(app, "Guest system", "게스트 시스템"),
+        tr(app, "Host system", "호스트 시스템"),
         tr(
             app,
-            "The Linux environment MicroVMs run in",
-            "MicroVM이 실행되는 Linux 환경",
+            "The machine running Firecrab",
+            "Firecrab을 실행하는 호스트",
         ),
         "host-info",
         "",
-        &guest,
+        &platform_rows,
     ));
+    if managed && !system_rows.is_empty() {
+        out.push_str(&host_section(
+            tr(app, "Management Linux", "관리 Linux 환경"),
+            tr(
+                app,
+                "The Linux environment MicroVMs run in",
+                "MicroVM이 실행되는 Linux 환경",
+            ),
+            "host-info",
+            "",
+            &system_rows,
+        ));
+    }
     // Firecrab: its versions, services and folders.
     let info = app.cache.get("/api/info").unwrap_or(&Value::Null);
     let firecrab = if info.is_null() || info["status"] == "unavailable" {
@@ -2968,7 +3002,23 @@ fn host(app: &App) -> String {
     } else {
         out.push_str(&button("Updates", "update-open", ""));
     }
-    if let Some(manager) = app.cache.get("manager") {
+    let manager = app.cache.get("manager");
+    if managed || manager.is_some() {
+        out.push_str("<section class=\"wasm-details host-manager\" aria-label=\"microManager\"><h2>microManager</h2>");
+        if managed {
+            let _ = write!(
+                out,
+                "<h3>{}</h3><p class=\"host-note\">{}</p>{resources}",
+                tr(app, "Current usage", "현재 사용량"),
+                tr(
+                    app,
+                    "Usage of the Linux management VM, not the physical host.",
+                    "관리 Linux VM의 사용량이다. 호스트 사용량은 포함하지 않는다."
+                )
+            );
+        }
+    }
+    if let Some(manager) = manager {
         let pending = app.workflows.manager_pending;
         let mut apply = button(
             if pending {
@@ -2984,10 +3034,17 @@ fn host(app: &App) -> String {
         }
         let available = manager["host"]["diskAvailableGib"]
             .as_u64()
+            .map(|value| {
+                format!(
+                    "<p>{value} GiB {}</p>",
+                    tr(app, "host disk available", "호스트 디스크 사용 가능")
+                )
+            })
             .unwrap_or_default();
         let _ = write!(
             out,
-            "<section class=\"wasm-details\"><h2>microManager</h2>{}<p>{available} GiB disk available</p>{}{}{}</section>",
+            "<h3>{}</h3>{}{available}{}{}{}",
+            tr(app, "Configured resources", "설정된 리소스"),
             properties(&manager["settings"]),
             if manager["sharedWsl"] == true {
                 "<p>CPU, RAM, and networking affect every WSL2 distribution.</p>"
@@ -2997,6 +3054,9 @@ fn host(app: &App) -> String {
             button("Edit resources", "manager-edit", ""),
             apply
         );
+    }
+    if managed || manager.is_some() {
+        out.push_str("</section>");
     }
     out.push_str("</div>");
     out
