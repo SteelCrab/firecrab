@@ -751,9 +751,9 @@ fn load_route(app: Shared) {
                         .as_ref()
                         .is_some_and(|form| form.path == volumes::ENDPOINT);
                 let image_form = state.route == "images" && state.form.is_some();
-                let visible =
-                    matches!(state.route.as_str(), "host" | "images" | "volumes" | "pipe")
-                        && state.form.is_none();
+                let visible = state.form.is_none()
+                    && (matches!(state.route.as_str(), "host" | "images" | "volumes" | "pipe")
+                        || (state.route == "schedules" && path == "/api/vms"));
                 drop(state);
                 if volume_storage {
                     advanced::capture_form(&app);

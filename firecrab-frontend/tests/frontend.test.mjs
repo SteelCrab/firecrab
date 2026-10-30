@@ -32,6 +32,44 @@ async function detail(index = 1) {
   await response;
   await expect(page.getByRole('region', { name: 'Detail', exact: true })).toBeVisible();
 }
+
+test('schedule VM filter is hidden with no selectable VMs', async () => {
+  fixture.state.vms = [];
+  fixture.state.schedules = [{ id:'schedule-1', name:'orphan', vmId:'removed', timing:{kind:'cron', expression:'0 0 * * *', timeZone:'UTC'}, action:'start', enabled:true, lastRun:null }];
+  const vms = page.waitForResponse(response => new URL(response.url()).pathname === '/api/vms');
+  await page.goto(`${fixture.url}/#/schedules?vm=removed`);
+  await vms;
+  await expect(page.locator('#content')).toHaveAttribute('data-loaded', 'true');
+  await expect(page.locator('#schedule-filter')).toHaveCount(0);
+  await expect(page.locator('#content')).toContainText('orphan');
+});
+
+test('schedule VM filter appears after delayed VM loading and filters schedules', async () => {
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  fixture.handlers.set('GET /api/vms', async ({ send }) => { await waiting; send(200, fixture.state.vms); });
+  const [first, second] = fixture.state.vms;
+  fixture.state.schedules = [first, second].map((vm, i) => ({ id:`schedule-${i}`, name:`schedule-${i}`, vmId:vm.id, timing:{kind:'cron', expression:'0 0 * * *', timeZone:'UTC'}, action:'start', enabled:true, lastRun:null }));
+  await open('schedules');
+  await expect(page.locator('#schedule-filter')).toHaveCount(0);
+  release();
+  const filter = page.getByLabel('Filter by VM', { exact:true });
+  await expect(filter).toBeVisible();
+  await filter.selectOption(first.id);
+  await expect(page.locator('#content')).toContainText('schedule-0');
+  await expect(page.locator('#content')).not.toContainText('schedule-1');
+  await page.getByLabel('Filter by VM', { exact:true }).selectOption('');
+  await expect(page.locator('#content')).toContainText('schedule-1');
+});
+
+test('managed Queue and Pool VMs do not create schedule filter options', async () => {
+  fixture.state.vms = fixture.state.vms.slice(0, 2).map((vm, i) => ({ ...vm, purpose: i ? 'pool' : 'queue' }));
+  const vms = page.waitForResponse(response => new URL(response.url()).pathname === '/api/vms');
+  await open('schedules');
+  await vms;
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect(page.locator('#schedule-filter')).toHaveCount(0);
+});
 function mutation(path, method = 'POST') { return fixture.requests.findLast(request => request.path === path && request.method === method); }
 
 test('cluster preserves an unknown placement across reload and routes lifecycle and drain through the controller', async () => {

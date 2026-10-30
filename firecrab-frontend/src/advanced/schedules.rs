@@ -67,24 +67,36 @@ fn last_result(row: &Value, ko: bool) -> String {
 }
 pub fn content(app: &App) -> String {
     let ko = app.locale == "ko";
-    let filter = super::query("vm").unwrap_or_default();
-    let mut out = String::from(
-        "<div class=\"schedule-toolbar\"><label for=\"schedule-filter\">Filter by VM</label><select id=\"schedule-filter\"><option value=\"\">All MicroVMs</option>",
-    );
-    for vm in app.vms.iter().filter(|v| {
-        !matches!(
-            v.extra.get("purpose").and_then(Value::as_str),
-            Some("pool" | "queue")
-        )
-    }) {
+    let vms: Vec<_> = app
+        .vms
+        .iter()
+        .filter(|v| {
+            !matches!(
+                v.extra.get("purpose").and_then(Value::as_str),
+                Some("pool" | "queue")
+            )
+        })
+        .collect();
+    let filter = super::query("vm")
+        .filter(|id| vms.iter().any(|vm| &vm.id == id))
+        .unwrap_or_default();
+    let mut out = String::new();
+    if !vms.is_empty() {
         out.push_str(&format!(
-            "<option value=\"{}\" {}>{}</option>",
-            escape(&vm.id),
-            if vm.id == filter { "selected" } else { "" },
-            escape(&vm.name)
+            "<div class=\"schedule-toolbar\"><label for=\"schedule-filter\">{}</label><select id=\"schedule-filter\"><option value=\"\">{}</option>",
+            if ko { "VM 필터" } else { "Filter by VM" },
+            if ko { "모든 MicroVM" } else { "All MicroVMs" }
         ));
+        for vm in vms {
+            out.push_str(&format!(
+                "<option value=\"{}\" {}>{}</option>",
+                escape(&vm.id),
+                if vm.id == filter { "selected" } else { "" },
+                escape(&vm.name)
+            ));
+        }
+        out.push_str("</select></div>");
     }
-    out.push_str("</select></div>");
     let rows: Vec<&Value> = list(&app.resource)
         .iter()
         .filter(|row| filter.is_empty() || row["vmId"] == filter)
