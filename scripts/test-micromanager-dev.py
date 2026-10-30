@@ -52,7 +52,15 @@ case "$name" in
     echo "$flags"
     ;;
   uname) echo "${GUEST_ARCH:-aarch64}" ;;
-  cc|musl-gcc|pkg-config|cmake|journalctl|sleep) exit 0 ;;
+  cc)
+    [ "${MISSING_KERNEL_HEADERS:-0}" = 0 ] || [ -f "$TEST_ROOT/kernel-deps-ready" ]
+    ;;
+  apt-get)
+    echo "$*" >>"$TEST_ROOT/dependency-installs"
+    [ "${DEPENDENCY_INSTALL_FAIL:-0}" = 0 ] || exit 48
+    touch "$TEST_ROOT/kernel-deps-ready"
+    ;;
+  make|flex|bison|bc|perl|musl-gcc|pkg-config|cmake|journalctl|sleep) exit 0 ;;
   objcopy)
     if [ "$1" = --version ]; then exit 0; fi
     echo "$*" >>"$TEST_ROOT/objcopy-events"
@@ -143,7 +151,7 @@ class GuestDevelopmentTest(unittest.TestCase):
         stub = self.commands / "stub"
         stub.write_text(STUB)
         stub.chmod(0o755)
-        for name in ["findmnt", "chmod", "rm", "install", "uname", "cc", "musl-gcc", "pkg-config", "cmake", "objcopy", "df", "journalctl", "sleep", "flock", "curl", "rustup", "systemctl"]:
+        for name in ["findmnt", "chmod", "rm", "install", "uname", "cc", "make", "flex", "bison", "bc", "perl", "apt-get", "musl-gcc", "pkg-config", "cmake", "objcopy", "df", "journalctl", "sleep", "flock", "curl", "rustup", "systemctl"]:
             (self.commands / name).symlink_to(stub)
         # Linux mv -T replaces a symlink rather than following its directory.
         mv = self.commands / "mv"
@@ -183,6 +191,19 @@ class GuestDevelopmentTest(unittest.TestCase):
             archive.add(tools, arcname="scripts/firecracker-menual")
             archive.add(ingress_builder, arcname="scripts/build-ingress.sh")
             archive.add(guest_builder, arcname="scripts/build-guest-console.sh")
+
+    def test_existing_guest_installs_missing_kernel_headers_before_build(self):
+        result = self.run_guest(MISSING_KERNEL_HEADERS=1)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        installs = (self.root / 'dependency-installs').read_text()
+        for package in ('build-essential', 'flex', 'bison', 'bc', 'perl', 'xz-utils', 'libelf-dev', 'libssl-dev'):
+            self.assertIn(package, installs)
+
+    def test_dependency_install_failure_keeps_the_running_api(self):
+        result = self.run_guest(MISSING_KERNEL_HEADERS=1, DEPENDENCY_INSTALL_FAIL=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / 'events').exists())
+        self.assertFalse((self.binaries / 'bin').exists())
 
     def test_guest_console_helper_and_attribution_are_staged_next_to_the_api(self):
         result = self.run_guest()

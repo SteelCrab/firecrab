@@ -499,6 +499,7 @@ pub(crate) async fn ensure_managed_kernel(
             "kernel compilation requires a Linux host with a matching CPU architecture",
         ));
     }
+    check_build_dependencies(architecture).await?;
     log(
         tracker,
         requested,
@@ -715,6 +716,37 @@ impl Drop for BuildGroup {
             libc::kill(-(self.0 as i32), libc::SIGKILL);
         }
     }
+}
+
+/// Reject an incomplete host before downloading hundreds of MiB of kernel source.
+async fn check_build_dependencies(architecture: Architecture) -> Result<(), ResolveError> {
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::process::Command::new("bash")
+            .args([
+                "-c",
+                BUILD_SCRIPT,
+                "firecrab-kernel-builder",
+                "--check",
+                architecture.as_str(),
+            ])
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| unavailable(architecture, "kernel dependency check timed out"))?
+    .map_err(|error| unavailable(architecture, format!("check kernel dependencies: {error}")))?;
+    if !output.status.success() {
+        return Err(unavailable(
+            architecture,
+            format!(
+                "kernel build prerequisites failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Run the embedded recipe in a process group and stream both output pipes.
