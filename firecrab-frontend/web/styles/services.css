@@ -86,7 +86,7 @@
 .service-otlp-metrics dt { color: var(--text-3); }
 .service-otlp-metrics dd { margin: 0; }
 @media (max-width: 767px) {
-  .screen:has(#detail-panel[data-view="services"]:not([hidden])) .screen-header-end > :not(#api-status) { display: none; }
+  .screen:has(#detail-panel[data-view="services"]:not([hidden])) .screen-header-end > * { display: none; }
   .service-table :is(th, td) { padding-left: 8px; padding-right: 8px; }
   .service-table .service-col-port { width: 56px; }
   .service-table .service-col-replicas { width: 64px; }

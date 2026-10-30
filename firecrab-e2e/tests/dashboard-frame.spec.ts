@@ -388,7 +388,7 @@ test.describe("dashboard frame", () => {
     await openDashboard(page, { vms: VMS, locale: "ko", routes: { "/api/host": HOST } });
     await expect(hostCard(page)).toContainText("호스트 정상");
     await expect(hostCard(page)).toContainText("메모리");
-    await expect(page.locator("#api-status")).toHaveText("실시간");
+    await expect(page.locator("#api-status")).toHaveCount(0);
   });
 
   test("puts the banner under the screen header", async ({ page }) => {
@@ -399,16 +399,16 @@ test.describe("dashboard frame", () => {
     const banner = page.getByRole("alert").filter({ hasText: "VM list unavailable" });
     await expect(banner).toBeVisible();
     await expect(page.locator(".screen-header + #messages [role=alert]")).toHaveCount(1);
-    await expect(header).toContainText("API unavailable — retrying every 3s", { timeout: 20_000 });
+    await expect(header).not.toContainText("API unavailable");
   });
 
-  test("shows live status and no refresh or panel toggle buttons", async ({ page }) => {
+  test("keeps the header free of connection status, refresh and panel toggle buttons", async ({ page }) => {
     await openDashboard(page, { vms: VMS });
-    await expect(page.locator("#api-status")).toHaveText("Live");
-    await expect(page.locator("#api-status")).toHaveAttribute("data-state", "live");
+    await expect(page.locator("#api-status")).toHaveCount(0);
     for (const hash of ["#/vms", "#/networks", "#/secrets", "#/pipe", "#/host"]) {
       await page.goto(`/${hash}`);
       const header = page.locator(".screen-header");
+      await expect(header.locator("#api-status")).toHaveCount(0);
       await expect(header.getByRole("button", { name: "Refresh", exact: true })).toHaveCount(0);
       await expect(header.getByRole("button", { name: /^(Show details|Hide details|Details)$/ })).toHaveCount(0);
     }
@@ -420,12 +420,18 @@ test.describe("dashboard frame", () => {
     await expect(page.locator(".screen-heading h1")).toHaveText("New MicroVM");
   });
 
-  test("marks the status down while the API is unavailable", async ({ page }) => {
+  test("keeps API errors in the banner and recovers by polling", async ({ page }) => {
+    let unavailable = true;
     await openDashboard(page, {
-      routes: { "/api/vms": (route) => route.fulfill({ status: 500, json: { error: { message: "VM list unavailable" } } }) },
+      routes: { "/api/vms": (route) => unavailable
+        ? route.fulfill({ status: 500, json: { error: { message: "VM list unavailable" } } })
+        : route.fulfill({ json: VMS }) },
     });
-    await expect(page.locator("#api-status")).toHaveAttribute("data-state", "down");
-    await expect(page.locator("#api-status")).toHaveText("API unavailable — retrying every 3s");
+    await expect(page.getByRole("alert")).toContainText("VM list unavailable");
+    await expect(page.locator("#api-status")).toHaveCount(0);
+    unavailable = false;
+    await expect(page.getByRole("button", { name: "api-gateway", exact: true })).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
   });
 
   test("keeps the language select", async ({ page }) => {

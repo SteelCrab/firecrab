@@ -153,11 +153,6 @@
 .screen-group::after, .screen-parent::after { content: "/"; color: var(--text-5); }
 .screen-heading h1 { margin: 0; color: var(--text); font-size: 15px; font-weight: 650; }
 .screen-header-end { display: flex; align-items: center; gap: 6px; margin-left: auto; }
-#api-status { display: inline-flex; align-items: center; gap: 6px; margin-right: 8px; color: var(--text-4); font-size: 12px; white-space: nowrap; }
-#api-status::before { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--text-5); content: ""; }
-#api-status[data-state="live"]::before { background: var(--green); }
-#api-status[data-state="down"] { color: var(--red-ink); }
-#api-status[data-state="down"]::before { background: var(--red); }
 .screen-body { display: flex; flex: 1; flex-direction: column; gap: 16px; min-height: 0; padding: 20px; overflow: auto; }
 
 .banner {

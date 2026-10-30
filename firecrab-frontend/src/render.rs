@@ -469,7 +469,6 @@ pub fn page(app: &App) -> String {
     let parent = parent.map_or_else(String::new, |parent| {
         format!("<span class=\"screen-parent\">{parent}</span>")
     });
-    let (status_state, status_label) = api_status(app);
     let (summary, toolbar) = if section == "vms" && app.route == "vms" {
         (
             if app.loaded {
@@ -545,7 +544,7 @@ pub fn page(app: &App) -> String {
     let menu_label = tr(app, "Open menu", "메뉴 열기");
     let search_icon = navigation_icon("search");
     format!(
-        "<div class=\"app-frame\"><button class=\"icon-btn nav-toggle\" aria-label=\"{menu_label}\" id=\"nav-toggle\" aria-controls=\"main-navigation\" aria-expanded=\"false\" data-action=\"menu\">{menu_icon}</button><div class=\"nav-backdrop\" data-action=\"menu-close\" aria-hidden=\"true\"></div><nav id=\"main-navigation\" class=\"sidebar\" aria-label=\"{}\"><div class=\"sidebar-brand\"><img class=\"sidebar-logo\" src=\"/firecrab.png\" width=\"22\" height=\"22\" alt=\"\"><span class=\"sidebar-brand-text\"><span class=\"sidebar-name\">firecrab</span><span class=\"sidebar-host\" id=\"sidebar-platform\">private microvm cloud</span></span></div><button class=\"sidebar-search\" aria-label=\"{search_label}\" data-action=\"palette\">{search_icon}<span class=\"sidebar-label\">{search_label}</span><kbd>⌘ K</kbd></button><div class=\"sidebar-groups\">{nav}</div><div class=\"sidebar-foot\"><span id=\"update-indicator\"></span><section class=\"host-status\" id=\"host-status\" aria-label=\"Host status\">{meters}</section><div class=\"sidebar-language\"><select id=\"language\" aria-label=\"Language\"><option value=\"en\" {}>English</option><option value=\"ko\" {}>한국어</option></select></div></div></nav><div class=\"app-workspace\"><main class=\"screen\"><header class=\"screen-header\"><div class=\"screen-heading\"><span class=\"screen-group\">{category}</span>{parent}<h1>{title}</h1></div><div class=\"screen-header-end\"><span id=\"api-status\" data-state=\"{status_state}\">{status_label}</span>{actions}</div></header><div id=\"messages\" aria-live=\"polite\">{}</div><div class=\"wasm-layout\"><div class=\"screen-column\"><div id=\"screen-summary\">{summary}</div><div id=\"toolbar\">{toolbar}</div><div id=\"content\" class=\"wasm-content screen-main screen-body\" data-loaded=\"{}\">{}</div></div><aside id=\"detail-panel\" aria-label=\"{panel_label}\" class=\"wasm-panel detail-panel\" style=\"width:{panel_width}px\" {panel_hidden}>{panel}</aside></div></main></div></div><div id=\"menu-root\"></div><div id=\"palette-root\"></div><div id=\"tooltip-root\"></div><div id=\"modal-root\"></div>",
+        "<div class=\"app-frame\"><button class=\"icon-btn nav-toggle\" aria-label=\"{menu_label}\" id=\"nav-toggle\" aria-controls=\"main-navigation\" aria-expanded=\"false\" data-action=\"menu\">{menu_icon}</button><div class=\"nav-backdrop\" data-action=\"menu-close\" aria-hidden=\"true\"></div><nav id=\"main-navigation\" class=\"sidebar\" aria-label=\"{}\"><div class=\"sidebar-brand\"><img class=\"sidebar-logo\" src=\"/firecrab.png\" width=\"22\" height=\"22\" alt=\"\"><span class=\"sidebar-brand-text\"><span class=\"sidebar-name\">firecrab</span><span class=\"sidebar-host\" id=\"sidebar-platform\">private microvm cloud</span></span></div><button class=\"sidebar-search\" aria-label=\"{search_label}\" data-action=\"palette\">{search_icon}<span class=\"sidebar-label\">{search_label}</span><kbd>⌘ K</kbd></button><div class=\"sidebar-groups\">{nav}</div><div class=\"sidebar-foot\"><span id=\"update-indicator\"></span><section class=\"host-status\" id=\"host-status\" aria-label=\"Host status\">{meters}</section><div class=\"sidebar-language\"><select id=\"language\" aria-label=\"Language\"><option value=\"en\" {}>English</option><option value=\"ko\" {}>한국어</option></select></div></div></nav><div class=\"app-workspace\"><main class=\"screen\"><header class=\"screen-header\"><div class=\"screen-heading\"><span class=\"screen-group\">{category}</span>{parent}<h1>{title}</h1></div><div class=\"screen-header-end\">{actions}</div></header><div id=\"messages\" aria-live=\"polite\">{}</div><div class=\"wasm-layout\"><div class=\"screen-column\"><div id=\"screen-summary\">{summary}</div><div id=\"toolbar\">{toolbar}</div><div id=\"content\" class=\"wasm-content screen-main screen-body\" data-loaded=\"{}\">{}</div></div><aside id=\"detail-panel\" aria-label=\"{panel_label}\" class=\"wasm-panel detail-panel\" style=\"width:{panel_width}px\" {panel_hidden}>{panel}</aside></div></main></div></div><div id=\"menu-root\"></div><div id=\"palette-root\"></div><div id=\"tooltip-root\"></div><div id=\"modal-root\"></div>",
         tr(app, "Main navigation", "주요 메뉴"),
         if app.locale == "en" { "selected" } else { "" },
         if app.locale == "ko" { "selected" } else { "" },
@@ -576,21 +575,6 @@ fn crumbs(app: &App) -> (Option<&'static str>, &'static str) {
                 .map_or("MicroVM", |(_, _, en, ko)| tr(app, en, ko));
             (None, title)
         }
-    }
-}
-
-pub fn api_status(app: &App) -> (&'static str, &'static str) {
-    if app.connection_error.is_empty() {
-        ("live", tr(app, "Live", "실시간"))
-    } else {
-        (
-            "down",
-            tr(
-                app,
-                "API unavailable — retrying every 3s",
-                "API 연결 끊김 — 3초마다 다시 시도",
-            ),
-        )
     }
 }
 

@@ -439,11 +439,6 @@ fn render_messages(app: &Shared) {
             let _ = button.remove_attribute("disabled");
         }
     }
-    if let Some(status) = element("api-status") {
-        let (data_state, label) = render::api_status(&state);
-        let _ = status.set_attribute("data-state", data_state);
-        status.set_text_content(Some(label));
-    }
 }
 fn update_toolbar(app: &Shared) {
     let state = app.borrow();
