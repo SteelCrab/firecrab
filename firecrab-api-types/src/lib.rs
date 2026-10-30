@@ -23,8 +23,6 @@ mod sandbox_control;
 pub use sandbox_control::*;
 mod sandbox_canvas;
 pub use sandbox_canvas::*;
-mod project_workspace;
-pub use project_workspace::*;
 mod block_storage;
 mod network_dns;
 mod sandbox_environment;

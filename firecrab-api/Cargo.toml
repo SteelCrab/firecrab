@@ -27,7 +27,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 semver = "1"
 subtle = "2"
 ring = "0.17.14"
-rusqlite = { version = "0.39", features = ["bundled", "backup"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 lapin = { version = "4.12.3", default-features = false, features = ["tokio", "rustls--ring", "rustls-webpki-roots-certs"] }
 rcgen = "0.14.5"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

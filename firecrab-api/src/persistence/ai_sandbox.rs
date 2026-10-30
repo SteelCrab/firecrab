@@ -152,16 +152,6 @@ impl Store {
     pub fn delete_sandbox_project(&self, id: Uuid) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
-        let retained: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM project_workspaces WHERE project_id=?1)",
-            [id.to_string()],
-            |r| r.get(0),
-        )?;
-        if retained {
-            return Err(PersistenceError::BlockStorageConflict {
-                message: "project has retained workspace data",
-            });
-        }
         tx.execute(
             "DELETE FROM ai_sandbox_admissions WHERE task_id IN (SELECT id FROM ai_sandbox_tasks WHERE project_id=?1)",
             [id.to_string()],

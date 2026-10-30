@@ -373,26 +373,6 @@ pub async fn capabilities(
     super::guest_protocol::capabilities(&output.stdout)
 }
 
-/// Execute only the fixed project-volume bootstrap protocol over the existing authenticated channel.
-pub(crate) async fn prepare_project_volume(
-    state: &AppState,
-    binding: &Binding,
-    directory: &Path,
-    script: Vec<u8>,
-) -> io::Result<Vec<u8>> {
-    let output = capture(
-        ssh(state, binding, directory)?,
-        script,
-        4096,
-        Duration::from_secs(45),
-    )
-    .await?;
-    if output.code != 0 {
-        return Err(io::Error::other("Project volume verification failed"));
-    }
-    Ok(output.stdout)
-}
-
 /// Confirm guest writes reached its disks before a retained environment is stopped.
 pub async fn sync_filesystems(
     state: &AppState,

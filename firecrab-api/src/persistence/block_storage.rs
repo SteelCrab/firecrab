@@ -143,16 +143,6 @@ impl Store {
     /// Reserves an unattached disk against concurrent attach before removing its file.
     pub(crate) fn begin_block_storage_delete(&self, id: Uuid) -> Result<(), PersistenceError> {
         let conn = self.lock();
-        let retained: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM project_workspaces WHERE volume_id=?1)",
-            [id.to_string()],
-            |r| r.get(0),
-        )?;
-        if retained {
-            return Err(PersistenceError::BlockStorageConflict {
-                message: "volume is retained by a project workspace",
-            });
-        }
         let volume = conn
             .query_row(&format!("{SELECT} WHERE id = ?1"), [id.to_string()], decode)
             .optional()?
@@ -202,21 +192,6 @@ impl Store {
             });
         }
         for mount in mounts {
-            let reserved: Option<(String, String)> = transaction
-                .query_row(
-                    "SELECT vm_id,project_id FROM project_workspaces WHERE volume_id=?1",
-                    [mount.volume_id.to_string()],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()?;
-            if reserved.is_some_and(|(vm, _)| {
-                vm != vm_id.to_string() || mount.mount_path != "/workspace/shared"
-            }) {
-                return Err(PersistenceError::BlockStorageConflict {
-                    message: "volume is retained by another project workspace binding",
-                });
-            }
-
             let mut statement = transaction.prepare(
                 "SELECT id, mount_path FROM micro_block_storages WHERE attached_vm_id = ?1",
             )?;
@@ -269,18 +244,7 @@ impl Store {
         id: Uuid,
         vm_id: Uuid,
     ) -> Result<(), PersistenceError> {
-        let conn = self.lock();
-        let retained: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM project_workspaces WHERE volume_id=?1)",
-            [id.to_string()],
-            |r| r.get(0),
-        )?;
-        if retained {
-            return Err(PersistenceError::BlockStorageConflict {
-                message: "rebind retained volumes through their project workspace",
-            });
-        }
-        let changed = conn.execute(
+        let changed = self.lock().execute(
             "UPDATE micro_block_storages SET attached_vm_id = NULL, mount_path = NULL
              WHERE id = ?1 AND attached_vm_id = ?2",
             params![id.to_string(), vm_id.to_string()],

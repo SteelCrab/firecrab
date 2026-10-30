@@ -22,7 +22,6 @@ mod cluster;
 mod cluster_services;
 mod database_services;
 mod pools;
-mod project_workspaces;
 mod queues;
 pub(crate) use cluster::ClusterError;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
@@ -798,7 +797,6 @@ impl Store {
         migrate_dns_mode_column(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute_batch(block_storage::SCHEMA)?;
-        conn.execute_batch(project_workspaces::SCHEMA)?;
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;

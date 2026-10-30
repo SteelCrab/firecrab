@@ -19,7 +19,6 @@ name = "firecrab-api-types"
 version = "0.4.1"
 dependencies = [
  "serde",
- "serde_json",
  "uuid",
 ]
 
