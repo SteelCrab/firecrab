@@ -118,6 +118,65 @@ fn error_guidance<'a>(app: &App, error: &str) -> &'a str {
     }
 }
 
+fn setup_guide(app: &App) -> String {
+    let mut out = format!(
+        "<section class=\"wasm-card stack-setup\" aria-labelledby=\"stack-setup-title\"><h2 id=\"stack-setup-title\">{}</h2><p>{}</p><p>{}</p><ol>",
+        tr(app, "Set up a Stack", "Stack 구성 방법"),
+        tr(app, "No registered stacks.", "등록된 Stack이 없다."),
+        tr(
+            app,
+            "Use the Firecrab CLI connected to this host.",
+            "현재 호스트에 연결한 Firecrab CLI에서 진행한다."
+        )
+    );
+    for (instruction, command) in [
+        (
+            tr(
+                app,
+                "Write the network and required MicroVMs or MicroServices in stack.yaml.",
+                "stack.yaml 파일에 네트워크와 필요한 MicroVM 또는 MicroService를 작성한다.",
+            ),
+            "",
+        ),
+        (
+            tr(
+                app,
+                "Validate the file and register its Stack name.",
+                "파일을 검증하고 Stack 이름을 등록한다.",
+            ),
+            "firecrab stack validate --file stack.yaml\nfirecrab stack register --name demo",
+        ),
+        (
+            tr(
+                app,
+                "Review the planned changes, then apply them.",
+                "변경 계획을 확인한 뒤 적용한다.",
+            ),
+            "firecrab stack plan --file stack.yaml --json > plan.json\nfirecrab stack apply --file stack.yaml --expected-plan plan.json",
+        ),
+        (
+            tr(
+                app,
+                "Refresh this page to check the registered Stack.",
+                "이 화면을 새로고침해 등록된 Stack을 확인한다.",
+            ),
+            "",
+        ),
+    ] {
+        out.push_str(&format!("<li><p>{}</p>", escape(instruction)));
+        if !command.is_empty() {
+            out.push_str(&format!("<pre><code>{}</code></pre>", escape(command)));
+        }
+        out.push_str("</li>");
+    }
+    out.push_str(&format!(
+        "</ol><p class=\"stack-setup-note\">{}</p><a href=\"https://github.com/SteelCrab/firecrab/blob/main/public-docs/guides/stacks.md#schema\" target=\"_blank\" rel=\"noopener noreferrer\">{}</a></section>",
+        tr(app, "Replace demo with the name value in stack.yaml.", "예시의 demo는 stack.yaml의 name 값으로 바꾼다."),
+        tr(app, "View the YAML example", "YAML 작성 예시 보기")
+    ));
+    out
+}
+
 pub fn content(app: &App) -> String {
     let mut out = format!(
         "<div class=\"wasm-actions\">{}</div>",
@@ -130,11 +189,8 @@ pub fn content(app: &App) -> String {
     );
     let rows = list(&app.resource);
     if rows.is_empty() {
-        if app.connection_error.is_empty() {
-            out.push_str(&format!(
-                "<p class=\"empty-state\">{}</p>",
-                tr(app, "No registered stacks.", "등록된 Stack이 없다.")
-            ));
+        if app.loaded && app.connection_error.is_empty() {
+            out.push_str(&setup_guide(app));
         }
         return out;
     }

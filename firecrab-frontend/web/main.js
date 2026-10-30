@@ -10,6 +10,7 @@ import './styles/pipe-ai.css';
 import './styles/pipe-database.css';
 import './styles/ai-sandbox.css';
 import './styles/queues.css';
+import './styles/stacks.css';
 import './styles/services.css';
 import './styles/screens.css';
 import './styles/readability.css';
