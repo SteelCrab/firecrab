@@ -11,6 +11,7 @@ mod manager;
 mod model;
 mod notes;
 mod observability;
+mod oci_progress;
 mod render;
 mod sandbox;
 mod stacks;
@@ -154,6 +155,26 @@ fn set_html(id: &str, html: &str) {
         node.set_inner_html(html);
     }
 }
+fn set_content(html: &str) {
+    let details = element("oci-import-log-details");
+    let alias = details
+        .as_ref()
+        .and_then(|node| node.get_attribute("data-import-alias"));
+    let open = details.is_some_and(|node| node.has_attribute("open"));
+    let scroll = element("oci-import-log").map(|node| (node.scroll_top(), node.scroll_left()));
+    set_html("content", html);
+    if let Some(details) = element("oci-import-log-details")
+        && alias.is_some()
+        && details.get_attribute("data-import-alias") == alias
+        && open
+    {
+        let _ = details.set_attribute("open", "");
+        if let (Some(log), Some((top, left))) = (element("oci-import-log"), scroll) {
+            log.set_scroll_top(top);
+            log.set_scroll_left(left);
+        }
+    }
+}
 fn set_text(id: &str, value: &str) {
     if let Some(node) = element(id)
         && node.text_content().as_deref() != Some(value)
@@ -233,7 +254,7 @@ fn render_content(app: &Shared) {
         (render::content(&state), state.loaded)
     };
     app.borrow_mut().rendering = true;
-    set_html("content", &html);
+    set_content(&html);
     update_summary(app);
     advanced::cluster::restore_focus(cluster_focus);
     app.borrow_mut().rendering = false;
@@ -253,7 +274,7 @@ fn render_image_list(app: &Shared) {
         (render::content(&state), state.loaded)
     };
     app.borrow_mut().rendering = true;
-    set_html("content", &html);
+    set_content(&html);
     app.borrow_mut().rendering = false;
     if let Some(content) = element("content") {
         let _ = content.set_attribute("data-loaded", if loaded { "true" } else { "false" });
@@ -2088,6 +2109,27 @@ fn mutate(
             }
             result => result,
         };
+        let mut resumed_import = false;
+        let result = match result {
+            Err(error)
+                if method == "POST"
+                    && path == "/api/oci/import"
+                    && error.status == Some(409)
+                    && error.code.as_deref() == Some("import_in_progress") =>
+            {
+                let reference = body
+                    .as_ref()
+                    .map(|body| text(body, "reference"))
+                    .unwrap_or("");
+                if let Some(snapshot) = workflows::reconnect_import(reference).await {
+                    resumed_import = true;
+                    Ok(snapshot)
+                } else {
+                    Err(error)
+                }
+            }
+            result => result,
+        };
         let succeeded = result.is_ok();
         let mut state = app.borrow_mut();
         if state.generation != generation {
@@ -2131,7 +2173,9 @@ fn mutate(
                 {
                     state.detail = Some(value.clone());
                 }
-                state.notice = if path == "/api/pipe/auth/firecrab" && method == "PUT" {
+                state.notice = if path == "/api/oci/import" {
+                    "Image import started."
+                } else if path == "/api/pipe/auth/firecrab" && method == "PUT" {
                     "Connected to the Firecrab account."
                 } else if path.ends_with("/rules") {
                     "Rules saved."
@@ -2245,7 +2289,12 @@ fn mutate(
                     );
                 }
                 if path == "/api/oci/import" && value["status"] == "running" {
-                    workflows::remember_import(text(&value, "alias"));
+                    workflows::remember_import(
+                        text(&value, "alias"),
+                        body.as_ref()
+                            .map(|body| text(body, "reference"))
+                            .unwrap_or(""),
+                    );
                 }
                 let status = text(&value, "status");
                 let job_path = if path == "/api/oci/import" {
@@ -2276,6 +2325,9 @@ fn mutate(
                 } else if let Some(path) = job_path {
                     state.job = Some((path, value));
                 }
+                if resumed_import {
+                    state.notice = "An import for this image name is already running.".into();
+                }
                 if let Some(route) = return_route.filter(|route| *route != state.route) {
                     drop(state);
                     let _ = window().location().set_hash(&format!("/{route}"));
@@ -2284,8 +2336,11 @@ fn mutate(
             }
             Err(error) => {
                 state.field_errors = error.fields;
-                state.error = if path.ends_with("/rules") && error.message.starts_with("HTTP 409:")
+                state.error = if path == "/api/oci/import"
+                    && error.code.as_deref() == Some("import_in_progress")
                 {
+                    "An import for this image name is already running.".into()
+                } else if path.ends_with("/rules") && error.message.starts_with("HTTP 409:") {
                     "Stop affected VMs and service deployments before changing rules.".into()
                 } else if path.starts_with("/api/micro-services/")
                     && (path.ends_with("/updates")
@@ -2588,7 +2643,7 @@ fn poll_job(app: Shared) {
     };
     if matches!(
         text(&value, "status"),
-        "complete" | "completed" | "succeeded" | "failed" | "error"
+        "complete" | "completed" | "succeeded" | "failed" | "error" | "interrupted"
     ) {
         return;
     }
@@ -2600,11 +2655,18 @@ fn poll_job(app: Shared) {
             return;
         }
         match result {
-            Ok(value) => {
+            Ok(mut value) => {
+                if path.starts_with("/api/oci/import/") && value["status"] == "idle" {
+                    value["status"] = "interrupted".into();
+                    workflows::forget_import(text(&value, "alias"));
+                }
                 let done = matches!(
                     text(&value, "status"),
                     "complete" | "completed" | "succeeded" | "failed" | "error"
                 );
+                if done && path.starts_with("/api/oci/import/") {
+                    workflows::forget_import(text(&value, "alias"));
+                }
                 state.job = Some((path, value));
                 if done {
                     state.notice =
@@ -2618,12 +2680,15 @@ fn poll_job(app: Shared) {
                 && matches!(text(value, "status"), "succeeded" | "failed")
         });
         let redraw = state.form.is_none();
+        let image_form = state.route == "images" && state.form.is_some();
         drop(state);
         if registry_done {
             workflows::job_finished(&app);
         }
         if redraw {
             render_content(&app);
+        } else if image_form {
+            render_image_list(&app);
         }
     });
 }

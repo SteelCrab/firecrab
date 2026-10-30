@@ -798,12 +798,16 @@ pub fn content(app: &App) -> String {
         html.push_str("</section>");
     }
     if let Some(job) = &app.job {
-        html.push_str(&format!(
-            "<section class=\"wasm-details\"><h2>{}</h2>{}{}</section>",
-            crate::i18n::t("Progress"),
-            properties(&job.1),
-            button("Refresh progress", "job-refresh", &job.0)
-        ));
+        if app.route == "images" && job.0.starts_with("/api/oci/import/") {
+            html = crate::oci_progress::html(&job.1) + &html;
+        } else {
+            html.push_str(&format!(
+                "<section class=\"wasm-details\"><h2>{}</h2>{}{}</section>",
+                crate::i18n::t("Progress"),
+                properties(&job.1),
+                button("Refresh progress", "job-refresh", &job.0)
+            ));
+        }
     }
     if app.route == "images" {
         let ko = app.locale == "ko";

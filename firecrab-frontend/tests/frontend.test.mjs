@@ -416,6 +416,90 @@ test('image registration and OCI import expose completion', async () => {
   assert.equal(mutation('/api/oci/import').body.reference, 'nginx:1.27');
 });
 
+test('a running OCI import survives reload and reattaches to a duplicate request', async () => {
+  const running = { alias: 'nginx-1.27', status: 'running', startedAtMs: 123, log: 'caching image blobs\nreading image process config\nprovisioning guest runtime\npairing host kernel' };
+  fixture.handlers.set('GET /api/oci/import/nginx-1.27', ({ send }) => send(200, running));
+  fixture.handlers.set('POST /api/oci/import', ({ send }) => send(409, { error: { code: 'import_in_progress', message: 'an import is already running for this image' } }));
+  await page.goto(fixture.url);
+  await page.evaluate(() => localStorage.setItem('firecrab.registry-job', JSON.stringify({kind:'import', id:'nginx-1.27', reference:'nginx:1.27'})));
+  await open('images');
+  const progress = page.getByRole('region', { name: 'Image import progress' });
+  await expect(progress).toContainText('Connecting kernel');
+  await expect(progress.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '3');
+  await expect(progress.locator('#oci-import-log')).toBeHidden();
+  await page.locator('#editor').getByRole('button', { name: 'Import', exact: true }).click();
+  await expect(page.locator('#editor')).toHaveCount(0);
+  await expect(progress).toContainText('Connecting kernel');
+  await expect(page.locator('#root')).not.toContainText('HTTP 409');
+  assert.equal(fixture.requests.filter(r => r.method === 'POST' && r.path === '/api/oci/import').length, 1);
+  await page.reload();
+  await expect(progress).toContainText('Connecting kernel');
+});
+
+test('a lost OCI job after an API restart is reported as unknown and can be retried', async () => {
+  let status = 'idle';
+  fixture.handlers.set('GET /api/oci/import/nginx-1.27', ({ send }) => send(200, { alias: 'nginx-1.27', status, log: status === 'running' ? 'caching image blobs' : '' }));
+  fixture.handlers.set('POST /api/oci/import', ({ send }) => { status = 'running'; send(202, { alias: 'nginx-1.27', status, log: 'caching image blobs' }); });
+  await page.goto(fixture.url);
+  await page.evaluate(() => localStorage.setItem('firecrab.registry-job', JSON.stringify({kind:'import', id:'nginx-1.27', reference:'nginx:1.27'})));
+  await open('images');
+  const progress = page.getByRole('region', { name: 'Image import progress' });
+  await expect(progress).toContainText('Import status unavailable');
+  await expect(progress.getByRole('progressbar')).toHaveCount(0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('firecrab.registry-job')), null);
+  await page.locator('#editor').getByRole('button', { name: 'Import', exact: true }).click();
+  await expect(progress).toContainText('Downloading image');
+});
+
+test('a duplicate OCI alias with a different saved reference preserves the draft', async () => {
+  fixture.handlers.set('GET /api/oci/import/nginx-1.27', ({ send }) => send(200, { alias:'nginx-1.27', status:'running', log:'caching image blobs' }));
+  fixture.handlers.set('POST /api/oci/import', ({ send }) => send(409, { error: { code:'import_in_progress', message:'already running' } }));
+  await page.goto(fixture.url);
+  await page.evaluate(() => localStorage.setItem('firecrab.registry-job', JSON.stringify({kind:'import', id:'nginx-1.27', reference:'other.example/nginx:1.27'})));
+  await open('images');
+  await page.locator('#editor').getByRole('button', { name:'Import', exact:true }).click();
+  await expect(page.locator('#editor')).toBeVisible();
+  await expect(page.getByLabel('OCI reference', { exact:true })).toHaveValue('nginx:1.27');
+  await expect(page.locator('#root')).toContainText('An import for this image name is already running.');
+  await expect(page.locator('#root')).not.toContainText('HTTP 409');
+});
+
+test('a saved legacy OCI job can reconnect by inspecting the reference', async () => {
+  fixture.handlers.set('GET /api/oci/import/nginx-1.27', ({ send }) => send(200, { alias:'nginx-1.27', status:'running', log:'caching image blobs' }));
+  fixture.handlers.set('GET /api/oci/inspect', ({ send }) => send(200, { alias:'nginx-1.27', architecture:'aarch64' }));
+  fixture.handlers.set('POST /api/oci/import', ({ send }) => send(409, { error: { code:'import_in_progress', message:'already running' } }));
+  await page.goto(fixture.url);
+  await page.evaluate(() => localStorage.setItem('firecrab.registry-job', JSON.stringify({kind:'import', id:'nginx-1.27'})));
+  await open('images');
+  await page.locator('#editor').getByRole('button', { name:'Import', exact:true }).click();
+  await expect(page.locator('#editor')).toHaveCount(0);
+  await expect(page.getByRole('region', { name:'Image import progress' })).toContainText('Downloading image');
+  await expect(page.locator('#root')).not.toContainText('HTTP 409');
+});
+
+test('OCI progress follows observed stages and clears the saved job on completion', async () => {
+  const job = { alias:'nginx-1.27', status:'running', log:'caching image blobs' };
+  fixture.handlers.set('GET /api/oci/import/nginx-1.27', ({ send }) => send(200, job));
+  await page.goto(fixture.url);
+  await page.evaluate(() => localStorage.setItem('firecrab.registry-job', JSON.stringify({kind:'import', id:'nginx-1.27', reference:'nginx:1.27'})));
+  await open('images');
+  const progress = page.getByRole('region', { name:'Image import progress' });
+  await expect(progress).toContainText('Downloading image');
+  for (const [line, label, count] of [
+    ['reading image process config', 'Preparing image files', '1'],
+    ['provisioning guest runtime', 'Building image', '2'],
+    ['pairing host kernel', 'Connecting kernel', '3'],
+  ]) {
+    job.log += `\n${line}`;
+    await expect(progress).toContainText(label);
+    await expect(progress.getByRole('progressbar')).toHaveAttribute('aria-valuenow', count);
+  }
+  job.status = 'succeeded';
+  await expect(progress).toContainText('Import complete');
+  await expect(progress.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '4');
+  assert.equal(await page.evaluate(() => localStorage.getItem('firecrab.registry-job')), null);
+});
+
 test('package catalog with only the removed defaults shows an empty state', async () => {
   fixture.handlers.set('GET /api/microregistry', ({ send }) => send(200, { images:
     ['alpine-3.24.1', 'rocky-9.8', 'ubuntu-26.04'].map(alias => ({ alias, version: `${alias}-v5` })),

@@ -1356,11 +1356,62 @@ pub fn close_on_escape(app: &Shared) -> bool {
     false
 }
 
-pub fn remember_import(alias: &str) {
+pub fn remember_import(alias: &str, reference: &str) {
     if let Ok(Some(storage)) = window().local_storage() {
         let _ = storage.set_item(
             "firecrab.registry-job",
-            &json!({"kind":"import","id":alias}).to_string(),
+            &json!({"kind":"import","id":alias,"reference":reference}).to_string(),
         );
     }
+}
+pub fn forget_import(alias: &str) {
+    if let Ok(Some(storage)) = window().local_storage()
+        && let Ok(Some(saved)) = storage.get_item("firecrab.registry-job")
+        && let Ok(value) = serde_json::from_str::<Value>(&saved)
+        && value["kind"] == "import"
+        && text(&value, "id") == alias
+    {
+        let _ = storage.remove_item("firecrab.registry-job");
+    }
+}
+
+pub async fn reconnect_import(reference: &str) -> Option<Value> {
+    let saved = window()
+        .local_storage()
+        .ok()
+        .flatten()
+        .and_then(|storage| storage.get_item("firecrab.registry-job").ok().flatten())
+        .and_then(|saved| serde_json::from_str::<Value>(&saved).ok());
+    if saved.as_ref().is_some_and(|saved| {
+        saved["kind"] == "import"
+            && !text(saved, "reference").is_empty()
+            && saved["reference"] != reference
+    }) {
+        return None;
+    }
+    let alias = if let Some(saved) =
+        saved.filter(|saved| saved["kind"] == "import" && saved["reference"] == reference)
+    {
+        text(&saved, "id").to_owned()
+    } else {
+        let inspected = api::request(
+            "GET",
+            &format!("/api/oci/inspect?reference={}", api::encode(reference)),
+            None,
+        )
+        .await
+        .ok()?;
+        text(&inspected, "alias").to_owned()
+    };
+    if alias.is_empty() {
+        return None;
+    }
+    let snapshot = api::request(
+        "GET",
+        &format!("/api/oci/import/{}", api::encode(&alias)),
+        None,
+    )
+    .await
+    .ok()?;
+    (snapshot["status"] == "running").then_some(snapshot)
 }

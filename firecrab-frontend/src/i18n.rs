@@ -443,6 +443,24 @@ pub fn t(value: &str) -> &str {
         "OCI reference" => "OCI 참조",
         "Inspect image" => "이미지 확인",
         "Image inspected" => "이미지 확인 완료",
+        "Image import progress" => "이미지 가져오기 진행 상황",
+        "Image import started." => "이미지 가져오기를 시작했다.",
+        "Import complete" => "가져오기 완료",
+        "Import failed" => "가져오기 실패",
+        "Import status unavailable" => "가져오기 상태 확인 불가",
+        "Check installed images or retry the import." => {
+            "설치된 이미지를 확인하거나 다시 가져온다."
+        }
+        "Downloading image" => "이미지 다운로드 중",
+        "Preparing image files" => "이미지 파일 준비 중",
+        "Building image" => "이미지 생성 중",
+        "Connecting kernel" => "커널 연결 중",
+        "Prepare files" => "파일 준비",
+        "Build image" => "이미지 생성",
+        "Connect kernel" => "커널 연결",
+        "An import for this image name is already running." => {
+            "이 이미지 이름으로 가져오기가 이미 진행 중이다."
+        }
         "Image name" => "이미지 이름",
         "Image details" => "이미지 세부정보",
         "Digest" => "다이제스트",

@@ -33,6 +33,13 @@
 .kernel-queue-head h2 { margin: 0; font-size: .95rem; font-weight: 650; }
 .kernel-queue-head > span, .kernel-progress-head > span { color: var(--text-3); font-size: .625rem; font-variant-numeric: tabular-nums; }
 .kernel-job { padding: .625rem .875rem; margin-top: .5rem; border: 1px solid var(--border); border-radius: .5rem; background: var(--bg); }
+.oci-import-progress { margin: 0 0 1rem; }
+.oci-import-head { display: flex; justify-content: space-between; gap: .5rem; font-size: .8rem; }
+.oci-import-head > span { color: var(--text-3); font-size: .625rem; }
+.oci-import-note { color: var(--text-3); font-size: .6875rem; }
+.oci-import-progress details { margin-top: .625rem; color: var(--text-2); font-size: .6875rem; }
+.oci-import-progress summary { width: fit-content; cursor: pointer; }
+.oci-import-progress details[open] summary { margin-bottom: .5rem; }
 .kernel-job-head .btn { height: auto; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; font-weight: 650; font-size: .85rem; }
 .kernel-job-head { margin-bottom: .375rem; }
 .kernel-job-head .btn:active { transform: scale(.97); }
