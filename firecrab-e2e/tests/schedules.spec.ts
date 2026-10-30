@@ -80,12 +80,12 @@ test.describe("Schedules @dashboard", () => {
     await detail(page).getByRole("button", { name: "Create schedule", exact: true }).click();
     await expect(page.getByRole("row", { name: /^dev\-web\ ·\ Start(\s|$)/ })).toBeVisible();
     expect(writes[0].body).toMatchObject({ vmId: WEB, action: "start", enabled: true, timing: { kind: "cron", expression: "0 9 * * Mon-Fri", timeZone: "Asia/Seoul" } });
-    await page.getByRole("row", { name: /^dev\-web\ ·\ Start(\s|$)/ }).click();
     await detail(page).getByRole("button", { name: "Edit schedule", exact: true }).click();
     await detail(page).getByRole("radiogroup", { name: "Action", exact: true }).getByRole("radio", { name: "Stop", exact: true }).check();
     await detail(page).getByLabel("Time", { exact: true }).fill("18:00");
     await detail(page).getByRole("button", { name: "Save changes", exact: true }).click();
     expect(writes.at(-1)?.body).toMatchObject({ action: "stop", timing: { expression: "0 18 * * Mon-Fri" } });
+    await detail(page).getByRole("button", { name: "Close detail", exact: true }).click();
     const row = page.locator("table.schedule-table tbody tr").first();
     await row.getByRole("switch").click();
     await expect(row.getByRole("switch")).toHaveAttribute("aria-checked", "false");
@@ -131,6 +131,7 @@ test.describe("Schedules @dashboard", () => {
     await expect(detail(page).getByLabel("Cron expression", { exact: true })).toHaveValue("*/15 9-18 * * Mon-Fri");
     await detail(page).getByRole("button", { name: "Save changes", exact: true }).click();
     expect(writes[0].body.timing).toEqual(initial[0].timing);
+    await detail(page).getByRole("button", { name: "Close detail", exact: true }).click();
     await page.getByRole("row", { name: /^Weekend\ maintenance(\s|$)/ }).click();
     await detail(page).getByRole("button", { name: "Edit schedule", exact: true }).click();
     await detail(page).getByRole("button", { name: "Save changes", exact: true }).click();

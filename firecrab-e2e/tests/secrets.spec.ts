@@ -71,6 +71,8 @@ test.describe("Secrets web console @dashboard", () => {
     await expect(page.getByRole("heading", { name: "New secret", exact: true })).toHaveCount(0);
     await expect(page.getByLabel("DB_PASSWORD value", { exact: true })).toHaveText("••••••••");
     expect(writes[0].body.value).toBe(value);
+    const closeDetail = page.getByRole("button", { name: "Close detail", exact: true });
+    if (await closeDetail.isVisible()) await closeDetail.click();
     await page.getByRole("button", { name: "Edit DB_PASSWORD", exact: true }).click();
     await expect(page.getByLabel("Secret value", { exact: true })).toBeHidden();
     await expect(page.getByLabel("Secret value", { exact: true })).toHaveValue("");
@@ -78,6 +80,7 @@ test.describe("Secrets web console @dashboard", () => {
     await page.getByRole("button", { name: "Save secret", exact: true }).click();
     expect(writes[1].body).toEqual({ name: "DB_PASSWORD", description: "Updated description", version: 1 });
     await expect(page.getByText("Updated description", { exact: true })).toBeVisible();
+    if (await closeDetail.isVisible()) await closeDetail.click();
     await page.getByRole("button", { name: "Edit DB_PASSWORD", exact: true }).click();
     await page.getByLabel("Replace secret value", { exact: true }).check();
     await expect(page.getByLabel("Secret value", { exact: true })).toBeVisible();
@@ -108,6 +111,7 @@ test.describe("Secrets web console @dashboard", () => {
   });
 
   test("retains upload selection and destination when a stale preview is retried", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
     const writes = await openSecrets(page, { conflictApply: true });
     await page.getByLabel("Select DB_PASSWORD", { exact: true }).check();
     await page.getByLabel("Upload destination", { exact: true }).selectOption(CONNECTION);
@@ -167,6 +171,7 @@ test.describe("Secrets web console @dashboard", () => {
   });
 
   test("SEC4: uploads selected local IDs and reports partial failure", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
     const writes = await openSecrets(page, { partial: true });
     await page.getByLabel("Select DB_PASSWORD", { exact: true }).check();
     await page.getByLabel("Upload destination", { exact: true }).selectOption(CONNECTION);
