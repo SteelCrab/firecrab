@@ -628,6 +628,68 @@ pub fn change(app: &Shared, target: &Element) -> bool {
     }
     false
 }
+fn oci_inspection(value: &Value) -> String {
+    let mut html = format!(
+        "<section class=\"oci-inspection\" aria-label=\"{}\"><div class=\"oci-inspection-head\"><span class=\"oci-inspection-dot\" aria-hidden=\"true\"></span><strong>{}</strong></div><dl class=\"oci-inspection-properties\">",
+        escape(t("Image inspected")),
+        escape(t("Image inspected"))
+    );
+    for (key, label) in [
+        ("alias", "Image name"),
+        ("architecture", "Architecture"),
+        ("registry", "Registry"),
+        ("repository", "Repository"),
+        ("version", "Version"),
+    ] {
+        let value = text(value, key);
+        if !value.is_empty() {
+            html.push_str(&format!(
+                "<dt>{}</dt><dd>{}</dd>",
+                escape(t(label)),
+                escape(value)
+            ));
+        }
+    }
+    html.push_str("</dl>");
+    let digest = text(value, "digest");
+    if !digest.is_empty() || value["immutable"].is_boolean() || value["singlePlatform"].is_boolean()
+    {
+        html.push_str(&format!("<details class=\"oci-inspection-details\"><summary>{}</summary><dl class=\"oci-inspection-properties\">", escape(t("Image details"))));
+        if !digest.is_empty() {
+            html.push_str(&format!(
+                "<dt>{}</dt><dd><code>{}</code></dd>",
+                escape(t("Digest")),
+                escape(digest)
+            ));
+        }
+        for (key, label, yes, no) in [
+            (
+                "immutable",
+                "Reference type",
+                "Digest reference",
+                "Tag reference",
+            ),
+            (
+                "singlePlatform",
+                "Manifest type",
+                "Single manifest",
+                "Manifest index",
+            ),
+        ] {
+            if let Some(flag) = value[key].as_bool() {
+                html.push_str(&format!(
+                    "<dt>{}</dt><dd>{}</dd>",
+                    escape(t(label)),
+                    escape(t(if flag { yes } else { no }))
+                ));
+            }
+        }
+        html.push_str("</dl></details>");
+    }
+    html.push_str("</section>");
+    html
+}
+
 fn inspect_form(app: Shared, kind: &str) {
     if app.borrow().busy {
         return;
@@ -735,11 +797,15 @@ fn inspect_form(app: Shared, kind: &str) {
                     let html = if kind == "database" {
                         format!("<p role=\"status\">{}</p>", t("Connected"))
                     } else {
-                        render::properties(&value)
+                        oci_inspection(&value)
                     };
                     state.workflows.form_result = Some((form_path, html.clone()));
                     drop(state);
-                    crate::show_form_result(&html);
+                    if kind == "database" {
+                        crate::show_form_result(&html);
+                    } else {
+                        set_html("form-result", &html);
+                    }
                 }
             }
         }

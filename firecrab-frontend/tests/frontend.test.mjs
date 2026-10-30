@@ -1037,6 +1037,10 @@ test('Korean locale translates forms, detail tabs and console settings', async (
 });
 
 test('OCI inspection and database connection tests preserve the active draft', async () => {
+  fixture.handlers.set('GET /api/oci/inspect', ({ send }) => send(200, {
+    alias: 'example-app-v1', architecture: 'aarch64', registry: 'ghcr.io', repository: 'example/app', version: 'v1',
+    digest: `sha256:${'a'.repeat(64)}`, immutable: false, singlePlatform: false,
+  }));
   let releaseKernels;
   const kernels = new Promise(resolve => { releaseKernels = resolve; });
   fixture.handlers.set('GET /api/kernels', async ({ send }) => { await kernels; send(200, []); });
@@ -1045,6 +1049,15 @@ test('OCI inspection and database connection tests preserve the active draft', a
   await page.getByLabel('OCI reference', { exact: true }).fill('ghcr.io/example/app:v1');
   await page.getByRole('button', { name: 'Inspect image', exact: true }).click();
   await expect(page.locator('#form-result')).toContainText('aarch64');
+  await expect(page.locator('#form-result')).toContainText('Image inspected');
+  await expect(page.locator('#form-result')).toContainText('example-app-v1');
+  const inspectButton = await page.getByRole('button', { name: 'Inspect image', exact: true }).boundingBox();
+  const resultCard = await page.locator('.oci-inspection').boundingBox();
+  assert.ok(resultCard.y - (inspectButton.y + inspectButton.height) < 40, 'inspection follows the input');
+  await expect(page.locator('.oci-inspection-details')).not.toHaveAttribute('open', '');
+  await page.locator('.oci-inspection-details > summary').click();
+  await expect(page.locator('.oci-inspection-details code')).toHaveText(`sha256:${'a'.repeat(64)}`);
+  assert.ok(await page.locator('.oci-inspection').evaluate(el => el.scrollWidth <= el.clientWidth));
   const inventory = page.waitForResponse(response => response.url().endsWith('/api/kernels'));
   releaseKernels();
   await inventory;

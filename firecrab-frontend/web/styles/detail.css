@@ -40,6 +40,18 @@
 .detail-form .form-footer { margin: auto -1.25rem 0; padding: 0.75rem 1.25rem; }
 .detail-form #form-result:not(:empty) { margin-top: auto; }
 .detail-form #form-result:not(:empty) + .form-footer { margin-top: 0; }
+.detail-form #editor:has([data-action="oci-inspect"]) #form-result:not(:empty) { margin-top: 0; }
+.detail-form #editor:has([data-action="oci-inspect"]) #form-result:not(:empty) + .form-footer { margin-top: auto; }
+.oci-inspection { min-width: 0; padding: .75rem; border: 1px solid var(--border-strong); border-radius: .5rem; background: var(--bg-subtle); }
+.oci-inspection-head { display: flex; align-items: center; gap: .375rem; margin-bottom: .5rem; color: var(--text); font-size: .75rem; }
+.oci-inspection-dot { flex: none; width: .375rem; height: .375rem; border-radius: 50%; background: var(--green); }
+.oci-inspection-properties { display: grid; grid-template-columns: minmax(4.5rem, 32%) minmax(0, 1fr); gap: .375rem .625rem; margin: 0; font-size: .6875rem; line-height: 1.4; }
+.oci-inspection-properties dt { color: var(--text-3); }
+.oci-inspection-properties dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.oci-inspection-properties code { font: .625rem/1.5 var(--mono); overflow-wrap: anywhere; }
+.oci-inspection-details { margin-top: .5rem; padding-top: .5rem; border-top: 1px solid var(--border); }
+.oci-inspection-details summary { width: fit-content; color: var(--text-2); font-size: .6875rem; cursor: pointer; }
+.oci-inspection-details[open] summary { margin-bottom: .625rem; }
 
 /* Sections have no frame: a soft rule under each, none under the last. */
 .detail-sec { margin: 0 0 1rem; padding: 0 0 1rem; border: 0; border-bottom: 1px solid var(--border-soft); background: none; }
