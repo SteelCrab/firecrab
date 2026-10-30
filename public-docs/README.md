@@ -48,6 +48,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Connect AWS and GitHub accounts to Pipe services | [Auth](guides/pipe-auth.md) |
 | Select models, converse, and run isolated project tasks in a MicroVM | [AI Sandbox](guides/ai-sandbox.md) |
 | Manage AI account connections and use shared CLI/MCP integration APIs | [Pipe AI](guides/pipe-ai.md) |
+| Store CODE workspace configuration and account references | [CODE workspaces](guides/code-workspaces.md) |
 | Connect and browse an existing database | [Pipe databases](guides/pipe-databases.md) |
 | Connect an existing Amazon S3 bucket and manage files | [PipeStorage](guides/pipe-storage.md) |
 | Pull images from Docker Hub, GHCR or Amazon ECR | [Pipe Registry](guides/pipe-registry.md) |

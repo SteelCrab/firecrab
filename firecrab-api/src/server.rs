@@ -922,6 +922,18 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::pipe_ai::login_status),
         )
         .route("/auth/callback", get(handlers::pipe_ai::login_callback))
+        .route(
+            "/api/code/workspaces",
+            get(handlers::code_workspaces::list)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
+        .route(
+            "/api/code/workspaces/{id}",
+            get(handlers::code_workspaces::get)
+                .put(handlers::code_workspaces::save)
+                .delete(handlers::code_workspaces::delete)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
         .route("/api/pipe/ai/connections", get(handlers::pipe_ai::list))
         .route(
             "/api/pipe/ai/connections/{id}",
@@ -2063,6 +2075,10 @@ mod quick_tunnels_tests;
 #[cfg(test)]
 #[path = "server_pipe_auth_tests.rs"]
 mod pipe_auth_tests;
+
+#[cfg(test)]
+#[path = "server_code_workspaces_tests.rs"]
+mod code_workspaces_tests;
 
 #[cfg(test)]
 #[path = "server_pipe_ai_tests.rs"]

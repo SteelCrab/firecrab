@@ -25,6 +25,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Add persistent CODE workspace configuration with GitHub and AI AUTH account
+  references, operator-only APIs, revision checks, and current connection
+  observations. This foundation allocates no runtime resources (#556).
 - Define the IaC coverage contract for all services shipped through v0.4.0,
   including controller, Pipe and Sandbox configuration. A frozen API inventory
   and CI check track missing Stack and Terraform coverage without claiming it

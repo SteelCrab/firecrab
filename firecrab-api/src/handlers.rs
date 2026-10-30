@@ -3,6 +3,7 @@ pub mod block_storage;
 mod block_storage_tests;
 pub mod bootstrap;
 pub mod builder_vm;
+pub mod code_workspaces;
 pub mod console;
 pub mod console_sentinel;
 pub mod images;
