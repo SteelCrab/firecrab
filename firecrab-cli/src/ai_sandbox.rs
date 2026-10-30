@@ -278,5 +278,5 @@ pub(crate) fn wait_for_task(
 }
 
 #[cfg(test)]
-#[path = "ai_sandbox_tests.rs"]
+#[path = "../tests/unit/ai_sandbox/mod.rs"]
 mod tests;

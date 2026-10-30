@@ -332,6 +332,8 @@ fn guest_mcp_reports_unsupported_capabilities_and_signal_acceptance_without_term
     let id = Uuid::new_v4();
     let base = format!("/api/ai-sandbox/projects/{project}/tasks/{id}/guest");
     let health = json!({"version":1,"init":"openrc","execution":false,"docker":false,"nspawn":false,"unsupported":"missing supervisor"});
+    let mut crun_health = health.clone();
+    crun_health["crun"] = json!(true);
     let process = json!({"pid":42,"startTicks":100,"bootId":"boot-1","state":"S"});
     let signal = json!({"process":process,"signal":"terminate"});
     let mut sent = response(
@@ -346,6 +348,12 @@ fn guest_mcp_reports_unsupported_capabilities_and_signal_acceptance_without_term
         response("GET", format!("{base}/health"), Value::Null, health.clone()),
         response(
             "GET",
+            format!("{base}/health"),
+            Value::Null,
+            crun_health.clone(),
+        ),
+        response(
+            "GET",
             format!("{base}/processes"),
             Value::Null,
             json!([process]),
@@ -353,6 +361,8 @@ fn guest_mcp_reports_unsupported_capabilities_and_signal_acceptance_without_term
         sent,
     ]);
     let mut session = Session::default();
+    let mut expected_health = health;
+    expected_health["crun"] = json!(false);
     assert_eq!(
         session
             .call(
@@ -361,7 +371,17 @@ fn guest_mcp_reports_unsupported_capabilities_and_signal_acceptance_without_term
                 json!({"projectId":project,"id":id})
             )
             .unwrap(),
-        health
+        expected_health
+    );
+    assert_eq!(
+        session
+            .call(
+                &client,
+                "sandbox_guest_health",
+                json!({"projectId":project,"id":id})
+            )
+            .unwrap(),
+        crun_health
     );
     assert_eq!(
         session

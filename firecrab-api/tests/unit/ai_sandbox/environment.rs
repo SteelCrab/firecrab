@@ -579,11 +579,23 @@ fn malformed_manifests_and_mutable_container_sources_fail_before_resource_reserv
             SandboxContainerRuntime::Docker,
             format!("safe@sha256:{}", "A".repeat(64)),
         ),
+        (SandboxContainerRuntime::Crun, "ubuntu:latest".into()),
+        (
+            SandboxContainerRuntime::Crun,
+            format!("bad;name@sha256:{}", "a".repeat(64)),
+        ),
         (SandboxContainerRuntime::Nspawn, "mutable.tar".into()),
         (SandboxContainerRuntime::Nspawn, "sha256:short".into()),
     ] {
         assert!(validate_mode(&SandboxExecutionMode::AgentSandbox { runtime, image }).is_err());
     }
+    assert!(
+        validate_mode(&SandboxExecutionMode::AgentSandbox {
+            runtime: SandboxContainerRuntime::Crun,
+            image: format!("example.invalid/image@sha256:{}", "a".repeat(64)),
+        })
+        .is_ok()
+    );
     assert!(
         validate_mode(&SandboxExecutionMode::AgentSandbox {
             runtime: SandboxContainerRuntime::Nspawn,

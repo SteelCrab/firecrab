@@ -1,6 +1,9 @@
 use super::super::files;
 use super::*;
 
+#[path = "guest_crun.rs"]
+mod crun;
+
 async fn local(
     root: &Path,
     action: &str,
@@ -71,6 +74,10 @@ fn versioned_shell_parses_for_every_execution_mode_and_operation() {
             image: format!("example.invalid/image@sha256:{}", "a".repeat(64)),
         }),
         Some(SandboxExecutionMode::AgentSandbox {
+            runtime: SandboxContainerRuntime::Crun,
+            image: format!("example.invalid/image@sha256:{}", "c".repeat(64)),
+        }),
+        Some(SandboxExecutionMode::AgentSandbox {
             runtime: SandboxContainerRuntime::Nspawn,
             image: format!("sha256:{}", "b".repeat(64)),
         }),
@@ -116,6 +123,76 @@ fn versioned_shell_parses_for_every_execution_mode_and_operation() {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+    }
+}
+
+#[test]
+fn crun_cleanup_only_removes_a_verified_owned_container() {
+    let body = SCRIPT
+        .split_once("stop_container() {")
+        .unwrap()
+        .1
+        .split_once("\n}\nuser_alive()")
+        .unwrap()
+        .0;
+    let shell = format!(
+        r#"set -eu
+control="$1"
+scenario="$2"
+id=0123456789abcdef0123456789abcdef
+mode=crun
+tool() {{ "$@"; }}
+nerdctl() {{ :; }}
+sandbox_containerd() {{
+  case "$1" in
+    ps) [ "$scenario" != offline ] || return 1
+        if [ -f "$control/exists" ]; then printf 'fcai-%s-%s\n' "$id" "$(cat "$control/current")"; fi;;
+    inspect) if [ "$scenario" = vanished ]; then rm -f "$control/exists"; return 1; fi
+             if [ "$scenario" = bad_id ]; then printf 'invalid %s' "$id"; return 0; fi
+             if [ "$scenario" = foreign ]; then owner=foreign; else owner="$id"; fi
+             printf '%s %s' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$owner";;
+    kill) [ "$2" = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ] || return 1
+          printf 'kill\n' >>"$control/actions";;
+    rm) [ "$2" = -f ] && [ "$3" = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ] || return 1
+        printf 'rm\n' >>"$control/actions"
+        [ "$scenario" != remove_failed ] || return 1
+        rm -f "$control/exists";;
+    *) return 1;;
+  esac
+}}
+stop_container() {{{body}
+}}
+stop_container
+"#
+    );
+    for (scenario, present, success, remaining, removal_requested) in [
+        ("owned", true, true, false, true),
+        ("absent", false, true, false, false),
+        ("foreign", true, false, true, false),
+        ("offline", true, false, true, false),
+        ("vanished", true, true, false, false),
+        ("bad_id", true, false, true, false),
+        ("remove_failed", true, false, true, true),
+    ] {
+        let control = tempfile::tempdir().unwrap();
+        std::fs::write(control.path().join("current"), "a".repeat(32)).unwrap();
+        if present {
+            std::fs::write(control.path().join("exists"), "").unwrap();
+        }
+        let status = std::process::Command::new("/bin/sh")
+            .args(["-c", &shell, "--"])
+            .arg(control.path())
+            .arg(scenario)
+            .status()
+            .unwrap();
+        assert_eq!(status.success(), success, "{scenario}");
+        let actions = std::fs::read_to_string(control.path().join("actions")).unwrap_or_default();
+        assert_eq!(actions, if removal_requested { "kill\nrm\n" } else { "" });
+        assert_eq!(
+            control.path().join("exists").exists(),
+            remaining,
+            "{scenario}"
+        );
     }
 }
 
@@ -1061,6 +1138,7 @@ async fn guest_transport_recovers_interrupted_output_before_owned_cleanup() {
         String::from_utf8_lossy(&probe.stderr),
         std::fs::read_to_string(dir.path().join("sshd.log")).unwrap()
     );
+    crun::unavailable_engine_keeps_the_attempt_unmodified(&state, &mut saved).await;
     assert!(recover(&state, &saved).await.unwrap().is_none());
     let invocation = saved.guest_command.take();
     assert!(recover(&state, &saved).await.unwrap().is_none());

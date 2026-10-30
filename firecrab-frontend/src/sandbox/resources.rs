@@ -1320,6 +1320,11 @@ fn environment_editor(a: &App, e: &Editor, out: &mut String) {
                 "보존형 Workspace",
             ),
             (
+                "crun",
+                "Agent Sandbox · containerd + crun (recommended)",
+                "에이전트 Sandbox · containerd + crun (권장)",
+            ),
+            (
                 "docker",
                 "Agent Sandbox · Docker",
                 "에이전트 Sandbox · Docker",
@@ -1345,6 +1350,17 @@ fn environment_editor(a: &App, e: &Editor, out: &mut String) {
         out.push_str("</select></label></div>");
         if mode["kind"] == "agent_sandbox" {
             out.push_str(&field(tr(a,"Container image digest","컨테이너 이미지 해시"),&format!("sb-resource-container-{index}"),text(mode,"image"),&format!("data-role-index=\"{index}\" data-role-field=\"containerImage\" required placeholder=\"repo@sha256:…\""),e.busy));
+            if mode["runtime"] == "crun" {
+                let _ = write!(
+                    out,
+                    "<p class=\"sb-hint\">{}</p>",
+                    tr(
+                        a,
+                        "Install containerd, nerdctl and crun in the MicroVM. Prepare the image in the firecrab-sandbox namespace.",
+                        "MicroVM에 containerd, nerdctl, crun을 설치한다. firecrab-sandbox 네임스페이스에 이미지를 준비한다."
+                    )
+                );
+            }
         }
         for (key, en, ko, placeholder) in [
             (
@@ -1622,5 +1638,5 @@ fn preview_editor(a: &App, e: &Editor, out: &mut String) {
 }
 
 #[cfg(test)]
-#[path = "resources_tests.rs"]
+#[path = "../../tests/unit/sandbox/resources.rs"]
 mod tests;

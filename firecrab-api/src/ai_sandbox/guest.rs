@@ -284,6 +284,10 @@ fn script_options(
             image,
         }) => ("docker", image.as_str(), false),
         Some(SandboxExecutionMode::AgentSandbox {
+            runtime: SandboxContainerRuntime::Crun,
+            image,
+        }) => ("crun", image.as_str(), false),
+        Some(SandboxExecutionMode::AgentSandbox {
             runtime: SandboxContainerRuntime::Nspawn,
             image,
         }) => ("nspawn", image.as_str(), false),
@@ -410,6 +414,13 @@ pub async fn mode_supported(
             image,
         } => format!(
             "set -eu\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nexport PATH\ndocker image inspect {} >/dev/null 2>&1\n",
+            super::guest_protocol::quote(image)
+        ),
+        SandboxExecutionMode::AgentSandbox {
+            runtime: SandboxContainerRuntime::Crun,
+            image,
+        } => format!(
+            "set -eu\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nexport PATH\nenv -i PATH=\"$PATH\" HOME=/root nerdctl --address /run/containerd/containerd.sock --namespace firecrab-sandbox --cgroup-manager=cgroupfs image inspect --mode=native {} >/dev/null 2>&1\n",
             super::guest_protocol::quote(image)
         ),
         SandboxExecutionMode::AgentSandbox {
@@ -647,6 +658,10 @@ async fn execute_bounded(
                 runtime: SandboxContainerRuntime::Docker,
                 ..
             } => probe.docker,
+            SandboxExecutionMode::AgentSandbox {
+                runtime: SandboxContainerRuntime::Crun,
+                ..
+            } => probe.crun,
             SandboxExecutionMode::AgentSandbox {
                 runtime: SandboxContainerRuntime::Nspawn,
                 ..
@@ -937,9 +952,11 @@ execution=true
 [ -z "$unsupported" ] || execution=false
 docker=false
 if command -v docker >/dev/null 2>&1 && [ -f /sys/fs/cgroup/cgroup.controllers ] && tool grep -qw memory /sys/fs/cgroup/cgroup.controllers && tool grep -qw pids /sys/fs/cgroup/cgroup.controllers && tool timeout -s KILL 3 docker info >/dev/null 2>&1; then docker=true; fi
+crun=false
+if command -v nerdctl >/dev/null 2>&1 && command -v crun >/dev/null 2>&1 && command -v containerd-shim-runc-v2 >/dev/null 2>&1 && [ -S /run/containerd/containerd.sock ] && [ -f /sys/fs/cgroup/cgroup.controllers ] && tool grep -qw cpu /sys/fs/cgroup/cgroup.controllers && tool grep -qw memory /sys/fs/cgroup/cgroup.controllers && tool grep -qw pids /sys/fs/cgroup/cgroup.controllers && tool timeout -s KILL 3 crun --version >/dev/null 2>&1 && tool timeout -s KILL 3 env -i PATH="$PATH" HOME=/root nerdctl --address /run/containerd/containerd.sock --namespace firecrab-sandbox --cgroup-manager=cgroupfs info >/dev/null 2>&1; then crun=true; fi
 nspawn=false
 if [ "$init" = systemd ] && command -v systemd-nspawn >/dev/null 2>&1 && [ -f /sys/fs/cgroup/cgroup.controllers ]; then nspawn=true; fi
-printf 'version=1\ninit=%s\nexecution=%s\ndocker=%s\nnspawn=%s\nunsupported=%s\n' "$init" "$execution" "$docker" "$nspawn" "$unsupported"
+printf 'version=1\ninit=%s\nexecution=%s\ndocker=%s\ncrun=%s\nnspawn=%s\nunsupported=%s\n' "$init" "$execution" "$docker" "$crun" "$nspawn" "$unsupported"
 "#;
 
 // All substitutions except the base64 payload are generated UUIDs, fixed actions or bounded integers.
@@ -968,6 +985,7 @@ work="$base/workspace"
 if [ "$persistent" = true ]; then work="$root/.workspaces/$workspace_id"; fi
 cmd="$control/commands/$invocation"
 tool() { if [ -x /etc/firecrab/busybox ]; then /etc/firecrab/busybox "$@"; else "$@"; fi; }
+sandbox_containerd() { env -i PATH="$PATH" HOME=/root nerdctl --address /run/containerd/containerd.sock --namespace firecrab-sandbox --cgroup-manager=cgroupfs "$@"; }
 [ "$(id -u)" = 0 ] || exit 80
 if command -v setpriv >/dev/null 2>&1 && setpriv --reuid 0 --regid 0 --clear-groups --no-new-privs /bin/true 2>/dev/null; then
   drop_program=$(command -v setpriv)
@@ -1089,6 +1107,7 @@ stop_container() {
   case "$current" in *[!0-9a-f]*|'') return 1;; esac
   [ "${#current}" = 32 ] || return 1
   container="firecrab-ai-$id-$current"
+  if [ "$mode" = crun ]; then container="fcai-$id-$current"; fi
   if [ "$mode" = docker ] && command -v docker >/dev/null 2>&1; then
     owner=$(docker inspect --format '{{index .Config.Labels "io.firecrab.attempt"}}' "$container" 2>/dev/null || true)
     if [ -n "$owner" ]; then
@@ -1096,6 +1115,25 @@ stop_container() {
       docker kill "$container" >/dev/null 2>&1 || true
       docker rm -f "$container" >/dev/null 2>&1 || true
       ! docker inspect "$container" >/dev/null 2>&1 || return 1
+    fi
+  elif [ "$mode" = crun ]; then
+    command -v nerdctl >/dev/null 2>&1 || return 1
+    names=$(sandbox_containerd ps -a --format '{{.Names}}') || return 1
+    if printf '%s\n' "$names" | tool grep -Fxq "$container"; then
+      if ! identity=$(sandbox_containerd inspect --format '{{.Id}} {{index .Config.Labels "io.firecrab.attempt"}}' "$container" 2>/dev/null); then
+        names=$(sandbox_containerd ps -a --format '{{.Names}}') || return 1
+        ! printf '%s\n' "$names" | tool grep -Fxq "$container" || return 1
+        return 0
+      fi
+      container_id=${identity%% *}
+      owner=${identity#* }
+      case "$container_id" in *[!0-9a-f]*|'') return 1;; esac
+      [ "${#container_id}" = 64 ] || return 1
+      [ "$owner" = "$id" ] || return 1
+      sandbox_containerd kill "$container_id" >/dev/null 2>&1 || true
+      sandbox_containerd rm -f "$container_id" >/dev/null 2>&1 || true
+      names=$(sandbox_containerd ps -a --format '{{.Names}}') || return 1
+      ! printf '%s\n' "$names" | tool grep -Fxq "$container" || return 1
     fi
   fi
 }
@@ -1269,6 +1307,15 @@ FIRECRAB_PAYLOAD
     chgrp "$user" "$cmd/container-start"; chmod 640 "$cmd/container-start"
     printf 'exec docker run --rm --name firecrab-ai-%s-%s --label io.firecrab.attempt=%s --network host --user %s:%s --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory __MEMORY_KIB__k --cpus 1 --ulimit cpu=__CPU_SECONDS__:__CPU_SECONDS__ --ulimit nofile=1024:1024 --mount type=bind,src=%s,dst=/workspace --mount type=bind,src=%s,dst=/firecrab,readonly --workdir /workspace --env HOME=/workspace --env PATH=/usr/local/bin:/usr/bin:/bin --entrypoint /bin/sh %s /firecrab/container-start\n' "$id" "$invocation" "$id" "$(id -u "$user")" "$(id -g "$user")" "$work" "$cmd" "$image" >>"$cmd/launch"
     ;;
+  crun)
+    command -v nerdctl >/dev/null 2>&1 || fail_run 'unsupported_crun: install nerdctl and containerd inside the managed guest'
+    crun_binary=$(command -v crun) || fail_run 'unsupported_crun: install crun inside the managed guest'
+    case "$crun_binary" in /*) ;; *) fail_run 'unsupported_crun: crun must have an absolute path';; esac
+    sandbox_containerd image inspect --mode=native "$image" >/dev/null 2>&1 || fail_run 'unsupported_crun_image: pre-install the exact digest-pinned OCI image'
+    printf '#!/bin/sh\nset -eu\nulimit -n 1024\nulimit -f 65536\nulimit -t __CPU_SECONDS__\nulimit -v __MEMORY_KIB__\ncd /workspace\nexec /bin/sh /firecrab/command\n' >"$cmd/container-start"
+    chgrp "$user" "$cmd/container-start"; chmod 640 "$cmd/container-start"
+    printf 'exec env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root nerdctl --address /run/containerd/containerd.sock --namespace firecrab-sandbox --cgroup-manager=cgroupfs run --pull=never --runtime %s --rm --name fcai-%s-%s --label io.firecrab.attempt=%s --network host --user %s:%s --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory __MEMORY_KIB__k --cpus 1 --ulimit cpu=__CPU_SECONDS__:__CPU_SECONDS__ --ulimit nofile=1024:1024 --mount type=bind,src=%s,dst=/workspace --mount type=bind,src=%s,dst=/firecrab,readonly --workdir /workspace --env HOME=/workspace --env PATH=/usr/local/bin:/usr/bin:/bin --entrypoint /bin/sh %s /firecrab/container-start\n' "$crun_binary" "$id" "$invocation" "$id" "$(id -u "$user")" "$(id -g "$user")" "$work" "$cmd" "$image" >>"$cmd/launch"
+    ;;
   nspawn)
     command -v systemd-nspawn >/dev/null 2>&1 && [ -d /run/systemd/system ] && [ -f /sys/fs/cgroup/cgroup.controllers ] || fail_run 'unsupported_nspawn: systemd and cgroup v2 are required inside the managed guest'
     digest=${image#sha256:}
@@ -1401,5 +1448,5 @@ esac
 "#;
 
 #[cfg(test)]
-#[path = "guest_tests.rs"]
+#[path = "../../tests/unit/ai_sandbox/guest.rs"]
 mod tests;

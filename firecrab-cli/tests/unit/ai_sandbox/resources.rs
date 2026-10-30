@@ -6,7 +6,7 @@ fn discovery_and_guest_cli_return_actual_readiness_and_unsupported_metadata() {
     let id = Uuid::new_v4();
     let env = environment(project, id);
     let binding = tunnel(project, id);
-    let health = json!({"version":1,"init":"openrc","execution":false,"docker":false,"nspawn":false,"unsupported":"missing supervisor"});
+    let health = json!({"version":1,"init":"openrc","execution":false,"docker":false,"crun":false,"nspawn":false,"unsupported":"missing supervisor"});
     let process = json!({"pid":42,"startTicks":100,"bootId":"boot-1","state":"S"});
     let address = json!({"subdomain":"test-preview","publicUrl":binding["publicUrl"],"connected":false,"claimedBy":id});
     let cases = vec![
@@ -63,6 +63,34 @@ fn discovery_and_guest_cli_return_actual_readiness_and_unsupported_metadata() {
         worker.join().unwrap();
     }
 }
+
+#[test]
+fn guest_health_cli_accepts_legacy_replies_and_reports_crun_support() {
+    let project = Uuid::new_v4();
+    let id = Uuid::new_v4();
+    for crun in [None, Some(true)] {
+        let mut health = json!({"version":1,"init":"openrc","execution":true,"docker":false,"nspawn":false,"unsupported":null});
+        if let Some(value) = crun {
+            health["crun"] = json!(value);
+        }
+        let (client, worker) = reply(
+            "GET",
+            format!("/api/ai-sandbox/projects/{project}/tasks/{id}/guest/health"),
+            Value::Null,
+            200,
+            health.clone(),
+        );
+        health["crun"] = json!(crun.unwrap_or(false));
+        let command = Command::Guest {
+            project,
+            id,
+            command: super::super::resources::GuestCommand::Health,
+        };
+        assert_eq!(request(&client, command, [].as_slice()).unwrap(), health);
+        worker.join().unwrap();
+    }
+}
+
 fn environment(project: Uuid, id: Uuid) -> Value {
     let spec = json!({"version":1,"subnetCidr":"172.29.80.0/24","roles":[{"name":"backend","template":{"name":"ubuntu","version":"1","kernelSha256":"1".repeat(64),"rootfsSha256":"2".repeat(64),"initrdSha256":null,"bootArgsSha256":"3".repeat(64)},"cpu":1,"memoryMib":512,"diskGb":4,"dependsOn":[],"services":[{"name":"app","port":8080,"readiness":true}],"executionMode":{"kind":"persistent_workspace"}}],"allow":[],"retention":{"ttlSeconds":null}});
     json!({"id":id,"projectId":project,"owner":"local","generation":Uuid::new_v4(),"spec":spec,"networkId":Uuid::new_v4(),"dnsMode":"private_only","roles":[],"state":"provisioning","createdAt":1,"updatedAt":1,"expiresAt":null,"exportedAt":null,"error":null})
