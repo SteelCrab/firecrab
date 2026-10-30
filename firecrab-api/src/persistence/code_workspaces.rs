@@ -83,7 +83,7 @@ fn connections(
     Ok(CodeWorkspaceConnections { github, ai })
 }
 
-fn read(conn: &Connection, id: Uuid) -> Result<Option<CodeWorkspace>, PersistenceError> {
+pub(super) fn read(conn: &Connection, id: Uuid) -> Result<Option<CodeWorkspace>, PersistenceError> {
     let row = conn.query_row(
         "SELECT name, spec, revision, created_at_ms, updated_at_ms FROM code_workspaces WHERE id=?1",
         [id.to_string()], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?, row.get::<_, i64>(4)?)),

@@ -1,7 +1,8 @@
 # CODE workspace configuration
 
-The first CODE implementation persists workspace configuration and references to existing accounts.
-It is the data and connection-contract foundation for #556. It does not provision a VM, clone a repository, launch an editor, or run an agent.
+CODE persists workspace configuration and references to existing accounts.
+An explicit verification API checks repository reads and provider credentials.
+It does not provision a VM, clone a repository, launch an editor, or run an agent.
 The local CODE UI mockup remains separate from these configuration APIs.
 
 ## Access and storage
@@ -44,7 +45,7 @@ Choose a non-nil UUID, then send `PUT /api/code/workspaces/{id}`:
 The GitHub login must match the currently saved `github` Pipe AUTH account, ignoring login case.
 The repository owner may differ from that login. An organization repository is a normal example.
 The reference does not accept a URL, embedded credential, revision-expression syntax, local path, or command option.
-Branch syntax is checked locally; the existence of that exact remote branch and repository permissions require the later GitHub integration.
+Branch syntax is checked locally; use the explicit verification API below to check the exact remote branch and repository read access.
 An existing GitHub account connection proves neither repository access nor clone permission.
 
 Supported runtime configuration values are `node_js`, `python`, and `rust`.
@@ -113,4 +114,93 @@ Delete metadata with `DELETE /api/code/workspaces/{id}?expectedRevision=1`, usin
 Deletion requires a positive revision and returns `204`; an absent record returns `404`.
 It remains possible to remove configuration after an account is disconnected.
 Deletion does not disconnect GitHub or AI AUTH accounts.
-This phase owns no VM, volume, editor process, or agent process to delete.
+The configuration APIs own no VM, volume, editor process, or agent process to delete.
+
+## Verify repository and AUTH credentials
+
+Send `POST /api/code/workspaces/{id}/verify` with the current revision:
+
+```json
+{ "expectedRevision": 1 }
+```
+
+The same verified operator identity and origin controls apply.
+The request accepts no credentials, URLs, model names, provider overrides, or readiness flags.
+Verification does not change configuration revisions or save a readiness flag.
+The response uses `Cache-Control: no-store`.
+
+```json
+{
+  "id": "22222222-2222-4222-8222-222222222222",
+  "revision": 1,
+  "checkedAtMs": 1793332800000,
+  "github": {
+    "status": "verified",
+    "commitSha": "1234567890abcdef1234567890abcdef12345678"
+  },
+  "ai": {
+    "status": "credentials_verified",
+    "method": "openai_api_key"
+  }
+}
+```
+
+The GitHub check uses only the saved Pipe AUTH GitHub token and fixed `https://api.github.com` endpoints.
+It verifies the authenticated login, repository identity, and exact `refs/heads/{branch}` commit reference.
+Organization owners may differ from the authenticated login.
+Path segments are encoded separately, including branches with slashes.
+Redirects are rejected, so moved repositories require correcting the saved selection.
+For private repositories, the token must grant repository content reads; a GHCR package connection alone does not establish that permission.
+GitHub documents the exact-reference contract and required contents permission in [Get a reference](https://docs.github.com/en/rest/git/refs?apiVersion=2026-03-10#get-a-reference).
+Public repository readability does not prove private-repository privileges or push access.
+No Git clone, GitHub write, or repository script is executed.
+
+The AI check first validates the agent/provider combination and the saved authentication metadata.
+It then uses the existing provider clients with fixed endpoints:
+
+| Selected authentication | Probe | Success method |
+| --- | --- | --- |
+| OpenAI API key | OpenAI model catalogue (`object`/`data` response) | `openai_api_key` |
+| ChatGPT plan account | ChatGPT account model catalogue (`models` response) | `chatgpt_plan` |
+| Anthropic API key | Anthropic Models API | `anthropic_api_key` |
+
+ChatGPT uses the public `/v1/models` endpoint with the selected account's OAuth bearer token, as documented in [Models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
+The session must retain `resource.invoke` and `chatgpt.tokens.use.direct` consent.
+Expiring tokens reuse the existing Pipe AI refresh flow.
+Fresh credentials replace only the exact saved account read before refresh; they cannot recreate a disconnected account or overwrite a replacement.
+Scope and expiry are checked again after refresh.
+Refresh tokens stay in the existing private AUTH store.
+
+Agent-disabled workspaces return `ai: {"status":"not_required"}`.
+Failed checks return `status: "failed"` with a stable `reason`:
+
+| Reason | Recovery |
+| --- | --- |
+| `missing` | Reconnect or select an existing account |
+| `identity_changed` | Select the intended GitHub account again |
+| `incompatible` | Select an eligible provider/authentication combination |
+| `authentication_rejected` | Reconnect the expired, revoked, or invalid credential |
+| `consent_required` | Reconnect ChatGPT and grant plan-usage consent |
+| `access_denied` | Check repository permission and organization SSO approval |
+| `not_found` | Check the repository and exact branch; private resources may be hidden |
+| `rate_limited` | Retry after provider limits recover |
+| `redirected` | Correct the moved repository selection |
+| `invalid_response` | Retry or inspect provider availability; invalid or oversized data was rejected |
+| `unavailable` | Retry when the provider becomes available |
+| `timed_out` | Retry the bounded provider check |
+
+Provider bodies, credential values, and redirect destinations never appear in the report.
+GitHub responses are capped at 128 KiB with a six-second request timeout and a 20-second overall GitHub deadline.
+The AI check has a 25-second overall deadline, including refresh.
+The existing AI mutation gate serializes this operation with local AI replacement and disconnect; a busy gate returns `409 ai_busy`.
+
+Independent repository and AI check failures are reported under HTTP `200` so the setup can show both results.
+A stale initial revision returns `409 code_workspace_revision_conflict` before contacting providers.
+The API compares the configuration and exact credential documents again after network requests.
+Changed or deleted configuration/accounts return `409 code_workspace_bindings_changed`, including same-ID credential rotations from another database connection.
+Read the current configuration and retry.
+
+The report is a point-in-time observation, not a reusable authorization grant.
+GET configuration responses retain their metadata-only `present_unverified` observations.
+Provider credential acceptance does not verify model inference, CLI installation, CLI login, or an agent authentication adapter.
+Later clone and agent execution must recheck current credentials and perform their own operation-specific checks.

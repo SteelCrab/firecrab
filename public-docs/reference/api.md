@@ -388,6 +388,7 @@ database snapshot and never claim that an agent is authenticated.
 | GET | `/api/code/workspaces/{id}` | Read configuration, revision, timestamps, and current `connections` observations |
 | PUT | `/api/code/workspaces/{id}` | Save `{expectedRevision, spec}`; revision 0 creates, later writes must match the saved revision |
 | DELETE | `/api/code/workspaces/{id}?expectedRevision=N` | Delete only the matching configuration revision; return `204` |
+| POST | `/api/code/workspaces/{id}/verify` | Check `{expectedRevision}` against current GitHub identity/exact branch and AI AUTH provider credentials; allocate no runtime resources |
 
 The specification contains `name`, `github: {account, owner, repository, branch}`,
 `runtime`, `resources: {cpu, ram, diskGb}`, and an optional
@@ -395,6 +396,10 @@ The specification contains `name`, `github: {account, owner, repository, branch}
 Credentials and caller-supplied runtime/readiness fields are rejected.
 See [CODE workspace configuration](../guides/code-workspaces.md) for eligibility,
 connection states, limits, conflict/retry behavior, and the remaining integration work.
+Explicit verification returns independent `github` and `ai` results with secret-free
+failure reasons. It rejects stale revisions before provider requests and rejects
+configuration/account changes observed during requests with `409 code_workspace_bindings_changed`.
+The report does not verify clone success, model entitlement, or CLI-agent login.
 
 ## Pipe AI
 
