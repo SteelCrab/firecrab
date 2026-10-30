@@ -88,6 +88,14 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
         original = main["initial"]
         unrelated_ids = ids(unrelated["initial"])
         victim = original["instances"][0]["vmId"]
+        assert traffic(original["instances"][0]["ipv4"], 8080, "fixture", "/cgi-bin/security-activity") == (200, "security-signal")
+        def security_history(replica):
+            view = api.call("GET", "/api/service-security")
+            service_view = next((item for item in view["services"] if item["id"] == main["id"]), None)
+            if not service_view:
+                return None
+            return service_view if any(event["deploymentId"] == original["id"] and replica in event["replicaIds"] for event in service_view["activityHistory"]) else None
+        wait_for(lambda: security_history(victim), timeout=60, message="security signal missing before replica restart")
         metrics["currentStage"] = "restart after VM exit"
         metrics["exitInjectionSeconds"] = round(time.monotonic() - started, 2)
         api.call("POST", "/api/vms/" + victim + "/stop")
@@ -106,6 +114,8 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
             return None
 
         target = wait_for(holding, timeout=15)
+        assert traffic(target["ipv4"], 8080, "fixture", "/cgi-bin/security-activity") == (200, "security-signal")
+        wait_for(lambda: security_history(target["vmId"]), timeout=60, message="security signal missing before replica replacement")
         held_ip = target["ipv4"]
         traffic(held_ip, 8080, "fixture", "/cgi-bin/fail-health")
 
@@ -132,6 +142,7 @@ def run_recovery(api, wait_for, traffic, network, spec_a, port, evidence):
         repaired = wait_for(replaced, timeout=240)
         assert len(ids(repaired)) == 2 and len(ids(repaired) & ids(original)) == 1
         assert repaired["id"] == original["id"] and repaired["digest"] == original["digest"]
+        wait_for(lambda: security_history(target["vmId"]), timeout=60, message="security signal was lost after replica replacement")
         assert repaired["spec"] == original["spec"] and repaired["request"] == original["request"]
         assert ids(current(unrelated)) == unrelated_ids
         routes = [route for route in api.call("GET", "/api/pipe")["config"]["routes"]

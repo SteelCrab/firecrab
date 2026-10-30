@@ -53,6 +53,33 @@ pub fn load(app: &Shared) {
 }
 
 pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
+    if action == "security-scan" {
+        let app = app.clone();
+        let service = id.to_owned();
+        let generation = app.borrow().generation;
+        app.borrow_mut().security.busy = true;
+        render_content(&app);
+        spawn_local(async move {
+            let result = api::request(
+                "POST",
+                &format!("/api/service-security/{}/scan", api::encode(&service)),
+                None,
+            )
+            .await;
+            let mut state = app.borrow_mut();
+            if state.generation != generation || state.route != "security" {
+                return;
+            }
+            state.security.busy = false;
+            match result {
+                Ok(_) => state.error.clear(),
+                Err(error) => state.error = error,
+            }
+            drop(state);
+            crate::refresh(app);
+        });
+        return true;
+    }
     if action != "security-explain" {
         return false;
     }

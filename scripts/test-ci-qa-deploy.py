@@ -30,6 +30,21 @@ module.loader.exec_module(qa)
 
 
 class DeployQaTests(unittest.TestCase):
+    def test_security_scanner_fixture_requires_registry_credentials(self):
+        scanner = Path(__file__).with_name("ci-qa-security-trivy.py")
+        target = "ghcr.io/team/app@sha256:" + "a" * 64
+        with tempfile.TemporaryDirectory() as root:
+            env = {**os.environ, "DOCKER_CONFIG": root}
+            config = Path(root) / "config.json"
+            config.write_text(json.dumps({"auths": {"ghcr.io": {"auth": "fixture"}}}))
+            result = subprocess.run([sys.executable, str(scanner), "image", target], env=env, capture_output=True, text=True, check=True)
+            report = json.loads(result.stdout)
+            self.assertEqual(report["Metadata"]["RepoDigests"], [target])
+            self.assertEqual(report["Results"][0]["Vulnerabilities"][0]["FixedVersion"], "2.0")
+            config.write_text(json.dumps({"auths": {"example.com": {}}}))
+            rejected = subprocess.run([sys.executable, str(scanner), "image", target], env=env, capture_output=True)
+            self.assertNotEqual(rejected.returncode, 0)
+
     def test_observation_acceptance_requires_report_before_runtime_access(self):
         result = subprocess.run([sys.executable, str(Path(__file__).with_name("ci-qa-deploy.py")),
                                  "--disposable-host", "--observability"], capture_output=True, text=True)
@@ -204,6 +219,8 @@ class DeployQaTests(unittest.TestCase):
                 self.assertIn('fixture-stdout-%s', init)
                 self.assertIn('fixture-stderr-%s', init)
                 self.assertIn('exec /bin/busybox httpd', init)
+                security_cgi = archive.extractfile("www/cgi-bin/security-activity").read().decode()
+                self.assertIn('"status":403', security_cgi)
                 cgi = archive.extractfile("www/cgi-bin/observation").read().decode()
                 result = subprocess.run(["/bin/sh", "-c", cgi], env={"OBS_ID": "alpha"}, capture_output=True, check=True)
                 self.assertEqual(result.stderr, b"fixture-cgi-alpha\n")

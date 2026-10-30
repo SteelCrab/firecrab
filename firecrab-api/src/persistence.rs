@@ -40,7 +40,9 @@ mod registries;
 mod sandbox_environments;
 mod sandbox_tunnels;
 mod schedules;
+pub(crate) mod security_activity;
 mod security_groups;
+pub(crate) mod security_scans;
 pub(crate) mod service_logs;
 pub(crate) mod service_observation;
 mod stack_applies;
@@ -812,6 +814,8 @@ impl Store {
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute_batch(service_observation::SCHEMA)?;
         conn.execute_batch(service_logs::SCHEMA)?;
+        conn.execute_batch(security_scans::SCHEMA)?;
+        conn.execute_batch(security_activity::SCHEMA)?;
         conn.execute(otlp_config::SCHEMA, [])?;
         otlp_config::migrate(&conn)?;
         conn.execute_batch(micro_services::HISTORY_SQL)?;

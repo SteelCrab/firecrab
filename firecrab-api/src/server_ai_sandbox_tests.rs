@@ -802,3 +802,112 @@ async fn service_security_explanation_sends_only_aggregate_evidence() {
     assert!(!payload.contains("ghcr.io/team/orders"));
     assert!(!payload.contains("Firecrab AI Sandbox"));
 }
+
+#[tokio::test]
+async fn service_security_ai_can_explain_cves_without_disclosing_package_names() {
+    use crate::{persistence::security_scans::Scan, service_security::cve::Finding};
+    use firecrab_api_types::{MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec};
+    let f = fixture().await;
+    let connection = connect(&f, "openai").await;
+    verify(&f, connection, false).await;
+    f.provider.requests.lock().unwrap().clear();
+    let service = Uuid::new_v4();
+    let deployment = Uuid::new_v4();
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let spec: MicroServiceSpec = serde_json::from_value(json!({"name":"private-app","image":"ghcr.io/team/private:v1","port":8080,"ram":128,"cpu":1})).unwrap();
+    f.state
+        .store
+        .insert_micro_service(&MicroServiceResponse {
+            id: service,
+            spec: spec.clone(),
+        })
+        .unwrap();
+    let saved: MicroServiceDeployment = serde_json::from_value(json!({"id":deployment,"serviceId":service,"phase":"running","spec":spec,"request":{"hostPort":0},"digest":digest,"log":[],"error":null,"instances":[]})).unwrap();
+    f.state.store.save_service_deployment(&saved).unwrap();
+    f.state
+        .store
+        .save_security_scan(
+            service,
+            &Scan {
+                deployment_id: deployment,
+                request_id: None,
+                digest: digest.clone(),
+                replica_ids: vec![],
+                scanned_at: chrono::Utc::now().timestamp(),
+                status: "complete".into(),
+                limitations: vec![],
+                database_updated_at: Some(chrono::Utc::now().to_rfc3339()),
+                findings: vec![Finding {
+                    cve: "CVE-2025-15467".into(),
+                    package: "private-package-name".into(),
+                    installed_version: "3.0".into(),
+                    fixed_version: Some("3.1".into()),
+                    severity: "high".into(),
+                    source: "https://nvd.nist.gov/vuln/detail/CVE-2025-15467".into(),
+                    advisory_source: "Alpine Secdb".into(),
+                    advisory_url: Some("https://secdb.alpinelinux.org/".into()),
+                    target: "private-image-path".into(),
+                }],
+            },
+        )
+        .unwrap();
+    let (status, response) = call(
+        &f.app,
+        "POST",
+        &format!("/api/service-security/{service}/analysis"),
+        json!({"connectionId":connection,"model":"fixture-model"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let requests = f.provider.requests.lock().unwrap();
+    let payload = requests.last().unwrap().to_string();
+    assert!(payload.contains("CVE-2025-15467"));
+    for secret in [
+        "private-package-name",
+        "private-image-path",
+        "private-app",
+        "ghcr.io/team/private",
+        "sandbox-private-key",
+    ] {
+        assert!(!payload.contains(secret), "{payload}");
+    }
+}
+
+#[tokio::test]
+async fn operator_can_queue_a_pinned_service_scan() {
+    use firecrab_api_types::{MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec};
+    let f = fixture().await;
+    let service = Uuid::new_v4();
+    let deployment = Uuid::new_v4();
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let spec: MicroServiceSpec = serde_json::from_value(
+        json!({"name":"web","image":"ghcr.io/team/web:v1","port":8080,"ram":128,"cpu":1}),
+    )
+    .unwrap();
+    f.state
+        .store
+        .insert_micro_service(&MicroServiceResponse {
+            id: service,
+            spec: spec.clone(),
+        })
+        .unwrap();
+    let saved: MicroServiceDeployment=serde_json::from_value(json!({"id":deployment,"serviceId":service,"phase":"running","spec":spec,"request":{"hostPort":0},"digest":digest,"log":[],"error":null,"instances":[]})).unwrap();
+    f.state.store.save_service_deployment(&saved).unwrap();
+    let (status, _) = call(
+        &f.app,
+        "POST",
+        &format!("/api/service-security/{service}/scan"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let scan = f
+        .state
+        .store
+        .security_scan(service, deployment, &digest)
+        .unwrap()
+        .unwrap();
+    assert_eq!(scan.status, "queued");
+    assert!(scan.scanned_at > 0);
+    assert!(scan.findings.is_empty());
+}

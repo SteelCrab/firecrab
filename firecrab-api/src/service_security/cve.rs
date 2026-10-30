@@ -1,17 +1,21 @@
-//! Parse bounded image-scanner reports. The scanner is not connected yet.
+//! Parse bounded vulnerability reports from immutable image scans.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// One scanner-reported CVE affecting an installed image package.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct Finding {
+pub(crate) struct Finding {
     pub cve: String,
     pub package: String,
     pub installed_version: String,
     pub fixed_version: Option<String>,
     pub severity: String,
     pub source: String,
+    #[serde(default)]
+    pub advisory_source: String,
+    #[serde(default)]
+    pub advisory_url: Option<String>,
     pub target: String,
 }
 
@@ -23,7 +27,17 @@ pub(super) fn parse_report(bytes: &[u8], expected: &str) -> Result<Vec<Finding>,
     }
     let doc: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|_| "Invalid scanner report")?;
-    if doc["SchemaVersion"].as_u64() != Some(2) || doc["ArtifactName"].as_str() != Some(expected) {
+    if doc["SchemaVersion"].as_u64() != Some(2)
+        || doc["ArtifactName"].as_str() != Some(expected)
+        || doc["ArtifactType"].as_str() != Some("container_image")
+        || !doc["Metadata"]["RepoDigests"]
+            .as_array()
+            .is_some_and(|digests| {
+                digests
+                    .iter()
+                    .any(|digest| digest.as_str() == Some(expected))
+            })
+    {
         return Err("Scanner report does not match the pinned image");
     }
     let results = doc["Results"]
@@ -91,6 +105,19 @@ pub(super) fn parse_report(bytes: &[u8], expected: &str) -> Result<Vec<Finding>,
                 _ => "unknown",
             };
             let source = format!("https://nvd.nist.gov/vuln/detail/{cve}");
+            let advisory_source = v["DataSource"]["Name"]
+                .as_str()
+                .filter(|value| !value.is_empty() && value.len() <= 256)
+                .unwrap_or("Trivy vulnerability database")
+                .to_owned();
+            let advisory_url = v["DataSource"]["URL"]
+                .as_str()
+                .filter(|value| {
+                    value.starts_with("https://")
+                        && value.len() <= 1024
+                        && !value.chars().any(char::is_control)
+                })
+                .map(str::to_owned);
             let fixed = v["FixedVersion"]
                 .as_str()
                 .filter(|x| !x.is_empty() && x.len() <= 256)
@@ -102,11 +129,40 @@ pub(super) fn parse_report(bytes: &[u8], expected: &str) -> Result<Vec<Finding>,
                 fixed_version: fixed,
                 severity: severity.into(),
                 source,
+                advisory_source,
+                advisory_url,
                 target: target.into(),
             });
         }
     }
     Ok(findings)
+}
+
+/// Explicitly report coverage limits carried by the scanner report.
+pub(super) fn limitations(bytes: &[u8]) -> Result<Vec<String>, &'static str> {
+    let report: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| "Invalid scanner report")?;
+    let mut limits = Vec::new();
+    if report["Metadata"]["OS"]["EOSL"] == true {
+        limits.push("os_end_of_support".into());
+    }
+    if report["Metadata"]["OS"].is_null() {
+        limits.push("os_not_detected".into());
+    }
+    if report["Results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|result| result["Vulnerabilities"].as_array().into_iter().flatten())
+        .any(|vulnerability| {
+            vulnerability["VulnerabilityID"]
+                .as_str()
+                .is_some_and(|id| !valid_cve(id))
+        })
+    {
+        limits.push("non_cve_advisories_omitted".into());
+    }
+    Ok(limits)
 }
 
 fn valid_cve(value: &str) -> bool {
@@ -130,11 +186,16 @@ mod tests {
     #[test]
     fn matches_pinned_image_and_preserves_cve_evidence() {
         let expected = "ghcr.io/team/app@sha256:abc";
-        let report = json!({"SchemaVersion":2,"ArtifactName":expected,"Results":[{"Target":"alpine","Packages":[{"Name":"openssl","Version":"1.0"}],"Vulnerabilities":[{"VulnerabilityID":"CVE-2024-12345","PkgName":"openssl","InstalledVersion":"1.0","FixedVersion":"1.1","Severity":"HIGH"},{"VulnerabilityID":"GHSA-test","PkgName":"x","InstalledVersion":"1"}]}]});
+        let report = json!({"SchemaVersion":2,"ArtifactName":expected,"ArtifactType":"container_image","Metadata":{"RepoDigests":[expected]},"Results":[{"Target":"alpine","Packages":[{"Name":"openssl","Version":"1.0"}],"Vulnerabilities":[{"VulnerabilityID":"CVE-2024-12345","PkgName":"openssl","InstalledVersion":"1.0","FixedVersion":"1.1","Severity":"HIGH","DataSource":{"Name":"Alpine Secdb","URL":"https://secdb.alpinelinux.org/"}},{"VulnerabilityID":"GHSA-test","PkgName":"x","InstalledVersion":"1"}]}]});
         let bytes = serde_json::to_vec(&report).unwrap();
         let findings = parse_report(&bytes, expected).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, "high");
+        assert_eq!(findings[0].advisory_source, "Alpine Secdb");
+        assert_eq!(
+            findings[0].advisory_url.as_deref(),
+            Some("https://secdb.alpinelinux.org/")
+        );
         assert_eq!(findings[0].fixed_version.as_deref(), Some("1.1"));
         assert_eq!(
             findings[0].source,
@@ -144,18 +205,31 @@ mod tests {
     }
 
     #[test]
+    fn coverage_limitations_are_not_hidden() {
+        let report = json!({"Metadata":{"OS":{"EOSL":true}},"Results":[{"Vulnerabilities":[{"VulnerabilityID":"GHSA-test"}]}]});
+        assert_eq!(
+            limitations(&serde_json::to_vec(&report).unwrap()).unwrap(),
+            vec!["os_end_of_support", "non_cve_advisories_omitted"]
+        );
+        assert_eq!(
+            limitations(br#"{"Metadata":{}}"#).unwrap(),
+            vec!["os_not_detected"]
+        );
+    }
+
+    #[test]
     fn incomplete_or_invalid_reports_cannot_claim_a_clean_scan() {
-        assert!(parse_report(br#"{"SchemaVersion":2,"ArtifactName":"x"}"#, "x").is_err());
+        assert!(parse_report(br#"{"SchemaVersion":2,"ArtifactName":"x","ArtifactType":"container_image","Metadata":{"RepoDigests":["x"]}}"#, "x").is_err());
         assert!(
             parse_report(
-                br#"{"SchemaVersion":2,"ArtifactName":"x","Results":[]}"#,
+                br#"{"SchemaVersion":2,"ArtifactName":"x","ArtifactType":"container_image","Metadata":{"RepoDigests":["x"]},"Results":[]}"#,
                 "x"
             )
             .is_err()
         );
         assert!(
             parse_report(
-                br#"{"SchemaVersion":2,"ArtifactName":"x","Results":[{"Target":"unknown"}]}"#,
+                br#"{"SchemaVersion":2,"ArtifactName":"x","ArtifactType":"container_image","Metadata":{"RepoDigests":["x"]},"Results":[{"Target":"unknown"}]}"#,
                 "x"
             )
             .is_err()
