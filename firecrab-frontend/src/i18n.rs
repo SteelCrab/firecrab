@@ -295,7 +295,30 @@ pub fn t(value: &str) -> &str {
         "Deployment status" => "배포 상태",
         "New network" => "새 네트워크",
         "Network settings" => "네트워크 설정",
-        "New storage" => "새 스토리지",
+        "Register disk location" => "저장 위치 등록",
+        "Disk location" => "VM 디스크 저장소",
+        "Host directory" => "호스트 폴더 경로",
+        "Free space" => "남은 공간",
+        "Filesystem capacity" => "전체 용량",
+        "Storage ID" => "저장소 ID",
+        "Capacity unavailable" => "용량 확인 불가",
+        "MicroVMs using this location" => "이 위치를 사용하는 MicroVM",
+        "No MicroVM disks use this location yet." => "이 위치를 사용하는 MicroVM이 아직 없다.",
+        "Stores MicroVM operating-system disks and MicroBlockStorage data disk files." => {
+            "MicroVM 운영체제 디스크와 MicroBlockStorage 데이터 디스크 파일을 저장한다."
+        }
+        "Capacity is shared by all folders on the same host filesystem." => {
+            "용량은 이 폴더가 속한 저장 공간을 기준으로 표시한다. 다른 폴더와 함께 사용한다."
+        }
+        "Capacity could not be read. Check this folder on the host." => {
+            "용량 정보를 읽지 못했다. 호스트에서 이 폴더를 확인한다."
+        }
+        "Register the host folder where VM and data disk files will be saved. Missing folders are created when you register." => {
+            "VM과 데이터 디스크 파일을 저장할 호스트 폴더를 등록한다. 폴더가 없으면 등록할 때 만든다."
+        }
+        "On macOS and Windows, enter a path inside the managed Linux VM." => {
+            "macOS와 Windows에서는 관리용 Linux VM 안의 경로를 입력한다."
+        }
         "New shell" => "새 Shell",
         "Publish shell revision" => "Shell 새 버전 발행",
         "Publish revision" => "새 버전 발행",

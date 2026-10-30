@@ -152,6 +152,13 @@ impl Form {
             if busy { "disabled" } else { "" }
         );
 
+        if self.title == "Register disk location" {
+            html.push_str(&format!(
+                "<div class=\"wasm-wide storage-form-help\"><p>{}</p><p>{}</p></div>",
+                crate::i18n::t("Register the host folder where VM and data disk files will be saved. Missing folders are created when you register."),
+                crate::i18n::t("On macOS and Windows, enter a path inside the managed Linux VM.")
+            ));
+        }
         if self.title == "Deploy MicroService" {
             html.push_str("<p class=\"wasm-wide\">Secret values are injected into every replica. Changes apply on the next deployment.</p>");
             html.push_str(&format!("<p class=\"wasm-wide\">Leave the host port empty for internal access. App port: {}.</p>", self.base["port"].as_u64().unwrap_or(8080)));
@@ -342,6 +349,7 @@ impl Form {
                 "New MicroVM" => "Create MicroVM",
                 "Connect database" | "Update connection credentials" => "Save connection",
                 "Create volume" => "Create volume",
+                "Register disk location" => "Register",
                 "Import OCI image" => "Import",
                 "Deploy MicroService" => "Deploy and run",
                 "Deploy update" => "Deploy update",
@@ -1131,12 +1139,12 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
             "networks",
         ),
         "storages" => Form::new(
-            "New storage",
+            "Register disk location",
             "/api/micro-storages".into(),
             "POST",
             vec![
                 Field::new("name", "Name", "text", ""),
-                Field::new("path", "Directory", "text", ""),
+                Field::new("path", "Host directory", "text", "").placeholder("/mnt/ssd/firecrab"),
             ],
             "storages",
         ),

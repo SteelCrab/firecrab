@@ -497,7 +497,7 @@ pub fn page(app: &App) -> String {
         "networks" | "storages" | "shells" => button(
             match section {
                 "networks" => tr(app, "New network", "새 네트워크"),
-                "storages" => tr(app, "New storage", "새 스토리지"),
+                "storages" => tr(app, "Register disk location", "저장 위치 등록"),
                 _ => tr(app, "New shell", "새 Shell"),
             },
             "create",
@@ -706,7 +706,7 @@ pub fn content(app: &App) -> String {
                 ("_vms", "VMs"),
             ],
         ),
-        "storages" => resource_table(app, &app.resource, &[("name", "Name")]),
+        "storages" => storage_locations(app),
         "volumes" => crate::volumes::content(app),
         "images" => resource_table(
             app,
@@ -1315,6 +1315,33 @@ fn table_cell(app: &App, row: &Value, key: &str, first: bool) -> String {
     }
 }
 
+fn storage_locations(app: &App) -> String {
+    format!(
+        "<section class=\"storage-explainer\" aria-labelledby=\"storage-purpose\"><h2 id=\"storage-purpose\">{}</h2><p>{}</p><p>{}</p><a href=\"#/volumes\">{}</a></section>{}",
+        tr(
+            app,
+            "Host folders for VM disk files",
+            "VM 디스크 파일을 저장하는 호스트 폴더"
+        ),
+        tr(
+            app,
+            "MicroVM operating-system disks and MicroBlockStorage data disks are saved in these folders.",
+            "MicroVM의 운영체제 디스크와 MicroBlockStorage의 데이터 디스크 파일을 이 위치에 저장한다."
+        ),
+        tr(
+            app,
+            "Register a folder, then select it when creating a MicroVM or MicroBlockStorage.",
+            "폴더를 등록한 뒤 MicroVM 또는 MicroBlockStorage를 만들 때 저장 위치로 선택한다."
+        ),
+        tr(
+            app,
+            "Create a data disk to attach inside a VM → MicroBlockStorage",
+            "VM 안에 연결할 데이터 디스크 만들기 → MicroBlockStorage"
+        ),
+        resource_table(app, &app.resource, &[("name", "Disk location")])
+    )
+}
+
 fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> String {
     let rows = if resource.is_array() {
         list(resource)
@@ -1348,13 +1375,21 @@ fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> Stri
                 button(tr(app, "New network", "새 네트워크"), "create", "networks"),
             ),
             "storages" => (
-                tr(app, "No MicroStorage yet", "아직 MicroStorage가 없습니다"),
                 tr(
                     app,
-                    "Host directories that hold VM disks and images.",
-                    "VM 디스크와 이미지를 담는 호스트 폴더입니다.",
+                    "No disk locations registered",
+                    "등록한 VM 디스크 저장소가 없다",
                 ),
-                button(tr(app, "New storage", "새 스토리지"), "create", "storages"),
+                tr(
+                    app,
+                    "Register a host folder to choose where new VM and data disks are saved.",
+                    "호스트 폴더를 등록한 뒤 새 VM과 데이터 디스크의 저장 위치로 선택한다.",
+                ),
+                button(
+                    tr(app, "Register disk location", "저장 위치 등록"),
+                    "create",
+                    "storages",
+                ),
             ),
             "images" => (
                 tr(app, "No images installed", "설치된 이미지가 없습니다"),
@@ -3409,7 +3444,10 @@ mod list_part_tests {
             &json!([]),
             &[("name", "Name")],
         );
-        assert!(korean.contains("아직 MicroStorage가 없습니다"), "{korean}");
+        assert!(
+            korean.contains("등록한 VM 디스크 저장소가 없다"),
+            "{korean}"
+        );
     }
 }
 

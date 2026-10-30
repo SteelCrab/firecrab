@@ -288,16 +288,12 @@ pub fn panel(app: &App) -> String {
                 copyable("Account ID", text(data, "accountId")),
                 property("Token expires", &expires)
             ));
+        } else if app.route == "storages" {
+            out.push_str(&storage_location(data));
         } else if let Some(body) = crate::advanced::detail(app, data) {
             out.push_str(&body);
         } else {
             out.push_str(&render::properties(data));
-        }
-        if app.route == "storages" {
-            out.push_str(&format!(
-                "<p>{} / {} GiB</p>",
-                data["availableGib"], data["totalGib"]
-            ));
         }
         let related: Vec<_> = app
             .vms
@@ -305,7 +301,7 @@ pub fn panel(app: &App) -> String {
             .filter(|vm| match app.route.as_str() {
                 "networks" => vm.extra.get("microNetworkId") == Some(&data["id"]),
                 "images" => vm.template == text(data, "alias"),
-                "storages" => vm.extra.get("storageRoot") == Some(&data["path"]),
+                "storages" => vm.extra.get("storageRoot") == Some(&data["id"]),
                 "shells" => list(vm.extra.get("shellRefs").unwrap_or(&Value::Null))
                     .iter()
                     .any(|entry| entry["shellId"] == data["id"]),
@@ -315,7 +311,7 @@ pub fn panel(app: &App) -> String {
         if app.route == "networks" || app.route == "storages" || app.route == "images" {
             let title = match app.route.as_str() {
                 "networks" => "Member VMs",
-                "storages" => "VMs",
+                "storages" => "MicroVMs using this location",
                 _ => "VMs using it",
             };
             let members = if data["vms"].is_array() {
@@ -329,6 +325,14 @@ pub fn panel(app: &App) -> String {
                     .map(|vm| button(&vm.name, "navigate-vm", &vm.id))
                     .collect::<String>()
             };
+            let members = if app.route == "storages" && members.is_empty() {
+                format!(
+                    "<p class=\"detail-note\">{}</p>",
+                    t("No MicroVM disks use this location yet.")
+                )
+            } else {
+                members
+            };
             out.push_str(&section(title, "", &members));
         }
         if app.route == "shells" {
@@ -338,7 +342,7 @@ pub fn panel(app: &App) -> String {
                 .collect::<String>();
             out.push_str(&section("Revisions", "", &format!("<ul>{revisions}</ul>")));
         }
-        if !related.is_empty() {
+        if !related.is_empty() && app.route != "storages" {
             out.push_str(&section(
                 "MicroVM",
                 "",
@@ -355,6 +359,30 @@ pub fn panel(app: &App) -> String {
         app.detail_result
     ));
     out
+}
+
+fn storage_location(data: &Value) -> String {
+    let total = data["totalGib"].as_u64().filter(|value| *value > 0);
+    let capacity = |key: &str| {
+        total.and(data[key].as_u64()).map_or_else(
+            || t("Capacity unavailable").to_string(),
+            |value| format!("{value} GiB"),
+        )
+    };
+    let note = if total.is_some() {
+        "Capacity is shared by all folders on the same host filesystem."
+    } else {
+        "Capacity could not be read. Check this folder on the host."
+    };
+    format!(
+        "<p class=\"storage-detail-purpose\">{}</p><dl class=\"props\">{}{}{}{}</dl><p class=\"detail-note\">{}</p>",
+        t("Stores MicroVM operating-system disks and MicroBlockStorage data disk files."),
+        copyable("Host directory", text(data, "path")),
+        property("Free space", &capacity("availableGib")),
+        property("Filesystem capacity", &capacity("totalGib")),
+        copyable("Storage ID", text(data, "id")),
+        t(note)
+    )
 }
 
 /// The panel of a selected shell: the head, the Content and Revisions tabs. A form replaces it.

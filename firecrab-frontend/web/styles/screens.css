@@ -104,3 +104,16 @@
 .secret-selection-count::before { content: counter(secret-selected) " " attr(data-label); font-size: 0.78125rem; font-weight: 600; }
 .secret-selection label { margin-left: auto; color: var(--text-3); font-size: 0.78125rem; }
 .secret-selection select { width: auto; min-width: 13.75rem; }
+
+/* Host folders selected when creating VM and persistent data disks. */
+.storage-explainer { margin-bottom: 1.25rem; padding-bottom: 1.25rem; border-bottom: 1px solid var(--border); }
+.storage-explainer h2 { margin: 0 0 .5rem; font-size: 1rem; font-weight: 650; }
+.storage-explainer p, .storage-form-help p, .storage-detail-purpose { margin: .375rem 0; font-size: .8125rem; line-height: 1.65; }
+.storage-explainer p, .storage-form-help p { color: var(--text-2); }
+.storage-explainer a { display: inline-block; margin-top: .5rem; font-size: .75rem; }
+.storage-detail-purpose { margin: 0 0 1rem; color: var(--text-2); }
+.storage-form-help { min-width: 0; }
+.storage-explainer, .storage-form-help, .storage-detail-purpose { word-break: keep-all; overflow-wrap: anywhere; }
+@media (max-width: 767px) {
+  .wasm-panel:has(.storage-detail-purpose, .storage-form-help) .detail-head { padding-left: 3.25rem; }
+}

@@ -123,10 +123,76 @@ test.describe("list screens with a detail panel", () => {
     const detail = panel(page, "MicroStorage detail");
     await expect(detail.getByRole("heading", { name: "fast-ssd" })).toBeVisible();
     await expect(detail).toContainText("/mnt/fast");
-    await expect(detail).toContainText("120 / 500 GiB");
-    await expect(detail.getByRole("region", { name: "VMs" })).toContainText("db-1");
+    await expect(detail.locator(".wasm-property", { hasText: "Free space" })).toContainText("120 GiB");
+    await expect(detail.locator(".wasm-property", { hasText: "Filesystem capacity" })).toContainText("500 GiB");
+    await expect(detail).toContainText("Stores MicroVM operating-system disks and MicroBlockStorage data disk files.");
+    await expect(detail).not.toContainText("Available Gib");
+    await expect(detail).not.toContainText("Total Gib");
+    await expect(detail.getByRole("region", { name: "MicroVMs using this location" })).toContainText("db-1");
     await page.keyboard.press("Escape");
     await expect(detail).toHaveCount(0);
+  });
+
+  test("explains host disk storage in Korean and marks missing capacity as unavailable", async ({ page }) => {
+    const id = "cccccccc-0000-4000-8000-000000000003";
+    await page.setViewportSize({ width: 1440, height: 1100 });
+    const storage = { id, name: "test", path: "/root/", availableGib: 0, totalGib: 0 };
+    await openDashboard(page, {
+      hash: "#/storages",
+      locale: "ko",
+      routes: {
+        "/api/micro-storages": [storage],
+        [`/api/micro-storages/${id}`]: { ...storage, vms: [] },
+      },
+    });
+    await expect(page.locator(".screen-header")).toContainText("VM 디스크 저장소");
+    await expect(page.getByRole("region", { name: "VM 디스크 파일을 저장하는 호스트 폴더" })).toContainText("MicroBlockStorage의 데이터 디스크 파일");
+    await expect(page.getByRole("link", { name: "VM 안에 연결할 데이터 디스크 만들기 → MicroBlockStorage" })).toHaveAttribute("href", "#/volumes");
+    await page.getByRole("cell", { name: /^test(\s|$)/ }).click();
+    const detail = panel(page, "MicroStorage detail");
+    await expect(detail).toContainText("호스트 폴더 경로");
+    await expect(detail).toContainText("/root/");
+    await expect(detail.getByText("용량 확인 불가", { exact: true })).toHaveCount(2);
+    await expect(detail).not.toContainText("0 / 0 GiB");
+    await expect(detail.getByRole("region", { name: "이 위치를 사용하는 MicroVM" })).toContainText("이 위치를 사용하는 MicroVM이 아직 없다.");
+    await page.screenshot({ path: "test-results/storage-role-ko.png", fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(detail).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: "test-results/storage-role-ko-mobile.png", fullPage: true });
+  });
+
+  test("registers a host folder with clear path guidance and the existing API fields", async ({ page }) => {
+    const writes: Record<string, unknown>[] = [];
+    const registered: Record<string, unknown>[] = [];
+    await openDashboard(page, {
+      hash: "#/storages",
+      locale: "ko",
+      routes: {
+        "/api/micro-storages": route => {
+          if (route.request().method() === "POST") {
+            const body = route.request().postDataJSON();
+            writes.push(body);
+            const storage = { id: "fast-location", ...body, availableGib: 120, totalGib: 500 };
+            registered.push(storage);
+            return route.fulfill({ status: 201, json: storage });
+          }
+          return route.fulfill({ json: registered });
+        },
+      },
+    });
+    await page.locator(".screen-header").getByRole("button", { name: "저장 위치 등록", exact: true }).click();
+    const form = page.getByRole("region", { name: "저장 위치 등록", exact: true });
+    await expect(form).toContainText("관리용 Linux VM 안의 경로를 입력한다.");
+    await expect(form).toContainText("폴더가 없으면 등록할 때 만든다.");
+    await form.getByLabel("이름", { exact: true }).fill("fast-ssd");
+    const directory = form.getByLabel("호스트 폴더 경로", { exact: true });
+    await expect(directory).toHaveAttribute("placeholder", "/mnt/ssd/firecrab");
+    await directory.fill("/mnt/ssd/firecrab");
+    await page.screenshot({ path: "test-results/storage-register-ko.png", fullPage: true });
+    await form.getByRole("button", { name: "등록", exact: true }).click();
+    await expect.poll(() => writes).toEqual([{ name: "fast-ssd", path: "/mnt/ssd/firecrab" }]);
+    await expect(page.getByRole("cell", { name: /^fast-ssd(\s|$)/ })).toBeVisible();
   });
 
   test("Images shows the selected image and the VMs using it", async ({ page }) => {

@@ -357,7 +357,7 @@ test.describe("dashboard frame", () => {
     for (const group of ["Compute", "Network", "Data", "System", "AI"]) {
       await expect(nav(page).getByText(group, { exact: true })).toBeVisible();
     }
-    for (const name of ["MicroVM", "Pools", "MicroService", "Schedules", "Networks", "Security groups", "Pipe", "Secrets", "Storage", "Images", "Kernels", "Shells", "Host"]) {
+    for (const name of ["MicroVM", "Pools", "MicroService", "Schedules", "Networks", "Security groups", "Pipe", "Secrets", "VM disk storage", "Images", "Kernels", "Shells", "Host"]) {
       await expect(nav(page).getByRole("link", { name, exact: true })).toBeVisible();
     }
   });
