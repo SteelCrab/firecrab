@@ -23,22 +23,22 @@
 .service-status-block { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border-soft); }
 .service-runtime { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .service-runtime:last-child { margin-bottom: 0; }
-.service-state { margin: 0; font-size: 14px; font-weight: 600; }
-.service-state .status { color: var(--text); font-size: 14px; font-weight: 600; }
-.service-health { color: var(--text-2); font-size: 12px; white-space: nowrap; }
-.service-endpoint { display: block; margin: 0 0 12px; font-size: 13px; overflow-wrap: anywhere; }
+.service-state { margin: 0; font-size: 0.875rem; font-weight: 600; }
+.service-state .status { color: var(--text); font-size: 0.875rem; font-weight: 600; }
+.service-health { color: var(--text-2); font-size: 0.75rem; white-space: nowrap; }
+.service-endpoint { display: block; margin: 0 0 12px; font-size: 0.8125rem; overflow-wrap: anywhere; }
 .service-endpoint:last-child { margin-bottom: 0; }
-#service-status [role="alert"] { margin: 12px 0 0; color: var(--red-ink); font-size: 12.5px; }
-.service-update { margin: 10px 0 0; color: var(--text-2); font-size: 12.5px; }
-.service-update .mono { color: var(--text); font-size: 12px; }
+#service-status [role="alert"] { margin: 12px 0 0; color: var(--red-ink); font-size: 0.78125rem; }
+.service-update { margin: 10px 0 0; color: var(--text-2); font-size: 0.78125rem; }
+.service-update .mono { color: var(--text); font-size: 0.75rem; }
 /* One cell per replica: healthy, the next one in progress, the rest waiting. */
 .service-progress { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; margin-top: 10px; }
 .service-progress i { height: 6px; border-radius: 3px; background: var(--track); }
 .service-progress i[data-state="ok"] { background: var(--green); }
 .service-progress i[data-state="busy"] { background: var(--amber); }
-.service-panel .wasm-log { max-height: 160px; margin: 10px 0 0; padding: 10px 12px; border-radius: var(--radius); background: var(--bg-subtle); font: 11.5px/1.7 var(--mono); }
+.service-panel .wasm-log { max-height: 160px; margin: 10px 0 0; padding: 10px 12px; border-radius: var(--radius); background: var(--bg-subtle); font: 0.71875rem/1.7 var(--mono); }
 /* Recent releases: a short list. The roll back icon is always shown and keeps its place on every row. */
-.release-recent .detail-list-main { font-size: 12px; }
+.release-recent .detail-list-main { font-size: 0.75rem; }
 .release-recent li { min-height: 36px; }
 .release-roll { display: inline-flex; flex: none; justify-content: center; width: 28px; }
 
@@ -53,8 +53,8 @@
 .release-table .release-col-actions { width: 36px; }
 .release-table td:first-child { white-space: nowrap; }
 .release-table td:first-child :is(.status, .release-archived) { margin-left: 8px; }
-.release-archived { color: var(--text-4); font-size: 12.5px; }
-.release-table .cell-sub { font: 11.5px var(--mono); }
+.release-archived { color: var(--text-4); font-size: 0.78125rem; }
+.release-table .cell-sub { font: 0.71875rem var(--mono); }
 .service-panel .wasm-table td.row-actions, .service-panel .wasm-table th.row-actions { width: 36px; padding-right: 0; }
 
 /* The first step of a setup: the account, repository and version pickers, one under the other. */
@@ -68,7 +68,7 @@
 
 /* Releases: update and roll back. */
 #deploy-panel section { margin: 0; }
-#deploy-panel p { margin: 0 0 12px; color: var(--text-2); font-size: 12px; line-height: 1.55; }
+#deploy-panel p { margin: 0 0 12px; color: var(--text-2); font-size: 0.75rem; line-height: 1.55; }
 #deploy-panel .wasm-actions { margin-bottom: 12px; }
 #deploy-panel .table-scroll { margin-bottom: 16px; }
 #deploy-panel .wasm-form { gap: 12px; margin-bottom: 12px; }
@@ -76,17 +76,17 @@
 
 /* Observability: logs, events, alerts and OTLP export, under the instances. */
 .service-observability { border-top: 1px solid var(--border); padding: 12px 0; min-width: 0; }
-.service-observability h3 { margin: 12px 0; font-size: 13px; }
+.service-observability h3 { margin: 12px 0; font-size: 0.8125rem; }
 .service-observability .icon-btn[aria-pressed="true"] { background: var(--bg-hover); color: var(--text); }
 .service-observability-list { list-style: none; margin: 0; padding: 0; }
 .service-observability-list li { min-width: 0; border-top: 1px solid var(--border); padding: 10px 0; }
-.service-observability-list .meta { color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
-.service-observability-list pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-size: 12px; }
-.service-otlp-metrics { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; font-size: 12px; }
+.service-observability-list .meta { color: var(--text-3); font-size: 0.75rem; overflow-wrap: anywhere; }
+.service-observability-list pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font-size: 0.75rem; }
+.service-otlp-metrics { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; font-size: 0.75rem; }
 .service-otlp-metrics dt { color: var(--text-3); }
 .service-otlp-metrics dd { margin: 0; }
 @media (max-width: 767px) {
-  .screen:has(#detail-panel[data-view="services"]:not([hidden])) .screen-header-end > :not(#api-status) { display: none; }
+  .screen:has(#detail-panel[data-view="services"]:not([hidden])) .screen-header-end > * { display: none; }
   .service-table :is(th, td) { padding-left: 8px; padding-right: 8px; }
   .service-table .service-col-port { width: 56px; }
   .service-table .service-col-replicas { width: 64px; }
@@ -99,27 +99,27 @@
 .wasm-content:has(.wizard-page) { padding: 0; }
 .wizard-page { display: flex; flex: 1 0 auto; flex-direction: column; padding-top: 28px; }
 .wizard-page > header { margin: 0 32px 20px; }
-.wizard-page > header h2 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; }
-.wizard-page > header p { margin: 4px 0 0; color: var(--text-3); font-size: 13px; }
+.wizard-page > header h2 { margin: 0; font-size: 1.25rem; font-weight: 650; letter-spacing: -0.02em; }
+.wizard-page > header p { margin: 4px 0 0; color: var(--text-3); font-size: 0.8125rem; }
 .wizard-layout { display: grid; flex: 1 0 auto; grid-template-columns: 232px minmax(0, 1fr) 300px; min-width: 0; }
 .wizard-main { display: flex; flex-direction: column; min-width: 0; padding: 0 32px; }
-.wizard-main > h3 { margin: 0 0 16px; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+.wizard-main > h3 { margin: 0 0 16px; font-size: 1rem; font-weight: 650; letter-spacing: -0.01em; }
 .wizard-main > form, .wizard-main > form > fieldset { display: flex; flex: 1 0 auto; flex-direction: column; gap: 0; min-width: 0; max-width: none; margin: 0; }
 .wizard-main > form > fieldset > .wasm-form { display: grid; gap: 14px; }
 .wizard-main .form-footer { margin: auto -32px 0; padding: 12px 32px; }
 .wizard-main #service-wizard-error:not(:empty) { margin-top: 12px; color: var(--red-ink); }
 
 .wizard-steps ol { display: grid; gap: 2px; margin: 0; padding: 0 0 0 32px; list-style: none; }
-.wizard-step { display: flex; align-items: center; gap: 10px; width: 100%; height: 34px; padding: 0 10px; border: 0; border-radius: var(--radius); background: none; color: var(--text-3); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.wizard-step { display: flex; align-items: center; gap: 10px; width: 100%; height: 34px; padding: 0 10px; border: 0; border-radius: var(--radius); background: none; color: var(--text-3); font: inherit; font-size: 0.8125rem; text-align: left; cursor: pointer; }
 .wizard-step:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
 .wizard-step:disabled { color: var(--text-5); cursor: default; }
 .wizard-step[aria-current="step"] { background: var(--bg-active); color: var(--text); font-weight: 600; }
-.wizard-step-no { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border: 1px solid var(--border-strong); border-radius: 50%; font-size: 11px; font-variant-numeric: tabular-nums; }
+.wizard-step-no { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border: 1px solid var(--border-strong); border-radius: 50%; font-size: 0.6875rem; font-variant-numeric: tabular-nums; }
 .wizard-step[aria-current="step"] .wizard-step-no { border-color: var(--text); background: var(--text); color: var(--bg); }
 
 .wizard-summary { align-self: start; position: sticky; top: 0; margin: 0 32px 0 0; padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-lg, 10px); }
-.wizard-summary h3 { margin: 0 0 12px; font-size: 12px; font-weight: 600; color: var(--text-3); }
-.wizard-summary dl { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 10px 12px; margin: 0; font-size: 12.5px; }
+.wizard-summary h3 { margin: 0 0 12px; font-size: 0.75rem; font-weight: 600; color: var(--text-3); }
+.wizard-summary dl { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 10px 12px; margin: 0; font-size: 0.78125rem; }
 .wizard-summary dt { color: var(--text-4); }
 .wizard-summary dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
 
@@ -129,9 +129,9 @@
 .size-card { position: relative; display: block; cursor: pointer; }
 .size-card input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
 .size-card-body { display: grid; gap: 4px; min-height: 84px; padding: 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); }
-.size-card-body b { font-size: 13.5px; font-weight: 600; }
-.size-card-body em { color: var(--text-3); font-size: 12px; font-style: normal; }
-.size-card-tag { position: absolute; top: 12px; right: 12px; color: var(--text-3); font-size: 11px; }
+.size-card-body b { font-size: 0.84375rem; font-weight: 600; }
+.size-card-body em { color: var(--text-3); font-size: 0.75rem; font-style: normal; }
+.size-card-tag { position: absolute; top: 12px; right: 12px; color: var(--text-3); font-size: 0.6875rem; }
 .size-card input:checked + .size-card-body { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
 .size-card input:focus-visible + .size-card-body { box-shadow: 0 0 0 3px var(--accent-ring); }
 .size-card input:checked:focus-visible + .size-card-body { box-shadow: inset 0 0 0 1px var(--text), 0 0 0 3px var(--accent-ring); }

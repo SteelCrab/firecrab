@@ -2,30 +2,30 @@
 
 /* Panel head: kind, title, one meta line, icon actions and the close X (spec §5.3). */
 .detail-body { display: flex; flex: 1; flex-direction: column; min-height: 0; padding: 0; overflow: hidden; }
-.detail-head { position: relative; z-index: 1; flex: none; padding: 16px 20px 0; }
-.detail-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
-.detail-kind { min-width: 0; overflow: hidden; color: var(--text-4); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.detail-top-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; margin-right: -6px; }
-.detail-top-actions > fieldset { display: flex; align-items: center; gap: 2px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.detail-head { position: relative; z-index: 1; flex: none; padding: 1rem 1.25rem 0; }
+.detail-top { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-height: 1.75rem; }
+.detail-kind { min-width: 0; overflow: hidden; color: var(--text-4); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
+.detail-top-actions { display: flex; flex: 0 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.125rem; min-width: 0; margin-right: -0.375rem; }
+.detail-top-actions > fieldset { display: flex; align-items: center; gap: 0.125rem; min-width: 0; margin: 0; padding: 0; border: 0; }
 .detail-top-actions .vm-more-actions { margin-left: 0; }
-.detail-title { margin: 2px 0 0; overflow: hidden; font-size: 18px; font-weight: 650; letter-spacing: -0.015em; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
-.detail-title.mono { font: 500 15px/1.5 var(--mono); letter-spacing: 0; }
-.detail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; color: var(--text-3); font-size: 12.5px; }
+.detail-title { margin: 0.125rem 0 0; overflow: hidden; font-size: 1.125rem; font-weight: 650; letter-spacing: -0.015em; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.detail-title.mono { font: 500 0.9375rem/1.5 var(--mono); letter-spacing: 0; }
+.detail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.375rem; color: var(--text-3); font-size: 0.78125rem; }
 .detail-meta:empty { display: none; }
 .detail-meta .sep { color: var(--text-5); }
-.detail-meta .mono { font-size: 12px; }
+.detail-meta .mono { font-size: 0.75rem; }
 
 /* Underline tabs: a 1px rule under the row; the 2px line of the active tab covers it. Tabs wrap on a very narrow panel, since a scroll box would clip the overlap. */
-.detail-tabs { flex: none; flex-wrap: wrap; gap: 0 18px; height: auto; margin-top: 14px; padding: 0 20px; border-bottom: 1px solid var(--border); }
-.detail-tabs .tab { height: 36px; margin-bottom: -1px; border-bottom: 2px solid transparent; color: var(--text-4); font: 500 13px var(--font); }
+.detail-tabs { flex: none; flex-wrap: wrap; gap: 0 1.125rem; height: auto; margin-top: 0.875rem; padding: 0 1.25rem; border-bottom: 1px solid var(--border); }
+.detail-tabs .tab { height: 2.25rem; margin-bottom: -0.0625rem; border-bottom: 2px solid transparent; color: var(--text-4); font: 500 0.8125rem var(--font); }
 .detail-tabs .tab[aria-selected="true"] { border-bottom-color: var(--text); color: var(--text); }
 .detail-tabs .tab[aria-selected="true"]::after { content: none; }
-.detail-tabs .tab em { margin-left: 5px; color: var(--text-4); font-size: 12px; font-style: normal; }
+.detail-tabs .tab em { margin-left: 0.3125rem; color: var(--text-4); font-size: 0.75rem; font-style: normal; }
 @media (hover: hover) { .detail-tabs .tab[aria-selected="false"]:hover { color: var(--text-2); } }
 
 /* The body scrolls under the fixed head and tabs. Without tabs a rule separates it from the head. */
-.detail-content { flex: 1; min-height: 0; padding: 18px 20px 28px; overflow-y: auto; }
-.detail-content.lined { margin-top: 16px; border-top: 1px solid var(--border); }
+.detail-content { flex: 1; min-height: 0; padding: 1.125rem 1.25rem 1.75rem; overflow-y: auto; }
+.detail-content.lined { margin-top: 1rem; border-top: 1px solid var(--border); }
 
 /* Form panels: the form fills the panel and its action row is a bar at the bottom, for any form height.
    A tall form scrolls and the bar stays in view (sticky); a short form leaves the free space above the bar. */
@@ -37,98 +37,98 @@
 .detail-form #service-deploy-form { display: flex; flex: 1 0 auto; flex-direction: column; }
 /* The shared bar is in forms.css. Here it runs edge to edge and sits at the bottom of a short form;
    a result message takes that place and the bar follows it. */
-.detail-form .form-footer { margin: auto -20px 0; padding: 12px 20px; }
+.detail-form .form-footer { margin: auto -1.25rem 0; padding: 0.75rem 1.25rem; }
 .detail-form #form-result:not(:empty) { margin-top: auto; }
 .detail-form #form-result:not(:empty) + .form-footer { margin-top: 0; }
 
 /* Sections have no frame: a soft rule under each, none under the last. */
-.detail-sec { margin: 0 0 16px; padding: 0 0 16px; border: 0; border-bottom: 1px solid var(--border-soft); background: none; }
+.detail-sec { margin: 0 0 1rem; padding: 0 0 1rem; border: 0; border-bottom: 1px solid var(--border-soft); background: none; }
 .detail-sec:is(:last-child, :has(+ .detail-result)) { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
-.detail-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; margin-bottom: 10px; }
-.detail-sec-head h3 { margin: 0; color: var(--text); font-size: 12.5px; font-weight: 600; }
-.detail-sec-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.detail-note { margin: 8px 0 0; color: var(--text-3); font-size: 12px; }
+.detail-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-height: 1.5rem; margin-bottom: 0.625rem; }
+.detail-sec-head h3 { margin: 0; color: var(--text); font-size: 0.78125rem; font-weight: 600; }
+.detail-sec-buttons { display: flex; flex-wrap: wrap; gap: 0.375rem; margin-top: 0.625rem; }
+.detail-note { margin: 0.5rem 0 0; color: var(--text-3); font-size: 0.75rem; }
 .detail-sec-head + .detail-note { margin-top: 0; }
 .detail-value-line { margin: 0; }
 .muted { color: var(--text-3); }
 
-.props { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 9px 8px; margin: 0; font-size: 12.5px; }
+.props { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: 0.5625rem 0.5rem; margin: 0; font-size: 0.78125rem; }
 .props > .wasm-property { display: contents; }
-.props dt { display: flex; align-items: center; min-width: 0; min-height: 24px; padding: 0; color: var(--text-3); font-size: 12.5px; overflow-wrap: anywhere; }
-.btn + .props { margin-top: 12px; }
-.props + .detail-sec { margin-top: 16px; }
-.props dd { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 24px; margin: 0; padding: 0; }
+.props dt { display: flex; align-items: center; min-width: 0; min-height: 1.5rem; padding: 0; color: var(--text-3); font-size: 0.78125rem; overflow-wrap: anywhere; }
+.btn + .props { margin-top: 0.75rem; }
+.props + .detail-sec { margin-top: 1rem; }
+.props dd { display: flex; align-items: center; gap: 0.375rem; min-width: 0; min-height: 1.5rem; margin: 0; padding: 0; }
 .props dd.editing { display: block; }
 .prop-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.prop-value .mono { font-size: 12px; }
-.prop-action { width: 24px; height: 24px; margin-left: auto; opacity: 0; }
-.prop-action svg { width: 13px; height: 13px; }
+.prop-value .mono { font-size: 0.75rem; }
+.prop-action { width: 1.5rem; height: 1.5rem; margin-left: auto; opacity: 0; }
+.prop-action svg { width: 0.8125rem; height: 0.8125rem; }
 /* The icon that copies a value, right after it. */
-.prop-copy { flex: none; width: 24px; height: 24px; }
-.prop-copy svg { width: 14px; height: 14px; }
+.prop-copy { flex: none; width: 1.5rem; height: 1.5rem; }
+.prop-copy svg { width: 0.875rem; height: 0.875rem; }
 .props dd:hover .prop-action, .prop-action:focus-visible { opacity: 1; }
 @media (hover: none) { .prop-action { opacity: 1; } }
-.prop-lock { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; margin-left: auto; color: var(--text-3); font-size: 11.5px; white-space: nowrap; }
-.prop-lock svg { width: 12px; height: 12px; }
-.prop-editor { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 6px; }
-.prop-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.detail-edit-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.prop-lock { display: inline-flex; flex-shrink: 0; align-items: center; gap: 0.25rem; margin-left: auto; color: var(--text-3); font-size: 0.71875rem; white-space: nowrap; }
+.prop-lock svg { width: 0.75rem; height: 0.75rem; }
+.prop-editor { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.25rem 0 0.375rem; }
+.prop-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem; }
+.detail-edit-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; margin-top: 0.625rem; }
 .prop-editor .detail-edit-actions { margin-top: 0; }
 
 .kv { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); }
 .kv-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr) 40px;
+  grid-template-columns: minmax(0, 1fr) 0.875rem minmax(0, 1fr) 2.5rem;
   align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 3px 6px 3px 12px;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding: 0.1875rem 0.375rem 0.1875rem 0.75rem;
   border-bottom: 1px solid var(--border);
-  font-size: 12.5px;
+  font-size: 0.78125rem;
 }
 .kv-row:last-child { border-bottom: 0; }
-.kv-head { min-height: 28px; background: var(--bg-subtle); color: var(--text-3); font-size: 11.5px; }
-.kv-arrow { width: 13px; height: 13px; color: var(--text-4); }
-.kv-proto { color: var(--text-3); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; }
-.vm-port-editor .kv-row { grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr) 64px 28px; padding-left: 6px; }
+.kv-head { min-height: 1.75rem; background: var(--bg-subtle); color: var(--text-3); font-size: 0.71875rem; }
+.kv-arrow { width: 0.8125rem; height: 0.8125rem; color: var(--text-4); }
+.kv-proto { color: var(--text-3); font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; }
+.vm-port-editor .kv-row { grid-template-columns: minmax(0, 1fr) 0.875rem minmax(0, 1fr) 4rem 1.75rem; padding-left: 0.375rem; }
 .vm-env-row { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); }
-.vm-env-editor .kv-row { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr) 28px; padding-left: 6px; }
-.kv-key, .kv-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.kv + .btn { margin-top: 8px; }
-.kv-row .input { height: 28px; padding: 0 8px; font-size: 12px; }
+.vm-env-editor .kv-row { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr) 1.75rem; padding-left: 0.375rem; }
+.kv-key, .kv-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
+.kv + .btn { margin-top: 0.5rem; }
+.kv-row .input { height: 1.75rem; padding: 0 0.5rem; font-size: 0.75rem; }
 .prop-value.wrap { overflow: visible; white-space: normal; overflow-wrap: anywhere; }
 .detail-list { margin: 0; padding: 0; list-style: none; }
-.detail-list li { display: flex; align-items: center; gap: 8px; min-height: 32px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.detail-list li { display: flex; align-items: center; gap: 0.5rem; min-height: 2rem; border-bottom: 1px solid var(--border); font-size: 0.78125rem; }
 .detail-list li:last-child { border-bottom: 0; }
 .detail-list .detail-list-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.detail-list .detail-list-sub { color: var(--text-3); font-size: 12px; white-space: nowrap; }
+.detail-list .detail-list-sub { color: var(--text-3); font-size: 0.75rem; white-space: nowrap; }
 
 .detail-body .detail-log {
   max-height: none;
-  padding: 10px 12px;
+  padding: 0.625rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-subtle);
   color: var(--text-2);
-  font: 11.5px/1.7 var(--mono);
+  font: 0.71875rem/1.7 var(--mono);
 }
 
 /* Existing page sections (forms, runtime) shown inside the panel lose their card frame. */
-.detail-embed { padding-top: 4px; }
+.detail-embed { padding-top: 0.25rem; }
 .detail-embed > .panel { padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
-.detail-embed .panel-title { padding: 0 0 12px; margin: 0 0 12px; border-bottom: 1px solid var(--border); font-family: var(--font); font-size: 13px; letter-spacing: 0; text-transform: none; }
+.detail-embed .panel-title { padding: 0 0 0.75rem; margin: 0 0 0.75rem; border-bottom: 1px solid var(--border); font-family: var(--font); font-size: 0.8125rem; letter-spacing: 0; text-transform: none; }
 .detail-embed .create-grid { grid-template-columns: minmax(0, 1fr); }
 .detail-embed .service-wide, .detail-embed .service-full { grid-column: auto; }
-.detail-field { margin-top: 10px; }
+.detail-field { margin-top: 0.625rem; }
 
 /* Shell revisions */
 .shell-revisions li { padding: 0; }
 .shell-revision {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0.125rem;
   width: 100%;
-  padding: 7px 8px;
+  padding: 0.4375rem 0.5rem;
   border: 0;
   border-radius: 6px;
   background: none;
@@ -139,15 +139,15 @@
 }
 .shell-revision.active { background: var(--bg-active); }
 @media (hover: hover) { .shell-revision:not(.active):hover { background: var(--bg-hover); } }
-.shell-revision-version { font-size: 12.5px; font-weight: 500; }
-.shell-revision-meta { overflow: hidden; color: var(--text-3); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
-.shell-detail-desc { margin-top: 12px; }
-.detail-body .shell-file-editor { min-height: 240px; font-size: 12px; }
+.shell-revision-version { font-size: 0.78125rem; font-weight: 500; }
+.shell-revision-meta { overflow: hidden; color: var(--text-3); font-size: 0.71875rem; text-overflow: ellipsis; white-space: nowrap; }
+.shell-detail-desc { margin-top: 0.75rem; }
+.detail-body .shell-file-editor { min-height: 15rem; font-size: 0.75rem; }
 
 /* With the detail column open, list tables drop the columns the panel shows. */
 .screen.has-panel .col-detail { display: none; }
 .vm-table .actions { white-space: nowrap; }
-.vm-table .actions .btn { height: var(--control-height-sm); padding: 0 8px; font-size: 12px; }
+.vm-table .actions .btn { height: var(--control-height-sm); padding: 0 0.5rem; font-size: 0.75rem; }
 
 /* A script or a block of code in a panel. */
-.codeblock { margin: 0; padding: 12px; overflow: auto; border-radius: var(--radius); background: var(--bg-subtle); font: 12px/1.6 var(--mono); white-space: pre; }
+.codeblock { margin: 0; padding: 0.75rem; overflow: auto; border-radius: var(--radius); background: var(--bg-subtle); font: 0.75rem/1.6 var(--mono); white-space: pre; }

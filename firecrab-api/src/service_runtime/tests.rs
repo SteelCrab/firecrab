@@ -82,7 +82,8 @@ async fn secret_preflight_rejects_missing_and_invalid_values_without_creating_re
             Extension(RequestId(id)),
             Path(id.to_string()),
             ValidatedJson(DeployMicroServiceRequest {
-                host_port: 30100,
+                // Secret validation must not depend on another test's host listener.
+                host_port: 0,
                 micro_network_id: None,
             }),
         )

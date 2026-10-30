@@ -1,5 +1,6 @@
 mod advanced;
 mod api;
+mod auth_setup;
 mod databases;
 mod deploy;
 mod details;
@@ -243,6 +244,21 @@ fn render_content(app: &Shared) {
     workflows::sync_form();
     advanced::services::sync(app);
 }
+/// Refresh the image list without replacing an open import form.
+fn render_image_list(app: &Shared) {
+    let (html, loaded) = {
+        let state = app.borrow();
+        (render::content(&state), state.loaded)
+    };
+    app.borrow_mut().rendering = true;
+    set_html("content", &html);
+    app.borrow_mut().rendering = false;
+    if let Some(content) = element("content") {
+        let _ = content.set_attribute("data-loaded", if loaded { "true" } else { "false" });
+    }
+    render_messages(app);
+}
+
 fn render_editor(app: &Shared) {
     if app.borrow().route == "pipe/database" {
         render_content(app);
@@ -281,22 +297,9 @@ fn render_detail(app: &Shared) {
     let (open, width, html, selection, same_view) = {
         let mut state = app.borrow_mut();
         observability::clear(&mut state);
-        let narrow = window()
-            .inner_width()
-            .ok()
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1440.0)
-            < 1280.0;
-        if !narrow {
-            let viewport = window()
-                .inner_width()
-                .ok()
-                .and_then(|v| v.as_f64())
-                .unwrap_or(1440.0) as u32;
-            state.panel_width = state
-                .panel_width
-                .min(viewport.saturating_sub(716).clamp(320, 720));
-        }
+        state.panel_width = state
+            .panel_width
+            .clamp(details::PANEL_MIN_WIDTH, details::panel_max_width());
         let open = details::panel_visible(&state);
         let html = if open {
             details::panel(&state)
@@ -399,6 +402,10 @@ fn render_detail(app: &Shared) {
 /// Marks the table row of the selected item, so the highlight shows before the next list render.
 /// The VM list keeps its own row cache (`vm_rows`).
 fn mark_selected_rows(app: &Shared) {
+    // Queue rows track their selection separately from the detail panel.
+    if app.borrow().route == "queues" {
+        return;
+    }
     let Ok(rows) = document().query_selector_all("#content tr[data-id]") else {
         return;
     };
@@ -438,11 +445,6 @@ fn render_messages(app: &Shared) {
         } else {
             let _ = button.remove_attribute("disabled");
         }
-    }
-    if let Some(status) = element("api-status") {
-        let (data_state, label) = render::api_status(&state);
-        let _ = status.set_attribute("data-state", data_state);
-        status.set_text_content(Some(label));
     }
 }
 fn update_toolbar(app: &Shared) {
@@ -509,10 +511,11 @@ pub fn start() -> Result<(), JsValue> {
             .flatten()
             .and_then(|s| s.get_item("firecrab.detailPanelWidth").ok().flatten())
             .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(384)
-            .clamp(320, 720),
+            .unwrap_or(details::PANEL_DEFAULT_WIDTH)
+            .clamp(details::PANEL_MIN_WIDTH, details::PANEL_MAX_WIDTH),
         ..App::default()
     }));
+    open_image_import_on_entry(&mut app.borrow_mut());
     if let Some(root) = element("root") {
         root.set_attribute("data-engine", "wasm")?;
     }
@@ -699,11 +702,23 @@ fn load_route(app: Shared) {
                     state.vms = vms;
                 }
                 state.cache.insert(path.into(), value);
+                let volume_storage = path == "/api/storage"
+                    && state
+                        .form
+                        .as_ref()
+                        .is_some_and(|form| form.path == volumes::ENDPOINT);
+                let image_form = state.route == "images" && state.form.is_some();
                 let visible =
                     matches!(state.route.as_str(), "host" | "images" | "volumes" | "pipe")
                         && state.form.is_none();
                 drop(state);
-                if visible {
+                if volume_storage {
+                    advanced::capture_form(&app);
+                    workflows::prepare_form(&app);
+                    render_editor(&app);
+                } else if image_form {
+                    render_image_list(&app);
+                } else if visible {
                     render_content(&app);
                 }
                 if path == "/api/update" {
@@ -842,6 +857,9 @@ fn refresh(app: Shared) {
         advanced::after_refresh(&app);
         databases::after_refresh(&app);
         databases::tick(&app);
+        if has_form && route == "images" && changed {
+            render_image_list(&app);
+        }
         if !has_form {
             if changed {
                 render_content(&app);
@@ -1000,6 +1018,15 @@ fn allow_discard(app: &Shared) -> bool {
             .confirm_with_message(i18n::t("Discard unsaved changes?"))
             .unwrap_or(false)
 }
+/// Show the OCI import form when entering the image screen.
+fn open_image_import_on_entry(state: &mut App) {
+    if state.route == "images" {
+        state.form = forms::resource_form("oci", &Value::Null, "");
+        state.panel_open = true;
+        state.workflows.form_result = None;
+    }
+}
+
 fn navigate(app: &Shared) {
     let next = route_from_hash();
     let next_index = history_index();
@@ -1056,6 +1083,7 @@ fn navigate(app: &Shared) {
     state.job = None;
     state.query.clear();
     state.filter = "all".into();
+    open_image_import_on_entry(&mut state);
     drop(state);
     render_page(app);
     load_route(app.clone());
@@ -2113,6 +2141,43 @@ fn mutate(
                         {
                             base.extend(updated.clone());
                         }
+                    } else if path == format!("/api/shells/{}/revisions", api::encode(id))
+                        && value["shellId"] == *id
+                    {
+                        let summary = json!({
+                            "latestVersion": value["version"],
+                            "latestRevisionId": value["revisionId"],
+                            "contentSha256": value["contentSha256"],
+                            "updatedAtMs": value["createdAtMs"],
+                        });
+                        if let Some(rows) = state.resource.as_array_mut() {
+                            for row in rows.iter_mut().filter(|row| row["id"] == *id) {
+                                if let Some(row) = row.as_object_mut() {
+                                    row.extend(summary.as_object().unwrap().clone());
+                                }
+                            }
+                        }
+                        if let Some(detail) = state.detail.as_mut() {
+                            if let Some(fields) = detail.as_object_mut() {
+                                fields.extend(summary.as_object().unwrap().clone());
+                            }
+                            detail["latestContent"] = value["content"].clone();
+                            let mut revisions = model::list(&detail["revisions"]).to_vec();
+                            revisions.retain(|revision| revision["id"] != value["revisionId"]);
+                            revisions.insert(
+                                0,
+                                json!({
+                                    "id": value["revisionId"],
+                                    "version": value["version"],
+                                    "contentSha256": value["contentSha256"],
+                                    "createdAtMs": value["createdAtMs"],
+                                    "sizeBytes": text(&value, "content").len(),
+                                }),
+                            );
+                            detail["revisions"] = json!(revisions);
+                        }
+                        state.detail_loading = false;
+                        state.detail_result.clear();
                     } else if path.ends_with("/deployment")
                         || path.ends_with("/stop")
                         || path.ends_with("/updates")

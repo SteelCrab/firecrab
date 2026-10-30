@@ -94,6 +94,19 @@ pub fn prepare_form(app: &Shared) {
     form.choose("microNetworkId", networks, "id", "name");
     if form.path == crate::volumes::ENDPOINT {
         form.choose("storageRoot", storage, "id", "name");
+        if let Some(field) = form
+            .fields
+            .iter_mut()
+            .find(|field| field.key == "storageRoot")
+            && field.value.is_empty()
+        {
+            // The API lists the host's default root first.
+            field.value = field
+                .options
+                .first()
+                .map(|(id, _)| id.clone())
+                .unwrap_or_default();
+        }
     } else {
         form.choose("storageRoot", storage, "path", "path");
     }

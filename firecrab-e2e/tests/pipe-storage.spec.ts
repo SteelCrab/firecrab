@@ -197,6 +197,10 @@ async function open(page: Page, options: Options = {}) {
 }
 
 async function browse(page: Page) {
+  const panel = page.locator("#detail-panel");
+  if (await panel.isVisible()) {
+    await panel.getByRole("button", { name: "Close detail", exact: true }).click();
+  }
   await page
     .getByRole("button", { name: "Open files in Reports", exact: true })
     .click();

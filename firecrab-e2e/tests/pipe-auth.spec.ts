@@ -168,6 +168,43 @@ async function open(
 
 // Assert API behavior and credential lifetime independently of the previous React layout.
 test.describe("Pipe Auth @dashboard", () => {
+  for (const locale of [undefined, "ko"] as const) {
+    for (const provider of [
+      { id: "firecrab", name: "Firecrab", required: ["Account integration", "fca_"], url: "https://console.firecrab.dev/#account" },
+      { id: "github", name: "GitHub", required: ["classic", "read:packages", "ghcr.io", "SSO"], url: "https://github.com/settings/tokens" },
+      { id: "aws", name: "AWS", required: ["IAM", "ap-northeast-2", "ecr:GetAuthorizationToken", "ecr:DescribeRepositories"], url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/access-key-self-managed.html" },
+    ]) {
+      test(`shows four account connection steps for ${provider.name} in ${locale ?? "en"}`, async ({ page }, info) => {
+        await page.setViewportSize({ width: 1440, height: 1100 });
+        const mock = await open(page, { locale });
+        const overview = page.locator(".auth-setup-overview");
+        await expect(overview.locator("summary")).toHaveText(
+          ["Firecrab", "GitHub", "AWS"].map(name => `${name} ${locale === "ko" ? "계정 연동 방법" : "connection steps"}`),
+        );
+        const card = overview.locator("details").nth(["firecrab", "github", "aws"].indexOf(provider.id));
+        await card.locator("summary").click();
+        await expect(card.locator("ol > li")).toHaveCount(4);
+        for (const text of provider.required) await expect(card).toContainText(text);
+        await card.locator("summary").click();
+        await page.getByRole("button", {
+          name: locale === "ko" ? `${provider.name} 연결` : `Connect ${provider.name}`,
+          exact: true,
+        }).click();
+        const guide = page.locator("#editor .auth-setup");
+        await expect(guide.getByRole("heading")).toHaveText(`${provider.name} ${locale === "ko" ? "계정 연동 방법" : "connection steps"}`);
+        await expect(guide.locator("ol > li")).toHaveCount(4);
+        for (const text of provider.required) await expect(guide).toContainText(text);
+        await expect(guide.locator(`a[href="${provider.url}"]`)).toHaveAttribute("rel", "noopener noreferrer");
+        expect(mock.writes).toHaveLength(0);
+        if (locale === "ko") await page.screenshot({ path: info.outputPath(`auth-guide-${provider.id}-ko.png`), fullPage: true });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.locator("#detail-panel .detail-content").evaluate(el => { el.scrollTop = 0; });
+        await expect(guide).toBeVisible();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        if (locale === "ko") await page.screenshot({ path: info.outputPath(`auth-guide-${provider.id}-mobile.png`), fullPage: true });
+      });
+    }
+  }
   test("links a console account token, shows verified identity, and clears browser secrets", async ({ page }, info) => {
     const mock = await open(page, { connections: [github] });
     await page.getByRole("button", { name: "Connect Firecrab", exact: true }).click();

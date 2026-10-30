@@ -3,7 +3,7 @@ use crate::{
     App, Shared, api, element,
     forms::Field,
     model::{escape, list, text},
-    render::{Icon, button, chips, empty_state, icon_button, status_dot, status_line},
+    render::{Icon, button, chips, empty_state, icon_button, status_dot},
     render_content, render_editor, render_messages, set_html,
 };
 use serde_json::{Value, json};
@@ -25,9 +25,12 @@ fn title(value: &str) -> String {
         .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
         .unwrap_or_default()
 }
+fn tr(ko: bool, en: &'static str, local: &'static str) -> &'static str {
+    if ko { local } else { en }
+}
 fn input(name: &str, label: &str, value: &str, min: u32, max: u32) -> String {
     format!(
-        "<label>{label}<input name=\"{name}\" type=\"number\" value=\"{value}\" min=\"{min}\" max=\"{max}\" required></label>"
+        "<label class=\"field\"><span class=\"field-label\">{label}</span><input class=\"input\" name=\"{name}\" type=\"number\" value=\"{value}\" min=\"{min}\" max=\"{max}\" required></label>"
     )
 }
 fn controls_disabled(app: &App) -> &'static str {
@@ -37,116 +40,208 @@ fn controls_disabled(app: &App) -> &'static str {
         ""
     }
 }
-/// The tone of a queue or engine phase.
 fn phase_tone(phase: &str) -> &'static str {
     match phase {
-        "running" => "ok",
+        "running" | "ready" => "ok",
+        "stopped" => "off",
         "failed" => "error",
         _ => "busy",
     }
+}
+fn phase_label(phase: &str, ko: bool) -> String {
+    if !ko {
+        return title(phase);
+    }
+    match phase {
+        "running" => "실행 중",
+        "ready" => "사용 가능",
+        "stopped" => "중지됨",
+        "failed" => "실패",
+        "installing" => "설치 중",
+        "provisioning" => "준비 중",
+        "starting" => "시작 중",
+        "stopping" => "중지 중",
+        _ => phase,
+    }
+    .to_owned()
+}
+fn setup(app: &App, disabled: &str) -> String {
+    let ko = app.locale == "ko";
+    let mut options = format!(
+        "<option value=\"\">{}</option>",
+        tr(ko, "Select a network", "네트워크 선택")
+    );
+    for network in list(app.cache.get("/api/micro-networks").unwrap_or(&Value::Null)) {
+        options.push_str(&format!(
+            "<option value=\"{}\">{}</option>",
+            escape(text(network, "id")),
+            escape(text(network, "name"))
+        ));
+    }
+    format!(
+        "<section class=\"queue-setup\" aria-labelledby=\"queue-setup-title\"><div class=\"queue-setup-copy\"><span class=\"queue-engine-icon\" aria-hidden=\"true\">{icon}</span><span class=\"queue-eyebrow\">RabbitMQ</span><h2 id=\"queue-setup-title\">{heading}</h2><p>{description}</p><p class=\"queue-setup-note\">{note}</p></div><form id=\"queue-engine-form\" class=\"queue-form\"><fieldset {disabled}><div class=\"queue-section-head\"><h3>{resources}</h3><p>{resource_note}</p></div><label class=\"field\"><span class=\"field-label\">MicroNetwork</span><select class=\"input\" name=\"microNetworkId\" required>{options}</select></label><div class=\"queue-engine-resources\">{cpu}{ram}{disk}</div><div class=\"queue-form-footer\"><button type=\"submit\" class=\"btn primary\">{install}</button></div></fieldset></form></section>",
+        icon = crate::render::navigation_icon("queues"),
+        heading = tr(ko, "Set up your queue engine", "큐 엔진 설치"),
+        description = tr(
+            ko,
+            "One RabbitMQ engine handles the queues your services use to send and receive messages.",
+            "RabbitMQ 엔진 하나로 서비스 간 메시지를 보내고 받는 큐를 관리합니다."
+        ),
+        note = tr(
+            ko,
+            "The engine runs in a dedicated MicroVM. Install it once, then create your queues.",
+            "엔진은 전용 MicroVM에서 실행됩니다. 한 번 설치한 뒤 큐를 생성합니다."
+        ),
+        resources = tr(ko, "Engine resources", "엔진 리소스"),
+        resource_note = tr(
+            ko,
+            "Choose the network and resources for the engine.",
+            "엔진이 사용할 네트워크와 리소스를 선택합니다."
+        ),
+        cpu = input("cpu", "CPU", "4", 1, 32),
+        ram = input(
+            "ram",
+            tr(ko, "Memory (MiB)", "메모리 (MiB)"),
+            "4096",
+            128,
+            32768
+        ),
+        disk = input("diskGb", tr(ko, "Disk (GiB)", "디스크 (GiB)"), "8", 4, 1024),
+        install = tr(ko, "Install RabbitMQ", "RabbitMQ 설치"),
+    )
+}
+fn engine_card(app: &App, engine: &Value, disabled: &str) -> String {
+    let ko = app.locale == "ko";
+    let phase = text(engine, "phase");
+    let mut actions = format!("<fieldset class=\"queue-actions\" {disabled}>");
+    if ["stopped", "failed"].contains(&phase) {
+        actions.push_str(&button(
+            tr(ko, "Start / recover", "시작 / 복구"),
+            "queue-start",
+            "",
+        ));
+    }
+    if phase == "running" {
+        actions.push_str(&icon_button("Stop", "queue-stop", "", Icon::Stop));
+    }
+    actions.push_str("</fieldset>");
+    let mut out = format!(
+        "<section class=\"queue-engine\" aria-label=\"{}\"><div class=\"queue-engine-head\"><span class=\"queue-engine-icon\" aria-hidden=\"true\">{}</span><div class=\"queue-engine-copy\"><h2>RabbitMQ</h2><p>{}</p></div>{}{actions}</div>",
+        tr(ko, "Queue engine", "큐 엔진"),
+        crate::render::navigation_icon("queues"),
+        tr(
+            ko,
+            "Shared engine for your application queues",
+            "애플리케이션 큐가 함께 사용하는 엔진"
+        ),
+        status_dot(phase_tone(phase), &phase_label(phase, ko)),
+    );
+    if !text(engine, "error").is_empty() {
+        out.push_str(&format!(
+            "<div class=\"queue-engine-error\" role=\"status\"><strong>{}</strong><p>{}</p></div>",
+            tr(
+                ko,
+                "The engine needs attention",
+                "엔진 상태를 확인해야 합니다"
+            ),
+            escape(text(engine, "error"))
+        ));
+    } else if phase != "running" {
+        out.push_str(&format!(
+            "<p class=\"queue-engine-note\">{}</p>",
+            tr(
+                ko,
+                "Start the engine to create queues and exchange messages.",
+                "엔진이 실행되면 큐를 생성하고 메시지를 주고받을 수 있습니다."
+            )
+        ));
+    }
+    if !text(engine, "log").is_empty() {
+        out.push_str(&format!("<details class=\"queue-engine-log\" {}><summary>{}</summary><pre class=\"queue-log\">{}</pre></details>",if phase == "failed" { "open" } else { "" },tr(ko,"Installation log","설치 로그"),escape(text(engine,"log"))));
+    }
+    out.push_str("</section>");
+    out
+}
+fn create_form(ready: bool, ko: bool) -> String {
+    format!(
+        "<section class=\"queue-create\" aria-labelledby=\"queue-create-title\"><div class=\"queue-section-head\"><h2 id=\"queue-create-title\">{heading}</h2><p>{description}</p></div><form id=\"queue-create-form\" class=\"queue-form\"><fieldset {disabled}><div class=\"queue-create-fields\"><div class=\"field\"><label for=\"queue-name\">{name}</label><input class=\"input\" id=\"queue-name\" name=\"name\" required pattern=\"[a-z0-9-]{{1,40}}\" maxlength=\"40\" placeholder=\"notifications\" autocomplete=\"off\" aria-describedby=\"queue-name-hint\"><p class=\"field-hint\" id=\"queue-name-hint\">{name_hint}</p></div>{delivery}{capacity}</div><div class=\"queue-form-footer\"><span class=\"queue-create-note\">{note}</span><button class=\"btn primary\" type=\"submit\">{submit}</button></div></fieldset></form></section>",
+        heading = tr(ko, "Create a queue", "큐 생성"),
+        description = tr(
+            ko,
+            "Name the queue and set its message limits.",
+            "큐 이름과 메시지 한도를 설정합니다."
+        ),
+        disabled = if ready { "" } else { "disabled" },
+        name = tr(ko, "Queue name", "큐 이름"),
+        name_hint = tr(
+            ko,
+            "Lowercase letters, numbers and hyphens. Up to 40 characters.",
+            "영문 소문자, 숫자, 하이픈을 사용합니다. 최대 40자입니다."
+        ),
+        delivery = input(
+            "deliveryLimit",
+            tr(ko, "Delivery limit", "전달 한도"),
+            "5",
+            1,
+            100
+        ),
+        capacity = input(
+            "maxMib",
+            tr(ko, "Capacity per queue (MiB)", "큐 용량 (MiB)"),
+            "64",
+            1,
+            1024
+        ),
+        note = if ready {
+            tr(
+                ko,
+                "Connect a MicroService after creating the queue.",
+                "큐를 생성한 뒤 MicroService에 연결합니다.",
+            )
+        } else {
+            tr(
+                ko,
+                "The engine must be running to create a queue.",
+                "엔진이 실행 중이어야 큐를 생성할 수 있습니다.",
+            )
+        },
+        submit = tr(ko, "Create Queue", "큐 생성"),
+    )
 }
 pub fn content(app: &App) -> String {
     let ko = app.locale == "ko";
     let engine = app.cache.get("/api/queue/engine").unwrap_or(&Value::Null);
     let disabled = controls_disabled(app);
-    let mut out = String::from("<div class=\"queue-page\">");
     if engine.is_null() {
-        // Not installed: the install form is the first thing to do.
-        let mut form = format!(
-            "<form id=\"queue-engine-form\" class=\"queue-form\"><fieldset {disabled}><div class=\"queue-inputs\"><label>MicroNetwork<select name=\"microNetworkId\" required><option value=\"\">Select a network</option>"
-        );
-        for network in list(app.cache.get("/api/micro-networks").unwrap_or(&Value::Null)) {
-            form.push_str(&format!(
-                "<option value=\"{}\">{}</option>",
-                escape(text(network, "id")),
-                escape(text(network, "name"))
-            ));
-        }
-        form.push_str("</select></label>");
-        form.push_str(&input("cpu", "CPU", "4", 1, 32));
-        form.push_str(&input("ram", "Memory (MiB)", "4096", 128, 32768));
-        form.push_str(&input("diskGb", "Disk (GiB)", "8", 4, 1024));
-        form.push_str("</div><button type=\"submit\" class=\"btn primary\">Install RabbitMQ</button></fieldset></form>");
+        return format!("<div class=\"queue-page\">{}</div>", setup(app, disabled));
+    }
+    let queues = list(&app.resource);
+    let ready = text(engine, "phase") == "running" && disabled.is_empty();
+    let mut out = format!(
+        "<div class=\"queue-page\">{}{}<section class=\"queue-list\" aria-labelledby=\"queue-list-title\"><div class=\"queue-section-head queue-list-head\"><h2 id=\"queue-list-title\">{} <span class=\"queue-count\">{}</span></h2><p>{}</p></div>",
+        engine_card(app, engine, disabled),
+        create_form(ready, ko),
+        tr(ko, "Queues", "큐"),
+        queues.len(),
+        tr(
+            ko,
+            "Select a queue to view its activity and connection details.",
+            "큐를 선택하면 메시지 현황과 연결 정보를 확인할 수 있습니다."
+        )
+    );
+    if queues.is_empty() {
         out.push_str(&empty_state(
             "queues",
-            if ko { "큐를 쓰려면 엔진을 설치합니다" } else { "Install the engine to use queues" },
-            if ko {
-                "RabbitMQ 엔진은 MicroVM 하나에서 실행되고 모든 큐가 함께 씁니다. 한 번만 설치하면 됩니다."
-            } else {
-                "The RabbitMQ engine runs in one MicroVM and every queue shares it. You install it once."
-            },
-            &form,
+            tr(ko, "No queues yet", "아직 큐가 없습니다"),
+            tr(
+                ko,
+                "Your queues will appear here after you create one.",
+                "큐를 생성하면 이곳에 표시됩니다.",
+            ),
+            "",
         ));
     } else {
-        let phase = text(engine, "phase");
-        let mut actions = format!("<fieldset class=\"queue-actions\" {disabled}>");
-        if ["stopped", "failed"].contains(&phase) {
-            actions.push_str(&icon_button(
-                "Start / recover",
-                "queue-start",
-                "",
-                Icon::Start,
-            ));
-        }
-        if phase == "running" {
-            actions.push_str(&icon_button("Stop", "queue-stop", "", Icon::Stop));
-        }
-        actions.push_str("</fieldset>");
-        let message = if phase == "running" {
-            ""
-        } else if ko {
-            "엔진이 실행 중일 때 큐를 만들 수 있습니다."
-        } else {
-            "Queues can be created once the engine is running."
-        };
-        out.push_str(&status_line(
-            phase_tone(phase),
-            "Internal RabbitMQ",
-            &[status_dot(phase_tone(phase), &title(phase))],
-            &actions,
-            if text(engine, "error").is_empty() {
-                message
-            } else {
-                text(engine, "error")
-            },
-        ));
-        if !text(engine, "log").is_empty() {
-            out.push_str(&format!("<details><summary>Installation log</summary><pre class=\"queue-log\">{}</pre></details>",escape(text(engine,"log"))));
-        }
-    }
-    let ready = text(engine, "phase") == "running" && disabled.is_empty();
-    // New queue: a flat form row above the list.
-    out.push_str(&format!("<form id=\"queue-create-form\" class=\"queue-form queue-create\"><fieldset {}><div class=\"queue-inputs\"><label>Queue name<input name=\"name\" required pattern=\"[a-z0-9-]{{1,40}}\" maxlength=\"40\"></label>",if ready { "" } else { "disabled" }));
-    out.push_str(&input("deliveryLimit", "Delivery limit", "5", 1, 100));
-    out.push_str(&input("maxMib", "Capacity per queue (MiB)", "64", 1, 1024));
-    out.push_str("</div><button class=\"btn primary\" type=\"submit\">Create Queue</button></fieldset></form>");
-    let queues = list(&app.resource);
-    if queues.is_empty() {
-        if !engine.is_null() {
-            out.push_str(&empty_state(
-                "queues",
-                if ko {
-                    "아직 큐가 없습니다"
-                } else {
-                    "No queues yet"
-                },
-                if ko {
-                    "엔진이 시작되면 위 양식으로 첫 큐를 만듭니다."
-                } else {
-                    "Create the first queue with the form above once the engine starts."
-                },
-                "",
-            ));
-        }
-    } else {
-        out.push_str(&format!(
-            "<div class=\"table-scroll\"><table class=\"wasm-table queue-table\" aria-label=\"{}\"><thead><tr><th>{}</th><th>{}</th><th class=\"col-secondary\">{}</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",
-            if ko { "큐" } else { "Queues" },
-            if ko { "이름" } else { "Name" },
-            if ko { "상태" } else { "Status" },
-            if ko { "사용 서비스" } else { "Used by" },
-            crate::i18n::t("Actions")
-        ));
+        out.push_str(&format!("<div class=\"table-scroll\"><table class=\"wasm-table queue-table\" aria-label=\"{}\"><colgroup><col><col class=\"queue-col-status\"><col class=\"queue-col-services col-secondary\"><col class=\"queue-col-actions\"></colgroup><thead><tr><th>{}</th><th>{}</th><th class=\"col-secondary\">{}</th><th class=\"row-actions\"><span class=\"sr-only\">{}</span></th></tr></thead><tbody>",tr(ko,"Queues","큐"),tr(ko,"Name","이름"),tr(ko,"Status","상태"),tr(ko,"Used by","사용 서비스"),crate::i18n::t("Actions")));
         for queue in queues {
             let id = text(queue, "id");
             let phase = text(queue, "phase");
@@ -165,72 +260,56 @@ pub fn content(app: &App) -> String {
             let sub = if error.is_empty() {
                 format!(
                     "{} {} · {} {} MiB",
-                    if ko {
-                        "전달 한도"
-                    } else {
-                        "Delivery limit"
-                    },
+                    tr(ko, "Delivery limit", "전달 한도"),
                     queue["deliveryLimit"],
-                    if ko { "최대" } else { "Max" },
-                    queue["maxBytes"].as_u64().map_or(0, |b| b / 1_048_576)
+                    tr(ko, "Max", "최대"),
+                    queue["maxBytes"]
+                        .as_u64()
+                        .map_or(0, |bytes| bytes / 1_048_576)
                 )
             } else {
-                error.to_string()
+                error.to_owned()
             };
             let mut actions = format!("<fieldset class=\"queue-actions\" {disabled}>");
             if phase == "failed" {
                 actions.push_str(&icon_button("Retry", "queue-retry", id, Icon::Retry));
             }
-            actions.push_str(&format!(
-                "<button type=\"button\" class=\"icon-btn danger\" aria-label=\"Delete\" title=\"{}\" data-action=\"queue-delete\" data-id=\"{}\" {}>{}</button></fieldset>",
-                if services.is_empty() {
-                    "Delete"
-                } else {
-                    "Used by a MicroService. Remove its connection before deletion."
-                },
-                escape(id),
-                if services.is_empty() { "" } else { "disabled" },
-                Icon::Delete.svg()
-            ));
-            out.push_str(&format!(
-                "<tr data-id=\"{}\"><td><div class=\"cell-name\"><b><button type=\"button\" class=\"cell-link\" data-action=\"queue-select\" data-id=\"{}\">{}</button></b><span class=\"cell-sub\" data-tone=\"{}\">{}</span></div></td><td>{}</td><td class=\"col-secondary\">{}</td><td class=\"row-actions\">{actions}</td></tr>",
-                escape(id),
-                escape(id),
-                escape(text(queue, "name")),
-                if error.is_empty() { "" } else { "error" },
-                escape(&sub),
-                status_dot(phase_tone(phase), &title(phase)),
-                chips(&used)
-            ));
+            actions.push_str(&format!("<button type=\"button\" class=\"icon-btn danger\" aria-label=\"{}\" title=\"{}\" data-action=\"queue-delete\" data-id=\"{}\" {}>{}</button></fieldset>",tr(ko,"Delete","삭제"),if services.is_empty(){tr(ko,"Delete","삭제")}else{tr(ko,"Used by a MicroService. Remove its connection before deletion.","MicroService 연결을 해제한 뒤 삭제할 수 있습니다.")},escape(id),if services.is_empty(){""}else{"disabled"},Icon::Delete.svg()));
+            out.push_str(&format!("<tr data-action=\"queue-select\" data-id=\"{}\" aria-selected=\"{}\"><td><div class=\"cell-name\"><b><button type=\"button\" class=\"cell-open\" data-action=\"queue-select\" data-id=\"{}\" title=\"{}\">{}</button></b><span class=\"cell-sub\" data-tone=\"{}\">{}</span></div></td><td>{}</td><td class=\"col-secondary\">{}</td><td class=\"row-actions\">{actions}</td></tr>",escape(id),app.advanced.queues.selected==id,escape(id),escape(text(queue,"name")),escape(text(queue,"name")),if error.is_empty(){""}else{"error"},escape(&sub),status_dot(phase_tone(phase),&phase_label(phase,ko)),chips(&used)));
         }
         out.push_str("</tbody></table></div>");
     }
-    if !app.advanced.queues.selected.is_empty() {
-        out.push_str(&format!("<section class=\"queue-detail\"><h2>Queue detail</h2><div id=\"queue-metrics\">{}</div><fieldset class=\"queue-actions\" {disabled}>{}{}{}</fieldset>",metrics(&app.advanced.queues.metrics),button("Show sender connection","queue-reveal-publish",""),button("Show receiver connection","queue-reveal-consume",""),button("Hide","queue-hide","")));
+    out.push_str("</section>");
+    if let Some(queue) = queues
+        .iter()
+        .find(|queue| text(queue, "id") == app.advanced.queues.selected)
+    {
+        out.push_str(&format!("<section class=\"queue-detail\" aria-label=\"{}\"><div class=\"queue-section-head queue-detail-head\"><div><span class=\"queue-eyebrow\">{}</span><h2>{}</h2></div>{}</div><div id=\"queue-metrics\">{}</div><div class=\"queue-connections\"><div class=\"queue-section-head\"><h3>{}</h3><p>{}</p></div><fieldset class=\"queue-actions\" {disabled}>{}{}{}</fieldset>",tr(ko,"Queue detail","큐 상세"),tr(ko,"Queue detail","큐 상세"),escape(text(queue,"name")),status_dot(phase_tone(text(queue,"phase")),&phase_label(text(queue,"phase"),ko)),metrics(&app.advanced.queues.metrics,ko),tr(ko,"Connection details","연결 정보"),tr(ko,"Show the credentials for the role your application needs.","애플리케이션에 필요한 역할의 연결 정보를 확인합니다."),button(tr(ko,"Show sender connection","전송 연결 정보 보기"),"queue-reveal-publish",""),button(tr(ko,"Show receiver connection","수신 연결 정보 보기"),"queue-reveal-consume",""),button(tr(ko,"Hide","숨기기"),"queue-hide","")));
         if let Some((url, _)) = &app.advanced.queues.reveal {
             out.push_str(&format!(
                 "<div class=\"queue-connection\"><code>{}</code></div>",
                 escape(url)
             ));
         }
-        out.push_str("</section>");
+        out.push_str("</div></section>");
     }
     out.push_str("</div>");
     out
 }
-fn metrics(value: &Value) -> String {
+fn metrics(value: &Value, ko: bool) -> String {
     if value.is_null() {
         return String::new();
     }
     let mut out = "<dl class=\"queue-metrics\">".to_string();
-    for (key, label) in [
-        ("ready", "Waiting"),
-        ("unacknowledged", "Unacknowledged"),
-        ("consumers", "Consumers"),
-        ("failed", "Failed"),
+    for (key, en, local) in [
+        ("ready", "Waiting", "대기 메시지"),
+        ("unacknowledged", "Unacknowledged", "처리 중 메시지"),
+        ("consumers", "Consumers", "수신자"),
+        ("failed", "Failed", "실패 메시지"),
     ] {
         out.push_str(&format!(
-            "<div><dt>{label}</dt><dd>{}</dd></div>",
+            "<div><dt>{}</dt><dd>{}</dd></div>",
+            tr(ko, en, local),
             value[key].as_u64().unwrap_or(0)
         ));
     }
@@ -303,7 +382,10 @@ pub fn refresh(app: Shared) {
         } else {
             set_html(
                 "queue-metrics",
-                &metrics(&app.borrow().advanced.queues.metrics),
+                &metrics(
+                    &app.borrow().advanced.queues.metrics,
+                    app.borrow().locale == "ko",
+                ),
             );
         }
         render_messages(&app);

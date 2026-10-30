@@ -17,6 +17,7 @@ test("shows Git status, owned operation details and recovery guidance", async ({
     },
   });
   await expect(page.getByRole("heading", { name: "demo" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Set up a Stack", exact: true })).toHaveCount(0);
   await expect(page.getByText("Recovery required", { exact: true })).toBeVisible();
   await expect(page.getByText("desired", { exact: true })).toBeVisible();
   await expect(page.getByText("attempted", { exact: true })).toBeVisible();
@@ -50,4 +51,34 @@ test("does not present a failed stack list as an empty result", async ({ page })
   });
   await expect(page.getByText(/HTTP 500: unavailable/)).toBeVisible();
   await expect(page.getByText("No registered stacks.")).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Set up a Stack", exact: true })).toHaveCount(0);
 });
+
+for (const locale of ["en", "ko"] as const) {
+  test(`shows four setup steps for an empty Stack list in ${locale}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 1100 });
+    await openDashboard(page, {
+      hash: "#/stacks",
+      locale,
+      routes: { "/api/stacks": [] },
+    });
+    const guide = page.getByRole("region", {
+      name: locale === "ko" ? "Stack 구성 방법" : "Set up a Stack",
+      exact: true,
+    });
+    await expect(guide).toBeVisible();
+    await expect(guide.locator("ol > li")).toHaveCount(4);
+    await expect(guide.locator("ol > li").first()).toContainText("stack.yaml");
+    await expect(guide.locator("ol > li").nth(1)).toContainText("firecrab stack validate --file stack.yaml");
+    await expect(guide.locator("ol > li").nth(1)).toContainText("firecrab stack register --name demo");
+    await expect(guide.locator("ol > li").nth(2)).toContainText("firecrab stack plan --file stack.yaml --json > plan.json");
+    await expect(guide.locator("ol > li").nth(2)).toContainText("firecrab stack apply --file stack.yaml --expected-plan plan.json");
+    await expect(guide.locator("ol > li").last()).toContainText(locale === "ko" ? "새로고침" : "Refresh");
+    await expect(guide.getByRole("link")).toHaveAttribute("href", /guides\/stacks\.md#schema$/);
+    await page.screenshot({ path: `test-results/stack-setup-${locale}.png`, fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(guide).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `test-results/stack-setup-${locale}-mobile.png`, fullPage: true });
+  });
+}

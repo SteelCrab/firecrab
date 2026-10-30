@@ -371,6 +371,10 @@ pub fn payload(title: &str, mut body: Value) -> Result<Value, String> {
             body.as_object_mut().unwrap().remove("leaseMinutes");
             Ok(body)
         }
+        "New security group" => Ok(json!({
+            "name": body["name"],
+            "microNetworkId": body["microNetworkId"],
+        })),
         "Security group rules" => {
             let mut rules = Vec::new();
             for line in text(&body, "rules")
@@ -672,6 +676,24 @@ mod tests {
             build_timing(&body).unwrap()["at"],
             "2030-01-01T09:00:00.123Z"
         );
+    }
+    #[test]
+    fn security_group_creation_keeps_network_choices_out_of_the_api_request() {
+        let network = "aaaaaaaa-0000-4000-8000-000000000001";
+        let ipv6_network = "aaaaaaaa-0000-4000-8000-000000000002";
+        let values = std::collections::BTreeMap::from([
+            ("name".into(), "orders-policy".into()),
+            ("microNetworkId".into(), network.into()),
+        ]);
+        for disabled in [json!([]), json!([ipv6_network])] {
+            let mut form = resource("security-groups", &json!({}), "").unwrap();
+            form.base["disabledNetworks"] = disabled;
+            let body = form.payload(&values).unwrap();
+            let request: firecrab_api_types::CreateSecurityGroupRequest =
+                serde_json::from_value(body).unwrap();
+            assert_eq!(request.name, "orders-policy");
+            assert_eq!(request.micro_network_id.to_string(), network);
+        }
     }
     #[test]
     fn security_group_rules_validate_before_sending_and_allow_an_empty_policy() {

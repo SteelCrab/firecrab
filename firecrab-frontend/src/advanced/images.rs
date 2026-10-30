@@ -29,7 +29,9 @@ pub fn load(app: &Shared) {
             || s.cache.contains_key("pulled-images-error");
         let editing = s.form.is_some();
         drop(s);
-        if changed && !editing {
+        if changed && editing {
+            crate::render_image_list(&a);
+        } else if changed {
             render_content(&a);
         }
         render_messages(&a);

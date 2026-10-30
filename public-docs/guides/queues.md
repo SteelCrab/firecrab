@@ -15,6 +15,13 @@ Small development environments can choose less memory; size production workloads
 The first installation imports the official RabbitMQ 4.3.7 management image pinned by its multi-platform SHA-256 digest.
 Image installation requires internet access; normal messaging does not require an external queue service or cloud account.
 
+The first OCI installation also needs a guest kernel. Native kernel builds require
+`make`, a C compiler, `flex`, `bison`, `bc`, `perl`, `xz`, and the libelf/OpenSSL development headers.
+The runtime installer and managed macOS/Windows guest provisioners install these dependencies.
+Kernel dependency checks run before downloading source archives.
+If an older host reports `Missing kernel build tool`, update its runtime dependencies in the Linux API host,
+then use **Start / recover** to retry the same engine identity and disk.
+
 The engine keeps the same VM identifier, node name and writable disk across stop/start.
 The broker's data stays inside that VM's persistent disk generation.
 Firecrab prepares the private Erlang authentication file before boot with the broker user's ownership.

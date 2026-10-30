@@ -346,6 +346,7 @@ apt-get update
 phase apt-install
 {clean_guest_installation}
 apt-get install -y ca-certificates curl git openssh-client sudo tar findutils xz-utils gzip zstd lz4 lzop \
+  build-essential flex bison bc perl libelf-dev libssl-dev \
   nftables conntrack dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat postgresql-client mariadb-client \
   binutils initramfs-tools {kernel_package}
 
@@ -849,6 +850,20 @@ mod tests {
         let script = guest_provision_script(&X86_64, "/mnt/c/Users/it's me/micromanager");
         assert!(script.contains("share='/mnt/c/Users/it'\\''s me/micromanager'"));
         assert!(script.contains("e2fsprogs fakeroot "));
+        for package in [
+            "build-essential",
+            "flex",
+            "bison",
+            "bc",
+            "perl",
+            "libelf-dev",
+            "libssl-dev",
+        ] {
+            assert!(
+                script.contains(package),
+                "OCI kernel dependency missing: {package}"
+            );
+        }
         assert!(script.contains("linux-image-amd64"));
         assert!(script.contains("firecracker-v1.17.0-x86_64.tgz"));
         assert!(script.contains("install-firecrab-v0.2.2.sh\" --no-deps"));

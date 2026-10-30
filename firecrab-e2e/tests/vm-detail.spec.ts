@@ -235,13 +235,13 @@ test.describe("MicroVM detail panel", () => {
       env: { LONG: "v".repeat(200) },
     });
     await open(page, [long], "long-values");
-    expect(await panel(page).evaluate((el) => el.getBoundingClientRect().width)).toBe(384);
+    expect(await panel(page).evaluate((el) => el.getBoundingClientRect().width)).toBe(576);
     const storage = section(page, "Properties").locator(".prop-value").filter({ hasText: "deep/" });
     expect(await storage.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
     await panel(page).getByRole("tab", { name: /Environment/ }).click();
     const value = section(page, "Environment").locator(".kv-value").first();
     expect(await value.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
-    expect(await panel(page).evaluate((el) => el.getBoundingClientRect().width)).toBe(384);
+    expect(await panel(page).evaluate((el) => el.getBoundingClientRect().width)).toBe(576);
   });
 });
 
@@ -285,6 +285,7 @@ test.describe("MicroVM pause and resume", () => {
       await detail.getByRole("button", { name: locale === "en" ? "Resume" : "재개", exact: true }).click();
       await expect(detail.getByRole("button", { name: locale === "en" ? "Pause" : "일시정지", exact: true })).toBeVisible();
       expect(actions).toEqual(["pause", "resume"]);
+      await detail.getByRole("button", { name: locale === "en" ? "Close detail" : "세부정보 닫기", exact: true }).click();
       const row = page.getByRole("row").filter({ has: page.getByRole("button", { name: current.name, exact: true }) });
       await row.getByRole("button", { name: locale === "en" ? "Pause" : "일시정지", exact: true }).click();
       await expect(row.getByRole("button", { name: locale === "en" ? "Resume" : "재개", exact: true })).toBeVisible();

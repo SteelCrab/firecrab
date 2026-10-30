@@ -116,9 +116,19 @@ async function setup(
       ],
       "/api/security-groups": (route) => {
         if (route.request().method() === "POST") {
+          const body = route.request().postDataJSON();
+          if (Object.keys(body).sort().join(",") !== "microNetworkId,name")
+            return route.fulfill({
+              status: 400,
+              json: {
+                error: {
+                  message: "request body must be one valid JSON object",
+                },
+              },
+            });
           const group = {
             id: GROUP,
-            ...route.request().postDataJSON(),
+            ...body,
             rules: [],
           };
           state.groups.push(group);

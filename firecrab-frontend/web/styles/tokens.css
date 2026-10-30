@@ -2,7 +2,12 @@
  * Design tokens for the dashboard redesign
  * (docs/superpowers/specs/2026-10-21-dashboard-redesign-design.ko.md §5).
  */
+/* Desktop text is 150% of the original compact layout. */
 :root {
+  font-size: 150%;
+  --sidebar-width: 13rem;
+  --table-row-height: 75px;
+  --table-header-height: 51px;
   --bg: #ffffff;
   --bg-sidebar: #f7f7f8;
   --bg-subtle: #fafafb;
@@ -14,8 +19,8 @@
 
   --text: #18181b;
   --text-2: #52525b;
-  --text-3: #71717a;
-  --text-4: #a1a1aa;
+  --text-3: #62626b;
+  --text-4: #71717a;
   --text-5: #c4c4ca;
 
   --accent: #e8492f;
@@ -52,9 +57,13 @@
   --bg-panel: var(--bg);
   --shadow-md: var(--shadow-pop);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --control-height: 30px;
-  --control-height-sm: 26px;
+  --control-height: 2rem;
+  --control-height-sm: 1.75rem;
 
   --font: "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Noto Sans JP", "Noto Sans SC", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, "Pretendard Variable", monospace;
+}
+
+@media (max-width: 767px) {
+  :root { font-size: 137.5%; }
 }

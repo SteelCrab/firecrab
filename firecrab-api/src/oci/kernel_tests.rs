@@ -55,8 +55,12 @@ fn releases(version: &str) -> Vec<u8> {
 }
 
 async fn fixture_server(bytes: Vec<u8>) -> (String, tokio::task::JoinHandle<()>) {
+    fixture_server_at("/", bytes).await
+}
+
+async fn fixture_server_at(path: &str, bytes: Vec<u8>) -> (String, tokio::task::JoinHandle<()>) {
     let router = Router::new().route(
-        "/",
+        path,
         get(move || {
             let bytes = bytes.clone();
             async move { bytes }
@@ -68,6 +72,82 @@ async fn fixture_server(bytes: Vec<u8>) -> (String, tokio::task::JoinHandle<()>)
         axum::serve(listener, router).await.unwrap();
     });
     (url, task)
+}
+
+fn checksum_index(versions: &[&str]) -> Vec<u8> {
+    versions
+        .iter()
+        .map(|version| format!("{}  linux-{version}.tar.xz\n", "a".repeat(64)))
+        .collect::<String>()
+        .into_bytes()
+}
+
+#[tokio::test]
+async fn recent_stable_download_is_cached_for_offline_use() {
+    let directory = tempdir().unwrap();
+    tokio::fs::create_dir_all(directory.path().join(".oci/kernel"))
+        .await
+        .unwrap();
+    let mut index = b"-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA256\n\n".to_vec();
+    index.extend(checksum_index(&[
+        "7.2.9", "7.2.12", "7.2.14", "7.2.13", "7.2.11",
+    ]));
+    let (url, server) = fixture_server_at("/sha256sums.asc", index.clone()).await;
+    let stable = kernel::StableRelease {
+        version: "7.2.13".into(),
+        source_url: format!("{url}linux-7.2.13.tar.xz"),
+    };
+    let versions = kernel::recent_stable_versions(directory.path(), &stable)
+        .await
+        .unwrap();
+    assert_eq!(versions, ["7.2.13", "7.2.12", "7.2.11"]);
+    assert_eq!(
+        tokio::fs::read(directory.path().join(".oci/kernel/sha256sums-v7.asc"))
+            .await
+            .unwrap(),
+        index
+    );
+    server.abort();
+    let _ = server.await;
+    assert_eq!(
+        kernel::recent_stable_versions(directory.path(), &stable)
+            .await
+            .unwrap(),
+        versions
+    );
+}
+
+#[tokio::test]
+async fn recent_stable_keeps_expired_cache_when_upstream_is_invalid() {
+    let directory = tempdir().unwrap();
+    let cache = directory.path().join(".oci/kernel/sha256sums-v7.asc");
+    tokio::fs::create_dir_all(cache.parent().unwrap())
+        .await
+        .unwrap();
+    let index = checksum_index(&["7.2.13", "7.2.12", "7.2.11"]);
+    tokio::fs::write(&cache, &index).await.unwrap();
+    filetime::set_file_mtime(&cache, filetime::FileTime::from_unix_time(1, 0)).unwrap();
+    let (url, server) = fixture_server_at("/sha256sums.asc", b"invalid index".to_vec()).await;
+    let stable = kernel::StableRelease {
+        version: "7.2.13".into(),
+        source_url: format!("{url}linux-7.2.13.tar.xz"),
+    };
+    assert_eq!(
+        kernel::recent_stable_versions(directory.path(), &stable)
+            .await
+            .unwrap(),
+        ["7.2.13", "7.2.12", "7.2.11"]
+    );
+    assert_eq!(tokio::fs::read(&cache).await.unwrap(), index);
+    tokio::fs::remove_file(&cache).await.unwrap();
+    assert!(
+        kernel::recent_stable_versions(directory.path(), &stable)
+            .await
+            .is_err()
+    );
+    assert!(!cache.exists());
+    server.abort();
+    let _ = server.await;
 }
 
 #[test]
@@ -86,6 +166,19 @@ fn stable_selection_rejects_release_candidates_and_unexpected_source_hosts() {
     ] {
         assert!(kernel::parse_stable_release(&serde_json::to_vec(&value).unwrap()).is_err());
     }
+}
+
+#[test]
+fn recent_versions_use_published_releases_and_numeric_order() {
+    let digest = "a".repeat(64);
+    let sums = format!(
+        "{digest}  linux-7.1.9.tar.xz\n{digest}  linux-7.2.tar.xz\n{digest}  linux-7.2.1.tar.xz\n{digest}  linux-7.2.10.tar.xz\n{digest}  linux-7.3-rc1.tar.xz\ninvalid  linux-7.2.2.tar.xz\n"
+    );
+    assert_eq!(
+        kernel::parse_recent_versions(sums.as_bytes(), "7.2.1").unwrap(),
+        ["7.2.1", "7.2", "7.1.9"]
+    );
+    assert!(kernel::parse_recent_versions(sums.as_bytes(), "7.2.2").is_err());
 }
 
 #[test]
@@ -177,6 +270,16 @@ async fn kernel_catalog_reports_current_stable_and_independent_local_versions() 
         install_fixture_kernel(root, Architecture::HOST, version).await;
     }
     let (url, server) = fixture_server(releases("7.2.13")).await;
+    let cache = root.join(".oci/kernel");
+    tokio::fs::create_dir_all(&cache).await.unwrap();
+    let digest = "a".repeat(64);
+    let sums = ["7.2.13", "7.2.12", "7.2.11", "7.2.10"]
+        .iter()
+        .map(|version| format!("{digest}  linux-{version}.tar.xz\n"))
+        .collect::<String>();
+    tokio::fs::write(cache.join("sha256sums-v7.asc"), sums)
+        .await
+        .unwrap();
     let templates = TemplateRegistry::from_specs(root, std::iter::empty()).unwrap();
     let downloads = ImageInstallTracker::with_base_url(&url);
     let catalog = crate::kernel_manager::list(root, &templates, &downloads)
@@ -187,14 +290,14 @@ async fn kernel_catalog_reports_current_stable_and_independent_local_versions() 
             .iter()
             .map(|entry| entry.version.as_str())
             .collect::<Vec<_>>(),
-        ["7.2.13", "7.2.12", "7.2.2"]
+        ["7.2.13", "7.2.12", "7.2.11", "7.2.2"]
     );
     assert!(!catalog[0].installed);
     assert!(catalog[0].image_sha256.is_empty());
     assert!(
-        catalog[1..]
-            .iter()
-            .all(|entry| entry.installed && entry.image_sha256.len() == 64)
+        [1, 3]
+            .into_iter()
+            .all(|index| catalog[index].installed && catalog[index].image_sha256.len() == 64)
     );
     assert!(catalog.iter().all(|entry| {
         entry

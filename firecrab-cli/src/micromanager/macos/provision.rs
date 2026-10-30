@@ -584,6 +584,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 phase apt-install
 apt-get install -y ca-certificates curl git openssh-client sudo tar findutils xz-utils gzip zstd lz4 lzop \
+  build-essential flex bison bc perl libelf-dev libssl-dev \
   nftables conntrack dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat postgresql-client mariadb-client openssh-server \
   linux-image-{kernel_version}
 # firecrab-helper runs its own dnsmasq per bridge; the packaged unit only
@@ -973,6 +974,20 @@ mod tests {
             provision.contains("e2fsprogs fakeroot "),
             "Debian guest apt-get must install fakeroot next to e2fsprogs; OCI import packs ext4 via fakeroot"
         );
+        for package in [
+            "build-essential",
+            "flex",
+            "bison",
+            "bc",
+            "perl",
+            "libelf-dev",
+            "libssl-dev",
+        ] {
+            assert!(
+                provision.contains(package),
+                "OCI kernel dependency missing: {package}"
+            );
+        }
         assert!(provision.contains("firecrab-manager-ready.service"));
         assert!(provision.contains("nested-firecracker-e2e.sh"));
         assert!(provision.contains("nested_firecracker=passed"));

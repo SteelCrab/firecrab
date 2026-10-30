@@ -177,10 +177,13 @@ if [ "$profile" != restore ] && [ "$profile" != clean ]; then
   if ! command -v cc >/dev/null || ! command -v pkg-config >/dev/null || ! command -v cmake >/dev/null \
     || ! command -v objcopy >/dev/null || ! command -v musl-gcc >/dev/null \
     || ! command -v python3 >/dev/null || ! command -v git >/dev/null \
-    || ! command -v ssh >/dev/null; then
+    || ! command -v ssh >/dev/null || ! command -v make >/dev/null \
+    || ! command -v flex >/dev/null || ! command -v bison >/dev/null \
+    || ! command -v bc >/dev/null || ! command -v perl >/dev/null \
+    || ! printf '#include <libelf.h>\n#include <gelf.h>\n#include <openssl/opensslv.h>\n' | cc -x c -fsyntax-only - >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y build-essential pkg-config cmake ca-certificates curl musl-tools python3 git openssh-client
+    apt-get install -y build-essential pkg-config cmake ca-certificates curl musl-tools python3 git openssh-client flex bison bc perl xz-utils libelf-dev libssl-dev
   fi
   export CARGO_HOME="$root/cargo"
   export RUSTUP_HOME="$root/rustup"

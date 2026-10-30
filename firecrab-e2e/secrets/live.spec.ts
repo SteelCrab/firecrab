@@ -72,6 +72,7 @@ test("SEC10: import applies a captured snapshot and keeps local copies after dis
 });
 
 test("SEC11: upload rejects a changed remote and applies only the selected local values once", async ({ page, local, remote }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await local.create("qa-UPLOAD", "qa-upload-value");
   await local.create("qa-UNSELECTED", "qa-should-stay-local");
   const target = await remote.create("qa-UPLOAD", "qa-before-preview");
@@ -100,6 +101,7 @@ test("SEC11: upload rejects a changed remote and applies only the selected local
 });
 
 test("SEC12: stale editor versions and stale transfer previews cannot overwrite local data", async ({ page, local, remote }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const row = await local.create("qa-CONFLICT", "qa-original");
   await remote.create("qa-CONFLICT", "qa-import");
   await openSecrets(page, local);

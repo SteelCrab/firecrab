@@ -49,6 +49,7 @@ test.describe("pool dashboard @dashboard", () => {
     expect(keys[0]).toMatch(/^[a-f0-9]{32}$/);
     expect(keys[1]).toBe(keys[0]);
     await expect(page.getByRole("button", { name: "Use VM", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "Close detail", exact: true }).click();
     await page.getByRole("button", { name: "Use VM", exact: true }).click();
     await expect.poll(() => keys.length).toBe(3);
     expect(keys[2]).not.toBe(keys[0]);
@@ -145,6 +146,7 @@ test.describe("pool dashboard @dashboard", () => {
     await page.getByRole("row", { name: /^ci-runners(\s|$)/ }).click();
     await expect(page.getByRole("button", { name: "사용 종료", exact: true })).toBeVisible();
     if (process.env.FIRECRAB_POOL_SCREENSHOT) await page.screenshot({ path: process.env.FIRECRAB_POOL_SCREENSHOT, fullPage: true });
+    await page.getByRole("button", { name: "세부정보 닫기", exact: true }).click();
     await page.getByRole("button", { name: "새 풀", exact: true }).click();
     await expect(page.locator("#editor input:visible, #editor select:visible")).toHaveCount(2);
     if (process.env.FIRECRAB_POOL_SCREENSHOT) await page.screenshot({ path: process.env.FIRECRAB_POOL_SCREENSHOT.replace(/\.png$/, "-create.png"), fullPage: true });

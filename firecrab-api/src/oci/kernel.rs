@@ -240,6 +240,98 @@ pub(crate) async fn latest_stable(
     }
 }
 
+/// List the current stable release and up to two older published releases.
+/// The checksum index is authoritative, including across minor-version boundaries.
+pub(crate) async fn recent_stable_versions(
+    image_root: &Path,
+    stable: &StableRelease,
+) -> Result<Vec<String>, ResolveError> {
+    let directory = image_root.join(".oci/kernel");
+    let major = stable.version.split('.').next().expect("validated version");
+    let path = directory.join(format!("sha256sums-v{major}.asc"));
+    let lock = cache_path_lock(&directory, Path::new(&format!("sha256sums-v{major}.asc"))).await?;
+    let _guard = lock.lock().await;
+    let cached = tokio::fs::read(&path).await.ok();
+    let fresh = tokio::fs::metadata(&path)
+        .await
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .is_some_and(|age| age < RELEASE_CACHE_TTL);
+    if fresh
+        && let Some(bytes) = &cached
+        && let Ok(versions) = parse_recent_versions(bytes, &stable.version)
+    {
+        return Ok(versions);
+    }
+    let url = format!(
+        "{}/sha256sums.asc",
+        stable
+            .source_url
+            .rsplit_once('/')
+            .expect("source directory")
+            .0
+    );
+    let fetched = async {
+        let bytes = fetch_bytes(&url, METADATA_MAX_BYTES).await?;
+        let versions = parse_recent_versions(&bytes, &stable.version)?;
+        write_atomic(&path, &bytes).await?;
+        Ok(versions)
+    }
+    .await;
+    match fetched {
+        Ok(versions) => Ok(versions),
+        Err(error) => {
+            match cached.and_then(|bytes| parse_recent_versions(&bytes, &stable.version).ok()) {
+                Some(versions) => Ok(versions),
+                None => Err(error),
+            }
+        }
+    }
+}
+
+pub(crate) fn parse_recent_versions(
+    bytes: &[u8],
+    stable: &str,
+) -> Result<Vec<String>, ResolveError> {
+    let text =
+        std::str::from_utf8(bytes).map_err(|error| ResolveError::Malformed(error.to_string()))?;
+    let key = |version: &str| -> Vec<u32> {
+        let mut parts: Vec<u32> = version
+            .split('.')
+            .map(|part| part.parse().expect("validated version"))
+            .collect();
+        parts.resize(3, 0);
+        parts
+    };
+    let stable_key = key(stable);
+    let mut versions: Vec<String> = text
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let (Some(digest), Some(name), None) = (fields.next(), fields.next(), fields.next())
+            else {
+                return None;
+            };
+            Sha256Digest::parse(&format!("sha256:{digest}")).ok()?;
+            let version = name
+                .trim_start_matches('*')
+                .strip_prefix("linux-")?
+                .strip_suffix(".tar.xz")?;
+            (is_source_version(version) && key(version) <= stable_key).then(|| version.to_owned())
+        })
+        .collect();
+    versions.sort_by_key(|version| std::cmp::Reverse(key(version)));
+    versions.dedup();
+    if !versions.iter().any(|version| version == stable) {
+        return Err(ResolveError::Malformed(
+            "kernel checksum index does not contain stable release".to_owned(),
+        ));
+    }
+    versions.truncate(3);
+    Ok(versions)
+}
+
 /// Create a source client with bounded connection and read waits.
 fn http_client() -> Result<reqwest::Client, ResolveError> {
     reqwest::Client::builder()
@@ -407,6 +499,7 @@ pub(crate) async fn ensure_managed_kernel(
             "kernel compilation requires a Linux host with a matching CPU architecture",
         ));
     }
+    check_build_dependencies(architecture).await?;
     log(
         tracker,
         requested,
@@ -623,6 +716,37 @@ impl Drop for BuildGroup {
             libc::kill(-(self.0 as i32), libc::SIGKILL);
         }
     }
+}
+
+/// Reject an incomplete host before downloading hundreds of MiB of kernel source.
+async fn check_build_dependencies(architecture: Architecture) -> Result<(), ResolveError> {
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::process::Command::new("bash")
+            .args([
+                "-c",
+                BUILD_SCRIPT,
+                "firecrab-kernel-builder",
+                "--check",
+                architecture.as_str(),
+            ])
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| unavailable(architecture, "kernel dependency check timed out"))?
+    .map_err(|error| unavailable(architecture, format!("check kernel dependencies: {error}")))?;
+    if !output.status.success() {
+        return Err(unavailable(
+            architecture,
+            format!(
+                "kernel build prerequisites failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Run the embedded recipe in a process group and stream both output pipes.

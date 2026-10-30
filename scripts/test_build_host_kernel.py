@@ -78,6 +78,34 @@ class NativeKernelBuildTests(unittest.TestCase):
                                str(self.root / 'work'), str(self.output)], env=env,
                               text=True, capture_output=True, check=False)
 
+    def preflight(self, **overrides):
+        env = dict(os.environ, PATH=f'{self.tools}{os.pathsep}{os.environ["PATH"]}', TEST_HOST_ARCH='x86_64')
+        env.update(overrides)
+        return subprocess.run(['/bin/bash', str(SCRIPT), '--check', 'x86_64'],
+                              env=env, text=True, capture_output=True, check=False)
+
+    def test_preflight_needs_no_source_archive_or_work_directory(self):
+        self.archive.unlink()
+        result = self.preflight()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / 'work').exists())
+        self.assertFalse(self.log.exists())
+
+    def test_preflight_rejects_missing_make(self):
+        for name in ('tar', 'xz', 'install', 'grep'):
+            (self.tools / name).symlink_to(shutil.which(name))
+        (self.tools / 'make').unlink()
+        result = self.preflight(PATH=str(self.tools))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Missing kernel build tool: make', result.stderr)
+        self.assertFalse((self.root / 'work').exists())
+
+    def test_preflight_rejects_missing_headers(self):
+        result = self.preflight(MISSING_KERNEL_HEADERS='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('install libelf and OpenSSL development packages', result.stderr)
+        self.assertFalse((self.root / 'work').exists())
+
     def test_x86_build_has_required_builtin_drivers_and_preserves_config(self):
         result = self.build()
         self.assertEqual(result.returncode, 0, result.stderr)

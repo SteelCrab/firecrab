@@ -14,15 +14,15 @@
   border-radius: 50%;
   background: var(--text);
   color: var(--on-dark);
-  font: 600 11px/1 var(--font);
+  font: 600 0.6875rem/1 var(--font);
 }
-.ssh-step-title { margin: 0; font-size: 13px; font-weight: 600; }
-.ssh-step-hint { margin: 2px 0 0; color: var(--text-3); font-size: 12px; line-height: 1.5; }
+.ssh-step-title { margin: 0; font-size: 0.8125rem; font-weight: 600; }
+.ssh-step-hint { margin: 2px 0 0; color: var(--text-3); font-size: 0.75rem; line-height: 1.5; }
 .ssh-step-body { display: grid; gap: 12px; min-width: 0; padding-left: 30px; }
 
 .console-ssh-block { display: grid; gap: 4px; min-width: 0; }
 .console-ssh-block-head { display: flex; align-items: center; gap: 4px; min-width: 0; min-height: 26px; }
-.console-ssh-block-label { margin-right: auto; overflow: hidden; color: var(--text-2); font: 500 11.5px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.console-ssh-block-label { margin-right: auto; overflow: hidden; color: var(--text-2); font: 500 0.71875rem var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .console-ssh-copy { color: var(--text-3); }
 .console-ssh-code {
   margin: 0;
@@ -31,7 +31,7 @@
   border-radius: var(--radius);
   background: var(--bg-subtle);
   color: var(--text);
-  font: 12px/1.6 var(--mono);
+  font: 0.75rem/1.6 var(--mono);
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -40,17 +40,17 @@
 
 /* The key gets a card of its own: it is the one thing every command needs. */
 .ssh-key { gap: 8px; padding: 8px 8px 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); }
-.ssh-key .console-ssh-block-label { color: var(--text); font-size: 12px; }
+.ssh-key .console-ssh-block-label { color: var(--text); font-size: 0.75rem; }
 .ssh-key .console-ssh-code { border: 0; }
 .ssh-key-icon { flex-shrink: 0; width: 15px; height: 15px; margin-right: 2px; color: var(--text-3); stroke-width: 1.75; }
 
 .console-ssh-forward { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.console-ssh-forward label { color: var(--text-2); font-size: 12px; font-weight: 500; }
+.console-ssh-forward label { color: var(--text-2); font-size: 0.75rem; font-weight: 500; }
 .console-ssh-forward .input { width: 96px; height: var(--control-height-sm); }
-.console-ssh-forward-target { color: var(--text-3); font: 12px var(--mono); }
-.console-ssh-empty { margin: 0; color: var(--text-3); font-size: 12px; line-height: 1.5; }
+.console-ssh-forward-target { color: var(--text-3); font: 0.75rem var(--mono); }
+.console-ssh-empty { margin: 0; color: var(--text-3); font-size: 0.75rem; line-height: 1.5; }
 
-.ssh-more summary { width: fit-content; color: var(--text-2); font-size: 12px; font-weight: 500; cursor: pointer; }
+.ssh-more summary { width: fit-content; color: var(--text-2); font-size: 0.75rem; font-weight: 500; cursor: pointer; }
 .ssh-more summary:hover { color: var(--text); }
 .ssh-more[open] { display: grid; gap: 12px; }
 
@@ -99,9 +99,9 @@
 }
 .ssh-dialog-icon svg { width: 15px; height: 15px; stroke-width: 1.75; }
 .ssh-dialog-titles { min-width: 0; margin-right: auto; }
-.ssh-dialog-title { margin: 0; font-size: 14px; font-weight: 600; }
-.ssh-dialog-sub { display: flex; gap: 8px; margin: 1px 0 0; overflow: hidden; color: var(--text-3); font-size: 12px; white-space: nowrap; }
-.ssh-dialog-sub .mono { font-size: 11.5px; }
+.ssh-dialog-title { margin: 0; font-size: 0.875rem; font-weight: 600; }
+.ssh-dialog-sub { display: flex; gap: 8px; margin: 1px 0 0; overflow: hidden; color: var(--text-3); font-size: 0.75rem; white-space: nowrap; }
+.ssh-dialog-sub .mono { font-size: 0.71875rem; }
 .ssh-dialog-body { min-height: 0; padding: 18px 20px 22px; overflow-y: auto; }
 
 @media (max-width: 640px) {

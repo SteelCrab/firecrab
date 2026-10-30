@@ -117,6 +117,7 @@ async function open(
   });
   await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
   await page.goto("/#/images");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
   // Pulled registry images are the third tab of the images screen.
   await page.getByRole("tab", { name: /Registry images/ }).click();
   const panel = page.locator("main");
@@ -192,6 +193,7 @@ test.describe("Pulled registry images in M2Image @dashboard", () => {
       .click();
     await expect(m.row).toContainText("Building…");
     await page.reload();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await page.getByRole("tab", { name: /Registry images/ }).click();
     await expect(m.row).toContainText("Building…");
     m.allowBuild();

@@ -152,15 +152,20 @@ impl Form {
             if busy { "disabled" } else { "" }
         );
 
+        if self.title == "Register disk location" {
+            html.push_str(&format!(
+                "<div class=\"wasm-wide storage-form-help\"><p>{}</p><p>{}</p></div>",
+                crate::i18n::t("Register the host folder where VM and data disk files will be saved. Missing folders are created when you register."),
+                crate::i18n::t("On macOS and Windows, enter a path inside the managed Linux VM.")
+            ));
+        }
         if self.title == "Deploy MicroService" {
             html.push_str("<p class=\"wasm-wide\">Secret values are injected into every replica. Changes apply on the next deployment.</p>");
             html.push_str(&format!("<p class=\"wasm-wide\">Leave the host port empty for internal access. App port: {}.</p>", self.base["port"].as_u64().unwrap_or(8080)));
         }
         let domain_deploy =
             self.title == "Deploy MicroService" && !text(&self.base, "domain").is_empty();
-        if self.path == "/api/pipe/auth/firecrab" {
-            html.push_str(&format!("<p class=\"wasm-wide\">{} <a href=\"https://console.firecrab.dev/#account\" target=\"_blank\" rel=\"noreferrer\">console.firecrab.dev</a>. {}</p>",crate::i18n::t("Issue an account integration token at"),crate::i18n::t("Open Account integration. The token verifies your account ID and email.")));
-        }
+        html.push_str(&crate::auth_setup::form_guide(&self.path));
         if domain_deploy {
             html.push_str(&format!("<p class=\"wasm-wide\">{} · Healthy replicas will connect to this domain automatically.</p><details class=\"form-advanced wasm-wide\"><summary>{}</summary>",escape(text(&self.base,"domain")),crate::i18n::t("Advanced settings")));
         }
@@ -342,6 +347,8 @@ impl Form {
                 "New MicroVM" => "Create MicroVM",
                 "Connect database" | "Update connection credentials" => "Save connection",
                 "Create volume" => "Create volume",
+                "Register disk location" => "Register",
+                "Import OCI image" => "Import",
                 "Deploy MicroService" => "Deploy and run",
                 "Deploy update" => "Deploy update",
                 "New MicroService" => "Create MicroService",
@@ -1080,7 +1087,7 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
             vec![
                 Field::new("name", "Name", "text", ""),
                 Field::new("sizeGib", "Size (GiB)", "number", 10),
-                Field::new("storageRoot", "Storage", "nullable-select", "").optional(),
+                Field::new("storageRoot", "Storage", "select", ""),
             ],
             "volumes",
         ),
@@ -1130,12 +1137,12 @@ pub fn resource_form(kind: &str, data: &Value, id: &str) -> Option<Form> {
             "networks",
         ),
         "storages" => Form::new(
-            "New storage",
+            "Register disk location",
             "/api/micro-storages".into(),
             "POST",
             vec![
                 Field::new("name", "Name", "text", ""),
-                Field::new("path", "Directory", "text", ""),
+                Field::new("path", "Host directory", "text", "").placeholder("/mnt/ssd/firecrab"),
             ],
             "storages",
         ),

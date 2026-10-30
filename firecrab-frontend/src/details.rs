@@ -121,6 +121,24 @@ fn property_row(label: &str, value: &str, copy: bool) -> String {
         escape(value)
     )
 }
+pub const PANEL_MIN_WIDTH: u32 = 440;
+pub const PANEL_MAX_WIDTH: u32 = 960;
+pub const PANEL_DEFAULT_WIDTH: u32 = 576;
+
+/// Leave room for the larger sidebar and list when the panel sits beside them.
+pub fn panel_max_width() -> u32 {
+    let viewport = window()
+        .inner_width()
+        .ok()
+        .and_then(|value| value.as_f64())
+        .unwrap_or(1440.0);
+    if viewport >= 1440.0 {
+        (viewport - 832.0).clamp(f64::from(PANEL_MIN_WIDTH), f64::from(PANEL_MAX_WIDTH)) as u32
+    } else {
+        PANEL_MAX_WIDTH
+    }
+}
+
 /// Routes that use the whole workspace, so they never get a side panel.
 pub const NO_PANEL_ROUTES: [&str; 4] = ["vms/new", "services/new", "pipe/database", "ai-sandbox"];
 /// The panel shows only for a selection or an open form.
@@ -142,7 +160,7 @@ pub fn panel_view(app: &App) -> String {
 }
 pub fn panel(app: &App) -> String {
     let mut out = format!(
-        "<button class=\"wasm-panel-resize\" role=\"separator\" aria-orientation=\"vertical\" aria-label=\"{}\" aria-valuemin=\"320\" aria-valuemax=\"720\" aria-valuenow=\"{}\" id=\"panel-resize\"></button>",
+        "<button class=\"wasm-panel-resize\" role=\"separator\" aria-orientation=\"vertical\" aria-label=\"{}\" aria-valuemin=\"{PANEL_MIN_WIDTH}\" aria-valuemax=\"{PANEL_MAX_WIDTH}\" aria-valuenow=\"{}\" id=\"panel-resize\"></button>",
         t("Resize detail panel"),
         app.panel_width
     );
@@ -270,16 +288,12 @@ pub fn panel(app: &App) -> String {
                 copyable("Account ID", text(data, "accountId")),
                 property("Token expires", &expires)
             ));
+        } else if app.route == "storages" {
+            out.push_str(&storage_location(data));
         } else if let Some(body) = crate::advanced::detail(app, data) {
             out.push_str(&body);
         } else {
             out.push_str(&render::properties(data));
-        }
-        if app.route == "storages" {
-            out.push_str(&format!(
-                "<p>{} / {} GiB</p>",
-                data["availableGib"], data["totalGib"]
-            ));
         }
         let related: Vec<_> = app
             .vms
@@ -287,7 +301,7 @@ pub fn panel(app: &App) -> String {
             .filter(|vm| match app.route.as_str() {
                 "networks" => vm.extra.get("microNetworkId") == Some(&data["id"]),
                 "images" => vm.template == text(data, "alias"),
-                "storages" => vm.extra.get("storageRoot") == Some(&data["path"]),
+                "storages" => vm.extra.get("storageRoot") == Some(&data["id"]),
                 "shells" => list(vm.extra.get("shellRefs").unwrap_or(&Value::Null))
                     .iter()
                     .any(|entry| entry["shellId"] == data["id"]),
@@ -297,7 +311,7 @@ pub fn panel(app: &App) -> String {
         if app.route == "networks" || app.route == "storages" || app.route == "images" {
             let title = match app.route.as_str() {
                 "networks" => "Member VMs",
-                "storages" => "VMs",
+                "storages" => "MicroVMs using this location",
                 _ => "VMs using it",
             };
             let members = if data["vms"].is_array() {
@@ -311,6 +325,14 @@ pub fn panel(app: &App) -> String {
                     .map(|vm| button(&vm.name, "navigate-vm", &vm.id))
                     .collect::<String>()
             };
+            let members = if app.route == "storages" && members.is_empty() {
+                format!(
+                    "<p class=\"detail-note\">{}</p>",
+                    t("No MicroVM disks use this location yet.")
+                )
+            } else {
+                members
+            };
             out.push_str(&section(title, "", &members));
         }
         if app.route == "shells" {
@@ -320,7 +342,7 @@ pub fn panel(app: &App) -> String {
                 .collect::<String>();
             out.push_str(&section("Revisions", "", &format!("<ul>{revisions}</ul>")));
         }
-        if !related.is_empty() {
+        if !related.is_empty() && app.route != "storages" {
             out.push_str(&section(
                 "MicroVM",
                 "",
@@ -337,6 +359,30 @@ pub fn panel(app: &App) -> String {
         app.detail_result
     ));
     out
+}
+
+fn storage_location(data: &Value) -> String {
+    let total = data["totalGib"].as_u64().filter(|value| *value > 0);
+    let capacity = |key: &str| {
+        total.and(data[key].as_u64()).map_or_else(
+            || t("Capacity unavailable").to_string(),
+            |value| format!("{value} GiB"),
+        )
+    };
+    let note = if total.is_some() {
+        "Capacity is shared by all folders on the same host filesystem."
+    } else {
+        "Capacity could not be read. Check this folder on the host."
+    };
+    format!(
+        "<p class=\"storage-detail-purpose\">{}</p><dl class=\"props\">{}{}{}{}</dl><p class=\"detail-note\">{}</p>",
+        t("Stores MicroVM operating-system disks and MicroBlockStorage data disk files."),
+        copyable("Host directory", text(data, "path")),
+        property("Free space", &capacity("availableGib")),
+        property("Filesystem capacity", &capacity("totalGib")),
+        copyable("Storage ID", text(data, "id")),
+        t(note)
+    )
 }
 
 /// The panel of a selected shell: the head, the Content and Revisions tabs. A form replaces it.
@@ -1388,10 +1434,10 @@ pub fn resize_key(app: &Shared, event: &KeyboardEvent) -> bool {
     }
     let width = app.borrow().panel_width;
     let width = match event.key().as_str() {
-        "ArrowLeft" => (width + 16).min(720),
-        "ArrowRight" => width.saturating_sub(16).max(320),
-        "Home" => 320,
-        "End" => 720,
+        "ArrowLeft" => (width + 24).min(panel_max_width()),
+        "ArrowRight" => width.saturating_sub(24).max(PANEL_MIN_WIDTH),
+        "Home" => PANEL_MIN_WIDTH,
+        "End" => panel_max_width(),
         _ => return false,
     };
     event.prevent_default();
@@ -1423,9 +1469,12 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
             .and_then(|el| el.dyn_into::<Element>().ok())
             .is_some_and(|el| el.id() == "panel-resize")
         {
-            reset.borrow_mut().panel_width = 384;
+            reset.borrow_mut().panel_width = PANEL_DEFAULT_WIDTH;
             if let Ok(Some(storage)) = window().local_storage() {
-                let _ = storage.set_item("firecrab.detailPanelWidth", "384");
+                let _ = storage.set_item(
+                    "firecrab.detailPanelWidth",
+                    &PANEL_DEFAULT_WIDTH.to_string(),
+                );
             }
             crate::render_detail(&reset);
         }
@@ -1487,18 +1536,10 @@ pub fn install(app: &Shared) -> Result<(), JsValue> {
     Ok(())
 }
 fn resize(app: &Shared, x: i32) {
-    let viewport = window()
-        .inner_width()
-        .ok()
-        .and_then(|v| v.as_f64())
-        .unwrap_or(1440.0);
-    let max = if viewport >= 1280.0 {
-        (viewport - 480.0 - 236.0).clamp(320.0, 720.0) as i32
-    } else {
-        720
-    };
+    let max = panel_max_width() as i32;
     let state = app.borrow();
-    let width = (state.panel_drag_width as i32 + state.panel_drag_x - x).clamp(320, max) as u32;
+    let width = (state.panel_drag_width as i32 + state.panel_drag_x - x)
+        .clamp(PANEL_MIN_WIDTH as i32, max) as u32;
     drop(state);
     app.borrow_mut().panel_width = width;
     if let Some(panel) = element("detail-panel") {

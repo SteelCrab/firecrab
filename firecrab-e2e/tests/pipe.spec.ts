@@ -765,6 +765,7 @@ test.describe("Pipe cards @dashboard", () => {
   test("reports lifecycle failures without discarding a draft", async ({
     page,
   }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
     const m = await open(page, { serviceFailure: "service operation failed" });
     await editRoutes(page);
     await page

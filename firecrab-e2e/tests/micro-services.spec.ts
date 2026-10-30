@@ -612,12 +612,12 @@ test.describe("MicroService configuration @dashboard", () => {
     await expect(rows.first().locator("td").nth(3)).toHaveText("orders.example.com");
     await expect(rows.nth(1).locator("td").nth(3)).toHaveText("—");
     await expect(rows.nth(1).locator("td").nth(3).locator(".none")).toBeVisible();
-    // The row's icons show on hover, and the row is 50px like every table.
+    // The row's icons show on hover, and the row is 75px like every table.
     const deploy = page.getByRole("button", { name: "Deploy orders", exact: true });
     await expect(deploy).toHaveCSS("opacity", "0");
     await rows.first().hover();
     await expect(deploy).toHaveCSS("opacity", "1");
-    expect((await rows.first().boundingBox())?.height).toBe(50);
+    expect((await rows.first().boundingBox())?.height).toBe(75);
     await deploy.click();
     const panel = servicePanel(page);
     await expect(panel.getByRole("heading", { name: "Deploy MicroService", exact: true })).toBeVisible();
@@ -674,9 +674,9 @@ test.describe("MicroService configuration @dashboard", () => {
     await openServices(page, [spec]);
     await routeRunning(page, running(spec, { instances: [{ vmId: vm, ipv4: "172.30.0.2", hostPort: 30190, healthy: false }] }),
       [retained(ACTIVE, image, `sha256:${"d".repeat(64)}`), retained("99999999-9999-4999-8999-999999999999", `${image}-previous`)]);
-    // The list: 50px rows, the domain cut with its whole text as the tooltip.
+    // The list: 75px rows, the domain cut with its whole text as the tooltip.
     const row = page.locator("table.service-table tbody tr").first();
-    expect((await row.boundingBox())?.height).toBe(50);
+    expect((await row.boundingBox())?.height).toBe(75);
     await expect(row.getByTitle(domain, { exact: true })).toBeVisible();
     await expect(row.getByTitle(image, { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Open orders", exact: true }).click();
@@ -685,12 +685,12 @@ test.describe("MicroService configuration @dashboard", () => {
     await panel.getByRole("tab", { name: "Instances" }).click();
     const instance = panel.locator("table.service-instances tbody tr").first();
     await expect(instance.getByTitle(vm, { exact: true })).toBeVisible();
-    expect((await instance.boundingBox())?.height).toBe(50);
+    expect((await instance.boundingBox())?.height).toBe(75);
     // The releases: one line each, and nothing wider than the panel.
     await panel.getByRole("tab", { name: "Releases" }).click();
     const releases = panel.locator("table.release-table tbody tr");
     await expect(releases).toHaveCount(2);
-    for (const index of [0, 1]) expect((await releases.nth(index).boundingBox())?.height).toBe(50);
+    for (const index of [0, 1]) expect((await releases.nth(index).boundingBox())?.height).toBe(75);
     await expect(releases.first().getByTitle(`sha256:${"d".repeat(64)}`, { exact: true })).toBeVisible();
     expect(await panel.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     expect(await panel.locator(".detail-content").evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
@@ -718,7 +718,11 @@ test.describe("MicroService configuration @dashboard", () => {
         gap: Math.abs(bar.bottom - body.bottom),
         rowHeight: bar.height,
         // Visible buttons below the top of the footer that are not in it.
-        below: buttons.filter(b => b.getBoundingClientRect().top >= bar.top - 1 && !b.closest(".form-footer")).length,
+        below: buttons.filter(b => {
+          const box = b.getBoundingClientRect();
+          return box.top >= bar.top - 1 && !b.closest(".form-footer") &&
+            b.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+        }).length,
         outside: [...document.querySelectorAll("#detail-panel [data-action=service-next], #detail-panel [data-action=service-back]")]
           .filter(b => !b.closest(".form-footer")).length,
         centers: [...document.querySelectorAll<HTMLElement>("#detail-panel .form-footer button:not([hidden])")]
@@ -729,7 +733,7 @@ test.describe("MicroService configuration @dashboard", () => {
       await serviceStep(page, step);
       const box = await layout();
       expect(box.gap).toBeLessThanOrEqual(1);
-      expect(box.rowHeight).toBeLessThan(64);
+      expect(box.rowHeight).toBeLessThan(96);
       expect(box.below).toBe(0);
       expect(box.outside).toBe(0);
       expect(new Set(box.centers).size).toBe(1);
@@ -1147,9 +1151,9 @@ test.describe("MicroService configuration @dashboard", () => {
     );
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(
-      page.getByRole("columnheader", { name: "Port", exact: true }),
+      page.getByRole("columnheader", { name: "Port", exact: true, includeHidden: true }),
     ).toHaveCount(1);
-    await expect(page.getByRole("cell", { name: /9090/ })).toHaveAttribute(
+    await expect(page.getByRole("cell", { name: /9090/, includeHidden: true })).toHaveAttribute(
       "headers",
       "service-column-2",
     );

@@ -23,7 +23,7 @@ async function open(page: Page, options: { hash?: string; ko?: boolean; failCrea
     routes: {
       "/api/host": { loadAverage1m: 0, memoryTotalMib: 8192, memoryAvailableMib: 4096, diskTotalGib: 100, diskAvailableGib: 80, uptimeSeconds: 100 },
       "/api/update/progress": { phase: "idle", percent: 0, updatedAtMs: 0 },
-      "/api/storage": [{ id: "default", name: "Local storage", path: "/var/lib/firecrab", availableGib: 80, totalGib: 100 }],
+      "/api/storage": [{ id: "default", name: "default", kind: "default", path: "/var/lib/firecrab", availableGib: 80, totalGib: 100 }],
       "/api/micro-networks": [], "/api/shells": [],
       [`/api/vms/${VM}`]: route => route.fulfill({ json: vm("database", VM, state.vmState) }),
       "/api/microblockstorage": route => {
@@ -67,16 +67,59 @@ test.describe("Persistent volumes @dashboard", () => {
   test("creates and explicitly deletes an independent data volume", async ({ page }, testInfo) => {
     const state = await open(page, { empty: true });
     await page.locator(".screen-header").getByRole("button", { name: "Create volume", exact: true }).click();
+    const storage = page.locator("#editor").getByLabel("Storage", { exact: true });
+    await expect(storage.locator("option")).toHaveText(["default"]);
+    await expect(storage).toHaveValue("default");
     await page.getByLabel("Name", { exact: true }).fill("uploads");
     await page.getByLabel("Size (GiB)", { exact: true }).fill("4");
     await page.locator("#editor").getByRole("button", { name: "Create volume", exact: true }).click();
     await expect(page.getByRole("cell", { name: /^uploads/ })).toBeVisible();
-    expect(state.writes[0]).toEqual({ method: "create", body: { name: "uploads", sizeGib: 4, storageRoot: null } });
+    expect(state.writes[0]).toEqual({ method: "create", body: { name: "uploads", sizeGib: 4, storageRoot: "default" } });
     await page.screenshot({ path: testInfo.outputPath("volumes-desktop.png"), fullPage: true });
     page.once("dialog", dialog => dialog.accept());
     await page.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(page.getByText("No data volumes", { exact: true })).toBeVisible();
     expect(state.writes.at(-1)?.method).toBe("delete");
+  });
+
+  test("keeps configured storage roots selectable by identity", async ({ page }) => {
+    const state = await open(page, { empty: true, routes: {
+      "/api/storage": [
+        { id: "disk-a", name: "disk-a", kind: "env", path: "/mnt/a" },
+        { id: "default", name: "default", kind: "env", path: "/mnt/b" },
+        { id: "fast-pool", name: "SSD pool", kind: "micro_storage", path: "/mnt/ssd" },
+      ],
+    } });
+    await page.locator(".screen-header").getByRole("button", { name: "Create volume", exact: true }).click();
+    const storage = page.locator("#editor").getByLabel("Storage", { exact: true });
+    await expect(storage.locator("option")).toHaveText(["disk-a", "default", "SSD pool"]);
+    await expect(storage).toHaveValue("disk-a");
+    await storage.selectOption("fast-pool");
+    await page.getByLabel("Name", { exact: true }).fill("pool-data");
+    await page.locator("#editor").getByRole("button", { name: "Create volume", exact: true }).click();
+    await expect.poll(() => state.writes[0]?.body.storageRoot).toBe("fast-pool");
+  });
+
+  test("loads storage choices without clearing an open volume draft", async ({ page }) => {
+    let releaseStorage!: () => void;
+    const storageReady = new Promise<void>(resolve => { releaseStorage = resolve; });
+    const state = await open(page, { empty: true, routes: {
+      "/api/storage": async route => {
+        await storageReady;
+        await route.fulfill({ json: [{ id: "disk-a", name: "disk-a", kind: "env", path: "/mnt/a" }] });
+      },
+    } });
+    await page.locator(".screen-header").getByRole("button", { name: "Create volume", exact: true }).click();
+    await page.getByLabel("Name", { exact: true }).fill("draft-data");
+    await page.getByLabel("Size (GiB)", { exact: true }).fill("4");
+    releaseStorage();
+    const storage = page.locator("#editor").getByLabel("Storage", { exact: true });
+    await expect(storage.locator("option")).toHaveText(["disk-a"]);
+    await expect(storage).toHaveValue("disk-a");
+    await expect(page.getByLabel("Name", { exact: true })).toHaveValue("draft-data");
+    await expect(page.getByLabel("Size (GiB)", { exact: true })).toHaveValue("4");
+    await page.locator("#editor").getByRole("button", { name: "Create volume", exact: true }).click();
+    await expect.poll(() => state.writes[0]?.body).toEqual({ name: "draft-data", sizeGib: 4, storageRoot: "disk-a" });
   });
 
   test("attaches to a stopped VM and disables detach while paused", async ({ page }, testInfo) => {

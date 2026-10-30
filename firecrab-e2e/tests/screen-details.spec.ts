@@ -61,9 +61,9 @@ test.describe("list screens with a detail panel", () => {
       },
     });
     const table = page.locator("table.wasm-table");
-    await expect(table.locator("th").first()).toHaveCSS("height", "34px");
+    await expect(table.locator("th").first()).toHaveCSS("height", "51px");
     const first = table.locator("tbody tr").first();
-    await expect(first).toHaveCSS("height", "50px");
+    expect((await first.boundingBox())!.height).toBeGreaterThanOrEqual(75);
     const details = first.getByRole("button", { name: "Details", exact: true });
     await expect(details).toHaveCSS("opacity", "0");
     await first.hover();
@@ -123,10 +123,76 @@ test.describe("list screens with a detail panel", () => {
     const detail = panel(page, "MicroStorage detail");
     await expect(detail.getByRole("heading", { name: "fast-ssd" })).toBeVisible();
     await expect(detail).toContainText("/mnt/fast");
-    await expect(detail).toContainText("120 / 500 GiB");
-    await expect(detail.getByRole("region", { name: "VMs" })).toContainText("db-1");
+    await expect(detail.locator(".wasm-property", { hasText: "Free space" })).toContainText("120 GiB");
+    await expect(detail.locator(".wasm-property", { hasText: "Filesystem capacity" })).toContainText("500 GiB");
+    await expect(detail).toContainText("Stores MicroVM operating-system disks and MicroBlockStorage data disk files.");
+    await expect(detail).not.toContainText("Available Gib");
+    await expect(detail).not.toContainText("Total Gib");
+    await expect(detail.getByRole("region", { name: "MicroVMs using this location" })).toContainText("db-1");
     await page.keyboard.press("Escape");
     await expect(detail).toHaveCount(0);
+  });
+
+  test("explains host disk storage in Korean and marks missing capacity as unavailable", async ({ page }) => {
+    const id = "cccccccc-0000-4000-8000-000000000003";
+    await page.setViewportSize({ width: 1440, height: 1100 });
+    const storage = { id, name: "test", path: "/root/", availableGib: 0, totalGib: 0 };
+    await openDashboard(page, {
+      hash: "#/storages",
+      locale: "ko",
+      routes: {
+        "/api/micro-storages": [storage],
+        [`/api/micro-storages/${id}`]: { ...storage, vms: [] },
+      },
+    });
+    await expect(page.locator(".screen-header")).toContainText("VM 디스크 저장소");
+    await expect(page.getByRole("region", { name: "VM 디스크 파일을 저장하는 호스트 폴더" })).toContainText("MicroBlockStorage의 데이터 디스크 파일");
+    await expect(page.getByRole("link", { name: "VM 안에 연결할 데이터 디스크 만들기 → MicroBlockStorage" })).toHaveAttribute("href", "#/volumes");
+    await page.getByRole("cell", { name: /^test(\s|$)/ }).click();
+    const detail = panel(page, "MicroStorage detail");
+    await expect(detail).toContainText("호스트 폴더 경로");
+    await expect(detail).toContainText("/root/");
+    await expect(detail.getByText("용량 확인 불가", { exact: true })).toHaveCount(2);
+    await expect(detail).not.toContainText("0 / 0 GiB");
+    await expect(detail.getByRole("region", { name: "이 위치를 사용하는 MicroVM" })).toContainText("이 위치를 사용하는 MicroVM이 아직 없다.");
+    await page.screenshot({ path: "test-results/storage-role-ko.png", fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(detail).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: "test-results/storage-role-ko-mobile.png", fullPage: true });
+  });
+
+  test("registers a host folder with clear path guidance and the existing API fields", async ({ page }) => {
+    const writes: Record<string, unknown>[] = [];
+    const registered: Record<string, unknown>[] = [];
+    await openDashboard(page, {
+      hash: "#/storages",
+      locale: "ko",
+      routes: {
+        "/api/micro-storages": route => {
+          if (route.request().method() === "POST") {
+            const body = route.request().postDataJSON();
+            writes.push(body);
+            const storage = { id: "fast-location", ...body, availableGib: 120, totalGib: 500 };
+            registered.push(storage);
+            return route.fulfill({ status: 201, json: storage });
+          }
+          return route.fulfill({ json: registered });
+        },
+      },
+    });
+    await page.locator(".screen-header").getByRole("button", { name: "저장 위치 등록", exact: true }).click();
+    const form = page.getByRole("region", { name: "저장 위치 등록", exact: true });
+    await expect(form).toContainText("관리용 Linux VM 안의 경로를 입력한다.");
+    await expect(form).toContainText("폴더가 없으면 등록할 때 만든다.");
+    await form.getByLabel("이름", { exact: true }).fill("fast-ssd");
+    const directory = form.getByLabel("호스트 폴더 경로", { exact: true });
+    await expect(directory).toHaveAttribute("placeholder", "/mnt/ssd/firecrab");
+    await directory.fill("/mnt/ssd/firecrab");
+    await page.screenshot({ path: "test-results/storage-register-ko.png", fullPage: true });
+    await form.getByRole("button", { name: "등록", exact: true }).click();
+    await expect.poll(() => writes).toEqual([{ name: "fast-ssd", path: "/mnt/ssd/firecrab" }]);
+    await expect(page.getByRole("cell", { name: /^fast-ssd(\s|$)/ })).toBeVisible();
   });
 
   test("Images shows the selected image and the VMs using it", async ({ page }) => {
@@ -170,6 +236,44 @@ test.describe("list screens with a detail panel", () => {
     await detail.getByRole("button", { name: "Publish revision", exact: true }).click();
     await expect(detail.getByLabel("Shell script", { exact: true })).toHaveValue("#!/bin/sh\necho hello\n");
     await expect(detail.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+  });
+
+  test("publishing a shell revision updates its version and content without reloading", async ({ page }) => {
+    const id = "ffffffff-0000-4000-8000-000000000006";
+    let content = "#!/bin/sh\necho previous\n";
+    let version = 2;
+    const summary = () => ({ id, name: "web-init", description: "Installs nginx", latestVersion: version, latestRevisionId: `rev-${version}`, contentSha256: "c".repeat(64), createdAtMs: 1, updatedAtMs: version });
+    const revisions = [{ id: "rev-2", version: 2, contentSha256: "c".repeat(64), createdAtMs: 2, sizeBytes: content.length }];
+    await openDashboard(page, {
+      hash: "#/shells",
+      routes: {
+        "/api/shells": route => route.fulfill({ json: [summary()] }),
+        [`/api/shells/${id}`]: route => route.fulfill({ json: { id, name: "web-init", description: "Installs nginx", createdAtMs: 1, updatedAtMs: version, revisions, latestContent: content } }),
+        [`/api/shells/${id}/revisions`]: route => {
+          content = route.request().postDataJSON().content;
+          version += 1;
+          const revision = { id: `rev-${version}`, version, contentSha256: "d".repeat(64), createdAtMs: version, sizeBytes: content.length };
+          revisions.unshift(revision);
+          return route.fulfill({ status: 201, json: { shellId: id, revisionId: revision.id, version, contentSha256: revision.contentSha256, content, createdAtMs: version } });
+        },
+      },
+    });
+    const row = page.locator("table.shell-table tbody tr", { hasText: "web-init" });
+    await row.click();
+    const detail = panel(page, "Shell detail");
+    await expect(detail.getByRole("region", { name: "Latest revision" })).toContainText("echo previous");
+    await detail.getByRole("button", { name: "Publish revision", exact: true }).click();
+    const updated = "#!/bin/sh\necho updated\n";
+    await detail.getByLabel("Shell script", { exact: true }).fill(updated);
+    await detail.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(row).toContainText("v3");
+    await expect(detail.locator(".detail-meta")).toContainText("v3");
+    await expect(detail.getByRole("region", { name: "Latest revision" })).toContainText("echo updated");
+    await detail.getByRole("tab", { name: /^Revisions/ }).click();
+    await expect(detail.getByRole("region", { name: "Revisions" })).toContainText("v3");
+    await expect(detail.getByRole("region", { name: "Revisions" })).toContainText("v2");
+    await detail.getByRole("button", { name: "Publish revision", exact: true }).click();
+    await expect(detail.getByLabel("Shell script", { exact: true })).toHaveValue(updated);
   });
 
   test("MicroService opens its forms and runtime in the panel", async ({ page }) => {
@@ -355,17 +459,54 @@ test.describe("list screens with a detail panel", () => {
     await openDashboard(page, { hash: "#/networks", routes: networkRoutes((route) => route.fulfill({ status: 500 })) });
     const detail = await openNewNetwork(page);
     await expect(detail.locator("#editor #form-result")).toBeHidden();
-    await page.evaluate(() => { document.getElementById("form-result")!.innerHTML = "<p role=\"status\">Checked</p>"; });
+    await page.evaluate(() => {
+      document.getElementById("form-result")!.innerHTML = "<p role=\"status\">Checked</p>";
+      const body = document.querySelector("#detail-panel .detail-content")!;
+      body.scrollTop = body.scrollHeight;
+    });
     const boxes = await page.evaluate(() => {
       const result = document.getElementById("form-result")!.getBoundingClientRect();
       const footer = document.querySelector("#editor .form-footer")!.getBoundingClientRect();
       const panel = document.getElementById("detail-panel")!.getBoundingClientRect();
       return { gap: footer.top - result.bottom, footerBottom: footer.bottom, panelBottom: panel.bottom };
     });
-    // One field gap (16px) and nothing else between the message and the footer.
+    // One enlarged field gap and nothing else between the message and the footer.
     expect(boxes.gap).toBeGreaterThanOrEqual(0);
-    expect(boxes.gap).toBeLessThanOrEqual(16.5);
+    expect(boxes.gap).toBeLessThanOrEqual(24.5);
     expect(Math.abs(boxes.footerBottom - boxes.panelBottom)).toBeLessThanOrEqual(1);
+  });
+
+  test("the image panel inspects and imports an OCI reference on entry", async ({ page }) => {
+    let inspected = "";
+    let imported: unknown;
+    await openDashboard(page, {
+      hash: "#/images",
+      routes: {
+        "/api/images": [],
+        "/api/kernels": [],
+        "/api/oci/inspect": (route) => {
+          inspected = new URL(route.request().url()).searchParams.get("reference") ?? "";
+          return route.fulfill({ json: { reference: inspected, digest: "sha256:abc" } });
+        },
+        "/api/oci/import": (route) => {
+          imported = route.request().postDataJSON();
+          return route.fulfill({ status: 202, json: { alias: "nginx", status: "running" } });
+        },
+        "/api/oci/import/nginx": { alias: "nginx", status: "running" },
+      },
+    });
+    const detail = page.locator("#detail-panel");
+    await expect(detail).toBeVisible();
+    await page.getByRole("link", { name: "Networks", exact: true }).click();
+    await expect(detail).toBeHidden();
+    await page.getByRole("link", { name: "Images", exact: true }).click();
+    await expect(detail.getByLabel("OCI reference", { exact: true })).toBeVisible();
+    await detail.getByLabel("OCI reference", { exact: true }).fill("docker.io/library/nginx:1.27");
+    await detail.getByRole("button", { name: "Inspect image", exact: true }).click();
+    await expect(detail.locator("#form-result")).toContainText("sha256:abc");
+    expect(inspected).toBe("docker.io/library/nginx:1.27");
+    await detail.getByRole("button", { name: "Import", exact: true }).click();
+    await expect.poll(() => imported).toEqual({ reference: "docker.io/library/nginx:1.27" });
   });
 
   test("a check result on a tall panel form is brought into view above the footer", async ({ page }) => {

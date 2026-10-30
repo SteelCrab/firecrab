@@ -469,7 +469,6 @@ pub fn page(app: &App) -> String {
     let parent = parent.map_or_else(String::new, |parent| {
         format!("<span class=\"screen-parent\">{parent}</span>")
     });
-    let (status_state, status_label) = api_status(app);
     let (summary, toolbar) = if section == "vms" && app.route == "vms" {
         (
             if app.loaded {
@@ -498,7 +497,7 @@ pub fn page(app: &App) -> String {
         "networks" | "storages" | "shells" => button(
             match section {
                 "networks" => tr(app, "New network", "새 네트워크"),
-                "storages" => tr(app, "New storage", "새 스토리지"),
+                "storages" => tr(app, "Register disk location", "저장 위치 등록"),
                 _ => tr(app, "New shell", "새 Shell"),
             },
             "create",
@@ -545,7 +544,7 @@ pub fn page(app: &App) -> String {
     let menu_label = tr(app, "Open menu", "메뉴 열기");
     let search_icon = navigation_icon("search");
     format!(
-        "<div class=\"app-frame\"><button class=\"icon-btn nav-toggle\" aria-label=\"{menu_label}\" id=\"nav-toggle\" aria-controls=\"main-navigation\" aria-expanded=\"false\" data-action=\"menu\">{menu_icon}</button><div class=\"nav-backdrop\" data-action=\"menu-close\" aria-hidden=\"true\"></div><nav id=\"main-navigation\" class=\"sidebar\" aria-label=\"{}\"><div class=\"sidebar-brand\"><img class=\"sidebar-logo\" src=\"/firecrab.png\" width=\"22\" height=\"22\" alt=\"\"><span class=\"sidebar-brand-text\"><span class=\"sidebar-name\">firecrab</span><span class=\"sidebar-host\" id=\"sidebar-platform\">private microvm cloud</span></span></div><button class=\"sidebar-search\" aria-label=\"{search_label}\" data-action=\"palette\">{search_icon}<span class=\"sidebar-label\">{search_label}</span><kbd>⌘ K</kbd></button><div class=\"sidebar-groups\">{nav}</div><div class=\"sidebar-foot\"><span id=\"update-indicator\"></span><section class=\"host-status\" id=\"host-status\" aria-label=\"Host status\">{meters}</section><div class=\"sidebar-language\"><select id=\"language\" aria-label=\"Language\"><option value=\"en\" {}>English</option><option value=\"ko\" {}>한국어</option></select></div></div></nav><div class=\"app-workspace\"><main class=\"screen\"><header class=\"screen-header\"><div class=\"screen-heading\"><span class=\"screen-group\">{category}</span>{parent}<h1>{title}</h1></div><div class=\"screen-header-end\"><span id=\"api-status\" data-state=\"{status_state}\">{status_label}</span>{actions}</div></header><div id=\"messages\" aria-live=\"polite\">{}</div><div class=\"wasm-layout\"><div class=\"screen-column\"><div id=\"screen-summary\">{summary}</div><div id=\"toolbar\">{toolbar}</div><div id=\"content\" class=\"wasm-content screen-main screen-body\" data-loaded=\"{}\">{}</div></div><aside id=\"detail-panel\" aria-label=\"{panel_label}\" class=\"wasm-panel detail-panel\" style=\"width:{panel_width}px\" {panel_hidden}>{panel}</aside></div></main></div></div><div id=\"menu-root\"></div><div id=\"palette-root\"></div><div id=\"tooltip-root\"></div><div id=\"modal-root\"></div>",
+        "<div class=\"app-frame\"><button class=\"icon-btn nav-toggle\" aria-label=\"{menu_label}\" id=\"nav-toggle\" aria-controls=\"main-navigation\" aria-expanded=\"false\" data-action=\"menu\">{menu_icon}</button><div class=\"nav-backdrop\" data-action=\"menu-close\" aria-hidden=\"true\"></div><nav id=\"main-navigation\" class=\"sidebar\" aria-label=\"{}\"><div class=\"sidebar-brand\"><img class=\"sidebar-logo\" src=\"/firecrab.png\" width=\"22\" height=\"22\" alt=\"\"><span class=\"sidebar-brand-text\"><span class=\"sidebar-name\">firecrab</span><span class=\"sidebar-host\" id=\"sidebar-platform\">private microvm cloud</span></span></div><button class=\"sidebar-search\" aria-label=\"{search_label}\" data-action=\"palette\">{search_icon}<span class=\"sidebar-label\">{search_label}</span><kbd>⌘ K</kbd></button><div class=\"sidebar-groups\">{nav}</div><div class=\"sidebar-foot\"><span id=\"update-indicator\"></span><section class=\"host-status\" id=\"host-status\" aria-label=\"Host status\">{meters}</section><div class=\"sidebar-language\"><select id=\"language\" aria-label=\"Language\"><option value=\"en\" {}>English</option><option value=\"ko\" {}>한국어</option></select></div></div></nav><div class=\"app-workspace\"><main class=\"screen\"><header class=\"screen-header\"><div class=\"screen-heading\"><span class=\"screen-group\">{category}</span>{parent}<h1>{title}</h1></div><div class=\"screen-header-end\">{actions}</div></header><div id=\"messages\" aria-live=\"polite\">{}</div><div class=\"wasm-layout\"><div class=\"screen-column\"><div id=\"screen-summary\">{summary}</div><div id=\"toolbar\">{toolbar}</div><div id=\"content\" class=\"wasm-content screen-main screen-body\" data-loaded=\"{}\">{}</div></div><aside id=\"detail-panel\" aria-label=\"{panel_label}\" class=\"wasm-panel detail-panel\" style=\"width:{panel_width}px\" {panel_hidden}>{panel}</aside></div></main></div></div><div id=\"menu-root\"></div><div id=\"palette-root\"></div><div id=\"tooltip-root\"></div><div id=\"modal-root\"></div>",
         tr(app, "Main navigation", "주요 메뉴"),
         if app.locale == "en" { "selected" } else { "" },
         if app.locale == "ko" { "selected" } else { "" },
@@ -576,21 +575,6 @@ fn crumbs(app: &App) -> (Option<&'static str>, &'static str) {
                 .map_or("MicroVM", |(_, _, en, ko)| tr(app, en, ko));
             (None, title)
         }
-    }
-}
-
-pub fn api_status(app: &App) -> (&'static str, &'static str) {
-    if app.connection_error.is_empty() {
-        ("live", tr(app, "Live", "실시간"))
-    } else {
-        (
-            "down",
-            tr(
-                app,
-                "API unavailable — retrying every 3s",
-                "API 연결 끊김 — 3초마다 다시 시도",
-            ),
-        )
     }
 }
 
@@ -722,7 +706,7 @@ pub fn content(app: &App) -> String {
                 ("_vms", "VMs"),
             ],
         ),
-        "storages" => resource_table(app, &app.resource, &[("name", "Name")]),
+        "storages" => storage_locations(app),
         "volumes" => crate::volumes::content(app),
         "images" => resource_table(
             app,
@@ -1331,6 +1315,33 @@ fn table_cell(app: &App, row: &Value, key: &str, first: bool) -> String {
     }
 }
 
+fn storage_locations(app: &App) -> String {
+    format!(
+        "<section class=\"storage-explainer\" aria-labelledby=\"storage-purpose\"><h2 id=\"storage-purpose\">{}</h2><p>{}</p><p>{}</p><a href=\"#/volumes\">{}</a></section>{}",
+        tr(
+            app,
+            "Host folders for VM disk files",
+            "VM 디스크 파일을 저장하는 호스트 폴더"
+        ),
+        tr(
+            app,
+            "MicroVM operating-system disks and MicroBlockStorage data disks are saved in these folders.",
+            "MicroVM의 운영체제 디스크와 MicroBlockStorage의 데이터 디스크 파일을 이 위치에 저장한다."
+        ),
+        tr(
+            app,
+            "Register a folder, then select it when creating a MicroVM or MicroBlockStorage.",
+            "폴더를 등록한 뒤 MicroVM 또는 MicroBlockStorage를 만들 때 저장 위치로 선택한다."
+        ),
+        tr(
+            app,
+            "Create a data disk to attach inside a VM → MicroBlockStorage",
+            "VM 안에 연결할 데이터 디스크 만들기 → MicroBlockStorage"
+        ),
+        resource_table(app, &app.resource, &[("name", "Disk location")])
+    )
+}
+
 fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> String {
     let rows = if resource.is_array() {
         list(resource)
@@ -1339,6 +1350,18 @@ fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> Stri
     } else {
         &[]
     };
+    let rows: Vec<&Value> = rows
+        .iter()
+        .filter(|row| {
+            app.route != "images"
+                || !matches!(
+                    row["alias"].as_str(),
+                    Some("alpine-3.24.1" | "rocky-9.8" | "ubuntu-26.04")
+                )
+                || row["installed"] == true
+                || row["packageStaged"] == true
+        })
+        .collect();
     if rows.is_empty() {
         let route = app.route.split('/').next().unwrap_or_default();
         let (title, text, action) = match app.route.as_str() {
@@ -1352,13 +1375,21 @@ fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> Stri
                 button(tr(app, "New network", "새 네트워크"), "create", "networks"),
             ),
             "storages" => (
-                tr(app, "No MicroStorage yet", "아직 MicroStorage가 없습니다"),
                 tr(
                     app,
-                    "Host directories that hold VM disks and images.",
-                    "VM 디스크와 이미지를 담는 호스트 폴더입니다.",
+                    "No disk locations registered",
+                    "등록한 VM 디스크 저장소가 없다",
                 ),
-                button(tr(app, "New storage", "새 스토리지"), "create", "storages"),
+                tr(
+                    app,
+                    "Register a host folder to choose where new VM and data disks are saved.",
+                    "호스트 폴더를 등록한 뒤 새 VM과 데이터 디스크의 저장 위치로 선택한다.",
+                ),
+                button(
+                    tr(app, "Register disk location", "저장 위치 등록"),
+                    "create",
+                    "storages",
+                ),
             ),
             "images" => (
                 tr(app, "No images installed", "설치된 이미지가 없습니다"),
@@ -2424,9 +2455,9 @@ fn pipe(app: &App, card: &str) -> String {
     let mut out = "<div class=\"wasm-actions\">".to_string();
     match card {
         "auth" => {
+            out.push_str(&button("Connect Firecrab", "create", "firecrab"));
             out.push_str(&button("Connect GitHub", "create", "github"));
             out.push_str(&button("Connect AWS", "create", "aws"));
-            out.push_str(&button("Connect Firecrab", "create", "firecrab"));
         }
         "route" => {
             out.push_str(&button("Edit routes", "create", "route"));
@@ -2484,15 +2515,18 @@ fn pipe(app: &App, card: &str) -> String {
         ));
     }
     match card {
-        "auth" => out.push_str(&resource_table(
-            app,
-            &app.resource,
-            &[
-                ("provider", "Provider"),
-                ("account", "Account"),
-                ("registry", "Registry"),
-            ],
-        )),
+        "auth" => {
+            out.push_str(&crate::auth_setup::overview(app.locale == "ko"));
+            out.push_str(&resource_table(
+                app,
+                &app.resource,
+                &[
+                    ("provider", "Provider"),
+                    ("account", "Account"),
+                    ("registry", "Registry"),
+                ],
+            ));
+        }
         "registry" => out.push_str(&resource_table(
             app,
             &app.resource,
@@ -3369,6 +3403,33 @@ mod list_part_tests {
     }
 
     #[test]
+    fn image_table_hides_uninstalled_default_images_but_keeps_usable_images() {
+        let columns = &[("alias", "Image"), ("installed", "Installed")];
+        let defaults = json!([
+            {"alias": "alpine-3.24.1", "installed": false},
+            {"alias": "rocky-9.8", "installed": false},
+            {"alias": "ubuntu-26.04", "installed": false}
+        ]);
+        let html = resource_table(&app("images"), &defaults, columns);
+        assert!(html.contains("No images installed"), "{html}");
+        assert!(!html.contains("alpine-3.24.1"), "{html}");
+        assert!(!html.contains("rocky-9.8"), "{html}");
+        assert!(!html.contains("ubuntu-26.04"), "{html}");
+
+        let images = json!([
+            {"alias": "alpine-3.24.1", "installed": true},
+            {"alias": "rocky-9.8", "installed": false, "packageStaged": true},
+            {"alias": "custom", "installed": true},
+            {"alias": "ubuntu-26.04", "installed": false}
+        ]);
+        let html = resource_table(&app("images"), &images, columns);
+        assert!(html.contains("alpine-3.24.1"), "{html}");
+        assert!(html.contains("rocky-9.8"), "{html}");
+        assert!(html.contains("custom"), "{html}");
+        assert!(!html.contains("ubuntu-26.04"), "{html}");
+    }
+
+    #[test]
     fn empty_resource_tables_show_the_shared_empty_state() {
         let html = resource_table(&app("storages"), &json!([]), &[("name", "Name")]);
         assert!(
@@ -3386,7 +3447,10 @@ mod list_part_tests {
             &json!([]),
             &[("name", "Name")],
         );
-        assert!(korean.contains("아직 MicroStorage가 없습니다"), "{korean}");
+        assert!(
+            korean.contains("등록한 VM 디스크 저장소가 없다"),
+            "{korean}"
+        );
     }
 }
 
