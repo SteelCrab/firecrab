@@ -490,6 +490,18 @@ pub async fn delete_project(
             "Stop and delete active preview bindings before deleting their project",
         ));
     }
+    if state
+        .store
+        .project_workspace(key)
+        .map_err(|_| AppError::internal(id.0))?
+        .is_some()
+    {
+        return Err(error(
+            id,
+            "project_workspace_retained",
+            "Project has retained workspace data; explicit data retention/deletion is required",
+        ));
+    }
     let owned = state.sandbox.root.join(key.to_string());
     if owned.exists() {
         tokio::task::spawn_blocking(move || std::fs::remove_dir_all(owned))
