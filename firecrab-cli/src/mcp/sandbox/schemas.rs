@@ -164,7 +164,7 @@ pub(super) fn environment_spec() -> Value {
             "bootArgsSha256",
         ],
     );
-    let mode = json!({"oneOf":[schema(json!({"kind":{"const":"agent_sandbox"},"runtime":{"enum":["docker","nspawn"]},"image":string()}),&["kind","runtime","image"]),schema(json!({"kind":{"const":"persistent_workspace"}}),&["kind"])]});
+    let mode = json!({"oneOf":[schema(json!({"kind":{"const":"agent_sandbox"},"runtime":{"enum":["crun","docker","nspawn"],"description":"crun uses containerd + crun inside the MicroVM and is recommended for OCI containers."},"image":string()}),&["kind","runtime","image"]),schema(json!({"kind":{"const":"persistent_workspace"}}),&["kind"])]});
     let service = schema(
         json!({"name":string(),"port":{"type":"integer","minimum":1,"maximum":65535},"readiness":boolean()}),
         &["name", "port"],
@@ -325,7 +325,7 @@ pub(in crate::mcp) fn output_schema(name: &str) -> Value {
         | "sandbox_tunnel_delete"
         | "sandbox_tunnel_verify" => tunnel(),
         "sandbox_guest_health" => record(
-            json!({"version":integer(),"init":string(),"execution":boolean(),"docker":boolean(),"nspawn":boolean(),"unsupported":nullable(string())}),
+            json!({"version":integer(),"init":string(),"execution":boolean(),"docker":boolean(),"crun":boolean(),"nspawn":boolean(),"unsupported":nullable(string())}),
             &[
                 "version",
                 "init",

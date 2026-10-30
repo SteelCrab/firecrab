@@ -181,6 +181,19 @@ test.describe("Sandbox resource contracts @dashboard",()=>{
     await page.screenshot({path:info.outputPath(`sandbox-environment-${locale}-${width}.png`),fullPage:true});
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   });
+  test("creates an environment with the crun runtime",async({page})=>{
+    const mock=await open(page);await page.locator("#sb-resources > summary").click();
+    await page.getByRole("button",{name:"New environment",exact:true}).click();
+    const dialog=page.getByRole("dialog",{name:"New environment",exact:true});
+    await dialog.getByRole("textbox",{name:"Role name",exact:true}).fill("debug");
+    await dialog.getByRole("combobox",{name:"Execution & retention",exact:true}).selectOption({label:"Agent Sandbox · containerd + crun (recommended)"});
+    await expect(dialog.getByText(/Install containerd, nerdctl and crun/)).toBeVisible();
+    const image=`example.invalid/image@sha256:${"a".repeat(64)}`;
+    await dialog.getByRole("textbox",{name:"Container image digest",exact:true}).fill(image);
+    await dialog.getByRole("button",{name:"Create environment",exact:true}).click();
+    await expect(dialog).toHaveCount(0);
+    expect(mock.environmentSpecs[0]).toMatchObject({roles:[{name:"debug",executionMode:{kind:"agent_sandbox",runtime:"crun",image}}]});
+  });
   test("links dependency results and retained artifacts to a saved-token preview",async({page},info)=>{
     const mock=await open(page);const input=page.getByRole("textbox",{name:"Message or task",exact:true});
     await input.fill("Debug the health endpoint");await page.getByRole("button",{name:"Send message",exact:true}).click();

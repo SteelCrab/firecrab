@@ -48,6 +48,9 @@ pub struct SandboxGuestCapabilities {
     pub execution: bool,
     /// Docker daemon and digest-pinned images can be used.
     pub docker: bool,
+    /// containerd, nerdctl, and crun can execute digest-pinned OCI images.
+    #[serde(default)]
+    pub crun: bool,
     /// nspawn and content-addressed roots can be used.
     pub nspawn: bool,
     /// Explicit unsupported reason, if execution is unavailable.

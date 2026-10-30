@@ -1,0 +1,190 @@
+{
+  "vm_id": "7eac7e3e-8dc7-4f32-8a81-a7700c765815",
+  "runtime": "Firecrab MicroVM",
+  "cpu": 1,
+  "ram_mib": 1024,
+  "kernel": "7.0.0-29-generic",
+  "architecture": "aarch64",
+  "image": "docker.io/library/python@sha256:b658b05ce9c4eb97ec6fc19424818a1f31993659c2b505a532f470e83807815d",
+  "container_memory_limit_mib": 256,
+  "versions": {
+    "docker": "Docker version 29.1.3, build 29.1.3-0ubuntu4.1",
+    "containerd": "containerd github.com/containerd/containerd/v2 2.2.2",
+    "crun": "crun version 1.21\ncommit: 10269840aa07fb7e6b7e1acff6198692d8ff5c88\nrundir: /run/crun\nspec: 1.0.0\n+SYSTEMD +SELINUX +APPARMOR +CAP +SECCOMP +EBPF +CRIU +WASM:wasmedge +YAJL",
+    "nerdctl": "nerdctl version 2.4.1"
+  },
+  "samples_ms": {
+    "docker": [
+      1574.481,
+      238.54,
+      107.294,
+      119.696,
+      121.845,
+      281.351,
+      92.71,
+      67.092,
+      87.928,
+      82.87
+    ],
+    "crun": [
+      160.524,
+      223.012,
+      124.595,
+      107.388,
+      122.176,
+      195.092,
+      134.824,
+      134.2,
+      129.178,
+      131.744
+    ]
+  },
+  "blocks": [
+    {
+      "engine": "docker",
+      "baseline": {
+        "vm_used_mib": 179.688,
+        "vm_available_mib": 767.094
+      },
+      "idle": {
+        "vm_used_mib": 249.969,
+        "vm_available_mib": 696.812,
+        "current_mib": 68.1328125,
+        "anon_mib": 66.5625,
+        "file_mib": 0.18359375,
+        "kernel_mib": 1.29296875,
+        "daemon_pss_mib": 149.935
+      },
+      "latency_ms": [
+        1574.481,
+        238.54,
+        107.294,
+        119.696,
+        121.845
+      ],
+      "workload": {
+        "allocated_anon_mib": 64,
+        "duration_seconds": 3,
+        "workload_peak_mib": 68.973,
+        "workload_anon_peak_mib": 67.176,
+        "daemon_peak_mib": 94.027,
+        "vm_used_peak_mib": 322.582,
+        "vm_increase_from_idle_mib": 72.613
+      }
+    },
+    {
+      "engine": "crun",
+      "baseline": {
+        "vm_used_mib": 180.738,
+        "vm_available_mib": 766.043
+      },
+      "idle": {
+        "vm_used_mib": 226.957,
+        "vm_available_mib": 719.824,
+        "current_mib": 32.63671875,
+        "anon_mib": 31.8046875,
+        "file_mib": 0.24609375,
+        "kernel_mib": 0.53125,
+        "daemon_pss_mib": 62.771
+      },
+      "latency_ms": [
+        160.524,
+        223.012,
+        124.595,
+        107.388,
+        122.176
+      ],
+      "workload": {
+        "allocated_anon_mib": 64,
+        "duration_seconds": 3,
+        "workload_peak_mib": 75.781,
+        "workload_anon_peak_mib": 67.176,
+        "daemon_peak_mib": 44.883,
+        "vm_used_peak_mib": 295.914,
+        "vm_increase_from_idle_mib": 68.957
+      }
+    },
+    {
+      "engine": "crun",
+      "baseline": {
+        "vm_used_mib": 212.422,
+        "vm_available_mib": 734.359
+      },
+      "idle": {
+        "vm_used_mib": 227.887,
+        "vm_available_mib": 718.895,
+        "current_mib": 30.80859375,
+        "anon_mib": 30.3046875,
+        "file_mib": 0.0,
+        "kernel_mib": 0.49609375,
+        "daemon_pss_mib": 61.208
+      },
+      "latency_ms": [
+        195.092,
+        134.824,
+        134.2,
+        129.178,
+        131.744
+      ],
+      "workload": {
+        "allocated_anon_mib": 64,
+        "duration_seconds": 3,
+        "workload_peak_mib": 67.57,
+        "workload_anon_peak_mib": 67.176,
+        "daemon_peak_mib": 40.129,
+        "vm_used_peak_mib": 298.031,
+        "vm_increase_from_idle_mib": 70.144
+      }
+    },
+    {
+      "engine": "docker",
+      "baseline": {
+        "vm_used_mib": 212.906,
+        "vm_available_mib": 733.875
+      },
+      "idle": {
+        "vm_used_mib": 274.504,
+        "vm_available_mib": 672.277,
+        "current_mib": 65.44140625,
+        "anon_mib": 63.86328125,
+        "file_mib": 0.14453125,
+        "kernel_mib": 1.20703125,
+        "daemon_pss_mib": 146.749
+      },
+      "latency_ms": [
+        281.351,
+        92.71,
+        67.092,
+        87.928,
+        82.87
+      ],
+      "workload": {
+        "allocated_anon_mib": 64,
+        "duration_seconds": 3,
+        "workload_peak_mib": 70.07,
+        "workload_anon_peak_mib": 67.176,
+        "daemon_peak_mib": 93.039,
+        "vm_used_peak_mib": 331.195,
+        "vm_increase_from_idle_mib": 56.691
+      }
+    }
+  ],
+  "image_ids": {
+    "docker": "sha256:b658b05ce9c4eb97ec6fc19424818a1f31993659c2b505a532f470e83807815d",
+    "crun": "sha256:b658b05ce9c4eb97ec6fc19424818a1f31993659c2b505a532f470e83807815d"
+  },
+  "summary_ms": {
+    "docker": {
+      "median": 113.495,
+      "mean": 277.381,
+      "min": 67.092,
+      "max": 1574.481
+    },
+    "crun": {
+      "median": 132.972,
+      "mean": 146.273,
+      "min": 107.388,
+      "max": 223.012
+    }
+  }
+}
