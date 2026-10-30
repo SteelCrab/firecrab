@@ -490,6 +490,35 @@ test('shell publishing uses latestContent and revision endpoints', async () => {
   assert.equal(mutation('/api/shells/shell-1/revisions').body.content, '#!/bin/sh\necho next');
 });
 
+test('shell revision history shows the selected script with its original formatting', async () => {
+  const oldScript = '#!/bin/sh\n  echo "old <version>"\n\necho done\n';
+  const newScript = '#!/bin/sh\necho new\n';
+  fixture.handlers.set('GET /api/shells/shell-1', ({ send }) => send(200, {
+    ...fixture.state.shells[0], latestVersion:2, latestContent:newScript,
+    revisions:[{id:'revision-2', version:2}, {id:'revision-1', version:1}],
+  }));
+  for (const [version, content] of [[1, oldScript], [2, newScript]]) {
+    fixture.handlers.set(`GET /api/shells/shell-1/revisions/revision-${version}`, ({ send }) =>
+      send(200, {shellId:'shell-1', revisionId:`revision-${version}`, version, content}));
+  }
+  await open('shells');
+  await page.getByRole('button', { name:'Details', exact:true }).click();
+  await page.getByRole('tab', { name:/Revisions/ }).click();
+  await page.getByRole('button', { name:'View version v1', exact:true }).click();
+  const result = page.locator('#detail-result');
+  await expect(result.getByRole('heading', { name:'Version v1' })).toBeVisible();
+  await expect(result.locator('pre')).toHaveText(oldScript);
+  await expect(result.getByRole('button', { name:'Copy' })).toHaveAttribute('data-id', oldScript);
+  await expect(result.locator('version')).toHaveCount(0);
+  await page.getByRole('button', { name:'View version v2', exact:true }).click();
+  await expect(result.getByRole('heading', { name:'Version v2' })).toBeVisible();
+  await expect(result.locator('pre')).toHaveText(newScript);
+  await page.getByRole('tab', { name:'Content', exact:true }).click();
+  await expect(result).toBeEmpty();
+  await page.getByRole('tab', { name:/Revisions/ }).click();
+  await expect(result.locator('pre')).toHaveText(newScript);
+});
+
 test('image registration and OCI import expose completion', async () => {
   fixture.handlers.set('GET /api/microregistry', ({ send }) => send(200, { images: [
     ...['alpine-3.24.1', 'rocky-9.8', 'ubuntu-26.04'].map(alias => ({ alias, version: `${alias}-v5` })),

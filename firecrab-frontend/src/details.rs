@@ -585,7 +585,11 @@ fn shell_panel(app: &App) -> String {
             &[("revisions", revisions.len())]
         ),
         tab_panel("shell", tab, &body),
-        app.detail_result
+        if tab == "revisions" {
+            &app.detail_result
+        } else {
+            ""
+        }
     )
 }
 /// The latest script in a code block, with a copy icon.
@@ -622,7 +626,7 @@ fn shell_revisions(data: &Value) -> String {
                 "<li><span class=\"mono detail-list-main\">v{}</span>{}</li>",
                 revision["version"],
                 render::button(
-                    &format!("Revision {}", revision["version"]),
+                    &format!("{} v{}", t("View version"), revision["version"]),
                     "shell-revision",
                     &format!("{id}/{}", text(revision, "id"))
                 )
@@ -638,6 +642,20 @@ fn shell_revisions(data: &Value) -> String {
             &format!("<ul class=\"detail-list\">{rows}</ul>"),
         )
     }
+}
+
+/// The selected immutable revision, preserving the script's original line breaks.
+pub fn shell_revision_result(data: &Value) -> String {
+    let content = text(data, "content");
+    let version = data["version"]
+        .as_u64()
+        .map_or_else(|| "—".into(), |v| v.to_string());
+    let copy = render::icon_button("Copy", "copy-text", content, render::Icon::Copy);
+    section(
+        &format!("{} v{version}", t("Version")),
+        &copy,
+        &format!("<pre class=\"codeblock\">{}</pre>", escape(content)),
+    )
 }
 
 /// The panel of a selected MicroService: the head, four tabs and the open tab. A form replaces it.

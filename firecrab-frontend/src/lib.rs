@@ -1865,7 +1865,7 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
                         api::encode(parts[0]),
                         api::encode(parts[1])
                     ),
-                    ResultKind::Properties,
+                    ResultKind::ShellRevision,
                 );
             }
         }
@@ -2474,6 +2474,7 @@ fn show_detail(app: Shared, id: String) {
 
 enum ResultKind {
     Properties,
+    ShellRevision,
     Logs,
     Download,
     Ssh,
@@ -2498,6 +2499,7 @@ fn fetch_result(app: Shared, path: String, kind: ResultKind) {
             Ok(value) => {
                 let html = match kind {
                     ResultKind::Properties => render::properties(&value),
+                    ResultKind::ShellRevision => details::shell_revision_result(&value),
                     ResultKind::Logs | ResultKind::Download => {
                         let logs = log_text(&value);
                         if matches!(kind, ResultKind::Download) {

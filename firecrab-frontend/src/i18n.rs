@@ -324,6 +324,8 @@ pub fn t(value: &str) -> &str {
         "Publish revision" => "새 버전 발행",
         "Shell script" => "Shell 스크립트",
         "Latest revision" => "최신 버전",
+        "Revisions" => "버전 기록",
+        "View version" => "버전 보기",
         "Description" => "설명",
         "Memory (MiB)" => "메모리 (MiB)",
         "Disk" => "디스크",

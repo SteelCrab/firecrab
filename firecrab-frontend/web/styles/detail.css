@@ -166,3 +166,5 @@
 
 /* A script or a block of code in a panel. */
 .codeblock { margin: 0; padding: 0.75rem; overflow: auto; border-radius: var(--radius); background: var(--bg-subtle); font: 0.75rem/1.6 var(--mono); white-space: pre; }
+.shell-panel .codeblock { max-height: 20rem; }
+.shell-panel .detail-result:not(:empty) { margin-top: 1rem; }
