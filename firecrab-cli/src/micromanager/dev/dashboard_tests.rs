@@ -279,10 +279,17 @@ fn a_private_dashboard_rejects_a_different_source_before_stopping_its_server() {
 
 #[test]
 fn check_port_never_creates_state_and_preserves_foreign_listeners() {
-    let fixture = Fixture::new();
+    let mut fixture = Fixture::new();
+    // Keep the port reserved while changing from closed to listening.
+    let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+    socket
+        .bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())
+        .unwrap();
+    fixture.port = socket.local_addr().unwrap().as_socket().unwrap().port();
     assert!(check_port(fixture.home.path(), fixture.port).is_ok());
     assert!(!fixture.home.path().join("runtime").exists());
-    let listener = TcpListener::bind(("127.0.0.1", fixture.port)).unwrap();
+    socket.listen(16).unwrap();
+    let listener: TcpListener = socket.into();
     assert!(check_port(fixture.home.path(), fixture.port).is_err());
     assert!(!fixture.home.path().join("runtime").exists());
     assert!(listener.local_addr().is_ok());
@@ -497,8 +504,10 @@ fn port_probe_distinguishes_listening_and_closed_ports() {
 
 #[test]
 fn occupied_ports_are_errors_and_the_other_listener_remains_open() {
-    let fixture = Fixture::new();
-    let listener = TcpListener::bind(("127.0.0.1", fixture.port)).unwrap();
+    let mut fixture = Fixture::new();
+    // Bind once and retain the listener; another parallel test cannot claim it.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    fixture.port = listener.local_addr().unwrap().port();
     assert!(
         fixture
             .start()
