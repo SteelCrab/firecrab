@@ -13,6 +13,7 @@
 .wasm-table th.row-actions, .wasm-table td.row-actions { width: 8rem; }
 .vm-col-actions { width: 8.25rem; }
 .vm-list :is(th, td) { padding-block: 0; }
+.vm-filters { flex-wrap: wrap; min-width: 0; max-width: 100%; }
 .vm-filter { min-height: 2rem; }
 .vm-toolbar { padding-block: .5rem; }
 .form-footer { flex-wrap: wrap; row-gap: .5rem; }

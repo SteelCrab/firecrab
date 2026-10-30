@@ -74,9 +74,8 @@ fn spacer(height: usize) -> Option<Element> {
     row.set_class_name("vm-spacer");
     let _ = row.set_attribute("role", "presentation");
     let _ = row.set_attribute("aria-hidden", "true");
-    row.set_inner_html(&format!(
-        "<td colspan=\"6\" style=\"height:{height}px\"></td>"
-    ));
+    // A colspan would add empty columns when responsive styles hide real cells.
+    row.set_inner_html(&format!("<td style=\"height:{height}px\"></td>"));
     Some(row)
 }
 
