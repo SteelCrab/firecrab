@@ -1323,6 +1323,18 @@ fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> Stri
     } else {
         &[]
     };
+    let rows: Vec<&Value> = rows
+        .iter()
+        .filter(|row| {
+            app.route != "images"
+                || !matches!(
+                    row["alias"].as_str(),
+                    Some("alpine-3.24.1" | "rocky-9.8" | "ubuntu-26.04")
+                )
+                || row["installed"] == true
+                || row["packageStaged"] == true
+        })
+        .collect();
     if rows.is_empty() {
         let route = app.route.split('/').next().unwrap_or_default();
         let (title, text, action) = match app.route.as_str() {
@@ -3350,6 +3362,33 @@ mod list_part_tests {
         assert!(!html.contains("Actions"), "{html}");
         assert!(!html.contains("data-action=\"detail\""), "{html}");
         assert_eq!(html.matches("<th ").count(), 2, "{html}");
+    }
+
+    #[test]
+    fn image_table_hides_uninstalled_default_images_but_keeps_usable_images() {
+        let columns = &[("alias", "Image"), ("installed", "Installed")];
+        let defaults = json!([
+            {"alias": "alpine-3.24.1", "installed": false},
+            {"alias": "rocky-9.8", "installed": false},
+            {"alias": "ubuntu-26.04", "installed": false}
+        ]);
+        let html = resource_table(&app("images"), &defaults, columns);
+        assert!(html.contains("No images installed"), "{html}");
+        assert!(!html.contains("alpine-3.24.1"), "{html}");
+        assert!(!html.contains("rocky-9.8"), "{html}");
+        assert!(!html.contains("ubuntu-26.04"), "{html}");
+
+        let images = json!([
+            {"alias": "alpine-3.24.1", "installed": true},
+            {"alias": "rocky-9.8", "installed": false, "packageStaged": true},
+            {"alias": "custom", "installed": true},
+            {"alias": "ubuntu-26.04", "installed": false}
+        ]);
+        let html = resource_table(&app("images"), &images, columns);
+        assert!(html.contains("alpine-3.24.1"), "{html}");
+        assert!(html.contains("rocky-9.8"), "{html}");
+        assert!(html.contains("custom"), "{html}");
+        assert!(!html.contains("ubuntu-26.04"), "{html}");
     }
 
     #[test]
