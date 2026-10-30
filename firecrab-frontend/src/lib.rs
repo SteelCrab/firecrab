@@ -281,22 +281,9 @@ fn render_detail(app: &Shared) {
     let (open, width, html, selection, same_view) = {
         let mut state = app.borrow_mut();
         observability::clear(&mut state);
-        let narrow = window()
-            .inner_width()
-            .ok()
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1440.0)
-            < 1280.0;
-        if !narrow {
-            let viewport = window()
-                .inner_width()
-                .ok()
-                .and_then(|v| v.as_f64())
-                .unwrap_or(1440.0) as u32;
-            state.panel_width = state
-                .panel_width
-                .min(viewport.saturating_sub(716).clamp(320, 720));
-        }
+        state.panel_width = state
+            .panel_width
+            .clamp(details::PANEL_MIN_WIDTH, details::panel_max_width());
         let open = details::panel_visible(&state);
         let html = if open {
             details::panel(&state)
@@ -504,8 +491,8 @@ pub fn start() -> Result<(), JsValue> {
             .flatten()
             .and_then(|s| s.get_item("firecrab.detailPanelWidth").ok().flatten())
             .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(384)
-            .clamp(320, 720),
+            .unwrap_or(details::PANEL_DEFAULT_WIDTH)
+            .clamp(details::PANEL_MIN_WIDTH, details::PANEL_MAX_WIDTH),
         ..App::default()
     }));
     if let Some(root) = element("root") {

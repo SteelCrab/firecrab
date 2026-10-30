@@ -44,7 +44,7 @@ async function open(page: Page, options: Parameters<typeof openDashboard>[1] = {
 
 test.describe("MicroVM list", () => {
   test.beforeEach(async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.setViewportSize({ width: 1920, height: 900 });
   });
 
   test("filters by state and text", async ({ page }) => {
@@ -78,8 +78,8 @@ test.describe("MicroVM list", () => {
   test("lays the summary out as one strip of four items", async ({ page }) => {
     await open(page);
     const strip = page.locator("#vm-summary");
-    expect(await strip.evaluate((el) => el.getBoundingClientRect().height)).toBeLessThanOrEqual(88);
-    await expect(strip).toHaveCSS("padding", "16px 24px");
+    expect(await strip.evaluate((el) => el.getBoundingClientRect().height)).toBeLessThanOrEqual(132);
+    await expect(strip).toHaveCSS("padding", "24px 36px");
     const items = strip.locator(".vm-summary-item");
     await expect(items).toHaveCount(4);
     await expect(items.nth(0)).toHaveCSS("border-left-width", "0px");
@@ -87,19 +87,19 @@ test.describe("MicroVM list", () => {
       await expect(items.nth(index)).toHaveCSS("border-left-width", "1px");
       await expect(items.nth(index)).toHaveCSS("border-left-color", "rgb(236, 236, 239)");
     }
-    await expect(items.nth(0).locator("dt")).toHaveCSS("font-size", "12px");
-    await expect(items.nth(0).locator("dt")).toHaveCSS("color", "rgb(113, 113, 122)");
+    await expect(items.nth(0).locator("dt")).toHaveCSS("font-size", "18px");
+    await expect(items.nth(0).locator("dt")).toHaveCSS("color", "rgb(98, 98, 107)");
     const value = items.nth(0).locator(".vm-summary-value");
-    await expect(value).toHaveCSS("font-size", "22px");
+    await expect(value).toHaveCSS("font-size", "33px");
     await expect(value).toHaveCSS("font-weight", "650");
-    await expect(value.locator("small")).toHaveCSS("font-size", "13px");
+    await expect(value.locator("small")).toHaveCSS("font-size", "19.5px");
     await expect(value.locator("small")).toHaveCSS("font-weight", "500");
-    await expect(value.locator("small")).toHaveCSS("color", "rgb(161, 161, 170)");
+    await expect(value.locator("small")).toHaveCSS("color", "rgb(113, 113, 122)");
     const bar = page.locator(".vm-summary-bar").first();
-    await expect(bar).toHaveCSS("height", "4px");
+    await expect(bar).toHaveCSS("height", "6px");
     await expect(bar).toHaveCSS("background-color", "rgb(239, 239, 242)");
     await expect(bar.locator("i")).toHaveCSS("background-color", "rgb(63, 63, 70)");
-    await expect(page.locator(".vm-toolbar")).toHaveCSS("height", "48px");
+    await expect(page.locator(".vm-toolbar")).toHaveCSS("height", "72px");
   });
 
   test("turns a summary bar amber from 80 percent", async ({ page }) => {
@@ -146,7 +146,7 @@ test.describe("MicroVM list", () => {
     await row(page, "postgres-main").click();
     const p = panel(page);
     await expect(p.locator(".detail-kind")).toHaveText("MicroVM");
-    await expect(p.locator(".detail-title")).toHaveCSS("font-size", "18px");
+    await expect(p.locator(".detail-title")).toHaveCSS("font-size", "27px");
     const section = p.locator(".detail-sec").first();
     await expect(section).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await expect(section).toHaveCSS("border-top-width", "0px");
@@ -157,11 +157,11 @@ test.describe("MicroVM list", () => {
 
   test("closes with the X button and with Escape and clears the selection", async ({ page }) => {
     await open(page);
-    await row(page, "postgres-main").click();
+    await row(page, "postgres-main").getByRole("button", { name: "postgres-main", exact: true }).click();
     await panel(page).getByRole("button", { name: "Close detail" }).click();
     await expect(page.locator("#detail-panel")).toBeHidden();
     await expect(row(page, "postgres-main")).toHaveAttribute("aria-selected", "false");
-    await row(page, "postgres-main").click();
+    await row(page, "postgres-main").getByRole("button", { name: "postgres-main", exact: true }).click();
     await page.keyboard.press("Escape");
     await expect(page.locator("#detail-panel")).toBeHidden();
   });
@@ -218,9 +218,9 @@ test.describe("MicroVM list", () => {
     await open(page, { vms: [...VMS.slice(0, 3), vm(longName, "11111111-2222-4333-8444-555555555555", "running", { ipv4: "10.42.0.99" })] });
     const longRow = row(page, longName);
     await longRow.click();
-    expect(await longRow.evaluate((tr) => tr.getBoundingClientRect().height)).toBe(50);
+    expect(await longRow.evaluate((tr) => tr.getBoundingClientRect().height)).toBe(75);
     expect(await longRow.locator(".vm-row-name").evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
-    expect(await panel(page).evaluate((el) => el.getBoundingClientRect().width)).toBe(384);
+    expect(await panel(page).evaluate((el) => el.getBoundingClientRect().width)).toBe(576);
   });
 
   test("shows the error summary and start step in the second line", async ({ page }) => {
@@ -269,8 +269,8 @@ test.describe("MicroVM list", () => {
     await expect(panel(page).getByRole("tab", { name: "Log" })).toHaveAttribute("aria-selected", "true");
   });
 
-  test("shows at least as many full rows as the old table at 1440×900", async ({ page }) => {
-    // The old dashboard showed 13 complete rows of 30 VMs at this size.
+  test("shows at least seven readable full rows at 1440×900", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
     const many = Array.from({ length: 30 }, (_, index) =>
       vm(`vm-${String(index).padStart(2, "0")}`, `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`, "running", { ipv4: `10.42.0.${index + 10}` }));
     await openDashboard(page, { vms: many, routes: { "/api/host": HOST } });
@@ -282,13 +282,14 @@ test.describe("MicroVM list", () => {
         return rect.top >= box.top && rect.bottom <= box.bottom;
       }).length;
     });
-    expect(full).toBeGreaterThanOrEqual(13);
+    expect(full).toBeGreaterThanOrEqual(7);
   });
 
   test("drags the panel edge to resize it and remembers the width", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1000 });
     await open(page);
     await row(page, "api-gateway").click();
-    expect(await panelWidth(page)).toBe(384);
+    expect(await panelWidth(page)).toBe(576);
     const mainBefore = await mainWidth(page);
     const box = (await resizer(page).boundingBox())!;
     const y = box.y + box.height / 2;
@@ -296,53 +297,55 @@ test.describe("MicroVM list", () => {
     await page.mouse.down();
     await page.mouse.move(box.x + box.width / 2 - 120, y, { steps: 6 });
     await page.mouse.up();
-    expect(await panelWidth(page)).toBe(504);
+    expect(await panelWidth(page)).toBe(696);
     expect(await mainWidth(page)).toBe(mainBefore - 120);
-    await expect(resizer(page)).toHaveAttribute("aria-valuenow", "504");
+    await expect(resizer(page)).toHaveAttribute("aria-valuenow", "696");
 
     await page.reload();
     await expect(rows(page)).toHaveCount(4);
     await row(page, "api-gateway").click();
-    expect(await panelWidth(page)).toBe(504);
+    expect(await panelWidth(page)).toBe(696);
   });
 
   test("resizes the panel with the keyboard within limits", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1000 });
     await open(page);
     await row(page, "api-gateway").click();
     const handle = resizer(page);
-    await expect(handle).toHaveAttribute("aria-valuenow", "384");
+    await expect(handle).toHaveAttribute("aria-valuenow", "576");
     await handle.focus();
     await page.keyboard.press("ArrowLeft");
-    await expect(handle).toHaveAttribute("aria-valuenow", "400");
+    await expect(handle).toHaveAttribute("aria-valuenow", "600");
     await page.keyboard.press("ArrowRight");
     await page.keyboard.press("ArrowRight");
-    await expect(handle).toHaveAttribute("aria-valuenow", "368");
+    await expect(handle).toHaveAttribute("aria-valuenow", "552");
     await page.keyboard.press("Home");
-    await expect(handle).toHaveAttribute("aria-valuenow", "320");
+    await expect(handle).toHaveAttribute("aria-valuenow", "440");
     await page.keyboard.press("End");
-    // 1440 − 236 sidebar − 480 kept for the list = 724, capped at 720.
-    await expect(handle).toHaveAttribute("aria-valuenow", "720");
-    expect(await panelWidth(page)).toBe(720);
+    // A wide workspace supports the full 960px detail panel.
+    await expect(handle).toHaveAttribute("aria-valuenow", "960");
+    expect(await panelWidth(page)).toBe(960);
     // Arrow keys on the handle never move the list selection.
     await expect(row(page, "api-gateway")).toHaveAttribute("aria-selected", "true");
   });
 
   test("double-click on the panel edge restores the default width", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1000 });
     await page.addInitScript(() => localStorage.setItem("firecrab.detailPanelWidth", "560"));
     await open(page);
     await row(page, "api-gateway").click();
     expect(await panelWidth(page)).toBe(560);
     await resizer(page).dblclick();
-    expect(await panelWidth(page)).toBe(384);
+    expect(await panelWidth(page)).toBe(576);
   });
 
   test("keeps room for the list when a remembered width no longer fits", async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem("firecrab.detailPanelWidth", "700"));
-    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.addInitScript(() => localStorage.setItem("firecrab.detailPanelWidth", "900"));
+    await page.setViewportSize({ width: 1600, height: 800 });
     await open(page);
     await row(page, "api-gateway").click();
-    // 1280 − 236 sidebar − 480 for the list.
-    expect(await panelWidth(page)).toBe(564);
+    // 1600 minus 312px for navigation and 520px for the list.
+    expect(await panelWidth(page)).toBe(768);
   });
 
   test("the overlay panel uses the same width", async ({ page }) => {
@@ -362,14 +365,14 @@ test.describe("MicroVM list", () => {
     await expect(resizer(page)).toBeHidden();
   });
 
-  test("shows at least 13 MicroVM rows at 1440x900", async ({ page }) => {
+  test("shows at least seven MicroVM rows at 1440x900", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openDashboard(page, { vms: many });
     await expect(page.locator("#vm-rows tr")).toHaveCount(20);
     const visible = await page.locator("#vm-rows tr").evaluateAll((rows) =>
       rows.filter((row) => row.getBoundingClientRect().bottom <= window.innerHeight).length);
-    expect(visible).toBeGreaterThanOrEqual(13);
-    await expect(page.locator("#vm-rows tr").first()).toHaveCSS("height", "50px");
+    expect(visible).toBeGreaterThanOrEqual(7);
+    await expect(page.locator("#vm-rows tr").first()).toHaveCSS("height", "75px");
     await expect(page.locator(".vm-overview")).toHaveCount(0);
   });
 
@@ -513,8 +516,8 @@ test.describe("MicroVM list", () => {
     const scroll = page.locator("#vm-scroll");
     await expect(page.locator("table.vm-list")).toHaveAttribute("data-visible-count", "300");
     expect(await rows(page).count()).toBeLessThan(100);
-    // Spacers and rows add up to the real height: a 34px head and 300 rows of 50px.
-    expect(Math.abs(await scroll.evaluate((el) => el.scrollHeight) - (34 + 300 * 50))).toBeLessThanOrEqual(2);
+    // Spacers and rows add up to the real height: a 51px head and 300 rows of 75px.
+    expect(Math.abs(await scroll.evaluate((el) => el.scrollHeight) - (51 + 300 * 75))).toBeLessThanOrEqual(2);
     await scroll.evaluate((el) => { el.scrollTop = el.scrollHeight; });
     const last = page.getByRole("button", { name: "vm-299", exact: true });
     await expect(last).toBeVisible();

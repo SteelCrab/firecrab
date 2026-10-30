@@ -61,9 +61,9 @@ test.describe("list screens with a detail panel", () => {
       },
     });
     const table = page.locator("table.wasm-table");
-    await expect(table.locator("th").first()).toHaveCSS("height", "34px");
+    await expect(table.locator("th").first()).toHaveCSS("height", "51px");
     const first = table.locator("tbody tr").first();
-    await expect(first).toHaveCSS("height", "50px");
+    expect((await first.boundingBox())!.height).toBeGreaterThanOrEqual(75);
     const details = first.getByRole("button", { name: "Details", exact: true });
     await expect(details).toHaveCSS("opacity", "0");
     await first.hover();
@@ -355,16 +355,20 @@ test.describe("list screens with a detail panel", () => {
     await openDashboard(page, { hash: "#/networks", routes: networkRoutes((route) => route.fulfill({ status: 500 })) });
     const detail = await openNewNetwork(page);
     await expect(detail.locator("#editor #form-result")).toBeHidden();
-    await page.evaluate(() => { document.getElementById("form-result")!.innerHTML = "<p role=\"status\">Checked</p>"; });
+    await page.evaluate(() => {
+      document.getElementById("form-result")!.innerHTML = "<p role=\"status\">Checked</p>";
+      const body = document.querySelector("#detail-panel .detail-content")!;
+      body.scrollTop = body.scrollHeight;
+    });
     const boxes = await page.evaluate(() => {
       const result = document.getElementById("form-result")!.getBoundingClientRect();
       const footer = document.querySelector("#editor .form-footer")!.getBoundingClientRect();
       const panel = document.getElementById("detail-panel")!.getBoundingClientRect();
       return { gap: footer.top - result.bottom, footerBottom: footer.bottom, panelBottom: panel.bottom };
     });
-    // One field gap (16px) and nothing else between the message and the footer.
+    // One enlarged field gap and nothing else between the message and the footer.
     expect(boxes.gap).toBeGreaterThanOrEqual(0);
-    expect(boxes.gap).toBeLessThanOrEqual(16.5);
+    expect(boxes.gap).toBeLessThanOrEqual(24.5);
     expect(Math.abs(boxes.footerBottom - boxes.panelBottom)).toBeLessThanOrEqual(1);
   });
 

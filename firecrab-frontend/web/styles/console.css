@@ -33,9 +33,9 @@
 }
 .console-brand svg { width: 15px; height: 15px; stroke-width: 1.75; }
 .console-heading { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.console-title { margin: 0; overflow: hidden; font-size: 13.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.console-host { overflow: hidden; color: var(--text-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.console-addr { color: var(--text-2); font: 12px var(--mono); white-space: nowrap; }
+.console-title { margin: 0; overflow: hidden; font-size: 0.84375rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.console-host { overflow: hidden; color: var(--text-3); font-size: 0.75rem; text-overflow: ellipsis; white-space: nowrap; }
+.console-addr { color: var(--text-2); font: 0.75rem var(--mono); white-space: nowrap; }
 
 .console-status {
   display: inline-flex;
@@ -47,7 +47,7 @@
   border-radius: 99px;
   background: var(--gray-soft);
   color: var(--text-2);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
   white-space: nowrap;
 }
@@ -94,7 +94,7 @@
 @starting-style {
   .console-settings-pop { opacity: 0; transform: scale(0.97); }
 }
-.console-settings-row { display: grid; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 500; }
+.console-settings-row { display: grid; gap: 6px; color: var(--text-2); font-size: 0.75rem; font-weight: 500; }
 
 /* Body: the terminal well and the details column side by side. */
 .console-body { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; min-height: 0; padding: 12px; }
@@ -144,10 +144,10 @@
 }
 .console-detail .detail-sec-head .badge { margin-left: auto; }
 .console-detail .vm-usage-cards { grid-template-columns: 1fr; }
-.console-detail-note { margin: 16px 0; color: var(--text-3); font-size: 12px; }
+.console-detail-note { margin: 16px 0; color: var(--text-3); font-size: 0.75rem; }
 .console-detail-note.error { color: var(--red-ink); }
 .console-forwards { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.console-forwards li { color: var(--text-2); font: 12px/1.7 var(--mono); }
+.console-forwards li { color: var(--text-2); font: 0.75rem/1.7 var(--mono); }
 
 /* Terminal only: one quiet way back besides Esc. */
 .console-exit-only {
@@ -182,4 +182,4 @@
   .console-settings-pop, .console-exit-only { transition: none; }
 }
 
-.console-geometry { margin: 5px 0 0; color: var(--text-3); font: 11px var(--mono); }
+.console-geometry { margin: 5px 0 0; color: var(--text-3); font: 0.6875rem var(--mono); }

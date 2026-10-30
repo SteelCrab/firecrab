@@ -5,15 +5,15 @@
 .pipe-ai > .banner { margin: 0; }
 .pipe-ai > .banner svg { width: 16px; height: 16px; flex: none; }
 
-.pipe-ai .panel .pipe-ai-section-head h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 600; }
+.pipe-ai .panel .pipe-ai-section-head h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 0.8125rem; font-weight: 600; }
 .pipe-ai-section-head h3 svg { width: 16px; height: 16px; color: var(--text-2); stroke-width: 1.7; }
 .pipe-ai-editor { display: grid; gap: 16px; width: 100%; max-width: 620px; margin-inline: auto; padding: 24px; }
 .pipe-ai-authentication { min-width: 0; margin: 0; padding: 0; border: 0; }
-.pipe-ai-authentication legend { margin-bottom: 8px; color: var(--text-2); font-size: 12px; font-weight: 500; }
+.pipe-ai-authentication legend { margin-bottom: 8px; color: var(--text-2); font-size: 0.75rem; font-weight: 500; }
 .pipe-ai-auth-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-subtle); }
 .pipe-ai-auth-options label { position: relative; min-width: 0; cursor: pointer; }
 .pipe-ai-auth-options input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
-.pipe-ai-auth-options span { display: flex; align-items: center; justify-content: center; gap: 8px; height: 34px; border: 1px solid transparent; border-radius: 6px; color: var(--text-2); font-size: 13px; }
+.pipe-ai-auth-options span { display: flex; align-items: center; justify-content: center; gap: 8px; height: 34px; border: 1px solid transparent; border-radius: 6px; color: var(--text-2); font-size: 0.8125rem; }
 .pipe-ai-auth-options svg { width: 16px; height: 16px; stroke-width: 1.7; }
 .pipe-ai-auth-options input:checked + span { border-color: var(--border-strong); background: var(--bg); color: var(--text); box-shadow: var(--shadow-xs); font-weight: 500; }
 .pipe-ai-auth-options input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }

@@ -3,36 +3,36 @@
 /* Table: a 34px head between two rules, 50px rows with a soft rule, no cell borders. */
 .wasm-table { width: 100%; border-collapse: separate; border-spacing: 0; }
 .wasm-table th {
-  height: 34px;
-  padding: 0 12px;
+  height: var(--table-header-height);
+  padding: 0 0.75rem;
   overflow: hidden;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   color: var(--text-4);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .wasm-table td {
-  height: 50px;
-  padding: 0 12px;
+  height: var(--table-row-height);
+  padding: 0 0.75rem;
   border: 0;
   border-bottom: 1px solid var(--border-soft);
-  font-size: 13px;
+  font-size: 0.8125rem;
   text-align: left;
   vertical-align: middle;
 }
 /* Mono values: `:where` keeps this at the lowest weight, so a screen's own `.mono` rule wins. */
-.wasm-table :where(td.mono, td > .mono) { color: var(--text-2); font-size: 12px; }
+.wasm-table :where(td.mono, td > .mono) { color: var(--text-2); font-size: 0.75rem; }
 .wasm-table tbody tr[data-id] { cursor: pointer; }
 @media (hover: hover) { .wasm-table tbody tr:hover td { background: var(--bg-subtle); } }
 .wasm-table tbody tr[aria-selected="true"] td { background: var(--bg-selected); }
 .wasm-table tbody tr[aria-selected="true"] td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 
 /* Row actions: icon buttons that show on hover, selection and focus, and always where there is no hover. */
-.wasm-table th.row-actions, .wasm-table td.row-actions { width: 96px; padding-right: 10px; text-align: right; white-space: nowrap; }
+.wasm-table th.row-actions, .wasm-table td.row-actions { width: 6rem; padding-right: 0.625rem; text-align: right; white-space: nowrap; }
 .row-actions .icon-btn, .vm-row-actions .icon-btn { opacity: 0; }
 tr:hover :is(.row-actions, .vm-row-actions) .icon-btn,
 tr[aria-selected="true"] :is(.row-actions, .vm-row-actions) .icon-btn,
@@ -46,22 +46,22 @@ tr:focus-within :is(.row-actions, .vm-row-actions) .icon-btn,
 .cell-name b {
   display: block;
   overflow: hidden;
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cell-name b.mono { font-size: 12.5px; font-weight: 500; }
+.cell-name b.mono { font-size: 0.78125rem; font-weight: 500; }
 /* A name that opens the row's panel is a button, so the keyboard gets there too. */
 .cell-open { display: block; max-width: 100%; padding: 0; overflow: hidden; border: 0; background: none; color: inherit; font: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .cell-open:disabled { color: var(--text-3); cursor: default; }
 @media (hover: hover) { .cell-open:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; } }
 .cell-sub {
   display: block;
-  margin-top: 2px;
+  margin-top: 0.125rem;
   overflow: hidden;
   color: var(--text-4);
-  font-size: 12px;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -73,15 +73,15 @@ tr:focus-within :is(.row-actions, .vm-row-actions) .icon-btn,
 .status {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 0.4375rem;
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   white-space: nowrap;
 }
 .status-dot {
   flex: none;
-  width: 7px;
-  height: 7px;
+  width: 0.4375rem;
+  height: 0.4375rem;
   border-radius: 50%;
   background: var(--dot, var(--text-5));
   animation: var(--dot-blink, none);
@@ -93,20 +93,20 @@ tr:focus-within :is(.row-actions, .vm-row-actions) .icon-btn,
 .status[data-tone="none"] .status-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-5); }
 
 /* Chips: the services, connections or tags a row uses. */
-.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 8px;
+  gap: 0.3125rem;
+  height: 1.375rem;
+  padding: 0 0.5rem;
   border-radius: 5px;
   background: var(--bg-hover);
   color: var(--text-2);
-  font-size: 12px;
+  font-size: 0.75rem;
   white-space: nowrap;
 }
-.chip svg { width: 13px; height: 13px; color: var(--text-3); }
+.chip svg { width: 0.8125rem; height: 0.8125rem; color: var(--text-3); }
 
 /* Empty state: where a list would be. */
 .empty-state {
@@ -114,22 +114,22 @@ tr:focus-within :is(.row-actions, .vm-row-actions) .icon-btn,
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 84px 24px;
+  padding: 5.25rem 1.5rem;
   color: var(--text-3);
   text-align: center;
 }
 .empty-state-icon {
   display: grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: 2.5rem;
+  height: 2.5rem;
   border-radius: 10px;
   background: var(--bg-hover);
   color: var(--text-3);
 }
-.empty-state-icon svg { width: 20px; height: 20px; }
-.empty-state-title { margin-top: 14px; color: var(--text); font-size: 15px; font-weight: 650; }
-.empty-state p { max-width: 460px; margin: 4px 0 16px; font-size: 13px; line-height: 1.55; }
+.empty-state-icon svg { width: 1.25rem; height: 1.25rem; }
+.empty-state-title { margin-top: 0.875rem; color: var(--text); font-size: 0.9375rem; font-weight: 650; }
+.empty-state p { max-width: 28.75rem; margin: 0.25rem 0 1rem; font-size: 0.8125rem; line-height: 1.55; }
 .empty-state p:empty { display: none; }
 .empty-state p:last-child { margin-bottom: 0; }
 /* While a screen loads, its one message sits in the middle of the body. */
@@ -140,9 +140,9 @@ tr:focus-within :is(.row-actions, .vm-row-actions) .icon-btn,
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 10px;
-  min-height: 48px;
-  padding: 6px 20px 6px 24px;
+  gap: 0.25rem 0.625rem;
+  min-height: 3rem;
+  padding: 0.375rem 1.25rem 0.375rem 1.5rem;
   border-bottom: 1px solid var(--border);
 }
 .status-line b { font-weight: 600; }
@@ -158,9 +158,9 @@ tr:focus-within :is(.row-actions, .vm-row-actions) .icon-btn,
 .subtabs {
   display: flex;
   flex: none;
-  gap: 20px;
-  height: 44px;
-  padding: 0 24px;
+  gap: 1.25rem;
+  height: 2.75rem;
+  padding: 0 1.5rem;
   overflow-x: auto;
   overflow-y: hidden;
   box-shadow: inset 0 -1px 0 var(--border);
@@ -171,19 +171,19 @@ tr:focus-within :is(.row-actions, .vm-row-actions) .icon-btn,
   display: flex;
   flex: none;
   align-items: center;
-  gap: 6px;
+  gap: 0.375rem;
   height: 100%;
   padding: 0;
   border: 0;
   border-bottom: 2px solid transparent;
   background: none;
   color: var(--text-4);
-  font: 500 13px var(--font);
+  font: 500 0.8125rem var(--font);
   white-space: nowrap;
   cursor: pointer;
 }
 .subtab:focus-visible { outline-offset: -2px; }
-.subtab em { color: var(--text-4); font-size: 12px; font-style: normal; }
+.subtab em { color: var(--text-4); font-size: 0.75rem; font-style: normal; }
 .subtab[aria-selected="true"] { border-bottom-color: var(--text); color: var(--text); }
 @media (hover: hover) { .subtab[aria-selected="false"]:hover { color: var(--text-2); } }
 

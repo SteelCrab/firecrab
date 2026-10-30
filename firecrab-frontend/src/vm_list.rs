@@ -3,9 +3,9 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Element, Event, HtmlElement};
 
 pub const WINDOW_THRESHOLD: usize = 256;
-// Keep these heights in sync with `.wasm-table` in styles/lists.css: a 34px head and 50px rows.
-const ROW_HEIGHT: usize = 50;
-const HEADER_HEIGHT: usize = 34;
+// Keep these in sync with the table height tokens in styles/tokens.css.
+const ROW_HEIGHT: usize = 75;
+const HEADER_HEIGHT: usize = 51;
 const OVERSCAN: usize = 8;
 
 pub fn cache(app: &Shared) {

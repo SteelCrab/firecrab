@@ -21,6 +21,50 @@ const nav = (page: Page) => page.getByRole("navigation", { name: "Main navigatio
 const hostCard = (page: Page) => page.getByRole("region", { name: "Host status" });
 
 test.describe("dashboard frame", () => {
+  for (const width of [320, 390, 1024, 1440, 1920]) {
+    test(`larger dashboard stays readable and contained at ${width}px`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 1000 });
+      await openDashboard(page, { vms: VMS, routes: {
+        "/api/host": HOST,
+        [`/api/vms/${VMS[0].id}`]: VMS[0],
+        "/api/images": [], "/api/micro-networks": [], "/api/storage": [], "/api/shells": [],
+        "/api/pipe/auth": [],
+      } });
+      const title = page.getByRole("button", { name: "api-gateway", exact: true });
+      await expect(title).toBeVisible();
+      expect(await title.evaluate(el => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(18);
+      await expect(page.locator("#vm-rows tr").first()).toHaveCSS("height", "75px");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      if (width >= 1440) {
+        await expect(page.locator("body")).toHaveCSS("font-size", "19.5px");
+        await page.screenshot({ path: testInfo.outputPath("larger-vm-list.png"), fullPage: true });
+      }
+      await title.click();
+      const detail = page.locator("#detail-panel");
+      await expect(detail).toBeVisible();
+      const box = (await detail.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width + 1);
+      if (width >= 768) expect(box.width).toBe(576);
+      await page.screenshot({ path: testInfo.outputPath("larger-detail-panel.png"), fullPage: true });
+      await detail.getByRole("button", { name: "Close detail", exact: true }).click();
+      await page.locator("#vm-list-add").click();
+      const name = page.getByLabel("Name", { exact: true });
+      await expect(name).toBeVisible();
+      expect(await name.evaluate(el => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(17);
+      expect((await name.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath("larger-create-form.png"), fullPage: true });
+      await page.goto("/#/pipe/auth");
+      await page.getByRole("button", { name: "Connect GitHub", exact: true }).click();
+      const token = page.getByLabel("Token", { exact: true });
+      await expect(token).toBeVisible();
+      expect((await token.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath("larger-pipe-account.png"), fullPage: true });
+    });
+  }
+
   test("uses the redesign tokens", async ({ page }) => {
     await openDashboard(page, { vms: VMS });
     await expect(page.getByText("api-gateway", { exact: true })).toBeVisible();
@@ -39,12 +83,12 @@ test.describe("dashboard frame", () => {
       return ["--border", "--border-soft", "--border-strong", "--bg-active", "--text-4", "--text-5"]
         .map((name) => style.getPropertyValue(name).trim());
     });
-    expect(tokens).toEqual(["#ececef", "#f2f2f4", "#e4e4e8", "#ebebee", "#a1a1aa", "#c4c4ca"]);
+    expect(tokens).toEqual(["#ececef", "#f2f2f4", "#e4e4e8", "#ebebee", "#71717a", "#c4c4ca"]);
     await expect(page.locator("#vm-list-add")).toHaveCSS("box-shadow", "none");
     const status = page.locator(".vm-status-label").first();
     await expect(status).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await expect(status).toHaveCSS("border-top-width", "0px");
-    expect(await status.evaluate((el) => getComputedStyle(el, "::before").width)).toBe("7px");
+    expect(await status.evaluate((el) => getComputedStyle(el, "::before").width)).toBe("10.5px");
   });
 
   test("picks memory with chips and keeps advanced fields folded", async ({ page }) => {
@@ -74,20 +118,21 @@ test.describe("dashboard frame", () => {
     await expect(header.getByRole("link", { name: "New MicroVM" })).toBeVisible();
   });
 
-  test("the New MicroVM page lays its sections out in a 760px column", async ({ page }) => {
+  test("the New MicroVM page lays its sections out in a wider responsive column", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openDashboard(page, { hash: "#/vms/new", routes: { "/api/images": [], "/api/micro-networks": [], "/api/storage": [], "/api/shells": [] } });
     const content = (await page.locator("#content").boundingBox())!;
     const sections = page.locator(".form-section");
     await expect(sections).toHaveCount(3);
     for (const box of await sections.evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().toJSON()))) {
-      expect(box.width).toBeCloseTo(760, 0);
-      expect(box.left + box.width / 2).toBeCloseTo(content.x + content.width / 2, 0);
+      expect(box.width).toBeGreaterThan(900);
+      expect(box.width).toBeLessThan(content.width);
+      expect(Math.abs(box.left + box.width / 2 - content.x - content.width / 2)).toBeLessThanOrEqual(12);
     }
     // The title and its line sit left of the inputs; memory chips take the whole row.
     const head = (await sections.nth(1).locator(".form-section-head").boundingBox())!;
     const fields = (await sections.nth(1).locator(".form-section-fields").boundingBox())!;
-    expect(head.width).toBeCloseTo(190, 0);
+    expect(head.width).toBeCloseTo(285, 0);
     expect(fields.x).toBeGreaterThan(head.x + head.width);
     const cpu = (await page.getByLabel("vCPU", { exact: true }).boundingBox())!;
     const disk = (await page.getByLabel("Disk", { exact: true }).boundingBox())!;
@@ -101,8 +146,8 @@ test.describe("dashboard frame", () => {
     expect(bar.width).toBeCloseTo(content.width, 0);
     const summary = (await page.locator("#form-summary").boundingBox())!;
     const create = (await page.getByRole("button", { name: "Create MicroVM" }).boundingBox())!;
-    expect(summary.x).toBeLessThan(bar.x + 40);
-    expect(create.x + create.width).toBeGreaterThan(bar.x + bar.width - 40);
+    expect(summary.x).toBeLessThan(bar.x + 60);
+    expect(create.x + create.width).toBeGreaterThan(bar.x + bar.width - 60);
     await expect(page.locator("#editor .form-footer button").first()).toHaveClass(/ghost/);
     await expect(page.getByRole("button", { name: "Create MicroVM" })).toHaveClass(/primary/);
   });
@@ -245,7 +290,7 @@ test.describe("dashboard frame", () => {
     await expect(page.locator("#unit-cpu")).toHaveCount(0);
     expect((await page.getByLabel("vCPU", { exact: true }).boundingBox())!.width).toBeCloseTo(box.width, 0);
     // Port forwarding is about one line high.
-    expect((await page.getByLabel("Port forwarding", { exact: true }).boundingBox())!.height).toBeLessThan(44);
+    expect((await page.getByLabel("Port forwarding", { exact: true }).boundingBox())!.height).toBeLessThan(64);
   });
 
   test("the New MicroVM page reads in Korean", async ({ page }) => {
@@ -540,7 +585,7 @@ test.describe("dashboard frame", () => {
     await expect(toggle).toBeFocused();
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await toggle.click();
-    await page.locator(".nav-backdrop").click({ position: { x: 350, y: 200 } });
+    await page.locator(".nav-backdrop").click({ position: { x: 380, y: 200 } });
     await expect(nav(page)).toBeHidden();
     await toggle.click();
     await page.setViewportSize({ width: 1440, height: 900 });
