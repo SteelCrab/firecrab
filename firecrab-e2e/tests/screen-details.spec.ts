@@ -172,6 +172,44 @@ test.describe("list screens with a detail panel", () => {
     await expect(detail.getByRole("button", { name: "Save", exact: true })).toBeVisible();
   });
 
+  test("publishing a shell revision updates its version and content without reloading", async ({ page }) => {
+    const id = "ffffffff-0000-4000-8000-000000000006";
+    let content = "#!/bin/sh\necho previous\n";
+    let version = 2;
+    const summary = () => ({ id, name: "web-init", description: "Installs nginx", latestVersion: version, latestRevisionId: `rev-${version}`, contentSha256: "c".repeat(64), createdAtMs: 1, updatedAtMs: version });
+    const revisions = [{ id: "rev-2", version: 2, contentSha256: "c".repeat(64), createdAtMs: 2, sizeBytes: content.length }];
+    await openDashboard(page, {
+      hash: "#/shells",
+      routes: {
+        "/api/shells": route => route.fulfill({ json: [summary()] }),
+        [`/api/shells/${id}`]: route => route.fulfill({ json: { id, name: "web-init", description: "Installs nginx", createdAtMs: 1, updatedAtMs: version, revisions, latestContent: content } }),
+        [`/api/shells/${id}/revisions`]: route => {
+          content = route.request().postDataJSON().content;
+          version += 1;
+          const revision = { id: `rev-${version}`, version, contentSha256: "d".repeat(64), createdAtMs: version, sizeBytes: content.length };
+          revisions.unshift(revision);
+          return route.fulfill({ status: 201, json: { shellId: id, revisionId: revision.id, version, contentSha256: revision.contentSha256, content, createdAtMs: version } });
+        },
+      },
+    });
+    const row = page.locator("table.shell-table tbody tr", { hasText: "web-init" });
+    await row.click();
+    const detail = panel(page, "Shell detail");
+    await expect(detail.getByRole("region", { name: "Latest revision" })).toContainText("echo previous");
+    await detail.getByRole("button", { name: "Publish revision", exact: true }).click();
+    const updated = "#!/bin/sh\necho updated\n";
+    await detail.getByLabel("Shell script", { exact: true }).fill(updated);
+    await detail.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(row).toContainText("v3");
+    await expect(detail.locator(".detail-meta")).toContainText("v3");
+    await expect(detail.getByRole("region", { name: "Latest revision" })).toContainText("echo updated");
+    await detail.getByRole("tab", { name: /^Revisions/ }).click();
+    await expect(detail.getByRole("region", { name: "Revisions" })).toContainText("v3");
+    await expect(detail.getByRole("region", { name: "Revisions" })).toContainText("v2");
+    await detail.getByRole("button", { name: "Publish revision", exact: true }).click();
+    await expect(detail.getByLabel("Shell script", { exact: true })).toHaveValue(updated);
+  });
+
   test("MicroService opens its forms and runtime in the panel", async ({ page }) => {
     const id = "99999999-0000-4000-8000-000000000007";
     const service = { id, name: "orders", image: "ghcr.io/team/orders:1.0", runtime: "vm", port: 8080, healthPath: "/health", domain: null, ram: 512, cpu: 1, replicas: 1, startupTimeout: 300, drainTimeout: 30, env: {}, secrets: {} };

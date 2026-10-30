@@ -2136,6 +2136,43 @@ fn mutate(
                         {
                             base.extend(updated.clone());
                         }
+                    } else if path == format!("/api/shells/{}/revisions", api::encode(id))
+                        && value["shellId"] == *id
+                    {
+                        let summary = json!({
+                            "latestVersion": value["version"],
+                            "latestRevisionId": value["revisionId"],
+                            "contentSha256": value["contentSha256"],
+                            "updatedAtMs": value["createdAtMs"],
+                        });
+                        if let Some(rows) = state.resource.as_array_mut() {
+                            for row in rows.iter_mut().filter(|row| row["id"] == *id) {
+                                if let Some(row) = row.as_object_mut() {
+                                    row.extend(summary.as_object().unwrap().clone());
+                                }
+                            }
+                        }
+                        if let Some(detail) = state.detail.as_mut() {
+                            if let Some(fields) = detail.as_object_mut() {
+                                fields.extend(summary.as_object().unwrap().clone());
+                            }
+                            detail["latestContent"] = value["content"].clone();
+                            let mut revisions = model::list(&detail["revisions"]).to_vec();
+                            revisions.retain(|revision| revision["id"] != value["revisionId"]);
+                            revisions.insert(
+                                0,
+                                json!({
+                                    "id": value["revisionId"],
+                                    "version": value["version"],
+                                    "contentSha256": value["contentSha256"],
+                                    "createdAtMs": value["createdAtMs"],
+                                    "sizeBytes": text(&value, "content").len(),
+                                }),
+                            );
+                            detail["revisions"] = json!(revisions);
+                        }
+                        state.detail_loading = false;
+                        state.detail_result.clear();
                     } else if path.ends_with("/deployment")
                         || path.ends_with("/stop")
                         || path.ends_with("/updates")
