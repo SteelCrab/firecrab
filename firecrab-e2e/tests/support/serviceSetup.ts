@@ -26,6 +26,11 @@ export async function openDeployForm(page: Page, name = "orders") {
 }
 
 export async function serviceAction(page: Page, name: string, action: "Edit" | "Delete") {
+  const panel = servicePanel(page);
+  // Overlay panels cover the list actions on narrower screens.
+  if (await panel.isVisible()) {
+    await panel.getByRole("button", { name: "Close detail", exact: true }).click();
+  }
   await page.getByLabel(`Actions for ${name}`, { exact: true }).click();
   await page.getByRole("button", { name: `${action} ${name}`, exact: true }).click();
 }

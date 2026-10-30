@@ -69,6 +69,7 @@
 }
 
 .service-table .service-col-actions { width: 8rem; }
+.service-table :is(th, td), .service-panel .wasm-table :is(th, td) { padding-block: 0; }
 .service-table .service-col-port { width: 5rem; }
 .service-table .service-col-replicas { width: 4.5rem; }
 @container (max-width: 900px) {
