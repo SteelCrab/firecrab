@@ -25,6 +25,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Add an explicit CODE repository and AI AUTH verification API. Check the selected
+  GitHub login and exact branch, verify provider credentials, refresh ChatGPT
+  sessions without restoring removed accounts, and reject stale results (#556).
 - Add persistent CODE workspace configuration with GitHub and AI AUTH account
   references, operator-only APIs, revision checks, and current connection
   observations. This foundation allocates no runtime resources (#556).

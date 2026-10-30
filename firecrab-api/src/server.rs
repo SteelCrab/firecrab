@@ -936,6 +936,11 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/pipe/ai/connections", get(handlers::pipe_ai::list))
         .route(
+            "/api/code/workspaces/{id}/verify",
+            post(handlers::code_workspaces::verify)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
+        .route(
             "/api/pipe/ai/connections/{id}",
             axum::routing::put(handlers::pipe_ai::save).delete(handlers::pipe_ai::disconnect),
         )
@@ -2079,6 +2084,10 @@ mod pipe_auth_tests;
 #[cfg(test)]
 #[path = "server_code_workspaces_tests.rs"]
 mod code_workspaces_tests;
+
+#[cfg(test)]
+#[path = "server_code_verification_tests.rs"]
+mod code_verification_tests;
 
 #[cfg(test)]
 #[path = "server_pipe_ai_tests.rs"]

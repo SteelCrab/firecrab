@@ -16,6 +16,8 @@ use axum::{
     http::StatusCode,
 };
 use firecrab_api_types::{CodeWorkspace, CodeWorkspaceDelete, CodeWorkspaceWrite};
+mod verification;
+pub use verification::verify;
 
 fn operator(caller: Caller, id: RequestId) -> Result<(), AppError> {
     caller.operator().map_err(|_| {

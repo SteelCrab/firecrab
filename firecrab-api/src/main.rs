@@ -4,6 +4,7 @@ mod block_storage;
 mod bootstrap;
 mod ci_deploy;
 mod cluster;
+mod code_verification;
 mod console;
 mod console_replay;
 mod console_resize;

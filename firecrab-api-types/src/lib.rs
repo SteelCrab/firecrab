@@ -12,6 +12,8 @@ mod queues;
 pub use queues::*;
 mod code_workspaces;
 pub use code_workspaces::*;
+mod code_verification;
+pub use code_verification::*;
 mod pool;
 pub use pool::*;
 mod cluster;
