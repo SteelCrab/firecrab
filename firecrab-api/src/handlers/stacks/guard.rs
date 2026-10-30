@@ -56,12 +56,23 @@ pub(crate) async fn protect_resources(
     let _admission = state.stack_apply_admission.lock().await;
     let store = state.store.clone();
     match super::database(request_id, move || {
-        store.stack_resource_apply_busy(kind, id)
+        let busy = store.stack_resource_apply_busy(kind, id)?;
+        let ownership = store.iac_resource_owner(&firecrab_stack::ManagedResource {
+            kind: kind.as_str().into(),
+            id: id.to_string(),
+        })?;
+        Ok((
+            busy,
+            ownership
+                .owner
+                .is_some_and(|owner| owner.manager == firecrab_stack::Manager::Terraform),
+        ))
     })
     .await
     {
-        Ok(false) => next.run(Request::from_parts(parts, body)).await,
-        Ok(true) => AppError::conflict(
+        Ok((_, true)) => crate::handlers::iac::managed(request_id).into_response(),
+        Ok((false, false)) => next.run(Request::from_parts(parts, body)).await,
+        Ok((true, false)) => AppError::conflict(
             "stack_apply_busy",
             "wait for the owning stack apply before changing this resource",
             request_id,

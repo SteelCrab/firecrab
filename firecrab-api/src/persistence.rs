@@ -46,6 +46,7 @@ pub(crate) mod service_observation;
 mod stack_applies;
 mod stack_sources;
 pub(crate) use stack_sources::SourceTrigger;
+mod iac_owners;
 mod stacks;
 pub use registries::RegistryLogin;
 pub(crate) use schedules::ScheduleMutation;
@@ -510,6 +511,27 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    /// An admitted resource operation still owns the current authority.
+    #[error("IaC resource operation is active")]
+    IacResourceBusy,
+    /// The request was prepared for a different API endpoint.
+    #[error("IaC endpoint identity changed")]
+    IacEndpointConflict,
+    /// Ownership metadata is malformed or identifies an unknown resource kind.
+    #[error("invalid IaC owner request")]
+    InvalidIacOwner,
+    /// Another workflow already owns the exact resource.
+    #[error("IaC resource ownership conflicts")]
+    IacOwnershipConflict,
+    /// A release/reclaim happened after the caller observed ownership.
+    #[error("IaC ownership generation changed")]
+    StaleIacOwner,
+    /// A retry UUID belongs to a different immutable ownership request.
+    #[error("IaC operation identity conflicts")]
+    IacOperationIdentity,
+    /// The resource adapter does not yet implement safe ownership transfer.
+    #[error("IaC ownership adapter is not implemented")]
+    UnsupportedIacResource,
     /// CI credentials were revoked, expired or no longer match the service/repository.
     #[error("CI Deploy authorization is no longer valid")]
     CiDeployUnauthorized,
@@ -824,6 +846,7 @@ impl Store {
         conn.execute_batch(stack_applies::SCHEMA_SQL)?;
         conn.execute_batch(queues::SCHEMA)?;
         conn.execute_batch(stack_sources::SCHEMA_SQL)?;
+        iac_owners::initialize(&conn)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;

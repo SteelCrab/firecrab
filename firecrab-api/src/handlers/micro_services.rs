@@ -173,6 +173,20 @@ pub(crate) async fn ensure_stack_writer(
     request_id: Uuid,
 ) -> Result<(), AppError> {
     let store = state.store.clone();
+    let ownership = database(request_id, move || {
+        store.iac_resource_owner(&firecrab_stack::ManagedResource {
+            kind: "service".into(),
+            id: service.to_string(),
+        })
+    })
+    .await?;
+    if ownership
+        .owner
+        .is_some_and(|owner| owner.manager == firecrab_stack::Manager::Terraform)
+    {
+        return Err(crate::handlers::iac::managed(request_id));
+    }
+    let store = state.store.clone();
     if !database(request_id, move || {
         store.stack_service_mutation_allowed(service, operation)
     })

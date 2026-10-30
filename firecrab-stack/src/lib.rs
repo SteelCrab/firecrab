@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 mod apply;
 mod inputs;
 mod lifecycle;
+mod ownership;
 mod planning;
 mod source;
 pub use apply::{
@@ -19,6 +20,10 @@ pub use apply::{
 };
 pub use inputs::{PlanInputs, TemplatePin, TemplateSnapshot};
 pub use lifecycle::{LifecyclePolicy, VmDiskIdentity};
+pub use ownership::{
+    ChangeResourceOwner, ManagedResource, Manager, OwnershipOperation, ResourceOwner,
+    ResourceOwnership, resource_kinds,
+};
 pub use planning::{
     Action, Binding, Change, DeleteStackRequest, Inventory, Plan, RegisterStackRequest,
     ResourceKind, ServiceSnapshot, StackRecord, VmSnapshot, fingerprint, plan,

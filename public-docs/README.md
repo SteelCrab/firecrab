@@ -27,6 +27,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Connect apps with internal RabbitMQ message queues | [Queue](guides/queues.md) |
 | Compare Stack and Terraform coverage through v0.4.0 | [IaC contract and inventory](reference/iac.md) |
 | Validate a declarative YAML stack offline | [Stack validation](guides/stacks.md) |
+| Inspect and transfer IaC ownership | [Shared ownership](guides/iac-ownership.md) |
 | Register stack ownership and preview configuration changes | [Stack planning](guides/stack-planning.md) |
 | Apply YAML stacks and inspect durable execution status | [Stack apply](guides/stack-apply.md) |
 | Replace or prune owned resources with default VM disk retention | [Stack lifecycle policies](guides/stack-lifecycle.md) |

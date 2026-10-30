@@ -36,7 +36,17 @@ pub fn refresh(app: Shared) {
                         Err(error) => json!({"stack":stack,"error":error.to_string()}),
                     });
                 }
-                Ok(Value::Array(rows))
+                let ownership = api::request_detailed("GET", "/api/iac/owners", None, None).await;
+                let (owners, error) = match ownership {
+                    Ok(owners) if owners.is_array() => (owners, Value::Null),
+                    Err(error) if error.status == Some(404) => (Value::Array(vec![]), Value::Null),
+                    Err(error) => (Value::Null, Value::String(error.to_string())),
+                    _ => (
+                        Value::Null,
+                        Value::String("Invalid ownership response".into()),
+                    ),
+                };
+                Ok(json!({"stacks":rows,"owners":owners,"ownershipError":error}))
             }
             Ok(_) => Err("Invalid stack response".to_owned()),
             Err(error) => Err(error),
@@ -128,15 +138,30 @@ pub fn content(app: &App) -> String {
             Icon::Refresh
         )
     );
-    let rows = list(&app.resource);
+    let rows = list(if app.resource.is_array() {
+        &app.resource
+    } else {
+        &app.resource["stacks"]
+    });
+    let owners: Vec<_> = list(&app.resource["owners"])
+        .iter()
+        .filter(|record| text(&record["owner"], "manager") == "terraform")
+        .collect();
     if rows.is_empty() {
         if app.connection_error.is_empty() {
             out.push_str(&format!(
-                "<p class=\"empty-state\">{}</p>",
+                "<p class=\"{}\">{}</p>",
+                if owners.is_empty() {
+                    "empty-state"
+                } else {
+                    "stack-guidance"
+                },
                 tr(app, "No registered stacks.", "등록된 Stack이 없다.")
             ));
         }
-        return out;
+        if list(&app.resource["owners"]).is_empty() && app.resource["ownershipError"].is_null() {
+            return out;
+        }
     }
     out.push_str("<div class=\"stack-list\">");
     for row in rows {
@@ -216,6 +241,32 @@ pub fn content(app: &App) -> String {
         out.push_str("</section>");
     }
     out.push_str("</div>");
+    if let Some(error) = app.resource["ownershipError"].as_str() {
+        out.push_str(&format!(
+            "<p role=\"alert\">{}: {}</p>",
+            tr(
+                app,
+                "Ownership unavailable",
+                "소유권 정보를 불러오지 못했다"
+            ),
+            escape(error)
+        ));
+    }
+    if !owners.is_empty() {
+        out.push_str(&format!(
+            "<section class=\"wasm-card stack-card\"><h2>{}</h2>",
+            tr(app, "Terraform ownership", "Terraform 소유권")
+        ));
+        for record in owners {
+            out.push_str(&format!("<dl class=\"stack-status\"><dt>{}</dt><dd>{}</dd><dt>{}</dt><dd class=\"mono\">{}</dd><dt>{}</dt><dd class=\"mono\">{}</dd><dt>{}</dt><dd class=\"mono\">{}</dd><dt>{}</dt><dd>{}</dd></dl>",
+                tr(app,"Resource","리소스"),escape(text(&record["resource"],"kind")),
+                tr(app,"Resource ID","리소스 ID"),escape(text(&record["resource"],"id")),
+                tr(app,"Terraform address","Terraform 주소"),escape(text(&record["owner"],"key")),
+                tr(app,"State owner ID","상태 소유자 ID"),escape(text(&record["owner"],"id")),
+                tr(app,"Ownership generation","소유권 세대"),record["generation"].as_u64().unwrap_or(0)));
+        }
+        out.push_str("</section>");
+    }
     out
 }
 
@@ -235,6 +286,33 @@ mod tests {
         assert!(html.contains("&lt;repo&gt;"));
         assert!(html.contains("bad &lt;input&gt;"));
         assert!(html.contains("Guest disks and application data are not restored"));
+    }
+    #[test]
+    fn renders_terraform_ownership_without_registered_native_stacks() {
+        let app = App {
+            locale: "en".into(),
+            resource: json!({"stacks":[],"owners":[{
+            "resource":{"kind":"network","id":"owned-id"},"generation":7,
+            "owner":{"manager":"terraform","id":"owner-id","key":"firecrab_network.<app>"}
+        }],"ownershipError":null}),
+            ..App::default()
+        };
+        let html = content(&app);
+        assert!(html.contains("Terraform ownership"));
+        assert!(html.contains("firecrab_network.&lt;app&gt;"));
+        assert!(html.contains("owned-id"));
+        assert!(html.contains("Ownership generation"));
+    }
+    #[test]
+    fn reports_an_ownership_failure_without_claiming_no_managed_resources() {
+        let app = App {
+            locale: "en".into(),
+            resource: json!({"stacks":[],"owners":null,"ownershipError":"HTTP 500: <unavailable>"}),
+            ..App::default()
+        };
+        let html = content(&app);
+        assert!(html.contains("Ownership unavailable: HTTP 500: &lt;unavailable&gt;"));
+        assert!(!html.contains("Terraform ownership"));
     }
     #[test]
     fn distinguishes_missing_source_from_unavailable_source() {

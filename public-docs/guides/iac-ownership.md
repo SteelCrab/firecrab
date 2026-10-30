@@ -1,0 +1,127 @@
+# Shared IaC ownership
+
+This API is the stage 2 foundation of [#548](https://github.com/SteelCrab/firecrab/issues/548).
+It observes, adopts, transfers and releases ownership metadata without changing resource configuration or data.
+The full service contract remains in [the inventory](../reference/iac-services.md).
+
+## Current support
+
+Network, standalone VM and MicroService ownership can move between native Stack and a Terraform state owner.
+Protected controller/pool/builder VMs and resources with active operations cannot be adopted.
+Other inventory kind names are recognized, but transition returns `unsupported_iac_resource` until their validation/activity adapter exists.
+A Terraform ownership record does not mean the Terraform provider is implemented.
+The Stack dashboard lists Terraform-owned resources and their ownership generation.
+
+The selected endpoint is the host/controller scope.
+Use existing [mTLS](mtls.md) for remote requests.
+Request-ID and idempotency headers do not authorize resource mutation.
+Only operator API access can request ownership changes; delegated Sandbox callers retain their existing restrictions.
+
+## Observe
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/api/iac/identity` | Persistent endpoint UUID, inventory kinds and implemented transfer adapters |
+| GET | `/api/iac/owners` | Active native and Terraform ownership records |
+| GET | `/api/iac/owners/{kind}/{id}` | Current owner and generation; null owner does not assert resource existence |
+| GET | `/api/iac/owner-changes/{id}` | Immutable committed acknowledgement for an operation UUID, or 404 |
+| POST | `/api/iac/owners/transition` | Atomically change ownership and persist its acknowledgement |
+
+The CLI uses the same selected host and remote mTLS as other resource commands:
+
+```sh
+firecrab --host production iac identity
+firecrab --host production iac owners
+firecrab --host production iac owner --kind network --id RESOURCE_UUID
+firecrab --host production iac change-owner --file ownership.json
+firecrab --host production iac owner-change --id OPERATION_UUID
+```
+
+Retain the exact JSON request file to recover an unknown response safely.
+The CLI never generates a replacement operation UUID on retry.
+
+A resource identity is its exact UUID, not its display name.
+UUID aliases are normalized before looking up ownership.
+A native owner has `manager: "stack"`, the registration UUID in `id`, and its logical binding `key`.
+A Terraform owner has `manager: "terraform"`, a stable state-owner UUID, and the exact Terraform resource address in `key`.
+The address is supplied by the operator; this API does not inspect a Terraform state backend.
+The same Terraform owner/address cannot claim two resource identities.
+
+## Transfer
+
+Read the current owner and its `endpointId` first.
+The API rejects a request for a different endpoint with `409 iac_endpoint_mismatch`.
+The endpoint identity survives API restart and is independent of the URL or renewed TLS certificate.
+Retain a fresh non-nil operation UUID before sending the request.
+Replace every placeholder in this example with actual observed values:
+
+```json
+{
+  "operationId": "OPERATION_UUID",
+  "expectedEndpointId": "ENDPOINT_UUID",
+  "resource": {"kind": "network", "id": "RESOURCE_UUID"},
+  "expectedGeneration": 1,
+  "expectedOwner": {
+    "manager": "stack", "id": "STACK_UUID", "key": "app"
+  },
+  "owner": {
+    "manager": "terraform", "id": "STATE_OWNER_UUID",
+    "key": "firecrab_network.application"
+  }
+}
+```
+
+Success returns the new ownership observation.
+The resource UUID, configuration and application data remain unchanged.
+The old Stack binding is removed and its revision increases in the same transaction.
+Transferring back adds the exact binding to the selected registered Stack.
+Remove or update the old Git declaration before resuming automatic reconciliation for a transferred resource.
+A paused Git source still owns its remaining bindings.
+
+Set `owner` to null to release ownership while retaining the resource.
+A released record keeps its generation to reject stale release/reclaim requests.
+Legacy Stack bind/unbind/create/replace/prune paths update the same generation.
+A new owner must supply both the current exact owner and generation.
+A stale request returns `409 stale_iac_owner` and changes nothing.
+
+## Retry and conflicts
+
+An identical normalized request with the same operation UUID returns its original committed result.
+Changing the request while reusing that UUID returns `409 iac_operation_identity_conflict`.
+After a timeout, read the operation acknowledgement or repeat the exact request.
+A later transfer does not rewrite an older acknowledgement.
+Refresh current ownership before making another change.
+
+Queued/running Stack applies and active Git checks block conflicting ownership transitions.
+Direct VM/network/service edits cannot bypass Terraform ownership.
+Explicitly transfer or release ownership before using independent mutation APIs.
+Reads remain available.
+Unsupported kinds, missing resources, protected VMs and occupied logical addresses fail before journal admission.
+These metadata transactions do not implement the pending per-service deployment execution adapters.
+
+
+## Reproduce dashboard evidence
+
+Build the frontend and start the disposable test server from the repository root:
+
+```sh
+npm run build --prefix firecrab-frontend
+FIRECRAB_IAC_QA_INFO=/tmp/firecrab-iac-qa.json \
+FIRECRAB_IAC_QA_ASSETS="$PWD/firecrab-frontend/dist" \
+cargo test -p firecrab-api --bin firecrab-api \
+  handlers::iac::tests::iac_owner_browser_fixture -- --ignored --exact --nocapture
+```
+
+In another terminal, run the browser check before the ten-minute fixture deadline:
+
+```sh
+node firecrab-e2e/scripts/capture-iac-ownership.mjs \
+  /tmp/firecrab-iac-qa.json firecrab-e2e/test-results/iac
+# Stop and remove the temporary server/database after capture:
+touch /tmp/firecrab-iac-qa.stop
+```
+
+Install the existing E2E browser dependencies first; `FIRECRAB_IAC_QA_CHANNEL=chrome` selects installed Chrome.
+The check uses actual HTTP and compiled WASM, with isolated SQLite fixture records.
+It verifies direct-mutation rejection, the durable acknowledgement, desktop and mobile rendering.
+It does not boot Linux/KVM workloads or run a Terraform provider.

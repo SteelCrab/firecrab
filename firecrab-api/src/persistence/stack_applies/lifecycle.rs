@@ -229,7 +229,16 @@ impl Store {
                 && s.change.key == change.key
                 && s.replacement_for == Some(old)
         });
+        crate::persistence::iac_owners::native_binding_changed(&tx, change.kind.as_str(), old)?;
         let changed = if let Some(replacement) = replacement {
+            crate::persistence::iac_owners::native_binding_changed(
+                &tx,
+                change.kind.as_str(),
+                replacement
+                    .change
+                    .resource_id
+                    .ok_or(PersistenceError::StackApplyIdentity)?,
+            )?;
             tx.execute("UPDATE stack_bindings SET resource_id=?1 WHERE stack_id=?2 AND kind=?3 AND logical_key=?4 AND resource_id=?5",
                 params![replacement.change.resource_id.ok_or(PersistenceError::StackApplyIdentity)?.to_string(),job.status.stack_id.to_string(),change.kind.as_str(),change.key,old.to_string()])?
         } else {

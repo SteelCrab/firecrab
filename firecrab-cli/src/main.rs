@@ -9,6 +9,7 @@ mod doctor;
 #[cfg(test)]
 mod host_api_tests;
 mod hosts;
+mod iac;
 mod image;
 #[cfg(target_os = "linux")]
 mod info;
@@ -53,6 +54,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Observe and explicitly transfer shared Stack/Terraform ownership metadata.
+    Iac {
+        #[command(subcommand)]
+        command: iac::Command,
+    },
     /// Manage authenticated cluster hosts and durable VM placement.
     Cluster {
         #[command(subcommand)]
@@ -196,6 +202,11 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
+        Command::Iac { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                iac::run(client, command)
+            })
+        }
         Command::Cluster { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 cluster::run(client, command)

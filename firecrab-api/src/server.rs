@@ -207,6 +207,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         ));
 
     let rest = Router::new()
+        .route("/api/iac/identity", get(handlers::iac::identity))
+        .route("/api/iac/owners", get(handlers::iac::owners))
+        .route("/api/iac/owner-changes/{id}", get(handlers::iac::operation))
+        .route("/api/iac/owners/{kind}/{id}", get(handlers::iac::owner))
+        .route(
+            "/api/iac/owners/transition",
+            post(handlers::iac::change_owner),
+        )
         .route(
             "/api/stacks",
             get(handlers::stacks::list).post(handlers::stacks::register),

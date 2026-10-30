@@ -33,17 +33,7 @@ impl Store {
         kind: ResourceKind,
         resource: Uuid,
     ) -> Result<bool, PersistenceError> {
-        Ok(self.lock().query_row(
-            "SELECT EXISTS(SELECT 1 FROM stack_applies a
-             WHERE a.state IN ('queued','running') AND (
-                 EXISTS(SELECT 1 FROM stack_bindings b
-                        WHERE b.stack_id=a.stack_id AND b.kind=?1 AND b.resource_id=?2)
-                 OR EXISTS(SELECT 1 FROM stack_apply_reservations r
-                           WHERE r.operation_id=a.operation_id AND r.kind=?1 AND r.resource_id=?2)
-             ))",
-            params![kind.as_str(), resource.to_string()],
-            |row| row.get(0),
-        )?)
+        resource_apply_busy(&self.lock(), kind, resource)
     }
 
     /// Recover the newest accepted content pin for this exact bound VM UUID.
@@ -93,6 +83,9 @@ impl Store {
         operation: Option<Uuid>,
     ) -> Result<bool, PersistenceError> {
         let conn = self.lock();
+        if super::iac_owners::terraform_owned(&conn, "service", service)? {
+            return Ok(false);
+        }
         let owner: Option<String> = conn
             .query_row(
                 "SELECT stack_id FROM stack_bindings WHERE kind='service' AND resource_id=?1",
@@ -133,7 +126,11 @@ impl Store {
         &self,
         service: Uuid,
     ) -> Result<bool, PersistenceError> {
-        Ok(!self.lock().query_row("SELECT EXISTS(SELECT 1 FROM stack_applies a JOIN stack_bindings b ON a.stack_id=b.stack_id WHERE b.kind='service' AND b.resource_id=?1 AND a.state IN ('queued','running'))", [service.to_string()], |r| r.get::<_, bool>(0))?)
+        let conn = self.lock();
+        if super::iac_owners::terraform_owned(&conn, "service", service)? {
+            return Ok(false);
+        }
+        Ok(!conn.query_row("SELECT EXISTS(SELECT 1 FROM stack_applies a JOIN stack_bindings b ON a.stack_id=b.stack_id WHERE b.kind='service' AND b.resource_id=?1 AND a.state IN ('queued','running'))", [service.to_string()], |r| r.get::<_, bool>(0))?)
     }
 
     /// Delete empty metadata atomically. Never release bindings or delete host resources.
@@ -247,6 +244,7 @@ impl Store {
         if owner {
             return Err(PersistenceError::StackConflict);
         }
+        super::iac_owners::native_binding_changed(&tx, binding.kind.as_str(), binding.resource_id)?;
         tx.execute("INSERT INTO stack_bindings (stack_id, kind, logical_key, resource_id) VALUES (?1, ?2, ?3, ?4)", params![stack.id.to_string(), binding.kind.as_str(), binding.key, binding.resource_id.to_string()])?;
         tx.execute(
             "UPDATE stacks SET revision = revision + 1 WHERE id = ?1",
@@ -281,6 +279,7 @@ impl Store {
             return Err(PersistenceError::StackConflict);
         }
         super::stack_applies::ensure_idle(&tx, stack.id)?;
+        super::iac_owners::native_binding_changed(&tx, binding.kind.as_str(), binding.resource_id)?;
         tx.execute("DELETE FROM stack_bindings WHERE stack_id = ?1 AND kind = ?2 AND logical_key = ?3 AND resource_id = ?4", params![stack.id.to_string(), binding.kind.as_str(), binding.key, binding.resource_id.to_string()])?;
         tx.execute(
             "UPDATE stacks SET revision = revision + 1 WHERE id = ?1",
@@ -290,6 +289,24 @@ impl Store {
         tx.commit()?;
         Ok(updated)
     }
+}
+
+pub(super) fn resource_apply_busy(
+    conn: &Connection,
+    kind: ResourceKind,
+    resource: Uuid,
+) -> Result<bool, PersistenceError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM stack_applies a
+             WHERE a.state IN ('queued','running') AND (
+                 EXISTS(SELECT 1 FROM stack_bindings b
+                        WHERE b.stack_id=a.stack_id AND b.kind=?1 AND b.resource_id=?2)
+                 OR EXISTS(SELECT 1 FROM stack_apply_reservations r
+                           WHERE r.operation_id=a.operation_id AND r.kind=?1 AND r.resource_id=?2)
+             ))",
+        params![kind.as_str(), resource.to_string()],
+        |row| row.get(0),
+    )?)
 }
 
 pub(super) fn read_stack(

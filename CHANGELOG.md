@@ -25,6 +25,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Add generation-checked Stack/Terraform ownership transfer for networks,
+  standalone VMs and services, with persistent endpoint identity, durable retry
+  acknowledgements, mTLS CLI commands and dashboard visibility. Other service adapters and the
+  Terraform provider remain tracked in #548.
 - Define the IaC coverage contract for all services shipped through v0.4.0,
   including controller, Pipe and Sandbox configuration. A frozen API inventory
   and CI check track missing Stack and Terraform coverage without claiming it

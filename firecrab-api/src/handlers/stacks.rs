@@ -243,6 +243,13 @@ pub(crate) async fn database<T: Send + 'static>(
     operation: impl FnOnce() -> Result<T, PersistenceError> + Send + 'static,
 ) -> Result<T, AppError> {
     tokio::task::spawn_blocking(operation).await.map_err(|_| AppError::internal(request_id))?.map_err(|error| match error {
+        PersistenceError::IacResourceBusy => AppError::conflict("iac_resource_busy", "wait for the current resource operation before transferring ownership",request_id),
+        PersistenceError::IacEndpointConflict => AppError::conflict("iac_endpoint_mismatch", "ownership request belongs to a different API endpoint", request_id),
+        PersistenceError::InvalidIacOwner => AppError::new(StatusCode::BAD_REQUEST, "invalid_iac_owner", "provide valid resource, owner and operation identities", request_id),
+        PersistenceError::UnsupportedIacResource => AppError::new(StatusCode::BAD_REQUEST, "unsupported_iac_resource", "this resource adapter does not yet support safe ownership transfer", request_id),
+        PersistenceError::IacOwnershipConflict => AppError::conflict("iac_ownership_conflict", "resource ownership conflicts; inspect the exact current owner", request_id),
+        PersistenceError::StaleIacOwner => AppError::conflict("stale_iac_owner", "read the current owner and generation before changing ownership", request_id),
+        PersistenceError::IacOperationIdentity => AppError::conflict("iac_operation_identity_conflict", "operation UUID requires the same normalized ownership request", request_id),
         PersistenceError::MissingStack | PersistenceError::MissingStackSource => AppError::not_found(request_id),
         PersistenceError::StaleStackSource => AppError::conflict("stale_stack_source", "read the current source generation before updating or checking it", request_id),
         PersistenceError::StackSourceBusy => AppError::conflict("stack_source_busy", "wait for the active Git check before changing or deleting its configuration", request_id),

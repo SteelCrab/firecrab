@@ -123,6 +123,7 @@ impl Store {
             if id.is_nil() || !firecrab_stack::logical_name(&change.key) {
                 return Err(PersistenceError::StackApplyIdentity);
             }
+            super::iac_owners::native_binding_changed(&tx, change.kind.as_str(), id)?;
             tx.execute("INSERT INTO stack_bindings (stack_id,kind,logical_key,resource_id) VALUES (?1,?2,?3,?4)",
                 params![current.id.to_string(), change.kind.as_str(), change.key, id.to_string()])?;
         }
