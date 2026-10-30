@@ -36,6 +36,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
+- Keep HTTP GET failover available when an upstream exits after a long response
+  wait. Bound retry attempts by the route's peer count and retain the existing
+  protection against replaying sent POST/PATCH requests (#552).
 - Reject direct VM and network mutations while their owning Stack apply is
   queued or running. Existing bindings and reserved create/replacement IDs
   are protected; reads and terminal-operation recovery remain available (#548).
