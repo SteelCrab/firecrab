@@ -742,3 +742,63 @@ async fn sandbox_project_crud_blocks_active_work_and_preserves_borrowed_resource
     assert!(f.state.store.sandbox_task(task).unwrap().is_none());
     assert_eq!(f.provider.requests.lock().unwrap().len(), requests);
 }
+
+#[tokio::test]
+async fn service_security_explanation_sends_only_aggregate_evidence() {
+    use crate::persistence::service_logs::InputLog;
+    use firecrab_api_types::{MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec};
+
+    let f = fixture().await;
+    let connection = connect(&f, "openai").await;
+    verify(&f, connection, false).await;
+    f.provider.requests.lock().unwrap().clear();
+    let service = Uuid::new_v4();
+    let deployment = Uuid::new_v4();
+    let vm = Uuid::new_v4();
+    let spec: MicroServiceSpec = serde_json::from_value(json!({
+        "name":"orders", "image":"ghcr.io/team/orders:v1", "port":8080, "ram":128, "cpu":1
+    }))
+    .unwrap();
+    f.state
+        .store
+        .insert_micro_service(&MicroServiceResponse {
+            id: service,
+            spec: spec.clone(),
+        })
+        .unwrap();
+    let saved: MicroServiceDeployment = serde_json::from_value(json!({
+        "id":deployment,"serviceId":service,"phase":"running","spec":spec,
+        "request":{"hostPort":0},"digest":null,"log":[],"error":null,
+        "instances":[{"vmId":vm,"ipv4":"172.30.0.5","hostPort":18080,"state":"running","healthy":true}]
+    })).unwrap();
+    f.state.store.save_service_deployment(&saved).unwrap();
+    let selection = json!({"connectionId":connection,"model":"fixture-model"});
+    let endpoint = format!("/api/service-security/{service}/analysis");
+    assert_eq!(
+        call(&f.app, "POST", &endpoint, selection.clone()).await.0,
+        StatusCode::CONFLICT
+    );
+    assert!(f.provider.requests.lock().unwrap().is_empty());
+    let input = InputLog {
+        sequence: 1,
+        timestamp: chrono::Utc::now().timestamp_millis(),
+        stream: "stdout".into(),
+        message: "{\"status\":403,\"path\":\"/private-secret\"}\n".repeat(10),
+    };
+    f.state
+        .store
+        .append_service_logs(service, (vm, Uuid::new_v4()), 1, "active", false, &[input])
+        .unwrap();
+    let (status, response) = call(&f.app, "POST", &endpoint, selection).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(response["serviceId"], service.to_string());
+    assert_eq!(response["deploymentId"], deployment.to_string());
+    let requests = f.provider.requests.lock().unwrap();
+    let payload = requests.last().unwrap().to_string();
+    assert!(payload.contains("repeated_access_denials"));
+    assert!(!payload.contains("private-secret"));
+    assert!(!payload.contains("172.30.0.5"));
+    assert!(!payload.contains("sandbox-private-key"));
+    assert!(!payload.contains("ghcr.io/team/orders"));
+    assert!(!payload.contains("Firecrab AI Sandbox"));
+}

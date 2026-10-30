@@ -1,4 +1,9 @@
 //! Operator view of deployed service security coverage.
+
+mod activity;
+mod analysis;
+#[allow(dead_code)]
+mod cve;
 use axum::{Extension, Json, extract::State, http::StatusCode};
 use serde::Serialize;
 use uuid::Uuid;
@@ -16,6 +21,8 @@ pub(crate) struct Service {
     deployment_id: Uuid,
     digest: Option<String>,
     replicas: usize,
+    signals: Vec<activity::Signal>,
+    sampled_records: usize,
 }
 
 #[derive(Serialize)]
@@ -49,12 +56,22 @@ pub(crate) async fn get(
                 continue;
             }
             if let Some(deployment) = store.service_deployment(service.id)? {
+                let instances = deployment
+                    .instances
+                    .iter()
+                    .map(|instance| instance.vm_id.to_string())
+                    .collect();
+                let logs = store.service_logs(service.id)?;
+                let (signals, sampled_records) =
+                    activity::detect(&logs, &instances, chrono::Utc::now());
                 services.push(Service {
                     id: service.id,
                     name: deployment.spec.name,
                     deployment_id: deployment.id,
                     digest: deployment.digest,
                     replicas: deployment.instances.len(),
+                    signals,
+                    sampled_records,
                 });
             }
         }
@@ -64,8 +81,8 @@ pub(crate) async fn get(
     Ok(Json(Coverage {
         services,
         cve_scan: "unavailable",
-        threat_detection: "unavailable",
-        ai_analysis: "unavailable",
+        threat_detection: "limited",
+        ai_analysis: "on_demand",
     }))
 }
 
@@ -99,8 +116,8 @@ mod tests {
             .0;
         assert!(result.services.is_empty());
         assert_eq!(result.cve_scan, "unavailable");
-        assert_eq!(result.threat_detection, "unavailable");
-        assert_eq!(result.ai_analysis, "unavailable");
+        assert_eq!(result.threat_detection, "limited");
+        assert_eq!(result.ai_analysis, "on_demand");
     }
     #[tokio::test]
     async fn coverage_lists_deployment_identity_without_sensitive_configuration() {
@@ -167,3 +184,6 @@ mod tests {
         assert_eq!(result["cveScan"], "unavailable");
     }
 }
+
+/// Explicit, operator-requested explanation of aggregate activity.
+pub(crate) use analysis::explain;

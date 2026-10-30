@@ -4186,14 +4186,41 @@ fn service_security(app: &App) -> String {
     let title = tr(app, "Serverless security", "서버리스 보안");
     let explanation = tr(
         app,
-        "CVE scanning, threat detection, and AI analysis are not available yet. These services have not been scanned.",
-        "CVE 검사, 위협 탐지와 AI 분석을 아직 사용할 수 없다. 아래 서비스는 검사되지 않았다.",
+        "CVE scanning is not available yet. Activity detection covers recent structured application logs only. AI receives aggregate signals, not raw logs.",
+        "CVE 검사는 아직 사용할 수 없다. 활동 탐지는 최근 구조화된 애플리케이션 로그만 확인한다. AI에는 원본 로그가 아닌 집계 신호만 전달한다.",
     );
     let mut out = format!(
         "<section class=\"security-page\"><h2>{}</h2><p role=\"status\">{}</p>",
         escape(title),
         escape(explanation)
     );
+    if app.security.models.is_empty() {
+        out.push_str(&format!(
+            "<p>{} <a href=\"#/ai-sandbox\">{}</a></p>",
+            tr(
+                app,
+                "Verify an AI model to explain activity signals.",
+                "활동 신호를 분석하려면 AI 모델을 검증한다."
+            ),
+            tr(app, "AI Sandbox", "AI 샌드박스")
+        ));
+    } else {
+        out.push_str(&format!(
+            "<label for=\"security-model\">{}</label><select id=\"security-model\">",
+            tr(app, "AI model", "AI 모델")
+        ));
+        for model in &app.security.models {
+            let selection =
+                serde_json::json!({"connectionId": model["connectionId"], "model":model["model"]});
+            out.push_str(&format!(
+                "<option value=\"{}\">{} · {}</option>",
+                escape(&selection.to_string()),
+                escape(text(model, "account")),
+                escape(text(model, "name"))
+            ));
+        }
+        out.push_str("</select>");
+    }
     let services = list(&app.resource["services"]);
     if services.is_empty() {
         out.push_str(&format!(
@@ -4208,12 +4235,62 @@ fn service_security(app: &App) -> String {
         out.push_str(&format!("<div class=\"table-scroll\"><table class=\"wasm-table\"><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>", tr(app, "Service", "서비스"), tr(app, "Deployment", "배포"), tr(app, "Image digest", "이미지 식별값"), tr(app, "Coverage", "검사 상태")));
         for service in services {
             let digest = text(service, "digest");
+            let count = list(&service["signals"]).len();
+            let sampled = service["sampledRecords"].as_u64().unwrap_or(0);
+            let coverage = if sampled == 0 {
+                tr(
+                    app,
+                    "CVE not scanned · no recent structured access logs",
+                    "CVE 미검사 · 최근 구조화된 접근 로그 없음",
+                )
+                .to_owned()
+            } else if count == 0 {
+                tr(
+                    app,
+                    "CVE not scanned · no activity signal in sampled logs",
+                    "CVE 미검사 · 확인한 로그에 활동 신호 없음",
+                )
+                .to_owned()
+            } else {
+                format!(
+                    "{} · {}: {}",
+                    tr(app, "CVE not scanned", "CVE 미검사"),
+                    tr(app, "Activity signals", "활동 신호"),
+                    count
+                )
+            };
+            let mut details = escape(&coverage);
+            for signal in list(&service["signals"]) {
+                details.push_str(&format!(
+                    "<p>{}: {} · {}: {}<br>{}: {}<br>{}</p>",
+                    tr(app, "401/403 records", "401/403 기록"),
+                    signal["count"].as_u64().unwrap_or(0),
+                    tr(app, "Severity", "심각도"),
+                    escape(text(signal, "severity")),
+                    tr(app, "Source", "출처"),
+                    escape(text(signal, "source")),
+                    escape(text(signal, "recommendation"))
+                ));
+            }
+            let id = text(service, "id");
+            if count > 0 && !app.security.models.is_empty() {
+                details.push_str(&format!("<button type=\"button\" data-action=\"security-explain\" data-id=\"{}\" {}>{}</button>", escape(id), if app.security.busy { "disabled" } else { "" }, tr(app, "Explain with AI", "AI로 분석")));
+            }
+            if let Some(explanation) = app.security.explanations.get(id)
+                && text(explanation, "deploymentId") == text(service, "deploymentId")
+            {
+                details.push_str(&format!(
+                    "<p>{}: {}</p>",
+                    tr(app, "AI guidance", "AI 조치 안내"),
+                    escape(text(explanation, "text"))
+                ));
+            }
             out.push_str(&format!(
                 "<tr><td>{}</td><td>{}</td><td class=\"mono\">{}</td><td>{}</td></tr>",
                 escape(text(service, "name")),
                 escape(text(service, "deploymentId")),
                 escape(if digest.is_empty() { "—" } else { digest }),
-                tr(app, "Not scanned", "검사되지 않음")
+                details
             ));
         }
         out.push_str("</tbody></table></div>");
