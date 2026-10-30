@@ -768,7 +768,21 @@ pub fn content(app: &App) -> String {
             "<section class=\"wasm-details\"><h2>{}</h2>",
             crate::i18n::t("Available packages")
         ));
-        for image in list(&catalog["images"]) {
+        let packages: Vec<_> = list(&catalog["images"])
+            .iter()
+            .filter(|image| !default_placeholder(image))
+            .collect();
+        if packages.is_empty() {
+            html.push_str(&format!(
+                "<p>{}</p>",
+                tr(
+                    app,
+                    "No packages available.",
+                    "등록할 수 있는 패키지가 없다."
+                )
+            ));
+        }
+        for image in packages {
             html.push_str(&format!(
                 "<p>{} · {} {}</p>",
                 escape(text(image, "alias")),
@@ -793,11 +807,16 @@ pub fn content(app: &App) -> String {
     }
     if app.route == "images" {
         let ko = app.locale == "ko";
-        let installed = list(&app.resource).len();
-        let packages = app
-            .cache
-            .get("/api/microregistry")
-            .map_or(0, |catalog| list(&catalog["images"]).len());
+        let installed = list(&app.resource)
+            .iter()
+            .filter(|row| visible_image(row))
+            .count();
+        let packages = app.cache.get("/api/microregistry").map_or(0, |catalog| {
+            list(&catalog["images"])
+                .iter()
+                .filter(|image| !default_placeholder(image))
+                .count()
+        });
         let pulled = list(app.cache.get("pulled-images").unwrap_or(&Value::Null)).len();
         html = format!(
             "{}{html}",
@@ -1348,6 +1367,17 @@ fn storage_locations(app: &App) -> String {
     )
 }
 
+fn default_placeholder(image: &Value) -> bool {
+    matches!(
+        image["alias"].as_str(),
+        Some("alpine-3.24.1" | "rocky-9.8" | "ubuntu-26.04")
+    )
+}
+
+fn visible_image(image: &Value) -> bool {
+    !default_placeholder(image) || image["installed"] == true || image["packageStaged"] == true
+}
+
 fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> String {
     let rows = if resource.is_array() {
         list(resource)
@@ -1358,15 +1388,7 @@ fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> Stri
     };
     let rows: Vec<&Value> = rows
         .iter()
-        .filter(|row| {
-            app.route != "images"
-                || !matches!(
-                    row["alias"].as_str(),
-                    Some("alpine-3.24.1" | "rocky-9.8" | "ubuntu-26.04")
-                )
-                || row["installed"] == true
-                || row["packageStaged"] == true
-        })
+        .filter(|row| app.route != "images" || visible_image(row))
         .collect();
     if rows.is_empty() {
         let route = app.route.split('/').next().unwrap_or_default();
@@ -1401,8 +1423,8 @@ fn resource_table(app: &App, resource: &Value, columns: &[(&str, &str)]) -> Stri
                 tr(app, "No images installed", "설치된 이미지가 없습니다"),
                 tr(
                     app,
-                    "Register a base image from Packages, or import an OCI image.",
-                    "패키지에서 기본 이미지를 등록하거나 OCI 이미지를 가져옵니다.",
+                    "Import an OCI image or register an available package.",
+                    "OCI 이미지를 가져오거나 사용 가능한 패키지를 등록합니다.",
                 ),
                 String::new(),
             ),

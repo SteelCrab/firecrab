@@ -397,8 +397,15 @@ test('shell publishing uses latestContent and revision endpoints', async () => {
 });
 
 test('image registration and OCI import expose completion', async () => {
+  fixture.handlers.set('GET /api/microregistry', ({ send }) => send(200, { images: [
+    ...['alpine-3.24.1', 'rocky-9.8', 'ubuntu-26.04'].map(alias => ({ alias, version: `${alias}-v5` })),
+    { alias: 'ubuntu-24.04', version: '2026.09.1' },
+  ] }));
   await open('images');
   await page.getByRole('tab', { name: /Packages/ }).click();
+  await expect(page.getByRole('tab', { name: /Packages/ })).toContainText('1');
+  for (const alias of ['alpine-3.24.1', 'rocky-9.8', 'ubuntu-26.04']) await expect(page.locator('#content')).not.toContainText(alias);
+  await expect(page.locator('#content')).toContainText('ubuntu-24.04');
   await page.getByRole('button', { name: 'Register', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Progress', exact: true })).toBeVisible();
   assert.deepEqual(mutation('/api/microregistry/register').body, { alias: 'ubuntu-24.04', version: '2026.09.1' });
@@ -407,6 +414,17 @@ test('image registration and OCI import expose completion', async () => {
   await page.locator('#editor').getByRole('button', { name: 'Import', exact: true }).click();
   await expect(page.locator('#editor')).toHaveCount(0);
   assert.equal(mutation('/api/oci/import').body.reference, 'nginx:1.27');
+});
+
+test('package catalog with only the removed defaults shows an empty state', async () => {
+  fixture.handlers.set('GET /api/microregistry', ({ send }) => send(200, { images:
+    ['alpine-3.24.1', 'rocky-9.8', 'ubuntu-26.04'].map(alias => ({ alias, version: `${alias}-v5` })),
+  }));
+  await open('images');
+  await page.getByRole('tab', { name: /Packages/ }).click();
+  await expect(page.getByRole('tab', { name: /Packages/ })).toContainText('0');
+  await expect(page.locator('#content')).toContainText('No packages available.');
+  await expect(page.locator('#content').getByRole('button', { name: 'Register', exact: true })).toHaveCount(0);
 });
 
 test('kernel reload restores a running install and keeps long logs in a scrollable panel', async () => {
