@@ -231,8 +231,13 @@ test.describe("MicroService configuration @dashboard", () => {
       return route.fulfill({ json: deployment });
     });
     await openDeployForm(page);
-    await page.getByLabel("First host port", { exact: true }).fill("");
-    await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
+    const deploy = page.getByRole("button", { name: "Deploy and run", exact: true });
+    const port = page.getByLabel("First host port", { exact: true });
+    await expect(deploy).toBeEnabled();
+    await port.fill("");
+    await expect(port).toHaveValue("");
+    await expect(deploy).toBeEnabled();
+    await deploy.click();
     await expect(page.getByText("Available to apps in the same MicroNetwork.", { exact: true })).toBeVisible();
     await expect(page.locator("code").filter({ hasText: "http://orders.internal" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Open app", exact: true })).toHaveCount(0);

@@ -207,7 +207,7 @@ pub fn navigation_icon(name: &str) -> String {
         "stacks" => "m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5",
         "cluster" => "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
         "networks" => "M9 3h6v6H9zM3 15h6v6H3zM15 15h6v6h-6zM12 9v3M6 15v-3h12v3",
-        "security-groups" => {
+        "security" | "security-groups" => {
             "M12 3c3 2 6 3 8 3v6c0 5-5 8-8 10-3-2-8-5-8-10V6c2 0 5-1 8-3Zm-4 9 3 3 5-6"
         }
         "pipe" => "M3 7h18m-4-4 4 4-4 4M21 17H3m4-4-4 4 4 4",
@@ -535,7 +535,7 @@ pub fn page(app: &App) -> String {
         "storages" | "volumes" | "images" | "kernels" | "secrets" | "queues" => {
             tr(app, "Data", "데이터")
         }
-        "ai-sandbox" => "AI",
+        "ai-sandbox" | "security" => "AI",
         _ => tr(app, "System", "시스템"),
     };
     let meters = host_meters(app);
@@ -710,6 +710,7 @@ pub fn content(app: &App) -> String {
             crate::advanced::content(app)
         }
         "services" => services(app),
+        "security" => service_security(app),
         "stacks" => crate::stacks::content(app),
         "networks" => resource_table(
             app,
@@ -4179,4 +4180,44 @@ mod uptime_tests {
         assert_eq!(format_uptime(2 * 86_400 + 4 * 3600, false), "2 d 4 h");
         assert_eq!(format_uptime(2 * 86_400 + 4 * 3600, true), "2일 4시간");
     }
+}
+
+fn service_security(app: &App) -> String {
+    let title = tr(app, "Serverless security", "서버리스 보안");
+    let explanation = tr(
+        app,
+        "CVE scanning, threat detection, and AI analysis are not available yet. These services have not been scanned.",
+        "CVE 검사, 위협 탐지와 AI 분석을 아직 사용할 수 없다. 아래 서비스는 검사되지 않았다.",
+    );
+    let mut out = format!(
+        "<section class=\"security-page\"><h2>{}</h2><p role=\"status\">{}</p>",
+        escape(title),
+        escape(explanation)
+    );
+    let services = list(&app.resource["services"]);
+    if services.is_empty() {
+        out.push_str(&format!(
+            "<p>{}</p>",
+            tr(
+                app,
+                "No service deployment records.",
+                "서비스 배포 기록이 없다."
+            )
+        ));
+    } else {
+        out.push_str(&format!("<div class=\"table-scroll\"><table class=\"wasm-table\"><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>", tr(app, "Service", "서비스"), tr(app, "Deployment", "배포"), tr(app, "Image digest", "이미지 식별값"), tr(app, "Coverage", "검사 상태")));
+        for service in services {
+            let digest = text(service, "digest");
+            out.push_str(&format!(
+                "<tr><td>{}</td><td>{}</td><td class=\"mono\">{}</td><td>{}</td></tr>",
+                escape(text(service, "name")),
+                escape(text(service, "deploymentId")),
+                escape(if digest.is_empty() { "—" } else { digest }),
+                tr(app, "Not scanned", "검사되지 않음")
+            ));
+        }
+        out.push_str("</tbody></table></div>");
+    }
+    out.push_str("</section>");
+    out
 }
