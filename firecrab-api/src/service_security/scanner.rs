@@ -18,19 +18,35 @@ const RETRY_SECONDS: i64 = 60 * 60;
 /// Start one worker. Scans are serialized and never delay deployment.
 pub(crate) fn start(state: AppState) {
     tokio::spawn(async move {
+        let mut next_refresh = tokio::time::Instant::now();
+        let mut database_updated = None;
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
             cleanup_expired_credentials(Path::new("data/security-scanner"));
-            if scan_pass(&state).await.is_err() {
+            if tokio::time::Instant::now() >= next_refresh {
+                let executable =
+                    std::env::var_os("FIRECRAB_SECURITY_TRIVY").unwrap_or_else(|| "trivy".into());
+                if let Ok(updated) =
+                    refresh_database(Path::new(&executable), Path::new("data/security-scanner"))
+                        .await
+                {
+                    database_updated = Some(updated);
+                }
+                next_refresh = tokio::time::Instant::now() + Duration::from_secs(60 * 60);
+            }
+            if scan_pass(&state, database_updated).await.is_err() {
                 tracing::warn!("service security scan scheduling failed");
             }
         }
     });
 }
 
-async fn scan_pass(state: &AppState) -> Result<(), ()> {
+async fn scan_pass(
+    state: &AppState,
+    database_updated: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<(), ()> {
     let store = state.store.clone();
     let candidates = tokio::task::spawn_blocking(
         move || -> Result<Vec<_>, crate::persistence::PersistenceError> {
@@ -46,20 +62,11 @@ async fn scan_pass(state: &AppState) -> Result<(), ()> {
                     continue;
                 };
                 let existing = store.security_scan(service.id, deployment.id, digest)?;
-                let due = existing.as_ref().is_none_or(|scan| {
-                    if scan.status == "queued" {
-                        return true;
-                    }
-                    let interval = if scan.status == "complete" {
-                        RESCAN_SECONDS
-                    } else {
-                        RETRY_SECONDS
-                    };
-                    chrono::Utc::now()
-                        .timestamp()
-                        .saturating_sub(scan.scanned_at)
-                        >= interval
-                });
+                let due = scan_due(
+                    existing.as_ref(),
+                    chrono::Utc::now().timestamp(),
+                    database_updated,
+                );
                 if due {
                     candidates.push((service.id, deployment, existing));
                 }
@@ -107,6 +114,70 @@ async fn scan_pass(state: &AppState) -> Result<(), ()> {
         .map_err(|_| ())?;
     }
     Ok(())
+}
+
+fn scan_due(scan: Option<&Scan>, now: i64, updated: Option<chrono::DateTime<chrono::Utc>>) -> bool {
+    let Some(scan) = scan else {
+        return true;
+    };
+    if scan.status == "queued" {
+        return true;
+    }
+    if scan.status == "complete" {
+        if let (Some(updated), Some(scanned_db)) = (
+            updated,
+            scan.database_updated_at
+                .as_deref()
+                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok()),
+        ) && updated > scanned_db.with_timezone(&chrono::Utc)
+        {
+            return true;
+        }
+        now.saturating_sub(scan.scanned_at) >= RESCAN_SECONDS
+    } else {
+        now.saturating_sub(scan.scanned_at) >= RETRY_SECONDS
+    }
+}
+
+/// Refresh the shared vulnerability database independently of deployed images.
+async fn refresh_database(
+    executable: &Path,
+    root: &Path,
+) -> Result<chrono::DateTime<chrono::Utc>, &'static str> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(root).map_err(|_| "scanner_error")?;
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
+        .map_err(|_| "scanner_error")?;
+    let root = std::fs::canonicalize(root).map_err(|_| "scanner_error")?;
+    let home = tempfile::Builder::new()
+        .prefix("auth-")
+        .tempdir_in(&root)
+        .map_err(|_| "scanner_error")?;
+    let cache = root.join("cache");
+    let mut cmd = tokio::process::Command::new(executable);
+    cmd.env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", home.path())
+        .current_dir(home.path())
+        .args([
+            "image",
+            "--config",
+            "",
+            "--quiet",
+            "--no-progress",
+            "--download-db-only",
+            "--cache-dir",
+        ])
+        .arg(&cache)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let child = cmd.spawn().map_err(|_| "scanner_error")?;
+    output(child, 1024 * 1024).await?;
+    let updated = database_version(executable, home.path(), &cache).await?;
+    chrono::DateTime::parse_from_rfc3339(&updated)
+        .map(|time| time.with_timezone(&chrono::Utc))
+        .map_err(|_| "database_unavailable")
 }
 
 async fn scan_deployment(
@@ -244,11 +315,20 @@ async fn run(
     let report = output(child, MAX_REPORT).await?;
     let findings = super::cve::parse_report(&report, target).map_err(|_| "report_invalid")?;
     let limitations = super::cve::limitations(&report).map_err(|_| "report_invalid")?;
+    let updated = database_version(executable, private.path(), &cache).await?;
+    Ok((findings, updated, limitations))
+}
+
+async fn database_version(
+    executable: &Path,
+    home: &Path,
+    cache: &Path,
+) -> Result<String, &'static str> {
     let mut cmd = tokio::process::Command::new(executable);
     cmd.env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .env("HOME", private.path())
-        .current_dir(private.path())
+        .env("HOME", home)
+        .current_dir(home)
         .args(["version", "--config", "", "--format", "json", "--cache-dir"])
         .arg(cache)
         .stdout(Stdio::piped())
@@ -266,7 +346,7 @@ async fn run(
     if age > chrono::Duration::hours(48) || age < -chrono::Duration::minutes(5) {
         return Err("database_stale");
     }
-    Ok((findings, updated.into(), limitations))
+    Ok(updated.into())
 }
 
 async fn output(mut child: tokio::process::Child, limit: usize) -> Result<Vec<u8>, &'static str> {
@@ -305,6 +385,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn database_updates_and_new_requests_trigger_scans() {
+        let now = chrono::Utc::now();
+        let mut scan = Scan {
+            deployment_id: Uuid::new_v4(),
+            request_id: None,
+            digest: "sha256:test".into(),
+            replica_ids: vec![],
+            scanned_at: now.timestamp(),
+            status: "complete".into(),
+            findings: vec![],
+            limitations: vec![],
+            database_updated_at: Some((now - chrono::Duration::hours(1)).to_rfc3339()),
+        };
+        assert!(scan_due(None, now.timestamp(), None));
+        assert!(!scan_due(Some(&scan), now.timestamp(), None));
+        assert!(scan_due(Some(&scan), now.timestamp(), Some(now)));
+        assert!(scan_due(
+            Some(&scan),
+            now.timestamp() + RESCAN_SECONDS,
+            None
+        ));
+        scan.status = "queued".into();
+        assert!(scan_due(Some(&scan), now.timestamp(), None));
+        scan.status = "scanner_missing".into();
+        assert!(!scan_due(Some(&scan), now.timestamp(), Some(now)));
+        assert!(scan_due(Some(&scan), now.timestamp() + RETRY_SECONDS, None));
+    }
+
     #[tokio::test]
     async fn missing_scanner_is_not_a_clean_result_and_auth_is_removed() {
         let root = tempfile::tempdir().unwrap();
@@ -325,6 +434,9 @@ mod tests {
         let script = root.path().join("fake-trivy");
         std::fs::write(&script, r##"#!/bin/sh
 set -eu
+if [ "$1" = image ]; then
+  case "$*" in *--download-db-only*) exit 0;; esac
+fi
 if [ "$1" = version ]; then
   printf '{"VulnerabilityDB":{"UpdatedAt":"%s"}}' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   exit 0
@@ -336,6 +448,7 @@ printf '{"SchemaVersion":2,"ArtifactName":"%s","ArtifactType":"container_image",
 "##).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
         let work = root.path().join("work");
+        assert!(refresh_database(&script, &work).await.is_ok());
         let (findings, updated, _) = run(&script, &work, "ghcr.io/a/b@sha256:abc", &credential())
             .await
             .unwrap();
@@ -351,6 +464,11 @@ printf '{"SchemaVersion":2,"ArtifactName":"%s","ArtifactType":"container_image",
     async fn real_pinned_image_reports_known_cves() {
         let executable = std::env::var("FIRECRAB_TEST_TRIVY").unwrap();
         let root = std::env::var("FIRECRAB_TEST_TRIVY_ROOT").unwrap();
+        assert!(
+            refresh_database(Path::new(&executable), Path::new(&root))
+                .await
+                .is_ok()
+        );
         let target = "registry-1.docker.io/library/alpine@sha256:8fc3dacfb6d69da8d44e42390de777e48577085db99aa4e4af35f483eb08b989";
         let (findings, _, limitations) = run(
             Path::new(&executable),

@@ -8,6 +8,8 @@ import sys
 if len(sys.argv) > 1 and sys.argv[1] == "version":
     print(json.dumps({"VulnerabilityDB": {"UpdatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat()}}))
 elif len(sys.argv) > 1 and sys.argv[1] == "image":
+    if "--download-db-only" in sys.argv:
+        sys.exit(0)
     target = sys.argv[-1]
     if not target.startswith("ghcr.io/") or "@sha256:" not in target:
         sys.exit(2)
