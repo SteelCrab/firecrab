@@ -23,6 +23,9 @@
 .pipe-row-status { overflow-wrap: anywhere; }
 .props { grid-template-columns: minmax(6rem, 35%) minmax(0, 1fr); }
 .detail-top-actions { max-width: 75%; }
+.kernel-install { margin-top: 1rem; min-width: 0; }
+.kernel-install h3 { margin-bottom: .5rem; }
+.kernel-install-log { height: 12rem; max-height: 35vh; margin: 0; padding: .625rem; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-subtle); font: .583333rem/1.65 var(--mono); white-space: pre; }
 
 @media (max-width: 1199px) {
   .form-section { grid-template-columns: minmax(0, 1fr); gap: 1rem; }

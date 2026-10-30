@@ -722,7 +722,7 @@ pub fn content(app: &App) -> String {
             &app.resource,
             &[
                 ("version", "Version"),
-                ("installed", "Installed"),
+                ("installed", "Status"),
                 ("architecture", "Architecture"),
             ],
         ),
@@ -1289,6 +1289,9 @@ fn table_cell(app: &App, row: &Value, key: &str, first: bool) -> String {
         }
         ("storages", "name") => name_cell(text(row, "name"), text(row, "path"), "", false),
         (_, "installed") => {
+            if app.route == "kernels" {
+                return escape(crate::i18n::t(crate::kernels::status(app, row)));
+            }
             if row[key] == true {
                 status_dot("ok", if ko { "설치됨" } else { "Installed" })
             } else {
@@ -1998,14 +2001,22 @@ pub fn detail_actions(app: &App, data: &Value) -> String {
         }
         "kernels" => {
             let version = encode(text(data, "version"));
-            out.push_str(&icon_request_with(
+            let install = icon_request_with(
                 "Build kernel",
                 "POST",
                 &format!("/api/kernels/{version}/install"),
                 Value::Null,
                 Icon::Download,
-            ));
-            out.push_str(&icon_request("Delete", &format!("/api/kernels/{version}")));
+            );
+            let enabled = crate::kernels::can_install(app, data);
+            out.push_str(&if enabled {
+                install
+            } else {
+                install.replacen("<button ", "<button disabled ", 1)
+            });
+            if data["installed"] == true && enabled && data["inUse"] != true {
+                out.push_str(&icon_request("Delete", &format!("/api/kernels/{version}")));
+            }
         }
         "pipe/auth" => {
             if text(data, "provider") == "firecrab" {
@@ -3228,7 +3239,16 @@ mod icon_button_tests {
             ),
             ("kernels", vec!["Build kernel", "Delete"]),
         ] {
-            let html = detail_actions(&app(route), &data);
+            let mut state = app(route);
+            let mut data = data.clone();
+            if route == "kernels" {
+                data["installed"] = true.into();
+                state
+                    .kernels
+                    .installs
+                    .insert("1".into(), json!({"status":"succeeded"}));
+            }
+            let html = detail_actions(&state, &data);
             for label in labels {
                 assert_icon_only(&html, label);
             }

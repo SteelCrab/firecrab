@@ -6,6 +6,7 @@ mod deploy;
 mod details;
 mod forms;
 mod i18n;
+mod kernels;
 mod manager;
 mod model;
 mod notes;
@@ -66,6 +67,7 @@ struct App {
     deploy: deploy::State,
     observability: observability::State,
     job: Option<(String, Value)>,
+    kernels: kernels::State,
     workflows: workflows::State,
     databases: databases::State,
     advanced: advanced::State,
@@ -287,6 +289,13 @@ fn panel_body() -> Option<Element> {
         .flatten()
 }
 fn render_detail(app: &Shared) {
+    let kernel_log = element("kernel-install-log").map(|log| {
+        (
+            log.scroll_top(),
+            log.scroll_left(),
+            log.scroll_height() - log.client_height() - log.scroll_top() <= 24,
+        )
+    });
     let more_open = element("vm-more-actions").is_some_and(|el| el.has_attribute("open"));
     let scroll_top = panel_body().map_or(0, |body| body.scroll_top());
     let focused = document()
@@ -352,6 +361,11 @@ fn render_detail(app: &Shared) {
                 && let Some(body) = panel_body()
             {
                 body.set_scroll_top(scroll_top);
+            }
+            if let Some(log) = element("kernel-install-log") {
+                let (top, left, follow) = kernel_log.filter(|_| same_view).unwrap_or((0, 0, true));
+                log.set_scroll_top(if follow { log.scroll_height() } else { top });
+                log.set_scroll_left(left);
             }
         } else {
             panel.set_inner_html("");
@@ -850,6 +864,7 @@ fn refresh(app: Shared) {
             }
         }
         drop(state);
+        kernels::refresh(&app);
         if selection_gone {
             close_detail(&app);
         }
@@ -1081,6 +1096,7 @@ fn navigate(app: &Shared) {
     state.connection_error.clear();
     state.notice.clear();
     state.job = None;
+    state.kernels = kernels::State::default();
     state.query.clear();
     state.filter = "all".into();
     open_image_import_on_entry(&mut state);
@@ -2053,6 +2069,17 @@ fn mutate(
     spawn_local(async move {
         let result =
             api::request_detailed(&method, &path, body.as_ref(), controller.as_deref()).await;
+        let result = match result {
+            Err(error)
+                if method == "POST"
+                    && kernels::install_version(&path).is_some()
+                    && error.status == Some(409)
+                    && error.code.as_deref() == Some("kernel_install_in_progress") =>
+            {
+                api::request_detailed("GET", &path, None, controller.as_deref()).await
+            }
+            result => result,
+        };
         let succeeded = result.is_ok();
         let mut state = app.borrow_mut();
         if state.generation != generation {
@@ -2235,7 +2262,10 @@ fn mutate(
                 } else {
                     None
                 };
-                if let Some(path) = job_path {
+                if let Some(version) = kernels::install_version(&path) {
+                    state.kernels.installs.insert(version.into(), value);
+                    state.notice.clear();
+                } else if let Some(path) = job_path {
                     state.job = Some((path, value));
                 }
                 if let Some(route) = return_route.filter(|route| *route != state.route) {

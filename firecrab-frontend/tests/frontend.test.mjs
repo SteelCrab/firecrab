@@ -409,6 +409,69 @@ test('image registration and OCI import expose completion', async () => {
   assert.equal(mutation('/api/oci/import').body.reference, 'nginx:1.27');
 });
 
+test('kernel reload restores a running install and keeps long logs in a scrollable panel', async () => {
+  fixture.state.kernels = [{ version: '7.2.13', architecture: 'aarch64', installed: false, inUse: false }];
+  let phase = 'running';
+  let log = Array.from({ length: 300 }, (_, i) => `[12:00:00] CC kernel/source-${i}.c`).join('\n');
+  fixture.handlers.set('GET /api/kernels/7.2.13/install', ({ send }) => send(200, {
+    version: '7.2.13', status: phase, log, startedAtMs: 1000, downloadedBytes: 160478200,
+  }));
+  await open('kernels');
+  await expect(page.getByRole('cell', { name: 'Installing kernel', exact: true })).toBeVisible();
+  await page.getByRole('cell', { name: '7.2.13', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Build kernel', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole('cell', { name: 'Installing kernel', exact: true })).toBeVisible();
+  await page.getByRole('cell', { name: '7.2.13', exact: true }).click();
+  const output = page.locator('#kernel-install-log');
+  await expect(output).toHaveText(log);
+  assert.equal(fixture.requests.filter(r => r.method === 'POST' && r.path.endsWith('/install')).length, 0);
+  await expect(page.locator('#content .wasm-details')).toHaveCount(0);
+  assert.equal(await output.evaluate(el => getComputedStyle(el).overflowY), 'auto');
+  assert.ok(await output.evaluate(el => el.clientHeight <= innerHeight * .35 && el.scrollHeight > el.clientHeight));
+  const box = await output.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const bottom = await output.evaluate(el => el.scrollTop);
+  await page.mouse.wheel(0, -300);
+  await expect.poll(() => output.evaluate(el => el.scrollTop)).toBeLessThan(bottom);
+  const reading = await output.evaluate(el => el.scrollTop);
+  log += '\n[12:01:00] POLL_UPDATE';
+  await expect(output).toContainText('POLL_UPDATE');
+  assert.equal(await output.evaluate(el => el.scrollTop), reading);
+  phase = 'succeeded';
+  fixture.state.kernels[0].installed = true;
+  await expect(page.getByRole('cell', { name: 'Installed', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Delete', exact: true })).toBeEnabled();
+});
+
+test('kernel install recovers an already-running conflict and gates deletion by installed and in-use state', async () => {
+  const kernel = { version: '7.2.12', architecture: 'aarch64', installed: false, inUse: false };
+  fixture.state.kernels = [kernel];
+  let status = 'idle';
+  fixture.handlers.set('GET /api/kernels/7.2.12/install', ({ send }) => send(200, {
+    version: kernel.version, status, log: status === 'idle' ? '' : 'Existing build continues\nCC init/main.c', startedAtMs: 1000,
+  }));
+  fixture.handlers.set('POST /api/kernels/7.2.12/install', ({ send }) => {
+    status = 'running';
+    send(409, { error: { code: 'kernel_install_in_progress', message: 'a kernel install is already running for this version' } });
+  });
+  await open('kernels');
+  await page.getByRole('cell', { name: kernel.version, exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Build kernel', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Build kernel', exact: true }).click();
+  await expect(page.locator('#kernel-install-log')).toContainText('Existing build continues');
+  await expect(page.getByRole('button', { name: 'Build kernel', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0);
+  await expect(page.locator('#root')).not.toContainText('HTTP 409');
+  assert.equal(fixture.requests.filter(r => r.method === 'POST' && r.path.endsWith('/install')).length, 1);
+  kernel.installed = true; kernel.inUse = true; status = 'succeeded';
+  await expect(page.getByRole('cell', { name: 'Installed', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Build kernel', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0);
+});
+
 test('Pipe credentials are sent to the API and never persisted locally', async () => {
   await open('pipe/auth');
   await page.getByRole('button', { name: 'Connect GitHub', exact: true }).click();

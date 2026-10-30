@@ -290,6 +290,8 @@ pub fn panel(app: &App) -> String {
             ));
         } else if app.route == "storages" {
             out.push_str(&storage_location(data));
+        } else if app.route == "kernels" {
+            out.push_str(&crate::kernels::panel(app, data));
         } else if let Some(body) = crate::advanced::detail(app, data) {
             out.push_str(&body);
         } else {
