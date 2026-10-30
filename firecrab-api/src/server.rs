@@ -953,6 +953,15 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         ));
 
     let observability = Router::new()
+        .route("/api/service-security", get(crate::service_security::get))
+        .route(
+            "/api/service-security/{id}/scan",
+            post(crate::service_security::rescan),
+        )
+        .route(
+            "/api/service-security/{id}/analysis",
+            post(crate::service_security::explain),
+        )
         .route(
             "/api/micro-services/{id}/observability",
             get(crate::service_observation::get),

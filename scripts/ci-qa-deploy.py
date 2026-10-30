@@ -99,6 +99,10 @@ esac
 printf 'fixture-cgi-%s\\n' "$OBS_ID" >&2
 printf 'Content-Type: text/plain\\r\\n\\r\\nobserved\\n'
 """,
+            "security-activity": """#!/bin/sh
+for n in 1 2 3 4 5 6 7 8 9 10; do printf '{"status":403,"token":"qa-secret-log"}\\n' >&2; done
+printf 'Content-Type: text/plain\\r\\n\\r\\nsecurity-signal\\n'
+""",
             "otel-environment": """#!/bin/sh
 printf 'Content-Type: text/plain\\r\\n\\r\\n%s|%s|%s\\n' "$OTEL_EXPORTER_OTLP_ENDPOINT" "$OTEL_EXPORTER_OTLP_PROTOCOL" "$OTEL_SERVICE_NAME"
 """,

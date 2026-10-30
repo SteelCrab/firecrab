@@ -11,6 +11,7 @@ mod notes;
 mod observability;
 mod render;
 mod sandbox;
+mod security;
 mod stacks;
 mod terminal;
 mod updates;
@@ -69,6 +70,7 @@ struct App {
     databases: databases::State,
     advanced: advanced::State,
     sandbox: sandbox::State,
+    security: security::State,
     volumes: volumes::State,
     console: Option<terminal::State>,
     console_retry: Option<Closure<dyn FnMut()>>,
@@ -594,6 +596,7 @@ fn endpoint(route: &str) -> &'static str {
         "security-groups" => "/api/security-groups",
         "secrets" => "/api/secrets",
         "services" => "/api/micro-services",
+        "security" => "/api/service-security",
         "networks" => "/api/micro-networks",
         "storages" => "/api/micro-storages",
         "volumes" => "/api/microblockstorage",
@@ -634,6 +637,9 @@ fn load_route(app: Shared) {
         return;
     }
     refresh(app.clone());
+    if route == "security" {
+        security::load(&app);
+    }
     if route == "cluster" {
         advanced::cluster::restore(&app);
     }
@@ -1565,6 +1571,9 @@ fn close_detail(app: &Shared) {
     render_content(app);
 }
 fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
+    if security::dispatch(&app, action, id) {
+        return;
+    }
     if observability::dispatch(&app, action) {
         return;
     }

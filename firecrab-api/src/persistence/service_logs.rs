@@ -154,6 +154,7 @@ impl Store {
         if !owner_exists {
             return Ok(());
         }
+        let release = super::security_activity::release_for_replica(&tx, service, vm)?;
         let mut gap = lost;
         let mut added = 0;
         for record in records {
@@ -170,7 +171,21 @@ impl Store {
             }
             let (message, clipped) = bounded(&record.message);
             gap |= clipped;
-            added += tx.execute("INSERT OR IGNORE INTO service_observation_logs(service_id,vm_id,runtime_id,sequence,timestamp_ms,stream,message) VALUES (?1,?2,?3,?4,?5,?6,?7)", params![service_id, vm_id, runtime_id, sequence, record.timestamp, record.stream, message])?;
+            let inserted = tx.execute("INSERT OR IGNORE INTO service_observation_logs(service_id,vm_id,runtime_id,sequence,timestamp_ms,stream,message) VALUES (?1,?2,?3,?4,?5,?6,?7)", params![service_id, vm_id, runtime_id, sequence, record.timestamp, record.stream, message])?;
+            added += inserted;
+            if inserted > 0
+                && let Some(release) = release
+            {
+                super::security_activity::record(
+                    &tx,
+                    service,
+                    release,
+                    vm,
+                    record.timestamp,
+                    &message,
+                    now,
+                )?;
+            }
         }
         let previous_loss: Option<i64> = tx.query_row("SELECT loss_at FROM service_observation_cursors WHERE service_id=?1 AND vm_id=?2 AND runtime_id=?3", params![service_id, vm_id, runtime_id], |row| row.get(0)).optional()?.flatten();
         tx.execute("INSERT INTO service_observation_cursors(service_id,vm_id,runtime_id,sequence,status,loss_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(service_id,vm_id,runtime_id) DO UPDATE SET sequence=MAX(sequence,excluded.sequence),status=excluded.status,loss_at=COALESCE(excluded.loss_at,loss_at),updated_at=excluded.updated_at", params![service_id, vm_id, runtime_id, next, status, gap.then_some(now), now])?;

@@ -872,7 +872,8 @@ jobs:
           # Reuse the installed API; its OCI toolbox comes from the local
           # static binary so the fixture does not pull a Docker Hub image.
           sudo mkdir -p /run/systemd/system/firecrab-api.service.d
-          printf '[Service]\nEnvironment=FIRECRAB_OCI_TOOLBOX_PATH=/usr/bin/busybox\n' \
+          sudo install -m 0755 scripts/ci-qa-security-trivy.py /usr/local/bin/firecrab-ci-security-trivy
+          printf '[Service]\nEnvironment=FIRECRAB_OCI_TOOLBOX_PATH=/usr/bin/busybox\nEnvironment=FIRECRAB_SECURITY_TRIVY=/usr/local/bin/firecrab-ci-security-trivy\n' \
             | sudo tee /run/systemd/system/firecrab-api.service.d/90-ci-e2e.conf
           sudo systemctl daemon-reload
           sudo systemctl restart firecrab-api
@@ -1062,6 +1063,7 @@ jobs:
           vm_unit=firecrab-vm-00000000000000000000000000000001.service
           sudo systemd-run --unit="$vm_unit" --collect --quiet sleep 600
           systemctl is-active --quiet "$vm_unit"
+          sudo rm -f /usr/local/bin/firecrab-ci-security-trivy
           sudo ./install.sh --uninstall
           if systemctl is-active --quiet firecrab-api; then
             echo 'FAILED: firecrab-api is still active after uninstall'

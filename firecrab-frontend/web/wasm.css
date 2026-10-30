@@ -201,3 +201,15 @@
 .stack-guidance p { margin: 6px 0; }
 .stack-guidance code { overflow-wrap: anywhere; }
 @media (max-width: 600px) { .stack-status { grid-template-columns: 1fr; gap: 4px; } .stack-status dd { margin-bottom: 8px; } }
+
+.security-page { max-width: 1200px; }
+.security-page > p { color: var(--text-3); line-height: 1.6; }
+.security-page table { margin-top: 24px; }
+.security-page td { overflow-wrap: anywhere; }
+
+.security-page .wasm-table { min-width: 760px; }
+.security-page .wasm-table th:nth-child(1) { width: 15%; }
+.security-page .wasm-table th:nth-child(2) { width: 18%; }
+.security-page .wasm-table th:nth-child(3) { width: 22%; }
+.security-page .wasm-table th:nth-child(4) { width: 45%; }
+.security-page .wasm-table td { vertical-align: top; }
