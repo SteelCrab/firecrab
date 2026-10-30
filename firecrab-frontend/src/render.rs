@@ -717,15 +717,18 @@ pub fn content(app: &App) -> String {
                 ("sizeBytes", "Size"),
             ],
         ),
-        "kernels" => resource_table(
-            app,
-            &app.resource,
-            &[
-                ("version", "Version"),
-                ("installed", "Status"),
-                ("architecture", "Architecture"),
-            ],
-        ),
+        "kernels" => {
+            crate::kernels::queue(app)
+                + &resource_table(
+                    app,
+                    &app.resource,
+                    &[
+                        ("version", "Version"),
+                        ("installed", "Status"),
+                        ("architecture", "Architecture"),
+                    ],
+                )
+        }
         "shells" => resource_table(
             app,
             &app.resource,

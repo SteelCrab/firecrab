@@ -24,8 +24,36 @@
 .props { grid-template-columns: minmax(6rem, 35%) minmax(0, 1fr); }
 .detail-top-actions { max-width: 75%; }
 .kernel-install { margin-top: 1rem; min-width: 0; }
-.kernel-install h3 { margin-bottom: .5rem; }
+.kernel-install summary { width: fit-content; cursor: pointer; padding: .375rem 0; color: var(--text-3); font-size: .75rem; }
+.kernel-install[open] summary { margin-bottom: .375rem; }
 .kernel-install-log { height: 12rem; max-height: 35vh; margin: 0; padding: .625rem; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-subtle); font: .583333rem/1.65 var(--mono); white-space: pre; }
+.kernel-queue { margin-bottom: 1.25rem; }
+.kernel-queue-head, .kernel-progress-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .375rem 1rem; }
+.kernel-queue-head { margin-bottom: .625rem; }
+.kernel-queue-head h2 { margin: 0; font-size: .95rem; font-weight: 650; }
+.kernel-queue-head > span, .kernel-progress-head > span { color: var(--text-3); font-size: .625rem; font-variant-numeric: tabular-nums; }
+.kernel-job { padding: .625rem .875rem; margin-top: .5rem; border: 1px solid var(--border); border-radius: .5rem; background: var(--bg); }
+.kernel-job-head .btn { height: auto; min-height: 0; padding: 0; border: 0; background: none; box-shadow: none; font-weight: 650; font-size: .85rem; }
+.kernel-job-head { margin-bottom: .375rem; }
+.kernel-job-head .btn:active { transform: scale(.97); }
+.kernel-progress { margin: .75rem 0; min-width: 0; }
+.kernel-job .kernel-progress { margin: 0; }
+.kernel-progress-head strong { font-size: .75rem; font-weight: 550; }
+.kernel-stage-bar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .25rem; margin: .5rem 0; }
+.kernel-stage-bar > span { display: block; height: .3rem; border-radius: 2px; background: var(--border); }
+.kernel-stage-bar > .done { background: var(--green); }
+.kernel-stage-bar > .current { background: var(--accent); }
+.kernel-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .25rem; margin: 0; padding: 0; list-style: none; }
+.kernel-steps li { display: flex; align-items: center; gap: .25rem; color: var(--text-3); font-size: .625rem; }
+.kernel-steps li > span { font-size: .55rem; font-variant-numeric: tabular-nums; }
+.kernel-steps .current { color: var(--accent); font-weight: 650; }
+.kernel-steps .done { color: var(--green-ink); }
+.kernel-progress.failed .kernel-progress-head strong, .kernel-progress.failed .kernel-steps .current { color: #b91c1c; }
+.kernel-progress.failed .kernel-stage-bar > .current { background: #b91c1c; }
+.kernel-download { display: grid; gap: .375rem; margin-top: .625rem; color: var(--text-3); font-size: .625rem; font-variant-numeric: tabular-nums; }
+.kernel-download progress { display: block; width: 100%; height: .25rem; accent-color: var(--accent); }
+@media (hover: hover) and (pointer: fine) { .kernel-job-head .btn:hover { color: var(--accent); text-decoration: underline; } }
+@media (max-width: 600px) { .kernel-steps li > span { display: none; } }
 
 @media (max-width: 1199px) {
   .form-section { grid-template-columns: minmax(0, 1fr); gap: 1rem; }

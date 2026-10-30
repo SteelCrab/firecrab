@@ -412,19 +412,26 @@ test('image registration and OCI import expose completion', async () => {
 test('kernel reload restores a running install and keeps long logs in a scrollable panel', async () => {
   fixture.state.kernels = [{ version: '7.2.13', architecture: 'aarch64', installed: false, inUse: false }];
   let phase = 'running';
-  let log = Array.from({ length: 300 }, (_, i) => `[12:00:00] CC kernel/source-${i}.c`).join('\n');
+  let log = '[12:00:00] building Linux 7.2.13 for aarch64\n' + Array.from({ length: 300 }, (_, i) => `[12:00:00] CC kernel/source-${i}.c`).join('\n');
   fixture.handlers.set('GET /api/kernels/7.2.13/install', ({ send }) => send(200, {
     version: '7.2.13', status: phase, log, startedAtMs: 1000, downloadedBytes: 160478200,
   }));
   await open('kernels');
-  await expect(page.getByRole('cell', { name: 'Installing kernel', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Building kernel', exact: true })).toBeVisible();
+  const job = page.locator('.kernel-job[data-kernel-version="7.2.13"]');
+  await expect(job.getByRole('progressbar', { name: 'Installation stages', exact: true })).toHaveAttribute('aria-valuenow', '2');
+  await expect(job).toContainText('2 / 4 stages complete');
   await page.getByRole('cell', { name: '7.2.13', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Build kernel', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0);
   await page.reload();
-  await expect(page.getByRole('cell', { name: 'Installing kernel', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Building kernel', exact: true })).toBeVisible();
   await page.getByRole('cell', { name: '7.2.13', exact: true }).click();
   const output = page.locator('#kernel-install-log');
+  await expect(output).toBeHidden();
+  await page.locator('#kernel-log-details > summary').click();
+  await expect(output).toBeVisible();
+  await output.press('End');
   await expect(output).toHaveText(log);
   assert.equal(fixture.requests.filter(r => r.method === 'POST' && r.path.endsWith('/install')).length, 0);
   await expect(page.locator('#content .wasm-details')).toHaveCount(0);
@@ -470,6 +477,30 @@ test('kernel install recovers an already-running conflict and gates deletion by 
   await expect(page.getByRole('cell', { name: 'Installed', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Build kernel', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0);
+});
+
+test('kernel queue shows measured download progress, queued builds and verified completion', async () => {
+  fixture.state.kernels = ['7.2.13', '7.2.12'].map(version => ({ version, architecture: 'aarch64', installed: false, inUse: false }));
+  const downloading = { version: '7.2.13', status: 'running', startedAtMs: 1, log: 'downloading and verifying source', downloadedBytes: 25 * 1024 * 1024, totalBytes: 100 * 1024 * 1024 };
+  const waiting = { version: '7.2.12', status: 'running', startedAtMs: 2, log: 'downloading and verifying source\nwaiting for the host kernel builder' };
+  for (const job of [downloading, waiting]) fixture.handlers.set(`GET /api/kernels/${job.version}/install`, ({ send }) => send(200, job));
+  await open('kernels');
+  const active = page.locator('.kernel-job[data-kernel-version="7.2.13"]');
+  const queued = page.locator('.kernel-job[data-kernel-version="7.2.12"]');
+  await expect(active).toContainText('25 MiB / 100 MiB · 25%');
+  await expect(active.getByRole('progressbar', { name: 'Source download', exact: true })).toHaveAttribute('value', '25.00');
+  await expect(queued).toContainText('Waiting for build');
+  await expect(queued.getByRole('progressbar', { name: 'Installation stages', exact: true })).toHaveAttribute('aria-valuenow', '1');
+  await expect(queued).not.toContainText('%');
+  await page.getByRole('button', { name: '7.2.13', exact: true }).click();
+  await expect(page.locator('#kernel-install-log')).toBeHidden();
+  downloading.log += '\nwaiting for the host kernel builder\nbuilding Linux 7.2.13 for aarch64\nverifying built kernel';
+  await expect(active).toContainText('Verifying kernel');
+  await expect(active.getByRole('progressbar', { name: 'Installation stages', exact: true })).toHaveAttribute('aria-valuenow', '3');
+  downloading.status = 'succeeded'; fixture.state.kernels[0].installed = true;
+  await expect(active).toContainText('4 / 4 stages complete');
+  await expect(active.getByRole('progressbar', { name: 'Installation stages', exact: true })).toHaveAttribute('aria-valuenow', '4');
+  await expect(page.locator('#kernel-install-log')).toBeHidden();
 });
 
 test('Pipe credentials are sent to the API and never persisted locally', async () => {

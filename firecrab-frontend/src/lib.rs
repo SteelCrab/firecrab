@@ -289,6 +289,8 @@ fn panel_body() -> Option<Element> {
         .flatten()
 }
 fn render_detail(app: &Shared) {
+    let kernel_log_open =
+        element("kernel-log-details").is_some_and(|node| node.has_attribute("open"));
     let kernel_log = element("kernel-install-log").map(|log| {
         (
             log.scroll_top(),
@@ -361,6 +363,12 @@ fn render_detail(app: &Shared) {
                 && let Some(body) = panel_body()
             {
                 body.set_scroll_top(scroll_top);
+            }
+            if same_view
+                && kernel_log_open
+                && let Some(details) = element("kernel-log-details")
+            {
+                let _ = details.set_attribute("open", "");
             }
             if let Some(log) = element("kernel-install-log") {
                 let (top, left, follow) = kernel_log.filter(|_| same_view).unwrap_or((0, 0, true));

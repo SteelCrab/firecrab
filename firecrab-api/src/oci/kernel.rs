@@ -570,6 +570,7 @@ pub(crate) async fn ensure_managed_kernel(
         )
         .await
         .map_err(|_| unavailable(architecture, "kernel build exceeded two hours"))??;
+        log(tracker, requested, "verifying built kernel".to_owned());
         let image_digest = inspect_kernel(&staged, architecture).await?;
         let receipt = BuiltKernel {
             version: version.clone(),
