@@ -218,7 +218,8 @@ Internal service deployment is allowed only for the accepted stack operation's r
 To recover or manage a service directly, wait for active operations, then explicitly unbind that exact service or remove the Git source.
 Pause alone does not release ownership. There is no independent registry tag watcher enabled for Git services.
 
-Manual VM and network configuration edits remain available.
+Manual VM and network configuration edits remain available while the owning stack has no active apply.
+Queued/running applies return `409 stack_apply_busy` for direct edits to bound or reserved resources.
 Detect-only reports their declared-field drift on the next check.
 Automatic mode restores supported declared fields at the same Git commit; stop permission still applies.
 Edits after a plan or during apply invalidate the affected observation and stop further execution.

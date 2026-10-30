@@ -30,6 +30,12 @@ Entries land here as work merges, and move under the next version heading when t
   and CI check track missing Stack and Terraform coverage without claiming it
   is implemented (#548).
 
+### Fixed
+
+- Reject direct VM and network mutations while their owning Stack apply is
+  queued or running. Existing bindings and reserved create/replacement IDs
+  are protected; reads and terminal-operation recovery remain available (#548).
+
 ## [0.4.1] - 2026-10-30
 
 Hotfix for macOS and Windows managed installations and updates.

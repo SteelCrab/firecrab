@@ -18,6 +18,9 @@ use crate::persistence::{PersistenceError, Store};
 use crate::server::RequestId;
 use crate::state::AppState;
 
+mod guard;
+pub(crate) use guard::protect_resources;
+
 /// Idempotently register a stack name without storing or applying its manifest.
 pub async fn register(
     State(state): State<AppState>,

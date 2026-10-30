@@ -26,6 +26,26 @@ CREATE TABLE IF NOT EXISTS stack_bindings (
 ) STRICT;";
 
 impl Store {
+    /// Active applies protect existing bindings and prospective replacement IDs.
+    /// Terminal reservations stay inspectable but must not block later edits.
+    pub(crate) fn stack_resource_apply_busy(
+        &self,
+        kind: ResourceKind,
+        resource: Uuid,
+    ) -> Result<bool, PersistenceError> {
+        Ok(self.lock().query_row(
+            "SELECT EXISTS(SELECT 1 FROM stack_applies a
+             WHERE a.state IN ('queued','running') AND (
+                 EXISTS(SELECT 1 FROM stack_bindings b
+                        WHERE b.stack_id=a.stack_id AND b.kind=?1 AND b.resource_id=?2)
+                 OR EXISTS(SELECT 1 FROM stack_apply_reservations r
+                           WHERE r.operation_id=a.operation_id AND r.kind=?1 AND r.resource_id=?2)
+             ))",
+            params![kind.as_str(), resource.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Recover the newest accepted content pin for this exact bound VM UUID.
     /// This also protects later manual starts and API restart recovery.
     /// Inventory excludes pending updates so admission itself does not create drift.
