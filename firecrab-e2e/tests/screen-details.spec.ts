@@ -372,6 +372,39 @@ test.describe("list screens with a detail panel", () => {
     expect(Math.abs(boxes.footerBottom - boxes.panelBottom)).toBeLessThanOrEqual(1);
   });
 
+  test("the image panel inspects and imports an OCI reference on entry", async ({ page }) => {
+    let inspected = "";
+    let imported: unknown;
+    await openDashboard(page, {
+      hash: "#/images",
+      routes: {
+        "/api/images": [],
+        "/api/kernels": [],
+        "/api/oci/inspect": (route) => {
+          inspected = new URL(route.request().url()).searchParams.get("reference") ?? "";
+          return route.fulfill({ json: { reference: inspected, digest: "sha256:abc" } });
+        },
+        "/api/oci/import": (route) => {
+          imported = route.request().postDataJSON();
+          return route.fulfill({ status: 202, json: { alias: "nginx", status: "running" } });
+        },
+        "/api/oci/import/nginx": { alias: "nginx", status: "running" },
+      },
+    });
+    const detail = page.locator("#detail-panel");
+    await expect(detail).toBeVisible();
+    await page.getByRole("link", { name: "Networks", exact: true }).click();
+    await expect(detail).toBeHidden();
+    await page.getByRole("link", { name: "Images", exact: true }).click();
+    await expect(detail.getByLabel("OCI reference", { exact: true })).toBeVisible();
+    await detail.getByLabel("OCI reference", { exact: true }).fill("docker.io/library/nginx:1.27");
+    await detail.getByRole("button", { name: "Inspect image", exact: true }).click();
+    await expect(detail.locator("#form-result")).toContainText("sha256:abc");
+    expect(inspected).toBe("docker.io/library/nginx:1.27");
+    await detail.getByRole("button", { name: "Import", exact: true }).click();
+    await expect.poll(() => imported).toEqual({ reference: "docker.io/library/nginx:1.27" });
+  });
+
   test("a check result on a tall panel form is brought into view above the footer", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 400 });
     const details = Object.fromEntries(["Reference", "Digest", "Architecture", "Operating system", "Size", "Layers", "Created", "Entrypoint"].map((key, index) => [key.toLowerCase().replace(/ /g, ""), `value ${index + 1}`]));

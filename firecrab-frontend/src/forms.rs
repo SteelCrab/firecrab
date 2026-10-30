@@ -342,6 +342,7 @@ impl Form {
                 "New MicroVM" => "Create MicroVM",
                 "Connect database" | "Update connection credentials" => "Save connection",
                 "Create volume" => "Create volume",
+                "Import OCI image" => "Import",
                 "Deploy MicroService" => "Deploy and run",
                 "Deploy update" => "Deploy update",
                 "New MicroService" => "Create MicroService",

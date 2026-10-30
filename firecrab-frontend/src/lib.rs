@@ -243,6 +243,21 @@ fn render_content(app: &Shared) {
     workflows::sync_form();
     advanced::services::sync(app);
 }
+/// Refresh the image list without replacing an open import form.
+fn render_image_list(app: &Shared) {
+    let (html, loaded) = {
+        let state = app.borrow();
+        (render::content(&state), state.loaded)
+    };
+    app.borrow_mut().rendering = true;
+    set_html("content", &html);
+    app.borrow_mut().rendering = false;
+    if let Some(content) = element("content") {
+        let _ = content.set_attribute("data-loaded", if loaded { "true" } else { "false" });
+    }
+    render_messages(app);
+}
+
 fn render_editor(app: &Shared) {
     if app.borrow().route == "pipe/database" {
         render_content(app);
@@ -495,6 +510,7 @@ pub fn start() -> Result<(), JsValue> {
             .clamp(details::PANEL_MIN_WIDTH, details::PANEL_MAX_WIDTH),
         ..App::default()
     }));
+    open_image_import_on_entry(&mut app.borrow_mut());
     if let Some(root) = element("root") {
         root.set_attribute("data-engine", "wasm")?;
     }
@@ -681,11 +697,14 @@ fn load_route(app: Shared) {
                     state.vms = vms;
                 }
                 state.cache.insert(path.into(), value);
+                let image_form = state.route == "images" && state.form.is_some();
                 let visible =
                     matches!(state.route.as_str(), "host" | "images" | "volumes" | "pipe")
                         && state.form.is_none();
                 drop(state);
-                if visible {
+                if image_form {
+                    render_image_list(&app);
+                } else if visible {
                     render_content(&app);
                 }
                 if path == "/api/update" {
@@ -824,6 +843,9 @@ fn refresh(app: Shared) {
         advanced::after_refresh(&app);
         databases::after_refresh(&app);
         databases::tick(&app);
+        if has_form && route == "images" && changed {
+            render_image_list(&app);
+        }
         if !has_form {
             if changed {
                 render_content(&app);
@@ -982,6 +1004,15 @@ fn allow_discard(app: &Shared) -> bool {
             .confirm_with_message(i18n::t("Discard unsaved changes?"))
             .unwrap_or(false)
 }
+/// Show the OCI import form when entering the image screen.
+fn open_image_import_on_entry(state: &mut App) {
+    if state.route == "images" {
+        state.form = forms::resource_form("oci", &Value::Null, "");
+        state.panel_open = true;
+        state.workflows.form_result = None;
+    }
+}
+
 fn navigate(app: &Shared) {
     let next = route_from_hash();
     let next_index = history_index();
@@ -1038,6 +1069,7 @@ fn navigate(app: &Shared) {
     state.job = None;
     state.query.clear();
     state.filter = "all".into();
+    open_image_import_on_entry(&mut state);
     drop(state);
     render_page(app);
     load_route(app.clone());
