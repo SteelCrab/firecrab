@@ -143,7 +143,7 @@ test.describe("dashboard frame", () => {
     expect(Math.abs(name.y - image.y)).toBeLessThan(2);
     // The bar spans the page: summary at its left, Cancel and Create at its right.
     const bar = (await page.locator("#editor .form-footer").boundingBox())!;
-    expect(bar.width).toBeCloseTo(content.width, 0);
+    expect(bar.width).toBeCloseTo(await page.locator("#content").evaluate(el => el.clientWidth), 0);
     const summary = (await page.locator("#form-summary").boundingBox())!;
     const create = (await page.getByRole("button", { name: "Create MicroVM" }).boundingBox())!;
     expect(summary.x).toBeLessThan(bar.x + 60);

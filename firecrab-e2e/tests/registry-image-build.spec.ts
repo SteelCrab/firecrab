@@ -193,6 +193,7 @@ test.describe("Pulled registry images in M2Image @dashboard", () => {
       .click();
     await expect(m.row).toContainText("Building…");
     await page.reload();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await page.getByRole("tab", { name: /Registry images/ }).click();
     await expect(m.row).toContainText("Building…");
     m.allowBuild();
