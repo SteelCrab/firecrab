@@ -32,6 +32,165 @@ fn change(current: &ResourceOwnership, owner: Option<ResourceOwner>) -> ChangeRe
     }
 }
 
+fn volume(store: &Store) -> ManagedResource {
+    let id = Uuid::new_v4();
+    store
+        .insert_block_storage(
+            &firecrab_api_types::MicroBlockStorageResponse {
+                id,
+                name: format!("volume-{id}"),
+                size_gib: 1,
+                storage_root: "default".into(),
+                state: "creating".into(),
+                attached_vm_id: None,
+                mount_path: None,
+            },
+            None,
+        )
+        .unwrap();
+    store.finish_block_storage_create(id).unwrap();
+    ManagedResource {
+        kind: "volume".into(),
+        id: id.to_string(),
+    }
+}
+
+#[test]
+fn iac_configuration_native_slots_survive_restart_and_reject_duplicate_addresses() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("state.db");
+    let store = Store::open(&path).unwrap();
+    let first = volume(&store);
+    let second = volume(&store);
+    let stack = store.register_stack("configuration").unwrap();
+    let native = ResourceOwner {
+        manager: Manager::Stack,
+        id: stack.id,
+        key: "disk".into(),
+    };
+    let before = store.iac_resource_owner(&first).unwrap();
+    let request = change(&before, Some(native.clone()));
+    let owned = store.change_iac_resource_owner(&request).unwrap();
+    assert_eq!(
+        store.list_iac_resource_owners().unwrap(),
+        vec![owned.clone()]
+    );
+    assert!(matches!(
+        store.delete_empty_stack("configuration", stack.id),
+        Err(PersistenceError::StackNotEmpty)
+    ));
+    let conflict = change(&store.iac_resource_owner(&second).unwrap(), Some(native));
+    assert!(matches!(
+        store.change_iac_resource_owner(&conflict),
+        Err(PersistenceError::IacOwnershipConflict)
+    ));
+    assert!(
+        store
+            .iac_ownership_operation(conflict.operation_id)
+            .unwrap()
+            .is_none()
+    );
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.iac_resource_owner(&first).unwrap(), owned);
+    assert_eq!(store.change_iac_resource_owner(&request).unwrap(), owned);
+    let external = store
+        .change_iac_resource_owner(&change(&owned, Some(terraform())))
+        .unwrap();
+    assert_eq!(external.generation, 2);
+    assert_eq!(store.stack("configuration").unwrap().unwrap().revision, 2);
+    store.delete_empty_stack("configuration", stack.id).unwrap();
+    let mut alias = first.clone();
+    alias.id = Uuid::parse_str(&alias.id)
+        .unwrap()
+        .simple()
+        .to_string()
+        .to_uppercase();
+    assert_eq!(store.iac_resource_owner(&alias).unwrap(), external);
+}
+
+#[test]
+fn iac_volume_transfer_waits_for_disk_work_without_journaling_a_failed_admission() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(&root.path().join("state.db")).unwrap();
+    let resource = volume(&store);
+    let request = change(
+        &store.iac_resource_owner(&resource).unwrap(),
+        Some(terraform()),
+    );
+    store
+        .lock()
+        .execute(
+            "UPDATE micro_block_storages SET phase='creating' WHERE id=?1",
+            [&resource.id],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.change_iac_resource_owner(&request),
+        Err(PersistenceError::IacResourceBusy)
+    ));
+    assert!(
+        store
+            .iac_ownership_operation(request.operation_id)
+            .unwrap()
+            .is_none()
+    );
+    store
+        .finish_block_storage_create(Uuid::parse_str(&resource.id).unwrap())
+        .unwrap();
+    let owned = store.change_iac_resource_owner(&request).unwrap();
+    assert_eq!(owned.generation, 1);
+    assert!(
+        store
+            .block_storage(Uuid::parse_str(&resource.id).unwrap())
+            .is_ok()
+    );
+}
+
+#[test]
+fn iac_configuration_slots_count_toward_the_legacy_stack_binding_limit() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(&root.path().join("state.db")).unwrap();
+    let stack = store.register_stack("configuration").unwrap();
+    let resource = resource(&store);
+    let mut retained = Vec::new();
+    {
+        let mut conn = store.lock();
+        let tx = conn.transaction().unwrap();
+        // Externally deleted resources retain their ownership until explicitly released.
+        for i in 0..firecrab_stack::MAX_RESOURCES {
+            let id = Uuid::new_v4().to_string();
+            tx.execute("INSERT INTO iac_resource_owners(kind,resource_id,generation,manager,owner_id,logical_key) VALUES('volume',?1,1,'stack',?2,?3)",
+                params![id,stack.id.to_string(),format!("retained-{i}")]).unwrap();
+            retained.push(id);
+        }
+        tx.commit().unwrap();
+    }
+    let binding = Binding {
+        kind: ResourceKind::Network,
+        key: "network".into(),
+        resource_id: Uuid::parse_str(&resource.id).unwrap(),
+    };
+    assert!(matches!(
+        store.bind_stack_resource("configuration", &binding),
+        Err(PersistenceError::StackBindingLimit)
+    ));
+    let retained = ManagedResource {
+        kind: "volume".into(),
+        id: retained.remove(0),
+    };
+    store
+        .change_iac_resource_owner(&change(&store.iac_resource_owner(&retained).unwrap(), None))
+        .unwrap();
+    store
+        .bind_stack_resource("configuration", &binding)
+        .unwrap();
+    assert_eq!(
+        store.stack("configuration").unwrap().unwrap().bindings,
+        vec![binding]
+    );
+}
+
 #[test]
 fn iac_owner_transfer_preserves_resource_and_replays_only_the_exact_request() {
     let root = tempfile::tempdir().unwrap();
@@ -337,6 +496,16 @@ fn iac_owner_vm_transition_blocks_adoption_and_release() {
         env: Default::default(),
     };
     store.insert(&vm).unwrap();
+    store.register_stack("legacy").unwrap();
+    let binding = Binding {
+        kind: ResourceKind::Vm,
+        key: "worker".into(),
+        resource_id: vm.id,
+    };
+    assert!(matches!(
+        store.bind_stack_resource("legacy", &binding),
+        Err(PersistenceError::IacResourceBusy)
+    ));
     let resource = ManagedResource {
         kind: "vm".into(),
         id: vm.id.to_string(),
@@ -359,4 +528,24 @@ fn iac_owner_vm_transition_blocks_adoption_and_release() {
         Err(PersistenceError::IacResourceBusy)
     ));
     assert_eq!(store.iac_resource_owner(&resource).unwrap(), owned);
+    vm.state = VmState::Stopped;
+    store.update(&vm).unwrap();
+    store
+        .change_iac_resource_owner(&change(&owned, None))
+        .unwrap();
+    store.bind_stack_resource("legacy", &binding).unwrap();
+    vm.state = VmState::Starting;
+    store.update(&vm).unwrap();
+    assert!(matches!(
+        store.unbind_stack_resource("legacy", &binding),
+        Err(PersistenceError::IacResourceBusy)
+    ));
+    assert_eq!(
+        store.stack("legacy").unwrap().unwrap().bindings,
+        vec![binding.clone()]
+    );
+    vm.state = VmState::Stopped;
+    store.update(&vm).unwrap();
+    store.unbind_stack_resource("legacy", &binding).unwrap();
+    assert!(store.iac_resource_owner(&resource).unwrap().owner.is_none());
 }

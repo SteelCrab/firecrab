@@ -18,7 +18,7 @@ pub async fn identity(
     let id = database(request.0, move || state.store.iac_endpoint_id()).await?;
     Ok(Json(
         serde_json::json!({"endpointId":id,"inventoryKinds":firecrab_stack::resource_kinds(),
-        "transferKinds":["network","vm","service"]}),
+        "transferKinds":crate::persistence::IAC_TRANSFER_KINDS}),
     ))
 }
 

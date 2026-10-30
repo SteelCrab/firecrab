@@ -6,11 +6,19 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 
 ## Current support
 
-Network, standalone VM and MicroService ownership can move between native Stack and a Terraform state owner.
+Network, standalone VM, MicroService, registered storage root, volume, security group,
+shell and schedule ownership can move between native Stack and a Terraform state owner.
 Protected controller/pool/builder VMs and resources with active operations cannot be adopted.
 Other inventory kind names are recognized, but transition returns `unsupported_iac_resource` until their validation/activity adapter exists.
 A Terraform ownership record does not mean the Terraform provider is implemented.
 The Stack dashboard lists Terraform-owned resources and their ownership generation.
+
+Storage roots, volumes, security groups, shells and schedules use their exact UUIDs.
+Volume creation/deletion and active schedule executions block ownership transfers.
+Immutable shell revisions remain pinned by their existing users.
+These additional Stack ownership records appear in `/api/iac/owners`.
+They count toward the same binding limit and prevent deleting the Stack registration.
+Their native manifest deployment adapters remain part of the pending Stack coverage work.
 
 The selected endpoint is the host/controller scope.
 Use existing [mTLS](mtls.md) for remote requests.

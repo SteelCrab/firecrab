@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS iac_resource_owners (
     PRIMARY KEY(kind, resource_id)
 ) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS iac_terraform_address ON iac_resource_owners(owner_id,logical_key) WHERE manager='terraform';
+CREATE UNIQUE INDEX IF NOT EXISTS iac_stack_address ON iac_resource_owners(owner_id,kind,logical_key) WHERE manager='stack';
 CREATE TABLE IF NOT EXISTS iac_owner_changes (
     operation_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, result TEXT NOT NULL
 ) STRICT;
@@ -96,6 +97,32 @@ impl Store {
         let result = read(&tx, &resource)?;
         tx.commit()?;
         Ok(result)
+    }
+
+    /// Public HTTP writes cannot impersonate an IaC executor with a request header.
+    pub(crate) fn iac_public_write_allowed(
+        &self,
+        resource: &ManagedResource,
+    ) -> Result<bool, PersistenceError> {
+        let conn = self.lock();
+        if let Some(kind) = resource.legacy_kind() {
+            let id =
+                Uuid::parse_str(&resource.id).map_err(|_| PersistenceError::InvalidIacOwner)?;
+            if super::stacks::resource_apply_busy(&conn, kind, id)? {
+                return Err(PersistenceError::StackApplyBusy);
+            }
+        }
+        let Some(owner) = read(&conn, resource)?.owner else {
+            return Ok(true);
+        };
+        if owner.manager == Manager::Terraform {
+            return Ok(false);
+        }
+        if resource.legacy_kind().is_none() {
+            super::stack_applies::ensure_idle(&conn, owner.id)?;
+            super::stack_sources::ensure_idle(&conn, owner.id)?;
+        }
+        Ok(true)
     }
 
     /// Active ownership records only; released tombstones stay available by exact identity.
@@ -183,37 +210,37 @@ impl Store {
                 .map_err(|_| PersistenceError::IacOperationIdentity);
         }
         // Kind support grows only when its existence, parent and activity checks exist.
-        let kind = request
-            .resource
-            .legacy_kind()
-            .ok_or(PersistenceError::UnsupportedIacResource)?;
-        let resource_id = Uuid::parse_str(&request.resource.id)
-            .map_err(|_| PersistenceError::InvalidStackResource)?;
         let before = read(&tx, &request.resource)?;
         if before.generation != request.expected_generation
             || before.owner != request.expected_owner
         {
             return Err(PersistenceError::StaleIacOwner);
         }
-        if super::stacks::resource_apply_busy(&tx, kind, resource_id)? {
-            return Err(PersistenceError::StackApplyBusy);
+        if let Some(kind) = request.resource.legacy_kind() {
+            let id = Uuid::parse_str(&request.resource.id)
+                .map_err(|_| PersistenceError::InvalidStackResource)?;
+            if super::stacks::resource_apply_busy(&tx, kind, id)? {
+                return Err(PersistenceError::StackApplyBusy);
+            }
+            ensure_resource_idle(&tx, kind, id)?;
+            if request.owner.is_some() {
+                super::stacks::validate_resource(
+                    &tx,
+                    &Binding {
+                        kind,
+                        key: "adopt".into(),
+                        resource_id: id,
+                    },
+                )?;
+            }
+        } else {
+            super::iac_resources::validate(&tx, &request.resource, request.owner.is_some())?;
         }
-        ensure_resource_idle(&tx, kind, resource_id)?;
         for owner in [&before.owner, &request.owner].into_iter().flatten() {
             if owner.manager == Manager::Stack {
                 super::stack_applies::ensure_idle(&tx, owner.id)?;
                 super::stack_sources::ensure_idle(&tx, owner.id)?;
             }
-        }
-        if request.owner.is_some() {
-            super::stacks::validate_resource(
-                &tx,
-                &Binding {
-                    kind,
-                    key: "adopt".into(),
-                    resource_id,
-                },
-            )?;
         }
         if let Some(owner) = request
             .owner
@@ -235,8 +262,9 @@ impl Store {
                 .as_ref()
                 .filter(|owner| owner.manager == Manager::Stack)
             {
-                if tx.execute("DELETE FROM stack_bindings WHERE stack_id=?1 AND kind=?2 AND logical_key=?3 AND resource_id=?4",
-                    params![owner.id.to_string(), kind.as_str(),owner.key,resource_id.to_string()])? != 1 {
+                if request.resource.legacy_kind().is_some()
+                    && tx.execute("DELETE FROM stack_bindings WHERE stack_id=?1 AND kind=?2 AND logical_key=?3 AND resource_id=?4",
+                        params![owner.id.to_string(), request.resource.kind,owner.key,request.resource.id])? != 1 {
                     return Err(PersistenceError::IacOwnershipConflict);
                 }
                 tx.execute(
@@ -249,28 +277,31 @@ impl Store {
                 .as_ref()
                 .filter(|owner| owner.manager == Manager::Stack)
             {
-                let name: String = tx
-                    .query_row(
-                        "SELECT name FROM stacks WHERE id=?1",
-                        [owner.id.to_string()],
-                        |row| row.get(0),
-                    )
-                    .optional()?
-                    .ok_or(PersistenceError::MissingStack)?;
-                let stack =
-                    super::stacks::read_stack(&tx, &name)?.ok_or(PersistenceError::MissingStack)?;
-                if stack.bindings.len() >= firecrab_stack::MAX_RESOURCES {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM stacks WHERE id=?1)",
+                    [owner.id.to_string()],
+                    |row| row.get(0),
+                )?;
+                if !exists {
+                    return Err(PersistenceError::MissingStack);
+                }
+                if super::stacks::binding_count(&tx, owner.id, Some(&request.resource))?
+                    >= firecrab_stack::MAX_RESOURCES
+                {
                     return Err(PersistenceError::StackBindingLimit);
                 }
-                if stack
-                    .bindings
-                    .iter()
-                    .any(|binding| binding.kind == kind && binding.key == owner.key)
-                {
+                let occupied: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM stack_bindings WHERE stack_id=?1 AND kind=?2 AND logical_key=?3)
+                     OR EXISTS(SELECT 1 FROM iac_resource_owners WHERE manager='stack' AND owner_id=?1 AND kind=?2 AND logical_key=?3 AND resource_id<>?4)",
+                    params![owner.id.to_string(),request.resource.kind,owner.key,request.resource.id], |row|row.get(0),
+                )?;
+                if occupied {
                     return Err(PersistenceError::IacOwnershipConflict);
                 }
-                tx.execute("INSERT INTO stack_bindings(stack_id,kind,logical_key,resource_id) VALUES (?1,?2,?3,?4)",
-                    params![owner.id.to_string(),kind.as_str(),owner.key,resource_id.to_string()])?;
+                if request.resource.legacy_kind().is_some() {
+                    tx.execute("INSERT INTO stack_bindings(stack_id,kind,logical_key,resource_id) VALUES (?1,?2,?3,?4)",
+                        params![owner.id.to_string(),request.resource.kind,owner.key,request.resource.id])?;
+                }
                 tx.execute(
                     "UPDATE stacks SET revision=revision+1 WHERE id=?1",
                     [owner.id.to_string()],
@@ -282,15 +313,15 @@ impl Store {
                 .filter(|generation| *generation <= i64::MAX as u64)
                 .ok_or(PersistenceError::StaleIacOwner)?;
             result.owner = request.owner.clone();
-            let external = request
-                .owner
-                .as_ref()
-                .filter(|owner| owner.manager == Manager::Terraform);
+            let persisted = request.owner.as_ref().filter(|owner| {
+                owner.manager == Manager::Terraform || request.resource.legacy_kind().is_none()
+            });
             tx.execute("INSERT INTO iac_resource_owners(kind,resource_id,generation,manager,owner_id,logical_key)
                 VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(kind,resource_id) DO UPDATE SET
                 generation=excluded.generation,manager=excluded.manager,owner_id=excluded.owner_id,logical_key=excluded.logical_key",
-                params![kind.as_str(),resource_id.to_string(),i64::try_from(result.generation).map_err(|_|PersistenceError::StaleIacOwner)?,
-                    external.map(|_|"terraform"),external.map(|owner|owner.id.to_string()),external.map(|owner|owner.key.as_str())])?;
+                params![request.resource.kind,request.resource.id,i64::try_from(result.generation).map_err(|_|PersistenceError::StaleIacOwner)?,
+                    persisted.map(|owner|match owner.manager { Manager::Stack => "stack", Manager::Terraform => "terraform" }),
+                    persisted.map(|owner|owner.id.to_string()),persisted.map(|owner|owner.key.as_str())])?;
         }
         tx.execute(
             "INSERT INTO iac_owner_changes(operation_id,request_hash,result) VALUES (?1,?2,?3)",
@@ -307,7 +338,7 @@ impl Store {
 }
 
 /// Do not move write authority while another controller owns an admitted operation.
-fn ensure_resource_idle(
+pub(super) fn ensure_resource_idle(
     conn: &Connection,
     kind: firecrab_stack::ResourceKind,
     id: Uuid,
@@ -385,11 +416,17 @@ fn read(
         u64::try_from(generation).map_err(|_| PersistenceError::IacOwnershipConflict)?;
     let external = match (manager, owner_id, key) {
         (None, None, None) => None,
-        (Some(manager), Some(id), Some(key)) if manager == "terraform" => Some(ResourceOwner {
-            manager: Manager::Terraform,
-            id: Uuid::parse_str(&id).map_err(|_| PersistenceError::IacOwnershipConflict)?,
-            key,
-        }),
+        (Some(manager), Some(id), Some(key)) if manager == "terraform" || manager == "stack" => {
+            Some(ResourceOwner {
+                manager: if manager == "stack" {
+                    Manager::Stack
+                } else {
+                    Manager::Terraform
+                },
+                id: Uuid::parse_str(&id).map_err(|_| PersistenceError::IacOwnershipConflict)?,
+                key,
+            })
+        }
         _ => return Err(PersistenceError::IacOwnershipConflict),
     };
     let native: Option<(String, String)> = conn

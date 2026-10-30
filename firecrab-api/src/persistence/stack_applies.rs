@@ -109,7 +109,9 @@ impl Store {
                     })
             })
             .count();
-        if current.bindings.len() + creates.len() - pruned > firecrab_stack::MAX_RESOURCES {
+        if super::stacks::binding_count(&tx, current.id, None)? + creates.len() - pruned
+            > firecrab_stack::MAX_RESOURCES
+        {
             return Err(PersistenceError::StackBindingLimit);
         }
         tx.execute("INSERT INTO stack_applies (operation_id,stack_id,desired_hash,allow_stop,state,status) VALUES (?1,?2,?3,?4,'queued',?5)",

@@ -21,6 +21,11 @@ fn inventory_resource_identities_normalize_uuid_aliases_and_reject_unknown_kinds
     for (kind, id) in [
         ("unknown", "ghcr.io"),
         ("network", "named"),
+        ("volume", "named"),
+        ("storage_root", "named"),
+        ("security_group", "named"),
+        ("shell", "named"),
+        ("schedule", "named"),
         ("vm", "00000000-0000-0000-0000-000000000000"),
         ("registry", "bad\nvalue"),
     ] {

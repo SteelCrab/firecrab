@@ -47,6 +47,8 @@ mod stack_applies;
 mod stack_sources;
 pub(crate) use stack_sources::SourceTrigger;
 mod iac_owners;
+mod iac_resources;
+pub(crate) use iac_resources::TRANSFER_KINDS as IAC_TRANSFER_KINDS;
 mod stacks;
 pub use registries::RegistryLogin;
 pub(crate) use schedules::ScheduleMutation;

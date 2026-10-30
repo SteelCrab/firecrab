@@ -2,6 +2,7 @@ use super::*;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
+use firecrab_stack::ResourceKind;
 use firecrab_stack::{ApplyState, ApplyStatus, Binding};
 use serde_json::{Value, json};
 use tower::ServiceExt;

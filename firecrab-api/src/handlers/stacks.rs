@@ -84,6 +84,7 @@ pub async fn bind(
     Path(name): Path<String>,
     ValidatedJson(binding): ValidatedJson<Binding>,
 ) -> Result<Json<StackRecord>, AppError> {
+    let _admission = state.stack_apply_admission.lock().await;
     let _claim = state.service_mutations.lock().await;
     change_binding(state.store.clone(), request_id.0, name, binding, false)
         .await
@@ -97,6 +98,7 @@ pub async fn unbind(
     Path(name): Path<String>,
     ValidatedJson(binding): ValidatedJson<Binding>,
 ) -> Result<Json<StackRecord>, AppError> {
+    let _admission = state.stack_apply_admission.lock().await;
     let _claim = state.service_mutations.lock().await;
     change_binding(state.store.clone(), request_id.0, name, binding, true)
         .await

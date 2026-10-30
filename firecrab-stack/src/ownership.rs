@@ -34,7 +34,18 @@ impl ManagedResource {
             }
             self.id = id.to_string();
         }
-        if self.legacy_kind().is_some() && Uuid::parse_str(&self.id).is_err() {
+        if matches!(
+            self.kind.as_str(),
+            "network"
+                | "vm"
+                | "service"
+                | "storage_root"
+                | "volume"
+                | "security_group"
+                | "shell"
+                | "schedule"
+        ) && Uuid::parse_str(&self.id).is_err()
+        {
             return Err("this resource kind requires a UUID");
         }
         Ok(())

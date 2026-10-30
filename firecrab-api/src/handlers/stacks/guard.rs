@@ -4,7 +4,8 @@ use axum::extract::{FromRequestParts, MatchedPath, Path, Request, State};
 use axum::http::Method;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use firecrab_stack::ResourceKind;
+use firecrab_stack::ManagedResource;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -27,13 +28,21 @@ pub(crate) async fn protect_resources(
     let Some(path) = request.extensions().get::<MatchedPath>() else {
         return next.run(request).await;
     };
-    let kind = if path.as_str().starts_with("/api/micro-networks/{id}") {
-        ResourceKind::Network
-    } else if path.as_str().starts_with("/api/vms/{id}")
-        && path.as_str() != "/api/vms/{id}/ssh-host-key/check"
-    {
-        ResourceKind::Vm
-    } else {
+    if path.as_str() == "/api/vms/{id}/ssh-host-key/check" {
+        return next.run(request).await;
+    }
+    let kind = [
+        ("/api/micro-networks/{id}", "network"),
+        ("/api/vms/{id}", "vm"),
+        ("/api/micro-storages/{id}", "storage_root"),
+        ("/api/microblockstorage/{id}", "volume"),
+        ("/api/security-groups/{id}", "security_group"),
+        ("/api/shells/{id}", "shell"),
+        ("/api/schedules/{id}", "schedule"),
+    ]
+    .into_iter()
+    .find_map(|(prefix, kind)| path.as_str().starts_with(prefix).then_some(kind));
+    let Some(kind) = kind else {
         return next.run(request).await;
     };
     let request_id = request
@@ -44,8 +53,11 @@ pub(crate) async fn protect_resources(
     // Use the router's decoded parameter, not the raw URI. Percent-encoded UUID
     // characters must not provide a second route around the ownership check.
     let (mut parts, body) = request.into_parts();
-    let id = match Path::<String>::from_request_parts(&mut parts, &state).await {
-        Ok(Path(id)) => match super::super::vms::parse_id(&id, request_id) {
+    let id = match Path::<HashMap<String, String>>::from_request_parts(&mut parts, &state).await {
+        Ok(Path(parameters)) => match super::super::vms::parse_id(
+            parameters.get("id").map(String::as_str).unwrap_or_default(),
+            request_id,
+        ) {
             Ok(id) => id,
             Err(error) => return error.into_response(),
         },
@@ -56,28 +68,15 @@ pub(crate) async fn protect_resources(
     let _admission = state.stack_apply_admission.lock().await;
     let store = state.store.clone();
     match super::database(request_id, move || {
-        let busy = store.stack_resource_apply_busy(kind, id)?;
-        let ownership = store.iac_resource_owner(&firecrab_stack::ManagedResource {
-            kind: kind.as_str().into(),
+        store.iac_public_write_allowed(&ManagedResource {
+            kind: kind.into(),
             id: id.to_string(),
-        })?;
-        Ok((
-            busy,
-            ownership
-                .owner
-                .is_some_and(|owner| owner.manager == firecrab_stack::Manager::Terraform),
-        ))
+        })
     })
     .await
     {
-        Ok((_, true)) => crate::handlers::iac::managed(request_id).into_response(),
-        Ok((false, false)) => next.run(Request::from_parts(parts, body)).await,
-        Ok((true, false)) => AppError::conflict(
-            "stack_apply_busy",
-            "wait for the owning stack apply before changing this resource",
-            request_id,
-        )
-        .into_response(),
+        Ok(false) => crate::handlers::iac::managed(request_id).into_response(),
+        Ok(true) => next.run(Request::from_parts(parts, body)).await,
         Err(error) => error.into_response(),
     }
 }
