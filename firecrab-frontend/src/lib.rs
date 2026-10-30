@@ -594,6 +594,7 @@ fn endpoint(route: &str) -> &'static str {
         "security-groups" => "/api/security-groups",
         "secrets" => "/api/secrets",
         "services" => "/api/micro-services",
+        "security" => "/api/service-security",
         "networks" => "/api/micro-networks",
         "storages" => "/api/micro-storages",
         "volumes" => "/api/microblockstorage",
