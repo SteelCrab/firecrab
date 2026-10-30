@@ -428,12 +428,52 @@ async fn checkpoint_is_matched_idempotent_and_keeps_partial_failures_incomplete(
     db.save_document(0, &json!({"checkpoint":"retained"}))
         .unwrap();
     db.mark_initialized().unwrap();
+    drop(db);
     let id = Uuid::new_v4();
-    let manifest = checkpoint::create_checkpoint(&state, &binding, &db, id).unwrap();
-    assert_eq!(
-        checkpoint::create_checkpoint(&state, &binding, &db, id).unwrap(),
-        manifest
+    let path = format!(
+        "/api/ai-sandbox/projects/{}/workspace/checkpoints/{id}",
+        b.project_id
     );
+    let (status, created) = call(&state, "PUT", &path, json!({}), None).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let manifest: ProjectWorkspaceCheckpoint = serde_json::from_value(created.clone()).unwrap();
+    let (status, retried) = call(&state, "PUT", &path, json!({}), None).await;
+    assert_eq!(status, StatusCode::OK, "{retried}");
+    assert_eq!(retried, created);
+    let reader = Uuid::new_v4();
+    assert_eq!(
+        call(&state, "GET", &path, json!({}), Some(reader)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    state
+        .store
+        .save_sandbox_access(
+            reader,
+            &SandboxAccessPolicy {
+                grants: vec![SandboxResourceGrant {
+                    resource: SandboxResource::Project { id: b.project_id },
+                    permissions: vec![SandboxPermission::Read],
+                }],
+            },
+        )
+        .unwrap();
+    let (status, fetched) = call(&state, "GET", &path, json!({}), Some(reader)).await;
+    assert_eq!(status, StatusCode::OK, "{fetched}");
+    assert_eq!(fetched, created);
+    assert_eq!(
+        call(&state, "PUT", &path, json!({}), Some(reader)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let missing = format!(
+        "/api/ai-sandbox/projects/{}/workspace/checkpoints/{}",
+        b.project_id,
+        Uuid::new_v4()
+    );
+    assert_eq!(
+        call(&state, "GET", &missing, json!({}), None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let db = open(&state, &binding).unwrap();
     let saved = db.directory.join("checkpoints").join(id.to_string());
     let restored = rusqlite::Connection::open(saved.join("project.db")).unwrap();
     let json: String = restored
@@ -581,6 +621,15 @@ async fn interrupted_provisioning_is_explicit_and_wrong_mount_is_not_reserved() 
             .join("project.db")
             .exists()
     );
+    let (status, result) = call(
+        &state,
+        "PUT",
+        &(path.clone() + "/state"),
+        json!({"expectedRevision":0,"document":{"during":"provisioning"}}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{result}");
     let retry = bind(&state, &b).await;
     assert_eq!(retry["databaseId"], pending.database_id.to_string());
     assert_eq!(retry["generation"], 1);
@@ -821,4 +870,176 @@ fi
     )
     .unwrap();
     assert!(!run(true).status.success());
+}
+
+#[tokio::test]
+async fn metadata_api_rejects_invalid_writes_and_preserves_state_during_contention() {
+    let (_dir, state, b) = fixture().await;
+    let path = format!("/api/ai-sandbox/projects/{}/workspace", b.project_id);
+    assert_eq!(
+        call(&state, "GET", &path, json!({}), None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    bind(&state, &b).await;
+    let update = path.clone() + "/state";
+    for document in [
+        json!([]),
+        json!({"oversized":"x".repeat(db::DOCUMENT_LIMIT)}),
+    ] {
+        let (status, result) = call(
+            &state,
+            "PUT",
+            &update,
+            json!({"expectedRevision":0,"document":document}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{result}");
+        assert_eq!(result["error"]["code"], "invalid_workspace");
+    }
+    let binding = state
+        .store
+        .project_workspace(b.project_id)
+        .unwrap()
+        .unwrap();
+    let db = open(&state, &binding).unwrap();
+    let (status, result) = call(
+        &state,
+        "PUT",
+        &update,
+        json!({"expectedRevision":0,"document":{"rejected":true}}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{result}");
+    assert_eq!(result["error"]["code"], "workspace_busy");
+    assert_eq!(db.document().unwrap().0, 0);
+    assert_eq!(db.document().unwrap().1, json!({}));
+    drop(db);
+    let writer = Uuid::new_v4();
+    state
+        .store
+        .save_sandbox_access(
+            writer,
+            &SandboxAccessPolicy {
+                grants: vec![SandboxResourceGrant {
+                    resource: SandboxResource::Project { id: b.project_id },
+                    permissions: vec![SandboxPermission::Write],
+                }],
+            },
+        )
+        .unwrap();
+    let (status, result) = call(
+        &state,
+        "PUT",
+        &update,
+        json!({"expectedRevision":0,"document":{"retained":"authorized write"}}),
+        Some(writer),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["revision"], 1);
+    let (status, result) = call(&state, "GET", &path, json!({}), None).await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["document"]["retained"], "authorized write");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn reconcile_rejects_unready_resources_and_keeps_retryable_initialization() {
+    let (_dir, state, b) = fixture().await;
+    let path = format!(
+        "/api/ai-sandbox/projects/{}/workspace/reconcile",
+        b.project_id
+    );
+    assert_eq!(
+        call(&state, "POST", &path, json!({}), Some(Uuid::new_v4()))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&state, "POST", &path, json!({}), None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let pending = state
+        .store
+        .reserve_project_workspace(b.project_id, b.volume_id, b.vm_id, None)
+        .unwrap();
+    assert_eq!(
+        call(&state, "POST", &path, json!({}), None).await.0,
+        StatusCode::CONFLICT
+    );
+    bind(&state, &b).await;
+    let (status, result) = call(&state, "POST", &path, json!({}), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{result}");
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Start the selected workspace VM")
+    );
+    {
+        let mut vms = state.vms.lock().unwrap();
+        let vm = vms.get_mut(&b.vm_id).unwrap();
+        vm.state = VmState::Running;
+        vm.last_runtime_id = Some(Uuid::new_v4());
+    }
+    let binding = state
+        .store
+        .project_workspace(b.project_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(binding.database_id, pending.database_id);
+    let volume = state.store.block_storage(b.volume_id).unwrap();
+    let disk = block_storage::disk_path(&state, &volume).unwrap();
+    let retained = disk.with_extension("retained");
+    fs::rename(&disk, &retained).unwrap();
+    let (status, result) = call(&state, "POST", &path, json!({}), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{result}");
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing, mismatched, or detached")
+    );
+    let db = open(&state, &binding).unwrap();
+    assert!(db.import_sha().unwrap().is_none());
+    drop(db);
+    fs::rename(&retained, &disk).unwrap();
+    // No operator SSH key exists in this fixture. Transport failure must preserve import identity.
+    let mut initial_digest = None;
+    for _ in 0..2 {
+        let (status, result) = call(&state, "POST", &path, json!({}), None).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{result}");
+        assert!(
+            result["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("could not be confirmed")
+        );
+        let db = open(&state, &binding).unwrap();
+        let digest = db
+            .import_sha()
+            .unwrap()
+            .expect("archive identity persisted before guest transport");
+        assert_eq!(
+            checkpoint::digest(&db.directory.join("import.tar")).unwrap(),
+            digest
+        );
+        if let Some(previous) = &initial_digest {
+            assert_eq!(&digest, previous);
+        }
+        initial_digest = Some(digest);
+        assert!(!db.document().unwrap().2);
+        assert!(
+            state
+                .store
+                .project_workspace(b.project_id)
+                .unwrap()
+                .unwrap()
+                .verified_runtime_id
+                .is_none()
+        );
+    }
 }
