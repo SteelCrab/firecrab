@@ -89,7 +89,9 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "pool",
             "queue",
             "database_connection",
-            "storage_connection"
+            "storage_connection",
+            "secret",
+            "secret_connection"
         ])
     );
     assert_eq!(
@@ -316,6 +318,47 @@ fn configuration_resource(
                 }),
             })
             .unwrap(),
+        "secret" => state
+            .secrets
+            .write(|contents| {
+                contents.secrets.push(crate::secrets::Secret {
+                    summary: crate::secrets::SecretSummary {
+                        id,
+                        name: "OWNED_SECRET".into(),
+                        description: String::new(),
+                        version: 1,
+                        created_at: 1,
+                        updated_at: 1,
+                        source: None,
+                    },
+                    value: "fixture-credential-never-echo".into(),
+                });
+                Ok(())
+            })
+            .unwrap(),
+        "secret_connection" => state
+            .secrets
+            .write(|contents| {
+                contents.connections.push(crate::secrets::Connection {
+                    summary: crate::secrets::ConnectionSummary {
+                        id,
+                        name: "owned-secret-connection".into(),
+                        provider: crate::secrets::Provider::Firecrab,
+                        settings: crate::secrets::Settings {
+                            base_url: "http://127.0.0.1:9".into(),
+                            ..Default::default()
+                        },
+                        version: 1,
+                        updated_at: 1,
+                    },
+                    credentials: std::collections::BTreeMap::from([(
+                        "token".into(),
+                        "fixture-credential-never-echo".into(),
+                    )]),
+                });
+                Ok(())
+            })
+            .unwrap(),
         _ => panic!("unsupported fixture kind"),
     }
     ManagedResource {
@@ -362,6 +405,12 @@ async fn iac_configuration_ownership_transfers_and_guards_each_public_write_rout
         (
             "storage_connection",
             "pipe/storage",
+            vec![("DELETE", ""), ("PUT", "")],
+        ),
+        ("secret", "secrets", vec![("DELETE", ""), ("PUT", "")]),
+        (
+            "secret_connection",
+            "secrets/connections",
             vec![("DELETE", ""), ("PUT", "")],
         ),
     ] {
@@ -965,26 +1014,31 @@ async fn iac_owner_browser_fixture() {
         "queue",
         "database_connection",
         "storage_connection",
+        "secret",
+        "secret_connection",
     ] {
         let resource = configuration_resource(&state, root.path(), id, kind);
         let before = state.store.iac_resource_owner(&resource).unwrap();
-        ownerships.push(
+        let transfer = ChangeResourceOwner {
+            expected_endpoint_id: before.endpoint_id,
+            operation_id: Uuid::new_v4(),
+            resource,
+            expected_generation: before.generation,
+            expected_owner: before.owner,
+            owner: Some(firecrab_stack::ResourceOwner {
+                manager: firecrab_stack::Manager::Terraform,
+                id: change.owner.as_ref().unwrap().id,
+                key: format!("firecrab_{kind}.application"),
+            }),
+        };
+        ownerships.push(if matches!(kind, "secret" | "secret_connection") {
             state
                 .store
-                .change_iac_resource_owner(&ChangeResourceOwner {
-                    expected_endpoint_id: before.endpoint_id,
-                    operation_id: Uuid::new_v4(),
-                    resource,
-                    expected_generation: before.generation,
-                    expected_owner: before.owner,
-                    owner: Some(firecrab_stack::ResourceOwner {
-                        manager: firecrab_stack::Manager::Terraform,
-                        id: change.owner.as_ref().unwrap().id,
-                        key: format!("firecrab_{kind}.application"),
-                    }),
-                })
-                .unwrap(),
-        );
+                .change_iac_vault_owner(&transfer, &state.secrets)
+                .unwrap()
+        } else {
+            state.store.change_iac_resource_owner(&transfer).unwrap()
+        });
     }
     ownerships.sort_by(|a, b| {
         (&a.resource.kind, &a.resource.id).cmp(&(&b.resource.kind, &b.resource.id))
@@ -1054,3 +1108,6 @@ async fn iac_owner_api_waits_for_service_mutation_admission() {
     drop(services);
     assert_eq!(pending.await.unwrap().0, StatusCode::OK);
 }
+
+#[path = "iac_vault.rs"]
+mod vault;

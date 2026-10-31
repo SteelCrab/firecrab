@@ -73,7 +73,14 @@ pub async fn change_owner(
     let _admission = state.stack_apply_admission.lock().await;
     let _services = state.service_mutations.lock().await;
     database(request.0, move || {
-        state.store.change_iac_resource_owner(&change)
+        if matches!(
+            change.resource.kind.as_str(),
+            "secret" | "secret_connection"
+        ) {
+            state.store.change_iac_vault_owner(&change, &state.secrets)
+        } else {
+            state.store.change_iac_resource_owner(&change)
+        }
     })
     .await
     .map(Json)

@@ -519,6 +519,9 @@ pub enum PersistenceError {
     /// Generated children retain their parent controller's immutable authority.
     #[error("resource belongs to a parent controller")]
     IacParentManaged,
+    /// A failed encrypted-vault lookup cannot be treated as an absent resource.
+    #[error("IaC credential store is unavailable")]
+    IacVaultUnavailable,
     /// The request was prepared for a different API endpoint.
     #[error("IaC endpoint identity changed")]
     IacEndpointConflict,

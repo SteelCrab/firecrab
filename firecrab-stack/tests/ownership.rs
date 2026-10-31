@@ -30,6 +30,8 @@ fn inventory_resource_identities_normalize_uuid_aliases_and_reject_unknown_kinds
         ("queue", "named"),
         ("database_connection", "named"),
         ("storage_connection", "named"),
+        ("secret", "named"),
+        ("secret_connection", "named"),
         ("vm", "00000000-0000-0000-0000-000000000000"),
         ("registry", "bad\nvalue"),
     ] {

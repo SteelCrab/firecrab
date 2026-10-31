@@ -181,6 +181,52 @@ impl Store {
         &self,
         request: &ChangeResourceOwner,
     ) -> Result<ResourceOwnership, PersistenceError> {
+        self.change_iac_owner_checked(request, None)
+    }
+
+    /// Hold the encrypted vault's file lock through the SQLite ownership commit.
+    /// Native vault writers take the same locks in this order before mutation.
+    pub(crate) fn change_iac_vault_owner(
+        &self,
+        request: &ChangeResourceOwner,
+        vault: &crate::secrets::Vault,
+    ) -> Result<ResourceOwnership, PersistenceError> {
+        if !matches!(
+            request.resource.kind.as_str(),
+            "secret" | "secret_connection"
+        ) {
+            return Err(PersistenceError::UnsupportedIacResource);
+        }
+        // Recover an exact committed retry even when the vault is now unavailable.
+        match self.change_iac_resource_owner(request) {
+            Err(PersistenceError::UnsupportedIacResource) => {}
+            result => return result,
+        }
+        let id =
+            Uuid::parse_str(&request.resource.id).map_err(|_| PersistenceError::InvalidIacOwner)?;
+        vault
+            .read(|contents| {
+                let exists = if request.resource.kind == "secret" {
+                    contents
+                        .secrets
+                        .iter()
+                        .any(|record| record.summary.id == id)
+                } else {
+                    contents
+                        .connections
+                        .iter()
+                        .any(|record| record.summary.id == id)
+                };
+                Ok(self.change_iac_owner_checked(request, Some(exists)))
+            })
+            .map_err(|_| PersistenceError::IacVaultUnavailable)?
+    }
+
+    fn change_iac_owner_checked(
+        &self,
+        request: &ChangeResourceOwner,
+        vault_presence: Option<bool>,
+    ) -> Result<ResourceOwnership, PersistenceError> {
         let mut request = request.clone();
         request
             .validate()
@@ -233,6 +279,17 @@ impl Store {
                         resource_id: id,
                     },
                 )?;
+            }
+        } else if matches!(
+            request.resource.kind.as_str(),
+            "secret" | "secret_connection"
+        ) {
+            let exists = vault_presence.ok_or(PersistenceError::UnsupportedIacResource)?;
+            if request.owner.is_some() {
+                super::iac_resources::ensure_independent(&tx, &request.resource)?;
+            }
+            if request.owner.is_some() && !exists {
+                return Err(PersistenceError::InvalidStackResource);
             }
         } else {
             super::iac_resources::validate(&tx, &request.resource, request.owner.is_some())?;

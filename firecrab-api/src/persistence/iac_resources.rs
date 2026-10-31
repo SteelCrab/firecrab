@@ -19,6 +19,8 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "queue",
     "database_connection",
     "storage_connection",
+    "secret",
+    "secret_connection",
 ];
 
 /// Reservations and tombstones keep generated identities with their parent.

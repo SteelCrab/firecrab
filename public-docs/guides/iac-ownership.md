@@ -7,7 +7,7 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 ## Current support
 
 Network, standalone VM, MicroService, registered storage root, volume, security group,
-shell, schedule, pool, Queue, database connection and S3 connection ownership
+shell, schedule, pool, Queue, database connection, S3 connection, Secret and Secret connection ownership
 can move between native Stack and a Terraform state owner.
 Protected controller/pool/builder VMs and resources with active operations cannot be adopted.
 Generated Sandbox environment networks, security groups and VMs retain their parent's authority.
@@ -29,6 +29,13 @@ Database maintenance also blocks transfers through other saved aliases of the sa
 These checks include backups, migrations, restores and work awaiting recovery.
 Pool leases and application row/object operations retain their existing permissions.
 Connection ownership manages configuration and credentials, while external data stays with its existing owner.
+
+Secret ownership uses the encrypted vault's file lock through the metadata commit.
+Single-value edits and bulk imports check the current writer inside that same lock.
+An import checks every selected destination before replacing any value.
+Explicit operator reveal and external data transfers keep their existing permissions.
+Values and provider credentials do not enter ownership records or acknowledgements.
+A vault read failure rejects new ownership changes; an exact committed retry still returns its original result.
 
 The selected endpoint is the host/controller scope.
 Use existing [mTLS](mtls.md) for remote requests.

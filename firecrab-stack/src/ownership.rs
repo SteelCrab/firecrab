@@ -48,6 +48,8 @@ impl ManagedResource {
                 | "queue"
                 | "database_connection"
                 | "storage_connection"
+                | "secret"
+                | "secret_connection"
         ) && Uuid::parse_str(&self.id).is_err()
         {
             return Err("this resource kind requires a UUID");

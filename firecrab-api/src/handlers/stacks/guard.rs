@@ -38,6 +38,8 @@ pub(crate) async fn protect_resources(
             Some("database_connection")
         }
         "/api/pipe/storage/{id}" => Some("storage_connection"),
+        "/api/secrets/{id}" => Some("secret"),
+        "/api/secrets/connections/{id}" => Some("secret_connection"),
         _ => None,
     };
     let kind = configuration.or_else(|| {
