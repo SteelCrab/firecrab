@@ -6,7 +6,8 @@ use axum::{
     http::StatusCode,
 };
 use firecrab_stack::{
-    ConfigureGitSource, GitCheck, GitSourceGeneration, GitSourceStatus, SyncGitSource,
+    ConfigureGitSource, DeleteGitSource, GitCheck, GitSourceGeneration, GitSourceStatus,
+    SyncGitSource,
 };
 
 use super::stacks::{database, validate_name};
@@ -51,6 +52,35 @@ pub async fn get(
     .map(Json)
 }
 
+/// Observe retained generation even after removing source configuration.
+pub async fn generation(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    Path(name): Path<String>,
+) -> Result<Json<GitSourceGeneration>, AppError> {
+    validate_name(&name, id.0)?;
+    database(id.0, move || state.store.stack_source_generation(&name))
+        .await
+        .map(Json)
+}
+
+/// Remove only Git configuration; keep Stack bindings, workloads and observation history.
+pub async fn remove(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    Path(name): Path<String>,
+    ValidatedJson(request): ValidatedJson<DeleteGitSource>,
+) -> Result<Json<firecrab_stack::NativeOperation>, AppError> {
+    validate_name(&name, id.0)?;
+    let _admission = state.stack_apply_admission.lock().await;
+    let _services = state.service_mutations.lock().await;
+    database(id.0, move || {
+        state.store.remove_stack_source(&name, &request)
+    })
+    .await
+    .map(Json)
+}
+
 /// Return the latest fifty checks, including earlier configuration generations.
 pub async fn history(
     State(state): State<AppState>,
@@ -59,9 +89,13 @@ pub async fn history(
 ) -> Result<Json<Vec<GitCheck>>, AppError> {
     validate_name(&name, id.0)?;
     database(id.0, move || {
-        state
+        match state
             .store
-            .refresh_stack_sync(&name, crate::stack_source::now())?;
+            .refresh_stack_sync(&name, crate::stack_source::now())
+        {
+            Ok(_) | Err(crate::persistence::PersistenceError::MissingStackSource) => {}
+            Err(error) => return Err(error),
+        }
         state.store.stack_check_history(&name)
     })
     .await

@@ -27,6 +27,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "ai_model",
     "sandbox_environment",
     "sandbox_project",
+    "stack_source",
 ];
 
 /// Reservations and tombstones keep generated identities with their parent.
@@ -88,6 +89,9 @@ pub(super) fn validate(
         "sandbox_project" => {
             "SELECT EXISTS(SELECT 1 FROM ai_sandbox_projects WHERE id=?1 AND json_extract(spec,'$.id')=?1)"
         }
+        "stack_source" => {
+            "SELECT EXISTS(SELECT 1 FROM stack_git_sources WHERE stack_id=?1 AND json_extract(status,'$.stackId')=?1)"
+        }
         _ => return Err(PersistenceError::UnsupportedIacResource),
     };
     if adopting && !conn.query_row(exists, [&resource.id], |row| row.get::<_, bool>(0))? {
@@ -118,6 +122,11 @@ pub(super) fn validate(
              OR EXISTS(SELECT 1 FROM queue_engine WHERE COALESCE(json_extract(record,'$.phase'),'') NOT IN ('running','stopped','failed'))",
         ),
         "database_connection" => return database_idle(conn, resource),
+        "stack_source"=>{
+            let id=uuid::Uuid::parse_str(&resource.id).map_err(|_|PersistenceError::InvalidIacOwner)?;
+            super::stack_sources::ensure_idle(conn,id)?;
+            return super::stack_applies::ensure_idle(conn,id);
+        }
         "sandbox_environment" => Some(
             "SELECT EXISTS(SELECT 1 FROM ai_sandbox_environments WHERE id=?1 AND state IN ('provisioning','cleanup_pending'))
              OR EXISTS(SELECT 1 FROM ai_sandbox_environment_resources r JOIN vms v ON v.id=r.id

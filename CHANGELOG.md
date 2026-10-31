@@ -29,13 +29,16 @@ Entries land here as work merges, and move under the next version heading when t
   standalone VMs, services, registered storage roots, volumes, security groups,
   shells, schedules, pools, queues, database and S3 connections, Secrets and Secret
   connections, Auth provider slots, direct registry logins, AI connections and project
-  model defaults, Sandbox environments and projects, with persistent endpoint identity, durable retry
+  model defaults, Sandbox environments/projects and Git sources, with persistent endpoint identity, durable retry
   acknowledgements, mTLS CLI commands and dashboard visibility. Other service adapters and the
   Terraform provider remain tracked in #548.
 - Persist Sandbox project deletion before removing its private workspace.
   Keep the worker alive after HTTP disconnects, retain uncertain-operation fences
   across restart, and recover the original typed action through API and CLI commands.
   Preserve borrowed sources and block late work against retired project identities (#548).
+- Disconnect exact Git source generations with immutable operation acknowledgements.
+  Retain infrastructure, bindings and check history. Preserve removal generations across
+  restart and recreation so an old delete retry cannot remove a new source (#548).
 - Keep generated Sandbox environment networks, security groups and VMs under
   their parent controller. Reject independent adoption and public mutation,
   while allowing old child bindings to be released without deleting resources.

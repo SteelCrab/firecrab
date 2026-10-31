@@ -97,10 +97,21 @@ pub async fn recover_native_operation(
     caller: crate::ai_sandbox::access::Caller,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<firecrab_stack::NativeOperation>, AppError> {
+    caller.operator().map_err(|_| {
+        AppError::new(
+            axum::http::StatusCode::FORBIDDEN,
+            "sandbox_permission_denied",
+            "native operation recovery requires operator access",
+            request.0,
+        )
+    })?;
     let store = state.store.clone();
     let operation = database(request.0, move || store.iac_native_operation(id))
         .await?
         .ok_or_else(|| AppError::not_found(request.0))?;
+    if operation.state == firecrab_stack::NativeOperationState::Succeeded {
+        return Ok(Json(operation));
+    }
     super::ai_sandbox::recover_project_delete(state, request, caller, operation)
         .await
         .map(Json)

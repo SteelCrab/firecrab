@@ -31,8 +31,8 @@ pub use planning::{
     ResourceKind, ServiceSnapshot, StackRecord, VmSnapshot, fingerprint, plan,
 };
 pub use source::{
-    ConfigureGitSource, GitCheck, GitCheckState, GitCredential, GitRevision, GitSource,
-    GitSourceGeneration, GitSourceStatus, GitSyncMode, SyncGitSource,
+    ConfigureGitSource, DeleteGitSource, GitCheck, GitCheckState, GitCredential, GitRevision,
+    GitSource, GitSourceGeneration, GitSourceStatus, GitSyncMode, SyncGitSource,
 };
 
 /// Maximum UTF-8 manifest size, including comments.

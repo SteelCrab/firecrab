@@ -104,6 +104,10 @@ Wait for an active check or apply to finish before changing source configuration
 These operations return `409 stack_source_busy` while a run is active.
 Pause suppresses future polls; it does not cancel an already accepted operation.
 
+To disconnect the source while retaining its Stack, bindings and history, use the
+[versioned source removal workflow](iac-source-removal.md).
+`stack source generation NAME` reads the retained generation after removal; it does not reset to zero.
+
 The poll interval defaults to 900 seconds and accepts 60–86400 seconds.
 The scheduler checks due sources every five seconds. At most four source checks contact GitHub concurrently.
 Failures double the interval for each consecutive failure, up to a factor of 64 and a maximum delay of one day.

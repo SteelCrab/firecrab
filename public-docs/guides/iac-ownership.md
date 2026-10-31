@@ -8,12 +8,15 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 
 Network, standalone VM, MicroService, registered storage root, volume, security group,
 shell, schedule, pool, Queue, database connection, S3 connection, Secret, Secret connection,
-Auth, registry, AI connection, project model-default, Sandbox environment and project ownership
+Auth, registry, AI connection, project model-default, Sandbox environment/project and Git source ownership
 can move between native Stack and a Terraform state owner.
 Protected controller/pool/builder VMs and resources with active operations cannot be adopted.
 Generated Sandbox environment networks, security groups and VMs retain their parent's authority.
 Their reservation ledger blocks independent adoption and direct public edits, including retired environments.
 Borrowed resources remain independent. Old independent child bindings can be released without deleting the child.
+Git source identity is its exact Stack registration UUID; active checks and applies block transfer.
+Configuration writes check ownership in the same SQLite transaction. Controller observations remain available.
+See [safe source removal](iac-source-removal.md) for retained generations and retryable disconnection without destroying infrastructure.
 Other inventory kind names are recognized, but transition returns `unsupported_iac_resource` until their validation/activity adapter exists.
 A Terraform ownership record does not mean the Terraform provider is implemented.
 The Stack dashboard lists Terraform-owned resources and their ownership generation.
@@ -159,7 +162,7 @@ These metadata transactions do not implement the pending per-service deployment 
 
 ## Native project deletion and recovery
 
-The native mutation journal currently covers Sandbox project deletion only.
+The native mutation journal covers Sandbox project deletion and atomic Git source removal.
 It is not the inventory-wide execution adapter required by stage 2.
 The server stores the project UUID, endpoint, ownership generation and typed action before deleting its private workspace.
 Its worker survives an HTTP disconnect. Ownership cannot move while the result is uncertain.

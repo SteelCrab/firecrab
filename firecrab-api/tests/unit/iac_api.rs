@@ -97,7 +97,8 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "ai_connection",
             "ai_model",
             "sandbox_environment",
-            "sandbox_project"
+            "sandbox_project",
+            "stack_source"
         ])
     );
     assert_eq!(
@@ -1064,6 +1065,40 @@ async fn iac_owner_browser_fixture() {
     std::fs::create_dir_all(&state.sandbox.root).unwrap();
     let recovery_workspace = state.sandbox.root.join(&recovery_project.id);
     std::fs::write(&recovery_workspace, "fixture cleanup failure").unwrap();
+    let source_stack = state.store.register_stack("source-proof").unwrap();
+    let source_network = Uuid::new_v4();
+    state.store.insert_micro_network(&serde_json::from_value(json!({"id":source_network,"name":"retained-source-network","subnetCidr":"172.31.21.0/24","gateway":"172.31.21.1","internetEnabled":true})).unwrap()).unwrap();
+    state
+        .store
+        .bind_stack_resource(
+            &source_stack.name,
+            &Binding {
+                kind: ResourceKind::Network,
+                key: "retained".into(),
+                resource_id: source_network,
+            },
+        )
+        .unwrap();
+    state.store.configure_stack_source(&source_stack.name,&serde_json::from_value(json!({"expectedGeneration":0,"source":{"repository":"https://github.com/example/infra","ref":"main","manifestPath":"stack.yaml","paused":true}})).unwrap(),1).unwrap();
+    let checked = state
+        .store
+        .begin_stack_check(
+            &source_stack.name,
+            1,
+            1,
+            crate::persistence::SourceTrigger::Check,
+        )
+        .unwrap()
+        .unwrap()
+        .0;
+    let mut check = checked.latest.unwrap();
+    check.state = firecrab_stack::GitCheckState::Failed;
+    check.finished_at = Some(2);
+    check.error = Some("fixture_no_network".into());
+    state
+        .store
+        .finish_stack_check(source_stack.id, &check, 2)
+        .unwrap();
     let router = build_router(
         state.clone(),
         &HttpConfig {
@@ -1086,7 +1121,8 @@ async fn iac_owner_browser_fixture() {
             .unwrap();
     });
     std::fs::write(&info,serde_json::to_vec_pretty(&json!({"url":url,"ownership":ownership,"ownerships":ownerships,"operationId":change.operation_id,"fixture":true,
-        "nativeRecoveryProjectId":recovery_id,"nativeRecoveryWorkspace":recovery_workspace,"nativeRecoveryBorrowedFile":borrowed.join("keep.txt")})).unwrap()).unwrap();
+        "nativeRecoveryProjectId":recovery_id,"nativeRecoveryWorkspace":recovery_workspace,"nativeRecoveryBorrowedFile":borrowed.join("keep.txt"),
+        "nativeSourceStackId":source_stack.id,"nativeSourceStackName":source_stack.name,"nativeSourceNetworkId":source_network})).unwrap()).unwrap();
     let stop = info.with_extension("stop");
     let started = std::time::Instant::now();
     while !stop.exists() {
@@ -1149,3 +1185,6 @@ mod environment;
 
 #[path = "iac_native.rs"]
 mod native;
+
+#[path = "iac_source.rs"]
+mod source;

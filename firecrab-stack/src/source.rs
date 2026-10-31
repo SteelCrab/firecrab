@@ -133,7 +133,7 @@ impl GitSource {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ConfigureGitSource {
-    /// Current source generation, or zero when no source is configured.
+    /// Current source generation, including a retained removal generation. Zero only before first configuration.
     pub expected_generation: u64,
     /// Complete next configuration. Updates never merge omitted fields.
     pub source: GitSource,
@@ -145,6 +145,20 @@ pub struct ConfigureGitSource {
 pub struct GitSourceGeneration {
     /// Exact generation returned by source status.
     pub generation: u64,
+}
+
+/// Retryable disconnection of an exact source generation; never destroys bound infrastructure.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DeleteGitSource {
+    /// Stable UUID reused after losing the original response.
+    pub operation_id: Uuid,
+    /// Selected API endpoint identity.
+    pub expected_endpoint_id: Uuid,
+    /// Exact Stack registration UUID; the URL name alone cannot authorize deletion.
+    pub expected_stack_id: Uuid,
+    /// Exact source configuration generation to remove.
+    pub expected_generation: u64,
 }
 
 /// Explicit synchronization, including acknowledgement of a failed operation before recovery.

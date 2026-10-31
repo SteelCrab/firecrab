@@ -1,7 +1,7 @@
 /** Actual compiled dashboard + isolated Axum/SQLite fixture; no browser API mocks. */
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -29,15 +29,14 @@ try {
   const capabilities = await identity.json();
   assert.equal(capabilities.endpointId, ownership.endpointId);
   assert.equal(capabilities.inventoryKinds.length, 43);
-  assert.deepEqual(capabilities.transferKinds, ["network", "vm", "service", "storage_root", "volume", "security_group", "shell", "schedule", "pool", "queue", "database_connection", "storage_connection", "secret", "secret_connection", "auth", "registry", "ai_connection", "ai_model", "sandbox_environment", "sandbox_project"]);
+  assert.deepEqual(capabilities.transferKinds, ["network", "vm", "service", "storage_root", "volume", "security_group", "shell", "schedule", "pool", "queue", "database_connection", "storage_connection", "secret", "secret_connection", "auth", "registry", "ai_connection", "ai_model", "sandbox_environment", "sandbox_project", "stack_source"]);
   const observed = await context.request.get(`${origin}api/iac/owners`);
   assert.equal(observed.status(), 200);
-  assert.deepEqual(await observed.json(), fixture.ownerships);
+  assert.deepEqual((await observed.json()).filter(item=>item.owner.manager==="terraform"), fixture.ownerships);
   const cliPath = process.env.FIRECRAB_IAC_QA_CLI;
   assert.ok(cliPath && path.isAbsolute(cliPath), "set the compiled CLI absolute path for native recovery evidence");
-  function cli(args) {
-    return JSON.parse(execFileSync(cliPath,["--api",fixture.url,"iac",...args],{encoding:"utf8"}));
-  }
+  function command(args) {return JSON.parse(execFileSync(cliPath,["--api",fixture.url,...args],{encoding:"utf8"}));}
+  function cli(args) {return command(["iac",...args]);}
   const project=fixture.nativeRecoveryProjectId;
   assert.match(project,/^[0-9a-f-]{36}$/);
   const failure=await context.request.delete(`${origin}api/ai-sandbox/projects/${project}`);
@@ -61,6 +60,25 @@ try {
   assert.deepEqual(cli(["recover-native-operation","--id",nativeBefore.operationId]),nativeAfter);
   assert.equal(await readFile(fixture.nativeRecoveryBorrowedFile,"utf8"),"borrowed contents");
   const nativeRecovery={before:nativeBefore,after:nativeAfter,checks:["real filesystem failure","CLI status discovery","same operation and project UUID after recovery","immutable completed retry","borrowed source retained"],cliSha256:createHash("sha256").update(await readFile(cliPath)).digest("hex")};
+  const sourceName=fixture.nativeSourceStackName;
+  const sourceBefore=command(["stack","source","status",sourceName]);
+  assert.equal(sourceBefore.generation,1);
+  const removalFile=path.join(output,"source-removal-request.json");
+  const removal={operationId:randomUUID(),expectedEndpointId:ownership.endpointId,expectedStackId:fixture.nativeSourceStackId,expectedGeneration:1};
+  await writeFile(removalFile,JSON.stringify(removal));
+  const sourceRemoved=command(["stack","source","remove",sourceName,"--file",removalFile]);
+  assert.equal(sourceRemoved.state,"succeeded");assert.equal(sourceRemoved.action,"delete_stack_source");
+  assert.equal(command(["stack","source","generation",sourceName]).generation,2);
+  assert.equal(command(["stack","source","history",sourceName]).length,1);
+  const sourceFile=path.join(output,"source-recreated.json");
+  await writeFile(sourceFile,JSON.stringify(sourceBefore.source));
+  const recreated=command(["stack","source","configure",sourceName,"--file",sourceFile,"--expected-generation","2"]);
+  assert.equal(recreated.generation,3);
+  assert.deepEqual(command(["stack","source","remove",sourceName,"--file",removalFile]),sourceRemoved);
+  assert.equal(command(["stack","source","status",sourceName]).generation,3);
+  const retained=await context.request.get(`${origin}api/micro-networks/${fixture.nativeSourceNetworkId}`);
+  assert.equal(retained.status(),200);assert.equal((await retained.json()).id,fixture.nativeSourceNetworkId);
+  const sourceRemoval={operation:sourceRemoved,recreatedGeneration:3,retainedNetworkId:fixture.nativeSourceNetworkId,checks:["actual CLI source removal","generation retained at 2","history retained","recreated source generation 3","old delete retry preserves recreated source","bound network retained"],fixtureObservation:"initial Git check metadata was created locally; no GitHub repository fetch"};
   let blockedConfigurations = 0;
   for (const resource of fixture.ownerships) {
     const namespace = {storage_root:"micro-storages",volume:"microblockstorage",security_group:"security-groups",shell:"shells",schedule:"schedules",pool:"pools",queue:"queues",database_connection:"pipe/databases",storage_connection:"pipe/storage",secret:"secrets",secret_connection:"secrets/connections",sandbox_project:"ai-sandbox/projects"}[resource.resource.kind];
@@ -87,6 +105,9 @@ try {
     await page.getByText(owned.owner.key, { exact: true }).waitFor();
   }
   await page.evaluate(async () => { await document.fonts.ready; });
+  await page.getByText(sourceName,{exact:true}).first().evaluate(element=>element.scrollIntoView({block:"start"}));
+  await page.waitForTimeout(500);
+  await page.screenshot({path:path.join(output,`iac-548-ownership-source-${captureDate}.png`),fullPage:true});
   await page.getByText(fixture.ownerships[0].owner.key, { exact: true }).evaluate(element => element.scrollIntoView({ block: "center" }));
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(output, `iac-548-ownership-overview-${captureDate}.png`), fullPage: true });
@@ -109,7 +130,7 @@ try {
   await writeFile(path.join(output, "iac-548-ownership-evidence.json"), JSON.stringify({
     capturedAt: new Date().toISOString(), captureDate, sourceCommit, sourceDirty, focusResource:focus.resource, versions:{browser:browser.version(),node:process.version}, fixture: true, transport: "actual local Axum HTTP; no mocked API responses",
     runtime: "compiled WASM dashboard with disposable SQLite resource records; no Linux/KVM boot",
-    ownership, ownerships:fixture.ownerships,nativeRecovery, checks: ["endpoint identity", `43 inventory kinds; ${capabilities.transferKinds.length} transfer adapters`, "actual ownership read", "direct PATCH rejected with 409", `${blockedConfigurations} configuration kinds reject direct DELETE with 409`, "immutable operation acknowledgement", `${fixture.ownerships.length} ownership records in the actual dashboard`, "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
+    ownership, ownerships:fixture.ownerships,nativeRecovery,sourceRemoval, checks: ["endpoint identity", `43 inventory kinds; ${capabilities.transferKinds.length} transfer adapters`, "actual ownership read", "direct PATCH rejected with 409", `${blockedConfigurations} configuration kinds reject direct DELETE with 409`, "immutable operation acknowledgement", `${fixture.ownerships.length} Terraform ownership records and one retained native binding in the actual dashboard`, "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
   }, null, 2) + "\n");
   console.log("Actual API ownership, mutation rejection, receipt and three dashboard screenshots verified.");
 } finally {

@@ -9,6 +9,8 @@ use uuid::Uuid;
 
 use super::{PersistenceError, Store};
 
+mod removal;
+
 pub(super) const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS stack_git_sources (
     stack_id TEXT PRIMARY KEY REFERENCES stacks(id),
@@ -44,8 +46,17 @@ impl Store {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let record = super::stacks::read_stack(&tx, name)?.ok_or(PersistenceError::MissingStack)?;
+        if !super::iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "stack_source".into(),
+                id: record.id.to_string(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
         let previous = read(&tx, record.id)?;
-        let generation = previous.as_ref().map_or(0, |s| s.generation);
+        let generation = removal::generation(&tx, record.id)?;
         if generation != request.expected_generation {
             return Err(PersistenceError::StaleStackSource);
         }

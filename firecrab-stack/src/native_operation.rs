@@ -10,6 +10,8 @@ use uuid::Uuid;
 pub enum NativeAction {
     /// Delete one project's private workspace and metadata; borrowed sources survive.
     DeleteSandboxProject,
+    /// Disconnect Git configuration without deleting its Stack or infrastructure.
+    DeleteStackSource,
 }
 
 /// Native work remains fenced until completion or explicit recovery.
@@ -38,4 +40,7 @@ pub struct NativeOperation {
     pub state: NativeOperationState,
     /// Static failure category, without upstream messages or supplied values.
     pub error_code: Option<String>,
+    /// Original configuration generation for a versioned metadata removal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_generation: Option<u64>,
 }

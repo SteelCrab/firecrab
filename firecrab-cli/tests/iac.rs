@@ -70,6 +70,59 @@ fn observed() -> Value {
 }
 
 #[test]
+fn source_removal_cli_retries_one_exact_request_and_reads_retained_generation() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("remove.json");
+    let mut ownership = observed();
+    ownership["resource"]["kind"] = json!("stack_source");
+    ownership["owner"] = Value::Null;
+    let input = json!({"operationId":"44444444-4444-4444-8444-444444444444","expectedEndpointId":ownership["endpointId"],"expectedStackId":ownership["resource"]["id"],"expectedGeneration":1});
+    std::fs::write(&file, input.to_string()).unwrap();
+    let result = json!({"operationId":input["operationId"],"ownership":ownership,"action":"delete_stack_source","state":"succeeded","errorCode":null,"configurationGeneration":1});
+    let (url, receive, task) = server(vec![result.clone(), result, json!({"generation":2})]);
+    for _ in 0..2 {
+        let output = Command::new(env!("CARGO_BIN_EXE_firecrab"))
+            .args(["--api", &url, "stack", "source", "remove", "demo", "--file"])
+            .arg(&file)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_firecrab"))
+        .args(["--api", &url, "stack", "source", "generation", "demo"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["generation"],
+        2
+    );
+    task.join().unwrap();
+    let requests = receive.try_iter().collect::<Vec<_>>();
+    assert_eq!(requests[0], requests[1]);
+    assert_eq!(
+        requests[0],
+        ("DELETE".into(), "/api/stacks/demo/source".into(), input)
+    );
+    assert_eq!(
+        requests[2],
+        (
+            "GET".into(),
+            "/api/stacks/demo/source/generation".into(),
+            Value::Null
+        )
+    );
+}
+
+#[test]
 fn native_operation_cli_observes_without_replay_and_recovers_only_the_original_id() {
     let operation = "44444444-4444-4444-8444-444444444444";
     let project = "22222222-2222-4222-8222-222222222222";

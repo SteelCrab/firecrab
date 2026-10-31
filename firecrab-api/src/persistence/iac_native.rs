@@ -38,14 +38,17 @@ pub(super) fn ensure_project_available(
             id: project.to_string(),
         },
     )?;
-    let retired:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM iac_native_operations WHERE kind='sandbox_project' AND resource_id=?1 AND state='succeeded')",[project.to_string()],|row|row.get(0))?;
+    let retired:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM iac_native_operations WHERE kind='sandbox_project' AND resource_id=?1 AND state='succeeded' AND json_extract(status,'$.action')='delete_sandbox_project')",[project.to_string()],|row|row.get(0))?;
     if retired {
         return Err(PersistenceError::IacOperationIdentity);
     }
     Ok(())
 }
 
-fn read(conn: &Connection, id: Uuid) -> Result<Option<NativeOperation>, PersistenceError> {
+pub(super) fn read(
+    conn: &Connection,
+    id: Uuid,
+) -> Result<Option<NativeOperation>, PersistenceError> {
     let raw: Option<String> = conn
         .query_row(
             "SELECT status FROM iac_native_operations WHERE operation_id=?1",
@@ -57,7 +60,7 @@ fn read(conn: &Connection, id: Uuid) -> Result<Option<NativeOperation>, Persiste
         .transpose()
 }
 
-fn save(conn: &Connection, operation: &NativeOperation) -> Result<(), PersistenceError> {
+pub(super) fn save(conn: &Connection, operation: &NativeOperation) -> Result<(), PersistenceError> {
     let state = match operation.state {
         NativeOperationState::Running => "running",
         NativeOperationState::NeedsRecovery => "needs_recovery",
@@ -150,6 +153,7 @@ impl Store {
             action: NativeAction::DeleteSandboxProject,
             state: NativeOperationState::Running,
             error_code: None,
+            configuration_generation: None,
         };
         save(&tx, &operation)?;
         tx.commit()?;
