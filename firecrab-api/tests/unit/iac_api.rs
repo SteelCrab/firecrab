@@ -93,7 +93,9 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "secret",
             "secret_connection",
             "auth",
-            "registry"
+            "registry",
+            "ai_connection",
+            "ai_model"
         ])
     );
     assert_eq!(
@@ -1119,3 +1121,6 @@ mod auth;
 
 #[path = "iac_registry.rs"]
 mod registry;
+
+#[path = "iac_ai.rs"]
+mod ai;

@@ -199,6 +199,7 @@ async fn account(state: &AppState, id: RequestId, key: Uuid) -> Result<SavedConn
     let mut saved = db(id, move || store.ai_connection(key))
         .await?
         .ok_or_else(|| error(id, "ai_connection_missing", "AI account is disconnected"))?;
+    let previous = saved.clone();
     if saved.connection.provider == AiProvider::Openai
         && state
             .pipe_ai
@@ -208,7 +209,7 @@ async fn account(state: &AppState, id: RequestId, key: Uuid) -> Result<SavedConn
     {
         let store = state.store.clone();
         let copy = saved.clone();
-        db(id, move || store.save_ai_connection(&copy)).await?;
+        db(id, move || store.refresh_ai_connection(&previous, &copy)).await?;
     }
     Ok(saved)
 }

@@ -575,6 +575,7 @@ async fn execute(
         .await?;
         access::attempt(state, saved).map_err(execution_error)?;
         let mut account = proof(state, &saved.task.selection, code).map_err(execution_error)?;
+        let previous = account.clone();
         if account.connection.provider == AiProvider::Openai
             && state
                 .pipe_ai
@@ -584,7 +585,7 @@ async fn execute(
         {
             state
                 .store
-                .save_ai_connection(&account)
+                .refresh_ai_connection(&previous, &account)
                 .map_err(|_| execution_error("Cannot save refreshed AI session"))?;
         }
         let mut connections = state

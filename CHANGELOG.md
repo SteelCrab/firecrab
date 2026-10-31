@@ -28,7 +28,8 @@ Entries land here as work merges, and move under the next version heading when t
 - Add generation-checked Stack/Terraform ownership transfer for networks,
   standalone VMs, services, registered storage roots, volumes, security groups,
   shells, schedules, pools, queues, database and S3 connections, Secrets and Secret
-  connections, Auth provider slots and direct registry logins, with persistent endpoint identity, durable retry
+  connections, Auth provider slots, direct registry logins, AI connections and project
+  model defaults, with persistent endpoint identity, durable retry
   acknowledgements, mTLS CLI commands and dashboard visibility. Other service adapters and the
   Terraform provider remain tracked in #548.
 - Keep generated Sandbox environment networks, security groups and VMs under

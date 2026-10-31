@@ -70,8 +70,42 @@ pub async fn change_owner(
             request.0,
         )
     })?;
+    let store = state.store.clone();
+    let operation = change.operation_id;
+    if database(request.0, move || store.iac_ownership_operation(operation))
+        .await?
+        .is_some()
+    {
+        // Validate the original fingerprint before returning its immutable result.
+        // Current controller activity must not turn an acknowledged retry into a new mutation.
+        return database(request.0, move || {
+            state.store.change_iac_resource_owner(&change)
+        })
+        .await
+        .map(Json);
+    }
     let _admission = state.stack_apply_admission.lock().await;
     let _services = state.service_mutations.lock().await;
+    let _ai = if matches!(change.resource.kind.as_str(), "ai_connection" | "ai_model") {
+        Some(state.pipe_ai_mutations.lock().await)
+    } else {
+        None
+    };
+    if change.resource.kind == "ai_connection"
+        && state
+            .pipe_ai_logins
+            .has_pending(
+                uuid::Uuid::parse_str(&change.resource.id)
+                    .map_err(|_| AppError::internal(request.0))?,
+            )
+            .map_err(|_| AppError::unavailable("AI login status is unavailable", request.0))?
+    {
+        return Err(AppError::conflict(
+            "iac_resource_busy",
+            "finish the pending AI login or wait for its expiry before transferring ownership",
+            request.0,
+        ));
+    }
     database(request.0, move || {
         if matches!(
             change.resource.kind.as_str(),

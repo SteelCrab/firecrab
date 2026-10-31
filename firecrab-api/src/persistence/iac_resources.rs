@@ -23,6 +23,8 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "secret_connection",
     "auth",
     "registry",
+    "ai_connection",
+    "ai_model",
 ];
 
 /// Reservations and tombstones keep generated identities with their parent.
@@ -74,6 +76,10 @@ pub(super) fn validate(
             "SELECT EXISTS(SELECT 1 FROM docker_hub_credential WHERE id=1 AND ?1='docker.io')"
         }
         "registry" => "SELECT EXISTS(SELECT 1 FROM registry_credentials WHERE registry=?1)",
+        "ai_connection" => {
+            "SELECT EXISTS(SELECT 1 FROM pipe_ai_connections WHERE id=?1 AND json_extract(spec,'$.connection.id')=?1)"
+        }
+        "ai_model" => "SELECT EXISTS(SELECT 1 FROM pipe_ai_defaults WHERE project_id=?1)",
         _ => return Err(PersistenceError::UnsupportedIacResource),
     };
     if adopting && !conn.query_row(exists, [&resource.id], |row| row.get::<_, bool>(0))? {
@@ -107,7 +113,7 @@ pub(super) fn validate(
         // Connection edits hold the same service-mutation lock as ownership admission.
         "storage_connection" => None,
         // Native credential commits and ownership changes share the SQLite transaction.
-        "auth" | "registry" => None,
+        "auth" | "registry" | "ai_connection" | "ai_model" => None,
         // Adding a revision never changes scripts already pinned by a VM.
         "shell" => None,
         _ => return Err(PersistenceError::UnsupportedIacResource),

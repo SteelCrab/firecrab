@@ -7,7 +7,8 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 ## Current support
 
 Network, standalone VM, MicroService, registered storage root, volume, security group,
-shell, schedule, pool, Queue, database connection, S3 connection, Secret, Secret connection, Auth and registry ownership
+shell, schedule, pool, Queue, database connection, S3 connection, Secret, Secret connection,
+Auth, registry, AI connection and project model-default ownership
 can move between native Stack and a Terraform state owner.
 Protected controller/pool/builder VMs and resources with active operations cannot be adopted.
 Generated Sandbox environment networks, security groups and VMs retain their parent's authority.
@@ -48,6 +49,13 @@ The earlier Docker Hub API and registry API enforce the same ownership.
 Shared Auth controls its derived registry connection; adopt the Auth slot instead.
 A new Auth connection cannot mask an independently managed direct login.
 These competing writes and transfers are checked within the same SQLite transaction.
+
+AI connections and project model defaults use exact UUIDs.
+Pending interactive login blocks a new transfer until completion or expiry.
+Owned model defaults block removing their connection or verified model.
+OAuth refresh keeps the same account and public configuration.
+It matches the previous private credential snapshot, so a late refresh cannot undo rotation or recreate a deleted connection.
+An acknowledged ownership retry returns its original result even while a newer login is pending.
 
 The selected endpoint is the host/controller scope.
 Use existing [mTLS](mtls.md) for remote requests.

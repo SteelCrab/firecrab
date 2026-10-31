@@ -42,6 +42,10 @@ pub(crate) async fn protect_resources(
         "/api/secrets/connections/{id}" => Some("secret_connection"),
         "/api/pipe/auth/{provider}" => Some("auth"),
         "/api/pipe/registries/{registry}" | "/api/microregistry/docker-hub" => Some("registry"),
+        "/api/pipe/ai/connections/{id}"
+        | "/api/pipe/ai/connections/{id}/verify"
+        | "/api/pipe/ai/connections/{id}/login" => Some("ai_connection"),
+        "/api/pipe/ai/projects/{id}/model" => Some("ai_model"),
         _ => None,
     };
     let kind = configuration.or_else(|| {
