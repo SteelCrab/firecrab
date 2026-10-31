@@ -8,7 +8,7 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 
 Network, standalone VM, MicroService, registered storage root, volume, security group,
 shell, schedule, pool, Queue, database connection, S3 connection, Secret, Secret connection,
-Auth, registry, AI connection and project model-default ownership
+Auth, registry, AI connection, project model-default and Sandbox environment ownership
 can move between native Stack and a Terraform state owner.
 Protected controller/pool/builder VMs and resources with active operations cannot be adopted.
 Generated Sandbox environment networks, security groups and VMs retain their parent's authority.
@@ -56,6 +56,10 @@ Owned model defaults block removing their connection or verified model.
 OAuth refresh keeps the same account and public configuration.
 It matches the previous private credential snapshot, so a late refresh cannot undo rotation or recreate a deleted connection.
 An acknowledged ownership retry returns its original result even while a newer login is pending.
+
+Sandbox environment transfer takes the existing controller lock.
+Provisioning, cleanup, VM transitions and unresolved environment tasks block transfer.
+Retired environments cannot be adopted again. Controller observations and retained child authority stay intact.
 
 The selected endpoint is the host/controller scope.
 Use existing [mTLS](mtls.md) for remote requests.

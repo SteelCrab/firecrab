@@ -95,7 +95,8 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "auth",
             "registry",
             "ai_connection",
-            "ai_model"
+            "ai_model",
+            "sandbox_environment"
         ])
     );
     assert_eq!(
@@ -1124,3 +1125,6 @@ mod registry;
 
 #[path = "iac_ai.rs"]
 mod ai;
+
+#[path = "iac_environment.rs"]
+mod environment;

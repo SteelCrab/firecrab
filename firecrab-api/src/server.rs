@@ -904,6 +904,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/ai-sandbox/tasks/{id}/artifacts/{artifact}",
             get(handlers::ai_sandbox::get_artifact),
         )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            handlers::stacks::protect_resources,
+        ))
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(

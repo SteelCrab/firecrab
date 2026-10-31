@@ -25,6 +25,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "registry",
     "ai_connection",
     "ai_model",
+    "sandbox_environment",
 ];
 
 /// Reservations and tombstones keep generated identities with their parent.
@@ -80,6 +81,9 @@ pub(super) fn validate(
             "SELECT EXISTS(SELECT 1 FROM pipe_ai_connections WHERE id=?1 AND json_extract(spec,'$.connection.id')=?1)"
         }
         "ai_model" => "SELECT EXISTS(SELECT 1 FROM pipe_ai_defaults WHERE project_id=?1)",
+        "sandbox_environment" => {
+            "SELECT EXISTS(SELECT 1 FROM ai_sandbox_environments WHERE id=?1 AND state<>'deleted' AND json_extract(spec,'$.id')=?1)"
+        }
         _ => return Err(PersistenceError::UnsupportedIacResource),
     };
     if adopting && !conn.query_row(exists, [&resource.id], |row| row.get::<_, bool>(0))? {
@@ -110,6 +114,13 @@ pub(super) fn validate(
              OR EXISTS(SELECT 1 FROM queue_engine WHERE COALESCE(json_extract(record,'$.phase'),'') NOT IN ('running','stopped','failed'))",
         ),
         "database_connection" => return database_idle(conn, resource),
+        "sandbox_environment" => Some(
+            "SELECT EXISTS(SELECT 1 FROM ai_sandbox_environments WHERE id=?1 AND state IN ('provisioning','cleanup_pending'))
+             OR EXISTS(SELECT 1 FROM ai_sandbox_environment_resources r JOIN vms v ON v.id=r.id
+                       WHERE r.environment_id=?1 AND r.kind='vm' AND v.state IN ('starting','pausing','resuming','stopping'))
+             OR EXISTS(SELECT 1 FROM ai_sandbox_tasks t JOIN ai_sandbox_task_index i ON i.id=t.id
+                       WHERE json_extract(t.spec,'$.task.environment.id')=?1 AND i.busy=1)"
+        ),
         // Connection edits hold the same service-mutation lock as ownership admission.
         "storage_connection" => None,
         // Native credential commits and ownership changes share the SQLite transaction.

@@ -85,6 +85,18 @@ pub async fn change_owner(
         .map(Json);
     }
     let _admission = state.stack_apply_admission.lock().await;
+    let _environment = if change.resource.kind == "sandbox_environment" {
+        Some(
+            state
+                .lock_vm(
+                    uuid::Uuid::parse_str(&change.resource.id)
+                        .map_err(|_| AppError::internal(request.0))?,
+                )
+                .await,
+        )
+    } else {
+        None
+    };
     let _services = state.service_mutations.lock().await;
     let _ai = if matches!(change.resource.kind.as_str(), "ai_connection" | "ai_model") {
         Some(state.pipe_ai_mutations.lock().await)

@@ -70,6 +70,7 @@ impl ManagedResource {
                 | "secret_connection"
                 | "ai_connection"
                 | "ai_model"
+                | "sandbox_environment"
         ) && Uuid::parse_str(&self.id).is_err()
         {
             return Err("this resource kind requires a UUID");

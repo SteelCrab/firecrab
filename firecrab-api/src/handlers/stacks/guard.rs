@@ -46,6 +46,12 @@ pub(crate) async fn protect_resources(
         | "/api/pipe/ai/connections/{id}/verify"
         | "/api/pipe/ai/connections/{id}/login" => Some("ai_connection"),
         "/api/pipe/ai/projects/{id}/model" => Some("ai_model"),
+        "/api/ai-sandbox/projects/{project}/environments/{environment}"
+        | "/api/ai-sandbox/projects/{project}/environments/{environment}/reconcile"
+        | "/api/ai-sandbox/projects/{project}/environments/{environment}/stop"
+        | "/api/ai-sandbox/projects/{project}/environments/{environment}/resume" => {
+            Some("sandbox_environment")
+        }
         _ => None,
     };
     let kind = configuration.or_else(|| {
@@ -91,7 +97,14 @@ pub(crate) async fn protect_resources(
                 parameters.get("provider").cloned().unwrap_or_default()
             }
             Ok(Path(parameters)) => match super::super::vms::parse_id(
-                parameters.get("id").map(String::as_str).unwrap_or_default(),
+                parameters
+                    .get(if kind == "sandbox_environment" {
+                        "environment"
+                    } else {
+                        "id"
+                    })
+                    .map(String::as_str)
+                    .unwrap_or_default(),
                 request_id,
             ) {
                 Ok(id) => id.to_string(),

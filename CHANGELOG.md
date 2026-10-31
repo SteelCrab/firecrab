@@ -29,7 +29,7 @@ Entries land here as work merges, and move under the next version heading when t
   standalone VMs, services, registered storage roots, volumes, security groups,
   shells, schedules, pools, queues, database and S3 connections, Secrets and Secret
   connections, Auth provider slots, direct registry logins, AI connections and project
-  model defaults, with persistent endpoint identity, durable retry
+  model defaults and Sandbox environments, with persistent endpoint identity, durable retry
   acknowledgements, mTLS CLI commands and dashboard visibility. Other service adapters and the
   Terraform provider remain tracked in #548.
 - Keep generated Sandbox environment networks, security groups and VMs under
