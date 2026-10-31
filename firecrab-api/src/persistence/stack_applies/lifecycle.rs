@@ -30,6 +30,13 @@ pub(super) fn validate(
         let Some(resource) = change.resource_id else {
             return Err(PersistenceError::StackApplyIdentity);
         };
+        crate::persistence::iac_resources::ensure_independent(
+            conn,
+            &firecrab_stack::ManagedResource {
+                kind: change.kind.as_str().into(),
+                id: resource.to_string(),
+            },
+        )?;
         if change.action == Action::Create {
             if resource.is_nil()
                 || !creates.insert((change.kind, resource))

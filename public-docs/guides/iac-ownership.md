@@ -10,6 +10,9 @@ Network, standalone VM, MicroService, registered storage root, volume, security 
 shell, schedule, pool, Queue, database connection and S3 connection ownership
 can move between native Stack and a Terraform state owner.
 Protected controller/pool/builder VMs and resources with active operations cannot be adopted.
+Generated Sandbox environment networks, security groups and VMs retain their parent's authority.
+Their reservation ledger blocks independent adoption and direct public edits, including retired environments.
+Borrowed resources remain independent. Old independent child bindings can be released without deleting the child.
 Other inventory kind names are recognized, but transition returns `unsupported_iac_resource` until their validation/activity adapter exists.
 A Terraform ownership record does not mean the Terraform provider is implemented.
 The Stack dashboard lists Terraform-owned resources and their ownership generation.

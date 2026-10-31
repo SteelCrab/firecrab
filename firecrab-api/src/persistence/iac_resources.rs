@@ -21,11 +21,31 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "storage_connection",
 ];
 
+/// Reservations and tombstones keep generated identities with their parent.
+/// Referencing a borrowed network or group does not create a ledger entry.
+pub(super) fn ensure_independent(
+    conn: &Connection,
+    resource: &ManagedResource,
+) -> Result<(), PersistenceError> {
+    let generated: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ai_sandbox_environment_resources WHERE kind=?1 AND id=?2)",
+        params![resource.kind, resource.id],
+        |row| row.get(0),
+    )?;
+    if generated {
+        return Err(PersistenceError::IacParentManaged);
+    }
+    Ok(())
+}
+
 pub(super) fn validate(
     conn: &Connection,
     resource: &ManagedResource,
     adopting: bool,
 ) -> Result<(), PersistenceError> {
+    if adopting {
+        ensure_independent(conn, resource)?;
+    }
     let exists = match resource.kind.as_str() {
         "storage_root" => "SELECT EXISTS(SELECT 1 FROM micro_storages WHERE id=?1)",
         "volume" => "SELECT EXISTS(SELECT 1 FROM micro_block_storages WHERE id=?1)",

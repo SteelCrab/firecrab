@@ -396,6 +396,13 @@ pub(super) fn validate_resource(
     conn: &Connection,
     binding: &Binding,
 ) -> Result<(), PersistenceError> {
+    super::iac_resources::ensure_independent(
+        conn,
+        &firecrab_stack::ManagedResource {
+            kind: binding.kind.as_str().into(),
+            id: binding.resource_id.to_string(),
+        },
+    )?;
     let id = binding.resource_id.to_string();
     let query = match binding.kind {
         ResourceKind::Network => "SELECT EXISTS(SELECT 1 FROM micro_networks WHERE id = ?1)",

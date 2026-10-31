@@ -506,6 +506,213 @@ fn claim_configuration(state: &AppState, resource: &ManagedResource) -> Value {
         "owner":{"manager":"terraform","id":Uuid::new_v4(),"key":format!("firecrab_{}.application",resource.kind)}})
 }
 
+fn generated_environment(
+    state: &AppState,
+    network: Uuid,
+) -> firecrab_api_types::SandboxEnvironment {
+    let mut environment = crate::ai_sandbox::environment::reservation(
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Default::default(),
+        serde_json::from_value(json!({
+            "version":1,"subnetCidr":"10.249.1.0/24",
+            "roles":[{"name":"workspace","template":{
+                "name":"alpine","version":"pinned", "kernelSha256":"a".repeat(64),
+                "rootfsSha256":"b".repeat(64),"bootArgsSha256":"c".repeat(64)
+            },"cpu":1,"memoryMib":128,"diskGb":1,
+                "executionMode":{"kind":"persistent_workspace"}}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    environment.network_id = network;
+    state
+        .store
+        .reserve_sandbox_environment(&environment)
+        .unwrap();
+    environment
+}
+
+#[tokio::test]
+async fn iac_generated_children_keep_parent_authority_through_retirement() {
+    use firecrab_api_types::SandboxEnvironmentState;
+
+    let root = tempfile::tempdir().unwrap();
+    let (state, app, borrowed) = fixture(root.path()).await;
+    let mut environment = generated_environment(&state, Uuid::new_v4());
+    let network = environment.network_id;
+    state
+        .store
+        .insert_micro_network(
+            &serde_json::from_value(json!({
+                "id":network,"name":"generated-network","subnetCidr":"10.249.1.0/24",
+                "gateway":"10.249.1.1","internetEnabled":false
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let vm = environment.roles[0].vm_id;
+    // Old records may predate the protected VM-purpose flag. The ledger is authoritative.
+    let mut record = crate::handlers::vms::test_support::record("generated-vm", vm);
+    record.micro_network_id = network;
+    state.store.insert(&record).unwrap();
+    state.vms.lock().unwrap().insert(vm, record);
+    let group = environment.roles[0].security_group_id;
+    state
+        .store
+        .insert_security_group(
+            &serde_json::from_value(json!({
+                "id":group,"name":"generated-group","microNetworkId":network,"rules":[]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let stack = state.store.register_stack("parent-guard").unwrap();
+    for phase in [
+        SandboxEnvironmentState::Provisioning,
+        SandboxEnvironmentState::Ready,
+        SandboxEnvironmentState::Deleted,
+    ] {
+        environment.state = phase;
+        state.store.save_sandbox_environment(&environment).unwrap();
+        for (kind, id, route) in [
+            ("network", network, "micro-networks"),
+            ("vm", vm, "vms"),
+            ("security_group", group, "security-groups"),
+        ] {
+            let resource = ManagedResource {
+                kind: kind.into(),
+                id: id.to_string(),
+            };
+            for manager in ["stack", "terraform"] {
+                let mut change = claim_configuration(&state, &resource);
+                change["owner"] = json!({"manager":manager,"id":stack.id,"key":"child"});
+                let operation = change["operationId"].as_str().unwrap().to_owned();
+                let (status, error) =
+                    call(&app, "POST", "/api/iac/owners/transition", change).await;
+                assert_eq!(status, StatusCode::CONFLICT, "{phase:?} {kind} {error}");
+                assert_eq!(error["error"]["code"], "iac_parent_managed");
+                assert!(
+                    state
+                        .store
+                        .iac_ownership_operation(Uuid::parse_str(&operation).unwrap())
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            if kind != "security_group" {
+                let (status, error) = call(
+                    &app,
+                    "POST",
+                    "/api/stacks/parent-guard/bindings",
+                    json!({"kind":kind,"key":"child","resourceId":id}),
+                )
+                .await;
+                assert_eq!(status, StatusCode::CONFLICT, "{error}");
+                assert_eq!(error["error"]["code"], "iac_parent_managed");
+            }
+            let encoded = id.to_string().replace('-', "%2d");
+            let (status, error) = call(
+                &app,
+                "DELETE",
+                &format!("/api/{route}/{encoded}"),
+                Value::Null,
+            )
+            .await;
+            assert_eq!(status, StatusCode::CONFLICT, "{error}");
+            assert_eq!(error["error"]["code"], "iac_parent_managed");
+            let ownership = state.store.iac_resource_owner(&resource).unwrap();
+            assert_eq!(ownership.generation, 0);
+            assert!(ownership.owner.is_none());
+        }
+    }
+    // A pool references this existing network; it does not own or generate it.
+    configuration_resource(&state, root.path(), borrowed, "pool");
+    let resource = ManagedResource {
+        kind: "network".into(),
+        id: borrowed.to_string(),
+    };
+    let (status, owned) = call(
+        &app,
+        "POST",
+        "/api/iac/owners/transition",
+        claim_configuration(&state, &resource),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{owned}");
+    assert_eq!(owned["generation"], 1);
+    assert_eq!(
+        state.store.micro_network(network).unwrap().unwrap().id,
+        network
+    );
+    assert!(state.store.security_group(group).unwrap().is_some());
+    assert!(state.vms.lock().unwrap().contains_key(&vm));
+}
+
+#[tokio::test]
+async fn iac_parent_guard_allows_releasing_an_old_independent_child_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, app, network) = fixture(root.path()).await;
+    state.store.register_stack("old-binding").unwrap();
+    state
+        .store
+        .bind_stack_resource(
+            "old-binding",
+            &Binding {
+                kind: ResourceKind::Network,
+                key: "child".into(),
+                resource_id: network,
+            },
+        )
+        .unwrap();
+    generated_environment(&state, network);
+    let stack = state.store.stack("old-binding").unwrap().unwrap();
+    let operation = Uuid::new_v4();
+    let status: firecrab_stack::ApplyStatus = serde_json::from_value(json!({
+        "operationId":operation,"stackId":stack.id,"name":"old-binding","state":"queued",
+        "changes":[{"kind":"network","key":"child","resourceId":network,
+            "action":"update","fields":["internetEnabled"],"reason":null,"state":"pending"}],
+        "error":null
+    }))
+    .unwrap();
+    assert!(matches!(
+        state
+            .store
+            .begin_stack_apply(&stack, "parent-fence", false, &status, None),
+        Err(crate::persistence::PersistenceError::IacParentManaged)
+    ));
+    assert!(state.store.stored_stack_apply(operation).unwrap().is_none());
+    let resource = ManagedResource {
+        kind: "network".into(),
+        id: network.to_string(),
+    };
+    let mut release = claim_configuration(&state, &resource);
+    release["owner"] = Value::Null;
+    let (status, released) = call(&app, "POST", "/api/iac/owners/transition", release).await;
+    assert_eq!(status, StatusCode::OK, "{released}");
+    assert_eq!(released["generation"], 2);
+    assert!(released["owner"].is_null());
+    assert!(
+        state
+            .store
+            .stack("old-binding")
+            .unwrap()
+            .unwrap()
+            .bindings
+            .is_empty()
+    );
+    assert!(state.store.micro_network(network).unwrap().is_some());
+    let (status, error) = call(
+        &app,
+        "POST",
+        "/api/iac/owners/transition",
+        claim_configuration(&state, &resource),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"]["code"], "iac_parent_managed");
+}
+
 #[tokio::test]
 async fn iac_database_transfer_waits_for_maintenance_on_another_alias_of_the_same_target() {
     use crate::pipe_databases::maintenance::{Job, Kind};
@@ -754,6 +961,10 @@ async fn iac_owner_browser_fixture() {
         "security_group",
         "shell",
         "schedule",
+        "pool",
+        "queue",
+        "database_connection",
+        "storage_connection",
     ] {
         let resource = configuration_resource(&state, root.path(), id, kind);
         let before = state.store.iac_resource_owner(&resource).unwrap();

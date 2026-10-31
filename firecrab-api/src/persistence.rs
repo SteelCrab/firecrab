@@ -516,6 +516,9 @@ pub enum PersistenceError {
     /// An admitted resource operation still owns the current authority.
     #[error("IaC resource operation is active")]
     IacResourceBusy,
+    /// Generated children retain their parent controller's immutable authority.
+    #[error("resource belongs to a parent controller")]
+    IacParentManaged,
     /// The request was prepared for a different API endpoint.
     #[error("IaC endpoint identity changed")]
     IacEndpointConflict,

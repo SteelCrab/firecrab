@@ -32,12 +32,14 @@ try {
   const observed = await context.request.get(`${origin}api/iac/owners`);
   assert.equal(observed.status(), 200);
   assert.deepEqual(await observed.json(), fixture.ownerships);
+  let blockedConfigurations = 0;
   for (const resource of fixture.ownerships) {
-    const namespace = {storage_root:"micro-storages",volume:"microblockstorage",security_group:"security-groups",shell:"shells",schedule:"schedules"}[resource.resource.kind];
+    const namespace = {storage_root:"micro-storages",volume:"microblockstorage",security_group:"security-groups",shell:"shells",schedule:"schedules",pool:"pools",queue:"queues",database_connection:"pipe/databases",storage_connection:"pipe/storage"}[resource.resource.kind];
     if (!namespace) continue;
     const rejected = await context.request.delete(`${origin}api/${namespace}/${resource.resource.id}`);
     assert.equal(rejected.status(), 409);
     assert.equal((await rejected.json()).error.code, "iac_resource_managed");
+    blockedConfigurations++;
   }
   const blocked = await context.request.patch(`${origin}api/micro-networks/${ownership.resource.id}`, { data: { internetEnabled: false } });
   assert.equal(blocked.status(), 409);
@@ -56,6 +58,9 @@ try {
     await page.getByText(owned.owner.key, { exact: true }).waitFor();
   }
   await page.evaluate(async () => { await document.fonts.ready; });
+  await page.getByText(fixture.ownerships[0].owner.key, { exact: true }).evaluate(element => element.scrollIntoView({ block: "center" }));
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(output, `iac-548-ownership-overview-${captureDate}.png`), fullPage: true });
   const focus = fixture.ownerships.find(owned => owned.resource.kind === "volume") || ownership;
   async function focusOwnership() {
     await page.getByText(focus.owner.key, { exact: true }).evaluate(element => element.scrollIntoView({ block: "center" }));
@@ -75,7 +80,7 @@ try {
   await writeFile(path.join(output, "iac-548-ownership-evidence.json"), JSON.stringify({
     capturedAt: new Date().toISOString(), captureDate, sourceCommit, sourceDirty, focusResource:focus.resource, versions:{browser:browser.version(),node:process.version}, fixture: true, transport: "actual local Axum HTTP; no mocked API responses",
     runtime: "compiled WASM dashboard with disposable SQLite resource records; no Linux/KVM boot",
-    ownership, ownerships:fixture.ownerships, checks: ["endpoint identity", "43 inventory kinds; twelve transfer adapters", "actual ownership read", "direct PATCH rejected with 409", "five configuration kinds reject direct DELETE with 409", "immutable operation acknowledgement", "six ownership records in the actual dashboard", "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
+    ownership, ownerships:fixture.ownerships, checks: ["endpoint identity", "43 inventory kinds; twelve transfer adapters", "actual ownership read", "direct PATCH rejected with 409", `${blockedConfigurations} configuration kinds reject direct DELETE with 409`, "immutable operation acknowledgement", `${fixture.ownerships.length} ownership records in the actual dashboard`, "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
   }, null, 2) + "\n");
   console.log("Actual API ownership, mutation rejection, receipt and two dashboard screenshots verified.");
 } finally {

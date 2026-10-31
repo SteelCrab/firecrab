@@ -30,6 +30,9 @@ Entries land here as work merges, and move under the next version heading when t
   shells, schedules, pools, queues, database and S3 connections, with persistent endpoint identity, durable retry
   acknowledgements, mTLS CLI commands and dashboard visibility. Other service adapters and the
   Terraform provider remain tracked in #548.
+- Keep generated Sandbox environment networks, security groups and VMs under
+  their parent controller. Reject independent adoption and public mutation,
+  while allowing old child bindings to be released without deleting resources.
 - Define the IaC coverage contract for all services shipped through v0.4.0,
   including controller, Pipe and Sandbox configuration. A frozen API inventory
   and CI check track missing Stack and Terraform coverage without claiming it

@@ -105,6 +105,7 @@ impl Store {
         resource: &ManagedResource,
     ) -> Result<bool, PersistenceError> {
         let conn = self.lock();
+        super::iac_resources::ensure_independent(&conn, resource)?;
         if let Some(kind) = resource.legacy_kind() {
             let id =
                 Uuid::parse_str(&resource.id).map_err(|_| PersistenceError::InvalidIacOwner)?;
