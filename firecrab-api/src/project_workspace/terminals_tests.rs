@@ -5,7 +5,7 @@ use super::*;
 use axum::http::StatusCode;
 use serde_json::json;
 
-fn record(binding: &Binding) -> Terminal {
+pub(super) fn record(binding: &Binding) -> Terminal {
     Terminal {
         id: Uuid::new_v4(),
         project: binding.project_id,

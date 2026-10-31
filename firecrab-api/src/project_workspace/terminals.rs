@@ -16,6 +16,7 @@ struct Cursor {
     cursor: u64,
 }
 
+/// Register project PTY lifecycle, replay and input-control endpoints.
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route(
@@ -49,6 +50,7 @@ pub(super) fn routes() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(32 * 1024))
 }
 
+/// Schedule prompt replay for the affected project without launching a process.
 fn wake(state: &AppState, project: Uuid) {
     state
         .workspaces
@@ -58,7 +60,13 @@ fn wake(state: &AppState, project: Uuid) {
         .insert(project);
     state.workspaces.terminal_wake.notify_one();
 }
-fn execute(state: &AppState, caller: Caller, b: &Binding, id: Uuid) -> Result<(), AppError> {
+/// Require the selected project runtime and all project/VM execution rights.
+pub(super) fn execute(
+    state: &AppState,
+    caller: Caller,
+    b: &Binding,
+    id: Uuid,
+) -> Result<(), AppError> {
     let project = authorize(state, caller, b.project_id, SandboxPermission::Read, id)?;
     if project.spec.vm_id != Some(b.vm_id) {
         return Err(Error::Conflict(
@@ -91,11 +99,18 @@ fn execute(state: &AppState, caller: Caller, b: &Binding, id: Uuid) -> Result<()
         )
         .map_err(|_| denied(id))
 }
-fn preauthorize(state: &AppState, caller: Caller, project: Uuid, id: Uuid) -> Result<(), AppError> {
+/// Reject missing project execution rights before opening a guest context.
+pub(super) fn preauthorize(
+    state: &AppState,
+    caller: Caller,
+    project: Uuid,
+    id: Uuid,
+) -> Result<(), AppError> {
     authorize(state, caller, project, SandboxPermission::Read, id)?;
     let binding = binding(state, project).map_err(|e| e.response(id))?;
     execute(state, caller, &binding, id)
 }
+/// Reject an old process record after a runtime or binding generation change.
 fn live(record: &Terminal, context: &files::Files) -> Result<(), Error> {
     if record.project != context.binding.project_id
         || record.runtime != context.runtime
@@ -108,6 +123,7 @@ fn live(record: &Terminal, context: &files::Files) -> Result<(), Error> {
     }
     Ok(())
 }
+/// Project runtime changes into interrupted history without replaying commands.
 fn observed(state: &AppState, binding: &Binding, mut record: Terminal) -> Terminal {
     let vm = state
         .vms
@@ -131,6 +147,7 @@ fn observed(state: &AppState, binding: &Binding, mut record: Terminal) -> Termin
     }
     record
 }
+/// Authorize project reads before opening retained terminal records.
 fn read_db(
     state: &AppState,
     caller: Caller,
@@ -143,6 +160,7 @@ fn read_db(
     authorize(state, caller, project, SandboxPermission::Read, id)?;
     Ok((b, db))
 }
+/// List retained terminal identities without exposing input control tokens.
 async fn list(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
@@ -164,6 +182,7 @@ async fn list(
     .await
     .map_err(|_| AppError::internal(rid.0))?
 }
+/// Return one authorized terminal’s process and control metadata.
 async fn metadata(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
@@ -180,6 +199,7 @@ async fn metadata(
     .await
     .map_err(|_| AppError::internal(rid.0))?
 }
+/// Read a bounded retained output page at an absolute byte cursor.
 async fn output(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
@@ -191,6 +211,7 @@ async fn output(
         .await
         .map(Json)
 }
+/// Read one consistent metadata/output snapshot under project ownership.
 async fn snapshot(
     state: AppState,
     caller: Caller,
@@ -213,6 +234,7 @@ async fn snapshot(
     .await
     .map_err(|_| AppError::internal(id))?
 }
+/// Poll a running guest only when required, otherwise serve retained history.
 async fn replay(
     state: AppState,
     caller: Caller,
@@ -226,6 +248,7 @@ async fn replay(
         .map(|(_, page)| page)
 }
 
+/// Admit a stable shell UUID before a native launch; exact retries never launch twice.
 async fn create(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
@@ -344,6 +367,7 @@ async fn create(
     })
     .await
 }
+/// Explicitly acquire or take over a generation-fenced input lease.
 async fn claim(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
@@ -368,6 +392,7 @@ async fn claim(
     })
     .await
 }
+/// Renew or release only the current caller, client and API-owner lease.
 async fn renewal(
     state: AppState,
     caller: Caller,
@@ -393,6 +418,7 @@ async fn renewal(
     })
     .await
 }
+/// Extend the current input lease without accepting stale ownership.
 async fn renew(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
@@ -403,6 +429,7 @@ async fn renew(
     renewal(state, caller, project, session, control, false, rid.0).await?;
     Ok(Json(serde_json::json!({"renewed":true})))
 }
+/// Release control without terminating the retained shell.
 async fn release(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
@@ -418,6 +445,7 @@ enum Action {
     Resize(u16, u16),
     Stop,
 }
+/// Dispatch one authorized input, resize or stop without replaying uncertain input.
 async fn action(
     state: AppState,
     caller: Caller,
@@ -462,6 +490,7 @@ async fn action(
     })
     .await
 }
+/// Interpret bounded typed WebSocket input under the same execution policy.
 async fn message(
     state: AppState,
     caller: Caller,
@@ -514,6 +543,7 @@ async fn message(
     }
     Ok(())
 }
+/// Forward a single authenticated input message to its controlled PTY.
 async fn input(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
@@ -524,6 +554,7 @@ async fn input(
     message(state, caller, project, session, value, rid.0).await?;
     Ok(Json(serde_json::json!({"accepted":true})))
 }
+/// Terminate only the controlled native UID scope.
 async fn stop(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
@@ -543,6 +574,7 @@ async fn stop(
     .await
     .map(Json)
 }
+/// Stream retained output and recheck grants while accepting fenced input.
 async fn socket(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
@@ -709,6 +741,7 @@ pub(super) fn start(state: AppState) {
         }
     });
 }
+/// Keep recovery active while a process or uncommitted output still needs reconciliation.
 fn needs_refresh(record: &Terminal) -> bool {
     matches!(
         record.status,

@@ -11,15 +11,19 @@ CREATE TABLE private_drafts(principal TEXT NOT NULL,view TEXT NOT NULL,path TEXT
 CREATE TABLE private_receipts(principal TEXT NOT NULL,id TEXT NOT NULL,resource TEXT NOT NULL,
  sha TEXT NOT NULL,revision INTEGER NOT NULL,PRIMARY KEY(principal,id)) STRICT;
 ";
+/// Reject revision values outside SQLite’s signed integer range.
 fn integer(n: u64) -> Result<i64, Error> {
     i64::try_from(n).map_err(|_| Error::Invalid("Invalid private document revision"))
 }
+/// Reject negative revisions recovered from private storage.
 fn unsigned(n: i64) -> Result<u64, Error> {
     u64::try_from(n).map_err(|_| Error::Conflict("Invalid private document metadata"))
 }
+/// Derive the storage key exclusively from the verified transport caller.
 fn principal(caller: Caller) -> Result<String, Error> {
     Ok(serde_json::to_string(&caller.principal)?)
 }
+/// Reject nil identities before using a view or mutation key.
 fn uuid(value: Uuid) -> Result<String, Error> {
     if value.is_nil() {
         Err(Error::Invalid("Use a non-empty view or operation identity"))
@@ -27,11 +31,13 @@ fn uuid(value: Uuid) -> Result<String, Error> {
         Ok(value.to_string())
     }
 }
+/// Bind a mutation receipt to the exact logical request.
 fn digest<T: Serialize>(value: &T) -> Result<String, Error> {
     Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(value)?)))
 }
 
 impl db::ProjectDb {
+    /// Check retained content and metadata bounds before committing a mutation.
     fn private_quota(&self) -> Result<(), Error> {
         let (bytes, drafts, views): (i64, i64, i64) = self.conn.query_row(
             "SELECT
@@ -48,6 +54,7 @@ impl db::ProjectDb {
         }
         Ok(())
     }
+    /// Return an identical recent acknowledgement without overwriting newer data.
     fn private_receipt(
         &self,
         principal: &str,
@@ -82,6 +89,7 @@ impl db::ProjectDb {
         })
         .transpose()
     }
+    /// Record an acknowledgement and compact receipts, preserving resource revisions.
     fn private_finish(
         &self,
         principal: &str,
@@ -102,6 +110,7 @@ impl db::ProjectDb {
             revision: unsigned(revision)?,
         })
     }
+    /// Return only the verified caller’s retained view metadata.
     pub(super) fn views(&self, caller: Caller) -> Result<Vec<ProjectViewSummary>, Error> {
         self.check_owner()?;
         let mut q=self.conn.prepare("SELECT id,revision,updated FROM private_views WHERE principal=?1 ORDER BY updated DESC,id LIMIT 64")?;
@@ -125,6 +134,7 @@ impl db::ProjectDb {
             })
             .collect()
     }
+    /// Read one private document under the current owner epoch.
     pub(super) fn view(&self, caller: Caller, view: Uuid) -> Result<ProjectView, Error> {
         self.check_owner()?;
         let row = self
@@ -152,6 +162,7 @@ impl db::ProjectDb {
             updated_at: unsigned(row.2)?,
         })
     }
+    /// Apply a compare-and-swap layout save and durable retry receipt together.
     pub(super) fn save_view(
         &self,
         caller: Caller,
@@ -205,6 +216,7 @@ impl db::ProjectDb {
         tx.commit()?;
         Ok(result)
     }
+    /// Return metadata for this caller and tab’s active buffers.
     pub(super) fn drafts(
         &self,
         caller: Caller,
@@ -236,6 +248,7 @@ impl db::ProjectDb {
             })
             .collect()
     }
+    /// Return bytes or a discard tombstone with its monotonic revision.
     pub(super) fn draft(
         &self,
         caller: Caller,
@@ -256,6 +269,7 @@ impl db::ProjectDb {
             content_base64: row.2.map(|v| STANDARD.encode(v)),
         })
     }
+    /// Atomically save or discard one private buffer at its expected revision.
     pub(super) fn save_draft(
         &self,
         caller: Caller,

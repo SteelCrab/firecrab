@@ -276,7 +276,7 @@ impl<B: Backend> Controller<B> {
                 Ok(Ok(request)) => request,
                 _ => return reply(&mut stream, 400, "Invalid or incomplete HTTP request").await,
             };
-        if request.path == STATUS_PATH {
+        if !request.editor && request.path == STATUS_PATH {
             if request.method != "GET" {
                 return reply(&mut stream, 405, "Use GET").await;
             }
@@ -287,7 +287,7 @@ impl<B: Backend> Controller<B> {
             )
             .await;
         }
-        if request.path == "/api/micromanager/hold" {
+        if !request.editor && request.path == "/api/micromanager/hold" {
             if request.method != "POST" || request.origin {
                 return reply(&mut stream, 403, "Local CLI control only").await;
             }
@@ -300,13 +300,15 @@ impl<B: Backend> Controller<B> {
             while stream.read(&mut buffer).await? != 0 {}
             return Ok(());
         }
-        if matches!(
-            request.path.as_str(),
-            "/api/micromanager/start"
-                | "/api/micromanager/stop"
-                | "/api/micromanager/shutdown"
-                | "/api/micromanager/reconfigure"
-        ) {
+        if !request.editor
+            && matches!(
+                request.path.as_str(),
+                "/api/micromanager/start"
+                    | "/api/micromanager/stop"
+                    | "/api/micromanager/shutdown"
+                    | "/api/micromanager/reconfigure"
+            )
+        {
             if request.method != "POST" || request.origin {
                 return reply(&mut stream, 403, "Local CLI control only").await;
             }
@@ -427,6 +429,7 @@ struct Request {
     method: String,
     path: String,
     origin: bool,
+    editor: bool,
     bytes: Vec<u8>,
 }
 impl Request {
@@ -471,6 +474,14 @@ async fn read_header(stream: &mut TcpStream) -> io::Result<Request> {
                 .ok_or_else(|| io::Error::other("Invalid header"))
         })
         .collect::<Result<_, _>>()?;
+    let editor = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("host"))
+        .any(|(_, v)| {
+            let value = v.trim().to_ascii_lowercase();
+            let host = value.split(':').next().unwrap_or("").trim_end_matches('.');
+            host == "editor.localhost" || host.ends_with(".editor.localhost")
+        });
     let origin = headers
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case("origin"));
@@ -495,6 +506,7 @@ async fn read_header(stream: &mut TcpStream) -> io::Result<Request> {
         method,
         path,
         origin,
+        editor,
         bytes,
     })
 }

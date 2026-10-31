@@ -25,7 +25,7 @@ export default defineConfig(({ command }) => {
   // Vite's default host checks keep the forwarded authority trustworthy.
   server: { port: 8080, host: true, strictPort: true, proxy: {
     // Preserve the dashboard authority for the API's same-origin checks on any dev port.
-    '/api': { target: apiTarget, changeOrigin: false },
+    '/api': { target: apiTarget, changeOrigin: false, ws: true },
     '/auth/callback': { target: apiTarget, changeOrigin: false },
     '/ws': { target: `ws://127.0.0.1:${apiPort}`, ws: true },
   } },

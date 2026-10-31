@@ -1,6 +1,7 @@
 //! Durable project metadata and retained-volume lifecycle. Sandbox keeps task ownership.
 mod checkpoint;
 mod db;
+pub(crate) mod editors;
 mod files;
 mod files_db;
 mod files_guest;
@@ -56,6 +57,12 @@ pub struct Runtime {
     terminal_projects: std::sync::Mutex<std::collections::BTreeSet<Uuid>>,
     /// Wake replay workers promptly after interactive input.
     terminal_wake: tokio::sync::Notify,
+    /// Derived private editor routes; persisted records remain in their project database.
+    editor_cache: std::sync::Mutex<std::collections::BTreeMap<(Uuid, Uuid), editors::Editor>>,
+    /// Bound large first-install uploads independently of light HTTP requests.
+    editor_launches: std::sync::Arc<tokio::sync::Semaphore>,
+    /// Bound workbench HTTP/upgrade connections separately from project mutation workers.
+    editor_connections: std::sync::Arc<tokio::sync::Semaphore>,
     /// One OS lock per project remains held for this service lifetime.
     services: std::sync::Mutex<std::collections::BTreeMap<Uuid, std::sync::Arc<db::OwnerLock>>>,
 }
@@ -69,6 +76,9 @@ impl Runtime {
             terminal_projects: std::sync::Mutex::default(),
             terminal_wake: tokio::sync::Notify::new(),
             services: std::sync::Mutex::default(),
+            editor_cache: std::sync::Mutex::default(),
+            editor_connections: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+            editor_launches: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
         }
     }
 }
@@ -301,6 +311,7 @@ pub fn routes() -> Router<AppState> {
         .merge(files::routes())
         .merge(terminals::routes())
         .merge(views::routes())
+        .merge(editors::routes())
 }
 /// Read project metadata even when the workload VM is stopped.
 async fn get_workspace(
@@ -638,5 +649,6 @@ async fn reconcile_runtime(
 
 /// Recover terminal observers without starting replacement shells.
 pub(crate) fn start_terminals(state: AppState) {
-    terminals::start(state);
+    terminals::start(state.clone());
+    editors::start_maintenance(state);
 }

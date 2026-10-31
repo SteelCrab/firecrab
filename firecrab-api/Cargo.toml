@@ -15,6 +15,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = "0.10.4"
 cron = "0.17.0"
 hmac = "0.12"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1.3"
+tower = { version = "0.5.3", features = ["util"] }
 firecrab-api-types = { path = "../firecrab-api-types" }
 firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
 firecrab-stack = { path = "../firecrab-stack" }

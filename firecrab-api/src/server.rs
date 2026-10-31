@@ -1053,8 +1053,12 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     };
 
     app.layer(middleware::from_fn_with_state(
-        state,
+        state.clone(),
         crate::ai_sandbox::access::restrict_delegates,
+    ))
+    .layer(middleware::from_fn_with_state(
+        state,
+        crate::project_workspace::editors::dispatch,
     ))
     .layer(middleware::from_fn_with_state(policy, enforce_origin))
     .layer(middleware::from_fn(assign_request_id))

@@ -338,7 +338,7 @@ fn additive_v3_migration_preserves_files_and_old_project_metadata() {
     let root = dir.path().join("state/projects");
     let db = db::ProjectDb::open(&root, &b, Uuid::new_v4(), true).unwrap();
     db.save_document(0, &json!({"retained":"schema3"})).unwrap();
-    db.conn.execute_batch("DROP TABLE private_receipts;DROP TABLE private_drafts;DROP TABLE private_views;PRAGMA user_version=3;").unwrap();
+    db.conn.execute_batch("DROP TABLE private_editor_attempts; DROP TABLE private_editors; DROP TABLE private_receipts;DROP TABLE private_drafts;DROP TABLE private_views;PRAGMA user_version=3;").unwrap();
     drop(db);
     b.provisioning = false;
     let db = db::ProjectDb::open(&root, &b, Uuid::new_v4(), false).unwrap();
@@ -351,7 +351,7 @@ fn additive_v3_migration_preserves_files_and_old_project_metadata() {
         db.conn
             .pragma_query_value::<u32, _>(None, "user_version", |r| r.get(0))
             .unwrap(),
-        4
+        db::SCHEMA_VERSION
     );
 }
 

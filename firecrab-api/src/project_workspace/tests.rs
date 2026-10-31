@@ -1053,7 +1053,7 @@ fn workspace_files_additive_schema_upgrade_preserves_v1_identity_and_document() 
     db.save_document(0, &json!({"kept":"v1 metadata"})).unwrap();
     db.conn
         .execute_batch(
-            "DROP TABLE private_receipts; DROP TABLE private_drafts; DROP TABLE private_views; DROP TABLE terminal_controls; DROP TABLE terminal_output; DROP TABLE terminal_sessions; DROP TABLE file_operations; DROP TABLE file_versions; PRAGMA user_version=1;",
+            "DROP TABLE private_editor_attempts; DROP TABLE private_editors; DROP TABLE private_receipts; DROP TABLE private_drafts; DROP TABLE private_views; DROP TABLE terminal_controls; DROP TABLE terminal_output; DROP TABLE terminal_sessions; DROP TABLE file_operations; DROP TABLE file_versions; PRAGMA user_version=1;",
         )
         .unwrap();
     drop(db);
@@ -1363,7 +1363,7 @@ async fn workspace_files_schema_upgrade_keeps_completed_v1_checkpoints_readable(
         let legacy = rusqlite::Connection::open(saved.join("project.db")).unwrap();
         legacy
             .execute_batch(
-                "DROP TABLE private_receipts; DROP TABLE private_drafts; DROP TABLE private_views; DROP TABLE terminal_controls; DROP TABLE terminal_output; DROP TABLE terminal_sessions; DROP TABLE file_operations; DROP TABLE file_versions; PRAGMA user_version=1;",
+                "DROP TABLE private_editor_attempts; DROP TABLE private_editors; DROP TABLE private_receipts; DROP TABLE private_drafts; DROP TABLE private_views; DROP TABLE terminal_controls; DROP TABLE terminal_output; DROP TABLE terminal_sessions; DROP TABLE file_operations; DROP TABLE file_versions; PRAGMA user_version=1;",
             )
             .unwrap();
     }
@@ -1455,7 +1455,6 @@ async fn workspace_files_read_only_grant_cannot_save_restore_or_reconcile() {
         StatusCode::OK
     );
 }
-
 // An unrelated fork must not keep a completed workspace operation locked.
 #[cfg(target_os = "linux")]
 #[test]
@@ -1470,8 +1469,8 @@ fn inherited_descriptors_do_not_retain_completed_project_or_service_locks() {
     let mut ready = [0; 2];
     let mut done = [0; 2];
     unsafe {
-        assert_eq!(libc::pipe2(ready.as_mut_ptr(), libc::O_CLOEXEC), 0);
-        assert_eq!(libc::pipe2(done.as_mut_ptr(), libc::O_CLOEXEC), 0);
+        assert_eq!(libc::pipe(ready.as_mut_ptr()), 0);
+        assert_eq!(libc::pipe(done.as_mut_ptr()), 0);
     }
     let child = unsafe { libc::fork() };
     assert!(child >= 0);

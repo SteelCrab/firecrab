@@ -65,7 +65,7 @@ impl Prefs {
             );
         }
     }
-    fn options(&self, id: &str) -> Value {
+    pub(crate) fn options(&self, id: &str) -> Value {
         let (background, foreground, cursor, selection) = match self.theme_id.as_str() {
             "classic" => ("#0c0c0c", "#cccccc", "#ffffff", "rgba(255,255,255,.25)"),
             "light" => ("#fafafb", "#18181b", "#e8492f", "rgba(232,73,47,.2)"),

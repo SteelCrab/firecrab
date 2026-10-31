@@ -15,57 +15,88 @@ const OUTPUT_LIMIT: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Proof {
+    /// Guest kernel boot UUID.
     pub boot: Uuid,
+    /// Unique unprivileged native process owner.
     pub uid: u32,
+    /// Root supervisor process ID.
     pub supervisor: u32,
+    /// Supervisor kernel start ticks used to reject PID reuse.
     pub supervisor_ticks: u64,
+    /// Unprivileged foreground process ID.
     pub child: u32,
+    /// Child kernel start ticks used to reject PID reuse.
     pub child_ticks: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct Terminal {
+    /// Stable resource identity.
     pub id: Uuid,
+    /// Authoritative project identity.
     pub project: Uuid,
+    /// Original immutable creation request used for exact retry matching.
     pub request: CreateProjectTerminal,
+    /// Verified creator whose current execution rights bound this process.
     pub creator: Caller,
+    /// VM and runtime identities captured at admission.
     pub runtime: guest::Binding,
+    /// Retained workspace binding generation.
     pub generation: u64,
+    /// Confirmed native kernel and process identity.
     pub proof: Option<Proof>,
+    /// Confirmed lifecycle state; recovery never replays a launch.
     pub status: ProjectTerminalStatus,
+    /// Earliest retained output byte cursor.
     pub start: u64,
+    /// Exclusive output cursor already cached in SQLite.
     pub end: u64,
+    /// Exclusive output cursor confirmed by the guest.
     pub guest_end: u64,
+    /// Whether earlier output was evicted by the explicit retention bound.
     pub truncated: bool,
+    /// Whether process termination still needs native UID-scope reconciliation.
     pub cleanup_required: bool,
+    /// Confirmed child exit status, absent if the process was interrupted.
     pub exit: Option<u32>,
     #[serde(default)]
+    /// Last confirmed shared rows and columns.
     pub dimensions: Option<(u16, u16)>,
 }
 
+/// Use bounded Unix seconds for retained control lease deadlines.
 pub(super) fn now() -> Result<u64, Error> {
     Ok(std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(std::io::Error::other)?
         .as_secs())
 }
+/// Reject terminal cursors outside SQLite’s signed integer range.
 fn integer(value: u64) -> Result<i64, Error> {
     i64::try_from(value).map_err(|_| Error::Invalid("Invalid terminal cursor or generation"))
 }
+/// Persist a lease token digest instead of the input secret.
 fn token_sha(token: Uuid) -> String {
     format!("{:x}", Sha256::digest(token.as_bytes()))
 }
 
 #[derive(Debug)]
 struct Lease {
+    /// Retained workspace binding generation.
     generation: u64,
+    /// API owner identity that holds this lease.
     owner: Option<String>,
+    /// Verified creator captured at admission.
     caller: Option<Caller>,
+    /// Browser client that holds the active input lease.
     client: Option<Uuid>,
+    /// Digest of the private control token.
     sha: Option<String>,
+    /// Unix expiration time of this input lease.
     expires: u64,
 }
 impl Lease {
+    /// Require the current API owner and a bounded non-expired lease.
     fn active(&self, owner: Uuid, time: u64) -> bool {
         self.owner.as_deref() == Some(owner.to_string().as_str())
             && self.expires > time
@@ -77,6 +108,7 @@ impl Lease {
 }
 
 impl db::ProjectDb {
+    /// Read and validate one retained native session identity.
     pub(super) fn terminal(&self, id: Uuid) -> Result<Terminal, Error> {
         self.check_owner()?;
         let json: String = self
@@ -97,6 +129,7 @@ impl db::ProjectDb {
         }
         Ok(record)
     }
+    /// Read the bounded project terminal catalog.
     pub(super) fn terminals(&self) -> Result<Vec<Terminal>, Error> {
         self.check_owner()?;
         let mut q = self
@@ -117,7 +150,13 @@ impl db::ProjectDb {
             })
             .collect()
     }
+    /// Reserve a public terminal identity before dispatching a guest launch.
     pub(super) fn admit_terminal(&self, record: &Terminal) -> Result<(), Error> {
+        if super::editors::private_attempt(self, record.id)? {
+            return Err(Error::Conflict(
+                "Session identity is reserved for a private editor",
+            ));
+        }
         self.check_owner()?;
         if self.terminals()?.len() >= 32 {
             return Err(Error::Conflict(
@@ -136,6 +175,7 @@ impl db::ProjectDb {
         tx.commit()?;
         Ok(())
     }
+    /// Persist reconciled process state under the owning service epoch.
     pub(super) fn save_terminal(&self, record: &Terminal) -> Result<(), Error> {
         self.check_owner()?;
         if self.conn.execute(
@@ -147,6 +187,7 @@ impl db::ProjectDb {
         }
         Ok(())
     }
+    /// Append durable output while checking native identity and monotonic cursors.
     pub(super) fn cache_terminal(&self, record: &mut Terminal, reply: Reply) -> Result<(), Error> {
         self.check_owner()?;
         if let Some(proof) = &record.proof {
@@ -210,6 +251,7 @@ impl db::ProjectDb {
         tx.commit()?;
         Ok(())
     }
+    /// Return bounded retained bytes and explicit replay/truncation cursors.
     pub(super) fn terminal_output(
         &self,
         record: &Terminal,
@@ -251,6 +293,7 @@ impl db::ProjectDb {
             content_base64: STANDARD.encode(bytes),
         })
     }
+    /// Load the generation and secret digest for one input controller.
     fn terminal_lease(&self, session: Uuid) -> Result<Lease, Error> {
         self.check_owner()?;
         let row = self.conn.query_row("SELECT generation,owner,caller,client,token_sha,expires FROM terminal_controls WHERE session=?1",
@@ -271,6 +314,7 @@ impl db::ProjectDb {
             expires: u64::try_from(row.5).map_err(|_| Error::Conflict("Invalid control expiry"))?,
         })
     }
+    /// Expose public process state without the controller token.
     pub(super) fn terminal_response(
         &self,
         record: &Terminal,
@@ -310,6 +354,7 @@ impl db::ProjectDb {
             controller,
         })
     }
+    /// Fence a new control lease against concurrent claims and stale generations.
     pub(super) fn claim_terminal(
         &self,
         session: Uuid,
@@ -343,6 +388,7 @@ impl db::ProjectDb {
             expires_at: expires,
         })
     }
+    /// Validate caller, API owner, client, generation and secret before input.
     pub(super) fn check_terminal_control(
         &self,
         session: Uuid,
@@ -363,6 +409,7 @@ impl db::ProjectDb {
         }
         Ok(())
     }
+    /// Refresh or release the exact active lease without changing another client’s control.
     pub(super) fn renew_terminal(
         &self,
         session: Uuid,

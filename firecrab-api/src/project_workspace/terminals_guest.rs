@@ -2,16 +2,26 @@
 use super::{terminals_db::Proof, *};
 
 pub(super) struct Reply {
+    /// Confirmed lifecycle state; recovery never replays a launch.
     pub status: ProjectTerminalStatus,
+    /// Confirmed native kernel and process identity.
     pub proof: Proof,
+    /// Earliest retained output byte cursor.
     pub start: u64,
+    /// Exclusive output cursor already cached in SQLite.
     pub end: u64,
+    /// Confirmed child exit status, absent if the process was interrupted.
     pub exit: Option<u32>,
+    /// Whether earlier output was evicted by the explicit retention bound.
     pub truncated: bool,
+    /// Whether process termination still needs native UID-scope reconciliation.
     pub cleanup_required: bool,
+    /// Bounded output bytes returned by this native response.
     pub bytes: Vec<u8>,
+    /// Last confirmed shared rows and columns.
     pub dimensions: Option<(u16, u16)>,
 }
+/// Decode a network-order field after the caller validates the frame length.
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     u32::from_be_bytes(
         bytes[offset..offset + 4]
@@ -19,6 +29,7 @@ fn u32_at(bytes: &[u8], offset: usize) -> u32 {
             .expect("checked frame size"),
     )
 }
+/// Decode a network-order cursor after frame bounds validation.
 fn u64_at(bytes: &[u8], offset: usize) -> u64 {
     u64::from_be_bytes(
         bytes[offset..offset + 8]
@@ -26,6 +37,7 @@ fn u64_at(bytes: &[u8], offset: usize) -> u64 {
             .expect("checked frame size"),
     )
 }
+/// Encode only supported native actions and bounded terminal input.
 pub(super) fn frame(
     id: Uuid,
     action: u32,
@@ -58,6 +70,7 @@ pub(super) fn frame(
     result.extend_from_slice(bytes);
     Ok(result)
 }
+/// Validate native process identity, replay cursors and terminal dimensions.
 pub(super) fn decode(bytes: &[u8]) -> Result<Reply, Error> {
     if bytes.len() < 8 {
         return Err(Error::Conflict("Guest terminal protocol is incomplete"));
@@ -144,6 +157,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Reply, Error> {
         dimensions,
     })
 }
+/// Send the fixed native protocol over a pinned project SSH connection.
 pub(super) async fn request(context: &mut files::Files, frame: Vec<u8>) -> Result<Reply, Error> {
     context.permission()?;
     let digest = &context.digest;

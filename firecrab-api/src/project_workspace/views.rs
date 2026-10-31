@@ -5,9 +5,11 @@ use axum::extract::{DefaultBodyLimit, Query};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DraftPath {
+    /// Validated workspace-relative buffer path.
     path: String,
 }
 
+/// Register only caller-scoped view and draft endpoints.
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route(
@@ -28,6 +30,7 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
 }
+/// Authorize before and after a bounded private database operation.
 async fn work<T: Send + 'static>(
     state: AppState,
     caller: Caller,
@@ -61,6 +64,7 @@ async fn work<T: Send + 'static>(
     })
     .await
 }
+/// List this caller’s private view identities without loading buffers.
 async fn list(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -73,6 +77,7 @@ async fn list(
     .await
     .map(Json)
 }
+/// Return this caller’s saved layout for a stable tab UUID.
 async fn read(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -85,6 +90,7 @@ async fn read(
     .await
     .map(Json)
 }
+/// Save an optimistic private layout without requiring shared write access.
 async fn save(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -99,6 +105,7 @@ async fn save(
     .await
     .map(Json)
 }
+/// List active private buffers without returning their contents.
 async fn drafts(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -111,6 +118,7 @@ async fn drafts(
     .await
     .map(Json)
 }
+/// Read a private buffer or its retained discard revision.
 async fn draft(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -124,6 +132,7 @@ async fn draft(
     .await
     .map(Json)
 }
+/// Retain unsaved bytes without changing the shared file.
 async fn save_draft(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -138,6 +147,7 @@ async fn save_draft(
     .await
     .map(Json)
 }
+/// Discard bytes while keeping a revision that rejects stale retries.
 async fn delete_draft(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
