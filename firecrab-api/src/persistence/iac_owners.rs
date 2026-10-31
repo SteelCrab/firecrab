@@ -36,7 +36,7 @@ pub(super) fn initialize(conn: &Connection) -> Result<(), PersistenceError> {
     Ok(())
 }
 
-fn endpoint(conn: &Connection) -> Result<Uuid, PersistenceError> {
+pub(super) fn endpoint(conn: &Connection) -> Result<Uuid, PersistenceError> {
     let raw: String = conn.query_row(
         "SELECT endpoint_id FROM iac_endpoint WHERE singleton=1",
         [],
@@ -82,6 +82,7 @@ pub(super) fn public_write_allowed(
     conn: &Connection,
     resource: &ManagedResource,
 ) -> Result<bool, PersistenceError> {
+    super::iac_native::ensure_idle(conn, resource)?;
     super::iac_resources::ensure_independent(conn, resource)?;
     if let Some(kind) = resource.legacy_kind() {
         let id = Uuid::parse_str(&resource.id).map_err(|_| PersistenceError::InvalidIacOwner)?;
@@ -280,6 +281,7 @@ impl Store {
         {
             return Err(PersistenceError::StaleIacOwner);
         }
+        super::iac_native::ensure_idle(&tx, &request.resource)?;
         if let Some(kind) = request.resource.legacy_kind() {
             let id = Uuid::parse_str(&request.resource.id)
                 .map_err(|_| PersistenceError::InvalidStackResource)?;
@@ -473,7 +475,7 @@ struct StoredOwner {
     key: Option<String>,
 }
 
-fn read(
+pub(super) fn read(
     conn: &Connection,
     resource: &ManagedResource,
 ) -> Result<ResourceOwnership, PersistenceError> {

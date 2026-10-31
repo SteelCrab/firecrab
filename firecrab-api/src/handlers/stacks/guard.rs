@@ -46,6 +46,7 @@ pub(crate) async fn protect_resources(
         | "/api/pipe/ai/connections/{id}/verify"
         | "/api/pipe/ai/connections/{id}/login" => Some("ai_connection"),
         "/api/pipe/ai/projects/{id}/model" => Some("ai_model"),
+        "/api/ai-sandbox/projects/{id}" => Some("sandbox_project"),
         "/api/ai-sandbox/projects/{project}/environments/{environment}"
         | "/api/ai-sandbox/projects/{project}/environments/{environment}/reconcile"
         | "/api/ai-sandbox/projects/{project}/environments/{environment}/stop"

@@ -1,6 +1,7 @@
 /** Actual compiled dashboard + isolated Axum/SQLite fixture; no browser API mocks. */
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -28,13 +29,41 @@ try {
   const capabilities = await identity.json();
   assert.equal(capabilities.endpointId, ownership.endpointId);
   assert.equal(capabilities.inventoryKinds.length, 43);
-  assert.deepEqual(capabilities.transferKinds, ["network", "vm", "service", "storage_root", "volume", "security_group", "shell", "schedule", "pool", "queue", "database_connection", "storage_connection", "secret", "secret_connection", "auth", "registry", "ai_connection", "ai_model", "sandbox_environment"]);
+  assert.deepEqual(capabilities.transferKinds, ["network", "vm", "service", "storage_root", "volume", "security_group", "shell", "schedule", "pool", "queue", "database_connection", "storage_connection", "secret", "secret_connection", "auth", "registry", "ai_connection", "ai_model", "sandbox_environment", "sandbox_project"]);
   const observed = await context.request.get(`${origin}api/iac/owners`);
   assert.equal(observed.status(), 200);
   assert.deepEqual(await observed.json(), fixture.ownerships);
+  const cliPath = process.env.FIRECRAB_IAC_QA_CLI;
+  assert.ok(cliPath && path.isAbsolute(cliPath), "set the compiled CLI absolute path for native recovery evidence");
+  function cli(args) {
+    return JSON.parse(execFileSync(cliPath,["--api",fixture.url,"iac",...args],{encoding:"utf8"}));
+  }
+  const project=fixture.nativeRecoveryProjectId;
+  assert.match(project,/^[0-9a-f-]{36}$/);
+  const failure=await context.request.delete(`${origin}api/ai-sandbox/projects/${project}`);
+  assert.equal(failure.status(),503);
+  const pending=cli(["native-operations","--kind","sandbox_project","--id",project]);
+  assert.equal(pending.length,1);
+  const nativeBefore=pending[0];
+  assert.equal(nativeBefore.state,"needs_recovery");
+  assert.equal(nativeBefore.errorCode,"project_cleanup_incomplete");
+  assert.equal(nativeBefore.ownership.resource.id,project);
+  assert.deepEqual(cli(["native-operation","--id",nativeBefore.operationId]),nativeBefore);
+  assert.equal(path.basename(fixture.nativeRecoveryWorkspace),project);
+  assert.equal(await readFile(fixture.nativeRecoveryWorkspace,"utf8"),"fixture cleanup failure");
+  await unlink(fixture.nativeRecoveryWorkspace);
+  await mkdir(fixture.nativeRecoveryWorkspace);
+  await writeFile(path.join(fixture.nativeRecoveryWorkspace,"remove.txt"),"private fixture output");
+  const nativeAfter=cli(["recover-native-operation","--id",nativeBefore.operationId]);
+  assert.equal(nativeAfter.state,"succeeded");
+  assert.equal(nativeAfter.operationId,nativeBefore.operationId);
+  assert.deepEqual(nativeAfter.ownership,nativeBefore.ownership);
+  assert.deepEqual(cli(["recover-native-operation","--id",nativeBefore.operationId]),nativeAfter);
+  assert.equal(await readFile(fixture.nativeRecoveryBorrowedFile,"utf8"),"borrowed contents");
+  const nativeRecovery={before:nativeBefore,after:nativeAfter,checks:["real filesystem failure","CLI status discovery","same operation and project UUID after recovery","immutable completed retry","borrowed source retained"],cliSha256:createHash("sha256").update(await readFile(cliPath)).digest("hex")};
   let blockedConfigurations = 0;
   for (const resource of fixture.ownerships) {
-    const namespace = {storage_root:"micro-storages",volume:"microblockstorage",security_group:"security-groups",shell:"shells",schedule:"schedules",pool:"pools",queue:"queues",database_connection:"pipe/databases",storage_connection:"pipe/storage",secret:"secrets",secret_connection:"secrets/connections"}[resource.resource.kind];
+    const namespace = {storage_root:"micro-storages",volume:"microblockstorage",security_group:"security-groups",shell:"shells",schedule:"schedules",pool:"pools",queue:"queues",database_connection:"pipe/databases",storage_connection:"pipe/storage",secret:"secrets",secret_connection:"secrets/connections",sandbox_project:"ai-sandbox/projects"}[resource.resource.kind];
     if (!namespace) continue;
     const rejected = await context.request.delete(`${origin}api/${namespace}/${resource.resource.id}`);
     assert.equal(rejected.status(), 409);
@@ -80,7 +109,7 @@ try {
   await writeFile(path.join(output, "iac-548-ownership-evidence.json"), JSON.stringify({
     capturedAt: new Date().toISOString(), captureDate, sourceCommit, sourceDirty, focusResource:focus.resource, versions:{browser:browser.version(),node:process.version}, fixture: true, transport: "actual local Axum HTTP; no mocked API responses",
     runtime: "compiled WASM dashboard with disposable SQLite resource records; no Linux/KVM boot",
-    ownership, ownerships:fixture.ownerships, checks: ["endpoint identity", "43 inventory kinds; nineteen transfer adapters", "actual ownership read", "direct PATCH rejected with 409", `${blockedConfigurations} configuration kinds reject direct DELETE with 409`, "immutable operation acknowledgement", `${fixture.ownerships.length} ownership records in the actual dashboard`, "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
+    ownership, ownerships:fixture.ownerships,nativeRecovery, checks: ["endpoint identity", `43 inventory kinds; ${capabilities.transferKinds.length} transfer adapters`, "actual ownership read", "direct PATCH rejected with 409", `${blockedConfigurations} configuration kinds reject direct DELETE with 409`, "immutable operation acknowledgement", `${fixture.ownerships.length} ownership records in the actual dashboard`, "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
   }, null, 2) + "\n");
   console.log("Actual API ownership, mutation rejection, receipt and three dashboard screenshots verified.");
 } finally {

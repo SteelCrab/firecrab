@@ -56,6 +56,56 @@ pub async fn operation(
         .ok_or_else(|| AppError::not_found(request.0))
 }
 
+/// Observe native backend work, including an outcome requiring explicit recovery.
+pub async fn native_operation(
+    State(state): State<AppState>,
+    Extension(request): Extension<RequestId>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<firecrab_stack::NativeOperation>, AppError> {
+    database(request.0, move || state.store.iac_native_operation(id))
+        .await?
+        .map(Json)
+        .ok_or_else(|| AppError::not_found(request.0))
+}
+
+/// Recover a lost acknowledgement using the exact resource already known to the caller.
+pub async fn native_resource_operations(
+    State(state): State<AppState>,
+    Extension(request): Extension<RequestId>,
+    Path((kind, id)): Path<(String, String)>,
+) -> Result<Json<Vec<firecrab_stack::NativeOperation>>, AppError> {
+    let mut resource = ManagedResource { kind, id };
+    resource.normalize().map_err(|_| {
+        AppError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "invalid_iac_owner",
+            "provide an exact resource identity",
+            request.0,
+        )
+    })?;
+    database(request.0, move || {
+        state.store.iac_native_operations(&resource)
+    })
+    .await
+    .map(Json)
+}
+
+/// Only an authenticated operator may resume the original typed native action.
+pub async fn recover_native_operation(
+    State(state): State<AppState>,
+    Extension(request): Extension<RequestId>,
+    caller: crate::ai_sandbox::access::Caller,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<firecrab_stack::NativeOperation>, AppError> {
+    let store = state.store.clone();
+    let operation = database(request.0, move || store.iac_native_operation(id))
+        .await?
+        .ok_or_else(|| AppError::not_found(request.0))?;
+    super::ai_sandbox::recover_project_delete(state, request, caller, operation)
+        .await
+        .map(Json)
+}
+
 /// Adoption/transfer/release commits with its retry result in the same transaction.
 pub async fn change_owner(
     State(state): State<AppState>,
@@ -85,6 +135,11 @@ pub async fn change_owner(
         .map(Json);
     }
     let _admission = state.stack_apply_admission.lock().await;
+    let _sandbox = if change.resource.kind == "sandbox_project" {
+        Some(state.sandbox.admission.lock().await)
+    } else {
+        None
+    };
     let _environment = if change.resource.kind == "sandbox_environment" {
         Some(
             state

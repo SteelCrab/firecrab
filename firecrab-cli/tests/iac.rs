@@ -70,6 +70,64 @@ fn observed() -> Value {
 }
 
 #[test]
+fn native_operation_cli_observes_without_replay_and_recovers_only_the_original_id() {
+    let operation = "44444444-4444-4444-8444-444444444444";
+    let project = "22222222-2222-4222-8222-222222222222";
+    let mut ownership = observed();
+    ownership["resource"]["kind"] = json!("sandbox_project");
+    let status = json!({"operationId":operation,"ownership":ownership,"action":"delete_sandbox_project","state":"needs_recovery","errorCode":"server_restarted"});
+    let mut completed = status.clone();
+    completed["state"] = json!("succeeded");
+    completed["errorCode"] = Value::Null;
+    let (url, receive, task) = server(vec![json!([status]), status.clone(), completed]);
+    for args in [
+        vec![
+            "native-operations",
+            "--kind",
+            "sandbox_project",
+            "--id",
+            project,
+        ],
+        vec!["native-operation", "--id", operation],
+        vec!["recover-native-operation", "--id", operation],
+    ] {
+        let output = command(&url).args(args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(serde_json::from_slice::<Value>(&output.stdout).is_ok());
+    }
+    task.join().unwrap();
+    let requests = receive.try_iter().collect::<Vec<_>>();
+    assert_eq!(
+        requests[0],
+        (
+            "GET".into(),
+            format!("/api/iac/native-operations/resources/sandbox_project/{project}"),
+            Value::Null
+        )
+    );
+    assert_eq!(
+        requests[1],
+        (
+            "GET".into(),
+            format!("/api/iac/native-operations/{operation}"),
+            Value::Null
+        )
+    );
+    assert_eq!(
+        requests[2],
+        (
+            "POST".into(),
+            format!("/api/iac/native-operations/{operation}/recover"),
+            json!({})
+        )
+    );
+}
+
+#[test]
 fn ownership_cli_reads_exact_identity_and_immutable_acknowledgements_as_json() {
     let ownership = observed();
     let operation = "44444444-4444-4444-8444-444444444444";

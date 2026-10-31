@@ -96,7 +96,8 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "registry",
             "ai_connection",
             "ai_model",
-            "sandbox_environment"
+            "sandbox_environment",
+            "sandbox_project"
         ])
     );
     assert_eq!(
@@ -364,6 +365,9 @@ fn configuration_resource(
                 Ok(())
             })
             .unwrap(),
+        "sandbox_project"=>state.store.save_sandbox_project(&serde_json::from_value(json!({
+            "id":id,"owner":"local","createdAt":1,"spec":{"name":"Owned project","sourcePath":null,"vmId":null,"selection":null}
+        })).unwrap()).unwrap(),
         _ => panic!("unsupported fixture kind"),
     }
     ManagedResource {
@@ -1021,6 +1025,7 @@ async fn iac_owner_browser_fixture() {
         "storage_connection",
         "secret",
         "secret_connection",
+        "sandbox_project",
     ] {
         let resource = configuration_resource(&state, root.path(), id, kind);
         let before = state.store.iac_resource_owner(&resource).unwrap();
@@ -1048,6 +1053,17 @@ async fn iac_owner_browser_fixture() {
     ownerships.sort_by(|a, b| {
         (&a.resource.kind, &a.resource.id).cmp(&(&b.resource.kind, &b.resource.id))
     });
+    let recovery_project = configuration_resource(&state, root.path(), id, "sandbox_project");
+    let recovery_id = Uuid::parse_str(&recovery_project.id).unwrap();
+    let borrowed = root.path().join("borrowed-source");
+    std::fs::create_dir(&borrowed).unwrap();
+    std::fs::write(borrowed.join("keep.txt"), "borrowed contents").unwrap();
+    let mut saved = state.store.sandbox_project(recovery_id).unwrap().unwrap();
+    saved.spec.source_path = Some(borrowed.to_string_lossy().into());
+    state.store.save_sandbox_project(&saved).unwrap();
+    std::fs::create_dir_all(&state.sandbox.root).unwrap();
+    let recovery_workspace = state.sandbox.root.join(&recovery_project.id);
+    std::fs::write(&recovery_workspace, "fixture cleanup failure").unwrap();
     let router = build_router(
         state.clone(),
         &HttpConfig {
@@ -1057,7 +1073,8 @@ async fn iac_owner_browser_fixture() {
             request_timeout: std::time::Duration::from_secs(10),
             static_root: Some(assets),
         },
-    );
+    )
+    .layer(axum::Extension(crate::ai_sandbox::access::LocalOperator));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let finished = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -1068,7 +1085,8 @@ async fn iac_owner_browser_fixture() {
             .await
             .unwrap();
     });
-    std::fs::write(&info,serde_json::to_vec_pretty(&json!({"url":url,"ownership":ownership,"ownerships":ownerships,"operationId":change.operation_id,"fixture":true})).unwrap()).unwrap();
+    std::fs::write(&info,serde_json::to_vec_pretty(&json!({"url":url,"ownership":ownership,"ownerships":ownerships,"operationId":change.operation_id,"fixture":true,
+        "nativeRecoveryProjectId":recovery_id,"nativeRecoveryWorkspace":recovery_workspace,"nativeRecoveryBorrowedFile":borrowed.join("keep.txt")})).unwrap()).unwrap();
     let stop = info.with_extension("stop");
     let started = std::time::Instant::now();
     while !stop.exists() {
@@ -1128,3 +1146,6 @@ mod ai;
 
 #[path = "iac_environment.rs"]
 mod environment;
+
+#[path = "iac_native.rs"]
+mod native;

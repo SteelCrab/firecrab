@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 mod apply;
 mod inputs;
 mod lifecycle;
+mod native_operation;
 mod ownership;
 mod planning;
 mod source;
@@ -20,6 +21,7 @@ pub use apply::{
 };
 pub use inputs::{PlanInputs, TemplatePin, TemplateSnapshot};
 pub use lifecycle::{LifecyclePolicy, VmDiskIdentity};
+pub use native_operation::{NativeAction, NativeOperation, NativeOperationState};
 pub use ownership::{
     ChangeResourceOwner, ManagedResource, Manager, OwnershipOperation, ResourceOwner,
     ResourceOwnership, resource_kinds,

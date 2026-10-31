@@ -71,6 +71,7 @@ impl ManagedResource {
                 | "ai_connection"
                 | "ai_model"
                 | "sandbox_environment"
+                | "sandbox_project"
         ) && Uuid::parse_str(&self.id).is_err()
         {
             return Err("this resource kind requires a UUID");

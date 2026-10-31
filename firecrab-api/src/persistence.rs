@@ -46,6 +46,7 @@ pub(crate) mod service_observation;
 mod stack_applies;
 mod stack_sources;
 pub(crate) use stack_sources::SourceTrigger;
+pub(crate) mod iac_native;
 mod iac_owners;
 mod iac_resources;
 pub(crate) use iac_resources::TRANSFER_KINDS as IAC_TRANSFER_KINDS;
@@ -855,6 +856,7 @@ impl Store {
         conn.execute_batch(queues::SCHEMA)?;
         conn.execute_batch(stack_sources::SCHEMA_SQL)?;
         iac_owners::initialize(&conn)?;
+        conn.execute_batch(iac_native::SCHEMA)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;

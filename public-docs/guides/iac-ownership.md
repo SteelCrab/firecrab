@@ -8,7 +8,7 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 
 Network, standalone VM, MicroService, registered storage root, volume, security group,
 shell, schedule, pool, Queue, database connection, S3 connection, Secret, Secret connection,
-Auth, registry, AI connection, project model-default and Sandbox environment ownership
+Auth, registry, AI connection, project model-default, Sandbox environment and project ownership
 can move between native Stack and a Terraform state owner.
 Protected controller/pool/builder VMs and resources with active operations cannot be adopted.
 Generated Sandbox environment networks, security groups and VMs retain their parent's authority.
@@ -61,6 +61,11 @@ Sandbox environment transfer takes the existing controller lock.
 Provisioning, cleanup, VM transitions and unresolved environment tasks block transfer.
 Retired environments cannot be adopted again. Controller observations and retained child authority stay intact.
 
+Sandbox project transfer takes the existing admission lock.
+Active or unresolved tasks and provisioning/cleanup of its environments block transfer.
+Configuration writes also check the owner inside their SQLite transaction.
+Task execution, retained task contents and borrowed source files retain their existing permissions.
+
 The selected endpoint is the host/controller scope.
 Use existing [mTLS](mtls.md) for remote requests.
 Request-ID and idempotency headers do not authorize resource mutation.
@@ -75,6 +80,9 @@ Only operator API access can request ownership changes; delegated Sandbox caller
 | GET | `/api/iac/owners/{kind}/{id}` | Current owner and generation; null owner does not assert resource existence |
 | GET | `/api/iac/owner-changes/{id}` | Immutable committed acknowledgement for an operation UUID, or 404 |
 | POST | `/api/iac/owners/transition` | Atomically change ownership and persist its acknowledgement |
+| GET | `/api/iac/native-operations/{id}` | Durable native operation state; observation never replays work |
+| GET | `/api/iac/native-operations/resources/{kind}/{resource}` | Recorded operation IDs for an exact known resource, including completed results |
+| POST | `/api/iac/native-operations/{id}/recover` | Operator recovery of the same accepted typed action |
 
 The CLI uses the same selected host and remote mTLS as other resource commands:
 
@@ -149,6 +157,34 @@ Reads remain available.
 Unsupported kinds, missing resources, protected VMs and occupied logical addresses fail before journal admission.
 These metadata transactions do not implement the pending per-service deployment execution adapters.
 
+## Native project deletion and recovery
+
+The native mutation journal currently covers Sandbox project deletion only.
+It is not the inventory-wide execution adapter required by stage 2.
+The server stores the project UUID, endpoint, ownership generation and typed action before deleting its private workspace.
+Its worker survives an HTTP disconnect. Ownership cannot move while the result is uncertain.
+New configuration, tasks, environments and preview bindings cannot enter the reserved project.
+Borrowed source directories and other projects' private workspaces are preserved.
+
+Successful deletion returns `deleted: true` and `operationId`.
+The project record and completed acknowledgement commit together after filesystem confirmation.
+A filesystem failure leaves `needs_recovery` and a static error code.
+Server startup changes unfinished native operations to `needs_recovery`; it does not replay them.
+The project UUID remains retired after successful deletion, so a late retry cannot target a new incarnation.
+
+After losing the response, find the original operation by the exact project UUID:
+
+```sh
+firecrab --host production iac native-operations --kind sandbox_project --id PROJECT_UUID
+firecrab --host production iac native-operation --id OPERATION_UUID
+firecrab --host production iac recover-native-operation --id OPERATION_UUID
+```
+
+Inspect and repair the underlying problem before explicit operator recovery.
+Recovery checks the original authority and reuses the same operation, project and private workspace identity.
+A completed recovery returns its immutable acknowledgement without another filesystem operation.
+Operation metadata contains no project settings, prompts, credentials or filesystem paths.
+
 
 ## Reproduce dashboard evidence
 
@@ -156,6 +192,7 @@ Build the frontend and start the disposable test server from the repository root
 
 ```sh
 npm run build --prefix firecrab-frontend
+cargo build -p firecrab-cli --bin firecrab --locked
 FIRECRAB_IAC_QA_INFO=/tmp/firecrab-iac-qa.json \
 FIRECRAB_IAC_QA_ASSETS="$PWD/firecrab-frontend/dist" \
 cargo test -p firecrab-api --bin firecrab-api \
@@ -165,6 +202,7 @@ cargo test -p firecrab-api --bin firecrab-api \
 In another terminal, run the browser check before the ten-minute fixture deadline:
 
 ```sh
+FIRECRAB_IAC_QA_CLI="$PWD/target/debug/firecrab" \
 node firecrab-e2e/scripts/capture-iac-ownership.mjs \
   /tmp/firecrab-iac-qa.json firecrab-e2e/test-results/iac
 # Stop and remove the temporary server/database after capture:
@@ -174,4 +212,5 @@ touch /tmp/firecrab-iac-qa.stop
 Install the existing E2E browser dependencies first; `FIRECRAB_IAC_QA_CHANNEL=chrome` selects installed Chrome.
 The check uses actual HTTP and compiled WASM, with isolated SQLite fixture records.
 It verifies direct-mutation rejection, the durable acknowledgement, desktop and mobile rendering.
+The actual CLI discovers a native cleanup failure, recovers its original operation and checks the immutable retry.
 It does not boot Linux/KVM workloads or run a Terraform provider.

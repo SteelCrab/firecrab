@@ -210,6 +210,18 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/iac/identity", get(handlers::iac::identity))
         .route("/api/iac/owners", get(handlers::iac::owners))
         .route("/api/iac/owner-changes/{id}", get(handlers::iac::operation))
+        .route(
+            "/api/iac/native-operations/{id}",
+            get(handlers::iac::native_operation),
+        )
+        .route(
+            "/api/iac/native-operations/resources/{kind}/{resource}",
+            get(handlers::iac::native_resource_operations),
+        )
+        .route(
+            "/api/iac/native-operations/{id}/recover",
+            post(handlers::iac::recover_native_operation),
+        )
         .route("/api/iac/owners/{kind}/{id}", get(handlers::iac::owner))
         .route(
             "/api/iac/owners/transition",
