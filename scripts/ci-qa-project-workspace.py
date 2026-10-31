@@ -20,6 +20,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 import uuid
 
 
@@ -71,6 +72,7 @@ class QA:
         self.workspace = f"/api/ai-sandbox/projects/{self.project}/workspace"
         self.vms, self.dropins = [], []
         self.api_process = None
+        self.file_save = None
         self.env = {
             "PATH": str(self.root / "bin") + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "FIRECRAB_BIND_ADDR": "127.0.0.1:19550",
@@ -193,6 +195,74 @@ class QA:
         self.request("POST", "/api/vms/" + vm["id"] + "/stop")
         return wait(lambda: self.vm_state(vm, "stopped"), 90)
 
+    def file_url(self, suffix=""):
+        return self.workspace + "/files" + suffix + "?path=" + urllib.parse.quote("src/qa550-live.txt", safe="")
+
+    def file_contents(self):
+        item = self.request("GET", self.file_url())
+        assert base64.b64decode(item["contentBase64"], validate=True) == self.file_bytes
+        assert item["version"]["id"] == self.file_save["version"]["id"]
+        return item
+
+    def file_history(self):
+        history = self.request("GET", self.file_url("/history"))
+        assert all(v["path"] == "src/qa550-live.txt" for v in history)
+        assert self.file_save["version"]["id"] in [v["id"] for v in history]
+        global_history = self.request("GET", self.workspace + "/files/history")
+        assert any(v["path"] == "src/qa550-live.txt" for v in global_history)
+        saved = self.request("GET", self.file_url("/versions/" + str(self.file_save["version"]["id"])))
+        assert base64.b64decode(saved["contentBase64"], validate=True) == self.file_bytes
+        return history
+
+    def exercise_files(self):
+        first = ("first:" + str(uuid.uuid4()) + "\n").encode()
+        initial = {"operationId": str(uuid.uuid4()), "expectedVersion": 0,
+            "contentBase64": base64.b64encode(first).decode()}
+        created = self.request("PUT", self.file_url(), initial)
+        assert base64.b64decode(created["contentBase64"], validate=True) == first
+        tree = self.request("GET", self.workspace + "/files/tree?path=src")
+        assert any(e["name"] == "qa550-live.txt" and not e["directory"] for e in tree)
+        stale = dict(initial, operationId=str(uuid.uuid4()), contentBase64=base64.b64encode(b"stale").decode())
+        self.request("PUT", self.file_url(), stale, status=409)
+        second = b"second:" + os.urandom(64)
+        changed = self.request("PUT", self.file_url(), {"operationId": str(uuid.uuid4()),
+            "expectedVersion": created["version"]["id"], "contentBase64": base64.b64encode(second).decode()})
+        difference = self.request("GET", self.file_url("/diff") + "&from=" + str(created["version"]["id"]) + "&to=" + str(changed["version"]["id"]))
+        assert base64.b64decode(difference["before"]["contentBase64"]) == first
+        assert base64.b64decode(difference["after"]["contentBase64"]) == second
+        restored = self.request("POST", self.file_url("/restore"), {"operationId": str(uuid.uuid4()),
+            "expectedVersion": changed["version"]["id"], "version": created["version"]["id"]})
+        assert restored["version"]["restoredFrom"] == created["version"]["id"]
+        assert restored["version"]["id"] > changed["version"]["id"]
+        self.file_bytes = b"retained:" + os.urandom(64)
+        self.file_request = {"operationId": str(uuid.uuid4()), "expectedVersion": restored["version"]["id"],
+            "contentBase64": base64.b64encode(self.file_bytes).decode()}
+        self.file_save = self.request("PUT", self.file_url(), self.file_request)
+        assert self.request("PUT", self.file_url(), initial)["version"]["id"] == created["version"]["id"]
+        self.file_contents()
+        assert len(self.file_history()) == 4
+        self.passed("file-api-conflict-diff-immutable-history-and-restore",
+            version=self.file_save["version"]["id"], fileSha256=hashlib.sha256(self.file_bytes).hexdigest())
+        self.request("GET", self.workspace + "/files?path=.firecrab-workspace/ready", status=400)
+        self.ssh("ln -s /etc/passwd /workspace/shared/qa550-forbidden-link")
+        self.request("GET", self.workspace + "/files?path=qa550-forbidden-link", status=400)
+        self.passed("file-api-rejects-private-metadata-and-symlink")
+        disconnected = {"operationId": str(uuid.uuid4()), "expectedVersion": self.file_save["version"]["id"],
+            "contentBase64": base64.b64encode(b"after-disconnect:" + os.urandom(64)).decode()}
+        client = http.client.HTTPConnection("127.0.0.1", 19550, timeout=10)
+        client.request("PUT", self.file_url(), json.dumps(disconnected),
+            headers={"Content-Type": "application/json", "Origin": self.base})
+        client.close()
+        time.sleep(0.5)
+        self.file_save = self.request("PUT", self.file_url(), disconnected)
+        self.file_request = disconnected
+        self.file_bytes = base64.b64decode(disconnected["contentBase64"])
+        self.file_contents()
+        assert len(self.file_history()) == 5
+        operations = self.request("GET", self.workspace + "/file-operations")
+        assert len([op for op in operations if op["id"] == disconnected["operationId"]]) == 1
+        self.passed("disconnected-save-retry-keeps-one-operation-and-version")
+
     def exercise(self):
         self.start_api()
         assert not self.request("GET", "/api/vms"), "QA database already contains VMs"
@@ -226,6 +296,8 @@ class QA:
         self.metadata()
         self.passed("real-ext4-mount-and-synced-write", vmId=vm["id"], bootId=boot,
             volumeId=self.volume["id"], databaseId=self.database, fileSha256=expected_digest)
+        if self.args.files:
+            self.exercise_files()
         client = http.client.HTTPConnection("127.0.0.1", 19550, timeout=10)
         client.request("GET", self.workspace)
         assert client.getresponse().status == 200
@@ -243,16 +315,28 @@ class QA:
             assert self.ssh("cat /proc/sys/kernel/random/boot_id") == boot
             assert self.digest() == expected_digest
             assert self.metadata()["vmId"] == vm["id"]
+            if self.args.files:
+                self.file_contents()
+                self.file_history()
+                assert self.request("PUT", self.file_url(), self.file_request)["version"]["id"] == self.file_save["version"]["id"]
             self.passed("api-crash-recovery" if crash else "api-restart-recovery",
                 oldApiPid=old_pid, newApiPid=self.api_process.pid, shimPid=shim)
         self.stop_vm(vm)
         assert self.metadata()["status"] == "stopped"
+        if self.args.files:
+            self.file_history()
+            self.request("GET", self.file_url(), status=409)
+            assert self.request("PUT", self.file_url(), self.file_request)["version"]["id"] == self.file_save["version"]["id"]
+            self.passed("file-history-and-completed-save-queryable-with-stopped-vm")
         self.passed("project-database-queryable-with-stopped-vm")
         vm, new_boot = self.start_vm(vm)
         assert new_boot != boot
         assert self.metadata()["status"] == "awaiting_mount"
         assert self.request("POST", self.workspace + "/reconcile")["status"] == "ready"
         assert self.digest() == expected_digest
+        if self.args.files:
+            self.file_contents()
+            self.file_history()
         self.passed("real-vm-stop-start-retains-data-and-requires-new-proof", oldBootId=boot, newBootId=new_boot)
         self.stop_vm(vm)
         self.request("DELETE", "/api/vms/" + vm["id"])
@@ -271,6 +355,10 @@ class QA:
         assert replacement_boot != new_boot and replacement["id"] != vm["id"]
         assert self.request("POST", self.workspace + "/reconcile")["status"] == "ready"
         assert self.digest() == expected_digest and self.metadata()["generation"] == 2
+        if self.args.files:
+            self.file_contents()
+            self.file_history()
+            self.passed("file-content-and-history-survive-runtime-replacement")
         self.passed("new-runtime-rebinds-same-retained-database-and-file", oldVmId=vm["id"],
             newVmId=replacement["id"], newBootId=replacement_boot, fileSha256=expected_digest)
         self.stop_vm(replacement)
@@ -329,6 +417,7 @@ def main():
     parser.add_argument("--run-id", type=uuid.UUID, required=True)
     parser.add_argument("--template", default="ubuntu-26.04")
     parser.add_argument("--live", action="store_true")
+    parser.add_argument("--files", action="store_true", help="also exercise the native file API and retained history")
     parser.add_argument("--namespace", help=argparse.SUPPRESS)
     parser.add_argument("--storage", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -365,7 +454,7 @@ def main():
         (args.root / "hosts").chmod(0o644)
         subprocess.run(["ip", "netns", "exec", name, "python3", str(Path(__file__).resolve()),
             "--root", str(args.root), "--run-id", str(args.run_id), "--template", args.template,
-            "--namespace", name, "--storage", str(storage), "--live"], check=True)
+            "--namespace", name, "--storage", str(storage), "--live"] + (["--files"] if args.files else []), check=True)
     finally:
         owned = args.root / "owned-vms.json"
         if owned.exists():
