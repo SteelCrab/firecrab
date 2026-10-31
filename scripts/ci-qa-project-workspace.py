@@ -14,6 +14,8 @@ import json
 import os
 from pathlib import Path
 import signal
+import ssl
+import importlib.util
 import stat
 import subprocess
 import sys
@@ -82,6 +84,26 @@ class QA:
             "FIRECRAB_LIBDIR": str(self.root / "bin"),
         }
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self.contexts, self.actors, self.identities = {}, {}, {}
+        if args.tls:
+            pki = self.root / "pki"
+            self.identities = json.loads((pki / "identities.json").read_text())
+            self.base = "https://127.0.0.1:19550"
+            self.env.update(FIRECRAB_TLS_CERT=str(pki / "controller.crt"),
+                FIRECRAB_TLS_KEY=str(pki / "controller.key"), FIRECRAB_TLS_CA=str(pki / "ca.crt"))
+            for name in ("controller", "editor", "writer", "viewer"):
+                context = ssl.create_default_context(cafile=str(pki / "ca.crt"))
+                context.load_cert_chain(str(pki / (name + ".crt")), str(pki / (name + ".key")))
+                self.contexts[name] = context
+                self.actors[name] = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
+            self.opener = self.actors["controller"]
+        self.terminals = None
+        if args.terminals:
+            source = Path(__file__).with_name("project-workspace-terminals-qa.py")
+            spec = importlib.util.spec_from_file_location("terminal_qa", source)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.terminals = module.TerminalGate(self)
         self.report = {
             "runId": str(args.run_id), "startedAt": datetime.now(timezone.utc).isoformat(),
             "apiSha256": hashlib.sha256((self.root / "bin/firecrab-api").read_bytes()).hexdigest(),
@@ -104,19 +126,30 @@ class QA:
         self.save()
         print("PASS", name, json.dumps(evidence), flush=True)
 
-    def request(self, method, path, body=None, status=None, raw=False):
+    def request(self, method, path, body=None, status=None, raw=False, actor="controller"):
         payload = json.dumps(body).encode() if body is not None else (b"" if method in ("PUT", "POST") else None)
-        request = urllib.request.Request(self.base + path, data=payload, method=method,
-            headers={"Content-Type": "application/json", "Origin": self.base})
-        try:
-            response = self.opener.open(request, timeout=90)
-        except urllib.error.HTTPError as error:
-            response = error
-        with response:
-            data = response.read(2 * 1024 * 1024)
-            if (status is not None and response.code != status) or (status is None and not 200 <= response.code < 300):
-                raise AssertionError((method, path, response.code, data.decode(errors="replace")))
-        return data if raw else json.loads(data) if data else None
+        for attempt in range(20):
+            request = urllib.request.Request(self.base + path, data=payload, method=method,
+                headers={"Content-Type": "application/json", "Origin": self.base})
+            try:
+                response = (self.opener if actor == "controller" else self.actors[actor]).open(request, timeout=90)
+            except urllib.error.HTTPError as error:
+                response = error
+            with response:
+                data = response.read(2 * 1024 * 1024)
+                code = response.code
+            busy = code == 409 and json.loads(data).get("error", {}).get("code") == "workspace_busy"
+            if method == "GET" and busy and attempt < 19:
+                time.sleep(0.1)
+                continue
+            if (status is not None and code != status) or (status is None and not 200 <= code < 300):
+                raise AssertionError((method, path, code, data.decode(errors="replace")))
+            return data if raw else json.loads(data) if data else None
+
+    def connection(self):
+        if self.args.tls:
+            return http.client.HTTPSConnection("127.0.0.1", 19550, context=self.contexts["controller"], timeout=10)
+        return http.client.HTTPConnection("127.0.0.1", 19550, timeout=10)
 
     def start_api(self):
         log = (self.root / "api.log").open("ab")
@@ -249,7 +282,7 @@ class QA:
         self.passed("file-api-rejects-private-metadata-and-symlink")
         disconnected = {"operationId": str(uuid.uuid4()), "expectedVersion": self.file_save["version"]["id"],
             "contentBase64": base64.b64encode(b"after-disconnect:" + os.urandom(64)).decode()}
-        client = http.client.HTTPConnection("127.0.0.1", 19550, timeout=10)
+        client = self.connection()
         client.request("PUT", self.file_url(), json.dumps(disconnected),
             headers={"Content-Type": "application/json", "Origin": self.base})
         client.close()
@@ -298,7 +331,9 @@ class QA:
             volumeId=self.volume["id"], databaseId=self.database, fileSha256=expected_digest)
         if self.args.files:
             self.exercise_files()
-        client = http.client.HTTPConnection("127.0.0.1", 19550, timeout=10)
+        if self.terminals:
+            self.terminals.started(vm)
+        client = self.connection()
         client.request("GET", self.workspace)
         assert client.getresponse().status == 200
         client.close()
@@ -319,10 +354,16 @@ class QA:
                 self.file_contents()
                 self.file_history()
                 assert self.request("PUT", self.file_url(), self.file_request)["version"]["id"] == self.file_save["version"]["id"]
+            if self.terminals:
+                self.terminals.restarted()
             self.passed("api-crash-recovery" if crash else "api-restart-recovery",
                 oldApiPid=old_pid, newApiPid=self.api_process.pid, shimPid=shim)
+        if self.terminals:
+            self.terminals.revocations()
         self.stop_vm(vm)
         assert self.metadata()["status"] == "stopped"
+        if self.terminals:
+            self.terminals.stopped()
         if self.args.files:
             self.file_history()
             self.request("GET", self.file_url(), status=409)
@@ -337,6 +378,8 @@ class QA:
         if self.args.files:
             self.file_contents()
             self.file_history()
+        if self.terminals:
+            self.terminals.rebooted()
         self.passed("real-vm-stop-start-retains-data-and-requires-new-proof", oldBootId=boot, newBootId=new_boot)
         self.stop_vm(vm)
         self.request("DELETE", "/api/vms/" + vm["id"])
@@ -359,6 +402,8 @@ class QA:
             self.file_contents()
             self.file_history()
             self.passed("file-content-and-history-survive-runtime-replacement")
+        if self.terminals:
+            self.terminals.replaced(replacement)
         self.passed("new-runtime-rebinds-same-retained-database-and-file", oldVmId=vm["id"],
             newVmId=replacement["id"], newBootId=replacement_boot, fileSha256=expected_digest)
         self.stop_vm(replacement)
@@ -418,11 +463,15 @@ def main():
     parser.add_argument("--template", default="ubuntu-26.04")
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--files", action="store_true", help="also exercise the native file API and retained history")
+    parser.add_argument("--tls", action="store_true", help="use the owned pki/ fixture and real mutual TLS identities")
+    parser.add_argument("--terminals", action="store_true", help="also exercise real PTYs and the multi-user API through TLS")
     parser.add_argument("--namespace", help=argparse.SUPPRESS)
     parser.add_argument("--storage", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if not args.live or sys.platform != "linux" or os.geteuid() != 0 or not Path("/dev/kvm").is_char_device():
         parser.error("requires --live and root on a Linux/KVM host")
+    if args.terminals and not (args.tls and args.files):
+        parser.error("--terminals requires --tls --files and an owned pki fixture")
     validate_owner(args.root, args.run_id)
     if (args.root / "prepare-api.pid").exists():
         parser.error("stop the owned image-preparation API before live acceptance")
@@ -454,7 +503,7 @@ def main():
         (args.root / "hosts").chmod(0o644)
         subprocess.run(["ip", "netns", "exec", name, "python3", str(Path(__file__).resolve()),
             "--root", str(args.root), "--run-id", str(args.run_id), "--template", args.template,
-            "--namespace", name, "--storage", str(storage), "--live"] + (["--files"] if args.files else []), check=True)
+            "--namespace", name, "--storage", str(storage), "--live"] + (["--files"] if args.files else []) + (["--tls"] if args.tls else []) + (["--terminals"] if args.terminals else []), check=True)
     finally:
         owned = args.root / "owned-vms.json"
         if owned.exists():

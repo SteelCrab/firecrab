@@ -575,6 +575,7 @@ async fn socket(
                             }
                             if (page.next>page.start||page.truncated)&&tx.send(Message::Text(serde_json::json!({"type":"output","output":page}).to_string().into())).await.is_err() { break; }
                         }
+                        Err(error) if error.code() == "workspace_busy" => {},
                         Err(_)=> { let _=tx.send(Message::Close(None)).await;break; }
                     }
                 }
