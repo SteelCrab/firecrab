@@ -1455,3 +1455,57 @@ async fn workspace_files_read_only_grant_cannot_save_restore_or_reconcile() {
         StatusCode::OK
     );
 }
+
+// An unrelated fork must not keep a completed workspace operation locked.
+#[cfg(target_os = "linux")]
+#[test]
+fn inherited_descriptors_do_not_retain_completed_project_or_service_locks() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut b = registration();
+    let root = dir.path().join("state/projects");
+    let db = db::ProjectDb::open(&root, &b, Uuid::new_v4(), true).unwrap();
+    let service =
+        db::OwnerLock::acquire(db::private_file(&db.directory.join("service.lock"), true).unwrap())
+            .unwrap();
+    let mut ready = [0; 2];
+    let mut done = [0; 2];
+    unsafe {
+        assert_eq!(libc::pipe2(ready.as_mut_ptr(), libc::O_CLOEXEC), 0);
+        assert_eq!(libc::pipe2(done.as_mut_ptr(), libc::O_CLOEXEC), 0);
+    }
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0);
+    if child == 0 {
+        unsafe {
+            libc::close(ready[0]);
+            libc::close(done[1]);
+            let value = [1u8];
+            libc::write(ready[1], value.as_ptr().cast(), 1);
+            let mut finish = [0u8];
+            libc::read(done[0], finish.as_mut_ptr().cast(), 1);
+            libc::_exit(0);
+        }
+    }
+    unsafe {
+        libc::close(ready[1]);
+        libc::close(done[0]);
+        let mut value = [0u8];
+        assert_eq!(libc::read(ready[0], value.as_mut_ptr().cast(), 1), 1);
+    }
+    let service_path = db.directory.join("service.lock");
+    drop(db);
+    drop(service);
+    b.provisioning = false;
+    // Evaluate before allowing the child to close its inherited descriptors.
+    let opened = db::ProjectDb::open(&root, &b, Uuid::new_v4(), false);
+    let service = db::OwnerLock::acquire(db::private_file(&service_path, false).unwrap());
+    unsafe {
+        let value = [1u8];
+        libc::write(done[1], value.as_ptr().cast(), 1);
+        libc::close(done[1]);
+        libc::close(ready[0]);
+        libc::waitpid(child, std::ptr::null_mut(), 0);
+    }
+    assert!(opened.is_ok(), "The completed operation remained locked");
+    assert!(service.is_ok(), "The stopped service remained locked");
+}

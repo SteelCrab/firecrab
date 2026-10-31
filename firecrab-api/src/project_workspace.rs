@@ -57,7 +57,7 @@ pub struct Runtime {
     /// Wake replay workers promptly after interactive input.
     terminal_wake: tokio::sync::Notify,
     /// One OS lock per project remains held for this service lifetime.
-    services: std::sync::Mutex<std::collections::BTreeMap<Uuid, std::sync::Arc<File>>>,
+    services: std::sync::Mutex<std::collections::BTreeMap<Uuid, std::sync::Arc<db::OwnerLock>>>,
 }
 impl Runtime {
     /// Establish controller ownership without creating project databases eagerly.
@@ -198,7 +198,7 @@ fn service_lease(
     state: &AppState,
     binding: &Binding,
     create: bool,
-) -> Result<std::sync::Arc<File>, Error> {
+) -> Result<std::sync::Arc<db::OwnerLock>, Error> {
     let mut services = state
         .workspaces
         .services
@@ -209,8 +209,7 @@ fn service_lease(
     }
     let directory = db::project_directory(&state.workspaces.root, binding, create)?;
     let file = db::private_file(&directory.join("service.lock"), true)?;
-    file.try_lock().map_err(|_| Error::Busy)?;
-    let lease = std::sync::Arc::new(file);
+    let lease = std::sync::Arc::new(db::OwnerLock::acquire(file)?);
     services.insert(binding.project_id, lease.clone());
     Ok(lease)
 }

@@ -17,6 +17,22 @@ const APPLICATION_ID: i64 = 0x46575031;
 /// Maximum serialized size of a project metadata object.
 pub const DOCUMENT_LIMIT: usize = 64 * 1024;
 
+/// An explicit unlock prevents unrelated forked children from retaining completed ownership.
+#[derive(Debug)]
+pub(super) struct OwnerLock(File);
+impl OwnerLock {
+    /// Wrap only a successfully acquired lock, including error paths during database opening.
+    pub(super) fn acquire(file: File) -> Result<Self, Error> {
+        file.try_lock().map_err(|_| Error::Busy)?;
+        Ok(Self(file))
+    }
+}
+impl Drop for OwnerLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 /// A private connection fenced by an advisory lock and persisted operation epoch.
 pub struct ProjectDb {
     /// Canonical directory containing the database and private artifacts.
@@ -26,9 +42,9 @@ pub struct ProjectDb {
     /// Persisted epoch checked by each mutation.
     pub epoch: i64,
     /// Retains the advisory lock until the entire operation is dropped.
-    _owner: File,
+    _owner: OwnerLock,
     /// Keep the owning service lock alive through the last in-flight operation.
-    pub(super) service: Option<std::sync::Arc<File>>,
+    pub(super) service: Option<std::sync::Arc<OwnerLock>>,
 }
 
 /// Create or validate a server-owned directory without following its final symlink.
@@ -106,7 +122,7 @@ impl ProjectDb {
         let initialize = create && binding.provisioning;
         let directory = project_directory(root, binding, create)?;
         let lock = private_file(&directory.join("owner.lock"), true)?;
-        lock.try_lock().map_err(|_| Error::Busy)?;
+        let lock = OwnerLock::acquire(lock)?;
         let path = directory.join("project.db");
         if !path.exists() && !initialize {
             return Err(Error::Conflict("Retained project database is missing"));
