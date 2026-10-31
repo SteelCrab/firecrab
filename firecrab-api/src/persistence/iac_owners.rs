@@ -102,6 +102,17 @@ pub(super) fn public_write_allowed(
     Ok(true)
 }
 
+/// A new parent credential source cannot conceal an independently managed login.
+pub(super) fn ensure_unowned(
+    conn: &Connection,
+    resource: &ManagedResource,
+) -> Result<(), PersistenceError> {
+    if read(conn, resource)?.owner.is_some() {
+        return Err(PersistenceError::IacOwnershipConflict);
+    }
+    Ok(())
+}
+
 impl Store {
     /// Stable endpoint identity for clients that manage multiple API hosts.
     pub(crate) fn iac_endpoint_id(&self) -> Result<Uuid, PersistenceError> {

@@ -7,7 +7,7 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 ## Current support
 
 Network, standalone VM, MicroService, registered storage root, volume, security group,
-shell, schedule, pool, Queue, database connection, S3 connection, Secret, Secret connection and Auth ownership
+shell, schedule, pool, Queue, database connection, S3 connection, Secret, Secret connection, Auth and registry ownership
 can move between native Stack and a Terraform state owner.
 Protected controller/pool/builder VMs and resources with active operations cannot be adopted.
 Generated Sandbox environment networks, security groups and VMs retain their parent's authority.
@@ -42,6 +42,13 @@ Transfer preserves its currently saved account and credentials.
 Native credential saves and removals check ownership in the same SQLite transaction.
 An older dispatched save cannot overwrite a slot after it moves to Terraform.
 
+Direct registry logins use lowercase hostnames and optional ports.
+`registry-1.docker.io` and `docker.io` identify the same Docker Hub login.
+The earlier Docker Hub API and registry API enforce the same ownership.
+Shared Auth controls its derived registry connection; adopt the Auth slot instead.
+A new Auth connection cannot mask an independently managed direct login.
+These competing writes and transfers are checked within the same SQLite transaction.
+
 The selected endpoint is the host/controller scope.
 Use existing [mTLS](mtls.md) for remote requests.
 Request-ID and idempotency headers do not authorize resource mutation.
@@ -70,7 +77,8 @@ firecrab --host production iac owner-change --id OPERATION_UUID
 Retain the exact JSON request file to recover an unknown response safely.
 The CLI never generates a replacement operation UUID on retry.
 
-UUID-backed resources use the exact UUID, not a display name. Auth uses its provider slot key.
+UUID-backed resources use the exact UUID, not a display name.
+Auth uses its provider slot key. Direct registries use their canonical host and optional port.
 UUID aliases are normalized before looking up ownership.
 A native owner has `manager: "stack"`, the registration UUID in `id`, and its logical binding `key`.
 A Terraform owner has `manager: "terraform"`, a stable state-owner UUID, and the exact Terraform resource address in `key`.

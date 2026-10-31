@@ -88,6 +88,15 @@ impl Store {
         )? {
             return Err(PersistenceError::IacOwnershipConflict);
         }
+        if let Some(registry) = auth.connection().registry {
+            super::iac_owners::ensure_unowned(
+                &tx,
+                &firecrab_stack::ManagedResource {
+                    kind: "registry".into(),
+                    id: registry,
+                },
+            )?;
+        }
         tx.execute(
             "INSERT INTO pipe_auth_credentials (provider, credential) VALUES (?1, ?2)
              ON CONFLICT(provider) DO UPDATE SET credential=excluded.credential",

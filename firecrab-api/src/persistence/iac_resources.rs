@@ -22,6 +22,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "secret",
     "secret_connection",
     "auth",
+    "registry",
 ];
 
 /// Reservations and tombstones keep generated identities with their parent.
@@ -48,6 +49,9 @@ pub(super) fn validate(
 ) -> Result<(), PersistenceError> {
     if adopting {
         ensure_independent(conn, resource)?;
+        if resource.kind == "registry" {
+            ensure_registry_direct(conn, &resource.id)?;
+        }
     }
     let exists = match resource.kind.as_str() {
         "storage_root" => "SELECT EXISTS(SELECT 1 FROM micro_storages WHERE id=?1)",
@@ -66,6 +70,10 @@ pub(super) fn validate(
         "auth" => {
             "SELECT EXISTS(SELECT 1 FROM pipe_auth_credentials WHERE provider=?1 AND json_extract(credential,'$.provider')=?1)"
         }
+        "registry" if resource.id == "docker.io" => {
+            "SELECT EXISTS(SELECT 1 FROM docker_hub_credential WHERE id=1 AND ?1='docker.io')"
+        }
+        "registry" => "SELECT EXISTS(SELECT 1 FROM registry_credentials WHERE registry=?1)",
         _ => return Err(PersistenceError::UnsupportedIacResource),
     };
     if adopting && !conn.query_row(exists, [&resource.id], |row| row.get::<_, bool>(0))? {
@@ -99,7 +107,7 @@ pub(super) fn validate(
         // Connection edits hold the same service-mutation lock as ownership admission.
         "storage_connection" => None,
         // Native credential commits and ownership changes share the SQLite transaction.
-        "auth" => None,
+        "auth" | "registry" => None,
         // Adding a revision never changes scripts already pinned by a VM.
         "shell" => None,
         _ => return Err(PersistenceError::UnsupportedIacResource),
@@ -108,6 +116,23 @@ pub(super) fn validate(
         && conn.query_row(query, [&resource.id], |row| row.get::<_, bool>(0))?
     {
         return Err(PersistenceError::IacResourceBusy);
+    }
+    Ok(())
+}
+
+/// Shared Auth owns its derived connection; the dormant direct row is not effective configuration.
+pub(super) fn ensure_registry_direct(
+    conn: &Connection,
+    registry: &str,
+) -> Result<(), PersistenceError> {
+    let mut statement = conn.prepare("SELECT credential FROM pipe_auth_credentials")?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        let auth: crate::pipe_auth::SavedAuth =
+            serde_json::from_str(&row?).map_err(|_| PersistenceError::IacOwnershipConflict)?;
+        if auth.connection().registry.as_deref() == Some(registry) {
+            return Err(PersistenceError::IacParentManaged);
+        }
     }
     Ok(())
 }

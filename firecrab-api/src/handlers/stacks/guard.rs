@@ -41,6 +41,7 @@ pub(crate) async fn protect_resources(
         "/api/secrets/{id}" => Some("secret"),
         "/api/secrets/connections/{id}" => Some("secret_connection"),
         "/api/pipe/auth/{provider}" => Some("auth"),
+        "/api/pipe/registries/{registry}" | "/api/microregistry/docker-hub" => Some("registry"),
         _ => None,
     };
     let kind = configuration.or_else(|| {
@@ -64,20 +65,36 @@ pub(crate) async fn protect_resources(
         .get::<RequestId>()
         .map(|id| id.0)
         .unwrap_or_else(Uuid::new_v4);
+    let docker_hub = path.as_str() == "/api/microregistry/docker-hub";
     // Use decoded identities so percent encoding cannot bypass the ownership check.
     let (mut parts, body) = request.into_parts();
-    let id = match Path::<HashMap<String, String>>::from_request_parts(&mut parts, &state).await {
-        Ok(Path(parameters)) if kind == "auth" => {
-            parameters.get("provider").cloned().unwrap_or_default()
+    let id = if docker_hub {
+        "docker.io".into()
+    } else {
+        match Path::<HashMap<String, String>>::from_request_parts(&mut parts, &state).await {
+            Ok(Path(parameters)) if kind == "registry" => {
+                let registry = parameters
+                    .get("registry")
+                    .map(|value| value.trim().to_ascii_lowercase())
+                    .unwrap_or_default();
+                if registry == "registry-1.docker.io" {
+                    "docker.io".into()
+                } else {
+                    registry
+                }
+            }
+            Ok(Path(parameters)) if kind == "auth" => {
+                parameters.get("provider").cloned().unwrap_or_default()
+            }
+            Ok(Path(parameters)) => match super::super::vms::parse_id(
+                parameters.get("id").map(String::as_str).unwrap_or_default(),
+                request_id,
+            ) {
+                Ok(id) => id.to_string(),
+                Err(error) => return error.into_response(),
+            },
+            Err(_) => return AppError::not_found(request_id).into_response(),
         }
-        Ok(Path(parameters)) => match super::super::vms::parse_id(
-            parameters.get("id").map(String::as_str).unwrap_or_default(),
-            request_id,
-        ) {
-            Ok(id) => id.to_string(),
-            Err(error) => return error.into_response(),
-        },
-        Err(_) => return AppError::not_found(request_id).into_response(),
     };
     // Admission cannot race between this check and a synchronous resource edit.
     // Detached runtime work remains subject to the existing resource-state checks.

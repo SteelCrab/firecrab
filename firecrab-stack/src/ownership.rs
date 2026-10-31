@@ -37,6 +37,21 @@ impl ManagedResource {
         if self.kind == "auth" && !matches!(self.id.as_str(), "firecrab" | "aws" | "github") {
             return Err("use the exact saved Auth provider key");
         }
+        if self.kind == "registry" {
+            self.id = self.id.to_ascii_lowercase();
+            if self.id == "registry-1.docker.io" {
+                self.id = "docker.io".into();
+            }
+            if self.id.len() > 255
+                || !self
+                    .id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b".:-[]".contains(&byte))
+                || !(self.id.contains('.') || self.id.contains(':') || self.id == "localhost")
+            {
+                return Err("use the exact registry hostname and optional port");
+            }
+        }
         if matches!(
             self.kind.as_str(),
             "network"

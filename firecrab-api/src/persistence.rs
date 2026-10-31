@@ -1191,14 +1191,37 @@ impl Store {
         username: &str,
         secret: &str,
     ) -> Result<(), PersistenceError> {
-        self.lock()
-            .execute(UPSERT_DOCKER_HUB_CREDENTIAL_SQL, params![username, secret])?;
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "registry".into(),
+                id: "docker.io".into(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        tx.execute(UPSERT_DOCKER_HUB_CREDENTIAL_SQL, params![username, secret])?;
+        tx.commit()?;
         Ok(())
     }
 
     /// Forgets the stored Docker Hub login.
     pub fn delete_docker_hub_credential(&self) -> Result<(), PersistenceError> {
-        self.lock().execute(DELETE_DOCKER_HUB_CREDENTIAL_SQL, [])?;
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "registry".into(),
+                id: "docker.io".into(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        tx.execute(DELETE_DOCKER_HUB_CREDENTIAL_SQL, [])?;
+        tx.commit()?;
         Ok(())
     }
 
