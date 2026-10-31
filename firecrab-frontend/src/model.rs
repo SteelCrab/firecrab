@@ -19,6 +19,7 @@ pub const VIEWS: &[(&str, &str, &str, &str)] = &[
     ("kernels", "data", "Kernels", "커널"),
     ("shells", "system", "Shells", "Shell"),
     ("host", "system", "Host", "호스트"),
+    ("ai-canvas", "ai", "AI Canvas", "AI Canvas"),
     ("ai-sandbox", "ai", "AI Sandbox", "AI Sandbox"),
 ];
 

@@ -1,0 +1,37 @@
+{
+  "name": "project-workspace",
+  "publisher": "firecrab",
+  "version": "0.1.0",
+  "displayName": "Firecrab Project Workspace",
+  "description": "Authorized project files and private unsaved buffers.",
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "browser": "./extension.js",
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onFileSystem:firecrab"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "license": "Apache-2.0",
+  "contributes": {
+    "commands": [
+      {
+        "command": "firecrabWorkspace.recoverDrafts",
+        "title": "Firecrab: Open Unsaved Draft Recovery Copy"
+      },
+      {
+        "command": "firecrabWorkspace.retryDrafts",
+        "title": "Firecrab: Retry Private Draft Persistence"
+      }
+    ]
+  }
+}

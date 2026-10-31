@@ -86,6 +86,23 @@ pub fn binding(state: &AppState, id: Uuid) -> io::Result<Binding> {
 }
 
 fn ssh(state: &AppState, binding: &Binding, attempt: &Path) -> io::Result<Command> {
+    ssh_command(state, binding, attempt, false)
+}
+fn ssh_command(
+    state: &AppState,
+    binding: &Binding,
+    attempt: &Path,
+    multiplex: bool,
+) -> io::Result<Command> {
+    ssh_remote_command(state, binding, attempt, multiplex, "/bin/sh -s")
+}
+fn ssh_remote_command(
+    state: &AppState,
+    binding: &Binding,
+    attempt: &Path,
+    multiplex: bool,
+    remote: &str,
+) -> io::Result<Command> {
     let current = self::binding(state, binding.vm_id)?;
     if current.runtime_id != binding.runtime_id {
         return Err(io::Error::other(
@@ -129,12 +146,39 @@ fn ssh(state: &AppState, binding: &Binding, attempt: &Path) -> io::Result<Comman
     {
         return Err(io::Error::other("Expected VM host key is invalid"));
     }
-    let known = attempt.join("known_hosts");
-    std::fs::write(
-        &known,
-        format!("{} {} {}\n", lease.ipv4, fields[0], fields[1]),
-    )?;
-    std::fs::set_permissions(&known, std::fs::Permissions::from_mode(0o600))?;
+    let known = attempt.join(format!("known_hosts-{}", binding.runtime_id));
+    let expected = format!("{} {} {}\n", lease.ipv4, fields[0], fields[1]);
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&known)
+        {
+            Ok(mut file) => {
+                file.write_all(expected.as_bytes())?;
+                file.sync_all()?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                // One creator publishes the file; another channel may arrive during its short write.
+                let mut valid = false;
+                for _ in 0..20 {
+                    if std::fs::read_to_string(&known).is_ok_and(|v| v == expected) {
+                        valid = true;
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                if !valid {
+                    return Err(io::Error::other("Pinned guest host key file is invalid"));
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
     let mut cmd = Command::new("/usr/bin/ssh");
     cmd.env_clear().env("PATH", "/usr/bin:/bin");
     cmd.args([
@@ -167,9 +211,39 @@ fn ssh(state: &AppState, binding: &Binding, attempt: &Path) -> io::Result<Comman
     .arg("-o")
     .arg(format!("UserKnownHostsFile={}", known.display()))
     .arg("-i")
-    .arg(&keys.operator_private)
-    .arg(format!("root@{}", lease.ipv4))
-    .arg("/bin/sh -s");
+    .arg(&keys.operator_private);
+    if multiplex {
+        use sha2::{Digest, Sha256};
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+        let identity = format!(
+            "{}:{}:{}",
+            std::fs::canonicalize(attempt)?.display(),
+            binding.runtime_id,
+            key
+        );
+        let digest = format!("{:x}", Sha256::digest(identity.as_bytes()));
+        let directory = PathBuf::from("/tmp").join(format!("fc-workspace-ssh-{}", &digest[..32]));
+        match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+        let metadata = std::fs::symlink_metadata(&directory)?;
+        if !metadata.is_dir()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o077 != 0
+        {
+            return Err(io::Error::other(
+                "Workspace SSH socket directory is not private",
+            ));
+        }
+        cmd.args(["-o", "ControlMaster=auto", "-o", "ControlPersist=30", "-o"])
+            .arg(format!(
+                "ControlPath={}",
+                directory.join("socket").display()
+            ));
+    }
+    cmd.arg(format!("root@{}", lease.ipv4)).arg(remote);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -371,6 +445,43 @@ pub async fn capabilities(
         ));
     }
     super::guest_protocol::capabilities(&output.stdout)
+}
+
+/// Execute only the fixed project-volume bootstrap protocol over the existing authenticated channel.
+pub(crate) async fn prepare_project_volume(
+    state: &AppState,
+    binding: &Binding,
+    directory: &Path,
+    script: Vec<u8>,
+) -> io::Result<Vec<u8>> {
+    let output = capture(
+        ssh(state, binding, directory)?,
+        script,
+        4096,
+        Duration::from_secs(45),
+    )
+    .await?;
+    if output.code != 0 {
+        return Err(io::Error::other("Project volume verification failed"));
+    }
+    Ok(output.stdout)
+}
+
+/// Run only the fixed, descriptor-confined project file protocol.
+pub(crate) async fn project_file_protocol(
+    state: &AppState,
+    binding: &Binding,
+    directory: &Path,
+    script: Vec<u8>,
+    limit: usize,
+) -> io::Result<Output> {
+    capture(
+        ssh_command(state, binding, directory, true)?,
+        script,
+        limit,
+        Duration::from_secs(20),
+    )
+    .await
 }
 
 /// Confirm guest writes reached its disks before a retained environment is stopped.
@@ -1450,3 +1561,102 @@ esac
 #[cfg(test)]
 #[path = "../../tests/unit/ai_sandbox/guest.rs"]
 mod tests;
+
+/// Bounded fixed editor setup; project input is never evaluated as a privileged command.
+pub(crate) async fn project_editor_protocol(
+    state: &AppState,
+    binding: &Binding,
+    directory: &Path,
+    script: Vec<u8>,
+    limit: usize,
+) -> io::Result<Output> {
+    capture(
+        ssh_command(state, binding, directory, true)?,
+        script,
+        limit,
+        Duration::from_secs(180),
+    )
+    .await
+}
+
+/// One SSH channel carries an editor HTTP exchange or upgrade. EOF closes the guest adapter.
+pub(crate) struct WorkspaceStream {
+    _child: tokio::process::Child,
+    input: tokio::process::ChildStdin,
+    output: tokio::process::ChildStdout,
+}
+impl tokio::io::AsyncRead for WorkspaceStream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().output).poll_read(cx, buffer)
+    }
+}
+impl tokio::io::AsyncWrite for WorkspaceStream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bytes: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().input).poll_write(cx, bytes)
+    }
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().input).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().input).poll_shutdown(cx)
+    }
+}
+pub(crate) fn project_editor_stream(
+    state: &AppState,
+    binding: &Binding,
+    directory: &Path,
+    package: &str,
+    socket: &str,
+    uid: u32,
+) -> io::Result<WorkspaceStream> {
+    let valid_socket = socket
+        .strip_prefix("/workspace/shared/.firecrab-workspace/editors/")
+        .and_then(|p| p.strip_suffix("/data/server.sock"))
+        .and_then(|p| Uuid::parse_str(p).ok().map(|id| (p, id)))
+        .is_some_and(|(text, id)| !id.is_nil() && text == id.to_string());
+    if !matches!(
+        package,
+        "/workspace/shared/.firecrab-workspace/editor-package/openvscode-server-v1.109.5-linux-arm64"
+            | "/workspace/shared/.firecrab-workspace/editor-package/openvscode-server-v1.109.5-linux-x64"
+    ) || uid < 100000
+        || !valid_socket
+    {
+        return Err(io::Error::other("Invalid pinned editor transport"));
+    }
+    let code = STANDARD.encode(include_str!(
+        "../project_workspace/editors/editor/bridge.cjs"
+    ));
+    let remote = format!(
+        "{package}/node -e \"eval(Buffer.from('{code}','base64').toString())\" {socket} {uid}"
+    );
+    let mut command = ssh_remote_command(state, binding, directory, true, &remote)?;
+    command.stderr(Stdio::null());
+    let mut child = command.spawn()?;
+    let input = child
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::other("Missing editor input channel"))?;
+    let output = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("Missing editor output channel"))?;
+    Ok(WorkspaceStream {
+        _child: child,
+        input,
+        output,
+    })
+}

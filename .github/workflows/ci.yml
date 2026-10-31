@@ -46,6 +46,8 @@ jobs:
           ./scripts/build-ingress.sh target/ingress
           ./scripts/build-guest-console.sh target/ingress
           python3 scripts/test-guest-console.py
+          python3 scripts/test-workspace-files.py
+          sudo python3 scripts/test-workspace-terminals.py
           sudo python3 scripts/test-sandbox-user.py
           python3 scripts/test-guest-app-log.py
 
@@ -99,6 +101,9 @@ jobs:
 
       - name: Sandbox live QA evidence and ownership guards
         run: python3 scripts/test-ci-qa-ai-sandbox.py
+
+      - name: Project workspace live QA ownership guards
+        run: python3 scripts/test-ci-qa-project-workspace.py
 
       - name: Sandbox recovery QA ownership and fault guards
         run: python3 scripts/test-ci-qa-ai-sandbox-recovery.py

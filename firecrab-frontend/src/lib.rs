@@ -1,5 +1,6 @@
 mod advanced;
 mod api;
+mod canvas;
 mod databases;
 mod deploy;
 mod details;
@@ -69,6 +70,7 @@ struct App {
     databases: databases::State,
     advanced: advanced::State,
     sandbox: sandbox::State,
+    canvas: canvas::State,
     volumes: volumes::State,
     console: Option<terminal::State>,
     console_retry: Option<Closure<dyn FnMut()>>,
@@ -170,6 +172,11 @@ fn set_host_status(status: &render::HostStatus) {
     set_text("host-disk", &status.disk);
 }
 fn render_page(app: &Shared) {
+    if app.borrow().route == "ai-canvas" {
+        canvas::render(app);
+        return;
+    }
+    canvas::before_render();
     let html = render::page(&app.borrow());
     app.borrow_mut().rendering = true;
     set_html("root", &html);
@@ -219,6 +226,10 @@ fn update_summary(app: &Shared) {
 }
 
 fn render_content(app: &Shared) {
+    if app.borrow().route == "ai-canvas" {
+        canvas::render(app);
+        return;
+    }
     deploy::discard_credentials(&mut app.borrow_mut());
     if app.borrow().route == "ai-sandbox" {
         sandbox::render(app);
@@ -527,11 +538,13 @@ pub fn start() -> Result<(), JsValue> {
     details::install(&app)?;
     vm_list::install(&app)?;
     terminal::install(&app)?;
+    canvas::install(&app)?;
     load_route(app.clone());
     updates::resume(app.clone());
     let poll = app.clone();
     let callback = Closure::<dyn FnMut()>::new(move || {
         terminal::tick(&poll);
+        canvas::tick(&poll);
         advanced::services::tick(&poll);
         updates::tick(&poll);
         poll_host(&poll);
@@ -543,6 +556,9 @@ pub fn start() -> Result<(), JsValue> {
         details::tick(&poll);
         observability::tick(&poll);
         volumes::tick(&poll);
+        if poll.borrow().route == "ai-canvas" {
+            return;
+        }
         if poll.borrow().route == "ai-sandbox" {
             sandbox::tick(&poll);
             return;
@@ -619,6 +635,10 @@ fn load_route(app: Shared) {
             .and_then(|id| id.as_string())
             .unwrap_or_else(|| id.into());
         terminal::start(app.clone(), id);
+        return;
+    }
+    if route == "ai-canvas" {
+        canvas::load(app);
         return;
     }
     if route == "ai-sandbox" {
@@ -1175,6 +1195,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
                 {
                     return;
                 }
+                if canvas::input(&changed, &target) {
+                    return;
+                }
                 if sandbox::input(&changed, &target) {
                     return;
                 }
@@ -1573,6 +1596,9 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
     }
     if action != "vm-menu" {
         set_html("menu-root", "");
+    }
+    if canvas::action(&app, action, id) {
+        return;
     }
     if databases::dispatch(&app, action, id, button) || sandbox::action(&app, action, id) {
         return;

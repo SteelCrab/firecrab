@@ -406,3 +406,8 @@ getfacl -p /dev/kvm; sysctl net.ipv4.ip_forward net.ipv6.conf.all.forwarding # U
 - [CI](ci.md)
 - [과거 검증 기록](validation-history.md)
 - [기여 가이드](../../CONTRIBUTING.md)
+
+## 프로젝트 작업 폴더 복구
+
+[전용 Linux/KVM 복구 검사](project-workspace-recovery-qa.md)를 따른다.
+실행 보호 검사는 CI에서 확인한다. 실제 검증 결과는 사용한 이미지에만 적용한다.

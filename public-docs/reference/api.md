@@ -506,3 +506,38 @@ Members:
 
 `DELETE /api/pools/{id}` answers `409 pool_in_use` while a lease is active. Otherwise it returns
 `202` with `deleting: true`, and the pool disappears once its members are deleted.
+
+
+## Project workspaces
+
+See [Private views and drafts](../guides/project-private-views.md) for the
+caller-scoped `/workspace/views` and `/workspace/views/{view}/draft` routes.
+
+Project workspace routes extend the authenticated Sandbox project API at
+`/api/ai-sandbox/projects/{project}/workspace`.
+
+| Method and suffix | Purpose |
+| --- | --- |
+| `GET`, `PUT /` | Read retained identities or bind an existing volume/runtime |
+| `PUT /state` | Save bounded project metadata with an expected revision |
+| `POST /reconcile` | Verify the current guest mount and initial import |
+| `GET`, `PUT /checkpoints/{id}` | Inspect or create a matched offline database/disk checkpoint |
+| `GET /files/tree` | List confined directory children |
+| `GET`, `PUT /files` | Read a file or save an optimistic, idempotent write |
+| `GET /files/history`, `/files/versions/{id}` | Inspect retained file versions |
+| `GET /files/diff` | Compare two versions of the same path |
+| `POST /files/restore` | Append a new version from earlier contents |
+| `GET /file-operations` | Inspect durable write outcomes |
+| `POST /file-operations/{id}/reconcile` | Recover that exact admitted write |
+
+See [workspace retention and checkpoints](../guides/project-workspaces.md) and
+[file API bodies, permissions and limits](../guides/project-workspace-files.md).
+
+### Project terminals
+
+The project workspace also exposes `GET /terminals`, `GET|PUT /terminals/{session}`,
+`GET /terminals/{session}/output`, `POST|PUT|DELETE /terminals/{session}/control`,
+`POST /terminals/{session}/input`, `POST /terminals/{session}/stop` and
+`GET /terminals/{session}/socket`. These paths extend the workspace prefix above.
+See [Project workspace terminals](../guides/project-workspace-terminals.md) for
+input leases, replay cursors, runtime fencing and message bodies.

@@ -34,6 +34,7 @@ mod pipe_databases;
 mod pipe_storage;
 mod pool;
 mod process_metrics;
+mod project_workspace;
 mod queues;
 mod reconcile;
 mod resource_limits;
@@ -177,6 +178,7 @@ async fn run() -> Result<(), StartupError> {
     reconcile::reconcile(&state).await;
     service_runtime::recover(&state).await;
     queues::recover(&state).await;
+    project_workspace::start_terminals(state.clone());
     ai_sandbox::environment::start_maintenance(state.clone());
     service_observation::start(state.clone());
     service_runtime::recovery::start(state.clone());

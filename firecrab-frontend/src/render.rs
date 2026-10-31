@@ -411,6 +411,9 @@ pub fn human_bytes(bytes: u64) -> String {
 }
 
 pub fn page(app: &App) -> String {
+    if app.route == "ai-canvas" {
+        return crate::canvas::page(app);
+    }
     if let Some(id) = app.route.strip_prefix("console/") {
         return console(app, id);
     }
