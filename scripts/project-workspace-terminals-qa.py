@@ -20,7 +20,10 @@ class ViewerSocket:
             "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
             f"Sec-WebSocket-Protocol: firecrab.terminal.v1\r\nSec-WebSocket-Key: {key}\r\n\r\n").encode())
         while b"\r\n\r\n" not in self.buffer:
-            self.buffer += self.socket.recv(4096)
+            chunk = self.socket.recv(4096)
+            if not chunk:
+                raise EOFError("viewer handshake ended")
+            self.buffer += chunk
             assert len(self.buffer) < 16384
         headers, remaining = self.buffer.split(b"\r\n\r\n", 1)
         self.buffer = bytearray(remaining)
@@ -74,8 +77,8 @@ class TerminalGate:
 
     def policy(self, name, vm, write=True):
         rights = ["read", "write", "execute"] if write else ["read"]
-        grants = [{"resource": {"type": "project", "id": self.qa.project}, "permissions": rights},
-            {"resource": {"type": "vm", "id": vm}, "permissions": ["read", "execute"] if write else ["read"]}]
+        grants = [{"resource": {"kind": "project", "id": self.qa.project}, "permissions": rights},
+            {"resource": {"kind": "vm", "id": vm}, "permissions": ["read", "execute"] if write else ["read"]}]
         self.qa.request("PUT", "/api/ai-sandbox/access/" + self.qa.identities[name], {"grants": grants})
 
     def claim(self, actor, session=None, take_over=False):
