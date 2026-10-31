@@ -1,0 +1,285 @@
+{
+  "capturedAt": "2026-10-31T10:16:58.359Z",
+  "captureDate": "2026-10-31",
+  "sourceCommit": "2798380750164bfa5bcb2d20dec282f01128352f",
+  "sourceDirty": false,
+  "focusResource": {
+    "id": "c396e082-9f4a-4cd7-94b4-ab40b326ddde",
+    "kind": "volume"
+  },
+  "versions": {
+    "browser": "156.0.8078.76",
+    "node": "v26.12.1"
+  },
+  "fixture": true,
+  "transport": "actual local Axum HTTP; no mocked API responses",
+  "runtime": "compiled WASM dashboard with disposable SQLite resource records; no Linux/KVM boot",
+  "ownership": {
+    "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+    "generation": 1,
+    "owner": {
+      "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+      "key": "firecrab_network.application",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "5256c5ae-f5e6-4640-9698-dbfa43052610",
+      "kind": "network"
+    }
+  },
+  "ownerships": [
+    {
+      "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+      "generation": 1,
+      "owner": {
+        "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+        "key": "firecrab_database_connection.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "664074f6-8b5d-4392-8a20-33612842cbdb",
+        "kind": "database_connection"
+      }
+    },
+    {
+      "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+      "generation": 1,
+      "owner": {
+        "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+        "key": "firecrab_network.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "5256c5ae-f5e6-4640-9698-dbfa43052610",
+        "kind": "network"
+      }
+    },
+    {
+      "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+      "generation": 1,
+      "owner": {
+        "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+        "key": "firecrab_pool.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "887a10eb-b083-4c57-b1fa-4c805347d4ba",
+        "kind": "pool"
+      }
+    },
+    {
+      "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+      "generation": 1,
+      "owner": {
+        "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+        "key": "firecrab_queue.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "0a4e8beb-7d38-47db-ac10-9aaa88de27bc",
+        "kind": "queue"
+      }
+    },
+    {
+      "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+      "generation": 1,
+      "owner": {
+        "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+        "key": "firecrab_sandbox_project.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "12f71baf-db82-449b-971a-da01a54ed9bd",
+        "kind": "sandbox_project"
+      }
+    },
+    {
+      "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+      "generation": 1,
+      "owner": {
+        "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+        "key": "firecrab_schedule.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "2f9ed38b-bf05-4579-8c12-a3723a4cea69",
+        "kind": "schedule"
+      }
+    },
+    {
+      "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+      "generation": 1,
+      "owner": {
+        "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+        "key": "firecrab_secret.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "08bd7980-6ce9-426e-b349-24c7b87d2103",
+        "kind": "secret"
+      }
+    },
+    {
+      "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+      "generation": 1,
+      "owner": {
+        "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+        "key": "firecrab_secret_connection.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "8e38b3dd-f533-49e9-8498-7b219e669164",
+        "kind": "secret_connection"
+      }
+    },
+    {
+      "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+      "generation": 1,
+      "owner": {
+        "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+        "key": "firecrab_security_group.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "1743f534-0dfb-4027-ad62-b4edeb8b7e36",
+        "kind": "security_group"
+      }
+    },
+    {
+      "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+      "generation": 1,
+      "owner": {
+        "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+        "key": "firecrab_shell.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "e032659a-6a86-48fd-b36b-89f3c923f5bd",
+        "kind": "shell"
+      }
+    },
+    {
+      "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+      "generation": 1,
+      "owner": {
+        "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+        "key": "firecrab_storage_connection.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "ec8af984-11d3-44ac-a039-91319a0b5d26",
+        "kind": "storage_connection"
+      }
+    },
+    {
+      "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+      "generation": 1,
+      "owner": {
+        "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+        "key": "firecrab_storage_root.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "da740d33-eb67-4167-a32f-d59cfc98350e",
+        "kind": "storage_root"
+      }
+    },
+    {
+      "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+      "generation": 1,
+      "owner": {
+        "id": "e92999d5-e792-49a6-a58c-f17128ea1dd6",
+        "key": "firecrab_volume.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "c396e082-9f4a-4cd7-94b4-ab40b326ddde",
+        "kind": "volume"
+      }
+    }
+  ],
+  "nativeRecovery": {
+    "before": {
+      "operationId": "d78eb7da-3585-4d79-af38-b6f65d6c4f96",
+      "ownership": {
+        "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+        "resource": {
+          "kind": "sandbox_project",
+          "id": "f406dc29-07a1-4793-ae6a-df12ea5d081f"
+        },
+        "generation": 0,
+        "owner": null
+      },
+      "action": "delete_sandbox_project",
+      "state": "needs_recovery",
+      "errorCode": "project_cleanup_incomplete"
+    },
+    "after": {
+      "operationId": "d78eb7da-3585-4d79-af38-b6f65d6c4f96",
+      "ownership": {
+        "endpointId": "ed7d24ef-90ff-4555-bcb2-adef5dc312ff",
+        "resource": {
+          "kind": "sandbox_project",
+          "id": "f406dc29-07a1-4793-ae6a-df12ea5d081f"
+        },
+        "generation": 0,
+        "owner": null
+      },
+      "action": "delete_sandbox_project",
+      "state": "succeeded",
+      "errorCode": null
+    },
+    "checks": [
+      "real filesystem failure",
+      "CLI status discovery",
+      "same operation and project UUID after recovery",
+      "immutable completed retry",
+      "borrowed source retained"
+    ],
+    "cliSha256": "a9a96052382739afe21c5d428ce071c208131fd4f54a6b0eaafa302d4486bfcc"
+  },
+  "checks": [
+    "endpoint identity",
+    "43 inventory kinds; 20 transfer adapters",
+    "actual ownership read",
+    "direct PATCH rejected with 409",
+    "12 configuration kinds reject direct DELETE with 409",
+    "immutable operation acknowledgement",
+    "13 ownership records in the actual dashboard",
+    "desktop dashboard",
+    "375px mobile without horizontal overflow",
+    "no browser page errors"
+  ],
+  "screenshots": [
+    {
+      "file": "iac-548-native-ownership-overview-2026-10-31.png",
+      "sha256": "c1402f026bc622b8a51beed16ad00e657a3517b4eb9fbf37e3a396d9775b0c8b"
+    },
+    {
+      "file": "iac-548-native-ownership-desktop-2026-10-31.png",
+      "sha256": "ca1972fc687eb0bbab1031ff9090b12c9911dfef95ef80e2ddae3d1b8b93326c"
+    },
+    {
+      "file": "iac-548-native-ownership-mobile-2026-10-31.png",
+      "sha256": "00db15ca983889581b11a076eadc7a1bd2a42a37413813ad038b1537b2bd23f6"
+    }
+  ],
+  "verification": {
+    "targetedApiPassed": 46,
+    "cliPassed": 4,
+    "stackPassed": 45,
+    "clippy": "API, CLI and Stack all targets; -D warnings; passed",
+    "scope": "20 ownership transfer adapters; native execution journal currently covers Sandbox project deletion only. Full lifecycle support for all 43 contracts and the Terraform provider remain incomplete.",
+    "limitations": "Expanded local macOS Sandbox run was not a full-suite pass. Linux /proc filesystem paths are unavailable. Response and SQLite contention regressions found in that run were fixed and their targeted checks passed. Latest Linux CI must finish independently."
+  },
+  "binaries": {
+    "apiTestSha256": "9d978ccac8b8a20a4624725925c38c3c5d9a8586bda3ee7682e9755f46f0d186",
+    "cliSha256": "a9a96052382739afe21c5d428ce071c208131fd4f54a6b0eaafa302d4486bfcc",
+    "wasm": [
+      {
+        "file": "firecrab_frontend_bg-rBhAnhF3.wasm",
+        "sha256": "83eacf10fe38810fc3e836c1411f967cd14b9d9f492f3d2f40c5fbcf91827404"
+      }
+    ]
+  }
+}
