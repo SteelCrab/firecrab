@@ -25,6 +25,8 @@ mod sandbox_canvas;
 pub use sandbox_canvas::*;
 mod project_workspace;
 pub use project_workspace::*;
+mod workspace_files;
+pub use workspace_files::*;
 mod block_storage;
 mod network_dns;
 mod sandbox_environment;

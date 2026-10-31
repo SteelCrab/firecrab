@@ -10,8 +10,8 @@ use std::{
 };
 use uuid::Uuid;
 
-/// Initial private schema; unsupported versions require explicit recovery.
-pub const SCHEMA_VERSION: u32 = 1;
+/// Private schema with an additive file-history migration from version 1.
+pub const SCHEMA_VERSION: u32 = 2;
 /// SQLite application identity prevents opening an unrelated database.
 const APPLICATION_ID: i64 = 0x46575031;
 /// Maximum serialized size of a project metadata object.
@@ -107,7 +107,9 @@ impl ProjectDb {
         let application: i64 = conn.pragma_query_value(None, "application_id", |r| r.get(0))?;
         let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         let new_database = application == 0 && version == 0 && initialize;
-        if !new_database && (application != APPLICATION_ID || version != SCHEMA_VERSION) {
+        if !new_database
+            && (application != APPLICATION_ID || version == 0 || version > SCHEMA_VERSION)
+        {
             return Err(Error::Conflict(
                 "Unexpected project database identity or schema version",
             ));
@@ -147,6 +149,10 @@ impl ProjectDb {
             return Err(Error::Conflict(
                 "Retained project database does not match its registered identity",
             ));
+        }
+        if version < 2 {
+            conn.execute_batch(super::files_db::SCHEMA)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         let epoch = epoch
             .checked_add(1)

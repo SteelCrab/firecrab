@@ -1,6 +1,9 @@
 //! Durable project metadata and retained-volume lifecycle. Sandbox keeps task ownership.
 mod checkpoint;
 mod db;
+mod files;
+mod files_db;
+mod files_guest;
 #[cfg(test)]
 mod tests;
 
@@ -38,6 +41,8 @@ pub struct Runtime {
     pub root: PathBuf,
     /// New identity on each controller start, persisted with operation epochs.
     pub owner: Uuid,
+    /// Bounded guest-file workers survive client cancellation without blocking the async executor.
+    pub(crate) file_slots: std::sync::Arc<tokio::sync::Semaphore>,
 }
 impl Runtime {
     /// Establish controller ownership without creating project databases eagerly.
@@ -45,6 +50,7 @@ impl Runtime {
         Self {
             root,
             owner: Uuid::new_v4(),
+            file_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
         }
     }
 }
@@ -72,6 +78,8 @@ pub(crate) struct Binding {
 enum Error {
     #[error("workspace not found")]
     Missing,
+    #[error("workspace access denied")]
+    Denied,
     #[error("workspace is busy")]
     Busy,
     #[error("{0}")]
@@ -93,6 +101,7 @@ impl Error {
     fn response(self, id: Uuid) -> AppError {
         match self {
             Self::Missing => AppError::not_found(id),
+            Self::Denied => denied(id),
             Self::Busy => AppError::conflict(
                 "workspace_busy",
                 "Another owner is operating on this project; retry later",
@@ -245,6 +254,7 @@ pub fn routes() -> Router<AppState> {
             "/api/ai-sandbox/projects/{project}/workspace/checkpoints/{checkpoint}",
             get(checkpoint::get).put(checkpoint::create),
         )
+        .merge(files::routes())
 }
 /// Read project metadata even when the workload VM is stopped.
 async fn get_workspace(

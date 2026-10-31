@@ -1043,3 +1043,415 @@ async fn reconcile_rejects_unready_resources_and_keeps_retryable_initialization(
         );
     }
 }
+
+#[test]
+fn workspace_files_additive_schema_upgrade_preserves_v1_identity_and_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("state/projects");
+    let mut b = registration();
+    let db = db::ProjectDb::open(&root, &b, Uuid::new_v4(), true).unwrap();
+    db.save_document(0, &json!({"kept":"v1 metadata"})).unwrap();
+    db.conn
+        .execute_batch(
+            "DROP TABLE file_operations; DROP TABLE file_versions; PRAGMA user_version=1;",
+        )
+        .unwrap();
+    drop(db);
+    b.provisioning = false;
+    let db = db::ProjectDb::open(&root, &b, Uuid::new_v4(), false).unwrap();
+    assert_eq!(db.document().unwrap().1["kept"], "v1 metadata");
+    assert_eq!(
+        db.conn
+            .pragma_query_value::<u32, _>(None, "user_version", |r| r.get(0))
+            .unwrap(),
+        2
+    );
+    let v = db.observe_file("AGENTS.md", b"rules").unwrap();
+    assert_eq!(
+        db.file_version("AGENTS.md", v.metadata.id).unwrap().bytes,
+        b"rules"
+    );
+}
+
+fn file_operation(path: &str, expected: u64, content: &[u8]) -> super::files_db::Operation {
+    super::files_db::Operation {
+        id: Uuid::new_v4(),
+        path: path.into(),
+        expected,
+        content: content.into(),
+        author: SandboxPrincipal::Local,
+        restored_from: None,
+        created_at: 0,
+        version: None,
+        state: "pending".into(),
+    }
+}
+
+#[test]
+fn workspace_files_history_survives_restart_and_restore_adds_a_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("state/projects");
+    let mut b = registration();
+    let db = db::ProjectDb::open(&root, &b, Uuid::new_v4(), true).unwrap();
+    let first = db.observe_file("src/code.rs", b"first").unwrap();
+    assert_eq!(
+        db.observe_file("src/code.rs", b"first")
+            .unwrap()
+            .metadata
+            .id,
+        first.metadata.id
+    );
+    let op = db
+        .stage_file(file_operation("src/code.rs", first.metadata.id, b"second"))
+        .unwrap();
+    assert_eq!(db.file_history("src/code.rs", None).unwrap().len(), 1);
+    assert_eq!(db.file_operations("src/code.rs").unwrap()[0].version, None);
+    drop(db);
+    b.provisioning = false;
+    let db = db::ProjectDb::open(&root, &b, Uuid::new_v4(), false).unwrap();
+    let pending = db.file_operation(op.id).unwrap().unwrap();
+    assert_eq!(pending.content, b"second");
+    assert_eq!(pending.state, "pending");
+    let second = db.finish_file(op.id).unwrap();
+    assert!(second.metadata.id > first.metadata.id);
+    assert_eq!(
+        db.finish_file(op.id).unwrap().metadata.id,
+        second.metadata.id
+    );
+    assert_eq!(
+        db.file_operation(op.id).unwrap().unwrap().content,
+        b"second"
+    );
+    let stored: Option<Vec<u8>> = db
+        .conn
+        .query_row(
+            "SELECT content FROM file_operations WHERE id=?1",
+            [op.id.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(stored.is_none());
+    let mut restore = file_operation("src/code.rs", second.metadata.id, b"first");
+    restore.restored_from = Some(first.metadata.id);
+    let restore = db.stage_file(restore).unwrap();
+    let restored = db.finish_file(restore.id).unwrap();
+    assert_eq!(restored.bytes, b"first");
+    assert_eq!(restored.metadata.restored_from, Some(first.metadata.id));
+    assert!(restored.metadata.id > second.metadata.id);
+    assert_eq!(db.file_history("src/code.rs", None).unwrap().len(), 3);
+    assert_eq!(db.file_history("", None).unwrap()[0].path, "src/code.rs");
+    assert_eq!(db.file_operations("").unwrap()[0].path, "src/code.rs");
+    assert!(matches!(
+        db.file_version("other.rs", first.metadata.id),
+        Err(Error::Missing)
+    ));
+    assert_eq!(
+        db.file_history("src/code.rs", Some(second.metadata.id))
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn workspace_files_pending_writes_are_exclusive_and_stale_owners_cannot_record_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("state/projects");
+    let b = registration();
+    let db = db::ProjectDb::open(&root, &b, Uuid::new_v4(), true).unwrap();
+    let op = db.stage_file(file_operation("file", 0, b"new")).unwrap();
+    assert!(matches!(
+        db.stage_file(file_operation("file", 0, b"different")),
+        Err(Error::Conflict(_))
+    ));
+    assert_eq!(db.pending_file("file").unwrap().unwrap().id, op.id);
+    db.reject_file(op.id).unwrap();
+    assert!(db.pending_file("file").unwrap().is_none());
+    assert!(db.finish_file(op.id).is_err());
+    let another = db
+        .stage_file(file_operation("file", 0, b"valid retry"))
+        .unwrap();
+    db.conn
+        .execute("UPDATE identity SET epoch=epoch+1", [])
+        .unwrap();
+    assert!(matches!(db.finish_file(another.id), Err(Error::Busy)));
+    assert!(matches!(
+        db.observe_file("file", b"stale"),
+        Err(Error::Busy)
+    ));
+}
+
+#[test]
+fn workspace_files_history_has_record_and_integrity_bounds() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("state/projects");
+    let b = registration();
+    let db = db::ProjectDb::open(&root, &b, Uuid::new_v4(), true).unwrap();
+    let v = db.observe_file("file", b"bytes").unwrap();
+    db.conn
+        .execute(
+            "UPDATE file_versions SET sha256='wrong' WHERE id=?1",
+            [v.metadata.id as i64],
+        )
+        .unwrap();
+    assert!(matches!(
+        db.file_version("file", v.metadata.id),
+        Err(Error::Conflict(_))
+    ));
+    db.conn.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<4096)
+        INSERT INTO file_versions(path,content,sha256,created_at) SELECT 'file-'||i,x'','unused',0 FROM n;").unwrap();
+    assert!(matches!(
+        db.observe_file("quota", b"value"),
+        Err(Error::Conflict(_))
+    ));
+}
+
+#[test]
+fn workspace_files_protocol_rejects_malformed_responses_and_path_traversal() {
+    use super::files_guest as wire;
+    for path in [
+        "../etc/passwd",
+        "/etc/passwd",
+        "a//b",
+        "a/./b",
+        "a\\b",
+        ".firecrab-workspace/ready",
+        "bad\0path",
+    ] {
+        assert!(wire::path(path, false).is_err(), "{path:?}");
+    }
+    for path in [
+        ".git/config",
+        "AGENTS.md",
+        "src/한글.rs",
+        "'; $(touch nope) '",
+    ] {
+        wire::path(path, false).unwrap();
+    }
+    for bytes in [
+        b"".to_vec(),
+        b"FCWR\0\0\0\x01".to_vec(),
+        b"XXXX\0\0\0\0".to_vec(),
+        b"FCWE\0\0\0\x0a".to_vec(),
+    ] {
+        assert!(wire::decode(bytes).is_err());
+    }
+    let frame = wire::frame(3, "AGENTS.md", Uuid::new_v4(), Some(b"old"), b"new\0bytes").unwrap();
+    assert_eq!(&frame[..4], b"FCW1");
+    assert!(frame.ends_with(b"AGENTS.mdoldnew\0bytes"));
+}
+
+#[tokio::test]
+async fn workspace_files_history_requires_project_access_and_remains_available_while_stopped() {
+    let (_dir, state, b) = fixture().await;
+    bind(&state, &b).await;
+    let saved = {
+        let registered = binding(&state, b.project_id).unwrap();
+        let db = open(&state, &registered).unwrap();
+        db.observe_file("AGENTS.md", b"saved rules").unwrap()
+    };
+    let base = format!("/api/ai-sandbox/projects/{}/workspace", b.project_id);
+    let history = format!("{base}/files/history?path=AGENTS.md");
+    assert_eq!(
+        call(&state, "GET", &history, json!({}), Some(Uuid::new_v4()))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, rows) = call(&state, "GET", &history, json!({}), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rows[0]["id"], saved.metadata.id);
+    let file = format!("{base}/files/versions/{}?path=AGENTS.md", saved.metadata.id);
+    assert_eq!(
+        call(&state, "GET", &file, json!({}), None).await.1["contentBase64"],
+        STANDARD.encode(b"saved rules")
+    );
+    assert_eq!(
+        call(
+            &state,
+            "GET",
+            &format!("{base}/files/versions/{}?path=other", saved.metadata.id),
+            json!({}),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &state,
+            "GET",
+            &format!("{base}/files?path=AGENTS.md"),
+            json!({}),
+            None
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &state,
+            "GET",
+            &format!("{base}/files?path=..%2Fsecret"),
+            json!({}),
+            None
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let write = json!({"operationId":Uuid::new_v4(),"expectedVersion":saved.metadata.id,"contentBase64":STANDARD.encode(b"edit")});
+    assert_eq!(
+        call(
+            &state,
+            "PUT",
+            &format!("{base}/files?path=AGENTS.md"),
+            write,
+            None
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    let registered = binding(&state, b.project_id).unwrap();
+    assert!(
+        open(&state, &registered)
+            .unwrap()
+            .file_operations("AGENTS.md")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn workspace_files_limits_live_workers_without_starting_guest_io() {
+    let (_dir, state, b) = fixture().await;
+    bind(&state, &b).await;
+    let permit = state
+        .workspaces
+        .file_slots
+        .clone()
+        .acquire_many_owned(16)
+        .await
+        .unwrap();
+    let path = format!(
+        "/api/ai-sandbox/projects/{}/workspace/files?path=AGENTS.md",
+        b.project_id
+    );
+    let (status, error) = call(&state, "GET", &path, json!({}), None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"]["code"], "workspace_busy");
+    drop(permit);
+    let (status, error) = call(&state, "GET", &path, json!({}), None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error"]["code"], "workspace_conflict");
+}
+
+#[tokio::test]
+async fn workspace_files_schema_upgrade_keeps_completed_v1_checkpoints_readable() {
+    let (_dir, state, b) = fixture().await;
+    bind(&state, &b).await;
+    let registered = binding(&state, b.project_id).unwrap();
+    let db = open(&state, &registered).unwrap();
+    db.mark_initialized().unwrap();
+    let id = Uuid::new_v4();
+    let mut manifest = checkpoint::create_checkpoint(&state, &registered, &db, id).unwrap();
+    let saved = db.directory.join("checkpoints").join(id.to_string());
+    {
+        let legacy = rusqlite::Connection::open(saved.join("project.db")).unwrap();
+        legacy
+            .execute_batch(
+                "DROP TABLE file_operations; DROP TABLE file_versions; PRAGMA user_version=1;",
+            )
+            .unwrap();
+    }
+    manifest.schema_version = 1;
+    manifest.database_sha256 = checkpoint::digest(&saved.join("project.db")).unwrap();
+    fs::write(
+        saved.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    let retry = checkpoint::create_checkpoint(&state, &registered, &db, id).unwrap();
+    assert_eq!(retry, manifest);
+    drop(db);
+    let path = format!(
+        "/api/ai-sandbox/projects/{}/workspace/checkpoints/{id}",
+        b.project_id
+    );
+    let (status, response) = call(&state, "GET", &path, json!({}), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["schemaVersion"], 1);
+}
+
+#[tokio::test]
+async fn workspace_files_read_only_grant_cannot_save_restore_or_reconcile() {
+    let (_dir, state, b) = fixture().await;
+    bind(&state, &b).await;
+    let reader = Uuid::new_v4();
+    state
+        .store
+        .save_sandbox_access(
+            reader,
+            &SandboxAccessPolicy {
+                grants: vec![SandboxResourceGrant {
+                    resource: SandboxResource::Project { id: b.project_id },
+                    permissions: vec![SandboxPermission::Read],
+                }],
+            },
+        )
+        .unwrap();
+    let base = format!("/api/ai-sandbox/projects/{}/workspace", b.project_id);
+    let save = json!({"operationId":Uuid::new_v4(),"expectedVersion":0,"contentBase64":STANDARD.encode(b"denied")});
+    assert_eq!(
+        call(
+            &state,
+            "PUT",
+            &format!("{base}/files?path=AGENTS.md"),
+            save,
+            Some(reader)
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let restore = json!({"operationId":Uuid::new_v4(),"expectedVersion":0,"version":1});
+    assert_eq!(
+        call(
+            &state,
+            "POST",
+            &format!("{base}/files/restore?path=AGENTS.md"),
+            restore,
+            Some(reader)
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &state,
+            "POST",
+            &format!("{base}/file-operations/{}/reconcile", Uuid::new_v4()),
+            json!({}),
+            Some(reader)
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &state,
+            "GET",
+            &format!("{base}/files/history?path=AGENTS.md"),
+            json!({}),
+            Some(reader)
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+}

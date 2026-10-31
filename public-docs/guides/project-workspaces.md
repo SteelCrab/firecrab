@@ -139,6 +139,11 @@ SQLite/disk restore does not restore process memory. Durable session/terminal hi
 and task reconciliation are separate later integrations; old commands are never
 replayed by this foundation.
 
+## File access and history
+
+Use the [project file API](project-workspace-files.md) for confined guest file
+access, optimistic saves, retained versions, comparisons and restoration.
+
 ## Validation
 
 The Rust workspace tests cover private SQLite identities/permissions, stale writes,

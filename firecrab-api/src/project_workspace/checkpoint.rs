@@ -66,7 +66,8 @@ fn completed(
         || manifest.project_id != binding.project_id
         || manifest.database_id != binding.database_id
         || manifest.volume_id != binding.volume_id
-        || manifest.schema_version != db::SCHEMA_VERSION
+        || manifest.schema_version == 0
+        || manifest.schema_version > db::SCHEMA_VERSION
     {
         return Err(Error::Conflict(
             "Checkpoint identity does not match this project",

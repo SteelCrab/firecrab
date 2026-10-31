@@ -3,6 +3,7 @@
 #include "app_log.h"
 #include "resize.h"
 #include "user.h"
+#include "workspace.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/vm_sockets.h>
@@ -14,6 +15,7 @@
 #include <unistd.h>
 
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "--workspace-files")) return firecrab_workspace_files(argc, argv);
     if (argc > 1 && (!strcmp(argv[1], "--sandbox-probe") || !strcmp(argv[1], "--sandbox-lock") || !strcmp(argv[1], "--reuid"))) {
         return firecrab_sandbox_user(argc, argv);
     }

@@ -393,6 +393,23 @@ pub(crate) async fn prepare_project_volume(
     Ok(output.stdout)
 }
 
+/// Run only the fixed, descriptor-confined project file protocol.
+pub(crate) async fn project_file_protocol(
+    state: &AppState,
+    binding: &Binding,
+    directory: &Path,
+    script: Vec<u8>,
+    limit: usize,
+) -> io::Result<Output> {
+    capture(
+        ssh(state, binding, directory)?,
+        script,
+        limit,
+        Duration::from_secs(20),
+    )
+    .await
+}
+
 /// Confirm guest writes reached its disks before a retained environment is stopped.
 pub async fn sync_filesystems(
     state: &AppState,

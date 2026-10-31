@@ -46,6 +46,7 @@ jobs:
           ./scripts/build-ingress.sh target/ingress
           ./scripts/build-guest-console.sh target/ingress
           python3 scripts/test-guest-console.py
+          python3 scripts/test-workspace-files.py
           sudo python3 scripts/test-sandbox-user.py
           python3 scripts/test-guest-app-log.py
 

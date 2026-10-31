@@ -5,7 +5,11 @@ umask 077
 BB=/etc/firecrab/busybox
 [ -x "$BB" ] || BB=""
 exec 9>/run/firecrab-project-__VOLUME__.lock
-flock -x -w 2 9 || exit 19
+if [ -x /usr/local/sbin/firecrab-console-resize ] && /usr/local/sbin/firecrab-console-resize --sandbox-probe; then
+    /usr/local/sbin/firecrab-console-resize --sandbox-lock 9 2 || exit 19
+else
+    flock -x -w 2 9 || exit 19
+fi
 root=/workspace/shared
 [ ! -L /workspace ] && [ ! -L "$root" ] || exit 20
 device=$($BB awk '$2 == "/workspace/shared" && $3 == "ext4" { print $1; exit }' /proc/mounts)
