@@ -16,6 +16,8 @@ const repoRoot=fileURLToPath(new URL("../../",import.meta.url));
 const sourceCommit=execFileSync("git",["rev-parse","HEAD"],{cwd:repoRoot,encoding:"utf8"}).trim();
 const sourceDirty=execFileSync("git",["status","--porcelain","--untracked-files=normal","--","firecrab-api","firecrab-stack","firecrab-frontend","firecrab-cli"],{cwd:repoRoot,encoding:"utf8"}).trim()!=="";
 const output = path.resolve(outputPath);
+const captureDate = process.env.FIRECRAB_IAC_QA_DATE || new Intl.DateTimeFormat("en-CA").format(new Date());
+assert.match(captureDate, /^\d{4}-\d{2}-\d{2}$/);
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ channel: process.env.FIRECRAB_IAC_QA_CHANNEL || undefined });
 try {
@@ -54,16 +56,24 @@ try {
     await page.getByText(owned.owner.key, { exact: true }).waitFor();
   }
   await page.evaluate(async () => { await document.fonts.ready; });
+  const focus = fixture.ownerships.find(owned => owned.resource.kind === "volume") || ownership;
+  async function focusOwnership() {
+    await page.getByText(focus.owner.key, { exact: true }).evaluate(element => element.scrollIntoView({ block: "center" }));
+    const generation = await page.getByText(String(focus.generation), { exact: true }).last().boundingBox();
+    assert.ok(generation && generation.y >= 0 && generation.y + generation.height <= page.viewportSize().height, "the focused ownership generation must be fully visible");
+  }
+  await focusOwnership();
   await page.waitForTimeout(500);
-  await page.screenshot({ path: path.join(output, "iac-548-ownership-desktop-2026-10-30.png"), fullPage: true });
+  await page.screenshot({ path: path.join(output, `iac-548-ownership-desktop-${captureDate}.png`), fullPage: true });
   await page.setViewportSize({ width: 375, height: 812 });
   await page.getByText(ownership.owner.key, { exact: true }).waitFor();
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "ownership must fit the mobile viewport");
+  await focusOwnership();
   await page.waitForTimeout(500);
-  await page.screenshot({ path: path.join(output, "iac-548-ownership-mobile-2026-10-30.png"), fullPage: true });
+  await page.screenshot({ path: path.join(output, `iac-548-ownership-mobile-${captureDate}.png`), fullPage: true });
   assert.deepEqual(errors, []);
   await writeFile(path.join(output, "iac-548-ownership-evidence.json"), JSON.stringify({
-    capturedAt: new Date().toISOString(), sourceCommit, sourceDirty, versions:{browser:browser.version(),node:process.version}, fixture: true, transport: "actual local Axum HTTP; no mocked API responses",
+    capturedAt: new Date().toISOString(), captureDate, sourceCommit, sourceDirty, focusResource:focus.resource, versions:{browser:browser.version(),node:process.version}, fixture: true, transport: "actual local Axum HTTP; no mocked API responses",
     runtime: "compiled WASM dashboard with disposable SQLite resource records; no Linux/KVM boot",
     ownership, ownerships:fixture.ownerships, checks: ["endpoint identity", "43 inventory kinds; eight transfer adapters", "actual ownership read", "direct PATCH rejected with 409", "five configuration kinds reject direct DELETE with 409", "immutable operation acknowledgement", "six ownership records in the actual dashboard", "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
   }, null, 2) + "\n");
