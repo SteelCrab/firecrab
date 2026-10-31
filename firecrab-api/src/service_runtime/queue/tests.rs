@@ -4,7 +4,7 @@ use axum::response::IntoResponse;
 use firecrab_api_types::MicroServiceResponse;
 use std::future::Future;
 
-fn insert(state: &AppState, record: &MicroServiceDeployment) {
+fn insert_configuration(state: &AppState, record: &MicroServiceDeployment) {
     let mut spec = record.spec.clone();
     spec.name = record.service_id.simple().to_string();
     state
@@ -14,6 +14,10 @@ fn insert(state: &AppState, record: &MicroServiceDeployment) {
             spec,
         })
         .unwrap();
+}
+
+fn insert(state: &AppState, record: &MicroServiceDeployment) {
+    insert_configuration(state, record);
     if let Some(update) = &record.update {
         state
             .store
@@ -437,12 +441,12 @@ async fn cancelled_initial_http_waiter_cannot_commit_a_job_without_dispatching_i
 }
 
 #[tokio::test]
-async fn direct_cancellation_respects_git_and_controller_ownership() {
-    for controller in [false, true] {
+async fn direct_cancellation_respects_git_terraform_and_controller_ownership() {
+    for owner in ["git", "terraform", "controller"] {
         let root = tempfile::tempdir().unwrap();
         let state = state(root.path()).await;
         let record = deployment(Uuid::new_v4());
-        if controller {
+        if owner == "controller" {
             state
                 .store
                 .cluster_service_worker_admit(
@@ -461,8 +465,8 @@ async fn direct_cancellation_respects_git_and_controller_ownership() {
                 )
                 .unwrap();
         }
-        insert(&state, &record);
-        if !controller {
+        insert_configuration(&state, &record);
+        if owner == "git" {
             state.store.register_stack("queue-ownership").unwrap();
             state
                 .store
@@ -483,14 +487,36 @@ async fn direct_cancellation_respects_git_and_controller_ownership() {
                 .store
                 .configure_stack_source("queue-ownership", &source, 0)
                 .unwrap();
+        } else if owner == "terraform" {
+            state
+                .store
+                .change_iac_resource_owner(&firecrab_stack::ChangeResourceOwner {
+                    operation_id: Uuid::new_v4(),
+                    expected_endpoint_id: state.store.iac_endpoint_id().unwrap(),
+                    resource: firecrab_stack::ManagedResource {
+                        kind: "service".into(),
+                        id: record.service_id.to_string(),
+                    },
+                    expected_generation: 0,
+                    expected_owner: None,
+                    owner: Some(firecrab_stack::ResourceOwner {
+                        manager: firecrab_stack::Manager::Terraform,
+                        id: Uuid::new_v4(),
+                        key: "firecrab_service.app".into(),
+                    }),
+                })
+                .unwrap();
         }
+        // Establish ownership before starting work. Active deployments cannot
+        // change writers, even when the new writer will only test cancellation.
+        state.store.save_service_deployment(&record).unwrap();
         let error = cancel_attempt(&state, &record).await.unwrap_err();
         assert_eq!(
             error.code(),
-            if controller {
-                "controller_managed"
-            } else {
-                "stack_source_managed"
+            match owner {
+                "controller" => "controller_managed",
+                "terraform" => "iac_resource_managed",
+                _ => "stack_source_managed",
             }
         );
         assert_eq!(
