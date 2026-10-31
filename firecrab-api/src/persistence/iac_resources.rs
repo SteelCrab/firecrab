@@ -1,7 +1,7 @@
 //! Resource existence and controller activity checks for ownership transitions.
 
 use firecrab_stack::ManagedResource;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension, params};
 
 use super::PersistenceError;
 
@@ -15,6 +15,10 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "security_group",
     "shell",
     "schedule",
+    "pool",
+    "queue",
+    "database_connection",
+    "storage_connection",
 ];
 
 pub(super) fn validate(
@@ -28,6 +32,14 @@ pub(super) fn validate(
         "security_group" => "SELECT EXISTS(SELECT 1 FROM security_groups WHERE id=?1)",
         "shell" => "SELECT EXISTS(SELECT 1 FROM shells WHERE id=?1)",
         "schedule" => "SELECT EXISTS(SELECT 1 FROM schedules WHERE id=?1)",
+        "pool" => "SELECT EXISTS(SELECT 1 FROM vm_pools WHERE id=?1)",
+        "queue" => {
+            "SELECT EXISTS(SELECT 1 FROM application_queues WHERE id=?1 AND json_extract(record,'$.id')=?1)"
+        }
+        "database_connection" => "SELECT EXISTS(SELECT 1 FROM pipe_databases WHERE id=?1)",
+        "storage_connection" => {
+            "SELECT EXISTS(SELECT 1 FROM pipe_storage WHERE id=?1 AND json_extract(record,'$.id')=?1)"
+        }
         _ => return Err(PersistenceError::UnsupportedIacResource),
     };
     if adopting && !conn.query_row(exists, [&resource.id], |row| row.get::<_, bool>(0))? {
@@ -49,6 +61,17 @@ pub(super) fn validate(
         "schedule" => Some(
             "SELECT EXISTS(SELECT 1 FROM schedule_runs WHERE schedule_id=?1 AND status='running')",
         ),
+        "pool" => Some(
+            "SELECT EXISTS(SELECT 1 FROM vm_pools WHERE id=?1 AND deleting<>0)
+             OR EXISTS(SELECT 1 FROM vm_pool_members WHERE pool_id=?1 AND state NOT IN ('ready','leased'))",
+        ),
+        "queue" => Some(
+            "SELECT EXISTS(SELECT 1 FROM application_queues WHERE id=?1 AND COALESCE(json_extract(record,'$.phase'),'') NOT IN ('ready','failed'))
+             OR EXISTS(SELECT 1 FROM queue_engine WHERE COALESCE(json_extract(record,'$.phase'),'') NOT IN ('running','stopped','failed'))",
+        ),
+        "database_connection" => return database_idle(conn, resource),
+        // Connection edits hold the same service-mutation lock as ownership admission.
+        "storage_connection" => None,
         // Adding a revision never changes scripts already pinned by a VM.
         "shell" => None,
         _ => return Err(PersistenceError::UnsupportedIacResource),
@@ -57,6 +80,45 @@ pub(super) fn validate(
         && conn.query_row(query, [&resource.id], |row| row.get::<_, bool>(0))?
     {
         return Err(PersistenceError::IacResourceBusy);
+    }
+    Ok(())
+}
+
+/// Maintenance may be attached to another saved alias for the same database.
+fn database_idle(conn: &Connection, resource: &ManagedResource) -> Result<(), PersistenceError> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT spec FROM pipe_databases WHERE id=?1",
+            [&resource.id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let target = raw
+        .map(|raw| {
+            let input = serde_json::from_str::<crate::pipe_databases::DatabaseInput>(&raw)
+                .map_err(|_| PersistenceError::IacOwnershipConflict)?;
+            let record = crate::pipe_databases::DatabaseRecord {
+                id: uuid::Uuid::parse_str(&resource.id)
+                    .map_err(|_| PersistenceError::InvalidIacOwner)?,
+                input,
+            };
+            crate::pipe_databases::maintenance::target_hash(&record)
+                .map_err(|_| PersistenceError::IacOwnershipConflict)
+        })
+        .transpose()?;
+    let mut statement=conn.prepare(
+        "SELECT spec FROM database_jobs WHERE database_id=?1 OR json_extract(spec,'$.targetHash')=?2",
+    )?;
+    let jobs = statement.query_map(params![resource.id, target], |row| row.get::<_, String>(0))?;
+    for raw in jobs {
+        let job: crate::pipe_databases::maintenance::Job =
+            serde_json::from_str(&raw?).map_err(|_| PersistenceError::IacOwnershipConflict)?;
+        if !matches!(
+            job.status.as_str(),
+            "succeeded" | "failed" | "recovered" | "expired"
+        ) {
+            return Err(PersistenceError::IacResourceBusy);
+        }
     }
     Ok(())
 }

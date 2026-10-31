@@ -28,7 +28,7 @@ try {
   const capabilities = await identity.json();
   assert.equal(capabilities.endpointId, ownership.endpointId);
   assert.equal(capabilities.inventoryKinds.length, 43);
-  assert.deepEqual(capabilities.transferKinds, ["network", "vm", "service", "storage_root", "volume", "security_group", "shell", "schedule"]);
+  assert.deepEqual(capabilities.transferKinds, ["network", "vm", "service", "storage_root", "volume", "security_group", "shell", "schedule", "pool", "queue", "database_connection", "storage_connection"]);
   const observed = await context.request.get(`${origin}api/iac/owners`);
   assert.equal(observed.status(), 200);
   assert.deepEqual(await observed.json(), fixture.ownerships);
@@ -75,7 +75,7 @@ try {
   await writeFile(path.join(output, "iac-548-ownership-evidence.json"), JSON.stringify({
     capturedAt: new Date().toISOString(), captureDate, sourceCommit, sourceDirty, focusResource:focus.resource, versions:{browser:browser.version(),node:process.version}, fixture: true, transport: "actual local Axum HTTP; no mocked API responses",
     runtime: "compiled WASM dashboard with disposable SQLite resource records; no Linux/KVM boot",
-    ownership, ownerships:fixture.ownerships, checks: ["endpoint identity", "43 inventory kinds; eight transfer adapters", "actual ownership read", "direct PATCH rejected with 409", "five configuration kinds reject direct DELETE with 409", "immutable operation acknowledgement", "six ownership records in the actual dashboard", "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
+    ownership, ownerships:fixture.ownerships, checks: ["endpoint identity", "43 inventory kinds; twelve transfer adapters", "actual ownership read", "direct PATCH rejected with 409", "five configuration kinds reject direct DELETE with 409", "immutable operation acknowledgement", "six ownership records in the actual dashboard", "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
   }, null, 2) + "\n");
   console.log("Actual API ownership, mutation rejection, receipt and two dashboard screenshots verified.");
 } finally {

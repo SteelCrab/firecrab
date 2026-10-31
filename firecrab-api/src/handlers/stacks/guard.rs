@@ -31,17 +31,28 @@ pub(crate) async fn protect_resources(
     if path.as_str() == "/api/vms/{id}/ssh-host-key/check" {
         return next.run(request).await;
     }
-    let kind = [
-        ("/api/micro-networks/{id}", "network"),
-        ("/api/vms/{id}", "vm"),
-        ("/api/micro-storages/{id}", "storage_root"),
-        ("/api/microblockstorage/{id}", "volume"),
-        ("/api/security-groups/{id}", "security_group"),
-        ("/api/shells/{id}", "shell"),
-        ("/api/schedules/{id}", "schedule"),
-    ]
-    .into_iter()
-    .find_map(|(prefix, kind)| path.as_str().starts_with(prefix).then_some(kind));
+    let configuration = match path.as_str() {
+        "/api/pools/{id}" => Some("pool"),
+        "/api/queues/{id}" | "/api/queues/{id}/retry" => Some("queue"),
+        "/api/pipe/databases/{id}" | "/api/pipe/databases/{id}/access" => {
+            Some("database_connection")
+        }
+        "/api/pipe/storage/{id}" => Some("storage_connection"),
+        _ => None,
+    };
+    let kind = configuration.or_else(|| {
+        [
+            ("/api/micro-networks/{id}", "network"),
+            ("/api/vms/{id}", "vm"),
+            ("/api/micro-storages/{id}", "storage_root"),
+            ("/api/microblockstorage/{id}", "volume"),
+            ("/api/security-groups/{id}", "security_group"),
+            ("/api/shells/{id}", "shell"),
+            ("/api/schedules/{id}", "schedule"),
+        ]
+        .into_iter()
+        .find_map(|(prefix, kind)| path.as_str().starts_with(prefix).then_some(kind))
+    });
     let Some(kind) = kind else {
         return next.run(request).await;
     };

@@ -85,7 +85,11 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "volume",
             "security_group",
             "shell",
-            "schedule"
+            "schedule",
+            "pool",
+            "queue",
+            "database_connection",
+            "storage_connection"
         ])
     );
     assert_eq!(
@@ -246,6 +250,72 @@ fn configuration_resource(
                 .unwrap(),
             )
             .unwrap(),
+        "pool" => state
+            .store
+            .insert_pool(&crate::persistence::PoolRow {
+                id,
+                name: "owned-pool".into(),
+                template: "alpine".into(),
+                template_version: "v1".into(),
+                cpu: 1,
+                ram: 128,
+                disk_gb: 1,
+                egress_policy: Default::default(),
+                micro_network_id: network,
+                storage_root: "default".into(),
+                min_ready: 0,
+                max_size: 1,
+                lease_ttl_seconds: 60,
+                deleting: false,
+                created_at_ms: 1,
+            })
+            .unwrap(),
+        "queue" => state
+            .store
+            .save_queue(&crate::queues::QueueRecord {
+                id,
+                name: "owned-queue".into(),
+                delivery_limit: 3,
+                max_bytes: 1024 * 1024,
+                phase: firecrab_api_types::QueuePhase::Ready,
+                error: None,
+                publish_password: "fixture-credential-never-echo".into(),
+                consume_password: "fixture-credential-never-echo".into(),
+            })
+            .unwrap(),
+        "database_connection" => state
+            .store
+            .save_pipe_database(
+                id,
+                &crate::pipe_databases::DatabaseInput {
+                    name: "owned-database".into(),
+                    provider: crate::pipe_databases::Provider::Local,
+                    uri: "postgresql://qa:fixture-credential-never-echo@127.0.0.1:9/owned".into(),
+                    tls_mode: Some(crate::pipe_databases::TlsMode::Disable),
+                    ca_certificate: None,
+                    write_enabled: false,
+                },
+            )
+            .unwrap(),
+        "storage_connection" => state
+            .store
+            .save_pipe_storage(&crate::pipe_storage::StorageRecord {
+                id,
+                spec: firecrab_api_types::PipeStorageSpec {
+                    name: "owned-bucket".into(),
+                    bucket: "fixture-bucket".into(),
+                    region: "us-east-1".into(),
+                    prefix: String::new(),
+                    credential_ref: firecrab_api_types::StorageCredentialRef::Connection,
+                },
+                credentials: Some(crate::pipe_auth::AwsCredentials {
+                    access_key_id: "fixture-access-key".into(),
+                    secret_access_key: "fixture-credential-never-echo".into(),
+                    session_token: String::new(),
+                    region: "us-east-1".into(),
+                }),
+            })
+            .unwrap(),
         _ => panic!("unsupported fixture kind"),
     }
     ManagedResource {
@@ -282,6 +352,18 @@ async fn iac_configuration_ownership_transfers_and_guards_each_public_write_rout
             "schedules",
             vec![("DELETE", ""), ("PUT", ""), ("PUT", "/enabled")],
         ),
+        ("pool", "pools", vec![("DELETE", ""), ("PATCH", "")]),
+        ("queue", "queues", vec![("DELETE", ""), ("POST", "/retry")]),
+        (
+            "database_connection",
+            "pipe/databases",
+            vec![("DELETE", ""), ("PUT", ""), ("PUT", "/access")],
+        ),
+        (
+            "storage_connection",
+            "pipe/storage",
+            vec![("DELETE", ""), ("PUT", "")],
+        ),
     ] {
         let resource = configuration_resource(&state, root.path(), network, kind);
         let free = state.store.iac_resource_owner(&resource).unwrap();
@@ -309,6 +391,7 @@ async fn iac_configuration_ownership_transfers_and_guards_each_public_write_rout
         let (code, owned) = call(&app, "POST", "/api/iac/owners/transition", request.clone()).await;
         assert_eq!(code, StatusCode::OK, "{kind}: {owned}");
         assert_eq!(owned["generation"], 2);
+        assert!(!owned.to_string().contains("fixture-credential-never-echo"));
         let encoded = resource.id.replace('-', "%2D");
         for (method, suffix) in edits {
             let (code, error) = call(
@@ -327,6 +410,23 @@ async fn iac_configuration_ownership_transfers_and_guards_each_public_write_rout
         })).await;
         assert_eq!(code, StatusCode::OK, "{kind}: {released}");
         assert!(released["owner"].is_null());
+        let receipt = call(
+            &app,
+            "GET",
+            &format!(
+                "/api/iac/owner-changes/{}",
+                request["operationId"].as_str().unwrap()
+            ),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(receipt.1["ownership"], owned);
+        assert!(
+            !receipt
+                .1
+                .to_string()
+                .contains("fixture-credential-never-echo")
+        );
         assert_eq!(
             call(&app, "POST", "/api/iac/owners/transition", request)
                 .await
@@ -397,6 +497,224 @@ async fn iac_owner_api_rejects_stale_and_invalid_requests_without_changing_the_n
     let list = call(&app, "GET", "/api/iac/owners", Value::Null).await.1;
     assert_eq!(list.as_array().unwrap().len(), 1);
     assert!(!list.to_string().contains("private-value"));
+}
+
+fn claim_configuration(state: &AppState, resource: &ManagedResource) -> Value {
+    let before = state.store.iac_resource_owner(resource).unwrap();
+    json!({"operationId":Uuid::new_v4(),"expectedEndpointId":before.endpoint_id,"resource":resource,
+        "expectedGeneration":before.generation,"expectedOwner":before.owner,
+        "owner":{"manager":"terraform","id":Uuid::new_v4(),"key":format!("firecrab_{}.application",resource.kind)}})
+}
+
+#[tokio::test]
+async fn iac_database_transfer_waits_for_maintenance_on_another_alias_of_the_same_target() {
+    use crate::pipe_databases::maintenance::{Job, Kind};
+    let root = tempfile::tempdir().unwrap();
+    let (state, app, network) = fixture(root.path()).await;
+    let resource = configuration_resource(&state, root.path(), network, "database_connection");
+    let record = state
+        .store
+        .pipe_database(Uuid::parse_str(&resource.id).unwrap())
+        .unwrap()
+        .unwrap();
+    let mut alias_input = record.input.clone();
+    alias_input.name = "same target alias".into();
+    alias_input.uri = alias_input.uri.replace(
+        "fixture-credential-never-echo",
+        "another-fixture-credential",
+    );
+    let alias = Uuid::new_v4();
+    state.store.save_pipe_database(alias, &alias_input).unwrap();
+    let alias = state.store.pipe_database(alias).unwrap().unwrap();
+    let mut job = Job::new(&alias, Uuid::new_v4(), Kind::Backup).unwrap();
+    let request = claim_configuration(&state, &resource);
+    for status in ["queued", "running", "needs_recovery"] {
+        job.status = status.into();
+        state.store.save_database_job(&job).unwrap();
+        let (code, error) = call(&app, "POST", "/api/iac/owners/transition", request.clone()).await;
+        assert_eq!(code, StatusCode::CONFLICT, "{status}: {error}");
+        assert_eq!(error["error"]["code"], "iac_resource_busy");
+        assert!(!error.to_string().contains("fixture-credential-never-echo"));
+        assert_eq!(
+            call(
+                &app,
+                "GET",
+                &format!(
+                    "/api/iac/owner-changes/{}",
+                    request["operationId"].as_str().unwrap()
+                ),
+                Value::Null
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    let other = configuration_resource(&state, root.path(), network, "database_connection");
+    let other_id = Uuid::parse_str(&other.id).unwrap();
+    let mut other_record = state.store.pipe_database(other_id).unwrap().unwrap();
+    other_record.input.uri = other_record.input.uri.replace("/owned", "/unrelated");
+    state
+        .store
+        .update_pipe_database(other_id, &other_record.input)
+        .unwrap();
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/iac/owners/transition",
+            claim_configuration(&state, &other)
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    job.status = "succeeded".into();
+    state.store.save_database_job(&job).unwrap();
+    let (code, owned) = call(&app, "POST", "/api/iac/owners/transition", request).await;
+    assert_eq!(code, StatusCode::OK, "{owned}");
+    assert_eq!(owned["generation"], 1);
+}
+
+#[tokio::test]
+async fn iac_pool_and_queue_transfer_rejects_active_controller_work_before_journaling() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, app, network) = fixture(root.path()).await;
+    let pool = configuration_resource(&state, root.path(), network, "pool");
+    let member = Uuid::new_v4();
+    state
+        .store
+        .insert_pool_member(&crate::persistence::MemberRow {
+            pool_id: Uuid::parse_str(&pool.id).unwrap(),
+            vm_id: member,
+            state: firecrab_api_types::PoolMemberState::Provisioning,
+            created_at_ms: 1,
+        })
+        .unwrap();
+    let request = claim_configuration(&state, &pool);
+    let (code, error) = call(&app, "POST", "/api/iac/owners/transition", request.clone()).await;
+    assert_eq!(code, StatusCode::CONFLICT, "{error}");
+    assert_eq!(error["error"]["code"], "iac_resource_busy");
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!(
+                "/api/iac/owner-changes/{}",
+                request["operationId"].as_str().unwrap()
+            ),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
+    assert!(
+        state
+            .store
+            .set_pool_member_state(
+                member,
+                &[firecrab_api_types::PoolMemberState::Provisioning],
+                firecrab_api_types::PoolMemberState::Ready
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        call(&app, "POST", "/api/iac/owners/transition", request)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let queue = configuration_resource(&state, root.path(), network, "queue");
+    let mut engine = crate::queues::EngineRecord {
+        vm_id: Uuid::new_v4(),
+        vm_created: false,
+        spec: firecrab_api_types::CreateQueueEngineRequest {
+            micro_network_id: network,
+            cpu: 1,
+            ram: 256,
+            disk_gb: 1,
+            storage_root: None,
+        },
+        phase: firecrab_api_types::QueueEnginePhase::Starting,
+        error: None,
+        username: "fixture".into(),
+        password: "fixture-credential-never-echo".into(),
+    };
+    state.store.save_queue_engine(&engine).unwrap();
+    let request = claim_configuration(&state, &queue);
+    let (code, error) = call(&app, "POST", "/api/iac/owners/transition", request.clone()).await;
+    assert_eq!(code, StatusCode::CONFLICT, "{error}");
+    assert_eq!(error["error"]["code"], "iac_resource_busy");
+    engine.phase = firecrab_api_types::QueueEnginePhase::Stopped;
+    state.store.save_queue_engine(&engine).unwrap();
+    let mut declaration = state
+        .store
+        .queue(Uuid::parse_str(&queue.id).unwrap())
+        .unwrap()
+        .unwrap();
+    declaration.phase = firecrab_api_types::QueuePhase::Provisioning;
+    state.store.save_queue(&declaration).unwrap();
+    let (code, error) = call(&app, "POST", "/api/iac/owners/transition", request.clone()).await;
+    assert_eq!(code, StatusCode::CONFLICT, "{error}");
+    assert_eq!(error["error"]["code"], "iac_resource_busy");
+    declaration.phase = firecrab_api_types::QueuePhase::Ready;
+    state.store.save_queue(&declaration).unwrap();
+    assert_eq!(
+        call(&app, "POST", "/api/iac/owners/transition", request)
+            .await
+            .0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn iac_configuration_ownership_preserves_transient_and_data_api_boundaries() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, app, network) = fixture(root.path()).await;
+    let pool = configuration_resource(&state, root.path(), network, "pool");
+    let database = configuration_resource(&state, root.path(), network, "database_connection");
+    let storage = configuration_resource(&state, root.path(), network, "storage_connection");
+    for resource in [&pool, &database, &storage] {
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                "/api/iac/owners/transition",
+                claim_configuration(&state, resource)
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+    }
+    let (_, lease) = call(
+        &app,
+        "POST",
+        &format!("/api/pools/{}/acquire", pool.id),
+        json!({}),
+    )
+    .await;
+    assert_eq!(lease["error"]["code"], "pool_exhausted");
+    let (code,error)=call(&app,"POST",&format!("/api/pipe/databases/{}/mutations",database.id),json!({
+        "requestId":Uuid::new_v4(),"schema":"public","table":"items","operation":"insert","values":{"id":"1"},"key":{},"version":null
+    })).await;
+    assert_eq!(code, StatusCode::FORBIDDEN, "{error}");
+    assert_eq!(error["error"]["code"], "database_read_only");
+    let (code, summary) = call(
+        &app,
+        "GET",
+        &format!("/api/pipe/storage/{}", storage.id),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{summary}");
+    assert!(
+        !summary
+            .to_string()
+            .contains("fixture-credential-never-echo")
+    );
 }
 
 #[tokio::test]
