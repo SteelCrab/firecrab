@@ -20,7 +20,6 @@ pub const VIEWS: &[(&str, &str, &str, &str)] = &[
     ("shells", "system", "Shells", "Shell"),
     ("host", "system", "Host", "호스트"),
     ("ai-sandbox", "ai", "AI Sandbox", "AI Sandbox"),
-    ("security", "ai", "Security", "보안"),
 ];
 
 #[derive(Clone, Default, Deserialize, Serialize, PartialEq)]
