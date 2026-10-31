@@ -100,7 +100,7 @@ static int confined_dir(int parent, const char *name, int create, dev_t device) 
         if (fstat(parent, &owner) || mkdirat(parent, name, 0755)) return -1;
         fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (fd >= 0 && (fchown(fd, owner.st_uid, owner.st_gid) ||
-                        fchmod(fd, owner.st_mode & 0755) || fsync(parent))) {
+                        fchmod(fd, owner.st_mode & 02777) || fsync(parent))) {
             int error = errno; close(fd); errno = error; return -1;
         }
     }
@@ -275,7 +275,7 @@ static int replace_file(int parent, const char *name, const char *temporary,
     struct stat owner;
     if (fstatat(parent, name, &owner, AT_SYMLINK_NOFOLLOW)) {
         if (errno != ENOENT || fstat(parent, &owner)) return -1;
-        owner.st_mode = 0600;
+        owner.st_mode = (owner.st_mode & 02000) ? 0660 : 0600;
     } else if (!S_ISREG(owner.st_mode) || owner.st_nlink != 1) { errno = EACCES; return -1; }
     int fd = openat(parent, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0) return -1;
@@ -320,20 +320,51 @@ static int write_file(int parent, const char *name, int journal, dev_t device,
     if (fsync(parent) || renameat(journal, pending, journal, done) || fsync(journal)) return -1;
     return 0;
 }
-int firecrab_workspace_files(int argc, char **argv) {
-    umask(0077);
+int firecrab_workspace_open(int argc, char **argv, int *root, int *marker, int *lock) {
     const char *root_path = "/workspace/shared";
 #ifdef FIRECRAB_WORKSPACE_TEST
-    if (argc != 7) { errno = EINVAL; return error_reply(); }
+    if (argc != 7) { errno = EINVAL; return -1; }
     root_path = argv[6];
 #else
-    if (argc != 6 || geteuid() != 0) { errno = EACCES; return error_reply(); }
+    if (argc != 6 || geteuid() != 0) { errno = EACCES; return -1; }
 #endif
     unsigned char project[16], database[16], volume[16];
     if (uuid_bytes(argv[2], project) || uuid_bytes(argv[3], database) ||
         uuid_bytes(argv[4], volume) || !hexadecimal(argv[5], 64)) {
-        errno = EINVAL; return error_reply();
+        errno = EINVAL; return -1;
     }
+    /* The fixed ancestors and opened root are the authority for every descendant. */
+#ifdef FIRECRAB_WORKSPACE_TEST
+    *root = open(root_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+#else
+    (void)root_path;
+    int workspace = open("/workspace", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (workspace >= 0) {
+        *root = openat(workspace, "shared", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        close(workspace);
+    }
+#endif
+    if (*root < 0 || volume_matches(*root, volume)) { errno = ENODEV; return -1; }
+    struct stat info;
+    if (fstat(*root, &info)) return -1;
+    *marker = private_dir(*root, ".firecrab-workspace", info.st_dev, 0);
+    if (*marker < 0) { errno = ENODEV; return -1; }
+    char identity[160];
+    int identity_length = snprintf(identity, sizeof identity, "%s:%s:%s", argv[2], argv[3], argv[5]);
+    unsigned char *ready = NULL; uint32_t ready_length = 0;
+    if (read_file(*marker, "ready", info.st_dev, &ready, &ready_length, sizeof identity, 1)) {
+        errno = ENODEV; return -1;
+    }
+    int matched = ready_length == (uint32_t)identity_length && !memcmp(ready, identity, ready_length);
+    free(ready);
+    if (!matched) { errno = ENODEV; return -1; }
+    *lock = lock_files(*marker, info.st_dev);
+    if (*lock < 0) return -1;
+    return 0;
+}
+
+int firecrab_workspace_files(int argc, char **argv) {
+    umask(0077);
     unsigned char header[FRAME_HEADER];
     if (transfer(STDIN_FILENO, header, sizeof header, 0) || memcmp(header, "FCW1", 4)) {
         errno = EINVAL; return error_reply();
@@ -359,33 +390,9 @@ int firecrab_workspace_files(int argc, char **argv) {
     char path[PATH_LIMIT + 1];
     memcpy(path, frame + FRAME_HEADER, path_length); path[path_length] = 0;
     if (strlen(path) != path_length) { errno = EINVAL; goto finish; }
-    /* The fixed ancestors and opened root are the authority for every descendant. */
-#ifdef FIRECRAB_WORKSPACE_TEST
-    root = open(root_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-#else
-    (void)root_path;
-    int workspace = open("/workspace", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (workspace >= 0) {
-        root = openat(workspace, "shared", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        close(workspace);
-    }
-#endif
-    if (root < 0 || volume_matches(root, volume)) { errno = ENODEV; goto finish; }
+    if (firecrab_workspace_open(argc, argv, &root, &marker, &lock)) goto finish;
     struct stat info;
     if (fstat(root, &info)) goto finish;
-    marker = private_dir(root, ".firecrab-workspace", info.st_dev, 0);
-    if (marker < 0) { errno = ENODEV; goto finish; }
-    char identity[160];
-    int identity_length = snprintf(identity, sizeof identity, "%s:%s:%s", argv[2], argv[3], argv[5]);
-    unsigned char *ready = NULL; uint32_t ready_length = 0;
-    if (read_file(marker, "ready", info.st_dev, &ready, &ready_length, sizeof identity, 1)) {
-        errno = ENODEV; goto finish;
-    }
-    int matched = ready_length == (uint32_t)identity_length && !memcmp(ready, identity, ready_length);
-    free(ready);
-    if (!matched) { errno = ENODEV; goto finish; }
-    lock = lock_files(marker, info.st_dev);
-    if (lock < 0) goto finish;
     char id[33];
     for (unsigned i = 0; i < 16; i++) snprintf(id + i * 2, 3, "%02x", header[20 + i]);
     if (action == 3 || action == 4) {
@@ -424,4 +431,17 @@ finish:
       free(frame); errno = error;
       int code = result ? error_reply() : reply("FCWR", output, output_length);
       free(output); return code; }
+}
+
+int firecrab_workspace_directory(int root, const char *path) {
+    struct stat info;
+    if (fstat(root, &info) || strlen(path) > PATH_LIMIT) { errno = EINVAL; return -1; }
+    if (!*path) return dup(root);
+    char copy[PATH_LIMIT + 1], *name;
+    strcpy(copy, path);
+    int parent = parent_dir(root, copy, 0, info.st_dev, &name);
+    if (parent < 0) return -1;
+    int result = confined_dir(parent, name, 0, info.st_dev);
+    int error = errno; close(parent); errno = error;
+    return result;
 }

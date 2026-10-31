@@ -75,7 +75,7 @@ fn time() -> Result<i64, Error> {
 }
 
 impl ProjectDb {
-    fn file_owner(&self) -> Result<(), Error> {
+    pub(super) fn check_owner(&self) -> Result<(), Error> {
         let current: i64 =
             self.conn
                 .query_row("SELECT epoch FROM identity WHERE singleton=1", [], |r| {
@@ -173,7 +173,7 @@ impl ProjectDb {
 
     /// Reads retain externally observed changes without claiming an API writer.
     pub(super) fn observe_file(&self, path: &str, bytes: &[u8]) -> Result<Version, Error> {
-        self.file_owner()?;
+        self.check_owner()?;
         if bytes.len() > super::files_guest::FILE_LIMIT {
             return Err(Error::Invalid("Files are limited to 1 MiB"));
         }
@@ -241,7 +241,7 @@ impl ProjectDb {
     }
 
     pub(super) fn stage_file(&self, mut op: Operation) -> Result<Operation, Error> {
-        self.file_owner()?;
+        self.check_owner()?;
         if op.content.len() > super::files_guest::FILE_LIMIT {
             return Err(Error::Invalid("Files are limited to 1 MiB"));
         }
@@ -267,7 +267,7 @@ impl ProjectDb {
     }
 
     pub(super) fn finish_file(&self, id: Uuid) -> Result<Version, Error> {
-        self.file_owner()?;
+        self.check_owner()?;
         let op = self.file_operation(id)?.ok_or(Error::Missing)?;
         if let Some(version) = op.version {
             return self.file_version(&op.path, version);
@@ -290,7 +290,7 @@ impl ProjectDb {
     }
 
     pub(super) fn reject_file(&self, id: Uuid) -> Result<(), Error> {
-        self.file_owner()?;
+        self.check_owner()?;
         self.conn.execute(
             "UPDATE file_operations SET state='failed' WHERE id=?1 AND state='pending'",
             [id.to_string()],

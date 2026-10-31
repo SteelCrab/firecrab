@@ -86,6 +86,14 @@ pub fn binding(state: &AppState, id: Uuid) -> io::Result<Binding> {
 }
 
 fn ssh(state: &AppState, binding: &Binding, attempt: &Path) -> io::Result<Command> {
+    ssh_command(state, binding, attempt, false)
+}
+fn ssh_command(
+    state: &AppState,
+    binding: &Binding,
+    attempt: &Path,
+    multiplex: bool,
+) -> io::Result<Command> {
     let current = self::binding(state, binding.vm_id)?;
     if current.runtime_id != binding.runtime_id {
         return Err(io::Error::other(
@@ -167,9 +175,39 @@ fn ssh(state: &AppState, binding: &Binding, attempt: &Path) -> io::Result<Comman
     .arg("-o")
     .arg(format!("UserKnownHostsFile={}", known.display()))
     .arg("-i")
-    .arg(&keys.operator_private)
-    .arg(format!("root@{}", lease.ipv4))
-    .arg("/bin/sh -s");
+    .arg(&keys.operator_private);
+    if multiplex {
+        use sha2::{Digest, Sha256};
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+        let identity = format!(
+            "{}:{}:{}",
+            std::fs::canonicalize(attempt)?.display(),
+            binding.runtime_id,
+            key
+        );
+        let digest = format!("{:x}", Sha256::digest(identity.as_bytes()));
+        let directory = PathBuf::from("/tmp").join(format!("fc-workspace-ssh-{}", &digest[..32]));
+        match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+        let metadata = std::fs::symlink_metadata(&directory)?;
+        if !metadata.is_dir()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o077 != 0
+        {
+            return Err(io::Error::other(
+                "Workspace SSH socket directory is not private",
+            ));
+        }
+        cmd.args(["-o", "ControlMaster=auto", "-o", "ControlPersist=30", "-o"])
+            .arg(format!(
+                "ControlPath={}",
+                directory.join("socket").display()
+            ));
+    }
+    cmd.arg(format!("root@{}", lease.ipv4)).arg("/bin/sh -s");
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -402,7 +440,7 @@ pub(crate) async fn project_file_protocol(
     limit: usize,
 ) -> io::Result<Output> {
     capture(
-        ssh(state, binding, directory)?,
+        ssh_command(state, binding, directory, true)?,
         script,
         limit,
         Duration::from_secs(20),

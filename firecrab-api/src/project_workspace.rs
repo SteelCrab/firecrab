@@ -4,6 +4,11 @@ mod db;
 mod files;
 mod files_db;
 mod files_guest;
+mod terminals;
+mod terminals_db;
+mod terminals_guest;
+#[cfg(test)]
+mod terminals_tests;
 #[cfg(test)]
 mod tests;
 
@@ -43,6 +48,12 @@ pub struct Runtime {
     pub owner: Uuid,
     /// Bounded guest-file workers survive client cancellation without blocking the async executor.
     pub(crate) file_slots: std::sync::Arc<tokio::sync::Semaphore>,
+    /// Projects with active or incompletely replayed terminal sessions.
+    terminal_projects: std::sync::Mutex<std::collections::BTreeSet<Uuid>>,
+    /// Wake replay workers promptly after interactive input.
+    terminal_wake: tokio::sync::Notify,
+    /// One OS lock per project remains held for this service lifetime.
+    services: std::sync::Mutex<std::collections::BTreeMap<Uuid, std::sync::Arc<File>>>,
 }
 impl Runtime {
     /// Establish controller ownership without creating project databases eagerly.
@@ -51,6 +62,9 @@ impl Runtime {
             root,
             owner: Uuid::new_v4(),
             file_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
+            terminal_projects: std::sync::Mutex::default(),
+            terminal_wake: tokio::sync::Notify::new(),
+            services: std::sync::Mutex::default(),
         }
     }
 }
@@ -176,14 +190,41 @@ fn binding(state: &AppState, project: Uuid) -> Result<Binding, Error> {
         .ok_or(Error::Missing)
 }
 /// Open retained state without permitting missing-data replacement.
-fn open(state: &AppState, binding: &Binding) -> Result<db::ProjectDb, Error> {
-    db::ProjectDb::open(
+fn service_lease(
+    state: &AppState,
+    binding: &Binding,
+    create: bool,
+) -> Result<std::sync::Arc<File>, Error> {
+    let mut services = state
+        .workspaces
+        .services
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if let Some(lease) = services.get(&binding.project_id) {
+        return Ok(lease.clone());
+    }
+    let directory = db::project_directory(&state.workspaces.root, binding, create)?;
+    let file = db::private_file(&directory.join("service.lock"), true)?;
+    file.try_lock().map_err(|_| Error::Busy)?;
+    let lease = std::sync::Arc::new(file);
+    services.insert(binding.project_id, lease.clone());
+    Ok(lease)
+}
+fn open_owned(state: &AppState, binding: &Binding, create: bool) -> Result<db::ProjectDb, Error> {
+    let lease = service_lease(state, binding, create)?;
+    let mut db = db::ProjectDb::open(
         &state.workspaces.root,
         binding,
         state.workspaces.owner,
-        false,
-    )
+        create,
+    )?;
+    db.service = Some(lease);
+    Ok(db)
 }
+fn open(state: &AppState, binding: &Binding) -> Result<db::ProjectDb, Error> {
+    open_owned(state, binding, false)
+}
+
 fn response(
     state: &AppState,
     binding: &Binding,
@@ -255,6 +296,7 @@ pub fn routes() -> Router<AppState> {
             get(checkpoint::get).put(checkpoint::create),
         )
         .merge(files::routes())
+        .merge(terminals::routes())
 }
 /// Read project metadata even when the workload VM is stopped.
 async fn get_workspace(
@@ -391,13 +433,16 @@ async fn bind_workspace(
                 "Detach the selected volume from its current owner before first binding",
             ));
         }
+        if let Some(existing) = state.store.project_workspace(project)? {
+            service_lease(&state, &existing, existing.provisioning)?;
+        }
         let b = state.store.reserve_project_workspace(
             project,
             volume.id,
             vm,
             input.expected_generation,
         )?;
-        let db = db::ProjectDb::open(&state.workspaces.root, &b, state.workspaces.owner, true)?;
+        let db = open_owned(&state, &b, true)?;
         if let Some(old) = volume
             .attached_vm_id
             .filter(|old| *old != vm || volume.mount_path.as_deref() != Some("/workspace/shared"))
@@ -585,4 +630,9 @@ async fn reconcile_runtime(
         response(&state, &binding(&state, b.project_id)?, &db)
     })
     .await
+}
+
+/// Recover terminal observers without starting replacement shells.
+pub(crate) fn start_terminals(state: AppState) {
+    terminals::start(state);
 }

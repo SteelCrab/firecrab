@@ -60,7 +60,7 @@ pub(super) fn routes() -> Router<AppState> {
 }
 
 /// Keep blocking SQLite/filesystem work off the executor, with a bounded number of owned workers.
-async fn run<T: Send + 'static>(
+pub(super) async fn run<T: Send + 'static>(
     slots: std::sync::Arc<tokio::sync::Semaphore>,
     id: Uuid,
     work: impl std::future::Future<Output = Result<T, AppError>> + Send + 'static,
@@ -77,18 +77,18 @@ async fn run<T: Send + 'static>(
 }
 
 /// VM ownership and project SQLite stay held until the bounded guest operation finishes.
-struct Files {
-    state: AppState,
+pub(super) struct Files {
+    pub(super) state: AppState,
     caller: Caller,
     writable: bool,
-    binding: Binding,
-    runtime: guest::Binding,
-    digest: String,
-    db: db::ProjectDb,
+    pub(super) binding: Binding,
+    pub(super) runtime: guest::Binding,
+    pub(super) digest: String,
+    pub(super) db: db::ProjectDb,
     _vm: OwnedMutexGuard<()>,
 }
 impl Files {
-    async fn open(
+    pub(super) async fn open(
         state: AppState,
         project: Uuid,
         caller: Caller,
@@ -137,7 +137,7 @@ impl Files {
         })
     }
 
-    fn permission(&self) -> Result<(), Error> {
+    pub(super) fn permission(&self) -> Result<(), Error> {
         self.caller
             .project(
                 &self.state,

@@ -529,3 +529,12 @@ Project workspace routes extend the authenticated Sandbox project API at
 
 See [workspace retention and checkpoints](../guides/project-workspaces.md) and
 [file API bodies, permissions and limits](../guides/project-workspace-files.md).
+
+### Project terminals
+
+The project workspace also exposes `GET /terminals`, `GET|PUT /terminals/{session}`,
+`GET /terminals/{session}/output`, `POST|PUT|DELETE /terminals/{session}/control`,
+`POST /terminals/{session}/input`, `POST /terminals/{session}/stop` and
+`GET /terminals/{session}/socket`. These paths extend the workspace prefix above.
+See [Project workspace terminals](../guides/project-workspace-terminals.md) for
+input leases, replay cursors, runtime fencing and message bodies.

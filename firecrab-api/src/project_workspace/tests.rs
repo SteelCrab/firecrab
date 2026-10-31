@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::io::{Seek, SeekFrom};
 use tower::ServiceExt;
 
-fn registration() -> Binding {
+pub(super) fn registration() -> Binding {
     Binding {
         project_id: Uuid::new_v4(),
         database_id: Uuid::new_v4(),
@@ -134,7 +134,7 @@ async fn reopen_state(root: &std::path::Path) -> AppState {
         .await
         .unwrap()
 }
-async fn fixture() -> (tempfile::TempDir, AppState, Binding) {
+pub(super) async fn fixture() -> (tempfile::TempDir, AppState, Binding) {
     let dir = tempfile::tempdir().unwrap();
     let state = reopen_state(dir.path()).await;
     let b = registration();
@@ -193,7 +193,7 @@ fn router(state: &AppState) -> Router {
         .layer(Extension(RequestId(Uuid::new_v4())))
         .layer(Extension(crate::ai_sandbox::access::LocalOperator))
 }
-async fn call(
+pub(super) async fn call(
     state: &AppState,
     method: &str,
     path: &str,
@@ -216,7 +216,7 @@ async fn call(
     let data = to_bytes(output.into_body(), 1024 * 1024).await.unwrap();
     (status, serde_json::from_slice(&data).unwrap())
 }
-async fn bind(state: &AppState, b: &Binding) -> Value {
+pub(super) async fn bind(state: &AppState, b: &Binding) -> Value {
     let (status, value) = call(
         state,
         "PUT",
@@ -1053,7 +1053,7 @@ fn workspace_files_additive_schema_upgrade_preserves_v1_identity_and_document() 
     db.save_document(0, &json!({"kept":"v1 metadata"})).unwrap();
     db.conn
         .execute_batch(
-            "DROP TABLE file_operations; DROP TABLE file_versions; PRAGMA user_version=1;",
+            "DROP TABLE terminal_controls; DROP TABLE terminal_output; DROP TABLE terminal_sessions; DROP TABLE file_operations; DROP TABLE file_versions; PRAGMA user_version=1;",
         )
         .unwrap();
     drop(db);
@@ -1064,7 +1064,7 @@ fn workspace_files_additive_schema_upgrade_preserves_v1_identity_and_document() 
         db.conn
             .pragma_query_value::<u32, _>(None, "user_version", |r| r.get(0))
             .unwrap(),
-        2
+        db::SCHEMA_VERSION
     );
     let v = db.observe_file("AGENTS.md", b"rules").unwrap();
     assert_eq!(

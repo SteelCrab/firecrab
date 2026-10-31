@@ -156,3 +156,7 @@ Use the [isolated Linux/KVM recovery gate](../development/project-workspace-reco
 to record real database, volume, runtime, and file identities.
 See [Persistent data volumes](volumes.md) for the existing volume lifecycle and
 [Storage](storage.md#backup-and-retention) for controller-level backup requirements.
+
+## Interactive project terminals
+
+See [Project workspace terminals](project-workspace-terminals.md) for scoped PTYs, input control, retained output and restart behavior.

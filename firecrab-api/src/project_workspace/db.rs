@@ -11,7 +11,7 @@ use std::{
 use uuid::Uuid;
 
 /// Private schema with an additive file-history migration from version 1.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 /// SQLite application identity prevents opening an unrelated database.
 const APPLICATION_ID: i64 = 0x46575031;
 /// Maximum serialized size of a project metadata object.
@@ -27,6 +27,8 @@ pub struct ProjectDb {
     pub epoch: i64,
     /// Retains the advisory lock until the entire operation is dropped.
     _owner: File,
+    /// Keep the owning service lock alive through the last in-flight operation.
+    pub(super) service: Option<std::sync::Arc<File>>,
 }
 
 /// Create or validate a server-owned directory without following its final symlink.
@@ -53,7 +55,7 @@ pub fn private_dir(path: &Path) -> Result<(), Error> {
 }
 
 /// Open a regular owner-only file and reject aliases to other data.
-fn private_file(path: &Path, create: bool) -> Result<File, Error> {
+pub(super) fn private_file(path: &Path, create: bool) -> Result<File, Error> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -71,27 +73,38 @@ fn private_file(path: &Path, create: bool) -> Result<File, Error> {
     Ok(file)
 }
 
+/// Resolve only the retained project's private directory; creation needs provisioning authority.
+pub(super) fn project_directory(
+    root: &Path,
+    binding: &Binding,
+    create: bool,
+) -> Result<PathBuf, Error> {
+    let initialize = create && binding.provisioning;
+    if !root.exists() {
+        if !initialize {
+            return Err(Error::Conflict("Retained project database is missing"));
+        }
+        private_dir(
+            root.parent()
+                .ok_or(Error::Conflict("Invalid workspace root"))?,
+        )?;
+        private_dir(root)?;
+    }
+    private_dir(root)?;
+    // Resolve operator-owned parent aliases before SQLite enforces NOFOLLOW on the database path.
+    let directory = fs::canonicalize(root)?.join(binding.project_id.to_string());
+    if !directory.exists() && !initialize {
+        return Err(Error::Conflict("Retained project database is missing"));
+    }
+    private_dir(&directory)?;
+    Ok(directory)
+}
+
 impl ProjectDb {
     /// Open an existing identity; only interrupted initial provisioning permits creation.
     pub fn open(root: &Path, binding: &Binding, owner: Uuid, create: bool) -> Result<Self, Error> {
         let initialize = create && binding.provisioning;
-        if !root.exists() {
-            if !initialize {
-                return Err(Error::Conflict("Retained project database is missing"));
-            }
-            private_dir(
-                root.parent()
-                    .ok_or(Error::Conflict("Invalid workspace root"))?,
-            )?;
-            private_dir(root)?;
-        }
-        private_dir(root)?;
-        // Resolve operator-owned parent aliases before SQLite enforces NOFOLLOW on the database path.
-        let directory = fs::canonicalize(root)?.join(binding.project_id.to_string());
-        if !directory.exists() && !initialize {
-            return Err(Error::Conflict("Retained project database is missing"));
-        }
-        private_dir(&directory)?;
+        let directory = project_directory(root, binding, create)?;
         let lock = private_file(&directory.join("owner.lock"), true)?;
         lock.try_lock().map_err(|_| Error::Busy)?;
         let path = directory.join("project.db");
@@ -154,6 +167,10 @@ impl ProjectDb {
             conn.execute_batch(super::files_db::SCHEMA)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
+        if version < 3 {
+            conn.execute_batch(super::terminals_db::SCHEMA)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
         let epoch = epoch
             .checked_add(1)
             .ok_or(Error::Conflict("Workspace owner epoch exhausted"))?;
@@ -169,6 +186,7 @@ impl ProjectDb {
             conn,
             epoch,
             _owner: lock,
+            service: None,
         })
     }
 
