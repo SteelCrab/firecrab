@@ -21,6 +21,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "storage_connection",
     "secret",
     "secret_connection",
+    "auth",
 ];
 
 /// Reservations and tombstones keep generated identities with their parent.
@@ -62,6 +63,9 @@ pub(super) fn validate(
         "storage_connection" => {
             "SELECT EXISTS(SELECT 1 FROM pipe_storage WHERE id=?1 AND json_extract(record,'$.id')=?1)"
         }
+        "auth" => {
+            "SELECT EXISTS(SELECT 1 FROM pipe_auth_credentials WHERE provider=?1 AND json_extract(credential,'$.provider')=?1)"
+        }
         _ => return Err(PersistenceError::UnsupportedIacResource),
     };
     if adopting && !conn.query_row(exists, [&resource.id], |row| row.get::<_, bool>(0))? {
@@ -94,6 +98,8 @@ pub(super) fn validate(
         "database_connection" => return database_idle(conn, resource),
         // Connection edits hold the same service-mutation lock as ownership admission.
         "storage_connection" => None,
+        // Native credential commits and ownership changes share the SQLite transaction.
+        "auth" => None,
         // Adding a revision never changes scripts already pinned by a VM.
         "shell" => None,
         _ => return Err(PersistenceError::UnsupportedIacResource),

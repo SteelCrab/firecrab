@@ -40,6 +40,7 @@ pub(crate) async fn protect_resources(
         "/api/pipe/storage/{id}" => Some("storage_connection"),
         "/api/secrets/{id}" => Some("secret"),
         "/api/secrets/connections/{id}" => Some("secret_connection"),
+        "/api/pipe/auth/{provider}" => Some("auth"),
         _ => None,
     };
     let kind = configuration.or_else(|| {
@@ -63,15 +64,17 @@ pub(crate) async fn protect_resources(
         .get::<RequestId>()
         .map(|id| id.0)
         .unwrap_or_else(Uuid::new_v4);
-    // Use the router's decoded parameter, not the raw URI. Percent-encoded UUID
-    // characters must not provide a second route around the ownership check.
+    // Use decoded identities so percent encoding cannot bypass the ownership check.
     let (mut parts, body) = request.into_parts();
     let id = match Path::<HashMap<String, String>>::from_request_parts(&mut parts, &state).await {
+        Ok(Path(parameters)) if kind == "auth" => {
+            parameters.get("provider").cloned().unwrap_or_default()
+        }
         Ok(Path(parameters)) => match super::super::vms::parse_id(
             parameters.get("id").map(String::as_str).unwrap_or_default(),
             request_id,
         ) {
-            Ok(id) => id,
+            Ok(id) => id.to_string(),
             Err(error) => return error.into_response(),
         },
         Err(_) => return AppError::not_found(request_id).into_response(),
@@ -83,7 +86,7 @@ pub(crate) async fn protect_resources(
     match super::database(request_id, move || {
         store.iac_public_write_allowed(&ManagedResource {
             kind: kind.into(),
-            id: id.to_string(),
+            id,
         })
     })
     .await

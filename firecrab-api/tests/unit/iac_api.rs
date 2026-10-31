@@ -91,7 +91,8 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "database_connection",
             "storage_connection",
             "secret",
-            "secret_connection"
+            "secret_connection",
+            "auth"
         ])
     );
     assert_eq!(
@@ -1111,3 +1112,6 @@ async fn iac_owner_api_waits_for_service_mutation_admission() {
 
 #[path = "iac_vault.rs"]
 mod vault;
+
+#[path = "iac_auth.rs"]
+mod auth;

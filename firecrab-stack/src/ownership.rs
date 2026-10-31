@@ -34,6 +34,9 @@ impl ManagedResource {
             }
             self.id = id.to_string();
         }
+        if self.kind == "auth" && !matches!(self.id.as_str(), "firecrab" | "aws" | "github") {
+            return Err("use the exact saved Auth provider key");
+        }
         if matches!(
             self.kind.as_str(),
             "network"

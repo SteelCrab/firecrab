@@ -77,6 +77,31 @@ pub(super) fn terraform_owned(
     )?)
 }
 
+/// Reuse the caller's SQLite transaction when committing a native edit.
+pub(super) fn public_write_allowed(
+    conn: &Connection,
+    resource: &ManagedResource,
+) -> Result<bool, PersistenceError> {
+    super::iac_resources::ensure_independent(conn, resource)?;
+    if let Some(kind) = resource.legacy_kind() {
+        let id = Uuid::parse_str(&resource.id).map_err(|_| PersistenceError::InvalidIacOwner)?;
+        if super::stacks::resource_apply_busy(conn, kind, id)? {
+            return Err(PersistenceError::StackApplyBusy);
+        }
+    }
+    let Some(owner) = read(conn, resource)?.owner else {
+        return Ok(true);
+    };
+    if owner.manager == Manager::Terraform {
+        return Ok(false);
+    }
+    if resource.legacy_kind().is_none() {
+        super::stack_applies::ensure_idle(conn, owner.id)?;
+        super::stack_sources::ensure_idle(conn, owner.id)?;
+    }
+    Ok(true)
+}
+
 impl Store {
     /// Stable endpoint identity for clients that manage multiple API hosts.
     pub(crate) fn iac_endpoint_id(&self) -> Result<Uuid, PersistenceError> {
@@ -104,26 +129,7 @@ impl Store {
         &self,
         resource: &ManagedResource,
     ) -> Result<bool, PersistenceError> {
-        let conn = self.lock();
-        super::iac_resources::ensure_independent(&conn, resource)?;
-        if let Some(kind) = resource.legacy_kind() {
-            let id =
-                Uuid::parse_str(&resource.id).map_err(|_| PersistenceError::InvalidIacOwner)?;
-            if super::stacks::resource_apply_busy(&conn, kind, id)? {
-                return Err(PersistenceError::StackApplyBusy);
-            }
-        }
-        let Some(owner) = read(&conn, resource)?.owner else {
-            return Ok(true);
-        };
-        if owner.manager == Manager::Terraform {
-            return Ok(false);
-        }
-        if resource.legacy_kind().is_none() {
-            super::stack_applies::ensure_idle(&conn, owner.id)?;
-            super::stack_sources::ensure_idle(&conn, owner.id)?;
-        }
-        Ok(true)
+        public_write_allowed(&self.lock(), resource)
     }
 
     /// Active ownership records only; released tombstones stay available by exact identity.
