@@ -199,6 +199,7 @@ async fn account(state: &AppState, id: RequestId, key: Uuid) -> Result<SavedConn
     let mut saved = db(id, move || store.ai_connection(key))
         .await?
         .ok_or_else(|| error(id, "ai_connection_missing", "AI account is disconnected"))?;
+    let previous = saved.clone();
     if saved.connection.provider == AiProvider::Openai
         && state
             .pipe_ai
@@ -208,7 +209,7 @@ async fn account(state: &AppState, id: RequestId, key: Uuid) -> Result<SavedConn
     {
         let store = state.store.clone();
         let copy = saved.clone();
-        db(id, move || store.save_ai_connection(&copy)).await?;
+        db(id, move || store.refresh_ai_connection(&previous, &copy)).await?;
     }
     Ok(saved)
 }
@@ -445,7 +446,7 @@ pub async fn save_project(
     };
     let copy = value.clone();
     let store = state.store.clone();
-    db(id, move || store.save_sandbox_project(&copy)).await?;
+    super::stacks::database(id.0, move || store.save_sandbox_project(&copy)).await?;
     Ok(Json(value))
 }
 
@@ -456,6 +457,22 @@ pub async fn delete_project(
     caller: Caller,
     Path(key): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let operation = tokio::spawn(delete_project_owned(state, id, caller, key, None))
+        .await
+        .map_err(|_| AppError::internal(id.0))??;
+    Ok(Json(
+        json!({"deleted":true,"operationId":operation.operation_id}),
+    ))
+}
+
+/// The server worker retains admission after its HTTP waiter disconnects.
+async fn delete_project_owned(
+    state: AppState,
+    id: RequestId,
+    caller: Caller,
+    key: Uuid,
+    recovery: Option<Uuid>,
+) -> Result<firecrab_stack::NativeOperation, AppError> {
     let _claim = state.sandbox.admission.lock().await;
     project(&state, id, key, caller, SandboxPermission::Write).await?;
     let store = state.store.clone();
@@ -490,16 +507,88 @@ pub async fn delete_project(
             "Stop and delete active preview bindings before deleting their project",
         ));
     }
+    let store = state.store.clone();
+    let operation = super::stacks::database(id.0, move || match recovery {
+        Some(operation) => store.recover_native_project_delete(operation),
+        None => store.begin_sandbox_project_delete(key, id.0),
+    })
+    .await?;
+    if operation.state == firecrab_stack::NativeOperationState::Succeeded {
+        return Ok(operation);
+    }
     let owned = state.sandbox.root.join(key.to_string());
-    if owned.exists() {
-        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(owned))
-            .await
-            .map_err(|_| AppError::internal(id.0))?
-            .map_err(|_| AppError::internal(id.0))?;
+    let result = tokio::task::spawn_blocking(move || match std::fs::symlink_metadata(&owned) {
+        Ok(metadata) if metadata.file_type().is_symlink() => std::fs::remove_file(owned),
+        Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(owned),
+        Ok(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "project workspace is not a directory",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    })
+    .await;
+    if !matches!(result, Ok(Ok(()))) {
+        let store = state.store.clone();
+        let operation_id = operation.operation_id;
+        let _ =
+            super::stacks::database(id.0, move || store.fail_native_project_delete(operation_id))
+                .await;
+        return Err(AppError::unavailable(
+            "project cleanup is incomplete; inspect and recover its recorded native operation",
+            id.0,
+        ));
     }
     let store = state.store.clone();
-    db(id, move || store.delete_sandbox_project(key)).await?;
-    Ok(Json(json!({"deleted":true})))
+    let operation_id = operation.operation_id;
+    match super::stacks::database(id.0, move || {
+        store.finish_native_project_delete(operation_id)
+    })
+    .await
+    {
+        Ok(operation) => Ok(operation),
+        Err(error) => {
+            let store = state.store.clone();
+            let _ = super::stacks::database(id.0, move || {
+                store.fail_native_project_delete(operation_id)
+            })
+            .await;
+            Err(error)
+        }
+    }
+}
+
+/// Recovery uses the original typed action and resource, never a new caller-supplied path.
+pub(crate) async fn recover_project_delete(
+    state: AppState,
+    id: RequestId,
+    caller: Caller,
+    operation: firecrab_stack::NativeOperation,
+) -> Result<firecrab_stack::NativeOperation, AppError> {
+    caller.operator().map_err(|e| denied(id, e))?;
+    if operation.action != firecrab_stack::NativeAction::DeleteSandboxProject
+        || operation.ownership.resource.kind != "sandbox_project"
+    {
+        return Err(AppError::conflict(
+            "iac_operation_identity_conflict",
+            "native operation has a different action",
+            id.0,
+        ));
+    }
+    if operation.state == firecrab_stack::NativeOperationState::Succeeded {
+        return Ok(operation);
+    }
+    let key =
+        Uuid::parse_str(&operation.ownership.resource.id).map_err(|_| AppError::internal(id.0))?;
+    tokio::spawn(delete_project_owned(
+        state,
+        id,
+        caller,
+        key,
+        Some(operation.operation_id),
+    ))
+    .await
+    .map_err(|_| AppError::internal(id.0))?
 }
 
 /// Discover available models without treating catalogue membership as inference proof.

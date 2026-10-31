@@ -2,7 +2,7 @@
 use super::{PersistenceError, Store};
 use crate::pipe_ai::{OAuthRegistration, SavedConnection};
 use firecrab_api_types::AiModelSelection;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
 pub(super) const CONNECTIONS_SQL: &str = "CREATE TABLE IF NOT EXISTS pipe_ai_connections (
@@ -80,8 +80,17 @@ impl Store {
             reason: "invalid AI connection".into(),
         })?;
         let mut conn = self.lock();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let id = saved.connection.id.to_string();
+        if !super::iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "ai_connection".into(),
+                id: id.clone(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
         if let Some(session) = &saved.oauth {
             let spec = serde_json::json!({"client_id":session.client_id,"subject":session.subject})
                 .to_string();
@@ -102,6 +111,13 @@ impl Store {
         drop(statement);
         for (project, model) in defaults {
             if !saved.connection.models.contains(&model) {
+                super::iac_owners::ensure_unowned(
+                    &tx,
+                    &firecrab_stack::ManagedResource {
+                        kind: "ai_model".into(),
+                        id: project.clone(),
+                    },
+                )?;
                 tx.execute(
                     "DELETE FROM pipe_ai_defaults WHERE project_id=?1",
                     [project],
@@ -114,7 +130,31 @@ impl Store {
 
     pub fn delete_ai_connection(&self, id: Uuid) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !super::iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "ai_connection".into(),
+                id: id.to_string(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        let mut statement =
+            tx.prepare("SELECT project_id FROM pipe_ai_defaults WHERE connection_id=?1")?;
+        let projects = statement
+            .query_map([id.to_string()], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        for project in projects {
+            super::iac_owners::ensure_unowned(
+                &tx,
+                &firecrab_stack::ManagedResource {
+                    kind: "ai_model".into(),
+                    id: project,
+                },
+            )?;
+        }
         tx.execute(
             "DELETE FROM pipe_ai_defaults WHERE connection_id=?1",
             [id.to_string()],
@@ -128,6 +168,34 @@ impl Store {
             [id.to_string()],
         )?;
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Refresh credentials for the same OAuth identity without changing desired configuration.
+    /// Match the entire previous private record so late refreshes cannot undo rotation or deletion.
+    pub(crate) fn refresh_ai_connection(
+        &self,
+        previous: &SavedConnection,
+        refreshed: &SavedConnection,
+    ) -> Result<(), PersistenceError> {
+        if previous.connection != refreshed.connection
+            || previous.connection.provider != firecrab_api_types::AiProvider::Openai
+            || previous.connection.authentication != firecrab_api_types::AiAuthentication::Chatgpt
+            || !matches!((&previous.oauth,&refreshed.oauth),(Some(old),Some(new)) if old.client_id==new.client_id && old.subject==new.subject)
+        {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        let expected =
+            serde_json::to_string(previous).map_err(|_| PersistenceError::IacOwnershipConflict)?;
+        let replacement =
+            serde_json::to_string(refreshed).map_err(|_| PersistenceError::IacOwnershipConflict)?;
+        let changed = self.lock().execute(
+            "UPDATE pipe_ai_connections SET spec=?1 WHERE id=?2 AND spec=?3",
+            params![replacement, previous.connection.id.to_string(), expected],
+        )?;
+        if changed != 1 {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
         Ok(())
     }
 
@@ -159,9 +227,35 @@ impl Store {
         project: Uuid,
         selection: &AiModelSelection,
     ) -> Result<(), PersistenceError> {
-        self.lock().execute("INSERT INTO pipe_ai_defaults (project_id, connection_id, model) VALUES (?1, ?2, ?3)
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !super::iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "ai_model".into(),
+                id: project.to_string(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        let raw: Option<String> = tx
+            .query_row(
+                "SELECT spec FROM pipe_ai_connections WHERE id=?1",
+                [selection.connection_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let connection = raw
+            .map(decode)
+            .transpose()?
+            .ok_or(PersistenceError::IacOwnershipConflict)?;
+        if !connection.connection.models.contains(&selection.model) {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        tx.execute("INSERT INTO pipe_ai_defaults (project_id, connection_id, model) VALUES (?1, ?2, ?3)
             ON CONFLICT(project_id) DO UPDATE SET connection_id=excluded.connection_id, model=excluded.model",
             params![project.to_string(), selection.connection_id.to_string(), selection.model])?;
+        tx.commit()?;
         Ok(())
     }
 }

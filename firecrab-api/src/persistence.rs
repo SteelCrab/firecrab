@@ -46,6 +46,10 @@ pub(crate) mod service_observation;
 mod stack_applies;
 mod stack_sources;
 pub(crate) use stack_sources::SourceTrigger;
+pub(crate) mod iac_native;
+mod iac_owners;
+mod iac_resources;
+pub(crate) use iac_resources::TRANSFER_KINDS as IAC_TRANSFER_KINDS;
 mod stacks;
 pub use registries::RegistryLogin;
 pub(crate) use schedules::ScheduleMutation;
@@ -510,6 +514,33 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    /// An admitted resource operation still owns the current authority.
+    #[error("IaC resource operation is active")]
+    IacResourceBusy,
+    /// Generated children retain their parent controller's immutable authority.
+    #[error("resource belongs to a parent controller")]
+    IacParentManaged,
+    /// A failed encrypted-vault lookup cannot be treated as an absent resource.
+    #[error("IaC credential store is unavailable")]
+    IacVaultUnavailable,
+    /// The request was prepared for a different API endpoint.
+    #[error("IaC endpoint identity changed")]
+    IacEndpointConflict,
+    /// Ownership metadata is malformed or identifies an unknown resource kind.
+    #[error("invalid IaC owner request")]
+    InvalidIacOwner,
+    /// Another workflow already owns the exact resource.
+    #[error("IaC resource ownership conflicts")]
+    IacOwnershipConflict,
+    /// A release/reclaim happened after the caller observed ownership.
+    #[error("IaC ownership generation changed")]
+    StaleIacOwner,
+    /// A retry UUID belongs to a different immutable ownership request.
+    #[error("IaC operation identity conflicts")]
+    IacOperationIdentity,
+    /// The resource adapter does not yet implement safe ownership transfer.
+    #[error("IaC ownership adapter is not implemented")]
+    UnsupportedIacResource,
     /// CI credentials were revoked, expired or no longer match the service/repository.
     #[error("CI Deploy authorization is no longer valid")]
     CiDeployUnauthorized,
@@ -824,6 +855,8 @@ impl Store {
         conn.execute_batch(stack_applies::SCHEMA_SQL)?;
         conn.execute_batch(queues::SCHEMA)?;
         conn.execute_batch(stack_sources::SCHEMA_SQL)?;
+        iac_owners::initialize(&conn)?;
+        conn.execute_batch(iac_native::SCHEMA)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;
@@ -1160,14 +1193,37 @@ impl Store {
         username: &str,
         secret: &str,
     ) -> Result<(), PersistenceError> {
-        self.lock()
-            .execute(UPSERT_DOCKER_HUB_CREDENTIAL_SQL, params![username, secret])?;
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "registry".into(),
+                id: "docker.io".into(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        tx.execute(UPSERT_DOCKER_HUB_CREDENTIAL_SQL, params![username, secret])?;
+        tx.commit()?;
         Ok(())
     }
 
     /// Forgets the stored Docker Hub login.
     pub fn delete_docker_hub_credential(&self) -> Result<(), PersistenceError> {
-        self.lock().execute(DELETE_DOCKER_HUB_CREDENTIAL_SQL, [])?;
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "registry".into(),
+                id: "docker.io".into(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        tx.execute(DELETE_DOCKER_HUB_CREDENTIAL_SQL, [])?;
+        tx.commit()?;
         Ok(())
     }
 

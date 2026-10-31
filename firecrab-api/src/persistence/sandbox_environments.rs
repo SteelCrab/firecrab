@@ -2,7 +2,7 @@
 use super::{PersistenceError, Store};
 use crate::ai_sandbox::SavedTask;
 use firecrab_api_types::{SandboxEnvironment, SandboxEnvironmentState};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
 pub(super) const SCHEMA: &str = "
@@ -119,7 +119,8 @@ impl Store {
     ) -> Result<(), PersistenceError> {
         let json = serde_json::to_string(saved).map_err(|_| corrupt())?;
         let mut conn = self.lock();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        super::iac_native::ensure_project_available(&tx, saved.project_id)?;
         tx.execute("INSERT INTO ai_sandbox_environments(id,project_id,generation,state,expires_at,spec) VALUES(?1,?2,?3,?4,?5,?6)",
             params![saved.id.to_string(),saved.project_id.to_string(),saved.generation.to_string(),state(saved.state),saved.expires_at.map(|v|v as i64),json])?;
         for (kind, role, id) in resources(saved) {

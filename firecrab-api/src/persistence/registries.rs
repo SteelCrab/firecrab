@@ -82,6 +82,18 @@ impl Store {
         credential: &RegistryCredential,
         account_name: Option<&str>,
     ) -> Result<RegistryLogin, PersistenceError> {
+        let mut resource = firecrab_stack::ManagedResource {
+            kind: "registry".into(),
+            id: credential.registry.clone(),
+        };
+        resource
+            .normalize()
+            .map_err(|_| PersistenceError::InvalidIacOwner)?;
+        let credential = RegistryCredential {
+            registry: resource.id.clone(),
+            username: credential.username.clone(),
+            secret: credential.secret.clone(),
+        };
         if matches!(
             credential.registry.as_str(),
             "docker.io" | "registry-1.docker.io"
@@ -92,19 +104,24 @@ impl Store {
                 account_name: None,
             });
         }
-        let conn = self.lock();
-        conn.execute(
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !super::iac_owners::public_write_allowed(&tx, &resource)? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        tx.execute(
             "INSERT INTO registry_credentials (registry, username, secret, account_name)
             VALUES (?1, ?2, ?3, NULLIF(?4, ''))
             ON CONFLICT(registry) DO UPDATE SET username=excluded.username, secret=excluded.secret,
             account_name=CASE WHEN ?4 IS NULL THEN registry_credentials.account_name ELSE NULLIF(?4, '') END",
             params![credential.registry, credential.username, credential.secret, account_name],
         )?;
-        let account_name = conn.query_row(
+        let account_name = tx.query_row(
             "SELECT account_name FROM registry_credentials WHERE registry = ?1",
             [&credential.registry],
             |row| row.get(0),
         )?;
+        tx.commit()?;
         Ok(RegistryLogin {
             credential: credential.clone(),
             account_name,
@@ -112,13 +129,27 @@ impl Store {
     }
 
     pub fn delete_registry_credential(&self, registry: &str) -> Result<(), PersistenceError> {
+        let mut resource = firecrab_stack::ManagedResource {
+            kind: "registry".into(),
+            id: registry.into(),
+        };
+        resource
+            .normalize()
+            .map_err(|_| PersistenceError::InvalidIacOwner)?;
+        let registry = resource.id.as_str();
         if matches!(registry, "docker.io" | "registry-1.docker.io") {
             return self.delete_docker_hub_credential();
         }
-        self.lock().execute(
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !super::iac_owners::public_write_allowed(&tx, &resource)? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        tx.execute(
             "DELETE FROM registry_credentials WHERE registry = ?1",
             [registry],
         )?;
+        tx.commit()?;
         Ok(())
     }
 }

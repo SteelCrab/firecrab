@@ -727,7 +727,19 @@ async fn sandbox_project_crud_blocks_active_work_and_preserves_borrowed_resource
     let requests = f.provider.requests.lock().unwrap().len();
     let (status, deleted) = call(&f.app, "DELETE", &uri, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{deleted}");
-    assert_eq!(deleted, json!({"deleted":true}));
+    assert_eq!(deleted["deleted"], true);
+    let operation = Uuid::parse_str(deleted["operationId"].as_str().unwrap()).unwrap();
+    let recorded = f
+        .state
+        .store
+        .iac_native_operation(operation)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        recorded.state,
+        firecrab_stack::NativeOperationState::Succeeded
+    );
+    assert_eq!(recorded.ownership.resource.id, id.to_string());
     assert!(!owned.exists());
     assert_eq!(
         std::fs::read_to_string(unrelated.join("keep.txt")).unwrap(),

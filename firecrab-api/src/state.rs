@@ -128,7 +128,8 @@ pub struct AppState {
     pub(crate) service_mutations: Arc<AsyncMutex<()>>,
     /// Per-service bounded observation exporters.
     pub(crate) observations: Arc<crate::service_observation::Runtime>,
-    /// Serializes durable apply admission and identical retry lookup, never worker execution.
+    /// Serializes apply admission/retry lookup with direct VM/network edit requests.
+    /// Detached Stack workers do not hold this lock.
     pub(crate) stack_apply_admission: Arc<AsyncMutex<()>>,
     /// Serializes RabbitMQ engine lifecycle and queue declarations.
     pub(crate) queue_mutations: Arc<AsyncMutex<()>>,
