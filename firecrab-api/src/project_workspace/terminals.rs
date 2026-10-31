@@ -312,6 +312,7 @@ async fn create(
             truncated: false,
             cleanup_required: false,
             exit: None,
+            dimensions: None,
         };
         context
             .db

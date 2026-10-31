@@ -76,7 +76,8 @@ class Terminals(unittest.TestCase):
             "supervisorTicks": struct.unpack_from(">Q", body, 24)[0],
             "boot": uuid.UUID(bytes=body[40:56]),
             "begin": struct.unpack_from(">Q", body, 56)[0], "end": struct.unpack_from(">Q", body, 64)[0],
-            "exit": struct.unpack_from(">I", body, 72)[0], "flags": struct.unpack_from(">I", body, 76)[0],
+            "exit": struct.unpack_from(">I", body, 72)[0],
+            "rows": struct.unpack_from(">I", body, 80)[0], "columns": struct.unpack_from(">I", body, 84)[0], "flags": struct.unpack_from(">I", body, 76)[0],
             "cursor": struct.unpack_from(">Q", body, 88)[0], "bytes": body[96:]}
 
     def until(self, probe, seconds=8):
@@ -145,7 +146,8 @@ class Terminals(unittest.TestCase):
     def test_resize_changes_only_the_selected_pty(self):
         first, _ = self.create()
         second, _ = self.create()
-        self.call(first, 4, rows=35, cols=101)
+        resized = self.call(first, 4, rows=35, cols=101)
+        self.assertEqual((resized["rows"], resized["columns"]), (35, 101))
         self.call(first, 3, b"stty size\n")
         self.call(second, 3, b"stty size\n")
         self.until(lambda: b"35 101" in self.output(first))

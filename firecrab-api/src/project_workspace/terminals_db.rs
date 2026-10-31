@@ -39,6 +39,8 @@ pub(super) struct Terminal {
     pub truncated: bool,
     pub cleanup_required: bool,
     pub exit: Option<u32>,
+    #[serde(default)]
+    pub dimensions: Option<(u16, u16)>,
 }
 
 pub(super) fn now() -> Result<u64, Error> {
@@ -182,6 +184,9 @@ impl db::ProjectDb {
         record.guest_end = reply.end;
         record.status = reply.status;
         record.exit = reply.exit;
+        if reply.dimensions.is_some() {
+            record.dimensions = reply.dimensions;
+        }
         record.truncated |= reply.truncated;
         record.cleanup_required = reply.cleanup_required;
         let threshold = record.end.saturating_sub(OUTPUT_LIMIT);
@@ -294,6 +299,8 @@ impl db::ProjectDb {
             status: record.status,
             boot_id: record.proof.as_ref().map(|p| p.boot),
             exit_code: record.exit,
+            rows: record.dimensions.map_or(record.request.rows, |d| d.0),
+            columns: record.dimensions.map_or(record.request.columns, |d| d.1),
             output_start: record.start,
             output_end: record.end,
             guest_output_end: record.guest_end,

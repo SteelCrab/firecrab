@@ -767,6 +767,9 @@ static int handle(int client, int dir, int chunks, int master,
             (unsigned short)((unsigned)r.header[34] * 256 + r.header[35])};
     if (ioctl(master, TIOCSWINSZ, &size))
       return rejected(client);
+    p32(meta + 80, size.ws_row);
+    p32(meta + 84, size.ws_col);
+    if (save_meta(dir, meta)) return response(client, NULL, 0, 9);
   } else if (r.action == 5) {
     *stop = 1;
   }
@@ -808,6 +811,8 @@ static void supervise(int root, int marker, int dir, int cwd, int lock,
           (unsigned short)((unsigned)r->header[34] * 256 + r->header[35])};
   if (ioctl(master, TIOCSWINSZ, &size))
     _exit(77);
+  p32(meta + 80, size.ws_row);
+  p32(meta + 84, size.ws_col);
   close_except(dir, cwd, home, master, server, chunks);
   pid_t child = fork();
   if (child < 0)

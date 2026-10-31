@@ -66,6 +66,9 @@ pub struct ProjectTerminal {
     /// Kernel boot identity confirmed by the guest supervisor.
     pub boot_id: Option<Uuid>,
     pub exit_code: Option<u32>,
+    /// Current shared character dimensions, also retained for history replay.
+    pub rows: u16,
+    pub columns: u16,
     /// Earliest replay byte retained by the controller.
     pub output_start: u64,
     /// Exclusive byte cursor already persisted in project SQLite.

@@ -10,6 +10,7 @@ pub(super) struct Reply {
     pub truncated: bool,
     pub cleanup_required: bool,
     pub bytes: Vec<u8>,
+    pub dimensions: Option<(u16, u16)>,
 }
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     u32::from_be_bytes(
@@ -113,6 +114,16 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Reply, Error> {
             "Invalid terminal process or replay identity",
         ));
     }
+    let rows = u32_at(body, 80);
+    let columns = u32_at(body, 84);
+    let dimensions = if rows == 0 && columns == 0 {
+        None
+    } else {
+        if !(2..=500).contains(&rows) || !(2..=1000).contains(&columns) {
+            return Err(Error::Conflict("Invalid shared terminal dimensions"));
+        }
+        Some((rows as u16, columns as u16))
+    };
     let exit = u32_at(body, 72);
     Ok(Reply {
         status,
@@ -130,6 +141,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Reply, Error> {
         truncated: flags & 1 != 0,
         cleanup_required: flags & 2 != 0,
         bytes: body[96..].to_vec(),
+        dimensions,
     })
 }
 pub(super) async fn request(context: &mut files::Files, frame: Vec<u8>) -> Result<Reply, Error> {

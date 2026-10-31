@@ -29,6 +29,7 @@ fn record(binding: &Binding) -> Terminal {
         truncated: false,
         cleanup_required: false,
         exit: None,
+        dimensions: None,
     }
 }
 fn reply(start: u64, bytes: &[u8], proof: Option<Proof>) -> terminals_guest::Reply {
@@ -48,6 +49,7 @@ fn reply(start: u64, bytes: &[u8], proof: Option<Proof>) -> terminals_guest::Rep
         truncated: false,
         cleanup_required: false,
         bytes: bytes.into(),
+        dimensions: Some((24, 80)),
     }
 }
 fn principal(id: Uuid) -> Caller {
@@ -328,4 +330,38 @@ async fn another_live_service_cannot_take_ownership_between_project_requests() {
     let (status, response) = call(&other, "GET", &path, json!({}), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(response["projectId"], b.project_id.to_string());
+}
+
+#[test]
+fn shared_terminal_dimensions_survive_reopen_and_legacy_json_without_dimensions() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut binding = registration();
+    let root = dir.path().join("state/projects");
+    let db = db::ProjectDb::open(&root, &binding, Uuid::new_v4(), true).unwrap();
+    let mut terminal = record(&binding);
+    db.admit_terminal(&terminal).unwrap();
+    db.cache_terminal(&mut terminal, reply(0, b"", None))
+        .unwrap();
+    let mut resized = reply(0, b"", terminal.proof.clone());
+    resized.dimensions = Some((42, 111));
+    db.cache_terminal(&mut terminal, resized).unwrap();
+    let id = terminal.id;
+    drop(db);
+    binding.provisioning = false;
+    let owner = Uuid::new_v4();
+    let db = db::ProjectDb::open(&root, &binding, owner, false).unwrap();
+    let recovered = db.terminal(id).unwrap();
+    let view = db.terminal_response(&recovered, owner).unwrap();
+    assert_eq!((view.rows, view.columns), (42, 111));
+    let mut legacy = serde_json::to_value(recovered).unwrap();
+    legacy.as_object_mut().unwrap().remove("dimensions");
+    db.conn
+        .execute(
+            "UPDATE terminal_sessions SET record=?2 WHERE id=?1",
+            rusqlite::params![id.to_string(), legacy.to_string()],
+        )
+        .unwrap();
+    let legacy = db.terminal(id).unwrap();
+    let view = db.terminal_response(&legacy, owner).unwrap();
+    assert_eq!((view.rows, view.columns), (24, 80));
 }

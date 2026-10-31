@@ -139,6 +139,8 @@ class TerminalGate:
         self.qa.request("POST", self.path(suffix="/input"), {"type": "resize", "control": self.control, "rows": 42, "columns": 111}, actor="writer")
         self.send("stty size\n")
         self.until(lambda: b"42 111" in self.output())
+        dimensions = self.qa.request("GET", self.path(), actor="viewer")
+        assert (dimensions["rows"], dimensions["columns"]) == (42, 111)
         other = self.qa.request("PUT", self.path(self.secondary), self.secondary_request, actor="writer")
         assert other["status"] == "running"
         secondary_control = self.claim("writer", self.secondary)
