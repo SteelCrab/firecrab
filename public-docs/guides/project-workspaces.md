@@ -160,3 +160,6 @@ See [Persistent data volumes](volumes.md) for the existing volume lifecycle and
 ## Interactive project terminals
 
 See [Project workspace terminals](project-workspace-terminals.md) for scoped PTYs, input control, retained output and restart behavior.
+
+See [Private views and drafts](project-private-views.md) for caller/tab isolation,
+optimistic saves and recovery while the workload VM is stopped.

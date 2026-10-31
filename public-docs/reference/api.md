@@ -510,6 +510,9 @@ Members:
 
 ## Project workspaces
 
+See [Private views and drafts](../guides/project-private-views.md) for the
+caller-scoped `/workspace/views` and `/workspace/views/{view}/draft` routes.
+
 Project workspace routes extend the authenticated Sandbox project API at
 `/api/ai-sandbox/projects/{project}/workspace`.
 

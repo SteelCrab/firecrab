@@ -11,6 +11,10 @@ mod terminals_guest;
 mod terminals_tests;
 #[cfg(test)]
 mod tests;
+mod views;
+mod views_db;
+#[cfg(test)]
+mod views_tests;
 
 use crate::{
     ai_sandbox::{self, access::Caller, guest},
@@ -297,6 +301,7 @@ pub fn routes() -> Router<AppState> {
         )
         .merge(files::routes())
         .merge(terminals::routes())
+        .merge(views::routes())
 }
 /// Read project metadata even when the workload VM is stopped.
 async fn get_workspace(

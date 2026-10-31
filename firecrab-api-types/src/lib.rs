@@ -29,6 +29,8 @@ mod workspace_files;
 pub use workspace_files::*;
 mod workspace_terminals;
 pub use workspace_terminals::*;
+mod workspace_views;
+pub use workspace_views::*;
 mod block_storage;
 mod network_dns;
 mod sandbox_environment;
