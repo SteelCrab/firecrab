@@ -954,6 +954,20 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
 
     let observability = Router::new()
         .route(
+            "/api/observability/signoz",
+            get(crate::observability::get)
+                .put(crate::observability::configure)
+                .delete(crate::observability::disconnect),
+        )
+        .route(
+            "/api/observability/signoz/test",
+            axum::routing::post(crate::observability::test_connection),
+        )
+        .route(
+            "/api/observability/signoz/test-log",
+            axum::routing::post(crate::observability::send_test),
+        )
+        .route(
             "/api/micro-services/{id}/observability",
             get(crate::service_observation::get),
         )

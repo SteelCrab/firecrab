@@ -19,6 +19,7 @@ interface Observation {
   active?: boolean;
 }
 interface Exporter {
+  managedBy?: "signoz" | null;
   endpoint: string | null;
   status: string;
   queuePersistent: boolean;
@@ -300,7 +301,7 @@ export default function ServiceObservability({
                   type="text"
                   inputMode="url"
                   maxLength={2048}
-                  disabled={saving}
+                  disabled={saving || snapshot.otlp.managedBy === "signoz"}
                   value={endpoint}
                   onChange={(event) => {
                     edited.current = true;
@@ -310,6 +311,16 @@ export default function ServiceObservability({
                   placeholder="https://collector.example.com"
                 />
               </div>
+              {snapshot.otlp.managedBy === "signoz" && (
+                <p>
+                  <a href="#/observability">
+                    {t(
+                      "Managed by the SigNoz integration. Open Observability to change this connection.",
+                      "SigNoz 연동에서 관리한다. 옵저버빌리티에서 연결 설정을 변경한다.",
+                    )}
+                  </a>
+                </p>
+              )}
               <p>
                 {t(
                   "Saving sends platform logs and events to this collector. App logs can contain sensitive values.",
@@ -342,7 +353,10 @@ export default function ServiceObservability({
                   </div>
                 ))}
               </dl>
-              <button className="btn primary" disabled={saving}>
+              <button
+                className="btn primary"
+                disabled={saving || snapshot.otlp.managedBy === "signoz"}
+              >
                 {saving ? t("Saving…", "저장 중…") : t("Save", "저장")}
               </button>
             </form>

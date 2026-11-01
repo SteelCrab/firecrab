@@ -22,6 +22,7 @@ import Console from "./components/Console";
 import VmScreen from "./components/vm/VmScreen";
 import FirecrabPanel from "./components/FirecrabPanel";
 import HostInfo from "./components/HostInfo";
+import Observability from "./components/Observability";
 import Cluster from "./components/Cluster";
 import AiSandbox from "./components/AiSandbox";
 import Images from "./components/Images";
@@ -454,6 +455,9 @@ export default function App() {
             <MicroStorages onUnsavedChange={setHasUnsavedChanges} />
           )}
           {view === "queues" && <Queues />}
+          {view === "observability" && (
+            <Observability onUnsavedChange={setHasUnsavedChanges} />
+          )}
           {view === "volumes" && <Volumes vms={visibleVms} />}
           {view === "ai-sandbox" && (
             <AiSandbox vms={instances} onUnsavedChange={setHasUnsavedChanges} />

@@ -24,6 +24,7 @@ mod microboot;
 mod model;
 mod network;
 mod network_policy;
+mod observability;
 mod oci;
 mod otlp;
 mod package;

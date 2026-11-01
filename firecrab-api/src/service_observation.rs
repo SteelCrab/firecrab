@@ -56,7 +56,7 @@ impl std::fmt::Debug for Runtime {
 }
 impl Runtime {
     /// Stop and discard the active exporter for a service.
-    fn remove(&self, service: Uuid) {
+    pub(crate) fn remove(&self, service: Uuid) {
         if let Some(old) = self
             .sessions
             .lock()
@@ -84,6 +84,13 @@ impl Runtime {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&service);
+    }
+    pub(crate) fn exporter(&self, service: Uuid) -> Option<Exporter> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&service)
+            .map(|session| session.exporter.clone())
     }
     /// Return redacted delivery status for the currently stored endpoint.
     fn view(&self, service: Uuid, endpoint: Option<String>) -> OtlpView {
@@ -116,6 +123,7 @@ impl Runtime {
             None => (DeliveryState::Disabled, 0, 0, 0, 0, 0, 0),
         };
         OtlpView {
+            managed_by: None,
             endpoint,
             status: state,
             queue_persistent: false,
@@ -133,6 +141,8 @@ impl Runtime {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OtlpView {
+    /// Central integration that owns this setting, when selected there.
+    managed_by: Option<&'static str>,
     /// Current collector base URL, or none when disabled.
     endpoint: Option<String>,
     /// Most recent exporter state.
@@ -185,7 +195,7 @@ where
 }
 
 /// Reject callers without verified operator privileges.
-fn operator(caller: Caller, request: Uuid) -> Result<(), AppError> {
+pub(crate) fn operator(caller: Caller, request: Uuid) -> Result<(), AppError> {
     caller.operator().map_err(|_| {
         AppError::new(
             StatusCode::FORBIDDEN,
@@ -197,7 +207,7 @@ fn operator(caller: Caller, request: Uuid) -> Result<(), AppError> {
 }
 
 /// Reject services owned by a controller or managed across hosts.
-async fn ensure_local_service(
+pub(crate) async fn ensure_local_service(
     state: &AppState,
     service: Uuid,
     request: Uuid,
@@ -233,7 +243,7 @@ pub(crate) async fn get(
     let service = parse_id(&id, request.0)?;
     ensure_local_service(&state, service, request.0).await?;
     let store = state.store.clone();
-    let (logs, events, alerts, endpoint, deployment) = database(request.0, move || {
+    let (logs, events, alerts, endpoint, deployment, managed) = database(request.0, move || {
         if store.micro_service(service)?.is_none() {
             return Ok(None);
         }
@@ -243,6 +253,7 @@ pub(crate) async fn get(
             store.service_alerts(service)?,
             store.otlp_endpoint(service)?,
             store.service_deployment(service)?,
+            store.signoz_source(service)?,
         )))
     })
     .await?
@@ -279,7 +290,8 @@ pub(crate) async fn get(
         Ok(result.to_owned())
     })
     .await?;
-    let otlp = state.observations.view(service, endpoint);
+    let mut otlp = state.observations.view(service, endpoint);
+    otlp.managed_by = managed.then_some("signoz");
     Ok(Json(View {
         logs,
         logs_status,
@@ -312,6 +324,14 @@ pub(crate) async fn configure(
             )
         })?;
     let claim = state.service_mutations.clone().lock_owned().await;
+    let store = state.store.clone();
+    if database(request.0, move || store.signoz_source(service)).await? {
+        return Err(AppError::conflict(
+            "observability_managed",
+            "Manage this service's exporter from Observability",
+            request.0,
+        ));
+    }
     ensure_local_service(&state, service, request.0).await?;
     let store = state.store.clone();
     let (saved, active, current_endpoint) = database(request.0, move || {
@@ -417,7 +437,7 @@ pub(crate) fn start(state: AppState) {
 }
 
 /// Reconcile exporters without blocking the async runtime on SQLite or mutexes.
-async fn export_pass(state: &AppState) -> Result<(), ()> {
+pub(crate) async fn export_pass(state: &AppState) -> Result<(), ()> {
     let claim = state.service_mutations.clone().lock_owned().await;
     let state = state.clone();
     let runtime = tokio::runtime::Handle::current();
@@ -434,8 +454,11 @@ async fn export_pass(state: &AppState) -> Result<(), ()> {
 }
 
 /// Submit bounded pages while configuration mutations are excluded.
-fn export_pass_blocking(state: &AppState) -> Result<(), crate::persistence::PersistenceError> {
+pub(crate) fn export_pass_blocking(
+    state: &AppState,
+) -> Result<(), crate::persistence::PersistenceError> {
     let services = state.store.list_micro_services()?;
+    let signoz = state.store.signoz_config()?;
     let mut present = HashSet::new();
     for service in services {
         let id = service.id;
@@ -449,6 +472,9 @@ fn export_pass_blocking(state: &AppState) -> Result<(), crate::persistence::Pers
             state.observations.remove(id);
             continue;
         };
+        let paused = signoz
+            .as_ref()
+            .is_some_and(|config| config.paused && config.service_ids.contains(&id));
         let previous = {
             let sessions = state
                 .observations
@@ -472,7 +498,8 @@ fn export_pass_blocking(state: &AppState) -> Result<(), crate::persistence::Pers
                     Some(enabled_at_ms),
                 ),
             };
-            let Ok(exporter) = Exporter::new(&endpoint, id, &service.spec.name) else {
+            let Ok(exporter) = Exporter::new_paused(&endpoint, id, &service.spec.name, paused)
+            else {
                 state.observations.remove(id);
                 state
                     .observations
@@ -493,6 +520,9 @@ fn export_pass_blocking(state: &AppState) -> Result<(), crate::persistence::Pers
                     since_ms,
                 },
             );
+        }
+        if let Some(exporter) = state.observations.exporter(id) {
+            exporter.set_paused(paused);
         }
         let (event_cursor, log_cursor) = {
             let sessions = state

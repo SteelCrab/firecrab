@@ -237,6 +237,10 @@ impl Store {
             [id.to_string()],
         )?;
         super::otlp_config::delete(&tx, id)?;
+        tx.execute(
+            "DELETE FROM observability_signoz_sources WHERE service_id=?1",
+            [id.to_string()],
+        )?;
         let changed = tx.execute("DELETE FROM micro_services WHERE id = ?1", [id.to_string()])?;
         tx.commit()?;
         Ok(changed != 0)
