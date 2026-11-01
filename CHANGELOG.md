@@ -23,6 +23,17 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
 
+### Changed
+
+- Replace the Rust/WASM dashboard with React and xterm.js. Resource, Pipe,
+  deployment and Sandbox workflows use responsive React forms and recover
+  ongoing image and kernel jobs after reload.
+- Preserve the established navigation symbols, flat lists and full-width page
+  headers after the React migration. Restore Shell and volume creation drawers
+  and separate physical host information from management VM usage.
+- Add dashboard-only development connections to an existing private instance.
+  UI changes reload without deploying guest binaries or restarting its VMs.
+
 ## [0.4.1] - 2026-10-30
 
 Hotfix for macOS and Windows managed installations and updates.
