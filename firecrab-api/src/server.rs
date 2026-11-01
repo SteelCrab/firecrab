@@ -905,6 +905,16 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
 
     // Registry authentication and manifest GETs retain their bounded inspection deadline.
     let inspection = Router::new()
+        .route(
+            "/api/code/agent-auth/adapters",
+            get(handlers::code_workspaces::agent_auth::catalog)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
+        .route(
+            "/api/code/workspaces/{id}/agent-auth/verify",
+            post(handlers::code_workspaces::agent_auth::verify)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
         .merge(handlers::code_workspaces::runtime::routes())
         .route(
             "/api/pipe/database-rabbitmq",

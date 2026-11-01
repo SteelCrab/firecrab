@@ -50,6 +50,11 @@ manages the shared account lifecycle and retains the assignment draft on return.
 
 ## Workspace and editor states
 
+The separate [agent authentication adapter check](code-agent-auth.md) verifies
+fixed CLI recipes against the current provider account and prepared MicroVM.
+Unsupported handoffs remain disabled. Its disposable result is not a live login
+or an execution grant.
+
 **Editor status** opens `#/code/{workspace-uuid}/editor`. It reads the same saved
 workspace and live account observations as workspace details. Missing or
 disconnected, incompatible, present but unverified, unknown and no-agent states

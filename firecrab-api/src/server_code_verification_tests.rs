@@ -20,6 +20,8 @@ use std::{
 use tokio::sync::Notify;
 use tower::ServiceExt;
 
+#[path = "server_code_agent_auth_tests.rs"]
+mod agent_auth_tests;
 #[path = "server_code_catalog_tests.rs"]
 mod catalog_tests;
 

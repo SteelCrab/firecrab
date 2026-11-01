@@ -84,6 +84,24 @@ impl Native {
     }
 }
 
+/// Reuse the full CODE ownership/image check before transferring any agent credential.
+pub(crate) fn auth_binding(state: &AppState, record: &Record) -> Result<guest::Binding, Failure> {
+    Native {
+        state: state.clone(),
+    }
+    .vm(record)?
+    .ok_or(Failure::OwnershipChanged)?;
+    if record.runtime.phase != CodeRuntimePhase::Ready || record.runtime.error.is_some() {
+        return Err(Failure::GuestUnavailable);
+    }
+    let binding =
+        guest::binding(state, record.runtime.vm_id).map_err(|_| Failure::GuestUnavailable)?;
+    if Some(binding.runtime_id) != record.runtime.runtime_id {
+        return Err(Failure::GuestUnavailable);
+    }
+    Ok(binding)
+}
+
 impl Driver for Native {
     async fn create(&self, record: &Record) -> Result<(), Failure> {
         if self.vm(record)?.is_some() {

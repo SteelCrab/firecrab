@@ -216,6 +216,7 @@ fn detail(app: &App, workspace: &Workspace) -> String {
     );
     auth.push_str(&binding::content(app, workspace));
     auth.push_str(&crate::code::auth::verification(app, workspace));
+    auth.push_str(&agent_auth::content(app, workspace));
     out.push_str(&section(tr(app, "Account connections", "계정 연결"), &auth));
     out.push_str(&runtime_section(app, &app.code.runtime));
     let _ = write!(

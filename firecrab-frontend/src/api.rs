@@ -104,6 +104,10 @@ async fn send(
                 65000
             } else if path.starts_with("/api/ai-sandbox/") {
                 185000
+            } else if path.starts_with("/api/code/workspaces/")
+                && path.ends_with("/agent-auth/verify")
+            {
+                70000
             } else if path.starts_with("/api/code/workspaces/") && path.ends_with("/verify") {
                 50000
             } else if path.ends_with("/acquire") {

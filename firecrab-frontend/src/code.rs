@@ -1,5 +1,6 @@
 //! CODE reads saved configuration and current runtime observations. No credentials are fetched.
 mod accounts;
+mod agent_auth;
 pub(crate) mod auth;
 mod binding;
 mod editor;
@@ -117,6 +118,7 @@ pub struct State {
     selection: Option<String>,
     setup: Option<setup::Setup>,
     auth: auth::State,
+    agent_auth: agent_auth::State,
     binding: Option<binding::Draft>,
     binding_epoch: u64,
     observation_epoch: u64,
@@ -233,6 +235,7 @@ pub fn load(app: Shared) {
         return;
     }
     if app.borrow().route == "code/new" {
+        agent_auth::load(app.clone());
         setup::load(app);
         return;
     }
@@ -279,6 +282,9 @@ pub fn load(app: Shared) {
                 Err(error) => state.code.error != Some(*error),
             };
         state.loaded = true;
+        if changed {
+            agent_auth::invalidate(&mut state);
+        }
         state.code.runtime = observation;
         match records {
             Ok(records) => {
@@ -296,6 +302,7 @@ pub fn load(app: Shared) {
             }
         }
         drop(state);
+        agent_auth::load(app.clone());
         if changed {
             render_content(&app);
         }
@@ -303,6 +310,9 @@ pub fn load(app: Shared) {
 }
 
 pub fn action(app: &Shared, action: &str) -> bool {
+    if agent_auth::action(app, action) {
+        return true;
+    }
     if auth::action(app, action) {
         return true;
     }

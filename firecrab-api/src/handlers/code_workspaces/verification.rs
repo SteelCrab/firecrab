@@ -39,7 +39,11 @@ fn provider_failure(failure: Failure) -> Ai {
     }
 }
 
-async fn ai(state: &AppState, snapshot: &mut Snapshot, id: RequestId) -> Result<Ai, AppError> {
+pub(super) async fn ai(
+    state: &AppState,
+    snapshot: &mut Snapshot,
+    id: RequestId,
+) -> Result<Ai, AppError> {
     let Some(binding) = &snapshot.workspace.spec.agent else {
         return Ok(Ai::NotRequired);
     };

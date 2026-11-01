@@ -391,6 +391,8 @@ database snapshot and never claim that an agent is authenticated.
 | PUT | `/api/code/workspaces/{id}` | Save `{expectedRevision, spec}`; revision 0 creates, later writes must match the saved revision |
 | DELETE | `/api/code/workspaces/{id}?expectedRevision=N` | Delete only the matching configuration revision; return `204` |
 | POST | `/api/code/workspaces/{id}/verify` | Check `{expectedRevision}` against current GitHub identity/exact branch and AI AUTH provider credentials; allocate no runtime resources |
+| GET | `/api/code/agent-auth/adapters` | Operator-only fixed CLI recipe metadata; supported does not mean authenticated |
+| POST | `/api/code/workspaces/{id}/agent-auth/verify` | Operator-only `{expectedRevision}` check of provider credentials and disposable pinned CLI configuration in the current ready runtime; no execution grant |
 
 The specification contains `name`, `github: {account, owner, repository, branch}`,
 `runtime`, `resources: {cpu, ram, diskGb}`, and an optional

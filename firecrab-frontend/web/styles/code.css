@@ -1,4 +1,8 @@
 /* CODE reuses the dashboard's flat surfaces, typography and focus styles. */
+.code-agent-auth { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 20px; }
+.code-agent-auth h4 { margin: 0; font-size: 13px; }
+.code-agent-auth .btn { margin-top: 14px; }
+.code-agent-auth-result { font-size: 12px; line-height: 1.7; color: var(--text-2); }
 .code-editor-layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 32px; }
 .code-editor-layout > section { min-width: 0; }
 .code-account-state { min-width: 0; }

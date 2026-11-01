@@ -18,6 +18,8 @@ mod code_verification;
 pub use code_verification::*;
 mod code_runtime;
 pub use code_runtime::*;
+mod code_agent_auth;
+pub use code_agent_auth::*;
 mod pool;
 pub use pool::*;
 mod cluster;

@@ -45,6 +45,7 @@ pub(super) fn invalidate(app: &mut App) {
     app.code.auth.report = None;
 }
 pub(super) fn context_changed(app: &mut App) {
+    agent_auth::invalidate(app);
     app.code.auth.epoch += 1;
     app.code.auth.checking = false;
     app.code.auth.report = None;
@@ -127,6 +128,7 @@ pub fn action(app: &Shared, action: &str) -> bool {
                 return true;
             }
             a.code.auth.open = true;
+            agent_auth::invalidate(&mut a);
             invalidate_observations(&mut a);
             a.code.auth.epoch += 1;
             a.code.auth.loading = false;

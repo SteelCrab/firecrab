@@ -25,6 +25,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Define pinned CODE authentication recipes for Codex, Claude Code and OpenCode.
+  Verify provider credentials and disposable CLI configuration against the same
+  workspace/runtime before reporting proof. Block unverified handoffs and unknown
+  versions without granting editor or agent execution (#560).
 - Add CODE account assignment and reuse states to saved workspaces and their
   editor AUTH panel. Preserve shared accounts when removing an assignment,
   recover interrupted revision-checked saves, and reflect missing or incompatible

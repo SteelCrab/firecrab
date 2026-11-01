@@ -2,7 +2,7 @@
 use super::*;
 use crate::model::escape;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, PartialEq)]
 pub(super) struct Account {
     pub id: String,
     pub name: String,

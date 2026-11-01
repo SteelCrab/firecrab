@@ -9,6 +9,7 @@ use crate::{
 use firecrab_api_types::{
     CodeRuntimeAction as Action, CodeRuntimeFailure as Failure, CodeRuntimePhase as Phase,
 };
+pub(crate) use native::auth_binding;
 pub(crate) use native::{Native, request as native_request};
 use std::{
     fs::File,
