@@ -5,9 +5,7 @@ export async function importOci(page: Page, reference: string, alias: string) {
     .getByRole("button", { name: "Import OCI image", exact: true })
     .click();
   await page.locator("#oci-reference").fill(reference);
-  await page
-    .getByRole("button", { name: "Inspect", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Inspect", exact: true }).click();
   await expect(page.locator(".subpanel")).toContainText(alias, {
     timeout: 30_000,
   });
@@ -45,19 +43,30 @@ export async function createNetwork(
   cidr: string,
   dualStack = false,
 ) {
-  await page.locator("#mn-name").fill(name);
-  await page.locator("#mn-subnet").fill(cidr);
-  await expect(page.locator("#mn-ipv6-enable")).toHaveValue("off");
-  if (dualStack) await page.locator("#mn-ipv6-enable").selectOption("on");
+  await page.getByRole("button", { name: "New network", exact: true }).click();
+  const form = page.locator("#editor");
+  await form.getByLabel("Name", { exact: true }).fill(name);
+  await form.getByLabel("IPv4 subnet (CIDR)", { exact: true }).fill(cidr);
+  const mode = form.getByRole("radiogroup", {
+    name: "IPv6 address mode",
+    exact: true,
+  });
+  await expect(
+    mode.getByRole("radio", { name: "Default", exact: true }),
+  ).toBeChecked();
+  if (dualStack)
+    await mode.getByRole("radio", { name: "SLAAC", exact: true }).check();
   const pending = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
       new URL(response.url()).pathname === "/api/micro-networks",
   );
-  await page.locator("form.create-grid button[type=submit]").click();
+  await form.getByRole("button", { name: "Save", exact: true }).click();
   const response = await pending;
   expect(response.ok(), await response.text()).toBe(true);
   await expect(
-    page.locator("table.vm-table tbody tr").filter({ hasText: name }),
+    page
+      .getByRole("row")
+      .filter({ has: page.getByRole("cell", { name, exact: true }) }),
   ).toBeVisible({ timeout: 30_000 });
 }

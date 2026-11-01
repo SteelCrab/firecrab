@@ -54,7 +54,9 @@ test("IPv6 defaults to IPv4-only and supports SLAAC or DHCPv6", async ({
   await expect(
     mode.getByRole("radio", { name: "Default", exact: true }),
   ).toBeChecked();
-  await expect(page.locator("#field-ipv6Cidr")).toHaveValue("");
+  await expect(
+    page.getByRole("textbox", { name: "IPv6 prefix (optional)", exact: true }),
+  ).toHaveValue("");
   await mode.getByRole("radio", { name: "SLAAC", exact: true }).check();
   await expect(
     mode.getByRole("radio", { name: "SLAAC", exact: true }),
