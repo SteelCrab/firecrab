@@ -37,6 +37,7 @@ mod pipe_auth;
 mod pipe_databases;
 mod pipe_storage;
 mod registries;
+mod sandbox_access;
 mod sandbox_environments;
 mod sandbox_tunnels;
 mod schedules;

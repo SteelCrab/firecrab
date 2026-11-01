@@ -146,7 +146,10 @@ pub async fn change_owner(
         .map(Json);
     }
     let _admission = state.stack_apply_admission.lock().await;
-    let _sandbox = if change.resource.kind == "sandbox_project" {
+    let _sandbox = if matches!(
+        change.resource.kind.as_str(),
+        "sandbox_project" | "sandbox_access"
+    ) {
         Some(state.sandbox.admission.lock().await)
     } else {
         None

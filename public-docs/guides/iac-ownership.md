@@ -8,7 +8,7 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 
 Network, standalone VM, MicroService, registered storage root, volume, security group,
 shell, schedule, pool, Queue, database connection, S3 connection, Secret, Secret connection,
-Auth, registry, AI connection, project model-default, Sandbox environment/project and Git source ownership
+Auth, registry, AI connection, project model-default, Sandbox environment/project, Git source and Sandbox access-policy ownership
 can move between native Stack and a Terraform state owner.
 Protected controller/pool/builder VMs and resources with active operations cannot be adopted.
 Generated Sandbox environment networks, security groups and VMs retain their parent's authority.
@@ -71,6 +71,20 @@ Sandbox project transfer takes the existing admission lock.
 Active or unresolved tasks and provisioning/cleanup of its environments block transfer.
 Configuration writes also check the owner inside their SQLite transaction.
 Task execution, retained task contents and borrowed source files retain their existing permissions.
+
+Sandbox access-policy identity is the exact delegated host UUID. Ownership covers its complete resource-grant policy.
+Transfer preserves every grant. Ordinary policy replacement checks the captured authority in the same SQLite transaction.
+The admitted database worker retains the Sandbox lock after HTTP disconnects.
+An older save cannot restore permissions after an authority change or revocation, including through another database connection.
+
+The controller operator can always revoke access using `DELETE /api/ai-sandbox/access/{host}` or an empty `PUT` policy.
+This safety action atomically saves an explicit deny policy, releases its Stack/Terraform owner, advances the authority generation and records a completed `revoke_sandbox_access` operation.
+The response includes `x-firecrab-operation-id`; the existing native-operation endpoints observe its immutable acknowledgement.
+Recovering an old completed operation never revokes newer grants again.
+The retained policy row keeps the host restricted to delegated Sandbox APIs after restart.
+Revocation preserves projects, runtimes, borrowed files and unrelated policies. Delegated hosts cannot revoke policies or edit ownership.
+Regranting access requires a fresh operator decision; a stale management generation cannot authorize it.
+This adapter does not complete the remaining shared lifecycle contracts or either frontend's full IaC coverage.
 
 The selected endpoint is the host/controller scope.
 Use existing [mTLS](mtls.md) for remote requests.

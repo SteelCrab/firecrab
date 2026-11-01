@@ -29,7 +29,7 @@ try {
   const capabilities = await identity.json();
   assert.equal(capabilities.endpointId, ownership.endpointId);
   assert.equal(capabilities.inventoryKinds.length, 43);
-  assert.deepEqual(capabilities.transferKinds, ["network", "vm", "service", "storage_root", "volume", "security_group", "shell", "schedule", "pool", "queue", "database_connection", "storage_connection", "secret", "secret_connection", "auth", "registry", "ai_connection", "ai_model", "sandbox_environment", "sandbox_project", "stack_source"]);
+  assert.deepEqual(capabilities.transferKinds, ["network", "vm", "service", "storage_root", "volume", "security_group", "shell", "schedule", "pool", "queue", "database_connection", "storage_connection", "secret", "secret_connection", "auth", "registry", "ai_connection", "ai_model", "sandbox_environment", "sandbox_project", "stack_source", "sandbox_access"]);
   const observed = await context.request.get(`${origin}api/iac/owners`);
   assert.equal(observed.status(), 200);
   assert.deepEqual((await observed.json()).filter(item=>item.owner.manager==="terraform"), fixture.ownerships);
@@ -147,11 +147,33 @@ try {
   await focusOwnership();
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(output, `iac-548-ownership-mobile-${captureDate}.png`), fullPage: true });
+  const access=fixture.ownerships.find(item=>item.resource.kind==="sandbox_access");
+  assert.ok(access,"fixture must include an owned access policy");
+  const accessPath=`${origin}api/ai-sandbox/access/${access.resource.id}`;
+  const originalPolicy=command(["sandbox","get-access",access.resource.id]);
+  assert.ok(originalPolicy.grants.length>0);
+  const replacement=await context.request.put(accessPath,{data:originalPolicy});
+  assert.equal(replacement.status(),409);
+  assert.equal((await replacement.json()).error.code,"iac_ownership_conflict");
+  assert.deepEqual(command(["sandbox","revoke-access",access.resource.id]),{grants:[]});
+  const accessOperations=cli(["native-operations","--kind","sandbox_access","--id",access.resource.id]);
+  assert.equal(accessOperations.length,1);
+  const accessOperation=accessOperations[0];
+  assert.equal(accessOperation.action,"revoke_sandbox_access");
+  assert.equal(accessOperation.state,"succeeded");
+  assert.deepEqual(accessOperation.ownership,access);
+  const released=cli(["owner","--kind","sandbox_access","--id",access.resource.id]);
+  assert.equal(released.owner,null);
+  assert.equal(released.generation,access.generation+1);
+  assert.deepEqual(cli(["recover-native-operation","--id",accessOperation.operationId]),accessOperation);
+  assert.deepEqual(command(["sandbox","get-access",access.resource.id]),{grants:[]});
+  await page.locator(`.stack-resource[data-resource-id="${access.resource.id}"]`).waitFor({state:"detached"});
+  const accessRevocation={operation:accessOperation,released,checks:["actual CLI policy observation and revocation","managed grant replacement rejected","atomic deny and authority release","immutable completed recovery","React poll removes revoked ownership"]};
   assert.deepEqual(errors, []);
   await writeFile(path.join(output, "iac-548-ownership-evidence.json"), JSON.stringify({
     capturedAt: new Date().toISOString(), captureDate, sourceCommit, sourceDirty, focusResource:focus.resource, versions:{browser:browser.version(),node:process.version}, fixture: true, transport: "actual local Axum HTTP; no mocked API responses",
     runtime: "compiled React dashboard with disposable SQLite resource records; no Linux/KVM boot",
-    ownership, ownerships:fixture.ownerships,nativeRecovery,sourceRemoval, checks: ["endpoint identity", `43 inventory kinds; ${capabilities.transferKinds.length} transfer adapters`, "actual ownership read", "direct PATCH rejected with 409", `${blockedConfigurations} configuration kinds reject direct DELETE with 409`, "immutable operation acknowledgement", `${fixture.ownerships.length} Terraform ownership records and one retained native binding in the actual dashboard`, `${states.size} Terraform states remain separate; each resource kind has its own icon section and count`, "native bindings are displayed once", "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
+    ownership, ownerships:fixture.ownerships,nativeRecovery,sourceRemoval,accessRevocation, checks: ["endpoint identity", `43 inventory kinds; ${capabilities.transferKinds.length} transfer adapters`, "actual ownership read", "direct PATCH rejected with 409", `${blockedConfigurations} configuration kinds reject direct DELETE with 409`, "immutable operation acknowledgement", `${fixture.ownerships.length} Terraform ownership records and one retained native binding in the actual dashboard before operator revocation`, `${states.size} Terraform states remain separate; each resource kind has its own icon section and count`, "native bindings are displayed once", "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
   }, null, 2) + "\n");
   console.log("Actual API ownership, separate state cards, icon sections and four dashboard screenshots verified.");
 } finally {

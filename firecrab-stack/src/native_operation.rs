@@ -12,6 +12,8 @@ pub enum NativeAction {
     DeleteSandboxProject,
     /// Disconnect Git configuration without deleting its Stack or infrastructure.
     DeleteStackSource,
+    /// Remove delegated permissions and invalidate the previous management authority.
+    RevokeSandboxAccess,
 }
 
 /// Native work remains fenced until completion or explicit recovery.

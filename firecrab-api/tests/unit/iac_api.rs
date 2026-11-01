@@ -98,7 +98,8 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "ai_model",
             "sandbox_environment",
             "sandbox_project",
-            "stack_source"
+            "stack_source",
+            "sandbox_access"
         ])
     );
     assert_eq!(
@@ -368,6 +369,9 @@ fn configuration_resource(
             .unwrap(),
         "sandbox_project"=>state.store.save_sandbox_project(&serde_json::from_value(json!({
             "id":id,"owner":"local","createdAt":1,"spec":{"name":"Owned project","sourcePath":null,"vmId":null,"selection":null}
+        })).unwrap()).unwrap(),
+        "sandbox_access"=>state.store.save_sandbox_access(id,&serde_json::from_value(json!({
+            "grants":[{"resource":{"kind":"project","id":Uuid::new_v4()},"permissions":["read"]}]
         })).unwrap()).unwrap(),
         _ => panic!("unsupported fixture kind"),
     }
@@ -1028,6 +1032,7 @@ async fn iac_owner_browser_fixture() {
         "secret",
         "secret_connection",
         "sandbox_project",
+        "sandbox_access",
     ] {
         let resource = configuration_resource(&state, root.path(), id, kind);
         let before = state.store.iac_resource_owner(&resource).unwrap();
@@ -1193,3 +1198,6 @@ mod native;
 
 #[path = "iac_source.rs"]
 mod source;
+
+#[path = "iac_access.rs"]
+mod access;

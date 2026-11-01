@@ -11,6 +11,7 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
     http::StatusCode,
+    response::{IntoResponse, Response},
 };
 use firecrab_api_types::*;
 use serde_json::json;
@@ -61,9 +62,9 @@ pub async fn set_access(
     caller: Caller,
     Path(principal): Path<Uuid>,
     ValidatedJson(mut policy): ValidatedJson<SandboxAccessPolicy>,
-) -> Result<Json<SandboxAccessPolicy>, AppError> {
+) -> Result<Response, AppError> {
     caller.operator().map_err(|e| denied(id, e))?;
-    let _claim = state.sandbox.admission.lock().await;
+    let claim = state.sandbox.admission.clone().lock_owned().await;
     if principal.is_nil() || policy.grants.len() > 256 {
         return Err(invalid(
             id,
@@ -133,8 +134,26 @@ pub async fn set_access(
     }
     let store = state.store.clone();
     let saved = policy.clone();
-    db(id, move || store.save_sandbox_access(principal, &saved)).await?;
-    Ok(Json(policy))
+    if saved.grants.is_empty() {
+        let operation = super::stacks::database(id.0, move || {
+            let _claim = claim;
+            store.revoke_sandbox_access(principal, Uuid::new_v4())
+        })
+        .await?;
+        return Ok(revoked_access_response(operation.operation_id));
+    }
+    let before = super::stacks::database(id.0, {
+        let store = store.clone();
+        move || store.sandbox_access_authority(principal)
+    })
+    .await?;
+    super::stacks::database(id.0, move || {
+        // Keep admission until SQLite finishes, even if the HTTP waiter disappears.
+        let _claim = claim;
+        store.save_sandbox_access_checked(principal, &saved, &before)
+    })
+    .await?;
+    Ok(Json(policy).into_response())
 }
 
 /// Revocation persists across controller restart and affects subsequent tool actions.
@@ -143,15 +162,27 @@ pub async fn revoke_access(
     Extension(id): Extension<RequestId>,
     caller: Caller,
     Path(principal): Path<Uuid>,
-) -> Result<Json<SandboxAccessPolicy>, AppError> {
+) -> Result<Response, AppError> {
     caller.operator().map_err(|e| denied(id, e))?;
-    let _claim = state.sandbox.admission.lock().await;
+    if principal.is_nil() {
+        return Err(invalid(id, "principal", "Use a non-nil host UUID"));
+    }
+    let claim = state.sandbox.admission.clone().lock_owned().await;
     let store = state.store.clone();
-    db(id, move || {
-        store.save_sandbox_access(principal, &SandboxAccessPolicy::default())
+    let operation = super::stacks::database(id.0, move || {
+        let _claim = claim;
+        store.revoke_sandbox_access(principal, Uuid::new_v4())
     })
     .await?;
-    Ok(Json(SandboxAccessPolicy::default()))
+    Ok(revoked_access_response(operation.operation_id))
+}
+
+fn revoked_access_response(operation: Uuid) -> Response {
+    (
+        [("x-firecrab-operation-id", operation.to_string())],
+        Json(SandboxAccessPolicy::default()),
+    )
+        .into_response()
 }
 async fn db<T: Send + 'static>(
     id: RequestId,

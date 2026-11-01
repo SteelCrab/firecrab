@@ -1,9 +1,7 @@
 //! Durable Sandbox records share the private controller database.
 use super::{PersistenceError, Store};
 use crate::ai_sandbox::{ModelProof, SavedTask};
-use firecrab_api_types::{
-    SandboxAccessPolicy, SandboxProject, SandboxTaskState, SandboxTaskSummary,
-};
+use firecrab_api_types::{SandboxProject, SandboxTaskState, SandboxTaskSummary};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
@@ -90,29 +88,6 @@ impl Store {
             |row| row.get(0),
         )?)
     }
-    /// Missing host policies deny every delegated operation.
-    pub fn sandbox_access(&self, principal: Uuid) -> Result<SandboxAccessPolicy, PersistenceError> {
-        self.lock()
-            .query_row(
-                "SELECT spec FROM ai_sandbox_access WHERE principal=?1",
-                [principal.to_string()],
-                |row| row.get(0),
-            )
-            .optional()?
-            .map(decode)
-            .transpose()
-            .map(Option::unwrap_or_default)
-    }
-    /// Atomically replace one host's complete policy, including explicit revocation.
-    pub fn save_sandbox_access(
-        &self,
-        principal: Uuid,
-        policy: &SandboxAccessPolicy,
-    ) -> Result<(), PersistenceError> {
-        self.lock().execute("INSERT INTO ai_sandbox_access(principal,spec) VALUES(?1,?2) ON CONFLICT(principal) DO UPDATE SET spec=excluded.spec", params![principal.to_string(),encode(policy)?])?;
-        Ok(())
-    }
-
     /// Backfill legacy local-operator records before serving requests; never grant a remote host.
     pub fn rebuild_sandbox_references(&self) -> Result<(), PersistenceError> {
         loop {

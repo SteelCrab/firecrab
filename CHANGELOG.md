@@ -33,6 +33,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Protect Sandbox access-policy ownership by exact delegated host UUID.
+  Keep operator revocation available with atomic permission denial, authority invalidation
+  and a durable acknowledgement. Reject late saves after revocation and preserve newer
+  grants when retrying an old completed operation (#548).
 - Group Stack resources into icon sections with resource counts.
   Keep native Stack registrations and Terraform state owners in separate cards,
   and show each state owner once instead of repeating it for every resource (#548).
