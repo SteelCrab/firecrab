@@ -125,7 +125,10 @@ export default function Volumes({ vms }: { vms: VmResponse[] }) {
       busy ||
       !available(volume) ||
       !window.confirm(
-        t(`Delete volume ${volume.name}?`, `볼륨 ${volume.name}을 삭제할까?`),
+        t(
+          `Delete volume ${volume.name}?`,
+          `"${volume.name}" 볼륨을 삭제할까요?`,
+        ),
       )
     )
       return;
@@ -231,7 +234,7 @@ export default function Volumes({ vms }: { vms: VmResponse[] }) {
           <p>
             {t(
               "Data volumes survive VM deletion. Attach them to a stopped MicroVM.",
-              "데이터 볼륨은 VM을 삭제해도 남는다. 중지된 MicroVM에 연결한다.",
+              "데이터 볼륨은 VM을 삭제해도 유지됩니다. 중지된 MicroVM에 연결할 수 있습니다.",
             )}
           </p>
           {volumes === null ? (
@@ -242,7 +245,7 @@ export default function Volumes({ vms }: { vms: VmResponse[] }) {
                 <HardDrive aria-hidden="true" />
               </div>
               <div className="empty-state-title">
-                {t("No data volumes.", "데이터 볼륨이 없다.")}
+                {t("No data volumes.", "데이터 볼륨이 없습니다.")}
               </div>
             </div>
           ) : (
@@ -347,7 +350,7 @@ export function VmVolumes({ vm }: { vm: VmResponse }) {
       !window.confirm(
         t(
           "Detach this volume? Its data will be kept.",
-          "볼륨을 분리할까? 데이터는 유지된다.",
+          "볼륨을 분리할까요? 데이터는 유지됩니다.",
         ),
       )
     )
@@ -374,13 +377,13 @@ export function VmVolumes({ vm }: { vm: VmResponse }) {
               ? "Data volumes can only be attached to instance VMs."
               : "Stop this VM to attach or detach a volume.",
             vm.purpose && vm.purpose !== "instance"
-              ? "데이터 볼륨은 일반 VM에만 연결할 수 있다."
-              : "볼륨을 연결하거나 분리하려면 VM을 중지한다.",
+              ? "데이터 볼륨은 일반 VM에만 연결할 수 있습니다."
+              : "볼륨을 연결하거나 분리하려면 VM을 중지하세요.",
           )}
         </p>
       )}
       {attached.length === 0 && (
-        <p>{t("No attached volumes.", "연결된 볼륨이 없다.")}</p>
+        <p>{t("No attached volumes.", "연결된 볼륨이 없습니다.")}</p>
       )}
       {attached.map((volume) => (
         <div key={volume.id}>
@@ -462,7 +465,7 @@ export function VmVolumes({ vm }: { vm: VmResponse }) {
       )}
       {editable && free.length === 0 && (
         <div>
-          <p>{t("No available volumes.", "사용 가능한 볼륨이 없다.")}</p>{" "}
+          <p>{t("No available volumes.", "사용 가능한 볼륨이 없습니다.")}</p>{" "}
           <a href="#/volumes">{t("Create volume", "볼륨 생성")}</a>
         </div>
       )}

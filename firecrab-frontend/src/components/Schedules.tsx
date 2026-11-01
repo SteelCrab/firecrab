@@ -97,7 +97,7 @@ function ScheduleSwitch({
           done
             ? t(
                 "Edit the execution time to use this schedule again.",
-                "다시 사용하려면 실행 시각을 수정한다.",
+                "다시 사용하려면 실행 시각을 수정하세요.",
               )
             : undefined
         }
@@ -174,9 +174,9 @@ export default function Schedules({
         schedule.enabled
           ? t(
               "Future runs are paused. An active operation will finish.",
-              "다음 실행을 일시정지했다. 실행 중인 작업은 계속 진행한다.",
+              "예약을 일시정지했습니다. 실행 중인 작업은 계속 진행됩니다.",
             )
-          : t("Schedule enabled.", "예약을 사용한다."),
+          : t("Schedule enabled.", "예약을 활성화했습니다."),
       );
       await reload();
     } catch (failure) {
@@ -192,7 +192,9 @@ export default function Schedules({
           "Delete “" +
             schedule.name +
             "” and its history? The VM will be kept.",
-          "‘" + schedule.name + "’ 예약과 기록을 삭제할까요? VM은 유지한다.",
+          "‘" +
+            schedule.name +
+            "’ 예약과 실행 기록을 삭제할까요? VM은 유지됩니다.",
         ),
       )
     )
@@ -202,7 +204,7 @@ export default function Schedules({
     try {
       await deleteSchedule(schedule.id);
       close();
-      setNotice(t("Schedule deleted.", "예약을 삭제했다."));
+      setNotice(t("Schedule deleted.", "예약을 삭제했습니다."));
       await reload();
     } catch (failure) {
       setError((failure as Error).message);
@@ -271,7 +273,7 @@ export default function Schedules({
           <p>
             {t(
               "Set a time to start or stop your MicroVMs.",
-              "MicroVM의 시작과 중지를 예약한다.",
+              "MicroVM의 시작과 중지를 예약할 수 있습니다.",
             )}
           </p>
         </div>
@@ -348,18 +350,16 @@ export default function Schedules({
         {items !== null && visible.length === 0 ? (
           <div className="schedule-empty">
             <CalendarClock aria-hidden="true" />
-            <h3>
-              {t("Make room for a routine.", "반복되는 작업을 예약한다.")}
-            </h3>
+            <h3>{t("Make room for a routine.", "반복 작업 예약")}</h3>
             <p>
               {vmsLoaded && vms.length === 0
                 ? t(
                     "Create a MicroVM, then schedule when it starts and stops.",
-                    "먼저 MicroVM을 만든 뒤 시작과 중지를 예약한다.",
+                    "먼저 MicroVM을 만든 뒤 시작과 중지를 예약하세요.",
                   )
                 : t(
                     "Start your development VM each morning, or stop it after work.",
-                    "아침에는 개발 VM을 시작한다. 업무가 끝나면 자동으로 중지한다.",
+                    "아침에 개발 VM을 시작하고 업무가 끝나면 자동으로 중지하도록 설정할 수 있습니다.",
                   )}
             </p>
             {vmsLoaded && vms.length === 0 ? (
@@ -481,7 +481,7 @@ export default function Schedules({
             <CalendarClock aria-hidden="true" />
             {t(
               "Schedules follow their selected time zone. Open a schedule to see its execution history.",
-              "각 예약의 시간대를 기준으로 실행한다. 예약을 선택하면 실행 기록을 확인한다.",
+              "각 예약에 설정된 시간대를 기준으로 실행됩니다. 예약을 선택하면 실행 기록을 확인할 수 있습니다.",
             )}
           </p>
         )}
@@ -616,7 +616,7 @@ function RunHistory({ schedule }: { schedule: ScheduleResponse }) {
         <p className="schedule-muted">
           {t(
             "No runs yet. The first result will appear here.",
-            "아직 실행 기록이 없다. 첫 실행 결과가 여기에 표시된다.",
+            "아직 실행 기록이 없습니다. 첫 실행이 끝나면 결과가 여기에 표시됩니다.",
           )}
         </p>
       ) : (

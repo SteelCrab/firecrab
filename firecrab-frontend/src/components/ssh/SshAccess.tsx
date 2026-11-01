@@ -332,7 +332,7 @@ export default function SshAccess({ vm }: SshAccessProps) {
         title={t("Private key", "개인 키")}
         hint={t(
           "One key per VM. ssh refuses it unless only you can read it (chmod 600).",
-          "VM마다 키가 하나입니다. 본인만 읽을 수 있어야(chmod 600) ssh가 받아들입니다.",
+          "VM마다 고유한 키를 사용합니다. SSH에서 사용할 수 있도록 키 파일의 권한을 본인만 읽을 수 있게 설정하세요(chmod 600).",
         )}
       >
         <div className="console-ssh-block ssh-key">
@@ -399,7 +399,7 @@ export default function SshAccess({ vm }: SshAccessProps) {
         title={t("Connect", "접속")}
         hint={t(
           "Run on the Firecrab host. From another machine, jump through the host or forward a port.",
-          "Firecrab 호스트에서 실행합니다. 다른 컴퓨터에서는 호스트를 거치거나 포트를 넘깁니다.",
+          "Firecrab 호스트에서 실행하세요. 다른 컴퓨터에서 접속하려면 호스트를 경유하거나 포트 포워딩을 설정하세요.",
         )}
       >
         {loginRows.length === 0 ? (
@@ -459,7 +459,7 @@ export default function SshAccess({ vm }: SshAccessProps) {
         <p className="console-ssh-empty">
           {t(
             "A forward opens the port on this host only — reaching it from outside also needs the router to forward it.",
-            "포워드는 이 호스트의 포트만 엽니다. 외부에서 닿으려면 공유기에서도 해당 포트를 넘겨야 합니다.",
+            "포트 포워딩은 이 호스트의 포트만 엽니다. 외부에서 접속하려면 공유기에도 포트 포워딩을 설정해야 합니다.",
           )}
         </p>
       </SshStep>
@@ -469,7 +469,7 @@ export default function SshAccess({ vm }: SshAccessProps) {
         title={t("Verify host key", "호스트 키 확인")}
         hint={t(
           "SHA256 is the guest host key — not the PEM. A check prints MATCH or MISMATCH.",
-          "SHA256은 게스트 호스트 키입니다. PEM이 아닙니다. check는 MATCH 또는 MISMATCH를 출력합니다.",
+          "SHA256은 게스트 호스트 키의 지문이며 PEM 개인 키가 아닙니다. check 명령은 MATCH 또는 MISMATCH를 출력합니다.",
         )}
       >
         {expected ? (

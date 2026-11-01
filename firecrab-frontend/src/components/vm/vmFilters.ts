@@ -16,7 +16,7 @@ export const VM_FILTERS: {
   },
   {
     id: "paused",
-    labels: ["Paused", "일시정지됨"],
+    labels: ["Paused", "일시정지"],
     matches: (vm) => vm.state === "paused",
   },
   {

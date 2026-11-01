@@ -126,7 +126,7 @@ export default function Kernels() {
       !window.confirm(
         t(
           `Delete kernel ${kernel.version}?`,
-          `커널 ${kernel.version}을 삭제할까?`,
+          `커널 ${kernel.version} 버전을 삭제할까요?`,
         ),
       )
     )

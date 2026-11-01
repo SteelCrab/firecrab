@@ -131,7 +131,7 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
     setNotice(null);
     try {
       await testPipeDatabase(input());
-      setNotice(t("Database connection succeeded.", "DB 연결을 확인했다."));
+      setNotice(t("Database connection succeeded.", "DB 연결을 확인했습니다."));
     } catch (failure) {
       setError((failure as Error).message);
     } finally {
@@ -158,7 +158,7 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
       setNotice(
         t(
           "Connection removed. The source database is unchanged.",
-          "연결을 제거했다. 원본 DB는 유지한다.",
+          "연결을 삭제했습니다. 원본 DB는 그대로 유지됩니다.",
         ),
       );
     } catch (failure) {
@@ -174,7 +174,7 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
       !window.confirm(
         t(
           "Change operator write access for this database?",
-          "이 DB의 쓰기 권한을 변경할까?",
+          "이 DB의 쓰기 권한을 변경할까요?",
         ),
       )
     )
@@ -269,7 +269,7 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
       <p className="pipe-description">
         {t(
           "Connect an existing MySQL or PostgreSQL database. Browse its tables and preview data with controlled read or write access.",
-          "기존 MySQL 또는 PostgreSQL DB를 연결한다. 테이블과 데이터를 조회하고 필요한 경우 편집한다.",
+          "기존 MySQL 또는 PostgreSQL DB를 연결하세요. 테이블과 데이터를 조회하고 필요한 경우 편집할 수 있습니다.",
         )}
       </p>
       {error && (
@@ -371,16 +371,16 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
             {provider === "supabase"
               ? t(
                   "Copy the PostgreSQL URI from Supabase → Connect. Use the session pooler on IPv4-only networks. A project HTTPS URL or API key cannot be used here.",
-                  "Supabase → Connect에서 PostgreSQL URI를 복사한다. IPv4 전용 환경에서는 Session pooler를 사용한다. 프로젝트 HTTPS 주소와 API 키는 사용할 수 없다.",
+                  "Supabase → Connect에서 PostgreSQL URI를 복사하세요. IPv4 전용 환경에서는 Session pooler를 사용하세요. 프로젝트의 HTTPS 주소와 API 키로는 연결할 수 없습니다.",
                 )
               : provider === "rds"
                 ? t(
                     "Use your RDS MySQL or PostgreSQL endpoint, database name and DB credentials. Allow the Firecrab API host in the RDS security group.",
-                    "RDS의 MySQL 또는 PostgreSQL 엔드포인트와 DB 계정을 사용한다. RDS 보안 그룹에서 Firecrab API 호스트의 접근을 허용한다.",
+                    "RDS의 MySQL 또는 PostgreSQL 엔드포인트와 DB 계정을 입력하세요. RDS 보안 그룹에서 Firecrab API 호스트의 접근을 허용해야 합니다.",
                   )
                 : t(
                     "Accepts mysql://, postgres:// and postgresql:// URIs. Localhost refers to the Firecrab API host. On macOS and Windows, this is the managed Linux VM.",
-                    "mysql://, postgres://, postgresql:// URI를 지원한다. localhost는 Firecrab API 호스트를 뜻한다. macOS와 Windows에서는 관리 Linux VM을 가리킨다.",
+                    "mysql://, postgres://, postgresql:// 형식의 연결 주소를 지원합니다. localhost는 Firecrab API 호스트를 뜻합니다. macOS와 Windows에서는 관리용 Linux VM을 가리킵니다.",
                   )}
           </p>
           <details>
@@ -440,7 +440,7 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
             <p className="pipe-description">
               {t(
                 "Cloud connections default to certificate verification. Paste the RDS CA bundle above when needed. Use a DB account with SELECT permission. Credentials are stored on the API host.",
-                "외부 서비스는 기본으로 인증서를 검증한다. 필요한 경우 RDS CA 인증서를 입력한다. SELECT 권한이 있는 DB 계정을 사용한다. 연결 정보는 API 호스트에 저장한다.",
+                "외부 서비스에 연결할 때는 기본으로 인증서를 검증합니다. 필요한 경우 RDS CA 인증서를 입력하세요. SELECT 권한이 있는 DB 계정을 사용하세요. 연결 정보는 API 호스트에 저장됩니다.",
               )}
             </p>
           </details>
@@ -477,7 +477,7 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
         <p className="empty">
           {t(
             "No database connections. Add a local DB URI, Supabase or Amazon RDS database.",
-            "DB 연결이 없다. 로컬 DB URI, Supabase 또는 Amazon RDS DB를 추가한다.",
+            "연결된 DB가 없습니다. 로컬 DB의 연결 주소를 입력하거나 Supabase 또는 Amazon RDS DB를 추가하세요.",
           )}
         </p>
       ) : (
@@ -661,7 +661,7 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
             <p className="empty">
               {t(
                 "No accessible tables. Check SELECT permissions or refresh the table list.",
-                "조회할 수 있는 테이블이 없다. SELECT 권한을 확인하거나 목록을 새로고침한다.",
+                "조회할 수 있는 테이블이 없습니다. SELECT 권한을 확인하거나 목록을 새로고침하세요.",
               )}
             </p>
           )}
@@ -669,7 +669,7 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
             <p className="pipe-description">
               {t(
                 "Showing the first 500 tables.",
-                "처음 500개 테이블을 표시한다.",
+                "처음 500개 테이블을 표시합니다.",
               )}
             </p>
           )}
@@ -678,7 +678,7 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
               <p className="pipe-description">
                 {t(
                   "Read-only preview: up to 50 rows, 2048 characters per cell. Binary values use hex. Row order can change between requests.",
-                  "읽기 전용 미리보기: 최대 50행, 셀당 2048자를 표시한다. 바이너리 값은 16진수로 표시한다. 조회할 때 행 순서가 달라질 수 있다.",
+                  "읽기 전용 미리보기입니다. 최대 50행, 셀당 2048자까지 표시합니다. 바이너리 값은 16진수로 표시합니다. 조회할 때마다 행 순서가 달라질 수 있습니다.",
                 )}
               </p>
               {preview.rows.length ? (
@@ -726,7 +726,7 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
                 <p className="empty">
                   {t(
                     "This table has no rows on this page.",
-                    "이 페이지에 데이터가 없다.",
+                    "이 페이지에 데이터가 없습니다.",
                   )}
                 </p>
               )}

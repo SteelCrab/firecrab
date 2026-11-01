@@ -93,7 +93,7 @@ export default function SecurityGroups({
       !window.confirm(
         t(
           `Delete security group "${group.name}"?`,
-          `보안그룹 "${group.name}"을(를) 삭제할까요?`,
+          `"${group.name}" 보안그룹을 삭제할까요?`,
         ),
       )
     )
@@ -182,7 +182,7 @@ export default function SecurityGroups({
         <p className="security-groups-intro">
           {t(
             "Allow specific IPv4 connections on a MicroNetwork. Other new connections are denied.",
-            "MicroNetwork에서 지정한 IPv4 연결을 허용한다. 그 외의 새 연결은 차단한다.",
+            "MicroNetwork에서 규칙으로 허용한 IPv4 연결만 받아들입니다. 그 외의 새로운 연결은 차단합니다.",
           )}
         </p>
         {error && (
@@ -194,7 +194,7 @@ export default function SecurityGroups({
           !error && <p className="empty">{t("Loading…", "불러오는 중…")}</p>
         ) : groups.length === 0 ? (
           <p className="empty">
-            {t("No security groups yet.", "저장된 보안그룹이 없다.")}
+            {t("No security groups yet.", "등록된 보안그룹이 없습니다.")}
           </p>
         ) : (
           <ul
@@ -356,7 +356,7 @@ function CreateGroupForm({
           <p className="poll-note">
             {t(
               "Create an IPv4-only MicroNetwork first.",
-              "먼저 IPv4 전용 MicroNetwork를 생성한다.",
+              "먼저 IPv4 전용 MicroNetwork를 만드세요.",
             )}{" "}
             <a href={viewHash("networks")}>
               {t("Open networks", "네트워크 열기")}
@@ -366,7 +366,7 @@ function CreateGroupForm({
         <p className="poll-note">
           {t(
             "A new group has no rules and denies new peer connections. Add allow rules after creating it.",
-            "새 그룹에는 규칙이 없어 새 연결을 차단한다. 생성 후 허용 규칙을 추가한다.",
+            "새 보안그룹은 규칙이 없어 모든 새로운 연결을 차단합니다. 그룹을 만든 뒤 허용할 규칙을 추가하세요.",
           )}
         </p>
         <div className="service-actions">
@@ -448,7 +448,7 @@ function RulesForm({
         !/^\d{1,2}$/.test(parts[1]) ||
         Number(parts[1]) > 32
       ) {
-        setError(t("Enter an IPv4 CIDR.", "IPv4 CIDR를 입력한다."));
+        setError(t("Enter an IPv4 CIDR.", "IPv4 CIDR를 입력하세요."));
         return;
       }
       if (
@@ -461,7 +461,7 @@ function RulesForm({
         setError(
           t(
             "Enter a port range from 1 to 65535, with the first port no greater than the last.",
-            "1~65535 범위의 포트를 입력한다. 시작 포트는 끝 포트보다 클 수 없다.",
+            "1~65535 범위의 포트를 입력하세요. 시작 포트는 끝 포트보다 작거나 같아야 합니다.",
           ),
         );
         return;
@@ -483,7 +483,7 @@ function RulesForm({
         failure instanceof ApiClientError && failure.status === 409
           ? t(
               "Stop affected VMs and service deployments before changing rules.",
-              "규칙을 변경하려면 연결된 VM과 서비스 배포를 중지하고 정리를 완료한다.",
+              "규칙을 변경하려면 연결된 VM과 서비스 배포를 중지하고 정리가 끝날 때까지 기다리세요.",
             )
           : (failure as Error).message,
       );
@@ -505,7 +505,7 @@ function RulesForm({
       <p className="poll-note">
         {t(
           "Only listed connections are allowed. Replies remain allowed. Stop affected VMs and services before saving changes.",
-          "목록에 있는 연결만 허용한다. 응답 트래픽은 허용한다. 변경을 저장하기 전에 연결된 VM과 서비스를 중지한다.",
+          "목록에 있는 연결과 응답 트래픽만 허용합니다. 변경 사항을 저장하기 전에 연결된 VM과 서비스를 중지하세요.",
         )}
       </p>
       {error && (
@@ -518,7 +518,7 @@ function RulesForm({
           <p className="empty">
             {t(
               "No allow rules. All new peer connections are denied.",
-              "허용 규칙이 없다. 모든 새 연결을 차단한다.",
+              "허용 규칙이 없어 모든 새로운 연결이 차단됩니다.",
             )}
           </p>
         )}

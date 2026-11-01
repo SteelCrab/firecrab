@@ -113,7 +113,7 @@ export default function NetworkTab({ vm, detail, edit }: NetworkTabProps) {
           <p>
             {t(
               "Security groups could not be loaded.",
-              "보안그룹을 불러오지 못했다.",
+              "보안그룹을 불러오지 못했습니다.",
             )}{" "}
             <button className="btn sm" onClick={detail.reloadSecurityGroups}>
               {t("Retry", "다시 시도")}
@@ -309,7 +309,7 @@ export default function NetworkTab({ vm, detail, edit }: NetworkTabProps) {
           <p className="detail-note">
             {t(
               "Saving applies host NAT immediately.",
-              "저장하면 호스트 NAT가 바로 적용됩니다.",
+              "저장하면 호스트의 NAT 설정에 바로 반영됩니다.",
             )}
           </p>
         )}

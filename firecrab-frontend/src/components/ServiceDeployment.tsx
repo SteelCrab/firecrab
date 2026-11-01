@@ -403,7 +403,7 @@ export default function ServiceDeployment({
                 {deployment
                   ? labels[deployment.phase]
                   : loaded
-                    ? t("Not deployed", "아직 배포하지 않았다")
+                    ? t("Not deployed", "아직 배포되지 않았습니다")
                     : t("Checking deployment…", "배포 상태 확인 중…")}
               </span>
               {deployment && (
@@ -523,11 +523,11 @@ export default function ServiceDeployment({
         <div id="service-status">
           <p role="status">
             {statusError
-              ? t("Status unavailable", "상태를 확인할 수 없다")
+              ? t("Status unavailable", "상태를 확인할 수 없습니다")
               : deployment
                 ? labels[deployment.phase]
                 : loaded
-                  ? t("Not deployed", "아직 배포하지 않았다")
+                  ? t("Not deployed", "아직 배포되지 않았습니다")
                   : t("Checking deployment…", "배포 상태 확인 중…")}
           </p>
           {deployment && (
@@ -649,10 +649,13 @@ export default function ServiceDeployment({
             <strong>{domain}</strong>
             <p>
               {routed
-                ? t("Domain routing is ready.", "도메인 경로가 준비되었다.")
+                ? t(
+                    "Domain routing is ready.",
+                    "도메인 라우팅이 준비되었습니다.",
+                  )
                 : t(
                     "Healthy replicas will connect to this domain automatically.",
-                    "정상 인스턴스를 이 도메인에 자동 연결한다.",
+                    "정상 상태의 인스턴스를 이 도메인에 자동으로 연결합니다.",
                   )}
             </p>
             {routed && (
@@ -669,19 +672,19 @@ export default function ServiceDeployment({
               <p className="poll-note">
                 {t(
                   "For public HTTPS, point this domain's DNS CNAME to",
-                  "외부 HTTPS 접속을 위해 도메인의 DNS CNAME을 다음 주소로 연결한다.",
+                  "외부에서 HTTPS로 접속하려면 도메인의 DNS CNAME을 다음 주소로 설정하세요.",
                 )}{" "}
                 <code>{pipe.config.tunnel.id}.cfargotunnel.com</code>.{" "}
                 {t(
                   "Keep Cloudflare proxy enabled.",
-                  "Cloudflare 프록시를 활성화한다.",
+                  "Cloudflare 프록시를 활성화하세요.",
                 )}
               </p>
             ) : (
               <p className="poll-note">
                 {t(
                   "For public HTTPS, connect your domain in",
-                  "외부 HTTPS 접속을 위해 다음 화면에서 도메인을 연결한다.",
+                  "외부에서 HTTPS로 접속하려면 다음 화면에서 도메인을 연결하세요.",
                 )}{" "}
                 <a href="#/pipe/named-tunnel">Pipe Tunnel</a>.
               </p>
@@ -841,11 +844,11 @@ export default function ServiceDeployment({
                 {port
                   ? t(
                       `Each replica uses one host port, starting at ${port}. App port: ${service.port}.`,
-                      `복제본마다 ${port}번부터 호스트 포트를 하나씩 사용한다. 앱 포트는 ${service.port}번이다.`,
+                      `각 복제본은 ${port}번부터 호스트 포트를 하나씩 사용합니다. 앱 포트는 ${service.port}번입니다.`,
                     )
                   : t(
                       `Leave the host port empty for internal access. App port: ${service.port}.`,
-                      "호스트 포트를 비우면 같은 MicroNetwork 안에서만 서비스에 연결한다.",
+                      "호스트 포트를 비워 두면 같은 MicroNetwork 안에서만 서비스에 연결할 수 있습니다.",
                     )}
               </p>
             )}
@@ -853,7 +856,7 @@ export default function ServiceDeployment({
               <p className="poll-note">
                 {t(
                   "Secret values are injected into every replica. Changes apply on the next deployment.",
-                  "모든 복제본에 시크릿 값을 주입한다. 변경은 다음 배포에 반영한다.",
+                  "모든 복제본에 시크릿 값을 전달합니다. 변경 사항은 다음 배포에 반영됩니다.",
                 )}
               </p>
             )}
@@ -893,7 +896,7 @@ export default function ServiceDeployment({
             <p>
               {t(
                 "Available to apps in the same MicroNetwork.",
-                "같은 MicroNetwork의 앱에서 사용할 수 있다.",
+                "같은 MicroNetwork에 있는 앱에서 사용할 수 있습니다.",
               )}{" "}
               <code>{`http://${deployment.spec.name}.internal`}</code>
             </p>
@@ -903,7 +906,7 @@ export default function ServiceDeployment({
           <p className="poll-note">
             {t(
               `New replicas inherit security group "${group.name}". Its MicroNetwork is selected automatically.`,
-              `새 복제 VM은 보안그룹 "${group.name}"을(를) 상속한다. 해당 MicroNetwork를 자동으로 선택한다.`,
+              `새 복제 VM에 "${group.name}" 보안그룹이 적용됩니다. 해당 MicroNetwork도 자동으로 선택됩니다.`,
             )}
           </p>
         )}
@@ -915,7 +918,7 @@ export default function ServiceDeployment({
         hidden={tab !== "instances"}
       >
         {!hasInstances && (
-          <p>{t("No service instances.", "서비스 인스턴스가 없다.")}</p>
+          <p>{t("No service instances.", "서비스 인스턴스가 없습니다.")}</p>
         )}
         {hasInstances && (
           <>
@@ -1023,7 +1026,7 @@ export default function ServiceDeployment({
           <p>
             {t(
               "Deploy the service to start its release history.",
-              "서비스를 배포하면 릴리스 기록이 표시된다.",
+              "서비스를 배포하면 릴리스 기록이 표시됩니다.",
             )}
           </p>
         )}
@@ -1047,7 +1050,7 @@ export default function ServiceDeployment({
           <p>
             {t(
               "Automation requires a deployed service with a domain.",
-              "자동화는 도메인을 사용하는 서비스 배포가 필요하다.",
+              "자동화를 사용하려면 도메인을 설정하고 서비스를 배포해야 합니다.",
             )}
           </p>
         )}

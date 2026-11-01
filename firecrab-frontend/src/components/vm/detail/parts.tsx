@@ -131,7 +131,7 @@ export function EditableProp({
                 className="prop-lock"
                 title={t(
                   "Stop the VM to change this.",
-                  "VM을 중지하면 바꿀 수 있습니다.",
+                  "VM을 중지하면 변경할 수 있습니다.",
                 )}
               >
                 <Lock aria-hidden="true" />

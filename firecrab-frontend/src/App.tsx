@@ -199,7 +199,7 @@ export default function App() {
       window.confirm(
         t(
           "Changes have not been saved. Leave without saving?",
-          "변경을 저장하지 않았다. 저장하지 않고 이동할까요?",
+          "저장하지 않은 변경 사항이 있습니다. 저장하지 않고 이동할까요?",
         ),
       ),
     [t],
@@ -394,7 +394,7 @@ export default function App() {
                   <p>
                     {t(
                       "Pick an image and resources. The MicroVM starts in a few seconds.",
-                      "이미지와 사양을 고르면 몇 초 안에 시작합니다.",
+                      "이미지와 사양을 선택하면 몇 초 안에 시작할 수 있습니다.",
                     )}
                   </p>
                 </header>
@@ -503,9 +503,6 @@ function confirmDelete(
   t: (english: string, korean: string) => string,
 ): boolean {
   return window.confirm(
-    t(
-      "Delete this VM record and its disk?",
-      "VM 레코드와 디스크를 삭제할까요?",
-    ),
+    t("Delete this VM record and its disk?", "VM과 디스크를 삭제할까요?"),
   );
 }

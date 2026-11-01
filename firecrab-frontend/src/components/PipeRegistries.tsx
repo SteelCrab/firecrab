@@ -130,9 +130,12 @@ export default function PipeRegistries({
         else
           setError(
             next.status === "idle"
-              ? t("Job expired. Retry.", "작업이 만료됐다. 다시 시도한다.")
+              ? t(
+                  "Job expired. Retry.",
+                  "작업이 만료되었습니다. 다시 시도하세요.",
+                )
               : (next.log.split("\n").filter(Boolean).at(-1) ??
-                  t("Image pull failed.", "이미지 가져오기에 실패했다.")),
+                  t("Image pull failed.", "이미지를 가져오지 못했습니다.")),
           );
         setActiveJob(null);
       } catch (failure) {
@@ -226,7 +229,7 @@ export default function PipeRegistries({
       !window.confirm(
         t(
           `Delete the ${registry} login? Pulled images are kept.`,
-          `${registry} 인증을 삭제할까요? 가져온 이미지는 유지된다.`,
+          `${registry} 인증 정보를 삭제할까요? 가져온 이미지는 유지됩니다.`,
         ),
       )
     )
@@ -237,7 +240,7 @@ export default function PipeRegistries({
         current.filter((value) => value.registry !== registry),
       );
       setEditor((current) => (current?.original === registry ? null : current));
-      setNotice(t("Login deleted.", "인증을 삭제했다."));
+      setNotice(t("Login deleted.", "인증 정보를 삭제했습니다."));
     });
   }
   async function pull(reference: string) {
@@ -288,7 +291,7 @@ export default function PipeRegistries({
           "AWS와 GitHub 계정은 ",
         )}
         <a href={pipeCardHash("auth")}>Pipe Auth</a>
-        {t(".", "에서 인증한다.")}
+        {t(".", "에서 연결할 수 있습니다.")}
       </p>
       {alert && (
         <div className="banner error" role="alert">
@@ -315,7 +318,7 @@ export default function PipeRegistries({
         </p>
       ) : !connections.length ? (
         <div className="empty">
-          {t("No registries.", "등록한 레지스트리가 없다.")}
+          {t("No registries.", "등록된 레지스트리가 없습니다.")}
         </div>
       ) : (
         <div className="table-scroll">
@@ -477,7 +480,7 @@ function RegistryForm({
     provider === "harbor"
       ? t(
           "Needs list and pull access.",
-          "목록 조회와 가져오기 권한이 필요하다.",
+          "목록 조회와 이미지 가져오기 권한이 필요합니다.",
         )
       : provider === "ghcr"
         ? t("Permission: read:packages", "권한: read:packages")
@@ -556,7 +559,7 @@ function RegistryForm({
             <span className="poll-note" id="ecr-registry-uri-help">
               {t(
                 "Enter the login registry URI without https://, a repository path, or a tag.",
-                "로그인용 레지스트리 URI를 입력한다. https://, 저장소 경로와 태그는 제외한다.",
+                "로그인할 레지스트리 주소를 입력하세요. https://, 저장소 경로, 태그는 제외하세요.",
               )}
             </span>
           )}

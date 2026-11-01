@@ -102,7 +102,10 @@ export default function ImageDetail({
             </p>
           ) : usedByVms.length === 0 ? (
             <p className="detail-note">
-              {t("No VMs use this image.", "이 이미지를 사용하는 VM이 없다.")}
+              {t(
+                "No VMs use this image.",
+                "이 이미지를 사용하는 VM이 없습니다.",
+              )}
             </p>
           ) : (
             <ul className="detail-list">
@@ -160,13 +163,13 @@ export default function ImageDetail({
                 <p className="detail-note">
                   {t(
                     "Only images with no VM references can change their kernel.",
-                    "사용 중인 VM이 없는 이미지만 커널을 변경할 수 있다.",
+                    "이 이미지를 사용하는 VM이 없어야 커널을 변경할 수 있습니다.",
                   )}
                 </p>
               )}
               {installedKernels.length === 0 && (
                 <p className="detail-note">
-                  {t("Install a kernel first.", "먼저 커널을 설치한다.")}
+                  {t("Install a kernel first.", "먼저 커널을 설치하세요.")}
                 </p>
               )}
             </div>
@@ -224,14 +227,14 @@ export default function ImageDetail({
                 <small className="image-file-help">
                   {t(
                     "A compressed archive for installing this image.",
-                    "이미지 설치에 쓰는 압축 파일이다.",
+                    "이미지를 설치할 때 사용하는 압축 파일입니다.",
                   )}
                   {image.installed && !image.packageStaged && (
                     <>
                       {" "}
                       {t(
                         "The installed image can still be used.",
-                        "설치된 이미지는 그대로 사용할 수 있다.",
+                        "설치된 이미지는 계속 사용할 수 있습니다.",
                       )}
                     </>
                   )}

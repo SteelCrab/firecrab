@@ -61,7 +61,7 @@ export default function ServiceForm({
   const steps = [
     t("App", "앱 선택"),
     t("Access", "접속 방법"),
-    t("Size", "실행 크기"),
+    t("Size", "리소스"),
     t("Connections", "연결"),
     t("Review", "확인"),
   ];
@@ -189,7 +189,7 @@ export default function ServiceForm({
           setError(
             t(
               "This image must belong to an account connected in Pipe Auth.",
-              "Pipe Auth에 연결한 계정의 이미지를 선택한다.",
+              "Pipe Auth에 연결된 계정의 이미지를 선택하세요.",
             ),
           );
           return;
@@ -224,7 +224,7 @@ export default function ServiceForm({
           setFields({
             [field]: t(
               "Each row needs a unique variable name.",
-              "각 행에 서로 다른 변수 이름이 필요하다.",
+              "각 행에 서로 다른 변수 이름을 입력하세요.",
             ),
           });
           return;
@@ -240,7 +240,7 @@ export default function ServiceForm({
         setFields({
           queues: t(
             "Each queue needs a unique variable and queue.",
-            "각 큐에 서로 다른 변수 이름과 큐가 필요하다.",
+            "변수 이름과 큐가 중복되지 않도록 선택하세요.",
           ),
         });
         return;
@@ -275,7 +275,7 @@ export default function ServiceForm({
         setError(
           t(
             "This AUTH account is no longer connected. Select a connected account again.",
-            "AUTH 계정 연결이 해제되었다. 연결된 계정을 다시 선택한다.",
+            "Auth 계정의 연결이 해제되었습니다. 연결된 계정을 다시 선택하세요.",
           ),
         );
         return;
@@ -463,7 +463,7 @@ export default function ServiceForm({
               {spec.securityGroupId &&
                 !groups?.some((group) => group.id === spec.securityGroupId) && (
                   <option value={spec.securityGroupId}>
-                    {t("Unavailable group", "그룹을 확인할 수 없다")} ·{" "}
+                    {t("Unavailable group", "그룹을 확인할 수 없습니다")} ·{" "}
                     {spec.securityGroupId}
                   </option>
                 )}
@@ -480,14 +480,14 @@ export default function ServiceForm({
             <p className="poll-note" id="service-security-group-note">
               {t(
                 "New replica VMs inherit the selected group and use its MicroNetwork. Changes apply on the next deployment.",
-                "새 복제 VM은 선택한 그룹을 상속하고 해당 MicroNetwork를 사용한다. 변경은 다음 배포에 적용한다.",
+                "새 복제 VM에 선택한 보안그룹이 적용되고 해당 MicroNetwork를 사용합니다. 변경 사항은 다음 배포에 적용됩니다.",
               )}
             </p>
             {groups?.length === 0 && (
               <p className="poll-note">
                 {t(
                   "Create a group from Security groups in the network menu.",
-                  "네트워크 메뉴의 보안그룹 화면에서 그룹을 생성한다.",
+                  "네트워크 메뉴의 보안그룹 화면에서 그룹을 만드세요.",
                 )}
               </p>
             )}
@@ -540,7 +540,7 @@ export default function ServiceForm({
             <p id="service-domain-help" className="poll-note">
               {t(
                 "Enter your domain. Healthy replicas connect automatically; no host port or manual route is needed. Public access uses Pipe Tunnel and your DNS.",
-                "도메인을 입력하면 정상 인스턴스를 자동 연결한다. 호스트 포트나 경로를 따로 설정할 필요가 없다. 외부 접속에는 Pipe Tunnel과 DNS 연결이 필요하다.",
+                "도메인을 입력하면 정상 상태의 인스턴스를 자동으로 연결합니다. 호스트 포트나 경로를 따로 설정할 필요가 없습니다. 외부에서 접속하려면 Pipe Tunnel과 DNS를 연결해야 합니다.",
               )}
             </p>
             {fieldError("domain")}
@@ -689,7 +689,7 @@ export default function ServiceForm({
             <small>
               {t(
                 "AWS SDK credentials are provided at boot. Use FIRECRAB_S3_BUCKET and FIRECRAB_S3_PREFIX in the app. Restrict access with AWS IAM.",
-                "부팅할 때 AWS SDK 자격 증명을 전달한다. 앱에서 FIRECRAB_S3_BUCKET과 FIRECRAB_S3_PREFIX를 사용한다. AWS IAM으로 접근 권한을 제한한다.",
+                "부팅할 때 AWS SDK 인증 정보를 전달합니다. 앱에서 FIRECRAB_S3_BUCKET과 FIRECRAB_S3_PREFIX를 사용하세요. AWS IAM으로 접근 권한을 제한하세요.",
               )}
             </small>
           </div>
@@ -961,7 +961,7 @@ function VariableRows({
         <p className="poll-note">
           {t(
             "Enter a PipeSecrets ID for each variable. Values are injected into every replica at deployment. Secret changes apply on the next deployment.",
-            "변수마다 PipeSecrets ID를 입력한다. 배포할 때 모든 복제본에 값을 주입한다. 시크릿 변경은 다음 배포에 반영한다.",
+            "각 변수에 사용할 PipeSecrets ID를 입력하세요. 배포할 때 모든 복제본에 값을 전달합니다. 시크릿 변경 사항은 다음 배포에 반영됩니다.",
           )}
         </p>
       )}
@@ -975,7 +975,7 @@ function VariableRows({
               rows.some((row) => !row.key.trim())
                 ? t(
                     "Use one NAME=value entry per line.",
-                    "한 줄에 이름=값을 입력한다.",
+                    "한 줄에 하나씩 이름=값 형식으로 입력하세요.",
                   )
                 : "",
             );
@@ -1005,7 +1005,7 @@ function VariableRows({
             lines.some((line) => line.indexOf("=") < 1)
               ? t(
                   "Use one NAME=value entry per line.",
-                  "한 줄에 이름=값을 입력한다.",
+                  "한 줄에 하나씩 이름=값 형식으로 입력하세요.",
                 )
               : "",
           );
