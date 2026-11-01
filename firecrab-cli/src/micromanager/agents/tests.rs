@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use super::*;
 #[cfg(unix)]
 fn fixture() -> (tempfile::TempDir, Runtime) {

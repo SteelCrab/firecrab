@@ -205,6 +205,7 @@ fn running(client: &Client, expected: &Session, url: &str) -> bool {
         .is_ok_and(|actual| actual == *expected)
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn agent_terminal_proxy_ready(client: &Client, state: &Session) -> bool {
     client
         .get(format!("{}{CONTROL}", state.url()))
