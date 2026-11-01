@@ -10,7 +10,7 @@ async function fixture(t) {
       setAttribute(name,value){this.attributes.set(name,value);},getAttribute(name){return this.attributes.get(name)??null;},
       get src(){return this.attributes.get('src');},set src(value){this.attributes.set('src',value);this.writes++;},contentWindow:{postMessage(){}},remove(){this.removed=true;},blur(){this.blurred=true;}})};
   globalThis.ResizeObserver=class{observe(){}disconnect(){}};
-  const module=await import(`../web/canvas-panes.js?fixture=${Math.random()}`);
+  const module=await import(`../src/canvas-panes.js?fixture=${Math.random()}`);
   t.after(()=>Object.assign(globalThis,original));
   const call=(action,payload)=>module.canvasPanes(action,JSON.stringify(payload));
   const attach=(id='tab-a',client='client-a',url='http://fixture.editor.localhost/?firecrabClient=client-a')=>call('attach',{surfaces:[],keep:[],editor:{id,client,url}});

@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     systemd systemd-sysv dbus ca-certificates curl iproute2 nftables conntrack \
     dnsmasq dnsmasq-utils e2fsprogs util-linux findutils tar zstd xz-utils \
     socat acl build-essential pkg-config cmake musl-tools python3 binutils git \
+    flex bison bc perl libelf-dev libssl-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && (getent group kvm >/dev/null || groupadd --system kvm) \
     && systemctl mask systemd-remount-fs.service systemd-udevd.service \

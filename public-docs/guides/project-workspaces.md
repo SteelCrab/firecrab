@@ -2,9 +2,11 @@
 
 A project workspace combines one private project SQLite database with one retained
 MicroBlockStorage data volume. The existing AI Sandbox project UUID owns both.
-The controller database keeps authorization and resource bindings. Sandbox task and
-attempt records remain in their current store; migrating them belongs to the later
-agent integration phase of #550.
+The controller database keeps authorization and resource bindings. Existing Sandbox
+task and attempt records remain in the controller database until an operator completes
+the opt-in [project database migration](../development/project-sandbox-migration-2026-11-01.md).
+After migration, the project database owns task bodies, attempts and admissions.
+The controller keeps only routing identifiers and the migration receipt.
 
 This foundation exposes a backend lifecycle. It does not start an editor, shared PTY,
 or model task. Consumers must reconcile the workspace and require `ready` before

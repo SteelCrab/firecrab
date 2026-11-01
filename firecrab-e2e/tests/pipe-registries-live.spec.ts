@@ -58,7 +58,7 @@ test.describe("Pipe registries against the API", () => {
     await expect(page).toHaveURL(/#\/pipe\/registry$/);
     const panel = page.locator("#content");
     await expect(
-      panel.getByRole("button", { name: "Connect registry" }),
+      panel.getByRole("button", { name: "Add registry", exact: true }),
     ).toBeEnabled();
     for (const row of rows)
       await expect(
@@ -73,14 +73,18 @@ test.describe("Pipe registries against the API", () => {
     const pipe = await openOverview(page);
     await pipe.locator('a.pipe-row[href="#/pipe/registry"]').click();
     const panel = page.locator("#content");
-    await panel.getByRole("button", { name: "Connect registry" }).click();
-    await page.getByLabel("Registry host", { exact: true }).fill(HOST);
-    await page.getByLabel("Username", { exact: true }).fill("AWS");
-    // ECR is inferred from the hostname; only Harbor needs a manual provider hint.
-    await expect(page.getByRole("radiogroup", { name: "Provider", exact: true }).getByRole("radio", { name: "Default", exact: true })).toBeChecked();
-    await page.getByLabel("Password / token", { exact: true }).fill(SECRET);
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    const row = panel.getByRole("row").filter({ has: page.getByRole("cell", { name: HOST, exact: true }) });
+    await panel
+      .getByRole("button", { name: "Add registry", exact: true })
+      .click();
+    await page
+      .getByRole("combobox", { name: "Provider", exact: true })
+      .selectOption("ecr");
+    await page.getByLabel("Registry URI", { exact: true }).fill(HOST);
+    await page.getByLabel("ECR login password", { exact: true }).fill(SECRET);
+    await page.getByRole("button", { name: "Save login", exact: true }).click();
+    const row = panel
+      .getByRole("row")
+      .filter({ has: page.getByRole("cell", { name: HOST, exact: true }) });
     await expect(row).toHaveCount(1);
 
     const saved = await connections();
@@ -96,11 +100,11 @@ test.describe("Pipe registries against the API", () => {
 
     await page.goto("/#/pipe");
     await pipe.locator('a.pipe-row[href="#/pipe/registry"]').click();
-    await row.getByRole("button", { name: "Details", exact: true }).click();
-    page.once("dialog", (dialog) => void dialog.accept());
-    await page
-      .locator("#detail-panel").getByRole("button", { name: "Disconnect", exact: true })
+    await row
+      .getByRole("button", { name: `${HOST} actions`, exact: true })
       .click();
+    page.once("dialog", (dialog) => void dialog.accept());
+    await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
     await expect(row).toHaveCount(0);
     expect(
       (await connections()).rows.some((value) => value.registry === HOST),

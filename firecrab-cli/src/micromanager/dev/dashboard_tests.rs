@@ -159,8 +159,8 @@ fn starts_reuses_stops_and_resumes_the_selected_checkout() {
 #[test]
 fn different_managed_homes_keep_their_dashboards_and_stop_independently() {
     let first = Fixture::new();
-    let second = Fixture::new();
     first.start().unwrap();
+    let second = Fixture::new();
     second.start().unwrap();
     let selected = second.state();
     assert_ne!(first.state().session, selected.session);
@@ -194,15 +194,16 @@ fn a_private_instance_passes_its_backend_ports_to_the_owned_server() {
 
 #[test]
 fn copied_sessions_cannot_control_primary_or_other_private_dashboards() {
+    // Bind each port before the next fixture asks the OS for a free port.
     let primary = Fixture::new();
-    let first = Fixture::new();
-    let second = Fixture::new();
-    let first_instance = first.private_instance("0123456789abcdef", 45121, 45122);
-    let second_instance = second.private_instance("fedcba9876543210", 45123, 45124);
     primary.start().unwrap();
     let primary_server = DashboardGuard(primary.state());
+    let first = Fixture::new();
+    let first_instance = first.private_instance("0123456789abcdef", 45121, 45122);
     first.start_private(&first_instance).unwrap();
     let first_server = DashboardGuard(read_session(&first_instance.managed_home).unwrap().unwrap());
+    let second = Fixture::new();
+    let second_instance = second.private_instance("fedcba9876543210", 45123, 45124);
     second.start_private(&second_instance).unwrap();
     let second_server = DashboardGuard(
         read_session(&second_instance.managed_home)
@@ -445,8 +446,8 @@ fn switches_checkouts_by_stopping_only_the_previous_owned_server() {
 #[test]
 fn changing_ports_stops_the_previous_dashboard_and_remembers_the_new_port() {
     let fixture = Fixture::new();
-    let other = Fixture::new();
     fixture.start().unwrap();
+    let other = Fixture::new();
     let original = fixture.state();
     start(&fixture.source(), fixture.home.path(), other.port).unwrap();
     let selected = fixture.state();
@@ -599,22 +600,22 @@ fn installs_missing_locked_dependencies_and_reports_invalid_locks() {
     assert!(!sentinel.exists());
     fs::write(&sentinel, "stale").unwrap();
 
-    // Reproduce a branch update that adds Ghostty while Vite is already installed.
-    let ghostty = frontend.join("fixture-ghostty");
+    // Reproduce a branch update that adds a terminal package while Vite is already installed.
+    let ghostty = frontend.join("fixture-terminal");
     fs::create_dir(&ghostty).unwrap();
     fs::write(
         ghostty.join("package.json"),
-        r#"{"name":"ghostty-web","version":"1.0.0"}"#,
+        r#"{"name":"terminal-fixture","version":"1.0.0"}"#,
     )
     .unwrap();
-    fs::write(ghostty.join("ghostty-vt.wasm"), "fixture wasm").unwrap();
-    fs::write(frontend.join("package.json"), r#"{"name":"dashboard-fixture","version":"1.0.0","dependencies":{"vite":"file:./fixture-vite","ghostty-web":"file:./fixture-ghostty"}}"#).unwrap();
-    fs::write(frontend.join("package-lock.json"), r#"{"name":"dashboard-fixture","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"dashboard-fixture","version":"1.0.0","dependencies":{"vite":"file:./fixture-vite","ghostty-web":"file:./fixture-ghostty"}},"node_modules/vite":{"resolved":"fixture-vite","link":true},"fixture-vite":{"name":"vite","version":"1.0.0"},"node_modules/ghostty-web":{"resolved":"fixture-ghostty","link":true},"fixture-ghostty":{"name":"ghostty-web","version":"1.0.0"}}}"#).unwrap();
+    fs::write(ghostty.join("terminal.js"), "fixture terminal").unwrap();
+    fs::write(frontend.join("package.json"), r#"{"name":"dashboard-fixture","version":"1.0.0","dependencies":{"vite":"file:./fixture-vite","terminal-fixture":"file:./fixture-terminal"}}"#).unwrap();
+    fs::write(frontend.join("package-lock.json"), r#"{"name":"dashboard-fixture","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"dashboard-fixture","version":"1.0.0","dependencies":{"vite":"file:./fixture-vite","terminal-fixture":"file:./fixture-terminal"}},"node_modules/vite":{"resolved":"fixture-vite","link":true},"fixture-vite":{"name":"vite","version":"1.0.0"},"node_modules/terminal-fixture":{"resolved":"fixture-terminal","link":true},"fixture-terminal":{"name":"terminal-fixture","version":"1.0.0"}}}"#).unwrap();
     prepare(fixture.source.path()).unwrap();
     assert!(frontend.join("node_modules/vite/package.json").is_file());
     assert!(
         frontend
-            .join("node_modules/ghostty-web/ghostty-vt.wasm")
+            .join("node_modules/terminal-fixture/terminal.js")
             .is_file()
     );
     assert!(!sentinel.exists());
@@ -636,23 +637,48 @@ fn installs_missing_locked_dependencies_and_reports_invalid_locks() {
 }
 
 #[test]
-fn wasm_build_failure_is_reported_before_starting_the_dashboard() {
+fn connecting_an_existing_backend_requires_its_saved_controller_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    assert!(super::check_backend_identity(directory.path(), None).is_err());
+    assert!(!directory.path().join("runtime").exists());
+    std::fs::create_dir(directory.path().join("runtime")).unwrap();
+    let selected = uuid::Uuid::new_v4().to_string();
+    std::fs::write(
+        directory.path().join("runtime/resource-controller-id.json"),
+        serde_json::to_vec(&selected).unwrap(),
+    )
+    .unwrap();
+    assert!(super::check_backend_identity(directory.path(), Some(&selected)).is_ok());
+    assert!(
+        super::check_backend_identity(directory.path(), Some(&uuid::Uuid::new_v4().to_string()))
+            .is_err()
+    );
+    assert!(super::check_backend_identity(directory.path(), None).is_err());
+}
+
+#[test]
+fn connected_dashboard_records_cannot_select_another_instances_backend() {
     let fixture = Fixture::new();
-    let frontend = fixture.source.path().join("firecrab-frontend");
-    fs::write(frontend.join("Cargo.toml"), "[workspace]\n").unwrap();
-    fs::create_dir(frontend.join("scripts")).unwrap();
-    fs::write(frontend.join("scripts/wasm.mjs"), "process.exit(42)").unwrap();
-    assert!(
-        prepare(fixture.source.path())
-            .unwrap_err()
-            .to_string()
-            .contains("dashboard WASM build failed")
-    );
-    assert!(
-        !fixture
-            .home
-            .path()
-            .join("runtime/dev-dashboard.json")
-            .exists()
-    );
+    let instance = fixture.private_instance("1234567890abcdef", 31001, 31002);
+    let state = Session {
+        source: fixture.source.path().join("different-frontend"),
+        session: Uuid::new_v4(),
+        dependencies: "deps".into(),
+        port: 31003,
+        api_port: 31001,
+        resource_port: 31002,
+        isolated: true,
+    };
+    let path = instance
+        .managed_home
+        .join("runtime/dev-dashboard-connected.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+    assert!(connected_session(&instance).unwrap().is_some());
+    let wrong = Session {
+        api_port: 5523,
+        ..state
+    };
+    fs::write(path, serde_json::to_vec(&wrong).unwrap()).unwrap();
+    assert!(connected_session(&instance).is_err());
 }

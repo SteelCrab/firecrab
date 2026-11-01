@@ -185,3 +185,65 @@ test('an unaccepted close reply retries its original operation identity',async()
   assert.deepEqual(requests[0],requests[1]);canvas.acknowledge(id);
   await expect(page.locator('iframe')).toHaveCount(0);assert.equal(canvas.stopRequests,0);
 });
+
+test('project terminals fence input, retain independent views, and resume output without replaying input',async()=>{
+  const canvas=installCanvasHistoryFixture(fixture),records=new Map(),connections=[],inputs=[],outputs=new Map();
+  const old=fixture.matchHandler;
+  fixture.handlers.set("GET "+canvas.base+"/terminals",({send})=>send(200,[...records.values()]));
+  const publish=(id)=>{for(const connection of connections.filter(item=>item.id===id))connection.socket.send(JSON.stringify({type:"state",terminal:records.get(id)}));};
+  fixture.matchHandler=({method,path})=>{
+    if(!path.startsWith(canvas.base+"/terminals/"))return old?.({method,path});
+    return ({body,send})=>{
+      const [id,action]=path.slice((canvas.base+"/terminals/").length).split("/");
+      if(method==="PUT"&&!action){
+        const record=records.get(id)||{id,...body,status:"running",controlGeneration:0,controller:null};records.set(id,record);outputs.set(id,outputs.get(id)||Buffer.from("Terminal fixture · no native shell\r\n"));return send(200,record);
+      }
+      const record=records.get(id);if(!record)return send(404,{error:{message:"Missing terminal"}});
+      if(method==="POST"&&action==="control"){
+        if(body.expectedGeneration!==record.controlGeneration)return send(409,{error:{message:"Stale control"}});
+        const control={clientId:body.clientId,generation:++record.controlGeneration,token:randomUUID()};
+        record.controller={clientId:control.clientId};record.control=control;publish(id);return send(200,control);
+      }
+      if(method==="POST"&&action==="stop"){record.status="stopped";record.controller=null;publish(id);return send(200,record);}
+      if(method==="DELETE"&&action==="control"){record.controller=null;return send(200,{});}
+      return send(200,record);
+    };
+  };
+  await page.routeWebSocket("**/workspace/terminals/*/socket?cursor=*",socket=>{
+    const url=new URL(socket.url()),id=url.pathname.split("/").at(-2),cursor=Number(url.searchParams.get("cursor")||0);
+    if(!records.has(id)){socket.close();return;}
+    const connection={id,socket,cursor};connections.push(connection);
+    socket.send(JSON.stringify({type:"state",terminal:records.get(id)}));
+    const output=outputs.get(id)||Buffer.alloc(0);
+    socket.send(JSON.stringify({type:"output",output:{start:0,next:output.length,contentBase64:output.toString("base64")}}));
+    socket.onMessage(raw=>{
+      const value=JSON.parse(String(raw));
+      if(value.type!=="input")return;
+      const record=records.get(id);assert.deepEqual(value.control,record.control);
+      inputs.push(value);const bytes=Buffer.from(value.contentBase64,"base64");const start=outputs.get(id).length;
+      outputs.set(id,Buffer.concat([outputs.get(id),bytes]));socket.send(JSON.stringify({type:"output",output:{start,next:start+bytes.length,contentBase64:bytes.toString("base64")}}));
+    });
+  });
+  await page.goto(fixture.url+"/#/ai-canvas");
+  await page.getByLabel("Project",{exact:true}).selectOption(canvas.project);
+  await page.getByRole("button",{name:"Open project",exact:true}).click();
+  await page.getByRole("button",{name:"Add terminal",exact:true}).click();
+  const panel=page.locator(".cw-terminal").first();
+  await expect(panel.locator(".terminal-output")).toContainText("Terminal fixture");
+  await panel.locator(".xterm-helper-textarea").focus();await page.keyboard.type("blocked");
+  assert.equal(inputs.length,0);
+  await panel.getByRole("button",{name:"Take input control",exact:true}).click();
+  await expect(panel).toContainText("You control input");
+  await panel.locator(".xterm-helper-textarea").focus();await page.keyboard.type("owned");
+  await expect(panel.locator(".terminal-output")).toContainText("owned");
+  await page.getByRole("button",{name:"Add terminal",exact:true}).click();
+  await expect(page.locator(".cw-terminal")).toHaveCount(2);
+  await expect(page.locator(".cw-terminal .terminal-output").last()).toContainText("Terminal fixture");
+  assert.equal(records.size,2);
+  const inputCount=inputs.length,first=connections[0];first.socket.close();
+  await expect.poll(()=>connections.filter(item=>item.id===first.id).length,{timeout:10000}).toBe(2);
+  assert.equal(inputs.length,inputCount);
+  await expect(panel.locator(".terminal-output")).toContainText("owned");
+  assert.equal((await panel.locator(".terminal-output").textContent()).match(/owned/g).length,1);
+  assert.ok(connections.find(item=>item.id===first.id&&item!==first).cursor>0);
+});

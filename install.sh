@@ -260,6 +260,16 @@ pkg_name() {
         *:findutils)  echo "findutils" ;;
         *:tar)        echo "tar" ;;
         apt-get:xz)   echo "xz-utils" ;;
+        apt-get:kernel-compiler) echo "build-essential" ;;
+        dnf:kernel-compiler) echo "gcc make" ;;
+        zypper:kernel-compiler) echo "gcc make" ;;
+        pacman:kernel-compiler) echo "base-devel" ;;
+        apk:kernel-compiler) echo "build-base" ;;
+        apt-get:kernel-headers) echo "libelf-dev libssl-dev" ;;
+        dnf:kernel-headers) echo "elfutils-libelf-devel openssl-devel" ;;
+        zypper:kernel-headers) echo "libelf-devel libopenssl-devel" ;;
+        pacman:kernel-headers) echo "libelf openssl" ;;
+        apk:kernel-headers) echo "elfutils-dev openssl-dev" ;;
         *:xz)         echo "xz" ;;
         # Native logical backups use client tools, never database servers.
         apt-get:mysql-client) echo "mariadb-client" ;;
@@ -415,6 +425,8 @@ ensure_runtime_deps() {
     ensure tar tar       || failed=1
     ensure zstd zstd     || failed=1
     ensure sha256sum coreutils || failed=1
+    # Kernel builds are optional, but install their prerequisites by default.
+    ensure_kernel_build_deps || warn "kernel builds are unavailable until their dependencies are installed"
     # Missing backup clients do not prevent VM or read-only DB operation.
     # Install them by default; --no-deps and --check never change the host.
     ensure pg_dump postgresql-client || warn "pg_dump unavailable; PostgreSQL backups need a compatible client"
@@ -423,6 +435,30 @@ ensure_runtime_deps() {
     ensure mysqldump mysql-client || warn "mysqldump unavailable; MySQL backups are unavailable"
     ensure mysql mysql-client || warn "mysql unavailable; MySQL restore is unavailable"
     return $failed
+}
+
+# The dashboard builds kernels from verified upstream sources on this host.
+ensure_kernel_build_deps() {
+    local failed=0 packages
+    ensure make kernel-compiler || failed=1
+    ensure cc kernel-compiler || failed=1
+    ensure flex flex || failed=1
+    ensure bison bison || failed=1
+    ensure bc bc || failed=1
+    ensure perl perl || failed=1
+    ensure xz xz || failed=1
+    if ! printf '#include <libelf.h>\n#include <gelf.h>\n#include <openssl/opensslv.h>\n' | cc -x c -fsyntax-only - >/dev/null 2>&1; then
+        read -ra packages <<<"$(pkg_name kernel-headers)"
+        if [ "$MODE" = check ] || [ "$INSTALL_DEPS" -ne 1 ] || [ -z "$PKG" ]; then
+            warn "missing kernel build headers (install: ${packages[*]})"
+            failed=1
+        else
+            step "installing ${packages[*]} (kernel build headers)"
+            pkg_install "${packages[@]}" || failed=1
+            printf '#include <libelf.h>\n#include <gelf.h>\n#include <openssl/opensslv.h>\n' | cc -x c -fsyntax-only - >/dev/null 2>&1 || failed=1
+        fi
+    fi
+    return "$failed"
 }
 
 # Comes from its own upstream script rather than a distro package.

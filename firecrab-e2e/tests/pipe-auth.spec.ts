@@ -1,7 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { AuthConnection, AuthLogin } from "../types/api/pipeAuth";
 
-const firecrab: AuthConnection = { provider: "firecrab", account: "owner@example.com", accountId: "11111111-1111-4111-8111-111111111111", expiresAt: 4102444800000, registry: null, region: null, services: [] };
+const firecrab: AuthConnection = {
+  provider: "firecrab",
+  account: "owner@example.com",
+  accountId: "11111111-1111-4111-8111-111111111111",
+  expiresAt: 4102444800000,
+  registry: null,
+  region: null,
+  services: [],
+};
 const github: AuthConnection = {
   provider: "github",
   account: "octocat",
@@ -34,8 +42,21 @@ async function open(
   const transfers: string[] = [];
   const tunnelSaves: unknown[] = [];
   const snapshot: import("../types/api/pipe").PipeSnapshot = {
-    config: { listen: "127.0.0.1:8080", routes: [{ host: "app.example.com", pathPrefix: "/", upstreams: ["127.0.0.1:9000"] }], tunnel: null },
-    units: [], nginxAvailable: true, cloudflaredAvailable: true, firecrabTunnels: [],
+    config: {
+      listen: "127.0.0.1:8080",
+      routes: [
+        {
+          host: "app.example.com",
+          pathPrefix: "/",
+          upstreams: ["127.0.0.1:9000"],
+        },
+      ],
+      tunnel: null,
+    },
+    units: [],
+    nginxAvailable: true,
+    cloudflaredAvailable: true,
+    firecrabTunnels: [],
   };
   await page.addInitScript(
     (locale) => localStorage.setItem("firecrab.locale", locale),
@@ -69,11 +90,18 @@ async function open(
           json: {
             error: {
               message:
-                provider === "firecrab" ? "The Firecrab account integration token is invalid, expired, or revoked" : "GitHub rejected the token. Check its validity and permissions.",
+                provider === "firecrab"
+                  ? "The Firecrab account integration token is invalid, expired, or revoked"
+                  : "GitHub rejected the token. Check its validity and permissions.",
             },
           },
         });
-      const connection = provider === "github" ? github : provider === "firecrab" ? firecrab : aws;
+      const connection =
+        provider === "github"
+          ? github
+          : provider === "firecrab"
+            ? firecrab
+            : aws;
       connections = [
         ...connections.filter((row) => row.provider !== provider),
         connection,
@@ -82,12 +110,15 @@ async function open(
     }
     if (path === "/api/pipe/registries")
       return route.fulfill({
-        json: connections.filter(connection => connection.registry !== null).map((connection) => ({
-          registry: connection.registry,
-          username: connection.provider === "aws" ? "AWS" : connection.account,
-          provider: connection.provider === "aws" ? "ecr" : "ghcr",
-          authProvider: connection.provider,
-        })),
+        json: connections
+          .filter((connection) => connection.registry !== null)
+          .map((connection) => ({
+            registry: connection.registry,
+            username:
+              connection.provider === "aws" ? "AWS" : connection.account,
+            provider: connection.provider === "aws" ? "ecr" : "ghcr",
+            authProvider: connection.provider,
+          })),
       });
     if (path.endsWith("/repositories")) {
       catalogs.push(url.search);
@@ -133,17 +164,26 @@ async function open(
     if (path === "/api/pipe") return route.fulfill({ json: snapshot });
     if (path === "/api/pipe/firecrab-tunnels") {
       tunnelSaves.push(route.request().postDataJSON());
-      snapshot.firecrabTunnels = [{ subdomain: "console-app", publicUrl: "https://console-app.firecrab.dev", target: { type: "nginx", host: "app.example.com" }, connectorId: "11111111-1111-4111-8111-111111111111", connected: true, error: null }];
+      snapshot.firecrabTunnels = [
+        {
+          subdomain: "console-app",
+          publicUrl: "https://console-app.firecrab.dev",
+          target: { type: "nginx", host: "app.example.com" },
+          connectorId: "11111111-1111-4111-8111-111111111111",
+          connected: true,
+          error: null,
+        },
+      ];
       return route.fulfill({ json: snapshot });
     }
     return route.fulfill({
-        json: {
-          config: null,
-          units: [],
-          nginxAvailable: true,
-          cloudflaredAvailable: true,
-        },
-      });
+      json: {
+        config: null,
+        units: [],
+        nginxAvailable: true,
+        cloudflaredAvailable: true,
+      },
+    });
     return route.fulfill({
       status: 404,
       json: { error: { message: "Fixture route unavailable" } },
@@ -166,74 +206,255 @@ async function open(
   };
 }
 
+async function credentials(page: Page, provider: string) {
+  await page.getByRole("button", { name: provider, exact: true }).waitFor();
+  const connect = page.getByRole("button", {
+    name: new RegExp(`^(Connect ${provider}|${provider} 연결)$`),
+  });
+  if (await connect.count()) {
+    await connect.click();
+    return;
+  }
+  await page.getByRole("button", { name: provider, exact: true }).click();
+  await page
+    .locator("#detail-panel")
+    .getByRole("button", { name: /^(Update credentials|인증 정보 갱신)$/ })
+    .click();
+}
+
 // Assert API behavior and credential lifetime independently of the previous React layout.
 test.describe("Pipe Auth @dashboard", () => {
-  test("links a console account token, shows verified identity, and clears browser secrets", async ({ page }, info) => {
+  for (const locale of [undefined, "ko"] as const) {
+    for (const provider of [
+      {
+        id: "firecrab",
+        name: "Firecrab",
+        required: ["Account integration", "fca_"],
+        url: "https://console.firecrab.dev/#account",
+      },
+      {
+        id: "github",
+        name: "GitHub",
+        required: ["classic", "read:packages", "ghcr.io", "SSO"],
+        url: "https://github.com/settings/tokens",
+      },
+      {
+        id: "aws",
+        name: "AWS",
+        required: [
+          "IAM",
+          "ap-northeast-2",
+          "ecr:GetAuthorizationToken",
+          "ecr:DescribeRepositories",
+        ],
+        url: "https://docs.aws.amazon.com/IAM/latest/UserGuide/access-key-self-managed.html",
+      },
+    ]) {
+      test(`shows four account connection steps for ${provider.name} in ${locale ?? "en"}`, async ({
+        page,
+      }, info) => {
+        await page.setViewportSize({ width: 1440, height: 1100 });
+        const mock = await open(page, { locale });
+        const overview = page.locator(".auth-setup-overview");
+        await expect(overview.locator("summary")).toHaveText(
+          ["Firecrab", "GitHub", "AWS"].map(
+            (name) =>
+              `${name} ${locale === "ko" ? "계정 연동 방법" : "connection steps"}`,
+          ),
+        );
+        const card = overview
+          .locator("details")
+          .nth(["firecrab", "github", "aws"].indexOf(provider.id));
+        await card.locator("summary").click();
+        await expect(card.locator("ol > li")).toHaveCount(4);
+        for (const text of provider.required)
+          await expect(card).toContainText(text);
+        await card.locator("summary").click();
+        await page
+          .getByRole("button", {
+            name:
+              locale === "ko"
+                ? `${provider.name} 연결`
+                : `Connect ${provider.name}`,
+            exact: true,
+          })
+          .click();
+        const guide = page.locator("#editor .auth-setup");
+        await expect(guide.getByRole("heading")).toHaveText(
+          `${provider.name} ${locale === "ko" ? "계정 연동 방법" : "connection steps"}`,
+        );
+        await expect(guide.locator("ol > li")).toHaveCount(4);
+        for (const text of provider.required)
+          await expect(guide).toContainText(text);
+        await expect(
+          guide.locator(`a[href="${provider.url}"]`),
+        ).toHaveAttribute("rel", "noopener noreferrer");
+        expect(mock.writes).toHaveLength(0);
+        if (locale === "ko")
+          await page.screenshot({
+            path: info.outputPath(`auth-guide-${provider.id}-ko.png`),
+            fullPage: true,
+          });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.locator("#detail-panel .pipe-auth-detail").evaluate((el) => {
+          el.scrollTop = 0;
+        });
+        await expect(guide).toBeVisible();
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true);
+        if (locale === "ko")
+          await page.screenshot({
+            path: info.outputPath(`auth-guide-${provider.id}-mobile.png`),
+            fullPage: true,
+          });
+      });
+    }
+  }
+  test("links a console account token, shows verified identity, and clears browser secrets", async ({
+    page,
+  }, info) => {
     const mock = await open(page, { connections: [github] });
-    await page.getByRole("button", { name: "Connect Firecrab", exact: true }).click();
+    await credentials(page, "Firecrab");
     const input = page.getByLabel("Account integration token", { exact: true });
     await expect(input).toHaveAttribute("type", "password");
-    await expect(page.getByRole("link", { name: "console.firecrab.dev", exact: true })).toHaveAttribute("href", "https://console.firecrab.dev/#account");
+    await expect(
+      page.getByRole("link", { name: "console.firecrab.dev", exact: true }),
+    ).toHaveAttribute("href", "https://console.firecrab.dev/#account");
     const token = "fca_" + "c".repeat(64);
     await input.fill(token);
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(page.getByRole("status")).toContainText("Connected to the Firecrab account");
+    await page
+      .getByRole("button", { name: "Verify and connect", exact: true })
+      .click();
+    await expect(page.getByRole("status")).toContainText("Account connected.");
     expect(mock.writes).toEqual([{ provider: "firecrab", token }]);
     const detail = page.locator("#detail-panel");
-    await expect(detail.getByText(firecrab.account, { exact: true })).toBeVisible();
-    await expect(detail.getByText(firecrab.accountId!, { exact: true })).toBeVisible();
-    await expect(detail.getByText("Token expires", { exact: true })).toBeVisible();
-    await expect(detail.getByRole("link", { name: "Firecrab Console", exact: true })).toHaveAttribute("href", "https://console.firecrab.dev/#account");
+    await expect(
+      detail.getByText(firecrab.account, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      detail.getByText(firecrab.accountId!, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      detail.getByText("Token expires", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      detail.getByRole("link", { name: "Firecrab Console", exact: true }),
+    ).toHaveAttribute("href", "https://console.firecrab.dev/#account");
     await expect(page.locator('input[type="password"]')).toHaveCount(0);
-    expect(await page.evaluate(() => JSON.stringify(localStorage) + JSON.stringify(sessionStorage))).not.toContain(token);
-    await page.screenshot({ path: info.outputPath("pipe-auth-firecrab-account.png"), fullPage: true });
-    page.once("dialog", dialog => { expect(dialog.message()).toContain("account integration token"); return dialog.accept(); });
-    await detail.getByRole("button", { name: "Disconnect", exact: true }).click();
+    expect(
+      await page.evaluate(
+        () => JSON.stringify(localStorage) + JSON.stringify(sessionStorage),
+      ),
+    ).not.toContain(token);
+    await page.screenshot({
+      path: info.outputPath("pipe-auth-firecrab-account.png"),
+      fullPage: true,
+    });
+    page.once("dialog", (dialog) => {
+      expect(dialog.message()).toContain("account integration token");
+      return dialog.accept();
+    });
+    await detail
+      .getByRole("button", { name: "Disconnect", exact: true })
+      .click();
     await expect.poll(() => mock.deletes).toEqual(["firecrab"]);
-    await expect(page.getByRole("cell", { name: /^octocat(\s|$)/ })).toBeVisible();
+    await expect(
+      page.getByRole("cell", { name: /^octocat(\s|$)/ }),
+    ).toBeVisible();
   });
 
-  test("keeps Tunnel tokens separate from the linked account", async ({ page }) => {
+  test("keeps Tunnel tokens separate from the linked account", async ({
+    page,
+  }) => {
     const mock = await open(page, { connections: [firecrab] });
-    await page.getByRole("button", { name: "Connect Firecrab", exact: true }).click();
-    await page.getByLabel("Account integration token", { exact: true }).fill("a".repeat(64));
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await credentials(page, "Firecrab");
+    await page
+      .getByLabel("Account integration token", { exact: true })
+      .fill("a".repeat(64));
+    await page
+      .getByRole("button", { name: "Verify and connect", exact: true })
+      .click();
     expect(mock.writes).toHaveLength(0);
-    page.once("dialog", dialog => dialog.accept());
+    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await page.goto("/#/pipe/firecrab-tunnel");
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
-    await expect(page.getByLabel("Account integration token", { exact: true })).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "Add fixed address", exact: true })
+      .click();
+    await expect(
+      page.getByLabel("Account integration token", { exact: true }),
+    ).toHaveCount(0);
     const token = "b".repeat(64);
-    await page.getByLabel("Ownership token", { exact: true }).fill(token);
-    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
-    await page.getByLabel("Route host", { exact: true }).selectOption("app.example.com");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(page.getByRole("link", { name: "https://console-app.firecrab.dev", exact: true })).toBeVisible();
-    expect(mock.tunnelSaves).toEqual([{ token, target: { type: "nginx", host: "app.example.com" } }]);
+    await page.getByLabel("Connection token", { exact: true }).fill(token);
+    await page
+      .getByRole("combobox", { name: "Connection target", exact: true })
+      .selectOption("nginx");
+    await page
+      .getByRole("combobox", { name: "Nginx route domain", exact: true })
+      .selectOption("app.example.com");
+    await page
+      .getByRole("button", { name: "Connect address", exact: true })
+      .click();
+    await expect(
+      page.getByRole("link", {
+        name: "https://console-app.firecrab.dev",
+        exact: true,
+      }),
+    ).toBeVisible();
+    expect(mock.tunnelSaves).toEqual([
+      { token, target: { type: "nginx", host: "app.example.com" } },
+    ]);
   });
 
-  test("preserves the linked Firecrab account when its replacement token is rejected", async ({ page }) => {
+  test("preserves the linked Firecrab account when its replacement token is rejected", async ({
+    page,
+  }) => {
     const mock = await open(page, { connections: [firecrab], reject: true });
-    await page.getByRole("button", { name: "Connect Firecrab", exact: true }).click();
-    await page.getByLabel("Account integration token", { exact: true }).fill("fca_" + "a".repeat(64));
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(page.getByRole("alert")).toContainText("invalid, expired, or revoked");
+    await credentials(page, "Firecrab");
+    await page
+      .getByLabel("Account integration token", { exact: true })
+      .fill("fca_" + "a".repeat(64));
+    await page
+      .getByRole("button", { name: "Verify and connect", exact: true })
+      .click();
+    await expect(page.getByRole("alert")).toContainText(
+      "invalid, expired, or revoked",
+    );
     expect(mock.connections).toEqual([firecrab]);
-    page.once("dialog", dialog => dialog.accept());
+    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
-    await expect(page.getByRole("cell", { name: firecrab.account, exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("cell", { name: firecrab.account, exact: true }),
+    ).toBeVisible();
     await expect(page.locator('input[type="password"]')).toHaveCount(0);
   });
 
-  test("shows the account token form on a narrow Korean screen", async ({ page }, info) => {
+  test("shows the account token form on a narrow Korean screen", async ({
+    page,
+  }, info) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await open(page, { locale: "ko" });
-    await page.getByRole("button", { name: "Firecrab 연결", exact: true }).click();
-    await expect(page.getByLabel("계정 연동 토큰", { exact: true })).toBeVisible();
-    await expect(page.getByRole("link", { name: "console.firecrab.dev", exact: true })).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await page.screenshot({ path: info.outputPath("pipe-auth-firecrab-mobile-ko.png"), fullPage: true });
+    await page
+      .getByRole("button", { name: "Firecrab 연결", exact: true })
+      .click();
+    await expect(
+      page.getByLabel("계정 연동 토큰", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "console.firecrab.dev", exact: true }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: info.outputPath("pipe-auth-firecrab-mobile-ko.png"),
+      fullPage: true,
+    });
   });
 
   test("discovers connected providers without loading credentials", async ({
@@ -243,8 +464,9 @@ test.describe("Pipe Auth @dashboard", () => {
     await expect(
       page.getByRole("cell", { name: /^octocat(\s|$)/ }),
     ).toBeVisible();
+    await page.getByRole("button", { name: "AWS", exact: true }).click();
     await expect(
-      page.getByRole("cell", { name: aws.registry!, exact: true }),
+      page.locator("#detail-panel").getByText(aws.registry!, { exact: true }),
     ).toBeVisible();
     await expect(page.locator("input[type=password]")).toHaveCount(0);
   });
@@ -252,11 +474,13 @@ test.describe("Pipe Auth @dashboard", () => {
     page,
   }) => {
     const mock = await open(page);
+    await credentials(page, "GitHub");
     await page
-      .getByRole("button", { name: "Connect GitHub", exact: true })
+      .getByLabel("Personal access token (classic)", { exact: true })
+      .fill("private-token");
+    await page
+      .getByRole("button", { name: "Verify and connect", exact: true })
       .click();
-    await page.getByLabel("Token", { exact: true }).fill("private-token");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.locator("#editor")).toHaveCount(0);
     expect(mock.writes).toEqual([
       { provider: "github", token: "private-token" },
@@ -278,15 +502,19 @@ test.describe("Pipe Auth @dashboard", () => {
     page,
   }) => {
     const mock = await open(page);
+    await credentials(page, "AWS");
     await page
-      .getByRole("button", { name: "Connect AWS", exact: true })
-      .click();
-    await page.getByLabel("Access key ID", { exact: true }).fill("FIXTURE_KEY");
+      .getByLabel("AWS access key ID", { exact: true })
+      .fill("FIXTURE_KEY");
     await page
-      .getByLabel("Secret access key", { exact: true })
+      .getByLabel("AWS secret access key", { exact: true })
       .fill("private-key");
-    await page.getByLabel("Session token", { exact: true }).fill("session");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page
+      .getByLabel("AWS session token (optional)", { exact: true })
+      .fill("session");
+    await page
+      .getByRole("button", { name: "Verify and connect", exact: true })
+      .click();
     await expect(page.locator("#editor")).toHaveCount(0);
     expect(mock.writes).toEqual([
       {
@@ -302,15 +530,17 @@ test.describe("Pipe Auth @dashboard", () => {
     page,
   }) => {
     const mock = await open(page, { connections: [github], reject: true });
+    await credentials(page, "GitHub");
     await page
-      .getByRole("button", { name: "Connect GitHub", exact: true })
+      .getByLabel("Personal access token (classic)", { exact: true })
+      .fill("rejected-token");
+    await page
+      .getByRole("button", { name: "Verify and connect", exact: true })
       .click();
-    await page.getByLabel("Token", { exact: true }).fill("rejected-token");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByRole("alert")).toContainText("GitHub rejected");
-    await expect(page.getByLabel("Token", { exact: true })).toHaveValue(
-      "rejected-token",
-    );
+    await expect(
+      page.getByLabel("Personal access token (classic)", { exact: true }),
+    ).toHaveValue("rejected-token");
     expect(mock.connections).toEqual([github]);
   });
   test("disconnects only the selected provider", async ({ page }) => {
@@ -318,13 +548,13 @@ test.describe("Pipe Auth @dashboard", () => {
     await page
       .getByRole("row")
       .filter({ hasText: "octocat" })
-      .getByRole("button", { name: "Details", exact: true })
+      .getByRole("button", { name: "GitHub", exact: true })
       .click();
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Disconnect", exact: true }).click();
     await expect.poll(() => mock.deletes).toEqual(["github"]);
     await expect(
-      page.getByRole("cell", { name: aws.account!, exact: true }),
+      page.getByRole("cell", { name: new RegExp(`^${aws.account}`) }),
     ).toBeVisible();
   });
   test("retries failed discovery and preserves a dirty credential draft", async ({
@@ -335,40 +565,49 @@ test.describe("Pipe Auth @dashboard", () => {
       "Connections unavailable",
     );
     mock.recover();
-    await page.waitForResponse(
+    const reloaded = page.waitForResponse(
       (r) =>
         new URL(r.url()).pathname === "/api/pipe/auth" &&
         r.request().method() === "GET",
     );
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await reloaded;
     await expect(page.getByRole("alert")).toHaveCount(0);
+    await credentials(page, "GitHub");
     await page
-      .getByRole("button", { name: "Connect GitHub", exact: true })
-      .click();
-    await page.getByLabel("Token", { exact: true }).fill("draft");
+      .getByLabel("Personal access token (classic)", { exact: true })
+      .fill("draft");
     page.once("dialog", (d) => d.dismiss());
     await page.getByRole("link", { name: "MicroVM", exact: true }).click();
-    await expect(page.getByLabel("Token", { exact: true })).toHaveValue(
-      "draft",
-    );
+    await expect(
+      page.getByLabel("Personal access token (classic)", { exact: true }),
+    ).toHaveValue("draft");
   });
   test("preserves the opaque ECR cursor and pulls the selected repository", async ({
     page,
   }) => {
     const mock = await open(page, { connections: [aws] });
     await page.goto("/#/pipe/registry");
-    await expect(page.locator("#registry-repository")).toHaveValue("team/app");
+    await expect(
+      page.locator('.registry-catalog .registry-select[aria-pressed="true"]'),
+    ).toHaveText("team/app");
     await page
       .getByRole("button", { name: "More repositories", exact: true })
       .click();
-    await expect(page.locator("#registry-repository option")).toHaveCount(2);
+    await expect(
+      page.locator(".registry-catalog .registry-select"),
+    ).toHaveCount(2);
     expect(
       mock.catalogs.some(
         (q) => new URLSearchParams(q).get("cursor") === "opaque+/=cursor",
       ),
     ).toBe(true);
-    await page.locator("#registry-repository").selectOption("team/worker");
-    await expect(page.locator("#registry-tag")).toHaveValue("v1");
-    await page.getByRole("button", { name: "Pull", exact: true }).click();
+    await page
+      .locator(".registry-catalog")
+      .getByRole("button", { name: "team/worker", exact: true })
+      .click();
+    await expect(page.locator("#registry-image-tag")).toHaveValue("v1");
+    await page.getByRole("button", { name: "Pull image", exact: true }).click();
     await expect
       .poll(() => mock.transfers)
       .toEqual([`${aws.registry}/team/worker:v1`]);
@@ -376,8 +615,8 @@ test.describe("Pipe Auth @dashboard", () => {
   test("keeps Korean credentials usable on mobile", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await open(page, { locale: "ko" });
-    await page.locator("[data-action=create][data-id=aws]").click();
-    await page.locator("#field-accessKeyId").fill("FIXTURE");
+    await page.getByRole("button", { name: "AWS 연결", exact: true }).click();
+    await page.locator("#pipe-auth-access-key").fill("FIXTURE");
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,

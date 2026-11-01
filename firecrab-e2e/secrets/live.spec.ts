@@ -16,7 +16,7 @@ test("SEC9: CRUD survives an API restart and leaves only encrypted values on dis
   expect(created).not.toHaveProperty("value");
   await page.getByRole("button", { name: "Edit qa-DB_PASSWORD", exact: true }).click();
   await expect(page.getByLabel("Secret value", { exact: true })).toBeHidden();
-  await expect(page.getByLabel("Secret value", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("Secret value", { exact: true })).toHaveCount(0);
   await page.getByLabel("Description", { exact: true }).fill("qa-description-only");
   await page.getByRole("button", { name: "Save secret", exact: true }).click();
   await expect(page.getByText("qa-description-only", { exact: true })).toBeVisible();
@@ -33,7 +33,7 @@ test("SEC9: CRUD survives an API restart and leaves only encrypted values on dis
   await expect(page.getByLabel("qa-DB_PASSWORD value", { exact: true })).toHaveText(value);
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete qa-DB_PASSWORD", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Internal secrets", exact: true }).getByRole("status")).toContainText("No secrets yet");
+  await expect(page.getByRole("tabpanel", { name: /^Internal/ }).getByRole("status")).toContainText("No secrets yet");
   await local.restart();
   expect(await local.rows()).toEqual([]);
 });
@@ -72,6 +72,7 @@ test("SEC10: import applies a captured snapshot and keeps local copies after dis
 });
 
 test("SEC11: upload rejects a changed remote and applies only the selected local values once", async ({ page, local, remote }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await local.create("qa-UPLOAD", "qa-upload-value");
   await local.create("qa-UNSELECTED", "qa-should-stay-local");
   const target = await remote.create("qa-UPLOAD", "qa-before-preview");
@@ -100,6 +101,7 @@ test("SEC11: upload rejects a changed remote and applies only the selected local
 });
 
 test("SEC12: stale editor versions and stale transfer previews cannot overwrite local data", async ({ page, local, remote }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const row = await local.create("qa-CONFLICT", "qa-original");
   await remote.create("qa-CONFLICT", "qa-import");
   await openSecrets(page, local);
@@ -144,13 +146,13 @@ test("SEC13: Firecrab proxy credentials survive edits and restarts; provider fai
     await openSecrets(page, local);
     await page.getByRole("tab", { name: /External connections/ }).click();
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
-    await page.getByRole("radiogroup", { name: "Provider", exact: true }).getByRole("radio", { name: "Firecrab · PipeSecrets", exact: true }).check();
+    await page.getByLabel("Provider", { exact: true }).selectOption("firecrab");
     await page.getByLabel("Connection name", { exact: true }).fill("qa-proxy");
     await page.getByLabel("Base URL", { exact: true }).fill(`http://127.0.0.1:${address.port}`);
-    await page.getByLabel("Bearer token", { exact: true }).fill("qa-private-credential");
+    await page.getByLabel("Bearer token (optional)", { exact: true }).fill("qa-private-credential");
     await page.getByRole("button", { name: "Save connection", exact: true }).click();
     await page.getByRole("button", { name: "Edit connection qa-proxy", exact: true }).click();
-    await expect(page.getByLabel("Bearer token", { exact: true })).toHaveValue("");
+    await expect(page.getByLabel("Bearer token (optional)", { exact: true })).toHaveValue("");
     await page.getByRole("button", { name: "Save connection", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Edit connection", exact: true })).toHaveCount(0);
     expect(JSON.stringify((await local.request("GET", "/connections")).body)).not.toContain("qa-private-credential");

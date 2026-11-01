@@ -64,11 +64,9 @@ cargo build -p firecrab-api -p firecrab-helper
 # Terminal 2: API
 cargo run -p firecrab-api
 
-# Terminal 3: Rust/WASM dashboard
-rustup target add wasm32-unknown-unknown
-cargo install wasm-pack --version 0.14.0 --locked
+# Terminal 3: React dashboard
 npm ci --prefix firecrab-frontend
-npm run dev --prefix firecrab-frontend
+FIRECRAB_DEV_API_PORT=5523 npm run dev --prefix firecrab-frontend
 ```
 
 **macOS:**
@@ -113,8 +111,6 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --document-private-items
-rustup target add wasm32-unknown-unknown
-cargo install wasm-pack --version 0.14.0 --locked
 npm ci --prefix firecrab-frontend
 npm run lint --prefix firecrab-frontend
 npm run build --prefix firecrab-frontend

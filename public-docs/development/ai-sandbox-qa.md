@@ -1,7 +1,17 @@
 # AI Sandbox validation
 
-The [AI Sandbox guide](../guides/ai-sandbox.md) defines the supported provider, file and guest-execution contracts.
+The [AI Sandbox guide](../guides/ai-sandbox.md) describes the current MicroVM CLI workspace.
+The dashboard no longer has separate project creation, project settings, or a model-task mode. Old `?view=models` links open the same CLI workspace and do not request project or provider-model APIs.
+Current dashboard coverage checks CLI task submission, Web VS Code connections, automation, and the retired project entry points. The provider/project API records below are historical backend validation, not instructions for the current dashboard. Existing VM files and stored records are not deleted when removing that UI.
 Do not report a mocked provider or a shell running in Docker as a real MicroVM/model inference result.
+
+## Task board checks
+
+- Submit separate Codex and Claude Code tasks in the same VM. Verify each card identifies its CLI and follows the runtime state.
+- Move a fixture task from blocked to working and then done. Verify the board moves its card without any POST request.
+- Verify that first-run setup stays in Waiting and uncertain delivery stays in Needs attention. Account login sessions must not appear as coding tasks.
+- Open a card, switch between Board and Terminals, and reload. The existing session must remain usable without replaying a task or reconnecting its PTY just to switch views.
+- Check English and Korean at desktop and phone widths. Phone columns stack vertically and task names remain readable.
 
 ## Deterministic checks
 
@@ -102,7 +112,7 @@ The old React components, navigation files and browser API helper are removed.
 - Updated screenshots use the WASM UI and retain the fixture-data labels. Original live-provider/MicroVM evidence above is separate from this frontend port.
 - REST project guards cover invalid/system/private source paths, credential rejection, ineligible or duplicate VM bindings, active-work mutation/deletion, and owned-only deletion that preserves source files and borrowed VMs. The Linux Sandbox suite now passes **24 tests**, including the isolated root guest contract.
 
-Run `cargo test --manifest-path firecrab-frontend/Cargo.toml --locked` and `npm run test:sandbox --prefix firecrab-e2e` for the port-specific checks.
+Run `npm run build --prefix firecrab-frontend` and `npm test --prefix firecrab-frontend` for the current React checks.
 Latest-main integration passes **69 Sandbox/Pipe AI/navigation/Deploy browser scenarios**, plus **4 Queue scenarios**. The current head's CI and the unchanged 80% patch-coverage gate are checked before completion.
 The subsequent linked-account Secret merge also passes **20 Sandbox/Secret browser scenarios**.
 The MicroBlockStorage merge passes **62 Sandbox/Volume/navigation/VM-detail/schedule browser scenarios**.
@@ -199,3 +209,12 @@ An earlier completed task (`77a088c7-969e-4cc5-9bb3-5cab01145484`, nonce `321e0b
 Host storage exhaustion occurs during report export after the passing run. The complete JSON is preserved before stopping and purging only the disposable management VM and its owned workload/network/image data.
 Physical host free space returns to **18 GiB**. The runbook now requires host-level headroom for sparse disks and staging, separately from guest free space.
 Timeout/cancellation, controller-crash/guest-reboot reconciliation and the Canvas handoff remain separate unchecked acceptance steps.
+
+
+## GitHub AUTH and one repository per VM
+
+1. Select a running regular MicroVM without selecting a coding CLI. **Prepare GitHub AUTH** must install only GitHub tools. No coding agent starts.
+2. Select **Connect with GitHub AUTH**. The device code and GitHub authorization link must appear. Reload the dashboard and repeat the API request: the same pending request must remain, without HTTP 409. Restart only the native resource server to verify guest-side recovery.
+3. Authorize **GitHub CLI** in the browser. This step belongs to the user. The dashboard must update automatically and list accessible repositories, including private repositories. Expired/denied requests must allow another attempt. A different controller must not create an auth request.
+4. Bind one repository. Start two coding tasks and open Web VS Code. They must use `/workspace/firecrab/project`. A new task must not clone again, reset edits or switch branches. A different repository requires another VM. Existing task folders remain valid.
+5. Reload the dashboard and reconnect the native service. The VM account and repository binding must remain. Run automation only after all agents in that shared folder stop working. Do not authorize a real account or call a paid model during unattended QA.

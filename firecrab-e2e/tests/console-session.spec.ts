@@ -3,7 +3,10 @@ import { expect, test, type Page } from "@playwright/test";
 import { ApiCleanup } from "../src/api.js";
 import { openDashboard } from "../src/navigation.mjs";
 import { apiUrl, NETWORK_READY, SKIP_GUEST_BOOT } from "../src/constants.js";
-import { startLocalOciRegistry, type LocalOciRegistry } from "../src/registry.js";
+import {
+  startLocalOciRegistry,
+  type LocalOciRegistry,
+} from "../src/registry.js";
 
 /**
  * Issue #303 browser E2E — `exit` in the guest shell ends the terminal
@@ -41,7 +44,7 @@ function consoleStatus(page: Page) {
 }
 
 async function typeInTerminal(page: Page, line: string): Promise<void> {
-  await page.locator(".console-page .terminal-emulator").click();
+  await page.locator(".console-page .xterm-helper-textarea").click();
   await page.keyboard.type(line);
   await page.keyboard.press("Enter");
 }
@@ -85,7 +88,9 @@ async function mockVm(page: Page): Promise<() => number> {
 
 test.describe("terminal session end @dashboard", () => {
   for (const command of ["exit", "logout"]) {
-    test(`a guest ${command} stops at Session ended and New session attaches again`, async ({ page }) => {
+    test(`a guest ${command} stops at Session ended and New session attaches again`, async ({
+      page,
+    }) => {
       const vmReads = await mockVm(page);
       let connections = 0;
       await page.routeWebSocket(`**/ws/vms/${MOCK_VM_ID}/console`, (ws) => {
@@ -97,9 +102,13 @@ test.describe("terminal session end @dashboard", () => {
         );
         let typed = "";
         ws.onMessage((message) => {
-          typed += typeof message === "string" ? message : message.toString("utf8");
+          typed +=
+            typeof message === "string" ? message : message.toString("utf8");
           if (typed.includes(`${command}\r`)) {
-            ws.close({ code: SESSION_ENDED_CLOSE_CODE, reason: "session_ended" });
+            ws.close({
+              code: SESSION_ENDED_CLOSE_CODE,
+              reason: "session_ended",
+            });
           }
         });
       });
@@ -110,7 +119,9 @@ test.describe("terminal session end @dashboard", () => {
       await typeInTerminal(page, command);
 
       await expect(consoleStatus(page)).toHaveText(/Session ended/);
-      await expect(page.locator(".console-page .terminal-output")).toContainText("Guest session ended");
+      await expect(page.locator(".console-page .xterm-rows")).toContainText(
+        "Guest session ended",
+      );
       // Longer than the first reconnect backoff: the page must stay detached.
       await page.waitForTimeout(2500);
       expect(connections).toBe(1);
@@ -126,7 +137,7 @@ test.describe("terminal session end @dashboard", () => {
       await page.mouse.up();
       await expect(consoleStatus(page)).toHaveText(/Connected/);
       expect(connections).toBe(2);
-      await expect(page.locator(".console-page .terminal-output")).toContainText(
+      await expect(page.locator(".console-page .xterm-rows")).toContainText(
         "session ended — starting a new one",
       );
     });
@@ -179,11 +190,13 @@ test.describe("terminal session end in a booted guest", () => {
     await registry?.stop();
   });
 
-  test("exit ends both viewers, keeps the VM running, and a new session executes commands", async ({ page }) => {
+  test("exit ends both viewers, keeps the VM running, and a new session executes commands", async ({
+    page,
+  }) => {
     const { reference, alias } = registry!.announcement;
     const vmId = await bootFixtureGuest(reference, alias);
     const guestFrames: Buffer[] = [];
-    page.on("websocket", socket => {
+    page.on("websocket", (socket) => {
       if (new URL(socket.url()).pathname !== `/ws/vms/${vmId}/console`) return;
       socket.on("framereceived", ({ payload }) => {
         if (typeof payload !== "string") guestFrames.push(payload);
@@ -197,76 +210,146 @@ test.describe("terminal session end in a booted guest", () => {
     await expect(consoleStatus(secondViewer)).toHaveText(/Connected/);
     // `running` and a connected socket can precede the fixture's interactive
     // shell. Wait for its prompt before sending input into the serial console.
-    await expect(page.locator(".console-page .terminal-output")).toContainText(/~ #/, {
-      timeout: 30_000,
-    });
+    await expect(page.locator(".console-page .xterm-rows")).toContainText(
+      /~ #/,
+      {
+        timeout: 30_000,
+      },
+    );
     if (process.env.FIRECRAB_E2E_REQUIRE_GUEST_RESIZE === "1") {
       const geometry = page.locator(".console-geometry");
-      await expect(geometry).toHaveAttribute("data-status", "applied", { timeout: 30_000 });
+      await expect(geometry).toHaveAttribute("data-status", "applied", {
+        timeout: 30_000,
+      });
       const initialSize = await geometry.textContent();
       await page.setViewportSize({ width: 1400, height: 950 });
       await secondViewer.setViewportSize({ width: 1000, height: 750 });
       await expect(geometry).not.toHaveText(initialSize!);
-      await expect(geometry).toHaveAttribute("data-status", "applied", { timeout: 30_000 });
-      await expect(secondViewer.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
+      await expect(geometry).toHaveAttribute("data-status", "applied", {
+        timeout: 30_000,
+      });
+      await expect(secondViewer.locator(".console-geometry")).toHaveAttribute(
+        "data-status",
+        "applied",
+      );
       const checkSize = async () => {
-        await expect.poll(async () => (await page.locator(".console-geometry").textContent()) === (await secondViewer.locator(".console-geometry").textContent())).toBe(true);
-        const dimensions = (await page.locator(".console-geometry").textContent())!.match(/(\d+) × (\d+)/)!;
+        await expect
+          .poll(
+            async () =>
+              (await page.locator(".console-geometry").textContent()) ===
+              (await secondViewer.locator(".console-geometry").textContent()),
+          )
+          .toBe(true);
+        const dimensions = (await page
+          .locator(".console-geometry")
+          .textContent())!.match(/(\d+) × (\d+)/)!;
         const expected = `${dimensions[2]} ${dimensions[1]}`;
-        await typeInTerminal(page, "printf '\\nFCR_SIZE_%s\\n' \"$(/etc/firecrab/busybox stty size)\"");
-        await expect(page.locator(".terminal-output")).toContainText(`FCR_SIZE_${expected}`);
+        await typeInTerminal(
+          page,
+          "printf '\\nFCR_SIZE_%s\\n' \"$(/etc/firecrab/busybox stty size)\"",
+        );
+        await expect(page.locator(".terminal-output")).toContainText(
+          `FCR_SIZE_${expected}`,
+        );
         return expected;
       };
       await checkSize();
       // ash's interactive editor owns WINCH; observe a foreground reader instead.
-      await typeInTerminal(page, "/etc/firecrab/busybox sh -c 'onwinch() { printf \"FCR_WINCH_%s\\n\" \"$(/etc/firecrab/busybox stty size)\"; }; trap onwinch WINCH; printf \"FCR_TRAP_%s\\n\" READY; read -r ignored'");
-      await expect(page.locator(".terminal-output")).toContainText("FCR_TRAP_READY");
-      const previousSize = await page.locator(".console-geometry").textContent();
+      await typeInTerminal(
+        page,
+        '/etc/firecrab/busybox sh -c \'onwinch() { printf "FCR_WINCH_%s\\n" "$(/etc/firecrab/busybox stty size)"; }; trap onwinch WINCH; printf "FCR_TRAP_%s\\n" READY; read -r ignored\'',
+      );
+      await expect(page.locator(".terminal-output")).toContainText(
+        "FCR_TRAP_READY",
+      );
+      const previousSize = await page
+        .locator(".console-geometry")
+        .textContent();
       await page.setViewportSize({ width: 800, height: 600 });
-      await expect(page.locator(".console-geometry")).not.toHaveText(previousSize!);
-      await expect(page.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
+      await expect(page.locator(".console-geometry")).not.toHaveText(
+        previousSize!,
+      );
+      await expect(page.locator(".console-geometry")).toHaveAttribute(
+        "data-status",
+        "applied",
+      );
       const size = (await geometry.textContent())!.match(/(\d+) × (\d+)/)!;
       const expected = `${size[2]} ${size[1]}`;
-      await expect(page.locator(".terminal-output")).toContainText(`FCR_WINCH_${expected}`);
+      await expect(page.locator(".terminal-output")).toContainText(
+        `FCR_WINCH_${expected}`,
+      );
       await page.keyboard.press("Enter");
       await typeInTerminal(page, "printf 'FCR_MONITOR_%s\\n' DONE");
-      await expect(page.locator(".terminal-output")).toContainText("FCR_MONITOR_DONE");
+      await expect(page.locator(".terminal-output")).toContainText(
+        "FCR_MONITOR_DONE",
+      );
       await checkSize();
       // The fixture app keeps writing to ttyS0 and can overwrite vi's visible rows.
       const viStart = guestFrames.length;
-      await typeInTerminal(page, "printf 'FCR_VI_%s\\n' READY > /tmp/fcr-size; /etc/firecrab/busybox vi /tmp/fcr-size");
-      await expect.poll(() => Buffer.concat(guestFrames.slice(viStart)).toString("utf8")).toContain("FCR_VI_READY");
+      await typeInTerminal(
+        page,
+        "printf 'FCR_VI_%s\\n' READY > /tmp/fcr-size; /etc/firecrab/busybox vi /tmp/fcr-size",
+      );
+      await expect
+        .poll(() => Buffer.concat(guestFrames.slice(viStart)).toString("utf8"))
+        .toContain("FCR_VI_READY");
       const viSize = await page.locator(".console-geometry").textContent();
       const viFrameStart = guestFrames.length;
       await page.setViewportSize({ width: 1400, height: 950 });
       await expect(page.locator(".console-geometry")).not.toHaveText(viSize!);
-      await expect(page.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
+      await expect(page.locator(".console-geometry")).toHaveAttribute(
+        "data-status",
+        "applied",
+      );
       const viRows = (await geometry.textContent())!.match(/(\d+) × (\d+)/)![2];
-      await expect.poll(() => Buffer.concat(guestFrames.slice(viFrameStart)).toString("utf8")).toContain(`\x1b[${viRows};1H\x1b[K`);
-      await expect.poll(() => Buffer.concat(guestFrames.slice(viFrameStart)).toString("utf8")).toContain("FCR_VI_READY");
+      await expect
+        .poll(() =>
+          Buffer.concat(guestFrames.slice(viFrameStart)).toString("utf8"),
+        )
+        .toContain(`\x1b[${viRows};1H\x1b[K`);
+      await expect
+        .poll(() =>
+          Buffer.concat(guestFrames.slice(viFrameStart)).toString("utf8"),
+        )
+        .toContain("FCR_VI_READY");
       await page.keyboard.type(":q!");
       await page.keyboard.press("Enter");
       await expect(page.locator(".terminal-output")).toContainText(/~ #/);
       await checkSize();
       const topStart = guestFrames.length;
       await typeInTerminal(page, "/etc/firecrab/busybox top -d 1");
-      await expect.poll(() => Buffer.concat(guestFrames.slice(topStart)).toString("utf8")).toContain("PID");
+      await expect
+        .poll(() => Buffer.concat(guestFrames.slice(topStart)).toString("utf8"))
+        .toContain("PID");
       const topSize = await page.locator(".console-geometry").textContent();
       await page.setViewportSize({ width: 900, height: 650 });
       await expect(page.locator(".console-geometry")).not.toHaveText(topSize!);
-      await expect(page.locator(".console-geometry")).toHaveAttribute("data-status", "applied");
+      await expect(page.locator(".console-geometry")).toHaveAttribute(
+        "data-status",
+        "applied",
+      );
       const topFrameStart = guestFrames.length;
-      await expect.poll(() => Buffer.concat(guestFrames.slice(topFrameStart)).toString("utf8")).toContain("PID");
+      await expect
+        .poll(() =>
+          Buffer.concat(guestFrames.slice(topFrameStart)).toString("utf8"),
+        )
+        .toContain("PID");
       await page.keyboard.press("q");
       await expect(page.locator(".terminal-output")).toContainText(/~ #/);
       await checkSize();
     }
     await typeInTerminal(page, "printf ';1R;145R;1R;145R\\n'");
-    await expect(page.locator(".console-page .terminal-output")).toContainText(";1R;145R;1R;145R");
+    await expect(page.locator(".console-page .xterm-rows")).toContainText(
+      ";1R;145R;1R;145R",
+    );
     await typeInTerminal(page, "exit");
 
-    await expect(consoleStatus(page)).toHaveText(/Session ended/, { timeout: 30_000 });
-    await expect(consoleStatus(secondViewer)).toHaveText(/Session ended/, { timeout: 30_000 });
+    await expect(consoleStatus(page)).toHaveText(/Session ended/, {
+      timeout: 30_000,
+    });
+    await expect(consoleStatus(secondViewer)).toHaveText(/Session ended/, {
+      timeout: 30_000,
+    });
     expect((await api.getVm(vmId))?.state).toBe("running");
 
     // The terminal renders only the visible rows. The guest MOTD and live app output
@@ -276,22 +359,33 @@ test.describe("terminal session end in a booted guest", () => {
     page.on("websocket", (socket) => {
       if (new URL(socket.url()).pathname !== `/ws/vms/${vmId}/console`) return;
       socket.on("framereceived", ({ payload }) => {
-        newSessionFrames.push(typeof payload === "string" ? Buffer.from(payload) : payload);
+        newSessionFrames.push(
+          typeof payload === "string" ? Buffer.from(payload) : payload,
+        );
       });
     });
     await page.getByRole("button", { name: "New session" }).click();
     await expect(consoleStatus(page)).toHaveText(/Connected/);
-    await expect.poll(() => Buffer.concat(newSessionFrames).toString("utf8"), {
-      timeout: 30_000,
-    }).toMatch(/session ended — starting a new one[\s\S]*~ #/);
-    expect(Buffer.concat(newSessionFrames).toString("utf8")).not.toContain(";1R;145R;1R;145R");
-    await expect(page.locator(".console-page .terminal-output")).toContainText(/~ #/, {
-      timeout: 30_000,
-    });
-    const log = (await request("GET", `/api/vms/${vmId}/log`)) as { consoleLog: string };
+    await expect
+      .poll(() => Buffer.concat(newSessionFrames).toString("utf8"), {
+        timeout: 30_000,
+      })
+      .toMatch(/session ended — starting a new one[\s\S]*~ #/);
+    expect(Buffer.concat(newSessionFrames).toString("utf8")).not.toContain(
+      ";1R;145R;1R;145R",
+    );
+    await expect(page.locator(".console-page .xterm-rows")).toContainText(
+      /~ #/,
+      {
+        timeout: 30_000,
+      },
+    );
+    const log = (await request("GET", `/api/vms/${vmId}/log`)) as {
+      consoleLog: string;
+    };
     expect(log.consoleLog).toContain(";1R;145R;1R;145R");
     await typeInTerminal(page, "printf 'FIRECRAB_REATTACH_%s\\n' READY");
-    await expect(page.locator(".console-page .terminal-output")).toContainText(
+    await expect(page.locator(".console-page .xterm-rows")).toContainText(
       "FIRECRAB_REATTACH_READY",
       { timeout: 15_000 },
     );
@@ -301,10 +395,15 @@ test.describe("terminal session end in a booted guest", () => {
   });
 });
 
-async function request(method: string, pathname: string, body?: unknown): Promise<unknown> {
+async function request(
+  method: string,
+  pathname: string,
+  body?: unknown,
+): Promise<unknown> {
   const response = await fetch(`${apiUrl()}${pathname}`, {
     method,
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    headers:
+      body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();
@@ -314,7 +413,11 @@ async function request(method: string, pathname: string, body?: unknown): Promis
   return text ? JSON.parse(text) : null;
 }
 
-async function poll<T>(what: string, timeoutMs: number, probe: () => Promise<T | null>): Promise<T> {
+async function poll<T>(
+  what: string,
+  timeoutMs: number,
+  probe: () => Promise<T | null>,
+): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const value = await probe();
@@ -325,17 +428,27 @@ async function poll<T>(what: string, timeoutMs: number, probe: () => Promise<T |
 }
 
 /** Imports the fixture, then creates and starts one VM from it. */
-async function bootFixtureGuest(reference: string, alias: string): Promise<string> {
+async function bootFixtureGuest(
+  reference: string,
+  alias: string,
+): Promise<string> {
   await request("POST", "/api/oci/import", { reference });
   await poll("the fixture import", 180_000, async () => {
-    const job = (await request("GET", `/api/oci/import/${encodeURIComponent(alias)}`)) as {
+    const job = (await request(
+      "GET",
+      `/api/oci/import/${encodeURIComponent(alias)}`,
+    )) as {
       status: string;
       log?: string;
     };
-    if (job.status === "failed") throw new Error(`fixture import failed:\n${job.log ?? ""}`);
+    if (job.status === "failed")
+      throw new Error(`fixture import failed:\n${job.log ?? ""}`);
     return job.status === "succeeded" ? job : null;
   });
-  const image = (await request("GET", `/api/images/${encodeURIComponent(alias)}`)) as {
+  const image = (await request(
+    "GET",
+    `/api/images/${encodeURIComponent(alias)}`,
+  )) as {
     minDiskGb?: number;
   };
   const network = (await request("POST", "/api/micro-networks", {
@@ -354,11 +467,16 @@ async function bootFixtureGuest(reference: string, alias: string): Promise<strin
   })) as { id: string };
   await request("POST", `/api/vms/${vm.id}/start`);
   await poll("the guest to run", 240_000, async () => {
-    const current = (await request("GET", `/api/vms/${vm.id}`)) as { state: string };
-    if (current.state === "error") throw new Error(`${CONSOLE_VM_NAME} entered error`);
+    const current = (await request("GET", `/api/vms/${vm.id}`)) as {
+      state: string;
+    };
+    if (current.state === "error")
+      throw new Error(`${CONSOLE_VM_NAME} entered error`);
     return current.state === "running" ? current : null;
   });
-  const log = (await request("GET", `/api/vms/${vm.id}/log`)) as { consoleLog: string };
+  const log = (await request("GET", `/api/vms/${vm.id}/log`)) as {
+    consoleLog: string;
+  };
   expect(log.consoleLog).toContain(NETWORK_READY);
   return vm.id;
 }

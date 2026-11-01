@@ -155,7 +155,7 @@ export async function connect(page: Page, remoteUrl: string) {
   await page.getByRole("tab", { name: /External connections/ }).click();
   await page.getByRole("button", { name: "Add connection", exact: true }).click();
   await page.getByLabel("Connection name", { exact: true }).fill("qa-remote");
-  await page.getByRole("radiogroup", { name: "Provider", exact: true }).getByRole("radio", { name: "Firecrab · PipeSecrets", exact: true }).check();
+  await page.getByLabel("Provider", { exact: true }).selectOption("firecrab");
   await page.getByLabel("Base URL", { exact: true }).fill(remoteUrl);
   await page.getByRole("button", { name: "Save connection", exact: true }).click();
   await expect(page.getByRole("button", { name: "Import from qa-remote", exact: true })).toBeVisible();

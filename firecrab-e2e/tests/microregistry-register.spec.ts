@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { createNetwork, importOci } from "./support/wasmDashboard";
+import { createNetwork, importOci } from "./support/dashboard";
 import { ApiCleanup } from "../src/api.js";
 import { openVmTab, vmPanel } from "./support/vmPanel";
 import {
@@ -160,7 +160,7 @@ test("deletes the template, reinstalls through the API, and boots to FIRECRAB_NE
     hasText: alias(),
   });
   await expect(imageRow).toBeVisible();
-  await imageRow.getByRole("button", { name: "Details", exact: true }).click();
+  await imageRow.click();
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete image", exact: true }).click();
   await expect(imageRow).toHaveCount(0, { timeout: 15_000 });
@@ -210,7 +210,7 @@ test("deletes the template, reinstalls through the API, and boots to FIRECRAB_NE
   expect(job.status, job.log).toBe("succeeded");
 
   await page.reload();
-  await expect(imageRow).toBeVisible();
+  await expect(imageRow.getByText("Installed", { exact: true })).toBeVisible();
   await expect
     .poll(
       async () =>
@@ -224,7 +224,9 @@ test("deletes the template, reinstalls through the API, and boots to FIRECRAB_NE
     .toBe(true);
 
   await openEnglish(page, "/#/networks");
-  await expect(page.locator("#content")).toHaveAttribute("data-loaded", "true");
+  await expect(
+    page.getByRole("button", { name: "New network", exact: true }),
+  ).toBeVisible();
   if ((await page.locator("table.network-table tbody tr").count()) === 0) {
     await createNetwork(page, REGISTER_NETWORK_NAME, REGISTER_NETWORK_CIDR);
     const networks = await api.listNetworks();
@@ -236,17 +238,17 @@ test("deletes the template, reinstalls through the API, and boots to FIRECRAB_NE
   await openEnglish(page, "/#/vms");
   await page.locator("#vm-list-add").click();
   await expect(page).toHaveURL(/#\/vms\/new$/);
-  await expect(page.locator("#field-template")).toBeEnabled({
+  await expect(page.locator("#vm-image")).toBeEnabled({
     timeout: 15_000,
   });
   await expect(
-    page.locator(`#field-template option[value="${alias()}"]`),
+    page.locator(`#vm-image option[value="${alias()}"]`),
   ).toHaveCount(1, {
     timeout: 15_000,
   });
-  await page.locator("#field-name").fill(REGISTER_VM_NAME);
-  await page.locator("#field-template").selectOption(alias());
-  await expect(page.locator("#field-microNetworkId")).not.toHaveValue("");
+  await page.locator("#vm-name").fill(REGISTER_VM_NAME);
+  await page.locator("#vm-image").selectOption(alias());
+  await expect(page.locator("#vm-micro-network")).not.toHaveValue("");
   await page.locator("#editor button[type=submit]").click();
   await expect(page).toHaveURL(/#\/vms(?:\?vm=.+)?$/);
 
@@ -256,7 +258,7 @@ test("deletes the template, reinstalls through the API, and boots to FIRECRAB_NE
   await expect(row).toBeVisible();
   // Row actions live behind the Actions toggle now.
   await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
-  await page.getByRole("menuitem", { name: "start", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Start", exact: true }).click();
   await expect(row.locator(".vm-status-label")).toHaveAttribute(
     "data-state",
     /running|error/,

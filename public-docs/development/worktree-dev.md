@@ -8,7 +8,7 @@ Tracked in #495.
 ## Select an environment
 
 Use a CLI built with worktree instance support and run commands from the selected checkout.
-Install Node.js, npm, wasm-pack 0.14.0, and the `wasm32-unknown-unknown` Rust target for the host dashboard.
+Install Node.js and npm for the host dashboard.
 
 | Host and checkout | Development backend |
 | --- | --- |
@@ -210,3 +210,21 @@ Unit, proxy, and command-fixture tests do not replace that runtime check.
 - [Contributing](../../CONTRIBUTING.md#run-from-source)
 - [CLI](../reference/cli.md)
 - [CI and runtime E2E](ci.md)
+
+## View React changes with an existing instance
+
+Run the dashboard from the checkout you are editing and select the worktree
+that owns the running development API:
+
+```sh
+cargo run -p firecrab-cli -- service dev --dashboard-only \
+  --connect-source /path/to/existing/worktree --port 8080
+```
+
+This command starts only the frontend. It keeps the selected management VM,
+API process and workload VMs unchanged. It refuses a missing or stopped API
+and never falls back to the installed controller. Stop it with Ctrl+C.
+
+The normal `service dev` command still builds and deploys the current checkout
+into its own private development instance. Use `--dashboard-only` when keeping
+an existing backend is required.

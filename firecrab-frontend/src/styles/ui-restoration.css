@@ -1,0 +1,401 @@
+/* Preserve the pre-migration dashboard hierarchy while React owns the UI. */
+:root {
+  --bg-active: #ebebee;
+  --border: #ececef;
+  --border-strong: #e4e4e8;
+  --text-3: #62626b;
+  --text-4: #71717a;
+  --bg-selected: #f6f6f8;
+  --track: #efeff2;
+  --meter: #3f3f46;
+  --on-dark: #fff;
+  --ink-hover: #2c2c32;
+  --line-green: #bfe5cd;
+  --line-red: #f6caca;
+  --scrim: rgba(24, 24, 27, 0.3);
+}
+.screen {
+  display: flex;
+  flex-direction: column;
+}
+.screen-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+.screen.has-panel {
+  grid-template-columns: none;
+}
+.screen.has-panel > .screen-layout {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.screen-header {
+  min-height: 64px;
+  height: auto;
+  padding-block: 12px;
+}
+.sidebar-item.active {
+  border-color: transparent;
+  background: var(--bg-active);
+  box-shadow: none;
+}
+.sidebar-logo {
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+.sidebar .host-card {
+  padding: 14px 6px 0;
+  margin-top: auto;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+.host-card-head {
+  flex-wrap: wrap;
+}
+.host-card-uptime {
+  display: none;
+}
+.host-status-values {
+  margin: 6px 0 0;
+  color: var(--text-4);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.host-status-values b {
+  font-weight: 400;
+}
+.screen-body > .panel,
+.screen-body > .stack > .panel,
+.volume-migration > .panel {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.screen-body > .panel > .panel-intro {
+  display: none;
+}
+.vm-table {
+  width: 100%;
+  border-collapse: collapse;
+  border-top: 1px solid var(--border);
+}
+.vm-table th {
+  height: 51px;
+  padding-block: 0;
+  background: none;
+  border-bottom: 1px solid var(--border);
+}
+.vm-table tbody tr {
+  height: 75px;
+}
+.vm-table td {
+  border-bottom: 1px solid var(--border-soft);
+}
+.vm-table tr[aria-selected="true"] > td {
+  background: var(--bg-selected);
+}
+.vm-table tr[aria-selected="true"] > td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.detail-panel {
+  overflow: hidden;
+}
+.detail-panel-top {
+  flex-shrink: 0;
+}
+.detail-editor {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 24px;
+  overflow: auto;
+}
+.detail-editor form {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 18px;
+}
+.detail-panel > #editor {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+  border: 0;
+  border-radius: 0;
+}
+.detail-panel > #editor form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.detail-panel > #editor fieldset {
+  display: grid;
+  gap: 18px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.detail-panel > #editor :is(input, select) {
+  width: 100%;
+  min-height: 44px;
+}
+.detail-panel > #editor label {
+  display: grid;
+  gap: 8px;
+}
+.detail-editor .form-footer {
+  position: sticky;
+  bottom: -24px;
+  padding: 18px 0;
+  background: var(--bg);
+}
+.detail-sec {
+  border-color: var(--border-soft);
+}
+.detail-sec-head h3 {
+  font-size: 18px;
+}
+.panel-intro {
+  white-space: normal;
+}
+.detail-fields {
+  grid-template-columns: minmax(120px, 30%) minmax(0, 1fr);
+  gap: 12px 18px;
+}
+.detail-fields dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.state-badge {
+  width: fit-content;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: none;
+}
+.storage-explanation h2 {
+  font-size: 18px;
+}
+.storage-explanation p {
+  max-width: 850px;
+  color: var(--text-3);
+  font-size: 16px;
+}
+.storage-explanation {
+  margin-bottom: 24px;
+}
+@media (max-width: 767px) {
+  .screen.has-panel > .screen-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .screen-header {
+    padding-left: 54px;
+  }
+  .detail-panel {
+    inset: 0;
+  }
+}
+:root {
+  --control-height: 48px;
+  --table-header-height: 51px;
+  --table-row-height: 75px;
+}
+.host-screen {
+  max-width: 1200px;
+  width: 100%;
+  margin: 0;
+  padding: 16px 20px 40px;
+}
+.host-title {
+  font-size: 28px;
+  font-weight: 650;
+  margin: 0 0 24px;
+}
+.host-section {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 32px;
+  padding: 28px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.host-section header h3 {
+  font-size: 18px;
+  margin: 0;
+}
+.host-section header p {
+  font-size: 15px;
+  color: var(--text-3);
+  margin: 8px 0 0;
+}
+.host-values {
+  display: grid;
+  grid-template-columns: minmax(140px, 30%) minmax(0, 1fr);
+  gap: 14px 20px;
+  margin: 0;
+  font-size: 17px;
+}
+.host-values dt {
+  color: var(--text-3);
+}
+.host-values dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.host-resources {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 18px 0;
+  margin: 0 0 16px;
+  border-block: 1px solid var(--border);
+}
+.host-resources > div {
+  padding: 0 16px;
+  border-left: 1px solid var(--border);
+  min-width: 0;
+}
+.host-resources > div:first-child {
+  padding-left: 0;
+  border: 0;
+}
+.host-resources dt {
+  font-size: 15px;
+  color: var(--text-3);
+}
+.host-resources dd {
+  font-size: 23px;
+  font-weight: 600;
+  margin: 6px 0 0;
+}
+.host-resources small {
+  font-size: 14px;
+  color: var(--text-3);
+  font-weight: 400;
+}
+.host-manager .host-resources {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.host-network {
+  margin-top: 24px;
+  font-size: 16px;
+}
+.host-network summary {
+  cursor: pointer;
+  padding: 8px 0;
+}
+@media (max-width: 900px) {
+  .host-section {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+  .host-screen {
+    padding: 0;
+  }
+}
+@media (max-width: 600px) {
+  .host-resources {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+  }
+  .host-values {
+    grid-template-columns: minmax(100px, 35%) minmax(0, 1fr);
+  }
+}
+.props {
+  grid-template-columns: minmax(135px, 32%) minmax(0, 1fr);
+  column-gap: 18px;
+}
+.props dt {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.screen[data-view="shells"] .shell-create-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+.screen[data-view="shells"] .shell-create-grid .field-span-2 {
+  grid-column: auto;
+}
+.list-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 16px;
+}
+.state-badge:is(.running, .error, .starting, .stopping) {
+  background: none;
+}
+/* Keep labels and values readable at normal browser zoom. */
+table.vm-table {
+  font-size: 18px;
+}
+.vm-table th {
+  font-size: 16px;
+}
+.vm-table .mono {
+  font-size: 16px;
+}
+.detail-fields {
+  font-size: 17px;
+}
+.detail-fields dt {
+  font-size: 16px;
+}
+.state-badge {
+  font-size: 16px;
+}
+.state-badge::before {
+  width: 8px;
+  height: 8px;
+}
+.image-detail .detail-sec-head h3 {
+  font-size: 18px;
+}
+.image-detail .props dt,
+.image-detail .detail-note,
+.image-detail-disclosure > summary {
+  font-size: 16px;
+}
+.image-detail .props dd {
+  font-size: 17px;
+}
+.image-detail .detail-title {
+  font-size: 27px;
+}
+.detail-panel > #editor {
+  display: flex;
+  flex-direction: column;
+}
+.detail-panel > #editor form {
+  flex: 1;
+}
+.detail-panel > #editor .form-footer {
+  margin-top: auto;
+}
+.vm-table td.state-badge {
+  display: table-cell;
+  width: auto;
+}
+.vm-table td.state-badge::before {
+  display: inline-block;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+table.service-table {
+  font-size: 16px;
+}
+.service-instances td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

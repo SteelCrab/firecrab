@@ -8,6 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
+| [0.4.2](#042---2026-11-01) | 2026-11-01 | React dashboard and MicroVM agent workspaces |
 | [0.4.1](#041---2026-10-30) | 2026-10-30 | Latest managed installations and cross-platform updates |
 | [0.4.0](#040---2026-10-30) | 2026-10-30 | [Changes since v0.3.1](https://github.com/SteelCrab/firecrab/compare/v0.3.1...v0.4.0) |
 | [0.3.1](#031---2026-10-06) | 2026-10-06 | [#123], [#314], [#315], [#318], [#324], [#330], [#331], [#332], [#333], [#343], [#351], [#358], [#359], [#360], [#368], [#378] |
@@ -22,6 +23,46 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 ## [Unreleased]
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
+
+## [0.4.2] - 2026-11-01
+
+React dashboard migration and MicroVM workspace recovery. See [#554](https://github.com/SteelCrab/firecrab/pull/554).
+
+### Added
+
+- MicroVM agent workspaces provide Codex and Claude Code sessions, a task board,
+  GitHub authentication and a web editor for the VM's working directory.
+
+### Changed
+
+- Replace the Rust/WASM dashboard with React and xterm.js. Resource, Pipe,
+  deployment and Sandbox workflows use responsive React forms and recover
+  ongoing image and kernel jobs after reload.
+- Preserve the established navigation symbols, flat lists and full-width page
+  headers after the React migration. Restore Shell and volume creation drawers
+  and separate physical host information from management VM usage.
+- Add dashboard-only development connections to an existing private instance.
+  UI changes reload without deploying guest binaries or restarting its VMs.
+
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- Resume kernel installations and OCI image imports after reload and show compact
+  progress without starting duplicate jobs.
+- Restore terminal size negotiation, shared viewer dimensions and resize signals
+  for interactive guest programs.
+- Align Secrets connection settings with the API's supported providers.
+
+### Improved
+
+- Keep fixture browser tests separate from real guest tests and run both against
+  built React bundles. Update live browser workflows to the current forms.
+- Extend native recovery and terminal transport coverage without lowering the
+  patch coverage requirement.
 
 ## [0.4.1] - 2026-10-30
 
