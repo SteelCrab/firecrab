@@ -225,6 +225,10 @@ SSH requires real authentication, including the management-VM proxy on macOS.
 - [ ] **V13 — Stopped delete:** deletion returns 204, detail returns 404, and the VM leaves the list.
 - [ ] **V14 — Missing network:** creation returns 400 and leaves no row.
 - [ ] **V15 — Console logout:** `exit` closes the socket with `4000 session_ended`; VM stays running.
+- [ ] **V16 — Network change:** stop a standalone VM on A, select B in Overview or Network, and save.
+  Confirm the VM and lease move together, A loses its member, and the next boot logs B's DHCP address and passes the SSH host-key check.
+  Verify running rejection, unchanged/omitted IDs, incompatible security groups, and rollback on lease exhaustion or storage failure.
+  The real boot case runs in `firecrab-e2e/tests/oci-dhcp-boot.spec.ts` with `npm run test:dhcp --prefix firecrab-e2e`.
 
 ## VM lifetime
 

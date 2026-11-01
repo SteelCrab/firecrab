@@ -31,6 +31,7 @@ type AvailableVolume = {
 import { isValidPort } from "../lib/portForward";
 import { useHostStatus } from "../hostStatusContext";
 import ShellCheckboxList from "./ShellCheckboxList";
+import MicroNetworkSelect from "./MicroNetworkSelect";
 import { useI18n } from "../i18n";
 
 const FIELDS_WITH_OWN_ERROR = [
@@ -583,28 +584,15 @@ export default function CreateVm({
         <div className="form-section-fields">
           <div className="field">
             <label htmlFor="vm-micro-network">MicroNetwork</label>
-            <select
+            <MicroNetworkSelect
               id="vm-micro-network"
               value={microNetworkId}
-              onChange={(event) => {
-                setMicroNetworkId(event.target.value);
+              networks={microNetworks}
+              onChange={(id) => {
+                setMicroNetworkId(id);
                 setSecurityGroupId("");
               }}
-            >
-              <option value={NO_NETWORK} disabled>
-                {microNetworks.length === 0
-                  ? t(
-                      "Create a MicroNetwork first",
-                      "먼저 MicroNetwork를 만드세요",
-                    )
-                  : t("Select a MicroNetwork", "MicroNetwork 선택")}
-              </option>
-              {microNetworks.map((network) => (
-                <option key={network.id} value={network.id}>
-                  {network.name} ({network.subnetCidr})
-                </option>
-              ))}
-            </select>
+            />
             {fieldError("microNetworkId")}
           </div>
           <div className="field">

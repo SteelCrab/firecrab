@@ -8,7 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
-| [0.6.0](#060---2026-11-02) | 2026-11-02 | Self-hosted SigNoz observability integration |
+| [0.6.0](#060---2026-11-02) | 2026-11-02 | SigNoz integration and inactive VM network changes |
 | [0.4.2](#042---2026-11-01) | 2026-11-01 | React dashboard and MicroVM agent workspaces |
 | [0.4.1](#041---2026-10-30) | 2026-10-30 | Latest managed installations and cross-platform updates |
 | [0.4.0](#040---2026-10-30) | 2026-10-30 | [Changes since v0.3.1](https://github.com/SteelCrab/firecrab/compare/v0.3.1...v0.4.0) |
@@ -34,6 +34,9 @@ Entries land here as work merges, and move under the next version heading when t
   exports, inspect bounded delivery history, and disconnect from the dashboard.
   The Observability page supports English, Korean, and mobile layouts. See
   [#579](https://github.com/SteelCrab/firecrab/issues/579).
+- Change an inactive MicroVM's MicroNetwork from its Overview or Network tab.
+  Save the VM settings and replacement IP lease together, then use the selected
+  network on the next start. See [#137](https://github.com/SteelCrab/firecrab/issues/137).
 
 ### Changed
 

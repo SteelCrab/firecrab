@@ -90,6 +90,10 @@ export const DHCP_NETWORK_NAME = "oci-e2e-dhcp";
 /** Isolated subnet so this spec does not share {@link NETWORK_CIDR}. */
 export const DHCP_NETWORK_CIDR = "172.30.94.0/24";
 
+/** Destination owned by the inactive VM network-change acceptance test. */
+export const DHCP_MOVE_NETWORK_NAME = "oci-e2e-dhcp-moved";
+export const DHCP_MOVE_NETWORK_CIDR = "172.30.95.0/24";
+
 /** Pool and MicroNetwork for the #291 spec. */
 export const POOL_E2E_NAME = "pool-e2e";
 

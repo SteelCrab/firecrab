@@ -1798,6 +1798,25 @@ impl Store {
         Ok(lease)
     }
 
+    /// Move an inactive VM and its complete resource record in the same transaction
+    /// as IPAM rotation. Allocation or persistence failure restores both old rows.
+    pub fn update_vm_network(&self, vm: &VmRecord, subnet: SubnetSpec) -> Result<Lease, IpamError> {
+        if vm.micro_network_id != subnet.micro_network_id {
+            return Err(IpamError::CorruptLease {
+                vm_id: vm.id,
+                reason: "VM and destination subnet do not match".into(),
+            });
+        }
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if execute_record(&tx, UPDATE_SQL, vm)? == 0 {
+            return Err(IpamError::Database(rusqlite::Error::QueryReturnedNoRows));
+        }
+        let lease = ipam::rotate(&tx, vm.id, subnet, &HashSet::new())?;
+        tx.commit()?;
+        Ok(lease)
+    }
+
     /// Whether `micro_network_id` still has an active lease — checked before
     /// deleting a MicroNetwork, so a network with VMs in it can't be pulled
     /// out from under them.
