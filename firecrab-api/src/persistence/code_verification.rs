@@ -12,7 +12,7 @@ pub(crate) struct Snapshot {
     pub github: Option<SavedAuth>,
     pub ai: Option<SavedConnection>,
     github_json: Option<String>,
-    ai_json: Option<String>,
+    pub(super) ai_json: Option<String>,
 }
 
 fn decode<T: serde::de::DeserializeOwned>(
@@ -78,6 +78,18 @@ impl Store {
             .is_some_and(|current| {
                 current.workspace == snapshot.workspace
                     && current.github_json == snapshot.github_json
+                    && current.ai_json == snapshot.ai_json
+            }))
+    }
+
+    /// Agent execution depends on the assigned AI account, independently of GitHub disconnection.
+    pub(crate) fn code_agent_current(&self, snapshot: &Snapshot) -> Result<bool, PersistenceError> {
+        Ok(self
+            .code_verification_snapshot(snapshot.workspace.id)?
+            .is_some_and(|current| {
+                current.workspace.id == snapshot.workspace.id
+                    && current.workspace.revision == snapshot.workspace.revision
+                    && current.workspace.spec == snapshot.workspace.spec
                     && current.ai_json == snapshot.ai_json
             }))
     }

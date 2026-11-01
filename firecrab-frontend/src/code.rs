@@ -1,6 +1,7 @@
 //! CODE reads saved configuration and current runtime observations. No credentials are fetched.
 mod accounts;
 mod agent_auth;
+mod agent_run;
 pub(crate) mod auth;
 mod binding;
 mod editor;
@@ -122,6 +123,7 @@ pub struct State {
     setup: Option<setup::Setup>,
     auth: auth::State,
     agent_auth: agent_auth::State,
+    agent_run: agent_run::State,
     lifecycle: lifecycle::State,
     editor: editor::State,
     binding: Option<binding::Draft>,
@@ -315,6 +317,7 @@ pub fn load(app: Shared) {
         lifecycle::load(app.clone());
         editor::load(app.clone());
         agent_auth::load(app.clone());
+        agent_run::load(app.clone());
         if changed {
             render_content(&app);
         }
@@ -322,6 +325,9 @@ pub fn load(app: Shared) {
 }
 
 pub fn action(app: &Shared, action: &str) -> bool {
+    if agent_run::action(app, action) {
+        return true;
+    }
     if editor::action(app, action) {
         return true;
     }
@@ -353,6 +359,9 @@ pub fn action(app: &Shared, action: &str) -> bool {
     true
 }
 pub fn input(app: &Shared, target: &Element) -> bool {
+    if agent_run::input(app, target) {
+        return true;
+    }
     if setup::input(app, target) {
         return true;
     }
@@ -371,15 +380,21 @@ pub fn render(app: &Shared) {
     let focus = document().active_element().filter(|el| {
         el.closest("#code-workspaces").ok().flatten().is_some() && !el.id().is_empty()
     });
-    let selection = focus
-        .as_ref()
-        .and_then(|el| el.dyn_ref::<HtmlInputElement>())
-        .map(|input| {
+    let selection = focus.as_ref().map(|el| {
+        if let Some(input) = el.dyn_ref::<HtmlInputElement>() {
             (
                 input.selection_start().ok().flatten(),
                 input.selection_end().ok().flatten(),
             )
-        });
+        } else if let Some(input) = el.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+            (
+                input.selection_start().ok().flatten(),
+                input.selection_end().ok().flatten(),
+            )
+        } else {
+            (None, None)
+        }
+    });
     let scroll = element("code-details").map(|el| el.scroll_top());
     let html = content(&app.borrow());
     app.borrow_mut().rendering = true;
@@ -408,10 +423,12 @@ pub fn render(app: &Shared) {
             options.set_prevent_scroll(true);
             let _ = el.focus_with_options(&options);
         }
-        if let Some((Some(start), Some(end))) = selection
-            && let Some(input) = focus.dyn_ref::<HtmlInputElement>()
-        {
-            let _ = input.set_selection_range(start, end);
+        if let Some((Some(start), Some(end))) = selection {
+            if let Some(input) = focus.dyn_ref::<HtmlInputElement>() {
+                let _ = input.set_selection_range(start, end);
+            } else if let Some(input) = focus.dyn_ref::<web_sys::HtmlTextAreaElement>() {
+                let _ = input.set_selection_range(start, end);
+            }
         }
     }
 }

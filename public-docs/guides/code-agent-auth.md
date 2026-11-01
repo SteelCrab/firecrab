@@ -38,7 +38,8 @@ The operator-only APIs are:
 
 The server first checks the selected provider credentials through Pipe AI. It
 then uses the pinned CODE SSH transport and the workspace-owned VM to run the
-matching CLI configuration probe. No inference or agent task is requested.
+matching CLI configuration probe with a disposable synthetic broker token.
+The real shared key stays on the controller. No inference or agent task is requested.
 
 Codex uses API-key login through stdin and checks its private cache and CLI
 status. Claude Code must report the selected environment-key source, first-party
@@ -62,12 +63,11 @@ checked after the probe. Same-ID key rotation, disconnect, configuration edits
 or runtime changes reject stale proof. Nonces, recipe IDs and exact versions
 bind each guest receipt to its own request. CLI/provider output is not returned.
 
-`configuration_verified` means the provider accepted the key and the pinned CLI
-loaded its configuration during that disposable check. It is not a live login,
+`configuration_verified` means the provider accepted the real key on the controller
+and the pinned CLI loaded disposable broker-token configuration during that check. It is not a live login,
 model entitlement, successful inference or execution grant. The browser labels
-it as the last check and invalidates it on observed context changes. Execution
-remains disabled. A future agent launch must repeat credential preparation and
-its runtime checks; it cannot trust this response as authorization.
+it as the last check and invalidates it on observed context changes. An explicit execution request repeats its runtime and credential preparation
+checks; it cannot trust this response as authorization.
 
 ## Official contracts
 
@@ -79,3 +79,8 @@ its runtime checks; it cannot trust this response as authorization.
 
 API-key configuration status alone is insufficient proof. The provider check
 and current workspace/runtime observations are required independently.
+
+Explicit [agent execution](code-agent-execution.md) rechecks the current saved
+assignment and runtime. It uses a disposable guest broker token while the real
+shared API key remains on the controller. Its result is separate from this
+configuration-only probe.

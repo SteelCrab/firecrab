@@ -255,3 +255,17 @@ pub(super) fn action(app: &Shared, action: &str) -> bool {
     });
     true
 }
+
+pub(super) fn execution_supported(app: &App, w: &Workspace) -> bool {
+    profile(app, w).is_some_and(|p| p.supported)
+}
+pub(super) fn account_label<'a>(app: &'a App, id: &str) -> Option<&'a str> {
+    app.code
+        .agent_auth
+        .metadata
+        .as_ref()?
+        .1
+        .iter()
+        .find(|a| a.id == id)
+        .map(|a| a.name.as_str())
+}

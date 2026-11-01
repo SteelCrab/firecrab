@@ -14,6 +14,7 @@ The editor and terminal open in separate tabs. The editor also includes its own
 integrated terminal. Files saved in either view belong to the same guest folder.
 VS Code may ask you to trust a folder before running its tasks or integrated terminal.
 That choice does not authenticate an AI agent.
+Use [Agent execution](code-agent-execution.md) to run the assigned agent in this same folder.
 
 Preparation installs the pinned official [code-server 4.144.0 release](https://github.com/coder/code-server/releases/tag/v4.144.0).
 The guest verifies its compiled SHA-256 before bounded extraction into a root-owned

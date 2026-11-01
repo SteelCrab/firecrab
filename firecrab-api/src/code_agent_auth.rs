@@ -123,15 +123,15 @@ impl Probe for Native {
         state: &AppState,
         record: &Record,
         profile: &CodeAgentAuthAdapter,
-        saved: &SavedConnection,
+        _saved: &SavedConnection,
     ) -> Result<(), CodeAgentAuthFailure> {
         use CodeAgentAuthFailure as F;
         let binding =
             crate::code_runtime::auth_binding(state, record).map_err(|_| F::RuntimeUnavailable)?;
         let nonce = Uuid::new_v4();
-        let encoded = STANDARD.encode(serde_json::to_vec(&json!({"workspace":record.runtime.workspace_id,"nonce":nonce,"adapter":profile.id,"key":saved.api_key})).map_err(|_| F::CliRejected)?);
+        let encoded = STANDARD.encode(serde_json::to_vec(&json!({"workspace":record.runtime.workspace_id,"nonce":nonce,"adapter":profile.id,"key":format!("fc-probe-{}",Uuid::new_v4().simple())})).map_err(|_| F::CliRejected)?);
         let manifest = STANDARD.encode(MANIFEST);
-        // Secrets are SSH stdin only. Never enter argv, VM env, a journal, or an API response.
+        // Provider proof stays on the controller; the guest checks only disposable broker-token mode.
         let input = format!(
             "timeout -k 2 35 python3 - <<'FIRECRAB_AGENT_AUTH'\n{}\nimport base64\nmain(base64.b64decode('{}'), json.loads(base64.b64decode('{}')))\nFIRECRAB_AGENT_AUTH\n",
             include_str!("code_agent_auth/guest.py"),

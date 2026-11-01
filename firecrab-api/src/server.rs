@@ -917,6 +917,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .merge(handlers::code_workspaces::runtime::routes())
         .merge(crate::code_editor::routes())
+        .merge(crate::code_agent_run::routes())
         .route(
             "/api/pipe/database-rabbitmq",
             axum::routing::put(handlers::pipe_database_events::rabbitmq_save),

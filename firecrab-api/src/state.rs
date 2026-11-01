@@ -117,6 +117,9 @@ pub struct AppState {
     /// Fixed-origin repository checker; accepts only saved GitHub credentials.
     pub(crate) code_github: crate::code_verification::Github,
     /// Bound detached CODE provisioning across all workspaces.
+    #[cfg(test)]
+    pub(crate) code_agent_test_origin: Option<String>,
+    pub(crate) code_agent_runs: Arc<crate::code_agent_run::Runs>,
     pub(crate) code_jobs: Arc<Semaphore>,
     pub(crate) code_editor: Arc<crate::code_editor::Editors>,
     pub(crate) pipe_ai_anthropic: crate::pipe_ai::anthropic::Anthropic,
@@ -225,6 +228,9 @@ impl AppState {
             stack_source_permits: Arc::new(Semaphore::new(4)),
             pipe_ai: crate::pipe_ai::OpenAi::new(),
             code_github: crate::code_verification::Github::new(),
+            #[cfg(test)]
+            code_agent_test_origin: None,
+            code_agent_runs: Arc::new(crate::code_agent_run::Runs::default()),
             code_jobs: Arc::new(Semaphore::new(2)),
             code_editor: Arc::new(crate::code_editor::Editors::default()),
             pipe_ai_anthropic: crate::pipe_ai::anthropic::Anthropic::new(),

@@ -18,6 +18,8 @@ mod code_verification;
 pub use code_verification::*;
 mod code_runtime;
 pub use code_runtime::*;
+mod code_agent_run;
+pub use code_agent_run::*;
 mod code_editor;
 pub use code_editor::*;
 mod code_agent_auth;

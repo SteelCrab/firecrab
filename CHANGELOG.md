@@ -25,6 +25,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Run selected CODE agents with their assigned shared AI AUTH in the retained
+  workspace. Keep provider keys on the controller, install pinned native CLIs,
+  and add cancellation, durable single-use requests and bounded execution history.
 - Open CODE Web VS Code and real guest PTY terminals for the retained workspace.
   Prepare a SHA-256-pinned code-server release, use authenticated session-specific
   browser origins and private SSH forwarding, and revoke access on workspace or

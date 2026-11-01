@@ -25,7 +25,7 @@ revision check. It can reuse an existing account or explicitly remove this
 workspace's assignment. The shared account remains connected for other workspaces.
 **Editor status** opens `#/code/{workspace-uuid}/editor` with the same live AUTH
 states. Prepare and open Web VS Code and the terminal for a ready MicroVM.
-See [CODE editor](code-editor.md). Assigned agent execution remains a separate scope item. See [CODE AI AUTH](code-ai-auth.md) for assignment,
+See [CODE editor](code-editor.md). Assigned agents can run explicitly in the same folder. See [CODE agent execution](code-agent-execution.md). See [CODE AI AUTH](code-ai-auth.md) for assignment,
 approval, disconnect and recovery states.
 
 Choose **New workspace** (`#/code/new`) to create saved configuration in one flow.

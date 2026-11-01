@@ -1,0 +1,32 @@
+{
+  "codex": {
+    "aarch64": {
+      "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.166.0-linux-arm64.tgz",
+      "integrity": "sha512-w0ScAsBr9aZKtIFrh6HN6KU2yjKKeSCzYfbb7DB0Ccj4BYPzeZtUeQprbycLCwuX3AFQdbdjapmLho2iot74jQ=="
+    },
+    "x86_64": {
+      "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.166.0-linux-x64.tgz",
+      "integrity": "sha512-CxDm3+D1cpbGJeHrdzINoG+3wn9BVncP4qpZaaNYkxe8iPtRJOYyCJnnPoVjWRIBvI9vPKbRoifsMSA5xDaUpw=="
+    }
+  },
+  "claude": {
+    "aarch64": {
+      "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.316.tgz",
+      "integrity": "sha512-xqlAkhgSLCMdcaepQNIs1+ym5X9++apiEeOc0LHRVOHpfLlpYKAaAXBRccM6QVITN0T9sXLCIby7CO1Lczusgw=="
+    },
+    "x86_64": {
+      "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.316.tgz",
+      "integrity": "sha512-RQDM6N285IjNKcmlPRriayNzpTkEJreAw5/vBU+V0R3qljkQ5z6/pSbzcVUAXvasoOlvub0RIma3NWvSuZA8Cg=="
+    }
+  },
+  "opencode": {
+    "aarch64": {
+      "url": "https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.19.5.tgz",
+      "integrity": "sha512-u2HFRI6v1nNMVKiV34An8XrGBxJeZ+RCg2tYu3SqlGODKqKsr5RoEbaX1tnsfGb+rETh9AJVX9kS8dSZXPufsA=="
+    },
+    "x86_64": {
+      "url": "https://registry.npmjs.org/opencode-linux-x64/-/opencode-linux-x64-1.19.5.tgz",
+      "integrity": "sha512-i1qh7VooLGML9xX6ud93y0JA8j/1aPeDYRKjsmYXrJX1TjIWHgBBMkEbEJPZthpWbsJg//XfBgR6Kb7+NPaJiQ=="
+    }
+  }
+}

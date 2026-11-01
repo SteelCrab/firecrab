@@ -51,6 +51,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Store CODE workspace configuration and account references | [CODE workspaces](guides/code-workspaces.md) |
 | Provision a CODE MicroVM and retain its repository across stop/resume | [CODE runtime](guides/code-runtime.md) |
 | Open authenticated CODE Web VS Code and terminal sessions | [CODE editor](guides/code-editor.md) |
+| Run the selected agent with its assigned AI AUTH in the same workspace | [CODE agent execution](guides/code-agent-execution.md) |
 | Connect and browse an existing database | [Pipe databases](guides/pipe-databases.md) |
 | Connect an existing Amazon S3 bucket and manage files | [PipeStorage](guides/pipe-storage.md) |
 | Pull images from Docker Hub, GHCR or Amazon ECR | [Pipe Registry](guides/pipe-registry.md) |

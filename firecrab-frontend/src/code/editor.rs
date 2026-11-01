@@ -11,20 +11,15 @@ pub(super) fn content(app: &App, w: &Workspace) -> String {
         agent_auth::content(app, w)
     );
     format!(
-        "<div id=\"code-editor\"><header class=\"code-detail-head\"><a class=\"code-text-link\" href=\"#/code/{}\">{}</a><h2>{}</h2><p>{}/{}</p></header><div class=\"code-editor-layout\"><div>{microvm}{tools}</div><section id=\"code-editor-auth\" class=\"code-section\" aria-label=\"AI AUTH\"><h3>AI AUTH</h3>{}{}<p class=\"code-hint\">{}</p><button class=\"btn\" disabled>{}</button></section></div></div>",
+        "<div id=\"code-editor\"><header class=\"code-detail-head\"><a class=\"code-text-link\" href=\"#/code/{}\">{}</a><h2>{}</h2><p>{}/{}</p></header><div class=\"code-editor-layout\"><div>{microvm}{tools}{}</div><section id=\"code-editor-auth\" class=\"code-section\" aria-label=\"AI AUTH\"><h3>AI AUTH</h3>{}{}</section></div></div>",
         w.id,
         tr(app, "Back to workspace", "워크스페이스로 돌아가기"),
         escape(&w.spec.name),
         escape(&w.spec.github.owner),
         escape(&w.spec.github.repository),
+        agent_run::content(app, w),
         binding::content(app, w),
-        checks,
-        tr(
-            app,
-            "Agent authentication must be verified before execution is available.",
-            "에이전트 인증을 검증해야 실행할 수 있습니다."
-        ),
-        tr(app, "Run agent", "에이전트 실행")
+        checks
     )
 }
 

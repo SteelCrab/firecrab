@@ -33,7 +33,7 @@ fn corrupt() -> PersistenceError {
     }
 }
 
-fn read(conn: &Connection, id: Uuid) -> Result<Option<Record>, PersistenceError> {
+pub(super) fn read(conn: &Connection, id: Uuid) -> Result<Option<Record>, PersistenceError> {
     let row: Option<(String, String)> = conn
         .query_row(
             "SELECT vm_id,record FROM code_runtimes WHERE workspace_id=?1",

@@ -104,3 +104,14 @@
   .code-properties > div { grid-template-columns: 105px minmax(0, 1fr); gap: 10px; }
   .code-auth-row { flex-direction: column; gap: 6px; }
 }
+
+#code-agent-execution { min-width: 0; }
+#code-agent-execution label { display: block; margin: 16px 0 8px; font-size: 12px; color: var(--text-2); }
+#code-agent-execution textarea, #code-agent-execution input { width: 100%; box-sizing: border-box; padding: 10px 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; font-size: 13px; }
+#code-agent-execution textarea { resize: vertical; min-height: 104px; line-height: 1.6; }
+#code-agent-execution textarea:focus-visible, #code-agent-execution input:focus-visible { outline: 2px solid var(--text-3); outline-offset: 2px; }
+#code-agent-execution .code-account-actions { margin-top: 16px; }
+.code-agent-observation { min-width: 0; margin-top: 20px; border-top: 1px solid var(--border); padding-top: 12px; font-size: 12px; overflow-wrap: anywhere; }
+.code-agent-output { max-height: 360px; overflow: auto; padding: 14px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); font: 12px/1.7 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.code-agent-history { margin-top: 20px; font-size: 12px; }
+.code-agent-history summary { cursor: pointer; }

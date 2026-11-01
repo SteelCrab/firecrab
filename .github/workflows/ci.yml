@@ -73,6 +73,9 @@ jobs:
       - name: CODE guest checkout and recovery contract
         run: python3 scripts/test-code-guest.py
 
+      - name: CODE agent transport and cleanup contract
+        run: python3 scripts/test-code-agent-run.py
+
       - name: Shared source development deployment contract
         run: python3 scripts/test-micromanager-dev.py
 
