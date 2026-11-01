@@ -5,6 +5,14 @@ The dashboard no longer has separate project creation, project settings, or a mo
 Current dashboard coverage checks CLI task submission, Web VS Code connections, automation, and the retired project entry points. The provider/project API records below are historical backend validation, not instructions for the current dashboard. Existing VM files and stored records are not deleted when removing that UI.
 Do not report a mocked provider or a shell running in Docker as a real MicroVM/model inference result.
 
+## Task board checks
+
+- Submit separate Codex and Claude Code tasks in the same VM. Verify each card identifies its CLI and follows the runtime state.
+- Move a fixture task from blocked to working and then done. Verify the board moves its card without any POST request.
+- Verify that first-run setup stays in Waiting and uncertain delivery stays in Needs attention. Account login sessions must not appear as coding tasks.
+- Open a card, switch between Board and Terminals, and reload. The existing session must remain usable without replaying a task or reconnecting its PTY just to switch views.
+- Check English and Korean at desktop and phone widths. Phone columns stack vertically and task names remain readable.
+
 ## Deterministic checks
 
 ```sh
