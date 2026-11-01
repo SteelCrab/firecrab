@@ -217,8 +217,8 @@ fn detail(app: &App, workspace: &Workspace) -> String {
     auth.push_str(&binding::content(app, workspace));
     auth.push_str(&crate::code::auth::verification(app, workspace));
     auth.push_str(&agent_auth::content(app, workspace));
+    out.push_str(&runtime_section(app, workspace));
     out.push_str(&section(tr(app, "Account connections", "계정 연결"), &auth));
-    out.push_str(&runtime_section(app, &app.code.runtime));
     let _ = write!(
         out,
         "<section class=\"code-section\"><h3>{}</h3><a class=\"btn\" href=\"#/code/{}/editor\">{}</a></section>",
@@ -229,8 +229,8 @@ fn detail(app: &App, workspace: &Workspace) -> String {
     out.push_str(&section(tr(app, "Configuration", "설정"), &config));
     out
 }
-fn runtime_section(app: &App, state: &RuntimeState) -> String {
-    let body = match state {
+pub(super) fn runtime_section(app: &App, workspace: &Workspace) -> String {
+    let mut body = match &app.code.runtime {
         RuntimeState::Loading => {
             empty(tr(app, "Checking MicroVM status…", "MicroVM 상태 확인 중…"))
         }
@@ -299,6 +299,7 @@ fn runtime_section(app: &App, state: &RuntimeState) -> String {
             body
         }
     };
+    body.push_str(&lifecycle::content(app, workspace));
     section(tr(app, "MicroVM environment", "MicroVM 환경"), &body)
 }
 pub(super) fn connection<'a>(app: &App, state: &str) -> &'a str {

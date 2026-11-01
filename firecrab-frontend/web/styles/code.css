@@ -1,4 +1,7 @@
 /* CODE reuses the dashboard's flat surfaces, typography and focus styles. */
+.code-placement { border: 0; padding: 0; margin: 20px 0; display: grid; gap: 14px; min-width: 0; }
+.code-runtime-controls { min-width: 0; }
+.code-runtime-notice { font-size: 12px; color: var(--text-2); line-height: 1.7; }
 .code-agent-auth { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 20px; }
 .code-agent-auth h4 { margin: 0; font-size: 13px; }
 .code-agent-auth .btn { margin-top: 14px; }

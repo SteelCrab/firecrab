@@ -25,6 +25,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Connect CODE workspace and editor status views to MicroVM provisioning, start
+  and stop. Choose existing images, internet-enabled networks and storage roots,
+  clone the saved repository/branch, retain working files on resume, and recover
+  interrupted lifecycle requests before replaying them (#560).
 - Define pinned CODE authentication recipes for Codex, Claude Code and OpenCode.
   Verify provider credentials and disposable CLI configuration against the same
   workspace/runtime before reporting proof. Block unverified handoffs and unknown

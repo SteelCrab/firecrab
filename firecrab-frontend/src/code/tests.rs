@@ -34,6 +34,9 @@ fn runtime_identity_and_live_observations_cannot_cross_workspaces() {
         ("vmState", json!("stopped")),
         ("runtimeId", Value::Null),
         ("error", json!("sync_failed")),
+        ("initialCommit", Value::Null),
+        ("initialCommit", json!("not-a-commit")),
+        ("projectPath", json!("/different/project")),
     ] {
         let mut value = runtime();
         value[key] = wrong;

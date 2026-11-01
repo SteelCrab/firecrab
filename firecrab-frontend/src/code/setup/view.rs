@@ -319,7 +319,7 @@ pub fn content(app: &App) -> String {
         out.push_str(&format!("<button class=\"btn\" type=\"button\" data-action=\"code-review-existing\">{}</button>",tr(app,"Review saved workspace","저장된 워크스페이스 검토")));
     }
     out.push_str(&format!("<footer class=\"code-setup-footer\"><p>{}</p><div><a class=\"btn\" href=\"#/code\">{}</a><button id=\"code-save\" class=\"btn primary\" type=\"submit\" {}>{}</button></div></footer></form></section>",
-        tr(app,"Saves configuration only. No VM or agent starts yet.","설정만 저장합니다. VM이나 에이전트는 아직 실행하지 않습니다."),tr(app,"Cancel","취소"),
+        tr(app,"Save these settings, then choose MicroVM placement to create and start it. No agent starts.","설정을 저장한 뒤 MicroVM 배치 정보를 선택하여 생성하고 시작합니다. 에이전트는 실행하지 않습니다."),tr(app,"Cancel","취소"),
         if s.busy || (s.pending.is_none() && !can_save(s)) {"disabled"} else {""},
         if s.busy {tr(app,"Saving…","저장 중…")} else if s.pending.is_some() {tr(app,"Check saved workspace","저장된 워크스페이스 확인")} else {tr(app,"Create workspace","워크스페이스 생성")}));
     out

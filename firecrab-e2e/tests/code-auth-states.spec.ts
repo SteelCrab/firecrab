@@ -28,6 +28,7 @@ async function open(page: Page, options: { locale?: "en" | "ko"; editor?: boolea
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
     const send = (json: unknown, status = 200) => route.fulfill({ json, status });
+    if (method === "GET" && ["/api/images", "/api/micro-networks", "/api/storage"].includes(path)) return send([]);
     if (method !== "GET") state.writes.push({ method, path, body: request.postData() ? request.postDataJSON() : null });
     if (path === "/api/pipe/ai/connections") {
       const rows = structuredClone(state.accounts), delay = state.delayAccounts; state.delayAccounts = null;

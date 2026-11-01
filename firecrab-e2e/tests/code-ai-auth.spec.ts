@@ -11,6 +11,7 @@ async function open(page: Page, options: { locale?: "en" | "ko"; setup?: boolean
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
     const send = (json: unknown, status = 200) => route.fulfill({ json, status });
+    if (method === "GET" && ["/api/images", "/api/micro-networks", "/api/storage"].includes(path)) return send([]);
     if (method !== "GET") state.writes.push({ method, path, body: request.postData() ? request.postDataJSON() : null });
     if (path === "/api/pipe/ai/connections") return state.unavailable ? send({ error: { code: "unavailable" } }, 503) : send(state.connections);
     if (path.endsWith("/login")) { state.loginConnection = path.split("/")[5]; state.loginName = request.postDataJSON().name; state.cancelled = false; return send({ loginId, authorizationUrl: "https://auth.openai.com/api/accounts/authorize?state=test", expiresIn: 600 }); }

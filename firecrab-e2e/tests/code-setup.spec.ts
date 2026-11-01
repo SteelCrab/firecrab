@@ -16,6 +16,7 @@ async function open(page: Page, locale: "en" | "ko" = "en", options: { missing?:
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname, method = request.method();
     const send = (json: unknown, status = 200) => route.fulfill({ json, status });
+    if (method === "GET" && ["/api/images", "/api/micro-networks", "/api/storage"].includes(path)) return send([]);
     if (method !== "GET") state.mutations.push(`${method} ${path}`);
     if (path === "/api/pipe/auth") return send(state.github ? [{ provider: "github", account: state.github }] : []);
     if (path === "/api/pipe/ai/connections") return send(state.accounts);

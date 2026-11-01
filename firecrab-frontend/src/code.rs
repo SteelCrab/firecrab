@@ -4,6 +4,7 @@ mod agent_auth;
 pub(crate) mod auth;
 mod binding;
 mod editor;
+mod lifecycle;
 mod setup;
 mod view;
 use crate::{App, Shared, api, document, element, render_content};
@@ -66,6 +67,8 @@ struct Runtime {
     vm_id: String,
     configuration_revision: u64,
     operation_id: String,
+    #[serde(default)]
+    action: String,
     phase: String,
     project_path: String,
     runtime_id: Option<String>,
@@ -119,6 +122,7 @@ pub struct State {
     setup: Option<setup::Setup>,
     auth: auth::State,
     agent_auth: agent_auth::State,
+    lifecycle: lifecycle::State,
     binding: Option<binding::Draft>,
     binding_epoch: u64,
     observation_epoch: u64,
@@ -151,10 +155,10 @@ pub fn is_editor(route: &str) -> bool {
     workspace_id(route).is_some() && route.ends_with("/editor")
 }
 pub fn saving(app: &App) -> bool {
-    binding::busy(app) || setup::saving(app)
+    lifecycle::busy(app) || binding::busy(app) || setup::saving(app)
 }
 pub fn change(app: &Shared, node: &Element) -> bool {
-    binding::change(app, node) || setup::change(app, node)
+    lifecycle::change(app, node) || binding::change(app, node) || setup::change(app, node)
 }
 fn tr<'a>(app: &App, en: &'a str, ko: &'a str) -> &'a str {
     if app.locale == "ko" { ko } else { en }
@@ -222,6 +226,11 @@ fn decode_runtime(id: &str, value: Value) -> Result<Runtime, Problem> {
     if runtime.phase == "ready"
         && (runtime.vm_state.as_deref() != Some("running")
             || runtime.error.is_some()
+            || runtime.project_path != "/home/fc-code/project"
+            || !runtime
+                .initial_commit
+                .as_deref()
+                .is_some_and(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
             || !runtime.runtime_id.as_deref().is_some_and(uuid))
     {
         runtime.phase = "reconcile_required".into();
@@ -302,6 +311,7 @@ pub fn load(app: Shared) {
             }
         }
         drop(state);
+        lifecycle::load(app.clone());
         agent_auth::load(app.clone());
         if changed {
             render_content(&app);
@@ -310,6 +320,12 @@ pub fn load(app: Shared) {
 }
 
 pub fn action(app: &Shared, action: &str) -> bool {
+    if lifecycle::action(app, action) {
+        return true;
+    }
+    if lifecycle::busy(&app.borrow()) && action.starts_with("code-") {
+        return true;
+    }
     if agent_auth::action(app, action) {
         return true;
     }

@@ -44,6 +44,10 @@ enable operations. The earlier local interactive mockup is not runtime evidence.
    choose no agent. ChatGPT accounts are eligible for Codex configuration;
    OpenCode uses OpenAI or Anthropic API keys. Claude Code uses Anthropic keys.
 4. Save the workspace. The resulting detail view shows the persisted settings.
+5. Choose an installed image, an internet-enabled MicroNetwork and a storage root.
+   Click **Create and start MicroVM** to clone the selected repository and branch.
+   Later, stop and start the same VM to preserve the working folder. See
+   [runtime controls and recovery](code-runtime.md#dashboard-controls).
 
 GitHub management opens its existing screen in another tab. AI AUTH opens the
 shared account manager in CODE and keeps the setup fields. Returning reloads

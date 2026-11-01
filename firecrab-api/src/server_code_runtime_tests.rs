@@ -188,6 +188,89 @@ impl Driver for Fake {
 }
 
 #[tokio::test]
+async fn code_runtime_rest_provision_stop_and_resume_reuse_the_reserved_vm_and_saved_repository() {
+    use crate::templates::{TemplateRegistry, TemplateSpec};
+    let mut f = fixture().await;
+    std::fs::write(f.dir.path().join("kernel"), b"kernel").unwrap();
+    std::fs::write(f.dir.path().join("rootfs"), b"rootfs").unwrap();
+    f.state.templates = TemplateRegistry::from_specs(
+        f.dir.path(),
+        [TemplateSpec {
+            alias: "dev".into(),
+            version: "v1".into(),
+            kernel: "kernel".into(),
+            rootfs: "rootfs".into(),
+            initrd: None,
+            boot_args: "console=ttyS0".into(),
+        }],
+    )
+    .unwrap()
+    .into();
+    let network =
+        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&f.state);
+    f.app = router(&f.state).layer(Extension(LocalOperator));
+    let path = format!("/api/code/workspaces/{}/runtime", f.id);
+    let body = json!({"expectedRevision":1,"template":"dev","microNetworkId":network,"storageRoot":f.state.storage.default_id()});
+    let (status, first) = call(&f, "POST", &path, body.clone()).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{first}");
+    let duplicate = call(&f, "POST", &path, body).await.1;
+    assert_eq!(duplicate["operationId"], first["operationId"]);
+    assert_eq!(duplicate["vmId"], first["vmId"]);
+    let initial = f.state.store.code_runtime(f.id).unwrap().unwrap();
+    assert_eq!(
+        initial.spec.github,
+        f.state
+            .store
+            .code_workspace(f.id)
+            .unwrap()
+            .unwrap()
+            .spec
+            .github
+    );
+    let vm_id = initial.runtime.vm_id;
+    let machine = Fake::default();
+    code_runtime::execute(&f.state.store, initial, &machine).await;
+    machine.0.lock().unwrap().files = "local commits and dirty files".into();
+    let stopped = call(
+        &f,
+        "POST",
+        &format!("{path}/stop"),
+        json!({"expectedRevision":1}),
+    )
+    .await;
+    assert_eq!(stopped.0, StatusCode::ACCEPTED);
+    code_runtime::execute(
+        &f.state.store,
+        f.state.store.code_runtime(f.id).unwrap().unwrap(),
+        &machine,
+    )
+    .await;
+    assert!(!machine.0.lock().unwrap().running);
+    let resumed = call(
+        &f,
+        "POST",
+        &format!("{path}/start"),
+        json!({"expectedRevision":1}),
+    )
+    .await;
+    assert_eq!(resumed.0, StatusCode::ACCEPTED);
+    code_runtime::execute(
+        &f.state.store,
+        f.state.store.code_runtime(f.id).unwrap().unwrap(),
+        &machine,
+    )
+    .await;
+    let saved = f.state.store.code_runtime(f.id).unwrap().unwrap();
+    assert_eq!(saved.runtime.vm_id, vm_id);
+    assert_eq!(saved.runtime.initial_commit.as_deref(), Some(SHA));
+    assert_eq!(machine.0.lock().unwrap().creates, 1);
+    assert_eq!(
+        machine.0.lock().unwrap().files,
+        "local commits and dirty files"
+    );
+}
+
+#[tokio::test]
 async fn code_runtime_reserves_one_vm_across_concurrent_database_connections_and_rejects_conflicting_placement()
  {
     let f = fixture().await;

@@ -5,6 +5,32 @@ Start and stop reuse existing VM lifecycle APIs.
 Stopping preserves the root disk, Git metadata, local commits, and uncommitted files.
 This API does not launch Web VS Code, a terminal session, or an AI agent.
 
+## Dashboard controls
+
+Save the workspace at **CODE → New workspace**, then open its detail view.
+The **MicroVM** section is also available in **Editor status**.
+
+1. Choose an installed image that fits the saved disk capacity, an internet-enabled
+   MicroNetwork and a registered storage root. The default root is selected when available.
+2. Click **Create and start MicroVM**. The saved repository and branch are cloned
+   into `/home/fc-code/project`. The dashboard observes the durable operation every three seconds.
+3. Use **Stop MicroVM** to sync and stop the guest. **Start MicroVM** resumes the
+   same VM and preserves local commits and dirty files without resetting the checkout.
+
+Placement discovery only reads existing resources. Missing choices or failed catalog
+reads disable creation; **Reload placement** refreshes those choices.
+Creation checks the current saved revision and configuration before submitting.
+An operation in progress disables conflicting lifecycle controls.
+Retained failures offer an explicit recovery action. Failed filesystem sync offers **Retry stop**.
+
+If a response is lost, the original request stays in session storage when available.
+**Check operation** reads the saved configuration and operation without replaying a mutation.
+An observed matching operation is accepted without another POST.
+When no new operation exists, **Retry same request** first checks again, then submits the
+original request. Changed configuration or a different operation observed by the check prevents replay.
+**Dismiss request notice** only removes that browser notice; it does not stop or delete the VM.
+Saving configuration, opening a page and reloading never automatically provision a VM.
+
 ## Provision
 
 Save [workspace configuration](code-workspaces.md) and connect the selected GitHub account first.
