@@ -8,6 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
+| [0.4.3](#043---2026-11-02) | 2026-11-02 | Dashboard and guest release validation |
 | [0.4.2](#042---2026-11-01) | 2026-11-01 | React dashboard and MicroVM agent workspaces |
 | [0.4.1](#041---2026-10-30) | 2026-10-30 | Latest managed installations and cross-platform updates |
 | [0.4.0](#040---2026-10-30) | 2026-10-30 | [Changes since v0.3.1](https://github.com/SteelCrab/firecrab/compare/v0.3.1...v0.4.0) |
@@ -23,6 +24,36 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 ## [Unreleased]
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
+
+## [0.4.3] - 2026-11-02
+
+Release validation updates for the React dashboard and guest workflows.
+See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
+[#573](https://github.com/SteelCrab/firecrab/pull/573).
+
+### Added
+
+- None.
+
+### Changed
+
+- Align Rust, dashboard and E2E package versions and lockfiles on 0.4.3.
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- Match live OCI image inspection, image deletion and SSH browser checks to
+  the current React dashboard controls. Allow guest actions up to 30 seconds.
+- Prevent dashboard isolation test fixtures from selecting the same free port
+  by starting each server before allocating the next fixture's port.
+
+### Improved
+
+- Verify that creating and removing an SSH port forward preserves existing
+  forwards in the console's SSH tab.
 
 ## [0.4.2] - 2026-11-01
 
@@ -1080,7 +1111,9 @@ network helper.
 - Changelog validation is part of the documentation CI job so a release
   cannot drop a required section.
 
-[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.4.1...main
+[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.4.3...main
+[0.4.3]: https://github.com/SteelCrab/firecrab/releases/tag/v0.4.3
+[0.4.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.4.2
 [0.4.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.4.1
 [0.4.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.4.0
 [0.3.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.3.1
