@@ -1,7 +1,7 @@
 use super::*;
 use firecrab_api_types::*;
 
-fn saved(project: Uuid, index: u64) -> SavedTask {
+pub(super) fn saved(project: Uuid, index: u64) -> SavedTask {
     SavedTask {
         caller: Default::default(),
         project: SandboxProjectSpec {

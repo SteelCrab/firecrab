@@ -47,7 +47,7 @@ fn copy_volume(source: &std::path::Path, destination: &std::path::Path) -> Resul
     Ok(format!("{:x}", hash.finalize()))
 }
 /// Read a completed matching manifest; retries additionally verify both backup files.
-fn completed(
+pub(super) fn completed(
     directory: &std::path::Path,
     binding: &Binding,
     id: Uuid,

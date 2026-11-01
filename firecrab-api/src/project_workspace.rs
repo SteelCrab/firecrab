@@ -1,6 +1,6 @@
 //! Durable project metadata and retained-volume lifecycle. Sandbox keeps task ownership.
 mod checkpoint;
-mod db;
+pub(crate) mod db;
 pub(crate) mod editors;
 mod files;
 mod files_db;
@@ -9,6 +9,7 @@ mod instructions;
 mod instructions_db;
 #[cfg(test)]
 mod instructions_tests;
+mod sandbox_migration;
 mod terminals;
 mod terminals_db;
 mod terminals_guest;
@@ -107,7 +108,7 @@ pub(crate) struct Binding {
 }
 /// Sanitized lifecycle failures; filesystem details remain in server logs.
 #[derive(Debug, thiserror::Error)]
-enum Error {
+pub(crate) enum Error {
     #[error("workspace not found")]
     Missing,
     #[error("workspace access denied")]
@@ -208,35 +209,35 @@ fn binding(state: &AppState, project: Uuid) -> Result<Binding, Error> {
         .ok_or(Error::Missing)
 }
 /// Open retained state without permitting missing-data replacement.
-fn service_lease(
-    state: &AppState,
-    binding: &Binding,
-    create: bool,
-) -> Result<std::sync::Arc<db::OwnerLock>, Error> {
-    let mut services = state
-        .workspaces
-        .services
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
-    if let Some(lease) = services.get(&binding.project_id) {
-        return Ok(lease.clone());
+impl Runtime {
+    fn service_lease(
+        &self,
+        binding: &Binding,
+        create: bool,
+    ) -> Result<std::sync::Arc<db::OwnerLock>, Error> {
+        let mut services = self.services.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(lease) = services.get(&binding.project_id) {
+            return Ok(lease.clone());
+        }
+        let directory = db::project_directory(&self.root, binding, create)?;
+        let file = db::private_file(&directory.join("service.lock"), true)?;
+        let lease = std::sync::Arc::new(db::OwnerLock::acquire(file)?);
+        services.insert(binding.project_id, lease.clone());
+        Ok(lease)
     }
-    let directory = db::project_directory(&state.workspaces.root, binding, create)?;
-    let file = db::private_file(&directory.join("service.lock"), true)?;
-    let lease = std::sync::Arc::new(db::OwnerLock::acquire(file)?);
-    services.insert(binding.project_id, lease.clone());
-    Ok(lease)
+    pub(crate) fn open_owned(
+        &self,
+        binding: &Binding,
+        create: bool,
+    ) -> Result<db::ProjectDb, Error> {
+        let lease = self.service_lease(binding, create)?;
+        let mut db = db::ProjectDb::open(&self.root, binding, self.owner, create)?;
+        db.service = Some(lease);
+        Ok(db)
+    }
 }
 fn open_owned(state: &AppState, binding: &Binding, create: bool) -> Result<db::ProjectDb, Error> {
-    let lease = service_lease(state, binding, create)?;
-    let mut db = db::ProjectDb::open(
-        &state.workspaces.root,
-        binding,
-        state.workspaces.owner,
-        create,
-    )?;
-    db.service = Some(lease);
-    Ok(db)
+    state.workspaces.open_owned(binding, create)
 }
 fn open(state: &AppState, binding: &Binding) -> Result<db::ProjectDb, Error> {
     open_owned(state, binding, false)
@@ -317,6 +318,7 @@ pub fn routes() -> Router<AppState> {
         .merge(views::routes())
         .merge(editors::routes())
         .merge(instructions::routes())
+        .merge(sandbox_migration::routes())
 }
 /// Read project metadata even when the workload VM is stopped.
 async fn get_workspace(
@@ -454,7 +456,9 @@ async fn bind_workspace(
             ));
         }
         if let Some(existing) = state.store.project_workspace(project)? {
-            service_lease(&state, &existing, existing.provisioning)?;
+            state
+                .workspaces
+                .service_lease(&existing, existing.provisioning)?;
         }
         let b = state.store.reserve_project_workspace(
             project,

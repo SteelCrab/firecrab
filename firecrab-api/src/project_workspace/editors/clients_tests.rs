@@ -444,7 +444,7 @@ fn schema_seven_adds_browser_close_records_without_replacing_legacy_editors() {
         db.conn
             .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
             .unwrap(),
-        7
+        super::super::db::SCHEMA_VERSION
     );
     assert!(db.closed_editor_snapshots(&restored).unwrap().is_empty());
 }

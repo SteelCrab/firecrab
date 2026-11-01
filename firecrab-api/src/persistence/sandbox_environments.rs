@@ -181,9 +181,12 @@ impl Store {
         &self,
         environment: Uuid,
     ) -> Result<Vec<Uuid>, PersistenceError> {
-        self.lock().prepare("SELECT id FROM ai_sandbox_tasks WHERE json_extract(spec,'$.task.environment.id')=?1 ORDER BY rowid")?
-            .query_map([environment.to_string()],|r|r.get::<_,String>(0))?
-            .map(|r|Uuid::parse_str(&r?).map_err(|_|corrupt())).collect()
+        let groups:Vec<Vec<(i64,String)>>=self.all_task_queries(|conn|Ok(conn.prepare("SELECT i.ordinal,t.id FROM ai_sandbox_tasks t JOIN ai_sandbox_task_index i ON i.id=t.id WHERE json_extract(t.spec,'$.task.environment.id')=?1 ORDER BY i.ordinal")?.query_map([environment.to_string()],|r|Ok((r.get(0)?,r.get(1)?)))?.collect::<Result<_,_>>()?))?;
+        let mut ids: Vec<_> = groups.into_iter().flatten().collect();
+        ids.sort_by_key(|(ordinal, _)| *ordinal);
+        ids.into_iter()
+            .map(|(_, id)| Uuid::parse_str(&id).map_err(|_| corrupt()))
+            .collect()
     }
 
     /// Pending cleanup is resumed; TTL only selects non-retained manifests.

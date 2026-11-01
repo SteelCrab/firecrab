@@ -196,7 +196,7 @@ impl AppState {
             db_file.with_extension("secrets"),
         ));
         let sandbox_root = db_file.with_extension("sandbox");
-        let workspace_root = sandbox_root.join("projects");
+
         let sandbox_database = db_file.clone();
         let (store, vms) = tokio::task::spawn_blocking(move || {
             let store = Store::open(&db_file)?;
@@ -213,7 +213,7 @@ impl AppState {
         let runtime = RuntimeConfig::from_defaults(&storage, &network);
         Ok(AppState {
             cluster: Arc::new(crate::cluster::Runtime::default()),
-            workspaces: Arc::new(crate::project_workspace::Runtime::new(workspace_root)),
+            workspaces: store.workspaces.clone(),
             #[cfg(test)]
             s3_test_origin: None,
             api_port: 5523,

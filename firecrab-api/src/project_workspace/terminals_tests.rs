@@ -322,6 +322,7 @@ async fn another_live_service_cannot_take_ownership_between_project_requests() {
     let path = format!("/api/ai-sandbox/projects/{}/workspace", b.project_id);
     let mut other = state.clone();
     other.workspaces = std::sync::Arc::new(Runtime::new(state.workspaces.root.clone()));
+    other.store.workspaces = other.workspaces.clone();
     let (status, _) = call(&other, "GET", &path, json!({}), None).await;
     assert_eq!(status, StatusCode::CONFLICT);
     let (status, _) = call(&state, "GET", &path, json!({}), None).await;

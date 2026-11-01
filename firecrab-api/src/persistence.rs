@@ -39,6 +39,7 @@ mod pipe_databases;
 mod pipe_storage;
 mod registries;
 mod sandbox_environments;
+pub(crate) mod sandbox_project_db;
 mod sandbox_tunnels;
 mod schedules;
 mod security_groups;
@@ -729,6 +730,8 @@ pub struct NewShell<'a> {
 pub struct Store {
     /// The shared, mutex-guarded SQLite connection.
     conn: Arc<Mutex<Connection>>,
+    pub(crate) workspaces: Arc<crate::project_workspace::Runtime>,
+    sandbox_gate: Arc<Mutex<()>>,
 }
 
 /// Restricts the database file to its owner.
@@ -808,6 +811,8 @@ impl Store {
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
         conn.execute_batch(ai_sandbox::SCHEMA)?;
+        conn.execute_batch(ai_sandbox::TASK_SCHEMA)?;
+        conn.execute_batch(sandbox_project_db::SCHEMA)?;
         conn.execute_batch(sandbox_tunnels::SCHEMA)?;
         conn.execute_batch(sandbox_environments::SCHEMA)?;
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
@@ -851,8 +856,13 @@ impl Store {
 
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
+            workspaces: Arc::new(crate::project_workspace::Runtime::new(
+                path.with_extension("sandbox").join("projects"),
+            )),
+            sandbox_gate: Arc::new(Mutex::new(())),
         };
         store.import_legacy(&path.with_file_name(LEGACY_FILE_NAME))?;
+        store.backfill_sandbox_catalog()?;
         store.rebuild_sandbox_references()?;
         store.rebuild_sandbox_index()?;
         Ok(store)

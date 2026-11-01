@@ -11,7 +11,7 @@ use std::{
 use uuid::Uuid;
 
 /// Private schema with an additive file-history migration from version 1.
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 /// SQLite application identity prevents opening an unrelated database.
 const APPLICATION_ID: i64 = 0x46575031;
 /// Maximum serialized size of a project metadata object.
@@ -71,7 +71,7 @@ pub fn private_dir(path: &Path) -> Result<(), Error> {
 }
 
 /// Open a regular owner-only file and reject aliases to other data.
-pub(super) fn private_file(path: &Path, create: bool) -> Result<File, Error> {
+pub(crate) fn private_file(path: &Path, create: bool) -> Result<File, Error> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -90,7 +90,7 @@ pub(super) fn private_file(path: &Path, create: bool) -> Result<File, Error> {
 }
 
 /// Resolve only the retained project's private directory; creation needs provisioning authority.
-pub(super) fn project_directory(
+pub(crate) fn project_directory(
     root: &Path,
     binding: &Binding,
     create: bool,
@@ -201,6 +201,11 @@ impl ProjectDb {
         }
         if version < 7 {
             conn.execute_batch(super::editors::CLIENT_SCHEMA)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        if version < 8 {
+            conn.execute_batch(crate::persistence::sandbox_project_db::TASK_SCHEMA)?;
+            conn.execute_batch("CREATE TABLE IF NOT EXISTS sandbox_migration(singleton INTEGER PRIMARY KEY CHECK(singleton=1),operation TEXT NOT NULL,source_sha TEXT NOT NULL) STRICT;")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         let epoch = epoch

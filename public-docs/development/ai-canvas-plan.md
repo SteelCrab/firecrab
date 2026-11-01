@@ -186,3 +186,10 @@ Existing foundations are documented in `public-docs/guides/volumes.md` and `publ
 - The instruction mockup covers the project-root file. Actual runtime loading and nested instruction discovery remain follow-up work. See the [official AGENTS.md guide](https://learn.chatgpt.com/docs/agent-configuration/agents-md) for the Codex convention.
 - The mockup does not run a VS Code server, terminal commands, AI API calls, MicroVMs, or skill downloads/installations. Example state resets on page reload.
 - The [screenshot comment](https://github.com/SteelCrab/firecrab/issues/550#issuecomment-6510124559) shows the Personal Page editor mockup.
+
+## Sandbox storage handoff implementation
+
+Draft PR #562 adds explicit project task-storage migration with a verified matched
+checkpoint, source write fencing, a private SQLite backup, verified copy and
+atomic registry cutover. See [API, interruption recovery and validation boundaries](project-sandbox-migration-2026-11-01.md).
+Live workload migration and integrated acceptance remain pending.
