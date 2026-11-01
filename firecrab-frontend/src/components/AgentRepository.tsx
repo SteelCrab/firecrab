@@ -142,7 +142,7 @@ export default function AgentRepository(p: Props) {
       .then(() => setCopiedCode(code))
       .catch(() =>
         setAuthError(
-          t("Select and copy the code.", "코드를 선택한 뒤 복사하세요."),
+          t("Select and copy the code.", "코드를 선택해서 복사해 주세요."),
         ),
       );
   };
@@ -257,7 +257,7 @@ export default function AgentRepository(p: Props) {
                     <p>
                       {t(
                         "Copy the code and enter it on GitHub.",
-                        "코드를 복사한 뒤 GitHub에 입력하세요.",
+                        "코드를 복사한 뒤 GitHub에 입력해 주세요.",
                       )}
                     </p>
                     <div className="am-device-actions">
@@ -293,7 +293,7 @@ export default function AgentRepository(p: Props) {
                     <span className="am-auth-waiting">
                       {t(
                         "This screen updates automatically after authorization.",
-                        "인증을 마치면 자동으로 연결됩니다.",
+                        "로그인이 끝나면 자동으로 연결돼요.",
                       )}
                     </span>
                   </>
@@ -301,7 +301,7 @@ export default function AgentRepository(p: Props) {
                   <p>
                     {t(
                       "Requesting an authentication code…",
-                      "인증 코드 요청 중…",
+                      "로그인 코드를 받고 있어요…",
                     )}
                   </p>
                 )}
@@ -310,7 +310,7 @@ export default function AgentRepository(p: Props) {
               <p>
                 {t(
                   "Authorize once. All tasks in this VM use the same GitHub account.",
-                  "한 번 인증하면 이 VM의 모든 작업에서 사용할 수 있습니다.",
+                  "한 번 로그인하면 이 VM의 모든 작업에서 사용할 수 있어요.",
                 )}
               </p>
             )}
@@ -361,7 +361,7 @@ export default function AgentRepository(p: Props) {
                 <p>
                   {t(
                     "Preparing the repository in this MicroVM…",
-                    "이 MicroVM에 저장소를 준비하는 중…",
+                    "이 VM에 저장소를 준비하고 있어요…",
                   )}
                 </p>
               </div>
@@ -432,7 +432,7 @@ export default function AgentRepository(p: Props) {
                   <p>
                     {t(
                       "No repositories found. Enter an address instead.",
-                      "저장소가 없습니다. 저장소 주소를 입력해 연결할 수 있습니다.",
+                      "저장소가 없어요. 주소를 직접 입력해서 연결할 수도 있어요.",
                     )}
                   </p>
                 )}

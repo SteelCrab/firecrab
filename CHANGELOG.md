@@ -8,7 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
-| [0.4.3](#043---2026-11-02) | 2026-11-02 | Dashboard and guest release validation |
+| [0.4.3](#043---2026-11-02) | 2026-11-02 | AI Sandbox quick start and dashboard validation |
 | [0.4.2](#042---2026-11-01) | 2026-11-01 | React dashboard and MicroVM agent workspaces |
 | [0.4.1](#041---2026-10-30) | 2026-10-30 | Latest managed installations and cross-platform updates |
 | [0.4.0](#040---2026-10-30) | 2026-10-30 | [Changes since v0.3.1](https://github.com/SteelCrab/firecrab/compare/v0.3.1...v0.4.0) |
@@ -27,13 +27,18 @@ Entries land here as work merges, and move under the next version heading when t
 
 ## [0.4.3] - 2026-11-02
 
-Release validation updates for the React dashboard and guest workflows.
-See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
-[#573](https://github.com/SteelCrab/firecrab/pull/573).
+AI Sandbox quick start and release validation updates for the React dashboard and guest workflows.
+See [#572](https://github.com/SteelCrab/firecrab/pull/572),
+[#573](https://github.com/SteelCrab/firecrab/pull/573) and
+[#577](https://github.com/SteelCrab/firecrab/pull/577).
 
 ### Added
 
-- None.
+- AI Sandbox quick start prepares Ubuntu 26.04 LTS with 2 vCPU, 4 GiB RAM,
+  a 32 GiB disk and the selected coding tools. The right-side navigation connects
+  workspace preparation, accounts, AI tasks, app verification and preview.
+- Connect a fixed Firecrab app address to the guest-owned preview tunnel and
+  explicitly verify its public HTTPS response before opening the app preview.
 
 ### Changed
 
@@ -49,9 +54,13 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
   the current React dashboard controls. Allow guest actions up to 30 seconds.
 - Prevent dashboard isolation test fixtures from selecting the same free port
   by starting each server before allocating the next fixture's port.
+- Use clearer Korean prompts, status messages and action descriptions throughout
+  the dashboard.
 
 ### Improved
 
+- Resume journaled workspace preparation after browser or controller restarts.
+  Idempotent retries preserve the reserved VM and avoid duplicate creation.
 - Verify that creating and removing an SSH port forward preserves existing
   forwards in the console's SSH tab.
 

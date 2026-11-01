@@ -175,6 +175,7 @@ pub struct AppState {
     pub(crate) update_check: Arc<AsyncMutex<Option<(std::time::Instant, UpdateCheckResponse)>>>,
     /// Warm pool reconciler signal and per-pool failures (`crate::pool`).
     pub(crate) pools: crate::pool::PoolRuntime,
+    pub(crate) workspace_setups: Arc<crate::workspace_setup::Runtime>,
 }
 
 impl AppState {
@@ -253,6 +254,7 @@ impl AppState {
             process_metrics: Arc::new(Mutex::new(ProcessMetricsTracker::default())),
             update_check: Arc::new(AsyncMutex::new(None)),
             pools: crate::pool::PoolRuntime::default(),
+            workspace_setups: Arc::new(crate::workspace_setup::Runtime::default()),
         })
     }
 

@@ -53,6 +53,7 @@ mod templates;
 mod tls;
 mod vm_execution;
 mod vm_shim;
+mod workspace_setup;
 
 use std::error::Error;
 use std::io;
@@ -175,6 +176,7 @@ async fn run() -> Result<(), StartupError> {
         .map_err(|error| StartupError::VolumeRecovery(error.to_string()))?
         .map_err(StartupError::VolumeRecovery)?;
     reconcile::reconcile(&state).await;
+    workspace_setup::recover(&state).await;
     service_runtime::recover(&state).await;
     queues::recover(&state).await;
     ai_sandbox::environment::start_maintenance(state.clone());

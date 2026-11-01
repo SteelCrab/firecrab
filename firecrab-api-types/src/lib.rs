@@ -8,6 +8,9 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod workspace_setup;
+pub use workspace_setup::*;
+
 mod queues;
 pub use queues::*;
 mod pool;

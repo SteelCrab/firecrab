@@ -45,6 +45,7 @@ pub(crate) mod service_logs;
 pub(crate) mod service_observation;
 mod stack_applies;
 mod stack_sources;
+mod workspace_setups;
 pub(crate) use stack_sources::SourceTrigger;
 mod stacks;
 pub use registries::RegistryLogin;
@@ -808,6 +809,7 @@ impl Store {
         conn.execute_batch(ai_sandbox::SCHEMA)?;
         conn.execute_batch(sandbox_tunnels::SCHEMA)?;
         conn.execute_batch(sandbox_environments::SCHEMA)?;
+        conn.execute_batch(workspace_setups::SCHEMA)?;
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute_batch(service_observation::SCHEMA)?;

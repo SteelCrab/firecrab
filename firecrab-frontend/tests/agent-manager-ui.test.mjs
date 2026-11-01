@@ -41,7 +41,11 @@ async function setup(
     fileURLToPath(new URL("../dist", import.meta.url)),
     1,
   );
-  t.after(() => fixture.close());
+  let browser;
+  t.after(async () => {
+    await browser?.close();
+    await fixture.close();
+  });
   fixture.handlers.set("GET /api/host", ({ send }) =>
     send(200, {
       loadAverage1m: 1,
@@ -59,8 +63,7 @@ async function setup(
       },
     }),
   );
-  const browser = await chromium.launch({ headless: true });
-  t.after(() => browser.close());
+  browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   await page.addInitScript(
     (value) => localStorage.setItem("firecrab.locale", value),
@@ -373,13 +376,22 @@ async function setup(
     if (selectCli)
       await page.getByRole("radio", { name: "Codex", exact: true }).check();
   }
-  if (view === "terminals")
+  if (select && selectCli && ready && authenticated && project) {
     await page
+      .locator(".am-quick-sidebar")
       .getByRole("button", {
-        name: locale === "ko" ? "터미널" : "Terminals",
+        name: locale === "ko" ? "AI 작업" : "AI tasks",
         exact: true,
       })
       .click();
+    if (view === "terminals")
+      await page
+        .getByRole("button", {
+          name: locale === "ko" ? "터미널" : "Terminals",
+          exact: true,
+        })
+        .click();
+  }
   return { fixture, page, state };
 }
 
@@ -515,9 +527,17 @@ test("work calls an agent only when a task is submitted", async (t) => {
     .click();
   await expect(dialog.getByLabel("Model", { exact: true })).toBeEnabled();
   await dialog.getByLabel("Model", { exact: true }).fill("temporary-model");
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "Connect accounts", exact: true })
+    .click();
   await page.getByRole("radio", { name: "Claude Code", exact: true }).check();
   await expect(dialog.getByLabel("Model", { exact: true })).toHaveValue("");
   await page.getByRole("radio", { name: "Codex", exact: true }).check();
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "AI tasks", exact: true })
+    .click();
   await page.screenshot({
     path: join(tmpdir(), "firecrab-microvm-task-form-20261031.png"),
     fullPage: false,
@@ -702,32 +722,42 @@ test("terminal reconnect preserves the agent session without replaying input", a
 });
 
 test("VM and CLI selection are explicit and opening a VM creation form starts nothing", async (t) => {
-  const { page, state } = await setup(t, { empty: true, select: false });
+  const { fixture, page, state } = await setup(t, {
+    empty: true,
+    select: false,
+  });
   await expect(
     page.getByRole("button", { name: "Start task", exact: true }),
   ).toHaveCount(0);
   assert.equal(state.calls.length, 0);
   await page.getByRole("button", { name: "New MicroVM", exact: true }).click();
-  const modal = page.getByRole("dialog", {
-    name: "New Sandbox MicroVM",
+  const form = page.getByRole("region", {
+    name: "Workspace setup",
     exact: true,
   });
-  await expect(modal.getByLabel("Name", { exact: true })).toBeVisible();
-  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
-  await expect(modal).toHaveCount(0);
-  await expect(
-    page.getByRole("heading", { name: "AI Sandbox", exact: true }),
-  ).toBeVisible();
-  assert.equal(state.calls.length, 0);
+  await expect(form.getByLabel("Workspace name", { exact: true })).toHaveValue(
+    "my-workspace",
+  );
+  await expect(form).toContainText("Ubuntu 26.04 LTS");
+  await expect(form).toContainText("2 vCPU");
+  await expect(form).toContainText("4 GiB");
+  await expect(form).toContainText("32 GiB");
+  await page.screenshot({
+    path: join(tmpdir(), "firecrab-quick-start-1440.png"),
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+    true,
+  );
+  await page.screenshot({
+    path: join(tmpdir(), "firecrab-quick-start-390.png"),
+  });
   await page
     .getByRole("combobox", { name: "MicroVM", exact: true })
-    .selectOption(
-      await page
-        .getByRole("combobox", { name: "MicroVM", exact: true })
-        .locator("option")
-        .nth(1)
-        .getAttribute("value"),
-    );
+    .selectOption(fixture.state.vms[0].id);
   await expect(
     page.getByRole("button", { name: "Start task", exact: true }),
   ).toHaveCount(0);
@@ -784,55 +814,67 @@ test("preparation and VM account connection do not submit a model task", async (
   assert(state.calls.every((c) => c.endpoint.includes("/microvms/")));
 });
 
-test("creating a VM selects it in Sandbox and waits for an explicit start", async (t) => {
+test("quick start prepares the default VM and resumes the same job after reload", async (t) => {
   const { fixture, page, state } = await setup(t, {
     empty: true,
     select: false,
   });
   const id = "59ded74d-c9a0-4ec6-a30a-71bb091a6eb3";
-  fixture.handlers.set("POST /api/vms", ({ send }) => {
-    const row = vm(9, { id, name: "sandbox-created", state: "created" });
-    fixture.state.vms.push(row);
-    send(201, row);
+  let job;
+  fixture.handlers.set("POST /api/workspace-setups", ({ send, body }) => {
+    job = { ...body, vmId: id, state: "running", phase: "image", error: null };
+    send(202, job);
+    fixture.handlers.set(`GET /api/workspace-setups/${body.id}`, ({ send }) =>
+      send(200, job),
+    );
   });
-  await page.getByRole("button", { name: "New MicroVM", exact: true }).click();
-  const modal = page.getByRole("dialog", {
-    name: "New Sandbox MicroVM",
-    exact: true,
-  });
-  await modal.locator("#vm-name").fill("sandbox-created");
-  await modal
-    .getByLabel("MicroNetwork", { exact: true })
-    .selectOption("network-1");
-  await modal
-    .getByRole("button", { name: "Create MicroVM", exact: true })
+  await page
+    .getByRole("button", { name: "Create workspace", exact: true })
     .click();
-  await expect(modal).toHaveCount(0);
-  const request = fixture.requests.find(
-    (r) => r.method === "POST" && r.path === "/api/vms",
+  await expect(
+    page.getByRole("region", { name: "Workspace setup" }),
+  ).toContainText("Working…");
+  await page.reload();
+  await expect(
+    page.getByRole("region", { name: "Workspace setup" }),
+  ).toContainText("Working…");
+  assert.equal(
+    fixture.requests.filter(
+      (r) => r.method === "POST" && r.path === "/api/workspace-setups",
+    ).length,
+    1,
   );
   assert.deepEqual(
     {
-      cpu: request.body.cpu,
-      ram: request.body.ram,
-      diskGb: request.body.diskGb,
+      cpu: job.cpu,
+      ram: job.ram,
+      diskGb: job.diskGb,
+      microNetworkId: job.microNetworkId,
+      storageRoot: job.storageRoot,
     },
-    { cpu: 1, ram: 1024, diskGb: 3 },
+    { cpu: 2, ram: 4096, diskGb: 32, microNetworkId: null, storageRoot: null },
   );
+  const row = vm(9, { id, name: job.name, state: "running" });
+  fixture.state.vms.push(row);
+  fixture.handlers.set(`GET /api/vms/${id}`, ({ send }) => send(200, row));
+  job = { ...job, state: "ready", phase: "complete" };
   await expect(
     page.getByRole("combobox", { name: "MicroVM", exact: true }),
-  ).toHaveValue(id);
+  ).toHaveValue(id, { timeout: 15000 });
   await expect(
-    page.getByRole("button", { name: "Start MicroVM", exact: true }),
+    page.getByRole("heading", { name: "Choose your AI and repository" }),
   ).toBeVisible();
   assert.equal(
-    fixture.requests.filter(
-      (r) => r.method === "POST" && r.path.endsWith("/start"),
-    ).length,
+    state.calls.filter((c) => c.method === "POST" && c.path === "/tasks")
+      .length,
     0,
   );
-  assert.equal(state.calls.filter((c) => c.method === "POST").length, 0);
-  await expect(page).toHaveURL(/#\/ai-sandbox$/);
+  assert.equal(
+    await page.evaluate(() =>
+      localStorage.getItem("firecrab.workspaceSetup.native-controller"),
+    ),
+    null,
+  );
 });
 
 test("a task waiting on CLI setup is sent only after the user resumes it", async (t) => {
@@ -987,7 +1029,7 @@ test("a temporary host status failure keeps the selected VM and task draft mount
   const task = page.getByRole("textbox", { name: "Task", exact: true });
   await task.fill("Keep this draft while status is unavailable");
   const originalEnvironment = await page
-    .getByRole("region", { name: "Execution environment", exact: true })
+    .locator(".am-environment")
     .elementHandle();
   const originalTask = await task.elementHandle();
   const healthy = fixture.handlers.get("GET /api/host");
@@ -1199,11 +1241,19 @@ test("GitHub authentication tools can be prepared before selecting any coding CL
 test("One VM repository is selected after AUTH and reused by new tasks", async (t) => {
   const { page, state } = await setup(t, { empty: true, project: false });
   await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "AI tasks", exact: true })
+    .click();
+  await page
     .getByLabel("Task", { exact: true })
     .fill("Inspect the connected repository");
   await expect(
     page.getByRole("button", { name: "Start task", exact: true }),
   ).toBeDisabled();
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "Connect accounts", exact: true })
+    .click();
   await page
     .getByRole("combobox", { name: "Your GitHub repositories" })
     .selectOption("example/private-project");
@@ -1213,6 +1263,9 @@ test("One VM repository is selected after AUTH and reused by new tasks", async (
   await expect(
     page.getByText("example/private-project", { exact: true }),
   ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Start an AI task", exact: true })
+    .click();
   await page.getByRole("button", { name: "Start task", exact: true }).click();
   const task = state.calls.find((c) => c.path === "/tasks");
   assert.equal(task.body.repository, undefined);
@@ -1519,6 +1572,10 @@ test("a board task can call Claude without changing the VM's selected Codex envi
     .getByRole("region", { name: "Task board", exact: true })
     .getByRole("button", { name: /Review the API changes/ });
   await expect(task.locator('[data-agent-kind="claude"]')).toBeVisible();
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "Connect accounts", exact: true })
+    .click();
   await expect(
     page.getByRole("radio", { name: "Codex", exact: true }),
   ).toBeChecked();
@@ -1545,3 +1602,236 @@ test("a disconnected board marks its last observation and recovers without start
   await expect(page.locator(".am-connection-error")).toHaveCount(0);
   assert.equal(state.calls.filter((call) => call.method === "POST").length, 0);
 });
+
+test("failed preparation retries keep the operation ID and install only the selected CLI", async (t) => {
+  const { page, fixture, state } = await setup(t, {
+    empty: true,
+    select: false,
+    ready: false,
+  });
+  const id = "a3524395-661c-4bee-aefc-bc733592f15d";
+  let posted = [];
+  fixture.handlers.set("POST /api/workspace-setups", ({ body, send }) => {
+    posted.push(body);
+    send(202, {
+      ...body,
+      vmId: id,
+      state: posted.length === 1 ? "failed" : "ready",
+      phase: posted.length === 1 ? "image" : "complete",
+      error: posted.length === 1 ? "Download unavailable" : null,
+    });
+  });
+  const row = vm(10, { id, state: "running", name: "my-workspace" });
+  fixture.state.vms.push(row);
+  fixture.handlers.set(`GET /api/vms/${id}`, ({ send }) => send(200, row));
+  await page
+    .getByRole("button", { name: "Create workspace", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText("Download unavailable");
+  await page
+    .getByRole("button", { name: "Continue preparation", exact: true })
+    .click();
+  await expect
+    .poll(
+      () =>
+        state.calls.filter((c) => c.method === "POST" && c.path === "/prepare")
+          .length,
+    )
+    .toBe(1);
+  assert.deepEqual(posted[0], posted[1]);
+  state.ready = true;
+  state.preparing = false;
+  await expect(
+    page.getByRole("heading", { name: "Choose your AI and repository" }),
+  ).toBeVisible({ timeout: 15000 });
+  assert.equal(
+    state.calls.filter((c) => c.method === "POST" && c.path === "/prepare")
+      .length,
+    1,
+  );
+  assert.equal(
+    state.calls.filter((c) => c.method === "POST" && c.path === "/tasks")
+      .length,
+    0,
+  );
+});
+
+test("a prepared VM with another controller cannot receive automatic CLI installation", async (t) => {
+  const { page, fixture, state } = await setup(t, {
+    empty: true,
+    select: false,
+    mismatch: true,
+    ready: false,
+  });
+  const id = "76f11710-583c-42b1-8eaf-ff5a186921ee";
+  const row = vm(11, { id, state: "running" });
+  fixture.state.vms.push(row);
+  fixture.handlers.set(`GET /api/vms/${id}`, ({ send }) => send(200, row));
+  fixture.handlers.set("POST /api/workspace-setups", ({ body, send }) =>
+    send(202, {
+      ...body,
+      vmId: id,
+      state: "ready",
+      phase: "complete",
+      error: null,
+    }),
+  );
+  await page
+    .getByRole("button", { name: "Create workspace", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText("host");
+  assert.equal(state.calls.filter((c) => c.method === "POST").length, 0);
+  await expect(
+    page.getByRole("button", {
+      name: "Open the prepared MicroVM",
+      exact: true,
+    }),
+  ).toBeVisible();
+});
+
+test(
+  "quick start verifies the app, proves its fixed HTTPS address and returns to real AI work",
+  { timeout: 45000 },
+  async (t) => {
+    const { page, state, fixture } = await setup(t);
+    const sidebar = page.locator(".am-quick-sidebar");
+    await sidebar.getByRole("button", { name: "Run app", exact: true }).click();
+    const run = page.getByRole("button", {
+      name: "Verify and run",
+      exact: true,
+    });
+    await expect(run).toBeDisabled();
+    state.agents.forEach((agent) => (agent.state = "done"));
+    await expect(run).toBeEnabled({ timeout: 15000 });
+    await run.click();
+    const submitted = state.calls.find(
+      (c) =>
+        c.method === "POST" &&
+        c.path.endsWith("/automation") &&
+        c.body.action === "run",
+    );
+    assert.equal(
+      submitted.endpoint.includes(`/microvms/${fixture.state.vms[0].id}/`),
+      true,
+    );
+    assert.equal(
+      state.calls.some((c) => c.body?.action === "start_preview"),
+      false,
+    );
+    state.automation.run = {
+      ...state.automation.run,
+      state: "passed",
+      phase: "complete",
+      appReady: true,
+      appRunning: true,
+      exitCode: 0,
+      log: "Real fixture command completed",
+    };
+    await page
+      .getByRole("button", { name: "Refresh app status", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Connect app address", exact: true })
+      .click();
+    let proofStatus = 503;
+    let savedTarget;
+    const publicUrl = "https://workspace-demo.firecrab.dev";
+    await page.route("https://workspace-demo.firecrab.dev/**", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: "<!doctype html><title>App preview fixture</title><p>Fixture app</p>",
+      }),
+    );
+    fixture.handlers.set("GET /api/pipe", ({ send }) =>
+      send(200, fixture.state.pipe),
+    );
+    fixture.handlers.set(
+      "POST /api/pipe/firecrab-tunnels",
+      ({ body, send }) => {
+        savedTarget = body.target;
+        fixture.state.pipe.firecrabTunnels = [
+          {
+            subdomain: "workspace-demo",
+            publicUrl,
+            target: body.target,
+            connectorId: "guest-preview",
+            connected: true,
+            error: null,
+          },
+        ];
+        send(200, fixture.state.pipe);
+      },
+    );
+    fixture.handlers.set(
+      "POST /api/pipe/firecrab-tunnels/workspace-demo/check",
+      ({ send }) =>
+        send(200, {
+          url: publicUrl,
+          status: proofStatus,
+          ok: proofStatus === 200,
+          latencyMs: 18,
+        }),
+    );
+    const token = "a".repeat(64);
+    await page
+      .getByLabel("Firecrab connection token", { exact: true })
+      .fill(token);
+    await page
+      .getByRole("button", { name: "Connect Firecrab address", exact: true })
+      .click();
+    await expect(page.getByRole("alert")).toContainText("503");
+    assert.deepEqual(savedTarget, {
+      type: "preview",
+      vm_id: fixture.state.vms[0].id,
+      url: "https://qa-preview.trycloudflare.com",
+    });
+
+    await expect(
+      page.getByTitle("Running app preview", { exact: true }),
+    ).toHaveCount(0);
+    assert.equal(
+      (await page.evaluate(() => JSON.stringify(localStorage))).includes(token),
+      false,
+    );
+    proofStatus = 200;
+    await page
+      .getByRole("button", { name: "Check HTTPS", exact: true })
+      .click();
+    await expect(page.getByRole("status")).toContainText("HTTPS 200");
+    await page
+      .getByRole("button", { name: "Open app preview", exact: true })
+      .click();
+    await expect(
+      page.getByTitle("Running app preview", { exact: true }),
+    ).toHaveAttribute("src", publicUrl);
+    await page.screenshot({
+      path: join(tmpdir(), "firecrab-workspace-preview-1440.png"),
+    });
+    const previous = state.calls.filter(
+      (c) => c.path === "/tasks" && c.method === "POST",
+    ).length;
+    await page
+      .getByRole("button", { name: "Ask AI for another change", exact: true })
+      .click();
+    const dialog = page.getByRole("dialog", { name: "New task", exact: true });
+    await expect(dialog).toBeVisible();
+    assert.equal(
+      state.calls.filter((c) => c.path === "/tasks" && c.method === "POST")
+        .length,
+      previous,
+    );
+    await dialog
+      .getByRole("textbox", { name: "Task", exact: true })
+      .fill("Add a delete button");
+    await dialog
+      .getByRole("button", { name: "Start task", exact: true })
+      .click();
+    await expect
+      .poll(
+        () =>
+          state.calls.filter((c) => c.path === "/tasks" && c.method === "POST")
+            .length,
+      )
+      .toBe(previous + 1);
+  },
+);

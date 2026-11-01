@@ -42,7 +42,7 @@ export default function AgentTaskForm({
           <p>
             {t(
               "Run this task in this MicroVM's connected workspace.",
-              "이 MicroVM에 연결된 작업 폴더에서 작업을 시작합니다.",
+              "이 VM의 작업 폴더에서 AI가 코드를 작성해요.",
             )}
           </p>
         </header>
@@ -59,7 +59,7 @@ export default function AgentTaskForm({
             rows={5}
             placeholder={t(
               "Describe what needs to be done…",
-              "에이전트에게 맡길 작업을 입력하세요…",
+              "예: 할 일 앱을 만들어 줘. 추가·완료·삭제 기능과 테스트를 작성해 줘. 앱은 Firecrab에서 실행할 수 있도록 시작 명령만 준비해 줘.",
             )}
             value={draft.input}
             onChange={(e) => onChange({ ...draft, input: e.target.value })}
@@ -112,7 +112,7 @@ export default function AgentTaskForm({
         <p className="am-host-note">
           {t(
             "The CLI uses the account connected inside the selected MicroVM. Provider usage may incur charges.",
-            "선택한 MicroVM에서 연결된 CLI 계정으로 작업합니다. 사용 중인 AI 서비스에서 요금이 청구될 수 있습니다.",
+            "이 VM에 연결한 AI 계정을 사용해요. AI 서비스 요금이 발생할 수 있어요.",
           )}
         </p>
         <footer>

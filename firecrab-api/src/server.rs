@@ -542,6 +542,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/images", get(handlers::images::list_images))
         .route(
+            "/api/workspace-setups",
+            get(crate::workspace_setup::list).post(crate::workspace_setup::create),
+        )
+        .route(
+            "/api/workspace-setups/{id}",
+            get(crate::workspace_setup::get),
+        )
+        .route(
             "/api/images/{alias}",
             get(handlers::images::list_image_detail).delete(handlers::images::delete_image),
         )
@@ -708,6 +716,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/pipe/firecrab-tunnels/{subdomain}",
             delete(handlers::pipe::delete_firecrab_tunnel),
+        )
+        .route(
+            "/api/pipe/firecrab-tunnels/{subdomain}/check",
+            post(handlers::pipe::check_firecrab_address),
         )
         .route(
             "/api/pipe/cloudflare/zones",
