@@ -541,7 +541,10 @@ Saved instruction context:
 
 Sandbox code-task admission accepts optional `instructionSnapshotId` to retain and apply
 that caller's saved context. See [saved task instructions](../guides/sandbox-saved-instructions.md)
-for prerequisites, runtime fencing and the current isolated-copy execution boundary.
+for prerequisites and runtime fencing. Adding `projectDirectory` explicitly selects
+the [retained-folder file-only profile](../guides/sandbox-folder-file-agents.md);
+it requires a matching saved snapshot and exposes confirmed `folderMutations`.
+Omitting that field retains isolated-copy execution.
 
 See [saved project instructions](../guides/project-instructions.md) for limits, private access and retries.
 

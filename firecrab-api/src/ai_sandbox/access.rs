@@ -321,7 +321,9 @@ fn task_rights(
         (project.clone(), SandboxPermission::Read),
         (project, permission),
     ];
-    if let Some(path) = &saved.project.source_path {
+    if saved.task.request.project_directory.is_none()
+        && let Some(path) = &saved.project.source_path
+    {
         rights.push((
             SandboxResource::Source { path: path.clone() },
             SandboxPermission::Read,
@@ -332,6 +334,14 @@ fn task_rights(
                 SandboxPermission::Write,
             ));
         }
+    }
+    if saved.task.request.project_directory.is_some() && permission == SandboxPermission::Execute {
+        rights.push((
+            SandboxResource::Project {
+                id: saved.task.project_id,
+            },
+            SandboxPermission::Write,
+        ));
     }
     if permission == SandboxPermission::Execute
         && saved.task.request.kind == SandboxTaskKind::Code

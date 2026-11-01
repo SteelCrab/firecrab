@@ -800,6 +800,8 @@ pub async fn create_task(
         return Ok((StatusCode::OK, Json(previous.task)));
     }
     ai_sandbox::coordination::validate(&input).map_err(|e| invalid(id, "coordination", e))?;
+    ai_sandbox::folder::validate_request(&project.spec, &input)
+        .map_err(|e| invalid(id, "projectDirectory", e))?;
     if let Some(snapshot) = input.instruction_snapshot_id
         && (snapshot.is_nil()
             || input.kind != SandboxTaskKind::Code
@@ -898,10 +900,27 @@ pub async fn create_task(
         ));
     }
     if input.kind == SandboxTaskKind::Code {
-        caller
-            .settings(&state, &project.spec)
-            .map_err(|e| denied(id, e))?;
-        if project.spec.source_path.is_none() {
+        if input.project_directory.is_some() {
+            caller
+                .project(&state, project_id, SandboxPermission::Write)
+                .map_err(|e| denied(id, e))?;
+            let vm = project
+                .spec
+                .vm_id
+                .ok_or_else(|| invalid(id, "vmId", "Select the project VM"))?;
+            caller
+                .require(
+                    &state,
+                    &SandboxResource::Vm { id: vm },
+                    SandboxPermission::Execute,
+                )
+                .map_err(|e| denied(id, e))?;
+        } else {
+            caller
+                .settings(&state, &project.spec)
+                .map_err(|e| denied(id, e))?;
+        }
+        if input.project_directory.is_none() && project.spec.source_path.is_none() {
             return Err(invalid(
                 id,
                 "sourcePath",
@@ -949,10 +968,14 @@ pub async fn create_task(
     }
     let timestamp = ai_sandbox::now();
     let spec = project.spec.clone();
-    let git_commit = tokio::task::spawn_blocking(move || ai_sandbox::context::resolve(&spec))
-        .await
-        .map_err(|_| AppError::internal(id.0))?
-        .map_err(|e| invalid(id, "gitRef", e))?;
+    let git_commit = if input.project_directory.is_some() {
+        None
+    } else {
+        tokio::task::spawn_blocking(move || ai_sandbox::context::resolve(&spec))
+            .await
+            .map_err(|_| AppError::internal(id.0))?
+            .map_err(|e| invalid(id, "gitRef", e))?
+    };
     if matches!(
         execution_mode,
         Some(SandboxExecutionMode::PersistentWorkspace)
@@ -1002,6 +1025,7 @@ pub async fn create_task(
         instructions,
         caller,
         task: SandboxTask {
+            folder_mutations: Vec::new(),
             git_commit,
             retry_root: Some(retry_root),
             retry_number,
@@ -1036,6 +1060,11 @@ pub async fn create_task(
     caller
         .task(&state, &saved, SandboxPermission::Execute)
         .map_err(|e| denied(id, e))?;
+    if ai_sandbox::folder::enabled(&saved) {
+        let target =
+            ai_sandbox::folder::target(&saved).map_err(|e| invalid(id, "projectDirectory", e))?;
+        crate::project_workspace::folder::admit(state.clone(), target, id.0).await?;
+    }
     let state = state.clone();
     let response = tokio::spawn(async move { ai_sandbox::admit(state, saved, claim).await })
         .await
@@ -1086,15 +1115,21 @@ pub async fn reconcile_task(
             "Only an interrupted attempt needs reconciliation",
         ));
     }
-    if let Some(binding) = &saved.guest {
-        saved.guest = Some(
-            ai_sandbox::guest::binding(&state, binding.vm_id)
-                .map_err(|e| invalid(id, "guest", e))?,
-        );
+    if ai_sandbox::folder::enabled(&saved) {
+        ai_sandbox::folder::settle(&state, &mut saved, caller)
+            .await
+            .map_err(|e| invalid(id, "fileOperation", e))?;
+    } else {
+        if let Some(binding) = &saved.guest {
+            saved.guest = Some(
+                ai_sandbox::guest::binding(&state, binding.vm_id)
+                    .map_err(|e| invalid(id, "guest", e))?,
+            );
+        }
+        ai_sandbox::reconcile_guest(&state, &mut saved)
+            .await
+            .map_err(|e| invalid(id, "guest", e))?;
     }
-    ai_sandbox::reconcile_guest(&state, &mut saved)
-        .await
-        .map_err(|e| invalid(id, "guest", e))?;
     if let Some(path) = &saved.workspace {
         saved.task.changes = match ai_sandbox::workspace::changes(path) {
             Ok(changes) => changes,
@@ -1177,6 +1212,13 @@ pub async fn apply_task(
 ) -> Result<Json<SandboxTask>, AppError> {
     let _claim = state.sandbox.admission.lock().await;
     let mut saved = task(&state, id, key, caller, SandboxPermission::Apply).await?;
+    if ai_sandbox::folder::enabled(&saved) {
+        return Err(error(
+            id,
+            "sandbox_folder_already_applied",
+            "Folder file changes are saved immediately; use project version history to review or restore them",
+        ));
+    }
     if saved.task.state.active() || saved.guest_pending || saved.guest_staged {
         return Err(error(
             id,

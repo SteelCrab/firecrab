@@ -25,6 +25,8 @@ Sandbox code-task admission can select a snapshot using `instructionSnapshotId`.
 The accepted saved bytes and resource binding are retained in the private task
 record. See [saved instructions for tasks](sandbox-saved-instructions.md).
 
-Task selection requires completed project-local task migration. Direct retained-folder
-execution, folder-agent sessions and provider-backed acceptance remain pending.
+Task selection requires completed project-local task migration. An explicit
+[retained-folder file profile](sandbox-folder-file-agents.md) reads and saves files
+in the snapshot's selected directory. Shell execution, the full folder-agent session
+UI and provider-backed acceptance remain pending.
 No provider connection is available for the current live model gate.

@@ -40,6 +40,11 @@ fn validate(saved: &SavedTask) -> Result<(), String> {
                 && !context.volume_id.is_nil()
                 && context.generation > 0 =>
         {
+            if let Some(directory) = &saved.task.request.project_directory
+                && directory != &context.snapshot.directory
+            {
+                return Err("Admitted saved rules select another folder".into());
+            }
             crate::project_workspace::validate_task_instructions(&context.snapshot)
         }
         _ => Err("The admitted saved instruction context is missing or inconsistent".into()),

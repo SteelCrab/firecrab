@@ -5,6 +5,7 @@ pub(crate) mod editors;
 mod files;
 mod files_db;
 mod files_guest;
+pub(crate) mod folder;
 mod instruction_tasks;
 mod instructions;
 pub(crate) use instruction_tasks::{task_instructions, validate_task_instructions};

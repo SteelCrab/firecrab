@@ -5,10 +5,12 @@ workspace. Admission copies the accepted saved-file versions into the private ta
 record. Restart, reconnect, a moving file or another user's editor buffer cannot
 silently change those rules.
 
-This capability supplies saved guidance to the existing Sandbox engine. Its file
-and command tools still use the existing isolated source-copy workflow. Direct
-execution in `/workspace/shared` and folder-agent sessions remain later #550 work.
-Selecting a snapshot does not grant additional filesystem or runtime access.
+This capability supplies saved guidance to the existing Sandbox engine. Requests
+without `projectDirectory` keep the isolated source-copy workflow described below.
+An explicit [retained-folder file profile](sandbox-folder-file-agents.md) can instead
+read and save files in the selected retained directory. Shell execution and the full
+folder-agent session UI remain later #550 work. Selecting a snapshot does not grant
+additional filesystem or runtime access.
 
 ## Prerequisites
 

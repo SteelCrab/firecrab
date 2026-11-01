@@ -71,10 +71,11 @@ in #414 and #496. Complete each phase's exit criterion before its dependent work
 
 **Exit criterion:** a real model performs an authorized task in its bound project folder and returns the result through the existing Sandbox lifecycle. Verify instruction revision capture, cancellation/recovery, migration recovery, and rejected cross-project access for the supported runtime paths.
 
-Saved instruction selection is implemented for the existing isolated-copy Sandbox
-engine. See [task instruction selection](../guides/sandbox-saved-instructions.md).
-Direct retained-folder execution and folder-agent session UI remain pending;
-this partial integration does not satisfy Phase 5's full exit criterion.
+Saved instruction selection is implemented for the existing Sandbox engine.
+An explicit [retained-folder file profile](../guides/sandbox-folder-file-agents.md)
+adds versioned reads and writes in the project volume. Shell execution, the full
+folder-agent session UI and live model acceptance remain pending. This partial
+integration does not satisfy Phase 5's full exit criterion.
 
 ### 6. Official-source skill catalog and installation
 
@@ -198,3 +199,16 @@ Draft PR #562 adds explicit project task-storage migration with a verified match
 checkpoint, source write fencing, a private SQLite backup, verified copy and
 atomic registry cutover. See [API, interruption recovery and validation boundaries](project-sandbox-migration-2026-11-01.md).
 Live workload migration and integrated acceptance remain pending.
+
+
+## Retained-folder file profile implementation
+
+The existing Sandbox engine now accepts an explicit `projectDirectory` file profile
+with a matching saved instruction snapshot. It reads and writes through the existing
+retained-volume file/version/receipt APIs. It skips host source-copy preparation and
+host context. Per-write before/after provenance is retained in `folderMutations`.
+Uncertain effects reuse the canonical Sandbox pending fence; reconciliation observes
+receipts without reapplying writes. Provider history is scoped to caller, directory
+and assigned agent. See the [API contract and validation limits](../guides/sandbox-folder-file-agents.md).
+Full folder shell execution, the agent session UI and live provider/runtime acceptance
+remain pending. This does not complete the folder-agent stage.

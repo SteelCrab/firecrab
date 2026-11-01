@@ -81,6 +81,7 @@ pub(super) struct Files {
     pub(super) state: AppState,
     caller: Caller,
     writable: bool,
+    pub(super) require_execution: bool,
     pub(super) binding: Binding,
     pub(super) runtime: guest::Binding,
     pub(super) digest: String,
@@ -129,6 +130,7 @@ impl Files {
             state,
             caller,
             writable,
+            require_execution: false,
             binding: b,
             runtime,
             digest,
@@ -138,6 +140,27 @@ impl Files {
     }
 
     pub(super) fn permission(&self) -> Result<(), Error> {
+        if self.require_execution {
+            self.caller
+                .require_all(
+                    &self.state,
+                    &[
+                        (
+                            SandboxResource::Project {
+                                id: self.binding.project_id,
+                            },
+                            SandboxPermission::Execute,
+                        ),
+                        (
+                            SandboxResource::Vm {
+                                id: self.binding.vm_id,
+                            },
+                            SandboxPermission::Execute,
+                        ),
+                    ],
+                )
+                .map_err(|_| Error::Denied)?;
+        }
         self.caller
             .project(
                 &self.state,
@@ -178,7 +201,7 @@ impl Files {
         Ok(result)
     }
 
-    async fn receipt(&mut self, op: &Operation) -> Result<bool, Error> {
+    pub(super) async fn receipt(&mut self, op: &Operation) -> Result<bool, Error> {
         let expected = wire::operation_frame(&self.db, op)?;
         match self.request(wire::frame(4, "", op.id, None, &[])?).await? {
             Reply::Data(actual) if actual == expected => {
@@ -211,11 +234,14 @@ impl Files {
     }
     /// Verify that a selected directory exists within the retained volume.
     pub(super) async fn directory(&mut self, path: &str) -> Result<(), Error> {
+        self.entries(path).await.map(|_| ())
+    }
+    pub(super) async fn entries(&mut self, path: &str) -> Result<Vec<ProjectFileEntry>, Error> {
         match self
             .request(wire::frame(1, path, Uuid::nil(), None, &[])?)
             .await?
         {
-            Reply::Data(bytes) => wire::entries(&bytes).map(|_| ()),
+            Reply::Data(bytes) => wire::entries(&bytes),
             Reply::Rejected(code) => Err(wire::rejected(code)),
         }
     }
@@ -279,6 +305,17 @@ async fn write(
     input: Operation,
     id: Uuid,
 ) -> Result<ProjectFile, AppError> {
+    write_bound(state, project, caller, input, id, None).await
+}
+/// Folder tasks pin both logical identity and the exact VM boot under the native I/O guard.
+pub(super) async fn write_bound(
+    state: AppState,
+    project: Uuid,
+    caller: Caller,
+    input: Operation,
+    id: Uuid,
+    expected: Option<(Binding, guest::Binding)>,
+) -> Result<ProjectFile, AppError> {
     authorize(&state, caller, project, SandboxPermission::Write, id)?;
     authorize(&state, caller, project, SandboxPermission::Read, id)?;
     // A confirmed retry remains queryable even after its workload VM stops.
@@ -309,6 +346,15 @@ async fn write(
         return Ok(cached);
     }
     let mut files = Files::open(state, project, caller, true, id).await?;
+    files.require_execution = expected.is_some();
+    files.permission().map_err(|e| e.response(id))?;
+    if let Some((binding, runtime)) = expected
+        && (files.binding != binding || files.runtime != runtime)
+    {
+        return Err(
+            Error::Conflict("Folder task runtime changed before file mutation").response(id),
+        );
+    }
     let result = async {
         if let Some(op) = files.db.file_operation(input.id)? {
             identical(&op, &input)?;

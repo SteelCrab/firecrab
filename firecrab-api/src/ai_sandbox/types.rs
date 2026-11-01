@@ -31,7 +31,7 @@ pub struct SavedTask {
     pub workspace: Option<PathBuf>,
     /// Borrowed VM boot identity captured before any guest side effect.
     pub guest: Option<GuestBinding>,
-    /// The guest may still own a process or an unexported workspace.
+    /// A guest command, retained file write, or unexported workspace remains uncertain.
     pub guest_pending: bool,
     /// Immutable identity of the most recently admitted guest command.
     #[serde(default)]

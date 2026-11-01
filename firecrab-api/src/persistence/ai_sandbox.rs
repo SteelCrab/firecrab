@@ -2,7 +2,7 @@
 use super::{PersistenceError, Store};
 use crate::ai_sandbox::{ModelProof, SavedTask};
 use firecrab_api_types::{
-    SandboxAccessPolicy, SandboxProject, SandboxTaskState, SandboxTaskSummary,
+    SandboxAccessPolicy, SandboxPrincipal, SandboxProject, SandboxTaskState, SandboxTaskSummary,
 };
 use rusqlite::{OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
@@ -278,6 +278,30 @@ impl Store {
         let mut statement=conn.prepare("SELECT i.summary FROM ai_sandbox_task_index i JOIN ai_sandbox_attempts a ON a.task_id=i.id WHERE i.project_id=?1 AND a.source_path IS ?2 AND json_extract(i.summary,'$.state') IN ('result','merged') ORDER BY i.ordinal DESC LIMIT 12")?;
         let mut rows = statement
             .query_map(params![project.to_string(), source], |r| r.get(0))?
+            .map(|r| decode(r?))
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.reverse();
+        Ok(rows)
+    }
+    /// Provider context is private to the admitted caller, directory and selected agent.
+    pub fn sandbox_history_for_folder(
+        &self,
+        project: Uuid,
+        directory: &str,
+        agent: Option<&str>,
+        caller: SandboxPrincipal,
+    ) -> Result<Vec<SandboxTaskSummary>, PersistenceError> {
+        let conn = self.task_connection(project, false)?;
+        let mut query=conn.prepare("SELECT i.summary FROM ai_sandbox_task_index i JOIN ai_sandbox_tasks t ON t.id=i.id
+            WHERE i.project_id=?1 AND json_extract(t.spec,'$.task.request.projectDirectory') IS ?2
+            AND json_extract(t.spec,'$.task.request.coordination.assignedAgent') IS ?3
+            AND json_extract(t.spec,'$.caller.principal') = json_extract(?4,'$')
+            AND json_extract(i.summary,'$.state') IN ('result','merged') ORDER BY i.ordinal DESC LIMIT 12")?;
+        let mut rows = query
+            .query_map(
+                params![project.to_string(), directory, agent, encode(&caller)?],
+                |r| r.get(0),
+            )?
             .map(|r| decode(r?))
             .collect::<Result<Vec<_>, _>>()?;
         rows.reverse();

@@ -22,6 +22,7 @@ pub(super) fn saved(project: Uuid, index: u64) -> SavedTask {
         results_exported: false,
         execution_mode: None,
         task: SandboxTask {
+            folder_mutations: Vec::new(),
             git_commit: None,
             retry_root: None,
             retry_number: 0,
@@ -34,6 +35,7 @@ pub(super) fn saved(project: Uuid, index: u64) -> SavedTask {
             attempt_id: Uuid::new_v4(),
             runtime: None,
             request: SandboxTaskInput {
+                project_directory: None,
                 instruction_snapshot_id: None,
                 coordination: Default::default(),
                 environment_role: None,
@@ -379,4 +381,56 @@ fn canonical_task_and_projection_roll_back_together_on_failed_checkpoint() {
         1
     );
     assert_eq!(store.sandbox_pending_count().unwrap(), 0);
+}
+#[test]
+fn folder_provider_history_is_private_to_caller_directory_and_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("state.db")).unwrap();
+    let project = Uuid::new_v4();
+    let caller = SandboxPrincipal::Host(Uuid::new_v4());
+    let mut original = saved(project, 1);
+    original.task.request.project_directory = Some("api".into());
+    original.task.request.coordination.assigned_agent = Some("Backend".into());
+    original.caller.principal = caller;
+    store.save_sandbox_task(&original).unwrap();
+    for n in 2..=18 {
+        let mut unrelated = saved(project, n);
+        unrelated.task.request.project_directory = Some("api".into());
+        unrelated.task.request.coordination.assigned_agent = Some("Backend".into());
+        unrelated.caller.principal = caller;
+        match n % 3 {
+            0 => unrelated.caller.principal = SandboxPrincipal::Local,
+            1 => unrelated.task.request.project_directory = Some("web".into()),
+            _ => unrelated.task.request.coordination.assigned_agent = Some("Frontend".into()),
+        }
+        store.save_sandbox_task(&unrelated).unwrap();
+    }
+    let rows = store
+        .sandbox_history_for_folder(project, "api", Some("Backend"), caller)
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, original.task.id);
+    assert!(
+        store
+            .sandbox_history_for_folder(project, "api", None, caller)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .sandbox_history_for_folder(project, "", Some("Backend"), caller)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .sandbox_history_for_folder(
+                project,
+                "api",
+                Some("Backend"),
+                SandboxPrincipal::Host(Uuid::new_v4())
+            )
+            .unwrap()
+            .is_empty()
+    );
 }

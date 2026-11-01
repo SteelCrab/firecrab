@@ -734,6 +734,12 @@ async fn execute_bounded(
     seconds: u64,
     limits: Option<&SandboxGuestLimits>,
 ) -> io::Result<Output> {
+    if saved.task.request.project_directory.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Retained-folder file agents do not expose command execution",
+        ));
+    }
     super::access::attempt(state, saved).map_err(io::Error::other)?;
     let accounts = state.store.ai_connections().map_err(io::Error::other)?;
     if super::redact(&accounts, command) != command {

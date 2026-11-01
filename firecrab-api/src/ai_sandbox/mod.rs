@@ -5,6 +5,7 @@ pub mod context;
 pub mod coordination;
 pub mod environment;
 pub mod files;
+pub(crate) mod folder;
 mod git;
 pub mod guest;
 pub mod guest_protocol;
@@ -233,7 +234,16 @@ async fn run(state: AppState, mut saved: SavedTask, mut cancel: watch::Receiver<
         saved.task.error_code = Some(code);
         saved.task.error = Some(message);
     }
-    if (saved.guest_pending || saved.guest_staged)
+    if folder::enabled(&saved) {
+        let actor = saved.caller;
+        if folder::settle(&state, &mut saved, actor).await.is_err() {
+            saved.task.state = SandboxTaskState::Interrupted;
+            saved.task.error_code = Some("sandbox_folder_reconciliation_required".into());
+            saved.task.error = Some("A retained-folder write needs receipt reconciliation; its original operation id was retained".into());
+        }
+    }
+    if !folder::enabled(&saved)
+        && (saved.guest_pending || saved.guest_staged)
         && reconcile_guest(&state, &mut saved).await.is_err()
     {
         saved.task.state = SandboxTaskState::Interrupted;
@@ -307,6 +317,9 @@ async fn run(state: AppState, mut saved: SavedTask, mut cancel: watch::Receiver<
 
 /// Explicit reconciliation stops only the recorded attempt and exports before cleanup.
 pub async fn reconcile_guest(state: &AppState, saved: &mut SavedTask) -> Result<(), String> {
+    if folder::enabled(saved) {
+        return Err("Reconcile retained-folder receipts through the folder profile".into());
+    }
     if !saved.guest_pending && !saved.guest_staged {
         return Ok(());
     }
@@ -414,7 +427,7 @@ async fn execute(
     saved.task.updated_at = now();
     save(state, saved).await.map_err(execution_error)?;
     let code = saved.task.request.kind == SandboxTaskKind::Code;
-    if code {
+    if code && !folder::enabled(saved) {
         let source = PathBuf::from(
             saved
                 .project
@@ -502,10 +515,19 @@ async fn execute(
             .map_err(execution_error)?;
         }
     }
-    let previous = state
-        .store
-        .sandbox_history_for_source(saved.task.project_id, saved.project.source_path.as_deref())
-        .map_err(|_| execution_error("Cannot read conversation history"))?;
+    let previous = if let Some(directory) = &saved.task.request.project_directory {
+        state.store.sandbox_history_for_folder(
+            saved.task.project_id,
+            directory,
+            saved.task.request.coordination.assigned_agent.as_deref(),
+            saved.caller.principal,
+        )
+    } else {
+        state
+            .store
+            .sandbox_history_for_source(saved.task.project_id, saved.project.source_path.as_deref())
+    }
+    .map_err(|_| execution_error("Cannot read conversation history"))?;
     let mut history = Vec::new();
     if let Some(mode) = &saved.execution_mode {
         let services = if let Some(reference) = &saved.task.environment {
@@ -526,12 +548,16 @@ async fn execute(
     } else {
         saved.task.git_commit.clone()
     };
-    let project_context = tokio::task::spawn_blocking(move || {
-        context::text(&context_spec, context_commit.as_deref(), &connections)
-    })
-    .await
-    .map_err(execution_error)?
-    .map_err(execution_error)?;
+    let project_context = if folder::enabled(saved) {
+        String::new()
+    } else {
+        tokio::task::spawn_blocking(move || {
+            context::text(&context_spec, context_commit.as_deref(), &connections)
+        })
+        .await
+        .map_err(execution_error)?
+        .map_err(execution_error)?
+    };
     if saved.task.git_commit.is_some() || !project_context.is_empty() {
         saved.task.events.push(SandboxEvent {
             sequence: saved.task.events.len(),
@@ -562,6 +588,12 @@ async fn execute(
     let mut context_bytes = 0;
     let recent = previous
         .iter()
+        .filter(|task| {
+            task.request.project_directory == saved.task.request.project_directory
+                && (!folder::enabled(saved)
+                    || task.request.coordination.assigned_agent
+                        == saved.task.request.coordination.assigned_agent)
+        })
         .filter(|v| matches!(v.state, SandboxTaskState::Result | SandboxTaskState::Merged))
         .rev()
         .take(12)
@@ -592,7 +624,17 @@ async fn execute(
             None
         };
     history.push(json!({"role":"user","content":saved.task.request.input}));
-    let mut tools = if code { model::tools() } else { vec![] };
+    let folder_profile = folder::enabled(saved);
+    let task_tools = || {
+        if folder_profile {
+            folder::tools()
+        } else if code {
+            model::tools()
+        } else {
+            vec![]
+        }
+    };
+    let mut tools = task_tools();
     let maximum = if code { 24 } else { 1 };
     let mut call_ids = std::collections::HashSet::new();
     saved.task.state = SandboxTaskState::InProgress;
@@ -642,13 +684,14 @@ async fn execute(
         access::attempt(state, saved).map_err(execution_error)?;
         let turn = interruptible(
             async {
-                model::turn(
+                model::turn_with_folder(
                     state,
                     &account,
                     &saved.task.selection.model,
                     &history,
                     &tools,
                     false,
+                    folder_profile,
                 )
                 .await
                 .map_err(provider_error)
@@ -690,6 +733,11 @@ async fn execute(
         history.extend(turn.continuation);
         let mut results = Vec::new();
         for mut call in turn.calls {
+            if folder_profile && saved.task.events.len() >= 128 {
+                return Err(execution_error(
+                    "The folder agent reached its action limit; inspect retained file versions before retrying",
+                ));
+            }
             access::attempt(state, saved).map_err(execution_error)?;
             proof(state, &saved.task.selection, true).map_err(execution_error)?;
             connections.extend(
@@ -703,9 +751,14 @@ async fn execute(
                     "Provider repeated a tool-call identity; execution was stopped",
                 ));
             }
-            call.arguments =
-                serde_json::from_str(&redact(&connections, &call.arguments.to_string()))
-                    .map_err(execution_error)?;
+            if folder_profile {
+                folder::reject_credentials(&mut call, &connections);
+            } else {
+                call.arguments =
+                    serde_json::from_str(&redact(&connections, &call.arguments.to_string()))
+                        .map_err(execution_error)?;
+            }
+            folder::prepare(saved, &mut call);
             let index = saved.task.events.len();
             saved.task.events.push(SandboxEvent {
                 sequence: index,
@@ -753,7 +806,7 @@ async fn execute(
         }
         model::append_results(&mut history, account.connection.provider, &results);
         // Retain a fixed tool set; model messages cannot expand capabilities.
-        tools = model::tools();
+        tools = task_tools();
     }
     Err((
         "sandbox_turn_limit".into(),
@@ -850,6 +903,9 @@ async fn tool(
     saved: &mut SavedTask,
     call: &model::Call,
 ) -> Result<(String, String, Option<i32>, bool), String> {
+    if folder::enabled(saved) {
+        return folder::tool(state, saved, call).await;
+    }
     if call.name == "record_test" {
         let args: TestArgs =
             serde_json::from_value(call.arguments.clone()).map_err(|_| "Invalid test arguments")?;
