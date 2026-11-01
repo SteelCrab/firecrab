@@ -115,7 +115,7 @@ function AgentVmSelection(props: Props & { controllerId: string }) {
     if (
       unsaved.current &&
       !window.confirm(
-        t("Leave the unsent draft?", "보내지 않은 입력을 두고 이동할까?"),
+        t("Leave the unsent draft?", "입력한 내용을 보내지 않고 이동할까요?"),
       )
     )
       return;
@@ -483,7 +483,7 @@ function VmAgentWorkspace({
               <strong>
                 {t(
                   "Could not connect to this MicroVM",
-                  "이 MicroVM에 연결할 수 없다",
+                  "이 MicroVM에 연결할 수 없습니다",
                 )}
               </strong>
               <button className="btn" onClick={() => void refresh()}>
@@ -501,7 +501,7 @@ function VmAgentWorkspace({
           <p className="am-error" role="alert">
             {t(
               "The native controller does not match this host. Reload this host’s dashboard before sending commands.",
-              "연결된 호스트와 에이전트 실행 호스트가 다르다. 이 호스트의 대시보드를 다시 열어 확인한다.",
+              "현재 연결된 제어 서버가 이 호스트와 일치하지 않습니다. 명령을 보내기 전에 이 호스트의 대시보드를 다시 여세요.",
             )}
           </p>
         )}
@@ -512,7 +512,7 @@ function VmAgentWorkspace({
               <p>
                 {t(
                   "Tasks call agents on demand. Follow their work on the board.",
-                  "작업을 시작하면 에이전트를 호출한다. 진행 상태는 보드에서 확인한다.",
+                  "작업을 시작하면 에이전트가 실행됩니다. 진행 상황은 보드에서 확인할 수 있습니다.",
                 )}
               </p>
             </div>
@@ -656,11 +656,11 @@ function VmAgentWorkspace({
                     {status
                       ? t(
                           "Choose a coding CLI above to start a task in this MicroVM.",
-                          "위에서 코딩 CLI를 선택하고 계정을 연결하면 작업을 시작할 수 있다.",
+                          "위에서 코딩 CLI를 선택하고 계정을 연결하면 작업을 시작할 수 있습니다.",
                         )
                       : t(
                           "Choose a MicroVM and CLI to start.",
-                          "MicroVM과 사용할 CLI를 선택한다.",
+                          "MicroVM과 사용할 CLI를 선택하세요.",
                         )}
                   </p>
                 </div>
@@ -708,7 +708,7 @@ function VmAgentWorkspace({
                   <p className="am-list-hint">
                     {t(
                       "No agents match this filter.",
-                      "조건에 맞는 에이전트가 없다.",
+                      "조건에 맞는 에이전트가 없습니다.",
                     )}
                   </p>
                 )}
@@ -736,7 +736,7 @@ function VmAgentWorkspace({
                       <PanelLeftClose aria-hidden="true" />
                       {t(
                         "Select an agent to open its session.",
-                        "에이전트를 선택하면 세션을 확인할 수 있다.",
+                        "에이전트를 선택하면 세션을 확인할 수 있습니다.",
                       )}
                     </div>
                   )}
@@ -838,7 +838,7 @@ function AgentPane({
       } else onUpdate(value, true);
     } catch (e) {
       setError(
-        `${e instanceof Error ? e.message : String(e)} ${t("Inspect the terminal before resending.", "다시 보내기 전에 터미널을 확인한다.")}`,
+        `${e instanceof Error ? e.message : String(e)} ${t("Inspect the terminal before resending.", "다시 보내기 전에 터미널을 확인하세요.")}`,
       );
     } finally {
       setBusy(false);
@@ -849,7 +849,7 @@ function AgentPane({
       window.confirm(
         t(
           `Close ${agent.name}? Its running CLI will stop.`,
-          `‘${agent.name}’ 세션을 종료할까? 실행 중인 CLI가 중지된다.`,
+          `‘${agent.name}’ 세션을 종료할까요? 실행 중인 CLI도 중지됩니다.`,
         ),
       )
     )
@@ -953,7 +953,7 @@ function AgentPane({
           <span>
             {t(
               "Finish CLI startup in the terminal, then send the waiting task.",
-              "터미널에서 CLI 시작 절차를 마친 뒤 준비한 작업을 전달한다.",
+              "터미널에서 CLI 초기 설정을 마친 뒤 작업을 보내세요.",
             )}
           </span>
           <button
@@ -971,7 +971,7 @@ function AgentPane({
         <p className="am-attention">
           {t(
             "Task delivery could not be confirmed. Inspect the terminal before sending it again.",
-            "작업 전달 여부를 확인하지 못했다. 다시 보내기 전에 터미널을 확인한다.",
+            "작업이 전달되었는지 확인하지 못했습니다. 다시 보내기 전에 터미널을 확인하세요.",
           )}
         </p>
       )}

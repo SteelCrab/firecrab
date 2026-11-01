@@ -175,12 +175,12 @@ export default function VmScreen({
             <Cpu aria-hidden="true" />
           </div>
           <div className="empty-state-title">
-            {t("Create your first MicroVM", "첫 MicroVM을 만든다")}
+            {t("Create your first MicroVM", "첫 MicroVM 만들기")}
           </div>
           <p>
             {t(
               "Pick an image and resources. It starts in a few seconds.",
-              "이미지와 사양을 고르면 몇 초 안에 시작한다.",
+              "이미지와 사양을 선택하면 몇 초 안에 시작할 수 있습니다.",
             )}
           </p>
           <a className="btn" href={newVmHash()}>
@@ -194,7 +194,10 @@ export default function VmScreen({
             {t("No results", "검색 결과 없음")}
           </h2>
           <p>
-            {t("No MicroVMs match the filter.", "조건에 맞는 MicroVM이 없다.")}
+            {t(
+              "No MicroVMs match the filter.",
+              "조건에 맞는 MicroVM이 없습니다.",
+            )}
           </p>
           <button className="btn" onClick={clearFilters}>
             {t("Clear filters", "필터 초기화")}

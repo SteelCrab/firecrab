@@ -23,12 +23,12 @@ export default function VmSchedules({ vm }: { vm: VmResponse }) {
     >
       {items === null && !error && (
         <p className="detail-note">
-          {t("Loading schedules…", "예약을 확인하는 중이다.")}
+          {t("Loading schedules…", "예약 확인 중…")}
         </p>
       )}
       {error && (
         <p className="detail-note">
-          {t("Schedules are unavailable.", "예약 정보를 불러오지 못했다.")}{" "}
+          {t("Schedules are unavailable.", "예약 정보를 불러오지 못했습니다.")}{" "}
           <button className="link-button" onClick={() => void reload()}>
             {t("Retry", "다시 시도")}
           </button>
@@ -38,7 +38,7 @@ export default function VmSchedules({ vm }: { vm: VmResponse }) {
         <p className="detail-note">
           {t(
             "Schedule this VM to start or stop automatically.",
-            "이 VM의 시작과 중지를 자동으로 예약한다.",
+            "이 VM의 시작과 중지를 예약할 수 있습니다.",
           )}
         </p>
       )}

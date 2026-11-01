@@ -293,7 +293,7 @@ export default function FirecrabTunnel({
         <p className="poll-note">{t("Loading addresses…", "주소 조회 중…")}</p>
       ) : !addresses.length ? (
         <div className="empty">
-          {t("No fixed addresses.", "등록한 고정 주소가 없다.")}
+          {t("No fixed addresses.", "등록된 고정 주소가 없습니다.")}
         </div>
       ) : (
         <div className="table-scroll">

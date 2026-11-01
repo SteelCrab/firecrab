@@ -86,20 +86,20 @@ export default function PipeAi({
           setEditing(null);
           setRevision((value) => value + 1);
           setNotice(
-            t("ChatGPT account connected.", "ChatGPT 계정을 연결했다."),
+            t("ChatGPT account connected.", "ChatGPT 계정을 연결했습니다."),
           );
         } else if (status.status === "failed") {
           setLogin(null);
           setError(
             status.message ??
-              t("ChatGPT login failed.", "ChatGPT 로그인에 실패했다."),
+              t("ChatGPT login failed.", "ChatGPT에 로그인하지 못했습니다."),
           );
         } else if (Date.now() >= deadline) {
           setLogin(null);
           setError(
             t(
               "ChatGPT login expired. Start again.",
-              "ChatGPT 로그인이 만료됐다. 다시 시작한다.",
+              "ChatGPT 로그인 시간이 만료되었습니다. 다시 로그인하세요.",
             ),
           );
         } else timer = setTimeout(() => void poll(), 1500);
@@ -177,12 +177,12 @@ export default function PipeAi({
         (current) =>
           current?.filter((value) => value.id !== connection.id) ?? [],
       );
-      setNotice(t("Account disconnected.", "계정 연결을 해제했다."));
+      setNotice(t("Account disconnected.", "계정 연결을 해제했습니다."));
       if (removed.remoteRevocationConfirmed === false)
         setNotice(
           t(
             "Disconnected locally. Remote revocation was not confirmed. Disconnect Firecrab in ChatGPT settings.",
-            "로컬 연결을 해제했다. 원격 토큰 폐기는 확인하지 못했다. ChatGPT 설정에서 Firecrab 연결을 해제한다.",
+            "로컬 연결을 해제했습니다. 원격 토큰이 폐기되었는지는 확인하지 못했습니다. ChatGPT 설정에서 Firecrab 연결을 해제하세요.",
           ),
         );
     });
@@ -224,7 +224,7 @@ export default function PipeAi({
             <p>
               {t(
                 "Connect and manage your AI accounts.",
-                "AI 서비스 계정을 연결하고 관리한다.",
+                "AI 서비스 계정을 연결하고 관리합니다.",
               )}
             </p>
           </div>
@@ -275,11 +275,11 @@ export default function PipeAi({
           <span className="pipe-ai-welcome-icon">
             <LogIn aria-hidden="true" />
           </span>
-          <h3>{t("Connect your AI account", "AI 계정을 연결한다")}</h3>
+          <h3>{t("Connect your AI account", "AI 계정 연결")}</h3>
           <p>
             {t(
               "Sign in with ChatGPT, or connect an OpenAI or Anthropic API key.",
-              "ChatGPT 로그인 또는 OpenAI·Anthropic API 키로 연결한다.",
+              "ChatGPT로 로그인하거나 OpenAI·Anthropic API 키로 연결하세요.",
             )}
           </p>
           <div className="pipe-ai-actions">
@@ -296,7 +296,7 @@ export default function PipeAi({
             <ShieldCheck aria-hidden="true" />
             {t(
               "Credentials are stored only on the API host.",
-              "인증 정보는 API 호스트에서만 저장한다.",
+              "인증 정보는 API 호스트에만 저장됩니다.",
             )}
           </p>
         </div>
@@ -368,11 +368,11 @@ export default function PipeAi({
             {authentication === "chatgpt"
               ? t(
                   "Sign in with your ChatGPT account. No API key needed.",
-                  "ChatGPT 계정으로 로그인한다. API 키는 필요 없다.",
+                  "ChatGPT 계정으로 로그인하세요. API 키 없이 연결할 수 있습니다.",
                 )
               : t(
                   "The server checks your API key before saving it.",
-                  "서버에서 API 키의 유효성을 확인한 뒤 저장한다.",
+                  "서버에서 API 키가 유효한지 확인한 뒤 저장합니다.",
                 )}
           </p>
           {authentication === "api_key" && (
@@ -469,7 +469,7 @@ export default function PipeAi({
                 <p>
                   {t(
                     "The browser must reach the local API callback at 127.0.0.1. For a remote API host, forward its port before signing in.",
-                    "브라우저에서 127.0.0.1의 로컬 API 콜백에 접근할 수 있어야 한다. 원격 API 호스트는 로그인 전에 포트를 전달한다.",
+                    "브라우저에서 127.0.0.1의 로컬 API 콜백에 접속할 수 있어야 합니다. 원격 API 호스트를 사용한다면 로그인 전에 포트 포워딩을 설정하세요.",
                   )}
                 </p>
               </div>
@@ -547,7 +547,7 @@ export default function PipeAi({
             <ShieldCheck aria-hidden="true" />
             {t(
               "Credentials stay on the server.",
-              "인증 정보는 서버에서 관리한다.",
+              "인증 정보는 서버에서 관리합니다.",
             )}
           </p>
           {connections!.some(

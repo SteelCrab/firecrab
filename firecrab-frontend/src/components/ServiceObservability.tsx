@@ -101,7 +101,7 @@ export default function ServiceObservability({
           setError(
             t(
               "Could not load observations.",
-              "로그·이벤트·알림을 불러올 수 없다.",
+              "로그·이벤트·알림을 불러올 수 없습니다.",
             ),
           );
       } finally {
@@ -143,7 +143,7 @@ export default function ServiceObservability({
         setSaveError(
           t(
             "Use an HTTP(S) collector base URL without credentials, query or fragment.",
-            "인증 정보·쿼리·프래그먼트가 없는 HTTP(S) 수집기 주소를 입력한다.",
+            "인증 정보, 쿼리 문자열, 프래그먼트가 없는 HTTP(S) 수집기 주소를 입력하세요.",
           ),
         );
         return;
@@ -170,7 +170,7 @@ export default function ServiceObservability({
         setSaveError(
           t(
             "Could not save the collector setting.",
-            "수집기 설정을 저장할 수 없다.",
+            "수집기 설정을 저장할 수 없습니다.",
           ),
         );
     } finally {
@@ -189,14 +189,14 @@ export default function ServiceObservability({
     { id: "otlp" as const, label: "OTLP", Icon: Upload },
   ];
   const statuses: Record<string, string> = {
-    waiting: t("Waiting for logs.", "로그를 기다리는 중이다."),
+    waiting: t("Waiting for logs.", "로그를 기다리는 중입니다."),
     unavailable: t(
       "Log collection is unavailable. Start a new VM or redeploy.",
-      "로그를 수집할 수 없다. 새 VM을 시작하거나 다시 배포한다.",
+      "로그를 수집할 수 없습니다. 새 VM을 시작하거나 다시 배포하세요.",
     ),
-    truncated: t("Some logs were lost.", "일부 로그가 유실되었다."),
-    error: t("Log collection failed.", "로그 수집에 실패했다."),
-    active: t("Collecting logs.", "로그를 수집하고 있다."),
+    truncated: t("Some logs were lost.", "일부 로그가 유실되었습니다."),
+    error: t("Log collection failed.", "로그를 수집하지 못했습니다."),
+    active: t("Collecting logs.", "로그 수집 중입니다."),
   };
   return (
     <section
@@ -250,17 +250,17 @@ export default function ServiceObservability({
                   {statuses[snapshot.logsStatus] ??
                     t(
                       "Unknown log collection state.",
-                      "로그 수집 상태를 확인할 수 없다.",
+                      "로그 수집 상태를 확인할 수 없습니다.",
                     )}
                 </p>
               )}
               {snapshot[view!].length === 0 ? (
                 <p>
                   {view === "logs"
-                    ? t("No logs.", "로그가 없다.")
+                    ? t("No logs.", "로그가 없습니다.")
                     : view === "events"
-                      ? t("No events.", "이벤트가 없다.")
-                      : t("No alerts.", "알림이 없다.")}
+                      ? t("No events.", "이벤트가 없습니다.")
+                      : t("No alerts.", "알림이 없습니다.")}
                 </p>
               ) : (
                 <ul className="service-observability-list">
@@ -313,14 +313,14 @@ export default function ServiceObservability({
               <p>
                 {t(
                   "Saving sends platform logs and events to this collector. App logs can contain sensitive values.",
-                  "저장하면 플랫폼 로그와 이벤트를 이 수집기로 전송한다. 앱 로그에는 민감한 값이 포함될 수 있다.",
+                  "저장하면 플랫폼 로그와 이벤트를 이 수집기로 전송합니다. 앱 로그에는 민감한 정보가 포함될 수 있습니다.",
                 )}
               </p>
               {!snapshot.otlp.queuePersistent && (
                 <p>
                   {t(
                     "Queued data is lost on API restart or when the endpoint is changed or disabled.",
-                    "API를 재시작하거나 수집기 주소를 바꾸거나 해제하면 대기 중인 데이터가 사라진다.",
+                    "API를 재시작하거나 수집기 주소를 변경하거나 연결을 해제하면 전송 대기 중인 데이터가 사라집니다.",
                   )}
                 </p>
               )}

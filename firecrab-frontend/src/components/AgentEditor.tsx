@@ -37,12 +37,15 @@ export default function AgentEditor({
       if (
         value.vmId !== vmId ||
         value.agentId !== agentId ||
-        ![`/workspace/firecrab/${agentId}`, "/workspace/firecrab/project"].includes(value.projectPath)
+        ![
+          `/workspace/firecrab/${agentId}`,
+          "/workspace/firecrab/project",
+        ].includes(value.projectPath)
       )
         throw Error(
           t(
             "The editor workspace identity changed.",
-            "편집기 작업 공간이 변경되었다.",
+            "편집기의 작업 공간이 변경되었습니다.",
           ),
         );
       if (value.state !== "ready" || !value.url) return false;
@@ -61,7 +64,7 @@ export default function AgentEditor({
         throw Error(
           t(
             "The private editor address could not be verified.",
-            "편집기의 로컬 연결 주소를 확인할 수 없다.",
+            "편집기의 로컬 접속 주소를 확인할 수 없습니다.",
           ),
         );
       window.location.replace(url.toString());
@@ -104,7 +107,7 @@ export default function AgentEditor({
           throw Error(
             t(
               "The editor workspace identity changed.",
-              "편집기 작업 공간이 변경되었다.",
+              "편집기의 작업 공간이 변경되었습니다.",
             ),
           );
         if (next.state === "failed" || next.state === "interrupted") {
@@ -112,7 +115,7 @@ export default function AgentEditor({
             next.error ||
               t(
                 "Editor installation was interrupted. Retry after checking the VM.",
-                "편집기 설치가 중단되었다. VM을 확인한 뒤 다시 시도한다.",
+                "편집기 설치가 중단되었습니다. VM 상태를 확인한 뒤 다시 시도하세요.",
               ),
           );
           return;
@@ -150,7 +153,7 @@ export default function AgentEditor({
         <p>
           {t(
             "Web VS Code runs inside the same MicroVM and edits the same files as the agent.",
-            "Web VS Code를 같은 MicroVM 안에서 실행한다. 저장한 내용은 에이전트의 작업 파일에 바로 반영된다.",
+            "같은 MicroVM 안에서 Web VS Code를 실행합니다. 파일을 저장하면 에이전트의 작업 파일에 바로 반영됩니다.",
           )}
         </p>
         {status?.projectPath && <code>{status.projectPath}</code>}
@@ -174,7 +177,7 @@ export default function AgentEditor({
           <p className="ae-error" role="alert">
             {t(
               "This link belongs to another host. Open the editor from the matching AI Sandbox workspace.",
-              "다른 호스트의 연결이다. 해당 AI Sandbox 작업에서 편집기를 연다.",
+              "다른 호스트에 연결된 편집기입니다. 해당 호스트의 AI Sandbox 작업에서 편집기를 여세요.",
             )}
           </p>
         ) : (

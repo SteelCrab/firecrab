@@ -24,7 +24,7 @@ export default function PipeCopyButton({
       onError(
         t(
           "Could not copy the address. Select the link to copy it.",
-          "주소를 복사하지 못했다. 링크를 선택해 직접 복사한다.",
+          "주소를 복사하지 못했습니다. 링크를 선택해 직접 복사하세요.",
         ),
       );
       return;

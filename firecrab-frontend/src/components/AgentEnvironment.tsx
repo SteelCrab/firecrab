@@ -42,7 +42,7 @@ export default function AgentEnvironment(p: Props) {
       case "stopped":
         return t("Stopped", "중지됨");
       case "paused":
-        return t("Paused", "일시정지됨");
+        return t("Paused", "일시정지");
       case "starting":
       case "resuming":
         return t("Starting", "시작 중");
@@ -97,7 +97,7 @@ export default function AgentEnvironment(p: Props) {
         <p className="am-environment-note">
           {t(
             "Choose or create a MicroVM. Agents and repository files run inside that VM.",
-            "MicroVM을 선택하거나 만든다. 에이전트와 저장소 파일은 선택한 VM 안에서 실행한다.",
+            "MicroVM을 선택하거나 새로 만드세요. 선택한 VM 안에서 에이전트가 실행되고 저장소 파일을 관리합니다.",
           )}
         </p>
       ) : vm.state !== "running" ? (
@@ -105,7 +105,7 @@ export default function AgentEnvironment(p: Props) {
           <p>
             {t(
               "Start this MicroVM to connect its coding workspace.",
-              "작업 공간에 연결하려면 이 MicroVM을 시작한다.",
+              "작업 공간에 연결하려면 이 MicroVM을 시작하세요.",
             )}
           </p>
           <button
@@ -203,8 +203,8 @@ export default function AgentEnvironment(p: Props) {
                     ? "Preparing GitHub tools inside this MicroVM."
                     : "Preparing tools and the selected CLI inside this MicroVM.",
                   p.status?.preparation?.cli === "github"
-                    ? "이 MicroVM 안에 GitHub 인증 도구를 준비한다."
-                    : "이 MicroVM 안에 기본 도구와 선택한 CLI를 준비한다.",
+                    ? "이 MicroVM에 GitHub 인증 도구를 설치합니다."
+                    : "이 MicroVM에 기본 도구와 선택한 CLI를 설치합니다.",
                 )}
               </span>
             </div>

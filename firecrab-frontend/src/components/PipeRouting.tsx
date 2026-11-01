@@ -146,7 +146,7 @@ export default function PipeRouting({
         setError(
           t(
             "Enter a domain and path, then select at least one app.",
-            "도메인과 경로를 입력하고 앱을 하나 이상 선택한다.",
+            "도메인과 경로를 입력하고 앱을 하나 이상 선택하세요.",
           ),
         );
         return;
@@ -167,7 +167,7 @@ export default function PipeRouting({
         setError(
           t(
             "This domain and path already exist.",
-            "이 도메인과 경로가 이미 있다.",
+            "같은 도메인과 경로가 이미 등록되어 있습니다.",
           ),
         );
         return;
@@ -214,9 +214,9 @@ export default function PipeRouting({
     try {
       onSnapshot(await controlPipeService("ingress", action));
       const messages = {
-        start: t("Nginx start requested.", "Nginx 시작을 요청했다."),
-        stop: t("Nginx stop requested.", "Nginx 중지를 요청했다."),
-        restart: t("Nginx restart requested.", "Nginx 재시작을 요청했다."),
+        start: t("Nginx start requested.", "Nginx 시작을 요청했습니다."),
+        stop: t("Nginx stop requested.", "Nginx 중지를 요청했습니다."),
+        restart: t("Nginx restart requested.", "Nginx 재시작을 요청했습니다."),
       };
       setNotice(messages[action]);
     } catch (failure) {
@@ -354,7 +354,7 @@ export default function PipeRouting({
         <p className="field-error">
           {t(
             "Reinstall the Firecrab host bundle to restore the ingress engine.",
-            "Ingress 엔진을 복구하려면 Firecrab 호스트 번들을 다시 설치한다.",
+            "Ingress 엔진을 복구하려면 Firecrab 호스트 번들을 다시 설치하세요.",
           )}
         </p>
       )}
@@ -429,7 +429,7 @@ export default function PipeRouting({
             <p>
               {t(
                 "Service-managed routes are preserved automatically.",
-                "서비스가 관리하는 라우트는 자동으로 유지한다.",
+                "서비스가 관리하는 라우트는 자동으로 유지됩니다.",
               )}
             </p>
             <div className="form-footer">
@@ -570,7 +570,7 @@ export default function PipeRouting({
           </div>
         ) : (
           <div className="empty">
-            {t("No routes.", "등록한 라우트가 없다.")}
+            {t("No routes.", "등록된 라우트가 없습니다.")}
           </div>
         )}
       </section>

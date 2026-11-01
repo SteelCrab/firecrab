@@ -48,7 +48,7 @@ export default function Shells({
       creating &&
       (name.trim() || description.trim() || content !== DEFAULT_CONTENT) &&
       !window.confirm(
-        t("Discard unsaved changes?", "저장하지 않은 변경을 버릴까요?"),
+        t("Discard unsaved changes?", "저장하지 않은 변경 사항을 취소할까요?"),
       )
     )
       return false;
@@ -231,7 +231,7 @@ export default function Shells({
       !window.confirm(
         t(
           `Delete shell "${shell.name}" and all revisions?`,
-          `Shell "${shell.name}"과(와) 모든 버전을 삭제할까요?`,
+          `"${shell.name}" Shell과 모든 버전을 삭제할까요?`,
         ),
       )
     ) {
@@ -498,7 +498,7 @@ export default function Shells({
             <p>
               {t(
                 "Create and version scripts that run when a MicroVM starts.",
-                "MicroVM을 시작할 때 실행할 스크립트를 등록하고 버전을 관리한다.",
+                "MicroVM을 시작할 때 실행할 스크립트를 등록하고 버전을 관리합니다.",
               )}
             </p>
           </div>

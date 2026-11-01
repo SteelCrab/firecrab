@@ -19,13 +19,13 @@ export const PIPE_PAGES: readonly {
     title: ["Account", "계정"],
     description: [
       "AWS, GitHub and Firecrab accounts",
-      "AWS, GitHub와 Firecrab 계정",
+      "AWS, GitHub, Firecrab 계정",
     ],
   },
   {
     id: "ai",
     title: ["Pipe AI", "Pipe AI"],
-    description: ["Connect and manage AI accounts", "AI 계정 연결과 관리"],
+    description: ["Connect and manage AI accounts", "AI 계정 연결 및 관리"],
   },
   {
     id: "firecrab-tunnel",
@@ -35,7 +35,7 @@ export const PIPE_PAGES: readonly {
   {
     id: "quick-tunnel",
     title: ["Quick tunnel", "빠른 터널"],
-    description: ["Temporary public application URLs", "임시 공개 앱 주소"],
+    description: ["Temporary public application URLs", "임시 주소로 앱 공개"],
   },
   {
     id: "named-tunnel",
@@ -50,19 +50,22 @@ export const PIPE_PAGES: readonly {
   {
     id: "storage",
     title: ["PipeStorage", "PipeStorage"],
-    description: ["Access your files in AWS", "AWS 파일에 접근"],
+    description: ["Access your files in AWS", "AWS에 저장된 파일 관리"],
   },
   {
     id: "registry",
     title: ["Registry", "레지스트리"],
-    description: ["Connect and pull OCI images", "OCI 이미지 연결과 가져오기"],
+    description: [
+      "Connect and pull OCI images",
+      "레지스트리 연결 및 OCI 이미지 가져오기",
+    ],
   },
   {
     id: "database",
     title: ["Database", "데이터베이스"],
     description: [
       "Connect and browse tables",
-      "데이터베이스 연결과 테이블 조회",
+      "데이터베이스 연결 및 테이블 조회",
     ],
   },
 ];

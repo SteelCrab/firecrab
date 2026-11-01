@@ -107,7 +107,7 @@ export default function VmDetailPanel({
         <p className="detail-note">
           {t(
             "Memory stays allocated while guest execution is paused.",
-            "일시정지 중에도 메모리는 계속 점유합니다.",
+            "일시정지 중에도 메모리는 계속 사용합니다.",
           )}
         </p>
       )}

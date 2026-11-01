@@ -244,7 +244,7 @@ export default function UpdateDialog({
     }
     return t(
       "The update stopped before it finished.",
-      "업데이트가 끝나기 전에 멈췄습니다.",
+      "업데이트가 완료되기 전에 중단되었습니다.",
     );
   })();
 
@@ -252,7 +252,7 @@ export default function UpdateDialog({
     if (step === "done")
       return t(
         "The update is complete. Reload to use the new version.",
-        "업데이트가 끝났습니다. 새 버전을 쓰려면 새로고침하세요.",
+        "업데이트가 완료되었습니다. 새 버전을 사용하려면 새로고침하세요.",
       );
     if (step === "failed") return failureText;
     switch (shown) {
@@ -284,7 +284,7 @@ export default function UpdateDialog({
       case "restarting":
         return t(
           "Restarting the services. This page reconnects when the API is back.",
-          "서비스를 재시작하는 중입니다. API가 돌아오면 이 페이지가 다시 연결됩니다.",
+          "서비스를 재시작하는 중입니다. API가 실행되면 이 페이지가 자동으로 다시 연결됩니다.",
         );
       default:
         return t("Starting the updater…", "업데이트 도구를 시작하는 중…");

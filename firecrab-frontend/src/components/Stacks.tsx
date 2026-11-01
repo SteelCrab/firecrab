@@ -90,24 +90,24 @@ export default function Stacks() {
           aria-label={t("Set up a Stack", "Stack 구성 방법")}
         >
           <h2>{t("Set up a Stack", "Stack 구성 방법")}</h2>
-          <p>{t("No registered stacks.", "등록된 Stack이 없다.")}</p>
+          <p>{t("No registered stacks.", "등록된 Stack이 없습니다.")}</p>
           <p>
             {t(
               "Use the Firecrab CLI connected to this host.",
-              "현재 호스트에 연결한 Firecrab CLI에서 진행한다.",
+              "현재 호스트에 연결된 Firecrab CLI에서 진행하세요.",
             )}
           </p>
           <ol>
             <li>
               {t(
                 "Write the network and required MicroVMs or MicroServices in stack.yaml.",
-                "stack.yaml 파일에 네트워크와 필요한 MicroVM 또는 MicroService를 작성한다.",
+                "stack.yaml 파일에 네트워크와 필요한 MicroVM 또는 MicroService를 정의하세요.",
               )}
             </li>
             <li>
               {t(
                 "Validate the file and register its Stack name.",
-                "파일을 검증하고 Stack 이름을 등록한다.",
+                "파일을 검증한 뒤 Stack 이름을 등록하세요.",
               )}
               <pre>
                 firecrab stack validate --file stack.yaml{"\n"}firecrab stack
@@ -117,7 +117,7 @@ export default function Stacks() {
             <li>
               {t(
                 "Review the planned changes, then apply them.",
-                "변경 계획을 확인한 뒤 적용한다.",
+                "변경 계획을 확인한 뒤 적용하세요.",
               )}
               <pre>
                 firecrab stack plan --file stack.yaml --json &gt; plan.json
@@ -128,14 +128,14 @@ export default function Stacks() {
             <li>
               {t(
                 "The registered Stack appears here automatically.",
-                "등록된 Stack이 이 화면에 자동으로 표시된다.",
+                "등록된 Stack은 이 화면에 자동으로 표시됩니다.",
               )}
             </li>
           </ol>
           <p>
             {t(
               "Replace demo with the name in stack.yaml.",
-              "예시의 demo는 stack.yaml의 name 값으로 바꾼다.",
+              "예시의 demo를 stack.yaml의 name 값으로 바꾸세요.",
             )}
           </p>
           <a
@@ -152,14 +152,14 @@ export default function Stacks() {
           <h2>{stack.name}</h2>
           {sourceError ? (
             <p role="alert">
-              {t("Source unavailable", "Git 상태를 불러오지 못했다")}:{" "}
+              {t("Source unavailable", "Git 상태를 불러오지 못했습니다")}:{" "}
               {sourceError}
             </p>
           ) : !source ? (
             <p>
               {t(
                 "Git source is not configured.",
-                "Git 소스가 설정되지 않았다.",
+                "Git 소스가 설정되지 않았습니다.",
               )}
             </p>
           ) : (
@@ -203,7 +203,7 @@ export default function Stacks() {
                   <p>
                     {t(
                       "Inspect and repair the operation before recovery. Recovery creates a new plan.",
-                      "작업과 리소스를 확인하고 수정한 뒤 복구한다. 복구는 새 계획을 만든다.",
+                      "작업과 리소스를 확인하고 필요한 내용을 수정한 뒤 복구하세요. 복구 시 새 계획이 생성됩니다.",
                     )}
                   </p>
                   <code>{`firecrab stack source sync ${stack.name} --generation ${source.generation ?? 0} --recover-operation-id ${source.recoveryOperationId}`}</code>
@@ -236,7 +236,7 @@ export default function Stacks() {
                 <p>
                   {t(
                     "Revert the manifest in Git and review the resulting commit. Guest disks and application data are not restored.",
-                    "Git에서 매니페스트를 되돌리고 새 커밋을 확인한다. 게스트 디스크와 앱 데이터는 복원되지 않는다.",
+                    "Git에서 매니페스트를 되돌린 뒤 새 커밋을 확인하세요. 게스트 디스크와 앱 데이터는 복원되지 않습니다.",
                   )}
                 </p>
               </section>

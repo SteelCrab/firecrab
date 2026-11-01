@@ -205,7 +205,7 @@ export default function Cluster() {
       setError(
         t(
           "Session storage is required for safe retries.",
-          "안전한 재시도를 위해 세션 저장소가 필요하다.",
+          "안전하게 다시 시도하려면 브라우저의 세션 저장소를 사용할 수 있어야 합니다.",
         ),
       );
       return;
@@ -395,7 +395,7 @@ export default function Cluster() {
               <p>
                 {t(
                   "No workload hosts registered.",
-                  "등록된 작업 호스트가 없다.",
+                  "등록된 작업 호스트가 없습니다.",
                 )}
               </p>
             ) : (
@@ -442,7 +442,7 @@ export default function Cluster() {
               <p>
                 {t(
                   "The previous result is unknown. Retry the saved request.",
-                  "이전 요청 결과를 확인하지 못했다. 저장된 요청을 재시도한다.",
+                  "이전 요청의 결과를 확인하지 못했습니다. 저장된 요청으로 다시 시도하세요.",
                 )}{" "}
                 <button
                   className="btn"
@@ -589,7 +589,7 @@ export default function Cluster() {
                             window.confirm(
                               t(
                                 "Delete this placement?",
-                                "이 배치를 삭제할까?",
+                                "이 배치를 삭제할까요?",
                               ),
                             )
                           )
@@ -675,7 +675,7 @@ export default function Cluster() {
               <p>
                 {t(
                   "The previous result is unknown. Retry the saved request.",
-                  "이전 요청 결과를 확인하지 못했다. 저장된 요청을 재시도한다.",
+                  "이전 요청의 결과를 확인하지 못했습니다. 저장된 요청으로 다시 시도하세요.",
                 )}{" "}
                 <button
                   className="btn"
@@ -702,7 +702,7 @@ export default function Cluster() {
                 <p>
                   {t(
                     "Use an OCI image pinned by digest.",
-                    "다이제스트로 고정한 OCI 이미지를 사용한다.",
+                    "다이제스트로 버전을 고정한 OCI 이미지를 사용하세요.",
                   )}
                 </p>
                 <label>

@@ -67,7 +67,7 @@ export default function MicroNetworks({
     if (
       dirty &&
       !window.confirm(
-        t("Discard unsaved changes?", "저장하지 않은 변경을 버릴까요?"),
+        t("Discard unsaved changes?", "저장하지 않은 변경 사항을 취소할까요?"),
       )
     )
       return false;
@@ -178,7 +178,7 @@ export default function MicroNetworks({
       !window.confirm(
         t(
           `Delete MicroNetwork "${network.name}"?`,
-          `MicroNetwork "${network.name}"을(를) 삭제할까요?`,
+          `"${network.name}" 네트워크를 삭제할까요?`,
         ),
       )
     )
@@ -391,7 +391,7 @@ export default function MicroNetworks({
               <p className="poll-note">
                 {t(
                   "Default uses IPv4 only. SLAAC or DHCPv6 also enables an IPv6 network.",
-                  "기본값은 IPv4만 사용한다. SLAAC나 DHCPv6를 선택하면 IPv6도 사용한다.",
+                  "기본으로 IPv4만 사용합니다. SLAAC나 DHCPv6를 선택하면 IPv6도 사용할 수 있습니다.",
                 )}
               </p>
               <div className="form-footer">
@@ -467,7 +467,7 @@ export default function MicroNetworks({
           <div className="empty">
             {t(
               "No MicroNetworks yet — create one above.",
-              "MicroNetwork가 없습니다 — 위에서 생성하세요",
+              "MicroNetwork가 없습니다. 위에서 새로 만드세요.",
             )}
           </div>
         ) : (
@@ -675,7 +675,7 @@ function MicroNetworkDetail({
                       )
                     : t(
                         "direct (globally routable)",
-                        "직접 라우팅 (공인 프리픽스)",
+                        "직접 라우팅 (공인 IPv6 주소 대역)",
                       )}
                 </>
               ) : (
@@ -696,7 +696,7 @@ function MicroNetworkDetail({
                 ? t("Enabled", "연결")
                 : t(
                     "Internet blocked — no masquerading; outbound traffic is dropped",
-                    "인터넷 차단 — 마스커레이드 없음, 외부로 나가는 트래픽 drop",
+                    "인터넷 차단 — IP 주소 변환 없이 외부로 나가는 트래픽 차단",
                   )}
             </DetailProp>
             <DetailProp label={t("Source", "출발")}>

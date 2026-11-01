@@ -103,7 +103,7 @@ export default function PipeAuth({
       window.confirm(
         t(
           "Pipe changes have not been saved. Leave without saving?",
-          "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?",
+          "Pipe 설정을 저장하지 않았습니다. 저장하지 않고 이동할까요?",
         ),
       )
     );
@@ -168,7 +168,7 @@ export default function PipeAuth({
       setError(
         t(
           "Enter a valid account integration token (fca_ and 64 lowercase hex characters).",
-          "fca_ 뒤에 소문자 16진수 64자리가 있는 계정 연동 토큰을 입력한다.",
+          "fca_ 뒤에 소문자 16진수 64자리가 이어지는 계정 연동 토큰을 입력하세요.",
         ),
       );
       return;
@@ -197,7 +197,7 @@ export default function PipeAuth({
           window.location.hash = viewHash("services");
         });
       }
-      setNotice(t("Account connected.", "계정을 연결했다."));
+      setNotice(t("Account connected.", "계정을 연결했습니다."));
     });
   }
   function disconnect(provider: AuthProvider) {
@@ -209,8 +209,8 @@ export default function PipeAuth({
             ? "Disconnect the Firecrab account integration token? Pipe services using this connection will lose access."
             : `Disconnect ${name}? Pipe services using this connection will lose access.`,
           provider === "firecrab"
-            ? "Firecrab 계정 연동 토큰의 연결을 해제할까? 이 인증을 사용하는 Pipe 서비스의 접근 권한이 해제된다."
-            : `${name} 인증 연결을 해제할까요? 이 인증을 사용하는 Pipe 서비스의 접근 권한이 해제된다.`,
+            ? "Firecrab 계정 연동을 해제할까요? 이 인증을 사용하는 Pipe 서비스의 접근 권한도 해제됩니다."
+            : `${name} 인증 연결을 해제할까요? 이 인증을 사용하는 Pipe 서비스의 접근 권한도 해제됩니다.`,
         ),
       )
     )
@@ -218,7 +218,7 @@ export default function PipeAuth({
     void perform(async () => {
       await disconnectPipeAuth(provider);
       setConnections((rows) => rows.filter((row) => row.provider !== provider));
-      setNotice(t("Disconnected.", "인증 연결을 해제했다."));
+      setNotice(t("Disconnected.", "인증 연결을 해제했습니다."));
     });
   }
 
@@ -361,7 +361,7 @@ export default function PipeAuth({
                         ) : (
                           t(
                             `Connect ${selected.name} to use ${selected.service}.`,
-                            `${selected.name} 계정을 연결하면 ${selected.service}를 사용할 수 있다.`,
+                            `${selected.name} 계정을 연결하면 ${selected.service}를 사용할 수 있습니다.`,
                           )
                         )}
                       </p>
@@ -378,7 +378,7 @@ export default function PipeAuth({
           <p className="detail-note">
             {t(
               "Connect an account to use its Pipe services.",
-              "계정을 인증하여 관련 Pipe 서비스를 사용한다.",
+              "계정을 연결하면 해당 계정의 Pipe 서비스를 사용할 수 있습니다.",
             )}
           </p>
         </div>
@@ -620,7 +620,7 @@ function AuthForm({
           <p className="detail-note" id="pipe-auth-help">
             {t(
               "Permission: read:packages. Authorize SSO for your organization if required.",
-              "권한: read:packages. 조직에서 요구하면 SSO 권한을 승인한다.",
+              "read:packages 권한이 필요합니다. 조직에서 요구하는 경우 SSO 권한도 승인하세요.",
             )}
           </p>
         </div>
@@ -683,7 +683,7 @@ function AuthForm({
           <p className="detail-note">
             {t(
               "Needs ecr:GetAuthorizationToken, ecr:DescribeRepositories and permission to pull images. Reconnect when temporary AWS credentials expire.",
-              "ecr:GetAuthorizationToken, ecr:DescribeRepositories 권한과 이미지 가져오기 권한이 필요하다. 임시 AWS 인증 정보가 만료되면 다시 연결한다.",
+              "ecr:GetAuthorizationToken, ecr:DescribeRepositories 권한과 이미지 가져오기 권한이 필요합니다. 임시 AWS 인증 정보가 만료되면 다시 연결하세요.",
             )}
           </p>
         </>
@@ -712,55 +712,55 @@ function AuthGuide({ provider }: { provider: AuthProvider }) {
   const items =
     provider === "firecrab"
       ? [
-          t("Sign in to Firecrab Console.", "Firecrab 콘솔에 로그인한다."),
+          t("Sign in to Firecrab Console.", "Firecrab 콘솔에 로그인하세요."),
           t(
             "Create an account integration token in Account integration.",
-            "Account integration에서 계정 연동 토큰을 발급한다.",
+            "Account integration에서 계정 연동 토큰을 발급하세요.",
           ),
           t(
             "Enter the token starting with fca_.",
-            "fca_로 시작하는 토큰을 입력한다.",
+            "fca_로 시작하는 토큰을 입력하세요.",
           ),
           t(
             "Verify and connect, then check the account details.",
-            "인증 후 연결하고 계정 정보를 확인한다.",
+            "인증을 마친 뒤 연결된 계정 정보를 확인하세요.",
           ),
         ]
       : provider === "github"
         ? [
             t(
               "Create a personal access token (classic) in GitHub token settings.",
-              "GitHub 토큰 설정에서 개인 액세스 토큰 (classic)을 발급한다.",
+              "GitHub 토큰 설정에서 개인 액세스 토큰(classic)을 발급하세요.",
             ),
             t(
               "Select read:packages and authorize SSO if your organization requires it.",
-              "read:packages 권한을 선택한다. 조직에서 요구하면 SSO도 승인한다.",
+              "read:packages 권한을 선택하세요. 조직에서 요구하는 경우 SSO도 승인하세요.",
             ),
             t(
               "Enter the token and connect the account.",
-              "토큰을 입력하고 계정을 연결한다.",
+              "토큰을 입력하고 계정을 연결하세요.",
             ),
             t(
               "Check ghcr.io in Pipe Registry.",
-              "Pipe Registry에서 ghcr.io를 확인한다.",
+              "Pipe Registry에서 ghcr.io를 확인하세요.",
             ),
           ]
         : [
             t(
               "Prepare IAM credentials with ECR read access, including ecr:GetAuthorizationToken and ecr:DescribeRepositories.",
-              "ECR 읽기 권한이 있는 IAM 인증 정보를 준비한다. ecr:GetAuthorizationToken과 ecr:DescribeRepositories 권한이 필요하다.",
+              "ECR 읽기 권한이 있는 IAM 인증 정보를 준비하세요. ecr:GetAuthorizationToken과 ecr:DescribeRepositories 권한이 필요합니다.",
             ),
             t(
               "Enter the access key ID and secret access key.",
-              "액세스 키 ID와 보안 액세스 키를 입력한다.",
+              "액세스 키 ID와 보안 액세스 키를 입력하세요.",
             ),
             t(
               "Enter the ECR region, such as ap-northeast-2. Add a session token for temporary credentials.",
-              "ECR 리전을 입력한다. 예시는 ap-northeast-2이다. 임시 인증 정보에는 세션 토큰도 입력한다.",
+              "ECR 리전을 입력하세요. 예: ap-northeast-2. 임시 인증 정보를 사용한다면 세션 토큰도 입력하세요.",
             ),
             t(
               "Connect and check the registry in Pipe Registry.",
-              "연결한 뒤 Pipe Registry에서 레지스트리를 확인한다.",
+              "연결한 뒤 Pipe Registry에서 레지스트리를 확인하세요.",
             ),
           ];
   const url =

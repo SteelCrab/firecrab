@@ -187,7 +187,7 @@ export default function Screen({
                 <div>
                   {t(
                     "Select an item to see its details.",
-                    "항목을 고르면 상세 정보가 보입니다.",
+                    "항목을 선택하면 상세 정보를 확인할 수 있습니다.",
                   )}
                 </div>
               </div>
