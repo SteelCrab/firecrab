@@ -196,6 +196,7 @@ fn view<'a>(app: &App, en: &'a str, ko: &'a str) -> &'a str {
 
 pub fn navigation_icon(name: &str) -> String {
     let path = match name {
+        "code" => "m8 5-7 7 7 7M16 5l7 7-7 7M14 3l-4 18",
         "vms" => {
             "M5 3h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm0 10h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2ZM7 7h.01M7 17h.01M11 7h6M11 17h6"
         }
@@ -417,6 +418,7 @@ pub fn page(app: &App) -> String {
     let section = app.route.split('/').next().unwrap_or("vms");
     let mut nav = String::new();
     for (group, en, ko) in [
+        ("code", "CODE", "CODE"),
         ("compute", "Compute", "컴퓨팅"),
         ("network", "Network", "네트워크"),
         ("data", "Data", "데이터"),
@@ -528,6 +530,7 @@ pub fn page(app: &App) -> String {
         "hidden"
     };
     let category = match section {
+        "code" => "CODE",
         "vms" | "services" | "stacks" | "pools" | "schedules" | "cluster" => {
             tr(app, "Compute", "컴퓨팅")
         }
@@ -580,6 +583,9 @@ fn crumbs(app: &App) -> (Option<&'static str>, &'static str) {
 }
 
 pub fn api_status(app: &App) -> (&'static str, &'static str) {
+    if crate::code::is_route(&app.route) {
+        return crate::code::api_status(app);
+    }
     if app.connection_error.is_empty() {
         ("live", tr(app, "Live", "실시간"))
     } else {
@@ -646,6 +652,9 @@ pub fn messages(app: &App) -> String {
 }
 
 pub fn content(app: &App) -> String {
+    if crate::code::is_route(&app.route) {
+        return crate::code::content(app);
+    }
     if app.route == "vms/new"
         && let Some(form) = &app.form
     {

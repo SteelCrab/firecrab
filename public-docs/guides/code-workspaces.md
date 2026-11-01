@@ -4,7 +4,28 @@ CODE persists workspace configuration and references to existing accounts.
 An explicit verification API checks repository reads and provider credentials.
 Configuration and verification requests allocate no VM or agent resources.
 Use the separate [CODE runtime API](code-runtime.md) to provision a MicroVM and clone the repository.
-The local CODE UI mockup remains separate from these configuration APIs.
+The Rust/WASM dashboard now reads these APIs at **CODE → Workspaces** (`#/code`).
+
+## Dashboard
+
+Open CODE → Workspaces to see saved workspace configuration and current MicroVM
+observations. Search by name, repository owner, repository name or branch.
+Selecting a workspace gives it a stable `#/code/{workspace-uuid}` address that
+survives reload and browser history navigation.
+
+The view refreshes every three seconds. An unavailable runtime is shown as
+unavailable, not as ready or unprovisioned. A runtime 404 means unprovisioned
+only after the workspace is confirmed to still exist. Access failures remove
+previously displayed records. Missing, changed and incompatible account
+references are shown separately. The GitHub and AI AUTH management links reuse
+the existing Pipe screens.
+
+This phase provides a read-only view. Use the APIs below and the runtime API
+for configuration and VM operations until their setup flow is integrated.
+The dashboard does not request credentials or execute an agent. Account presence
+does not prove repository permission or CLI authentication. A ready MicroVM
+does not prove that an editor or agent is ready. Unknown server states do not
+enable operations. The earlier local interactive mockup is not runtime evidence.
 
 ## Access and storage
 

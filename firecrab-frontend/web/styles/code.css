@@ -1,0 +1,58 @@
+/* CODE reuses the dashboard's flat surfaces, typography and focus styles. */
+#code-workspaces { min-width: 0; }
+.code-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 0 20px; }
+.code-toolbar p { margin: 0; color: var(--text-3); font-size: 13px; }
+.code-tools { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.code-tools input { width: 210px; min-width: 0; height: 32px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 0 10px; background: var(--bg); color: var(--text); font: inherit; font-size: 12px; }
+.code-layout { display: grid; grid-template-columns: minmax(210px, 280px) minmax(0, 1fr); border-top: 1px solid var(--border); }
+.code-list { min-width: 0; padding: 16px 16px 16px 0; border-right: 1px solid var(--border); }
+.code-list-head { display: flex; justify-content: space-between; gap: 12px; padding: 0 10px 12px; font-size: 12px; color: var(--text-3); }
+.code-list-head span { font-variant-numeric: tabular-nums; }
+.code-list ul { list-style: none; padding: 0; margin: 0; }
+.code-list a { display: grid; gap: 6px; padding: 14px 12px; margin-bottom: 4px; border-radius: var(--radius); text-decoration: none; color: var(--text); overflow-wrap: anywhere; }
+.code-list a:hover { background: var(--bg-hover); }
+.code-list a[aria-current] { background: var(--bg-selected); box-shadow: inset 2px 0 var(--accent); }
+.code-list strong { font-size: 13px; font-weight: 600; }
+.code-list a span { color: var(--text-2); font-size: 12px; }
+.code-list small { color: var(--text-3); font-size: 11px; }
+.code-details { min-width: 0; padding: 24px 28px; }
+.code-detail-head { margin-bottom: 28px; overflow-wrap: anywhere; }
+.code-eyebrow { color: var(--text-3); font-size: 11px; }
+.code-detail-head h2 { margin: 8px 0; font-size: 22px; font-weight: 600; letter-spacing: -.03em; }
+.code-detail-head p { margin: 0; font-size: 13px; color: var(--text-2); }
+.code-detail-head p span { color: var(--text-3); }
+.code-section { padding: 20px 0; border-top: 1px solid var(--border); }
+.code-section h3 { margin: 0 0 16px; font-size: 13px; font-weight: 600; }
+.code-properties { display: grid; gap: 12px; margin: 0; font-size: 12px; }
+.code-properties > div { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 12px; }
+.code-properties dt { color: var(--text-3); }
+.code-properties dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.code-runtime-status { display: flex; align-items: center; gap: 7px; font-size: 12px; margin: 0 0 18px; color: var(--text-2); }
+.code-runtime-status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.code-runtime-status.ok { color: var(--green-ink); }
+.code-runtime-status.busy { color: var(--amber-ink); }
+.code-runtime-status.error { color: var(--red-ink); }
+.code-auth-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 18px; min-width: 0; }
+.code-auth-row > div { min-width: 0; }
+.code-auth-row strong { font-size: 12px; font-weight: 500; }
+.code-auth-row p { margin: 7px 0; color: var(--text-2); font-size: 12px; }
+.code-auth-row code { font-family: var(--mono); font-size: 11px; color: var(--text-3); overflow-wrap: anywhere; }
+.code-text-link { font-size: 12px; color: var(--text-2); white-space: nowrap; text-underline-offset: 3px; }
+.code-hint { font-size: 12px; line-height: 1.7; margin: 18px 0 0; color: var(--text-3); }
+.code-empty { margin: 0; padding: 32px 12px; color: var(--text-3); font-size: 13px; }
+.code-message { padding: 12px; margin: 12px 0; background: var(--red-soft); border-radius: var(--radius-sm); color: var(--red-ink); font-size: 12px; line-height: 1.6; }
+@media (max-width: 1100px) {
+  .code-toolbar { align-items: flex-start; flex-direction: column; }
+  .code-details { padding: 22px 20px; }
+  .code-properties > div { grid-template-columns: 125px minmax(0, 1fr); }
+}
+@media (max-width: 740px) {
+  .code-layout { grid-template-columns: minmax(0, 1fr); }
+  .code-list { border-right: 0; border-bottom: 1px solid var(--border); padding: 16px 0; }
+  .code-list ul { max-height: 240px; overflow: auto; }
+  .code-details { padding: 24px 0; }
+  .code-tools { width: 100%; }
+  .code-tools input { flex: 1; width: 100%; }
+  .code-properties > div { grid-template-columns: 105px minmax(0, 1fr); gap: 10px; }
+  .code-auth-row { flex-direction: column; gap: 6px; }
+}

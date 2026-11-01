@@ -1,5 +1,6 @@
 mod advanced;
 mod api;
+mod code;
 mod databases;
 mod deploy;
 mod details;
@@ -69,6 +70,7 @@ struct App {
     databases: databases::State,
     advanced: advanced::State,
     sandbox: sandbox::State,
+    code: code::State,
     volumes: volumes::State,
     console: Option<terminal::State>,
     console_retry: Option<Closure<dyn FnMut()>>,
@@ -220,6 +222,10 @@ fn update_summary(app: &Shared) {
 
 fn render_content(app: &Shared) {
     deploy::discard_credentials(&mut app.borrow_mut());
+    if code::is_route(&app.borrow().route) {
+        code::render(app);
+        return;
+    }
     if app.borrow().route == "ai-sandbox" {
         sandbox::render(app);
         return;
@@ -563,6 +569,7 @@ fn route_from_hash() -> String {
     let hash = hash.split('?').next().unwrap_or(&hash);
     let route = hash.trim_start_matches('#').trim_start_matches('/');
     if route == "vms/new"
+        || code::is_route(route)
         || route == "services/new"
         || route.starts_with("console/")
         || [
@@ -624,6 +631,10 @@ fn load_route(app: Shared) {
     }
     if route == "ai-sandbox" {
         sandbox::load(app);
+        return;
+    }
+    if code::is_route(&route) {
+        code::load(app);
         return;
     }
     if route == "vms/new" {
@@ -733,6 +744,10 @@ fn load_route(app: Shared) {
     }
 }
 fn refresh(app: Shared) {
+    if code::is_route(&app.borrow().route) {
+        code::load(app);
+        return;
+    }
     if app.borrow().route == "stacks" {
         stacks::refresh(app);
         return;
@@ -1036,6 +1051,7 @@ fn navigate(app: &Shared) {
     state.advanced.queues = advanced::queues::State::default();
     state.advanced.ai = advanced::ai::State::default();
     state.sandbox = sandbox::State::default();
+    state.code = code::State::default();
     state.advanced.storage = advanced::storage::State::default();
     state.databases = databases::State::default();
     state.volumes = volumes::State::default();
@@ -1148,6 +1164,9 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             return;
         }
         if databases::input(&changed, &target) {
+            return;
+        }
+        if code::input(&changed, &target) {
             return;
         }
         match target.id().as_str() {
@@ -1566,6 +1585,9 @@ fn close_detail(app: &Shared) {
     render_content(app);
 }
 fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
+    if code::action(&app, action) {
+        return;
+    }
     if observability::dispatch(&app, action) {
         return;
     }

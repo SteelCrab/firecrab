@@ -25,6 +25,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Add CODE → Workspaces to the Rust/WASM dashboard with searchable saved
+  configuration, deep links, current MicroVM observations, and GitHub/AI AUTH
+  account-reference states. Retry failed reads without retaining stale readiness
+  or claiming agent authentication (#560).
 - Add durable CODE MicroVM provisioning, start/stop and repository checkout.
   Pin image placement, retain working files across resume, recover pending
   operations, and protect bound VMs from ordinary mutation routes (#560).

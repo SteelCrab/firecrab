@@ -10,6 +10,31 @@ and log bundles. The adapter only connects the Ghostty library to Rust. WebAssem
 [`wasm-bindgen` and `web-sys`](https://rustwasm.github.io/docs/wasm-bindgen/examples/fetch.html).
 CSS and public assets belong to this package.
 
+## CODE workspaces
+
+The CODE navigation group opens `#/code`. Saved workspaces can also be opened at
+`#/code/{workspace-uuid}`. The read-only dashboard searches names, repositories,
+owners and branches. It reads the configuration and selected runtime every three
+seconds, with navigation fences for late responses. A failed read removes stale
+runtime readiness; access failures also remove previously displayed records.
+
+The view shows the current GitHub/AI AUTH account references and links to their
+existing management screens. Account presence is not agent authentication.
+MicroVM readiness is not editor or agent readiness. This dashboard phase does
+not create workspaces, provision VMs, open an editor or execute an agent. Those
+flows remain separate unchecked items in #560. See the
+[CODE guide](../public-docs/guides/code-workspaces.md) for the current API.
+
+Browser contracts run against the production WASM build without a live API:
+
+```sh
+FIRECRAB_MOCKED_E2E_PRODUCTION=1 npm run test:mocked --prefix firecrab-e2e -- tests/code-workspaces.spec.ts
+```
+
+Run that command from the repository root. It covers English/Korean desktop and
+mobile layouts, reload/history, late responses, outage recovery, disconnection,
+operator access, missing runtimes and escaped server values.
+
 ## Build and run
 
 Requires the repository's pinned Rust toolchain, Node.js 22+, npm, and wasm-pack
