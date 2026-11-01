@@ -666,6 +666,16 @@ fn host_capability(layout: &lifecycle::Layout) -> debug::Capability {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub(super) fn agent_ssh_arguments(home: &Path) -> Result<Vec<OsString>, super::resource::Error> {
+    let settings = ssh::load(home).map_err(|e| super::resource::Error::Invalid(e.to_string()))?;
+    Ok(ssh::arguments(
+        &home.join("runtime"),
+        &settings,
+        ssh::Session::Command,
+    ))
+}
+
 /// A root shell in the management VM over its key-only SSH, or one command
 /// run there as root.
 fn run_shell(command: &[String]) -> Result<i32, Error> {

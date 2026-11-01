@@ -59,6 +59,56 @@ use axum::http::Request;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+#[tokio::test]
+async fn agent_terminal_upgrade_requires_the_origin_controller_and_bounded_size() {
+    use tokio_tungstenite::{
+        connect_async,
+        tungstenite::{Error as WsError, client::IntoClientRequest},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let id = resource::controller_id(dir.path()).unwrap();
+    let app = router_for(dir.path().to_owned(), resource::tests::platform());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let vm = uuid::Uuid::new_v4();
+    let agent = uuid::Uuid::new_v4();
+    for (controller, origin, cols, expected) in [
+        (
+            "wrong-controller",
+            Some(ORIGINS[0]),
+            100,
+            StatusCode::CONFLICT,
+        ),
+        (id.as_str(), None, 100, StatusCode::FORBIDDEN),
+        (
+            id.as_str(),
+            Some("https://evil.example"),
+            100,
+            StatusCode::FORBIDDEN,
+        ),
+        (id.as_str(), Some(ORIGINS[0]), 0, StatusCode::BAD_REQUEST),
+        (id.as_str(), Some(ORIGINS[0]), 401, StatusCode::BAD_REQUEST),
+    ] {
+        let mut request = format!("ws://127.0.0.1:{port}/api/service/agents/microvms/{vm}/{agent}/terminal?controller={controller}&cols={cols}&rows=24").into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert("host", "127.0.0.1:5524".parse().unwrap());
+        if let Some(origin) = origin {
+            request
+                .headers_mut()
+                .insert("origin", origin.parse().unwrap());
+        }
+        let Err(WsError::Http(response)) = connect_async(request).await else {
+            panic!("Terminal must reject invalid authority before touching a MicroVM");
+        };
+        assert_eq!(response.status(), expected);
+    }
+    server.abort();
+}
+
 fn request(method: &str, path: &str, id: Option<&str>, body: &str) -> Request<Body> {
     let mut builder = Request::builder()
         .method(method)
@@ -358,4 +408,74 @@ fn resource_server_rejects_relative_and_missing_homes() {
     assert!(run(Some(PathBuf::from("relative-home"))).is_err());
     let dir = tempfile::tempdir().unwrap();
     assert!(run(Some(dir.path().join("missing"))).is_err());
+}
+
+#[tokio::test]
+async fn native_agent_controls_are_scoped_to_the_selected_controller() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = router_for(dir.path().into(), resource::tests::platform());
+    let (status, _, body) =
+        response(app.clone(), request("GET", "/api/service/agents", None, "")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["agents"].as_array().unwrap().is_empty());
+    let id = body["controllerId"].as_str().unwrap();
+    let path = format!("/api/service/agents/{}/input", uuid::Uuid::new_v4());
+    let (status, _, _) = response(
+        app.clone(),
+        request(
+            "POST",
+            &path,
+            Some("other-controller"),
+            r#"{"text":"do not run"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _, _) = response(
+        app.clone(),
+        request("POST", &path, Some(id), r#"{"text":"do not run"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let mut foreign = request("GET", "/api/service/agents", None, "");
+    foreign.headers_mut().insert(
+        "origin",
+        HeaderValue::from_static("https://foreign.example"),
+    );
+    let (status, _, _) = response(app.clone(), foreign).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _, _) = response(
+        app.clone(),
+        request(
+            "POST",
+            "/api/service/agents",
+            Some(id),
+            r#"{"unknown":"value"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    for suffix in ["tasks", "prepare", "login", "project"] {
+        let path = format!(
+            "/api/service/agents/microvms/{}/{suffix}",
+            uuid::Uuid::new_v4()
+        );
+        let (status, _, _) = response(
+            app.clone(),
+            request("POST", &path, Some("another-controller"), r#"{}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+    let task_path = "/api/service/agents/tasks";
+    let empty_task =
+        json!({"id":uuid::Uuid::new_v4(),"input":"  ","cwd":dir.path(),"cli":"","model":""});
+    let (status, _, body) = response(
+        app,
+        request("POST", task_path, Some(id), &empty_task.to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"].as_str().unwrap().contains("Enter a task"));
+    assert!(!dir.path().join("runtime/agents/sessions.json").exists());
 }

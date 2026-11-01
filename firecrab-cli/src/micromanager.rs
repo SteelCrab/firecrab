@@ -2,6 +2,7 @@
 //!
 //! Each host has its own backend module; everything they share lives beside them.
 
+mod agents;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod artifact;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
