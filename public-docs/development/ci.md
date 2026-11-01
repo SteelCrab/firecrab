@@ -27,7 +27,7 @@ Passing build or unit checks does not establish MicroVM boot, SSH, or host port 
 | `docs` | Ubuntu | Public links/language/length, changelog and release-note contracts, PR-report tests, rustdoc with warnings denied, 75% rustdoc coverage floor |
 | `install` | Ubuntu 24.04 | Shell checks, install/service permissions, API QA, Chromium with real boot and IPv4/IPv6 SSH, nginx, Alpine/Ubuntu/Fedora, reinstall/uninstall |
 | `install-distro` | Linux containers | Dependency installation on Debian 12, Fedora, Arch, and openSUSE; no systemd or guest boot |
-| `frontend` | Ubuntu, Node.js 22 | Rust fmt/Clippy/tests, production WASM build, browser regression tests, Vite lifecycle |
+| `frontend` | Ubuntu, Node.js 22 | JavaScript lint/tests, production React build, browser regression tests, Vite lifecycle |
 | `e2e-dashboard` | Ubuntu, Node.js 22 | Mocked dashboard checks; Secrets QA contracts, unit tests, lint/types/builds, and real API/vault browser E2E without guest boot |
 
 
@@ -69,8 +69,6 @@ RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --document-private-it
 python3 -m unittest scripts/test_check_changelog.py scripts/test_write_release_notes.py scripts/test_micromanager_pr_report.py
 cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
 npm run test:runner --prefix firecrab-e2e
-rustup target add wasm32-unknown-unknown
-cargo install wasm-pack --version 0.14.0 --locked
 npm ci --prefix firecrab-frontend
 npm run lint --prefix firecrab-frontend
 npm run build --prefix firecrab-frontend
@@ -81,7 +79,7 @@ For native Windows and macOS CLI changes, run `cargo clippy -p firecrab-cli --al
 Linux API/helper checks still run on Linux; Windows source deployment builds them inside managed Debian.
 Clippy allows zero warnings; test-only code belongs behind `#[cfg(test)]`.
 Run `npm ci --prefix firecrab-e2e` before its runner checks.
-The Rust/WASM frontend uses wasm-pack and Vite. The E2E-only `typecheck:pipe` uses [tsrs](https://github.com/oxc-project/tsrs), which ships binaries for macOS arm64 and Linux x64/arm64 only.
+The React frontend uses Vite. The E2E-only `typecheck:pipe` uses [tsrs](https://github.com/oxc-project/tsrs), which ships binaries for macOS arm64 and Linux x64/arm64 only.
 On Windows or Intel macOS, run the E2E type check in WSL2 or on Linux.
 The docs job also enforces the rustdoc coverage floor.
 

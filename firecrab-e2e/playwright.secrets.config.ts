@@ -24,6 +24,7 @@ export default defineConfig({
   },
   webServer: {
     command: `npm run dev -- --host ${address.hostname} --port ${address.port}`,
+    env: { ...process.env, FIRECRAB_DEV_API_PORT: "1", FIRECRAB_DEV_RESOURCE_PORT: "1" },
     cwd: path.resolve(here, "../firecrab-frontend"), url: baseURL, reuseExistingServer: false,
   },
 });

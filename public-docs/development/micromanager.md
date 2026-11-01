@@ -1,7 +1,7 @@
 # microManager development
 
 Build the CLI on the host and the Linux API/helper inside managed Debian.
-Install Node.js, npm, wasm-pack 0.14.0, and the `wasm32-unknown-unknown` Rust target on the host for the development dashboard.
+Install Node.js and npm on the host for the development dashboard.
 Run commands from the checkout root with the pinned Rust toolchain.
 The managed Debian examples below describe the primary checkout on macOS and Windows.
 Linked worktrees select [independent development instances](worktree-dev.md): a separate VM on macOS and a private Docker runtime on Windows.
@@ -102,7 +102,7 @@ Overrides persist across `service stop` and `start` until restored.
 ## Frontend
 
 `service dev` installs locked frontend dependencies with `npm ci` when needed.
-It compiles the selected checkout's Rust/WASM dashboard and launches its Vite server on `http://localhost:8080` by default.
+It compiles the selected checkout's React dashboard and launches its Vite server on `http://localhost:8080` by default.
 For example, `firecrab service dev --port 8098` serves it at `http://localhost:8098`.
 Each build uses `--port` or its default of 8080.
 The option changes only the dashboard address; private instances have separately allocated backend ports.

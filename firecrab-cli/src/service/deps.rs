@@ -4,6 +4,8 @@
 use super::output;
 use super::pkg::{Packages, PkgManager, have};
 
+const KERNEL_HEADER_PROBE: &str = "printf '#include <libelf.h>\\n#include <gelf.h>\\n#include <openssl/opensslv.h>\\n' | cc -x c -fsyntax-only - >/dev/null 2>&1";
+
 /// Missing dependencies and warnings. An empty `missing` list means success.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct DepsOutcome {
@@ -179,6 +181,10 @@ pub fn ensure_runtime_deps(
         );
     }
 
+    if !ensure_kernel_build_deps(packages, install_deps, check_only) {
+        outcome.warnings.push("kernel builds and first-time OCI/Queue installation require the missing kernel build dependencies".into());
+    }
+
     // DB connections work without native clients, but logical backup/restore
     // needs these tools. Install them by default without blocking other services.
     for (command, generic) in [
@@ -206,6 +212,52 @@ pub fn ensure_runtime_deps(
         output::warn(warning);
     }
     outcome
+}
+
+/// Match the standalone installer's optional native-kernel dependencies.
+fn ensure_kernel_build_deps(
+    packages: &mut Packages<'_>,
+    install_deps: bool,
+    check_only: bool,
+) -> bool {
+    let mut outcome = DepsOutcome::default();
+    for (command, generic) in [
+        ("make", "kernel-compiler"),
+        ("cc", "kernel-compiler"),
+        ("flex", "flex"),
+        ("bison", "bison"),
+        ("bc", "bc"),
+        ("perl", "perl"),
+        ("xz", "xz"),
+    ] {
+        ensure(
+            packages,
+            &mut outcome,
+            command,
+            generic,
+            install_deps,
+            check_only,
+        );
+    }
+    let headers_present = |packages: &Packages<'_>| {
+        packages
+            .runner()
+            .run("sh", &["-c", KERNEL_HEADER_PROBE])
+            .is_ok_and(|output| output.status.success())
+    };
+    if !headers_present(packages) {
+        let Some(manager) = packages.manager().filter(|_| install_deps && !check_only) else {
+            output::warn(
+                "missing kernel build headers: install libelf and OpenSSL development packages",
+            );
+            return false;
+        };
+        let names = manager.packages_for("kernel-headers");
+        if packages.install("deps", &names).is_err() || !headers_present(packages) {
+            return false;
+        }
+    }
+    outcome.missing.is_empty()
 }
 
 #[cfg(test)]
@@ -266,6 +318,78 @@ mod tests {
         "sha256sum",
         "semanage",
     ];
+
+    #[test]
+    fn missing_kernel_compiler_is_installed_for_first_queue_import() {
+        let mut fake = fake_with_present(ALL);
+        fake.set_seq(
+            "sh",
+            &["-c", "command -v make"],
+            &[(1, "", ""), (0, "/usr/bin/make", "")],
+        );
+        let privileged = Privileged::with_sudo(&fake, true);
+        let mut packages = Packages::new(Some(PkgManager::AptGet), &privileged);
+        let outcome = ensure_runtime_deps(&mut packages, true, false, false);
+        assert!(outcome.missing.is_empty());
+        assert!(
+            fake.calls()
+                .iter()
+                .any(|call| call.ends_with("apt-get install -y -qq build-essential"))
+        );
+        assert!(
+            !outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("kernel build dependencies"))
+        );
+    }
+
+    #[test]
+    fn missing_kernel_headers_are_installed_and_checked_again() {
+        let mut fake = fake_with_present(ALL);
+        fake.set_seq(
+            "sh",
+            &["-c", KERNEL_HEADER_PROBE],
+            &[(1, "", ""), (0, "", "")],
+        );
+        let privileged = Privileged::with_sudo(&fake, true);
+        let mut packages = Packages::new(Some(PkgManager::AptGet), &privileged);
+        let outcome = ensure_runtime_deps(&mut packages, true, false, false);
+        assert!(
+            !outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("kernel build dependencies"))
+        );
+        assert!(
+            fake.calls()
+                .iter()
+                .any(|call| call.ends_with("apt-get install -y -qq libelf-dev libssl-dev"))
+        );
+    }
+
+    #[test]
+    fn no_deps_and_check_only_report_missing_kernel_tools_without_installing() {
+        for (install_deps, check_only) in [(false, false), (true, true)] {
+            let mut fake = fake_with_present(ALL);
+            fake.set("sh", &["-c", "command -v make"], 1, "", "");
+            let privileged = Privileged::with_sudo(&fake, true);
+            let mut packages = Packages::new(Some(PkgManager::AptGet), &privileged);
+            let outcome = ensure_runtime_deps(&mut packages, install_deps, check_only, false);
+            assert!(
+                outcome
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.contains("kernel build dependencies"))
+            );
+            assert!(
+                !fake
+                    .calls()
+                    .iter()
+                    .any(|call| call.contains("apt-get install"))
+            );
+        }
+    }
 
     #[test]
     fn nothing_is_installed_when_everything_is_present() {

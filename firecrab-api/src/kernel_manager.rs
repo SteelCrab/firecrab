@@ -6,7 +6,7 @@ use crate::templates::TemplateRegistry;
 use firecrab_api_types::{KernelInstallResponse, KernelResponse};
 use std::path::{Path, PathBuf};
 
-/// Current upstream stable plus locally installed versions for rollback.
+/// Three recent published releases plus locally installed versions for rollback.
 pub async fn list(
     image_root: &Path,
     templates: &TemplateRegistry,
@@ -16,8 +16,19 @@ pub async fn list(
     let mut versions = kernel::installed_versions(image_root, architecture).await;
     match kernel::latest_stable(image_root, downloads.base_url()).await {
         Ok(release) => {
-            versions.retain(|version| version != &release.version);
-            versions.insert(0, release.version);
+            let recent = if downloads.base_url().is_none() {
+                vec![release.version]
+            } else {
+                match kernel::recent_stable_versions(image_root, &release).await {
+                    Ok(recent) => recent,
+                    Err(error) => {
+                        tracing::debug!(%error, "kernel checksum index unavailable; listing stable and local kernels");
+                        vec![release.version]
+                    }
+                }
+            };
+            versions.retain(|version| !recent.contains(version));
+            versions.splice(0..0, recent);
         }
         Err(error) if versions.is_empty() && downloads.base_url().is_some() => return Err(error),
         Err(error) => {

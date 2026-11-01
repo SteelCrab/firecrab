@@ -3,11 +3,11 @@
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, State},
+    extract::{DefaultBodyLimit, Path as RoutePath, Query, State, ws::WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -20,6 +20,8 @@ use super::resource::{self, Error};
 struct Controller {
     home: PathBuf,
     platform: resource::Platform,
+    agents: Mutex<()>,
+    editors: Mutex<()>,
 }
 
 const ORIGINS: [&str; 4] = [
@@ -125,16 +127,395 @@ fn router(home: PathBuf) -> Router {
 }
 
 fn router_for(home: PathBuf, platform: resource::Platform) -> Router {
-    let controller = Arc::new(Controller { home, platform });
+    let controller = Arc::new(Controller {
+        home,
+        platform,
+        agents: Mutex::new(()),
+        editors: Mutex::new(()),
+    });
     Router::new()
         .route(
             "/api/service/resources",
             get(get_resources).put(save_resources),
         )
         .route("/api/service/resources/apply", post(apply_resources))
+        .merge(
+            Router::new()
+                .route("/api/service/agents/microvms/{vm}", get(vm_agent_status))
+                .route(
+                    "/api/service/agents/microvms/{vm}/github",
+                    post(connect_vm_github),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/github/repositories",
+                    get(vm_github_repositories),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/project",
+                    post(setup_vm_project),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/tasks",
+                    post(start_vm_agent_task),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/prepare",
+                    post(prepare_vm_agents),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/login",
+                    post(login_vm_agent),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/{id}",
+                    get(inspect_vm_agent),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/{id}/terminal",
+                    get(vm_agent_terminal),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/{id}/input",
+                    post(input_vm_agent),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/{id}/close",
+                    post(close_vm_agent),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/{id}/resume",
+                    post(resume_vm_agent_task),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/{id}/automation",
+                    get(vm_automation_status).post(run_vm_automation),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/{id}/editor",
+                    get(vm_editor_status).post(open_vm_editor),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/{id}/editor/stop",
+                    post(stop_vm_editor),
+                )
+                .route("/api/service/agents", get(agent_status))
+                .route("/api/service/agents/tasks", post(start_agent_task))
+                .route("/api/service/agents/{id}", get(inspect_agent))
+                .route("/api/service/agents/{id}/input", post(input_agent))
+                .route("/api/service/agents/{id}/close", post(close_agent))
+                .layer(DefaultBodyLimit::max(32768)),
+        )
         .layer(DefaultBodyLimit::max(4096))
         .layer(middleware::from_fn_with_state(controller.clone(), guard))
         .with_state(controller)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VmCli {
+    cli: String,
+    #[serde(default)]
+    id: Option<uuid::Uuid>,
+}
+async fn vm_agent_status(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let mut value = super::agents::Runtime::for_vm(&controller.home, vm, true)?.status()?;
+        value["controllerId"] = serde_json::json!(resource::controller_id(&controller.home)?);
+        Ok(Json(value))
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn vm_automation_status(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        super::agents::Runtime::for_vm(&controller.home, vm, false)?
+            .automation_status(id)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn vm_editor_status(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        super::agents::Runtime::for_vm(&controller.home, vm, false)?
+            .editor_status(id)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn open_vm_editor(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller
+            .editors
+            .lock()
+            .map_err(|_| Error::Invalid("Editor connection lock is unavailable.".into()))?;
+        super::agents::Runtime::for_vm(&controller.home, vm, false)?
+            .open_editor(id)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn stop_vm_editor(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller
+            .editors
+            .lock()
+            .map_err(|_| Error::Invalid("Editor connection lock is unavailable.".into()))?;
+        super::agents::Runtime::for_vm(&controller.home, vm, false)?
+            .stop_editor(id)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn run_vm_automation(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+    Json(input): Json<super::agents::automation::Request>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.try_lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .automate(id, input)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn start_vm_agent_task(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+    Json(input): Json<super::agents::TaskStart>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .start_task(input)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn connect_vm_github(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .connect_github()
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn vm_github_repositories(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .github_repositories()
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn setup_vm_project(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+    Json(input): Json<super::agents::project::Setup>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .setup_project(input)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn prepare_vm_agents(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+    Json(input): Json<VmCli>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.try_lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::for_vm(&controller.home, vm, false)?
+            .prepare(&input.cli)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn login_vm_agent(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+    Json(input): Json<VmCli>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.try_lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .login(input.id.unwrap_or_else(uuid::Uuid::new_v4), &input.cli)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn resume_vm_agent_task(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.try_lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .deliver_task(id)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn inspect_vm_agent(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .inspect(id)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+
+async fn vm_agent_terminal(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+    Query(query): Query<super::agents::terminal::Attach>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Result<Response, Error> {
+    // A WebSocket GET grants write access. It needs the same identity check as POST.
+    if !headers.contains_key("origin") {
+        return Ok(StatusCode::FORBIDDEN.into_response());
+    }
+    if resource::controller_id(&controller.home)? != query.controller {
+        return Ok((StatusCode::CONFLICT, Json(serde_json::json!({"error":"Resource controller identity changed; reload this host's dashboard."}))).into_response());
+    }
+    query.validate()?;
+    let command = tokio::task::spawn_blocking(move || {
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?.terminal_command(id, &query)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))??;
+    Ok(ws
+        .max_message_size(400000)
+        .max_frame_size(400000)
+        .on_upgrade(move |socket| super::agents::terminal::bridge(socket, command))
+        .into_response())
+}
+async fn input_vm_agent(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+    Json(input): Json<super::agents::Input>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.try_lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .input(id, input)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn close_vm_agent(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.try_lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .close(id)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+
+async fn agent_status(
+    State(controller): State<Arc<Controller>>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let mut status = super::agents::Runtime::new(&controller.home).status()?;
+        status["controllerId"] = serde_json::json!(resource::controller_id(&controller.home)?);
+        Ok::<_, Error>(status)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+    .map(Json)
+}
+async fn inspect_agent(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(id): RoutePath<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || super::agents::Runtime::new(&controller.home).inspect(id))
+        .await
+        .map_err(|e| Error::Invalid(e.to_string()))?
+        .map(Json)
+}
+async fn start_agent_task(
+    State(controller): State<Arc<Controller>>,
+    Json(input): Json<super::agents::TaskStart>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.try_lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::new(&controller.home).start_task(input)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+    .map(Json)
+}
+async fn input_agent(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(id): RoutePath<uuid::Uuid>,
+    Json(input): Json<super::agents::Input>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        super::agents::Runtime::new(&controller.home).input(id, input)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+    .map(Json)
+}
+async fn close_agent(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(id): RoutePath<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.try_lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::new(&controller.home).close(id)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+    .map(Json)
 }
 
 async fn get_resources(

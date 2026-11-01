@@ -2,12 +2,20 @@
 # The caller verifies the source archive before starting this native build.
 set -euo pipefail
 
-[ "$#" -eq 5 ] || { printf 'Usage: %s <architecture> <version> <source.tar.xz> <work-directory> <output>\n' "$0" >&2; exit 2; }
-architecture=$1
-version=$2
-archive=$3
-work=$4
-output=$5
+check_only=0
+if [ "$#" -eq 2 ] && [ "$1" = --check ]; then
+  check_only=1
+  architecture=$2
+elif [ "$#" -eq 5 ]; then
+  architecture=$1
+  version=$2
+  archive=$3
+  work=$4
+  output=$5
+else
+  printf 'Usage: %s --check <architecture> | <architecture> <version> <source.tar.xz> <work-directory> <output>\n' "$0" >&2
+  exit 2
+fi
 
 [ "$(uname -s)" = Linux ] || { printf 'Kernel builds require a Linux host\n' >&2; exit 1; }
 case "$(uname -m):$architecture" in
@@ -24,6 +32,7 @@ if ! printf '#include <libelf.h>\n#include <gelf.h>\n#include <openssl/opensslv.
 fi
 jobs=${FIRECRAB_KERNEL_BUILD_JOBS:-2}
 [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { printf 'FIRECRAB_KERNEL_BUILD_JOBS must be a positive integer\n' >&2; exit 1; }
+[ "$check_only" -eq 0 ] || exit 0
 
 # Each attempt has a fresh directory; an interrupted build is never reused.
 mkdir -p "$work/source" "$work/objects"

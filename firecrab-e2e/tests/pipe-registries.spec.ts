@@ -69,10 +69,11 @@ async function open(
                   },
                 ]
               : [];
-  if (options.saved === "twoEcr") connections = [
-    { registry: "public.ecr.aws", username: "AWS", provider: "ecr" },
-    { registry: ECR, username: "AWS", provider: "ecr" },
-  ];
+  if (options.saved === "twoEcr")
+    connections = [
+      { registry: "public.ecr.aws", username: "AWS", provider: "ecr" },
+      { registry: ECR, username: "AWS", provider: "ecr" },
+    ];
   let polls = 0;
   let failTags = options.tagError;
   let failCatalog = options.catalogError;
@@ -281,32 +282,45 @@ async function chooseRegistry(page: Page, host: string) {
   await page
     .getByRole("row")
     .filter({ has: page.getByRole("cell", { name: host, exact: true }) })
-    .getByRole("button", { name: "Details", exact: true })
+    .getByRole("button", { name: host, exact: true })
     .click();
-  await page.getByRole("button", { name: "Repositories", exact: true }).click();
 }
 test.describe("Pipe registry automatic discovery @dashboard", () => {
-  test("disconnects the selected host when multiple connections use ECR", async ({ page }) => {
+  test("disconnects the selected host when multiple connections use ECR", async ({
+    page,
+  }) => {
     await open(page, { saved: "twoEcr" });
-    const row = page.locator("#content").getByRole("row").filter({ has: page.getByRole("cell", { name: ECR, exact: true }) });
-    await row.getByRole("button", { name: "Details", exact: true }).click();
-    const detail = page.locator("#detail-panel");
-    await expect(detail.getByRole("heading", { name: ECR, exact: true })).toBeVisible();
-    const removed = page.waitForRequest(request => request.method() === "DELETE" && decodeURIComponent(new URL(request.url()).pathname) === `/api/pipe/registries/${ECR}`);
-    page.once("dialog", dialog => dialog.accept());
-    await detail.getByRole("button", { name: "Disconnect", exact: true }).click();
+    const row = page
+      .locator("#content")
+      .getByRole("row")
+      .filter({ has: page.getByRole("cell", { name: ECR, exact: true }) });
+    await row.getByRole("button", { name: ECR, exact: true }).click();
+    const removed = page.waitForRequest(
+      (request) =>
+        request.method() === "DELETE" &&
+        decodeURIComponent(new URL(request.url()).pathname) ===
+          `/api/pipe/registries/${ECR}`,
+    );
+    page.once("dialog", (dialog) => dialog.accept());
+    await row
+      .getByRole("button", { name: `${ECR} actions`, exact: true })
+      .click();
+    await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
     await removed;
     await expect(row).toHaveCount(0);
-    await expect(page.locator("#content").getByRole("cell", { name: /^public\.ecr\.aws(\s|$)/ })).toBeVisible();
+    await expect(
+      page
+        .locator("#content")
+        .getByRole("cell", { name: "public.ecr.aws", exact: true }),
+    ).toBeVisible();
   });
   test("does not query catalogs or tags without a saved login", async ({
     page,
   }) => {
     const m = await open(page);
-    await expect(page.locator("#content")).toHaveAttribute(
-      "data-loaded",
-      "true",
-    );
+    await expect(
+      page.getByText("No registries.", { exact: true }),
+    ).toBeVisible();
     expect(m.catalogs).toEqual([]);
     expect(m.tagQueries).toEqual([]);
   });
@@ -319,15 +333,19 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
       page,
     }) => {
       const m = await open(page, { saved });
-      await expect(page.locator("#registry-repository")).toHaveValue(
-        repository,
-      );
-      await expect(page.locator("#registry-tag")).toHaveValue(tag);
+      await expect(
+        page.locator('.registry-catalog .registry-select[aria-pressed="true"]'),
+      ).toHaveText(repository);
+      await expect(page.locator("#registry-image-tag")).toHaveValue(tag);
       await page
         .getByRole("button", { name: "More repositories", exact: true })
         .click();
-      await expect(page.locator("#registry-repository option")).toHaveCount(2);
-      await page.getByRole("button", { name: "Pull", exact: true }).click();
+      await expect(
+        page.locator(".registry-catalog .registry-select"),
+      ).toHaveCount(2);
+      await page
+        .getByRole("button", { name: "Pull image", exact: true })
+        .click();
       await expect.poll(() => m.transfers.length).toBe(1);
       expect(m.transfers[0]).toEqual({
         action: "pull",
@@ -339,20 +357,22 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
     page,
   }) => {
     await open(page, { saved: "ghcr" });
-    await expect(page.locator("#registry-tag")).toHaveValue("v1");
+    await expect(page.locator("#registry-image-tag")).toHaveValue("v1");
     await page.getByRole("button", { name: "More tags", exact: true }).click();
-    await expect(page.locator("#registry-tag option")).toHaveCount(2);
-    await page.locator("#registry-tag").selectOption("v2");
-    await expect(page.locator("#registry-repository")).toHaveValue("team/app");
+    await expect(page.locator("#registry-image-tag option")).toHaveCount(2);
+    await page.locator("#registry-image-tag").selectOption("v2");
+    await expect(
+      page.locator('.registry-catalog .registry-select[aria-pressed="true"]'),
+    ).toHaveText("team/app");
   });
   test("keeps an empty Docker Hub catalog empty", async ({ page }) => {
     const m = await open(page, { saved: "dockerHub", empty: true });
-    await expect(page.locator("#workflow-root")).toContainText(
-      "No repositories found.",
+    await expect(page.locator(".pipe-registries")).toContainText(
+      "No repositories.",
     );
     expect(m.tagQueries).toEqual([]);
     await expect(
-      page.getByRole("button", { name: "Pull", exact: true }),
+      page.getByRole("button", { name: "Pull image", exact: true }),
     ).toHaveCount(0);
   });
   test("shows catalog and tag failures and retries each lookup", async ({
@@ -363,45 +383,47 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
       catalogError: true,
       tagError: true,
     });
-    await expect(page.locator("#workflow-root [role=alert]")).toContainText(
+    await expect(page.locator(".pipe-registries [role=alert]")).toContainText(
       "Catalog access denied",
     );
     m.allowCatalog();
     await page
-      .locator("#workflow-root")
-      .getByRole("button", { name: "Retry", exact: true })
+      .locator(".pipe-registries")
+      .getByRole("button", { name: "Refresh", exact: true })
       .click();
-    await expect(page.locator("#workflow-root [role=alert]")).toContainText(
+    await expect(page.locator(".pipe-registries [role=alert]")).toContainText(
       "Repository lookup failed",
     );
     await expect(
-      page.getByRole("button", { name: "Pull", exact: true }),
+      page.getByRole("button", { name: "Pull image", exact: true }),
     ).toBeDisabled();
     m.allowTags();
     await page
-      .locator("#workflow-root")
-      .getByRole("button", { name: "Retry", exact: true })
+      .locator(".pipe-registries")
+      .getByRole("button", { name: "Retry tags", exact: true })
       .click();
-    await expect(page.locator("#registry-tag")).toHaveValue("v1");
+    await expect(page.locator("#registry-image-tag")).toHaveValue("v1");
   });
   test("rejects delayed tag responses from the previously selected registry", async ({
     page,
   }) => {
     await open(page, { saved: "both", slowTags: true });
     await chooseRegistry(page, "docker.io");
-    await expect(page.locator("#registry-tag")).toHaveValue("alpine");
+    await expect(page.locator("#registry-image-tag")).toHaveValue("alpine");
     await page.waitForTimeout(400);
-    await expect(page.locator("#registry-tag option")).toHaveText(["alpine"]);
+    await expect(page.locator("#registry-image-tag option")).toHaveText([
+      "alpine",
+    ]);
   });
   test("shows the ECR discovery limitation without inventing repositories", async ({
     page,
   }) => {
     await open(page, { saved: "ecr" });
-    await expect(page.locator("#workflow-root [role=alert]")).toContainText(
-      "not supported",
-    );
     await expect(
-      page.getByRole("button", { name: "Pull", exact: true }),
+      page.getByText(/ECR login passwords cannot list all repositories/),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Pull image", exact: true }),
     ).toHaveCount(0);
   });
   test("recovers ECR repositories from inventory and queries live tags", async ({
@@ -412,10 +434,12 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
       ecrRegistry: ECR,
       images: [localImage(`${ECR}/ecr-nginx:latest`)],
     });
-    await expect(page.locator("#registry-repository")).toHaveValue("ecr-nginx");
-    await expect(page.locator("#registry-tag option")).toHaveCount(2);
-    await page.locator("#registry-tag").selectOption("1.30.6");
-    await page.getByRole("button", { name: "Pull", exact: true }).click();
+    await expect(
+      page.locator('.registry-catalog .registry-select[aria-pressed="true"]'),
+    ).toHaveText("ecr-nginx");
+    await expect(page.locator("#registry-image-tag option")).toHaveCount(2);
+    await page.locator("#registry-image-tag").selectOption("1.30.6");
+    await page.getByRole("button", { name: "Pull image", exact: true }).click();
     await expect.poll(() => m.transfers.length).toBe(1);
     expect(m.transfers[0].reference).toBe(`${ECR}/ecr-nginx:1.30.6`);
   });
@@ -424,26 +448,25 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
   }) => {
     const m = await open(page);
     await page
-      .getByRole("button", { name: "Connect registry", exact: true })
+      .getByRole("button", { name: "Add registry", exact: true })
       .click();
-    await page.getByLabel("Registry host", { exact: true }).fill("docker.io");
-    await page.getByLabel("Username", { exact: true }).fill("docker-user");
     await page
-      .getByLabel("Password / token", { exact: true })
-      .fill("first-private-token");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(page.locator("#editor")).toHaveCount(0);
+      .getByLabel("Provider", { exact: true })
+      .selectOption("dockerHub");
+    await page.locator("#registry-username").fill("docker-user");
+    await page.locator("#registry-secret").fill("first-private-token");
+    await page.getByRole("button", { name: "Save login", exact: true }).click();
+    await expect(page.locator("#registry-login-editor")).toHaveCount(0);
     await chooseRegistry(page, "docker.io");
     await page
-      .getByRole("button", { name: "Update token", exact: true })
+      .getByRole("button", { name: "docker.io actions", exact: true })
       .click();
-    await expect(
-      page.getByLabel("Password / token", { exact: true }),
-    ).toHaveValue("");
     await page
-      .getByLabel("Password / token", { exact: true })
-      .fill("rotated-private-token");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+      .getByRole("menuitem", { name: "Update token", exact: true })
+      .click();
+    await expect(page.locator("#registry-secret")).toHaveValue("");
+    await page.locator("#registry-secret").fill("rotated-private-token");
+    await page.getByRole("button", { name: "Save login", exact: true }).click();
     await expect.poll(() => m.logins.length).toBe(2);
     expect(
       await page.evaluate(
@@ -455,27 +478,27 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
     page,
   }) => {
     const m = await open(page, { saved: "ghcr", failPull: true });
-    await expect(page.locator("#registry-tag")).toHaveValue("v1");
-    await page.getByRole("button", { name: "Pull", exact: true }).click();
+    await expect(page.locator("#registry-image-tag")).toHaveValue("v1");
+    await page.getByRole("button", { name: "Pull image", exact: true }).click();
     await expect(page.locator("#content")).toContainText(
       "registry transfer failed",
     );
-    await expect(page.locator("#registry-tag")).toHaveValue("v1");
-    await page.getByRole("button", { name: "Pull", exact: true }).click();
+    await expect(page.locator("#registry-image-tag")).toHaveValue("v1");
+    await page.getByRole("button", { name: "Pull image", exact: true }).click();
     await expect.poll(() => m.transfers.length).toBe(2);
   });
   test("restores a running transfer after reload without posting twice", async ({
     page,
   }) => {
     const m = await open(page, { saved: "ghcr", running: true });
-    await expect(page.locator("#registry-tag")).toHaveValue("v1");
-    await page.getByRole("button", { name: "Pull", exact: true }).click();
+    await expect(page.locator("#registry-image-tag")).toHaveValue("v1");
+    await page.getByRole("button", { name: "Pull image", exact: true }).click();
     await expect(
-      page.getByRole("heading", { name: "Progress", exact: true }),
+      page.getByRole("group", { name: "Last pull", exact: true }),
     ).toBeVisible();
     await page.reload();
     await expect(
-      page.getByRole("heading", { name: "Progress", exact: true }),
+      page.getByRole("group", { name: "Last pull", exact: true }),
     ).toBeVisible();
     expect(m.transfers).toHaveLength(1);
   });
@@ -487,15 +510,17 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
       imagesError: true,
       locale: "ko",
     });
-    await expect(page.locator("#workflow-root")).toContainText(
+    await expect(page.locator(".pipe-registries")).toContainText(
       "상태 확인 불가",
     );
     m.allowImages();
-    await page.waitForResponse(
-      (r) =>
-        new URL(r.url()).pathname === "/api/pipe/registries" &&
-        r.request().method() === "GET",
-    );
+    await page
+      .locator(".registry-browser")
+      .getByRole("button", { name: "새로고침", exact: true })
+      .click();
+    await expect(
+      page.locator(".registry-browser").getByRole("alert"),
+    ).toHaveCount(0);
     await page.setViewportSize({ width: 390, height: 844 });
     expect(
       await page.evaluate(

@@ -1,0 +1,69 @@
+.ae-page {
+  margin: 48px auto;
+  max-width: 600px;
+  padding: 28px;
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 18px;
+}
+.ae-icon {
+  width: 34px;
+  height: 34px;
+  color: var(--text-2);
+}
+.ae-page h2 {
+  font-size: 25px;
+  letter-spacing: -0.5px;
+  margin: 0;
+}
+.ae-page p {
+  margin: 0;
+  color: var(--text-3);
+  line-height: 1.7;
+}
+.ae-page code {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  padding: 10px 12px;
+  background: var(--bg-2, #f7f7fa);
+  border-radius: 6px;
+  max-width: 100%;
+}
+.ae-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  font-size: 14px;
+  padding: 12px 0;
+}
+.ae-progress progress {
+  width: 100%;
+  height: 6px;
+}
+.ae-page .ae-error {
+  color: var(--red-ink, #b4232d);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow: auto;
+}
+.ae-page .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ae-page .btn svg {
+  width: 16px;
+  height: 16px;
+}
+@media (max-width: 600px) {
+  .ae-page {
+    margin: 18px auto;
+    padding: 16px;
+  }
+  .ae-page h2 {
+    font-size: 22px;
+  }
+}

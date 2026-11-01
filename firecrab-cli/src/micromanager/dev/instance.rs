@@ -508,6 +508,9 @@ struct Options<'a> {
     control: Option<super::super::DevCommand>,
     /// Explicit source root for builds, otherwise the process working directory.
     source: Option<&'a Path>,
+    /// Existing backend selected explicitly for a foreground dashboard.
+    connect_source: Option<&'a Path>,
+    dashboard_only: bool,
     /// Requested dashboard port, separate from reserved backend ports.
     port: u16,
     /// Build the uploaded source with the guest release profile.
@@ -529,9 +532,13 @@ fn command_options(command: &super::super::Command) -> Option<Options<'_>> {
             release,
             restore,
             yes,
+            dashboard_only,
+            connect_source,
         } => Some(Options {
             control: *command,
             source: source.as_deref(),
+            connect_source: connect_source.as_deref(),
+            dashboard_only: *dashboard_only,
             port: *port,
             release: *release,
             restore: *restore,
@@ -574,6 +581,8 @@ pub fn dispatch(command: &super::super::Command) -> io::Result<Option<i32>> {
     let Some(Options {
         control,
         source,
+        connect_source,
+        dashboard_only,
         port,
         release,
         restore,
@@ -626,6 +635,15 @@ pub fn dispatch(command: &super::super::Command) -> io::Result<Option<i32>> {
         ));
     }
     let cwd = std::env::current_dir()?;
+    if dashboard_only {
+        let connection =
+            connect_source.ok_or_else(|| invalid("--dashboard-only requires --connect-source"))?;
+        let instance = resolve(connection, &primary_home, false, port)?
+            .ok_or_else(|| invalid("the selected worktree has no existing development instance"))?;
+        return super::dashboard::serve_existing(source.unwrap_or(&cwd), &instance, port)
+            .map(Some)
+            .map_err(|error| invalid(error.to_string()));
+    }
     let create = control.is_none() && !restore;
     let Some(instance) = resolve(source.unwrap_or(&cwd), &primary_home, create, port)? else {
         return Ok(None);

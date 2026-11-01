@@ -118,6 +118,7 @@ pub fn run(command: Command) -> Result<i32, Error> {
             release,
             restore,
             yes,
+            ..
         } => match command {
             Some(command) => run_dev_control(&lifecycle::Layout::from_process_env()?, command),
             None => run_dev(source.as_deref(), port, release, restore, yes),

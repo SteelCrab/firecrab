@@ -15,13 +15,15 @@ const resource_port = Number(process.env.FIRECRAB_DEV_RESOURCE_PORT || (isolated
 for (const value of [port, api_port, resource_port]) {
   if (!Number.isInteger(value) || value < 1 || value > 65535) throw new Error("Invalid development dashboard/backend port");
 }
+process.env.FIRECRAB_DEV_API_PORT = String(api_port);
+process.env.FIRECRAB_DEV_RESOURCE_PORT = String(resource_port);
 const resourcePrefix = "/__firecrab_resources";
 const proxy = {
   "/api": { target: `http://127.0.0.1:${api_port}`, changeOrigin: false },
   "/auth/callback": { target: `http://127.0.0.1:${api_port}`, changeOrigin: false },
   "/ws": { target: `ws://127.0.0.1:${api_port}`, changeOrigin: false, ws: true },
   [resourcePrefix]: {
-    target: `http://127.0.0.1:${resource_port}`, changeOrigin: true,
+    target: `http://127.0.0.1:${resource_port}`, changeOrigin: true, ws: true,
     rewrite: path => path.slice(resourcePrefix.length) || "/",
   },
 };
@@ -36,6 +38,7 @@ const control = (request, response) => {
   }
   if (request.method === "GET" && request.url === "/") {
     response.setHeader("Content-Type", "application/json");
+    response.setHeader("X-Firecrab-Agent-Terminal", "1");
     response.end(JSON.stringify({ source: resolve(root, ".."), session, dependencies: process.env.FIRECRAB_DEV_DEPENDENCIES, port, api_port, resource_port, isolated }));
   } else if (request.method === "POST" && request.url === "/stop") {
     response.writeHead(202).end();
@@ -46,6 +49,9 @@ const control = (request, response) => {
 };
 server = await createServer({
   root,
+  // Other Vite processes (for example browser tests) must not invalidate
+  // this server's optimized dependencies.
+  cacheDir: resolve(root, "node_modules/.firecrab-dev-vite", `port-${port}`),
   server: { host: "127.0.0.1", port, strictPort: true, proxy },
   plugins: [{
     name: "firecrab-dev-control",
