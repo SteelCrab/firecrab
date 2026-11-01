@@ -20,7 +20,7 @@ test("Security shows deployment identity and never reports unavailable scans as 
   await page.getByText("Evidence and history", { exact: true }).click();
   await expect(page.getByText("deploy-1", { exact: true })).toBeVisible();
   await page.getByText("Coverage and limitations", { exact: true }).click();
-  await expect(page.getByText(/CVE scans check supported packages/)).toBeVisible();
+  await expect(page.getByText(/CVE scans check supported image packages/)).toBeVisible();
   if (process.env.SECURITY_SCREENSHOT) await page.screenshot({ path: process.env.SECURITY_SCREENSHOT });
 });
 
@@ -112,7 +112,9 @@ test("Security identifies workloads outside its coverage", async ({ page }) => {
     services: [], unsupportedWorkloads: [{ id:"cluster-id", name:"cluster-service", reason:"cluster_managed" }, { id:"db-id", name:"orders-db", reason:"database_connection_unlinked" }]
   } } });
   await page.getByText("Coverage and limitations", { exact: true }).click();
-  await expect(page.getByText(/Standalone MicroVMs, cluster-managed services, and database connections without linked images or logs are not checked/)).toBeVisible();
+  await expect(page.getByText(/Standalone MicroVMs are not checked/)).toBeVisible();
+  await expect(page.getByText(/Cluster-managed services are not checked/)).toBeVisible();
+  await expect(page.getByText(/Database connections need linked images and logs/)).toBeVisible();
   await expect(page.getByRole("heading", { name:"Items not checked" })).toBeVisible();
   await expect(page.getByText("cluster-service · Cluster-managed service")).toBeVisible();
   await expect(page.getByText("orders-db · Database connection: image and logs not linked")).toBeVisible();
@@ -125,7 +127,7 @@ test("Security explains limited ingress coverage and detected loss", async ({ pa
     services: [{ id:"a", name:"api", deploymentId:"one", digest:null, sampledRecords:0, signals:[], activityHistory:[{ deploymentId:"one", replicaIds:[], bucketStart:1793310000, count:12, severity:"medium", source:"ingress HTTP status codes", recommendation:"Review ingress and authentication configuration." }] }], unsupportedWorkloads:[{ id:"db-id", name:"orders-db", reason:"database_connection_unlinked" }], ingressLogs:"limited"
   } } });
   await page.getByText("Coverage and limitations", { exact: true }).click();
-  await expect(page.getByText(/limited ingress 401\/403 counts/)).toBeVisible();
+  await expect(page.getByText(/Uses structured logs and ingress 401\/403 counts/)).toBeVisible();
   await expect(page.getByText(/ingress HTTP status codes/)).toBeVisible();
   await page.getByText("Evidence and history", { exact: true }).click();
   await expect(page.getByText(/Replicas: Unavailable/)).toBeVisible();
@@ -156,7 +158,7 @@ test("Security links database connections to an operator-selected service", asyn
       await route.fulfill({ status:204, body:"" });
     }
   }});
-  await page.getByText(/^Database connections/).click();
+  await page.getByText("Database connections (1)", { exact: true }).click();
   await expect(page.getByText(/Firecrab does not verify this link/)).toBeVisible();
   await expect(page.getByText(/Authentication failures: 12/)).toBeVisible();
   await page.getByLabel("orders-db").selectOption("a");
@@ -188,7 +190,7 @@ test("Security keeps findings compact and preserves disclosure and model choices
     "/api/ai-sandbox/connections/connection/models": { models: [{ id: "model-one", name: "Model one", verified: true }, { id: "model-two", name: "Model two", verified: true }] },
     "/api/service-security/api/analysis": async route => {
       request = route.request().postDataJSON();
-      await route.fulfill({ json: { serviceId: "api", deploymentId: "release-orders-current", text: "Update libcrypto3 to the fixed version, then redeploy and rescan the service." } });
+      await route.fulfill({ json: { serviceId: "api", deploymentId: "release-orders-current", text: "Update libcrypto3 to the fixed version.\nRedeploy the service.\nRescan the new image." } });
     },
   }});
   await expect(page.locator(".security-overview")).toContainText("Services to review2");
@@ -202,6 +204,9 @@ test("Security keeps findings compact and preserves disclosure and model choices
   await orders.getByText("Evidence and history", { exact: true }).click();
   await orders.getByRole("button", { name: "Explain with AI" }).click();
   await expect(orders.getByRole("complementary", { name: "AI guidance" })).toContainText("Update libcrypto3");
+  const guidanceLines = await orders.getByRole("complementary", { name: "AI guidance" }).locator(".security-copy-line").allTextContents();
+  expect(guidanceLines).toEqual(["Update libcrypto3 to the fixed version.", "Redeploy the service.", "Rescan the new image."]);
+  expect(guidanceLines.every(line => line.trim().split(/\s+/).length <= 8)).toBe(true);
   expect(request).toEqual({ connectionId: "connection", model: "model-two" });
   await expect(orders.locator(".security-evidence")).toHaveAttribute("open", "");
   await page.getByText("AI guidance settings", { exact: true }).click();

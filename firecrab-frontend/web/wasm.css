@@ -280,3 +280,44 @@
   .security-guidance { margin-left: 16px; margin-right: 16px; }
   .security-database-row { grid-template-columns: minmax(0,1fr); }
 }
+
+/* Shared outlines distinguish status, findings, and actions. */
+.security-page svg { flex-shrink: 0; width: 15px; height: 15px; }
+.security-heading h2 { display: flex; align-items: center; gap: 10px; }
+.security-heading h2 svg { width: 23px; height: 23px; color: var(--accent); }
+.security-overview dt, .security-toolbar h3, .security-guidance h5,
+.security-coverage-grid h5 { display: flex; align-items: center; gap: 8px; }
+.security-overview dt svg { color: var(--text-2); }
+.security-overview > div:first-child dt svg { color: var(--amber-ink); }
+.security-page summary { display: flex; align-items: center; gap: 8px; list-style: none; }
+.security-page summary::-webkit-details-marker { display: none; }
+.security-page summary::before { content: ""; width: 5px; height: 5px; flex: none; margin-right: 3px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); }
+.security-page details[open] > summary::before { transform: rotate(45deg); }
+.security-page summary svg { color: var(--text-3); }
+.security-service-heading h4 { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+.security-service-heading h4 > svg { box-sizing: border-box; width: 32px; height: 32px; padding: 7px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-subtle); color: var(--text-2); }
+.security-service-status { margin-left: 42px; }
+.security-group-title { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 22px; font-size: 11px; font-weight: 500; color: var(--text-2); background: var(--bg-subtle); border-top: 1px solid var(--border-soft); }
+.security-group-title svg { width: 14px; height: 14px; color: var(--text-3); }
+.security-group-count { color: var(--text-3); font-size: 10px; font-variant-numeric: tabular-nums; border: 1px solid var(--border-strong); border-radius: 4px; padding: 0 5px; line-height: 16px; background: var(--bg); }
+.security-group-title + .security-findings > li:first-child { border-top: 0; }
+.security-finding-body .security-fix { margin-top: 5px; color: var(--text-2); }
+.security-copy-line { display: block; }
+.security-guidance h5 svg { color: var(--accent); }
+.security-guidance p { white-space: normal; }
+.security-coverage-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; margin-top: 16px; }
+.security-coverage-grid > section { min-width: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); }
+.security-coverage-grid h5 { font-size: 12px; font-weight: 500; margin: 0 0 10px; }
+.security-coverage-grid h5 svg { color: var(--text-3); }
+.security-coverage-grid p { margin: 0; color: var(--text-3); font-size: 12px; }
+@media (max-width: 767px) {
+  .security-overview dt { align-items: flex-start; gap: 5px; }
+  .security-overview dt svg { width: 13px; height: 13px; margin-top: 1px; }
+  .security-overview dt { font-size: 10px; }
+  .security-service-status { margin-left: 0; }
+  .security-group-title { padding-left: 16px; padding-right: 16px; }
+  .security-coverage-grid { grid-template-columns: minmax(0,1fr); }
+}
+
+.security-overview dt { word-break: keep-all; }
+.security-finding-body p, .security-guidance p { font-size: 13px; }
