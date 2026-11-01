@@ -18,6 +18,10 @@ task/attempt routing identities, global cursor ordinals and the migration receip
 A private pre-migration archive remains for operator recovery. It is not a second
 serving database or a guest-visible file.
 
+Agent checkpoints retry project-owner contention for up to 60 seconds. Each wait
+releases the task gates. A missing/mismatched target is not retried or recreated.
+No provider or guest effect starts before its checkpoint succeeds.
+
 The Store and workspace API share the same service ownership lease. Project task
 operations use the existing project lock, persisted ownership epoch, local-disk
 WAL mode and `synchronous=FULL`. Missing, mismatched, unpaired or busy project
@@ -123,7 +127,7 @@ acceptance remain pending.
   secure path tests. Its macOS run does not pass; hosted Linux CI is required.
   This limitation is not hidden by ignoring or weakening those tests.
 
-Local results: 15 focused persistence tests and 68 workspace tests pass. API and
+Local results: 16 focused persistence tests and 68 workspace tests pass. API and
 API-types Clippy with `-D warnings`, formatting and whitespace checks pass. The
 console resize fixture now emits each observed size marker in one `printf` so
 periodic guest output cannot split its prefix and value. TypeScript syntax is

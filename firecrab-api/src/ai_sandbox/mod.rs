@@ -140,13 +140,27 @@ pub fn proof(
 }
 
 /// Persist a checkpoint off the async worker before an external side effect.
-async fn save(state: &AppState, saved: &SavedTask) -> Result<(), String> {
-    let store = state.store.clone();
-    let copy = saved.clone();
-    tokio::task::spawn_blocking(move || store.save_sandbox_task(&copy))
-        .await
-        .map_err(|_| "Cannot persist task")?
-        .map_err(|_| "Cannot persist task".into())
+pub(crate) async fn save(state: &AppState, saved: &SavedTask) -> Result<(), String> {
+    let copy = std::sync::Arc::new(saved.clone());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let store = state.store.clone();
+        let copy = copy.clone();
+        let result = tokio::task::spawn_blocking(move || store.save_sandbox_task(&copy))
+            .await
+            .map_err(|_| "Cannot persist task")?;
+        match result {
+            Ok(()) => return Ok(()),
+            Err(crate::persistence::PersistenceError::ProjectDatabaseBusy)
+                if tokio::time::Instant::now() < deadline =>
+            {
+                // File transport holds the same owner across its bounded guest call.
+                // Release all task gates before waiting; no effect is dispatched yet.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(_) => return Err("Cannot persist task".into()),
+        }
+    }
 }
 
 /// Complete persisted admission independently of the originating HTTP connection.

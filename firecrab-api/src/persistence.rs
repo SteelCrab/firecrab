@@ -524,6 +524,9 @@ pub enum PersistenceError {
     /// A disk is reserved, being prepared, or conflicts with another mount.
     #[error("{message}")]
     BlockStorageConflict { message: &'static str },
+    /// A bounded workspace operation currently holds the private project DB.
+    #[error("project database is busy")]
+    ProjectDatabaseBusy,
     /// A source needs explicit configuration before it can be checked.
     #[error("stack Git source does not exist")]
     MissingStackSource,

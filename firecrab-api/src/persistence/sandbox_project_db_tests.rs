@@ -408,3 +408,63 @@ fn damaged_backup_and_wrong_registry_identity_leave_the_source_frozen_and_readab
     assert!(store.sandbox_storage_status(binding.project_id).is_err());
     assert!(store.sandbox_pending_count().is_err());
 }
+
+#[tokio::test]
+async fn agent_checkpoint_waits_for_workspace_owner_and_never_retries_a_missing_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry =
+        crate::templates::TemplateRegistry::from_specs(dir.path(), std::iter::empty()).unwrap();
+    let state = crate::state::AppState::with_db_file(registry, dir.path().join("state.db"))
+        .await
+        .unwrap();
+    let (binding, db) = project(&state.store);
+    let mut task = saved(binding.project_id, 1);
+    state.store.save_sandbox_task(&task).unwrap();
+    state
+        .store
+        .migrate_sandbox_tasks(&binding, &db, Uuid::new_v4(), Uuid::new_v4())
+        .unwrap();
+    drop(db);
+    let owner = state.workspaces.open_owned(&binding, false).unwrap();
+    task.task.state = SandboxTaskState::InProgress;
+    assert!(matches!(
+        state.store.save_sandbox_task(&task),
+        Err(PersistenceError::ProjectDatabaseBusy)
+    ));
+    let local = state.clone();
+    let saved = task.clone();
+    let pending = tokio::spawn(async move { crate::ai_sandbox::save(&local, &saved).await });
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    assert!(
+        !pending.is_finished(),
+        "owner contention must not fail the agent checkpoint immediately"
+    );
+    let path = owner.directory.join("project.db");
+    drop(owner);
+    tokio::time::timeout(std::time::Duration::from_secs(5), pending)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        state
+            .store
+            .sandbox_task(task.task.id)
+            .unwrap()
+            .unwrap()
+            .task
+            .state,
+        SandboxTaskState::InProgress
+    );
+    std::fs::remove_file(&path).unwrap();
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            crate::ai_sandbox::save(&state, &task)
+        )
+        .await
+        .unwrap()
+        .is_err()
+    );
+    assert!(!path.exists());
+}

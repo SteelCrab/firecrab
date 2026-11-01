@@ -96,7 +96,7 @@ impl Store {
         let c = self.lock();
         let _durable = Durable::new(&c)?;
         let tx = c.unchecked_transaction()?;
-        tx.execute("INSERT INTO sandbox_task_catalog(id,project_id,attempt_id) VALUES(?1,?2,?3) ON CONFLICT(id) DO NOTHING",params![t.task.id.to_string(),t.task.project_id.to_string(),t.task.attempt_id.to_string()])?;
+        tx.execute("INSERT INTO sandbox_task_catalog(id,project_id,attempt_id) SELECT ?1,?2,?3 WHERE NOT EXISTS(SELECT 1 FROM sandbox_task_catalog WHERE id=?1) ON CONFLICT(id) DO NOTHING",params![t.task.id.to_string(),t.task.project_id.to_string(),t.task.attempt_id.to_string()])?;
         let (ordinal, project, attempt): (i64, String, String) = tx.query_row(
             "SELECT ordinal,project_id,attempt_id FROM sandbox_task_catalog WHERE id=?1",
             [t.task.id.to_string()],
@@ -130,7 +130,10 @@ impl Store {
         let db = self
             .workspaces
             .open_owned(&b, false)
-            .map_err(|_| unavailable())?;
+            .map_err(|error| match error {
+                crate::project_workspace::Error::Busy => PersistenceError::ProjectDatabaseBusy,
+                _ => unavailable(),
+            })?;
         let marker: Option<(String, String)> = db
             .conn
             .query_row(
