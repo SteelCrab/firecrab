@@ -81,6 +81,9 @@ test('canvas pages older retained versions and reloads without dispatching a res
   await expect(page.locator('.cw-history li')).toHaveCount(100);
   await page.getByRole('button', { name: 'Load older history', exact: true }).click();
   await expect(page.locator('.cw-history li')).toHaveCount(107);
+  await expect.poll(() => [...canvas.privateViews.values()]
+    .some(view => view.document.nodes.some(node => node.kind === 'history')))
+    .toBe(true);
   await page.reload();
   await page.getByRole('button', { name: 'Load retained history', exact: true }).click();
   await expect(page.locator('.cw-history li')).toHaveCount(100);

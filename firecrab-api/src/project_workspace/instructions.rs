@@ -150,7 +150,7 @@ async fn capture(
     Extension(id): Extension<RequestId>,
     caller: Caller,
     Path((project, snapshot)): Path<(Uuid, Uuid)>,
-    Json(request): Json<CaptureProjectInstructions>,
+    ValidatedJson(request): ValidatedJson<CaptureProjectInstructions>,
 ) -> Result<Json<ProjectInstructionSnapshot>, AppError> {
     files::run(state.workspaces.file_slots.clone(), id.0, async move {
         // Completed request retries remain queryable with the VM stopped.

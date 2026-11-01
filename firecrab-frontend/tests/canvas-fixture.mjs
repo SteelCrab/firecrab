@@ -93,6 +93,7 @@ export function installCanvasHistoryFixture(fixture) {
     get restoreCount() { return writes; },
     get restoreRequests() { return requests; },
     get savedFiles() { return versions; },
+    get privateViews() { return views; },
     externalWrite(content = 'concurrent saved content\n') { return addFile(content); },
     loseNextAcknowledgement() { loseAck = true; },
   };

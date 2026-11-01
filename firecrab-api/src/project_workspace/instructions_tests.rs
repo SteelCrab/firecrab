@@ -207,3 +207,115 @@ fn instruction_quota_rejects_new_context_but_keeps_accepted_retry() {
         Err(Error::Conflict(_))
     ));
 }
+
+#[tokio::test]
+async fn accepted_instruction_context_replays_while_stopped_and_remains_caller_private() {
+    use super::tests::{bind, call, fixture};
+    use axum::http::StatusCode;
+    use serde_json::json;
+    let (_dir, state, b) = fixture().await;
+    bind(&state, &b).await;
+    state.vms.lock().unwrap().get_mut(&b.vm_id).unwrap().state = VmState::Stopped;
+    let host = Uuid::new_v4();
+    let actor: Caller =
+        serde_json::from_value(json!({"principal":SandboxPrincipal::Host(host),"operator":false}))
+            .unwrap();
+    state
+        .store
+        .save_sandbox_access(
+            host,
+            &SandboxAccessPolicy {
+                grants: vec![SandboxResourceGrant {
+                    resource: SandboxResource::Project { id: b.project_id },
+                    permissions: vec![SandboxPermission::Read],
+                }],
+            },
+        )
+        .unwrap();
+    let snapshot = {
+        let db = open(&state, &binding(&state, b.project_id).unwrap()).unwrap();
+        let version = db
+            .observe_file("AGENTS.md", b"Saved rules before VM stop")
+            .unwrap();
+        let files = vec![ProjectInstructionFile {
+            path: "AGENTS.md".into(),
+            version: version.metadata.id,
+            sha256: version.metadata.sha256,
+            content: "Saved rules before VM stop".into(),
+        }];
+        let saved = ProjectInstructionSnapshot {
+            id: Uuid::new_v4(),
+            directory: "api".into(),
+            created_at: 1,
+            sha256: instructions::digest("api", &files).unwrap(),
+            files,
+        };
+        db.save_instruction_snapshot(actor, &saved).unwrap();
+        saved
+    };
+    let path = format!(
+        "/api/ai-sandbox/projects/{}/workspace/instructions/snapshots/{}",
+        b.project_id, snapshot.id
+    );
+    for (method, body) in [("GET", json!({})), ("PUT", json!({"directory":"api"}))] {
+        let (status, response) = call(&state, method, &path, body, Some(host)).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        assert_eq!(
+            serde_json::from_value::<ProjectInstructionSnapshot>(response).unwrap(),
+            snapshot
+        );
+    }
+    // Operator permission does not bypass another caller's private snapshot identity.
+    assert_eq!(
+        call(&state, "GET", &path, json!({}), None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(&state, "PUT", &path, json!({"directory":"web"}), Some(host))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let new_path = format!(
+        "/api/ai-sandbox/projects/{}/workspace/instructions/snapshots/{}",
+        b.project_id,
+        Uuid::new_v4()
+    );
+    assert_eq!(
+        call(
+            &state,
+            "PUT",
+            &new_path,
+            json!({"directory":"api"}),
+            Some(host)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(state.vms.lock().unwrap()[&b.vm_id].state, VmState::Stopped);
+    state
+        .store
+        .save_sandbox_access(host, &SandboxAccessPolicy::default())
+        .unwrap();
+    assert_eq!(
+        call(&state, "GET", &path, json!({}), Some(host)).await.0,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn instruction_capture_rejects_supplied_context_identity_with_json_error() {
+    use super::tests::{call, fixture};
+    use axum::http::StatusCode;
+    use serde_json::json;
+    let (_dir, state, b) = fixture().await;
+    let path = format!(
+        "/api/ai-sandbox/projects/{}/workspace/instructions/snapshots/{}",
+        b.project_id,
+        Uuid::new_v4()
+    );
+    let (status, body) = call(&state,"PUT",&path,json!({"directory":"api","principal":"forged","files":[{"content":"unsaved forged rules"}]}),None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.get("error").is_some());
+}

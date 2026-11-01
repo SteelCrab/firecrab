@@ -60,3 +60,9 @@ After explicit user approval, main `5bba54f6ce775fb50aa820d881c5627ce62424b7` wa
 Post-update checks pass: API/types clippy, 49 workspace tests, 205 frontend Rust tests, required frontend lint/build, and documentation checks. A fresh browser fixture confirms 19 dashboard menu entries, the AI Canvas link, project opening, file comparison, and a single append-only restore.
 
 Post-update compiled Canvas WASM SHA-256: `7647e2326e2ce6dc359cf0c61cd3a1a297f56f7847cbcf855af3d5709038f5f8`.
+
+## Retained-instruction API and CI follow-up
+
+The stopped-runtime instruction route now has HTTP-level regression coverage. An accepted snapshot can be read and replayed while the VM is stopped. A different operator identity cannot read it. Changing its selected directory conflicts, a new capture cannot start against a stopped VM, and access revocation denies a later read. Supplying a caller or forged rule payload is rejected with a JSON error. All 51 workspace tests and API/types clippy pass locally after this change.
+
+On `0b632114`, hosted frontend CI passed the stale-restore and identical-retry browser regressions. Its reload regression failed because it reloaded before the private canvas layout was durably accepted. The fixture now exposes accepted private views so that test waits for the saved history panel before reloading. The assertion remains enabled, and no timeout, lint, or coverage threshold was relaxed. The updated hosted run must verify the fix.
