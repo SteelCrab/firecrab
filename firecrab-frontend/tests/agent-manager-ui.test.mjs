@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { chromium } from "playwright-core";
 import { expect } from "@playwright/test";
 import { createFixtureServer, vm } from "./fixture-server.mjs";
@@ -477,7 +479,7 @@ for (const [width, locale] of [
       ),
     );
     await page.screenshot({
-      path: `/private/tmp/firecrab-agents-${locale}-${width}.png`,
+      path: join(tmpdir(), `firecrab-agents-${locale}-${width}.png`),
       fullPage: false,
     });
   });
@@ -517,7 +519,7 @@ test("work calls an agent only when a task is submitted", async (t) => {
   await expect(dialog.getByLabel("Model", { exact: true })).toHaveValue("");
   await page.getByRole("radio", { name: "Codex", exact: true }).check();
   await page.screenshot({
-    path: "/private/tmp/firecrab-microvm-task-form-20261031.png",
+    path: join(tmpdir(), "firecrab-microvm-task-form-20261031.png"),
     fullPage: false,
   });
   await dialog
@@ -892,7 +894,7 @@ test("verification stays scoped to its VM and does not publish until the app is 
     false,
   );
   await page.screenshot({
-    path: "/private/tmp/firecrab-automation-en-1440.png",
+    path: join(tmpdir(), "firecrab-automation-en-1440.png"),
   });
   await modal.getByRole("button", { name: "Close", exact: true }).click();
 });
@@ -950,7 +952,7 @@ test("preview targets only the selected VM port and records an explicit HTTPS ch
   assert.equal(call.body.tunnelId, undefined);
   assert.equal(call.body.url, undefined);
   await page.screenshot({
-    path: "/private/tmp/firecrab-automation-preview-en-1440.png",
+    path: join(tmpdir(), "firecrab-automation-preview-en-1440.png"),
   });
 });
 
@@ -975,7 +977,7 @@ test("automation settings fit a Korean mobile viewport", async (t) => {
     true,
   );
   await page.screenshot({
-    path: "/private/tmp/firecrab-automation-ko-390.png",
+    path: join(tmpdir(), "firecrab-automation-ko-390.png"),
   });
 });
 
@@ -1263,7 +1265,7 @@ for (const width of [1440, 390]) {
     const box = await panel.boundingBox();
     assert(box.width <= 682);
     await page.screenshot({
-      path: `/private/tmp/firecrab-auth-design-pending-${width}.png`,
+      path: join(tmpdir(), `firecrab-auth-design-pending-${width}.png`),
       fullPage: false,
     });
     assert(
@@ -1294,7 +1296,7 @@ for (const width of [1440, 390]) {
     assert.equal(state.calls.filter((c) => c.method === "POST").length, 0);
     await page.locator(".am-repository-alternative > summary").click();
     await page.screenshot({
-      path: `/private/tmp/firecrab-auth-design-pending-${width}.png`,
+      path: join(tmpdir(), `firecrab-auth-design-pending-${width}.png`),
       fullPage: false,
     });
   });
@@ -1314,7 +1316,7 @@ test("Connected repository collapses to a source row and keeps terminal room", a
   );
   await expect(page.locator(".am-github-auth")).toHaveCount(0);
   await page.screenshot({
-    path: "/private/tmp/firecrab-auth-design-connected.png",
+    path: join(tmpdir(), "firecrab-auth-design-connected.png"),
     fullPage: false,
   });
 });
@@ -1402,7 +1404,7 @@ for (const [width, locale] of [
       ),
     );
     await page.screenshot({
-      path: `/private/tmp/firecrab-agent-board-${locale}-${width}.png`,
+      path: join(tmpdir(), `firecrab-agent-board-${locale}-${width}.png`),
       fullPage: false,
     });
     await working.locator('[data-task-id="reviewer"]').click();
