@@ -201,3 +201,86 @@ async fn an_unconfirmed_write_cannot_admit_another_effect_or_use_isolated_guest_
     );
     assert!(saved.guest_pending);
 }
+#[tokio::test]
+async fn folder_session_endpoint_uses_transport_identity_and_needs_no_host_source_grant() {
+    use crate::{
+        handlers::ai_sandbox::{TaskQuery, tasks},
+        server::RequestId,
+    };
+    use axum::{
+        Extension,
+        extract::{Path, Query, State},
+    };
+    let (_dir, state, mut saved) = super::super::recovery_tests::fixture().await;
+    saved.task.id = Uuid::new_v4();
+    saved.task.attempt_id = Uuid::new_v4();
+    saved.guest_pending = false;
+    saved.guest_staged = false;
+    saved.guest_command = None;
+    let host = Uuid::new_v4();
+    let caller: access::Caller =
+        serde_json::from_value(json!({"principal":SandboxPrincipal::Host(host),"operator":false}))
+            .unwrap();
+    saved.caller = caller;
+    saved.project.source_path = Some("/not-authorized/host/source".into());
+    saved.task.request.project_directory = Some("api".into());
+    let project = saved.task.project_id;
+    state
+        .store
+        .save_sandbox_project(&SandboxProject {
+            id: project,
+            owner: caller.principal,
+            spec: saved.project.clone(),
+            created_at: 0,
+        })
+        .unwrap();
+    state
+        .store
+        .save_sandbox_access(
+            host,
+            &SandboxAccessPolicy {
+                grants: vec![SandboxResourceGrant {
+                    resource: SandboxResource::Project { id: project },
+                    permissions: vec![SandboxPermission::Read],
+                }],
+            },
+        )
+        .unwrap();
+    state.store.save_sandbox_task(&saved).unwrap();
+    let original = saved.task.id;
+    saved.task.id = Uuid::new_v4();
+    saved.task.attempt_id = Uuid::new_v4();
+    saved.caller = Default::default();
+    saved.task.request.input = "another caller's task".into();
+    state.store.save_sandbox_task(&saved).unwrap();
+    let response = tasks(
+        State(state.clone()),
+        Extension(RequestId(Uuid::new_v4())),
+        caller,
+        Path(project),
+        Query(TaskQuery {
+            project_directory: Some("api".into()),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.0.len(), 1);
+    assert_eq!(response.0[0].id, original);
+    let invalid = tasks(
+        State(state),
+        Extension(RequestId(Uuid::new_v4())),
+        caller,
+        Path(project),
+        Query(TaskQuery {
+            assigned_agent: Some("Backend".into()),
+            ..Default::default()
+        }),
+    )
+    .await;
+    assert!(invalid.is_err());
+    assert!(
+        serde_json::from_value::<TaskQuery>(json!({"projectDirectory":"api","caller":"local"}))
+            .is_err()
+    );
+}

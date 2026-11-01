@@ -545,6 +545,9 @@ for prerequisites and runtime fencing. Adding `projectDirectory` explicitly sele
 the [retained-folder file-only profile](../guides/sandbox-folder-file-agents.md);
 it requires a matching saved snapshot and exposes confirmed `folderMutations`.
 Omitting that field retains isolated-copy execution.
+The existing project task-list endpoint also accepts `projectDirectory` and optional
+`assignedAgent` to page the verified caller's folder session records, including
+active and interrupted attempts, with the existing `before` and `since` filters.
 
 See [saved project instructions](../guides/project-instructions.md) for limits, private access and retries.
 

@@ -720,6 +720,10 @@ pub struct TaskQuery {
     pub since: Option<u64>,
     /// Read the previous page before this task identity.
     pub before: Option<Uuid>,
+    /// Explicit retained-folder session filter; an empty string selects the root.
+    pub project_directory: Option<String>,
+    /// Exact agent label in that folder; omission selects unassigned tasks only.
+    pub assigned_agent: Option<String>,
 }
 /// Conversation and Kanban consume these same task records.
 pub async fn tasks(
@@ -730,7 +734,17 @@ pub async fn tasks(
     Query(query): Query<TaskQuery>,
 ) -> Result<Json<Vec<SandboxTaskSummary>>, AppError> {
     project(&state, id, key, caller, SandboxPermission::Read).await?;
-    let sources = caller.sources(&state, key).map_err(|e| denied(id, e))?;
+    if query.project_directory.is_none() && query.assigned_agent.is_some() {
+        return Err(invalid(
+            id,
+            "projectDirectory",
+            "An agent filter requires a retained project directory",
+        ));
+    }
+    if let Some(directory) = &query.project_directory {
+        crate::project_workspace::folder::path(directory, "", true)
+            .map_err(|e| invalid(id, "projectDirectory", e))?;
+    }
     let store = state.store.clone();
     let before = if let Some(cursor) = query.before {
         let store = state.store.clone();
@@ -742,6 +756,24 @@ pub async fn tasks(
     } else {
         None
     };
+    if let Some(directory) = query.project_directory {
+        let rows = db(id, move || {
+            store.sandbox_folder_summaries(
+                key,
+                &directory,
+                query.assigned_agent.as_deref(),
+                caller.principal,
+                query.since,
+                before,
+            )
+        })
+        .await?;
+        caller
+            .project(&state, key, SandboxPermission::Read)
+            .map_err(|e| denied(id, e))?;
+        return Ok(Json(rows));
+    }
+    let sources = caller.sources(&state, key).map_err(|e| denied(id, e))?;
     Ok(Json(
         db(id, move || {
             store.sandbox_visible_summaries(key, query.since, before, sources)

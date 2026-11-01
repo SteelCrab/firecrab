@@ -307,6 +307,44 @@ impl Store {
         rows.reverse();
         Ok(rows)
     }
+    /// Folder session pages filter caller and directory before the existing fifty-record bound.
+    pub fn sandbox_folder_summaries(
+        &self,
+        project: Uuid,
+        directory: &str,
+        agent: Option<&str>,
+        caller: SandboxPrincipal,
+        since: Option<u64>,
+        before: Option<i64>,
+    ) -> Result<Vec<SandboxTaskSummary>, PersistenceError> {
+        if since.is_some_and(|v| v > i64::MAX as u64) {
+            return Ok(vec![]);
+        }
+        let conn = self.task_connection(project, false)?;
+        let mut query = conn.prepare(
+            "SELECT i.summary FROM ai_sandbox_task_index i JOIN ai_sandbox_tasks t ON t.id=i.id
+            WHERE i.project_id=?1 AND json_extract(t.spec,'$.task.request.projectDirectory') IS ?2
+            AND json_extract(t.spec,'$.task.request.coordination.assignedAgent') IS ?3
+            AND json_extract(t.spec,'$.caller.principal') = json_extract(?4,'$')
+            AND (?5 IS NULL OR i.ordinal<?5) AND i.updated_at>=?6 ORDER BY i.ordinal DESC LIMIT 50",
+        )?;
+        let mut rows = query
+            .query_map(
+                params![
+                    project.to_string(),
+                    directory,
+                    agent,
+                    encode(&caller)?,
+                    before,
+                    since.unwrap_or(0) as i64
+                ],
+                |r| r.get(0),
+            )?
+            .map(|r| decode(r?))
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.reverse();
+        Ok(rows)
+    }
     /// Count retained attempts without reading their bodies.
     pub fn sandbox_task_count(&self, project: Uuid) -> Result<usize, PersistenceError> {
         let count: i64 = self.task_connection(project, false)?.query_row(

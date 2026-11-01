@@ -59,6 +59,27 @@ Previous provider context is selected by project, authenticated caller, director
 assigned agent. Unrelated recent tasks cannot evict that scope's history. This does not
 change the existing project permissions for viewing public task records.
 
+## Folder session records
+
+The existing task list accepts `projectDirectory` and `assignedAgent` query filters:
+
+```text
+GET /api/ai-sandbox/projects/{project}/tasks?projectDirectory=api&assignedAgent=Backend
+```
+
+An empty `projectDirectory=` selects the retained root. Omit `assignedAgent` to
+select only unassigned tasks in that directory. An agent filter without a directory
+is rejected. The server fixes the caller from its verified transport identity;
+clients cannot supply another caller. This scope needs Project Read but no host
+source grant or running VM. It includes active, failed and interrupted attempts.
+
+Each page contains at most 50 summaries in chronological order. Continue with
+`before` set to the oldest returned task ID. `since` is an inclusive update-time
+filter. Drain older pages in the same poll window before advancing that watermark,
+and merge updates by task ID. These filters run before the page bound, so another
+caller's recent tasks cannot hide the selected session's older records. Omitting
+the folder filter preserves the existing board and conversation query behavior.
+
 ## Interruption and recovery
 
 The server chooses each write's opaque operation ID and stores it in the canonical task
@@ -75,8 +96,8 @@ Cancellation stops further work; it does not roll back already confirmed file ve
 
 ## Validation boundary
 
-Local validation passed the 16 folder-profile tests, 16 instruction tests,
-17 Sandbox-persistence tests and 75 workspace tests; these groups overlap.
+Final local validation passed 109 distinct tests selected across folder agents,
+instructions, Sandbox persistence and project workspaces.
 API/types Clippy with warnings denied and public-document link checks also passed.
 The tests cover metadata provenance, stopped-VM confirmed receipts, unresolved-write
 retention, boot/generation fencing, grants, caller-scoped context, path restrictions,
