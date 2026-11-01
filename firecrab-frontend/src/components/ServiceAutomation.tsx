@@ -139,6 +139,7 @@ export default function ServiceAutomation({
             <input
               required
               maxLength={2048}
+              disabled={busy || disabled}
               value={reference}
               onChange={(e) => setReference(e.target.value)}
               placeholder="ghcr.io/team/app:v1.*"
@@ -150,6 +151,7 @@ export default function ServiceAutomation({
               type="number"
               min="60"
               max="3600"
+              disabled={busy || disabled}
               value={interval}
               onChange={(e) => setInterval(Number(e.target.value))}
             />

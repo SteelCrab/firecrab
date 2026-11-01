@@ -3105,6 +3105,10 @@ test.describe("Registry automatic Deploy @dashboard", () => {
       error: null,
     };
     const writes: any[] = [];
+    let releaseInitialRead!: () => void;
+    const initialRead = new Promise<void>((resolve) => {
+      releaseInitialRead = resolve;
+    });
     await page.route(`**/api/micro-services/${ID}/deployment`, (route) =>
       route.fulfill({ json: current }),
     );
@@ -3113,6 +3117,7 @@ test.describe("Registry automatic Deploy @dashboard", () => {
       async (route) => {
         const request = route.request();
         const suffix = new URL(request.url()).pathname.split("auto-deploy")[1];
+        if (request.method() === "GET") await initialRead;
         if (request.method() === "PUT") {
           const policy = request.postDataJSON();
           writes.push(policy);
@@ -3139,6 +3144,13 @@ test.describe("Registry automatic Deploy @dashboard", () => {
     await page
       .getByRole("button", { name: "Registry monitoring", exact: true })
       .click();
+    await expect(
+      page.getByLabel("Registry source", { exact: true }),
+    ).toBeDisabled();
+    await expect(
+      page.getByLabel("Interval (seconds)", { exact: true }),
+    ).toBeDisabled();
+    releaseInitialRead();
     await page
       .getByLabel("Registry source", { exact: true })
       .fill("ghcr.io/team/orders:v1.*");
