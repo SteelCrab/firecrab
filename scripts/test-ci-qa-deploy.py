@@ -72,18 +72,27 @@ class DatabaseSecurityQaTests(unittest.TestCase):
 
     def test_database_security_links_scans_detects_and_cleans_up(self):
         class Api:
-            def __init__(self):
+            def __init__(self, retain_database=False):
                 self.linked = False
+                self.database_exists = False
+                self.retain_database = retain_database
                 self.scanned = False
                 self.stopped = False
                 self.calls = []
             def call(self, method, path, body=None, allowed=None):
                 self.calls.append((method, path, body))
-                if (method, path) == ("GET", "/api/pipe/databases"): return []
+                if (method, path) == ("GET", "/api/pipe/databases"):
+                    return [{"id":"database"}] if self.database_exists else []
                 if (method, path) == ("POST", "/api/micro-services"): return {"id":"service"}
                 if (method, path) == ("GET", "/api/micro-services/service/deployment"):
                     return {"id":"release", "phase":"stopped" if self.stopped else "running", "digest":"sha256:test", "instances":[{"vmId":"replica", "ipv4":"192.0.2.8"}]}
-                if (method, path) == ("POST", "/api/pipe/databases"): return {"id":"database"}
+                if (method, path) == ("POST", "/api/pipe/databases"):
+                    self.database_exists = True
+                    return {"id":"database"}
+                if (method, path) == ("DELETE", "/api/pipe/databases/database"):
+                    assert 200 in allowed, "database deletion returns HTTP 200"
+                    self.database_exists = self.retain_database
+                    return {"deleted": True}
                 if path == "/api/service-security/databases/database/link":
                     self.linked = method == "PUT"
                     return None
@@ -118,6 +127,13 @@ class DatabaseSecurityQaTests(unittest.TestCase):
                 self.assertIn(("DELETE", "/api/pipe/databases/database", None), api.calls)
                 self.assertIn(("DELETE", "/api/micro-services/service", None), api.calls)
                 self.assertEqual(evidence["databaseSecurity"]["cleanupErrors"], [])
+        api = Api(retain_database=True)
+        evidence = {}
+        with patch.object(database_security.subprocess, "run", return_value=Mock(returncode=1, stderr="password authentication failed")), patch("builtins.print"):
+            with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
+                database_security.run_database_security(api, wait, "network", spec, ("sha256:test",), evidence)
+        self.assertIn("database connection was not removed", evidence["databaseSecurity"]["cleanupErrors"][0])
+        self.assertIn(("DELETE", "/api/micro-services/service", None), api.calls)
 
 
 class DeployQaTests(unittest.TestCase):

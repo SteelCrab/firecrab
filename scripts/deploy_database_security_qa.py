@@ -155,7 +155,8 @@ def run_database_security(api, wait_for, network, spec_a, fixture, evidence):
     finally:
         if connection:
             try:
-                api.call("DELETE", "/api/pipe/databases/" + connection, allowed=(204, 404))
+                api.call("DELETE", "/api/pipe/databases/" + connection, allowed=(200, 204, 404))
+                assert not any(item["id"] == connection for item in api.call("GET", "/api/pipe/databases")), "database connection was not removed"
             except Exception as error:
                 metrics["cleanupErrors"].append("database connection: " + str(error))
         if service:
