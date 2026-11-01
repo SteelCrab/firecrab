@@ -30,7 +30,7 @@ import uuid
 
 from deploy_fleet_qa import host_evidence, run_fleet
 from deploy_rotation_qa import run_rotation
-from deploy_auto_qa import run_auto
+from deploy_auto_qa import run_auto, trusted_registry
 from deploy_recovery_qa import run_recovery
 from deploy_queue_qa import run_queue
 from deploy_ci_qa import run_ci
@@ -45,16 +45,30 @@ def digest(data):
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
-def image_fixture(busybox, label, healthy=True):
+def image_fixture(busybox, label, healthy=True, security_layer=None):
     layer = io.BytesIO()
     with tarfile.open(fileobj=layer, mode="w") as archive:
-        for directory in ["bin", "www", "www/cgi-bin"]:
+        directories = ["bin", "www", "www/cgi-bin"]
+        if security_layer:
+            directories += ["etc", "lib", "lib/apk", "lib/apk/db"]
+        for directory in directories:
             entry = tarfile.TarInfo(directory)
             entry.type = tarfile.DIRTYPE
             entry.mode = 0o755
             archive.addfile(entry)
         files = {"bin/busybox": busybox, "www/index.html": f"release-{label}\n".encode(),
                  "bin/observed-init": b'#!/bin/sh\nprintf "fixture-stdout-%s\\n" "$OBS_ID"\nprintf "fixture-stderr-%s\\n" "$OBS_ID" >&2\nexec /bin/busybox httpd -f -p 8080 -h /www\n'}
+        if security_layer:
+            with tarfile.open(security_layer, mode="r:gz") as source:
+                for path in ["etc/alpine-release", "etc/os-release", "lib/apk/db/installed", "lib/libcrypto.so.3", "lib/libssl.so.3"]:
+                    entry = source.getmember(path)
+                    assert entry.isfile() and entry.size <= 8 * 1024 * 1024, "invalid security fixture layer"
+                    data = source.extractfile(entry).read()
+                    if path == "lib/apk/db/installed":
+                        packages = [block for block in data.split(b"\n\n") if b"\nP:libcrypto3\n" in b"\n" + block + b"\n" or b"\nP:libssl3\n" in b"\n" + block + b"\n"]
+                        assert len(packages) == 2, "missing security fixture packages"
+                        data = b"\n\n".join(packages) + b"\n\n"
+                    files[path] = data
         if healthy:
             files["www/health"] = b"healthy\n"
         for path, data in files.items():
@@ -166,6 +180,26 @@ class Registry:
         self.thread.join()
 
 
+@contextlib.contextmanager
+def real_security_scanner(executable):
+    """Temporarily use real Trivy only on the disposable systemd QA host."""
+    assert os.geteuid() == 0 and Path("/dev/kvm").exists(), "disposable root QA host required"
+    executable = Path(executable).resolve(strict=True)
+    assert executable.is_file() and os.access(executable, os.X_OK), "real scanner must be executable"
+    assert all(c.isalnum() or c in "/._-" for c in str(executable)), "invalid scanner path"
+    dropin = Path("/run/systemd/system/firecrab-api.service.d/95-real-security-qa.conf")
+    assert not dropin.exists(), "refusing existing scanner override"
+    try:
+        dropin.write_text(f"[Service]\nEnvironment=FIRECRAB_SECURITY_TRIVY={executable}\n")
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        subprocess.run(["systemctl", "restart", "firecrab-api.service"], check=True)
+        yield
+    finally:
+        dropin.unlink(missing_ok=True)
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        subprocess.run(["systemctl", "restart", "firecrab-api.service"], check=True)
+
+
 def wait_for(check, timeout=180, message="condition timed out"):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -251,7 +285,7 @@ def run(args, evidence):
         assert not api.call("GET", "/api/secrets"), "refusing existing Secrets"
         assert not api.call("GET", "/api/secrets/connections"), "refusing existing Secret connections"
     unit = "firecrab-ingress.service"
-    fixtures = [image_fixture(Path(args.busybox).read_bytes(), label, label != "bad") for label in ["A", "B", "bad", "C"]]
+    fixtures = [image_fixture(Path(args.busybox).read_bytes(), label, label != "bad", args.security_base_layer) for label in ["A", "B", "bad", "C"]]
     public_fixtures = []
     if args.public_tunnel:
         binary = args.public_fixture_binary.read_bytes()
@@ -457,7 +491,12 @@ def run(args, evidence):
             if args.ci_deploy:
                 run_ci(api, wait_for, traffic, network, spec_a, fixtures, ingress_port, evidence)
             if args.observability:
-                run_observation(api, wait_for, traffic, network, spec_a, ingress_port, evidence)
+                if args.security_base_layer:
+                    with real_security_scanner(args.security_trivy), trusted_registry(fixtures):
+                        api.ready()
+                        run_observation(api, wait_for, traffic, network, spec_a, ingress_port, evidence, real_scanner=True)
+                else:
+                    run_observation(api, wait_for, traffic, network, spec_a, ingress_port, evidence)
             if args.public_tunnel:
                 run_fixture_services(api, wait_for, network, spec_a, public_fixtures, credentials, evidence, run_public)
     finally:
@@ -519,12 +558,16 @@ if __name__ == "__main__":
     parser.add_argument("--queue-controls", action="store_true", help="run live queued cancellation, rollback priority and API restart acceptance")
     parser.add_argument("--ci-deploy", action="store_true", help="run scoped CLI/Action acceptance through private verified TLS and Nginx")
     parser.add_argument("--observability", action="store_true", help="run isolated app logs, API restart, events and OTLP acceptance")
+    parser.add_argument("--security-base-layer", type=Path, help="verified Alpine image layer for real CVE acceptance")
+    parser.add_argument("--security-trivy", type=Path, help="real Trivy executable for security acceptance")
     parser.add_argument("--public-tunnel", action="store_true", help="run explicitly approved public Tunnel acceptance")
     parser.add_argument("--public-target-approved", action="store_true", help="confirm separate approval for the host and public test addresses")
     parser.add_argument("--public-token", nargs=2, action="append", metavar=("LABEL", "PRIVATE_FILE"), help="owned qa- label and private token file; repeat twice")
     parser.add_argument("--public-fixture-binary", type=Path, help="statically linked Linux public Tunnel fixture")
     parser.add_argument("--report", type=Path, help="write measured evidence even when acceptance fails")
     args = parser.parse_args()
+    if bool(args.security_base_layer) != bool(args.security_trivy) or (args.security_base_layer and not args.observability):
+        parser.error("real security acceptance requires --observability, --security-base-layer and --security-trivy")
     if (args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability or args.public_tunnel) and not args.report:
         parser.error("extended acceptance requires --report")
     if args.public_tunnel:

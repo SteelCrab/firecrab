@@ -75,7 +75,7 @@ class Collector:
         assert not self.errors, self.errors
 
 
-def run_observation(api, wait_for, traffic, network, spec_a, port, evidence):
+def run_observation(api, wait_for, traffic, network, spec_a, port, evidence, real_scanner=False):
     services = []
     collector = Collector()
     errors = []
@@ -141,7 +141,10 @@ def run_observation(api, wait_for, traffic, network, spec_a, port, evidence):
             if scan and scan["status"] == "complete" and scan["deploymentId"] == deployment["id"]:
                 assert scan["digest"] == deployment["digest"]
                 assert deployment["instances"][0]["vmId"] in scan["replicaIds"]
-                assert any(item["cve"] == "CVE-2025-15467" and item["fixedVersion"] == "2.0" for item in scan["findings"])
+                if real_scanner:
+                    assert any(item["cve"] == "CVE-2025-15467" and item["package"] == "libcrypto3" and item["installedVersion"] == "3.0.15-r0" and item.get("fixedVersion") for item in scan["findings"])
+                else:
+                    assert any(item["cve"] == "CVE-2025-15467" and item["fixedVersion"] == "2.0" for item in scan["findings"])
                 return view
             return None
 
@@ -154,7 +157,7 @@ def run_observation(api, wait_for, traffic, network, spec_a, port, evidence):
 
         wait_for(first_signal_retained, timeout=60, message="security signal was not linked to its service release and replica")
         wait_for(lambda: scan_for_release(alpha, alpha["deployment"]), timeout=120, message="fixture CVE scan did not complete for the running service")
-        metrics["stages"].append("fixture CVE scan is tied to the running service release, digest and replica")
+        metrics["stages"].append(("real Trivy" if real_scanner else "fixture") + " CVE scan is tied to the running service release, digest and replica")
         metrics["stages"].append("security signal retains service, release and replica without raw log secrets")
         metrics["stages"].append("isolated stdout, stderr and deployment events")
 
@@ -186,7 +189,7 @@ def run_observation(api, wait_for, traffic, network, spec_a, port, evidence):
         api.call("POST", "/api/service-security/" + alpha["id"] + "/scan")
         scanned = wait_for(lambda: scan_for_release(alpha, next_deployment), timeout=120, message="new release CVE scan did not complete")
         assert any(scan["deploymentId"] == first_release for scan in scanned["previousScans"])
-        metrics["stages"].append("fixture CVE scans retain the previous release after redeploy")
+        metrics["stages"].append(("real Trivy" if real_scanner else "fixture") + " CVE scans retain the previous release after redeploy")
         metrics["stages"].append("security signal remains associated with the previous release after redeploy")
 
         collector.set_failure(True)

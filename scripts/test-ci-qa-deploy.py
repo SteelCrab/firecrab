@@ -30,6 +30,33 @@ module.loader.exec_module(qa)
 
 
 class DeployQaTests(unittest.TestCase):
+    def test_real_security_acceptance_requires_both_fixture_inputs(self):
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name("ci-qa-deploy.py")),
+                                 "--disposable-host", "--security-base-layer", "/tmp/layer"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("requires --observability", result.stderr)
+
+    def test_security_image_contains_only_fixture_packages_and_their_libraries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory) / "layer.tar.gz"
+            files = {"etc/alpine-release":b"3.17.10\n", "etc/os-release":b"ID=alpine\n",
+                     "lib/apk/db/installed":b"P:libcrypto3\nV:3.0.15-r0\n\nP:unrelated\nV:1\n\nP:libssl3\nV:3.0.15-r0\n\n",
+                     "lib/libcrypto.so.3":b"crypto-fixture", "lib/libssl.so.3":b"ssl-fixture"}
+            with tarfile.open(base, "w:gz") as archive:
+                for path, data in files.items():
+                    entry = tarfile.TarInfo(path)
+                    entry.size = len(data)
+                    archive.addfile(entry, io.BytesIO(data))
+            fixture = qa.image_fixture(b"busybox-fixture", "A", security_layer=base)
+            manifest = json.loads(fixture[1])
+            raw = gzip.decompress(fixture[2][manifest["layers"][0]["digest"]])
+            with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+                installed = archive.extractfile("lib/apk/db/installed").read()
+                self.assertIn(b"P:libcrypto3", installed)
+                self.assertIn(b"P:libssl3", installed)
+                self.assertNotIn(b"P:unrelated", installed)
+                self.assertEqual(archive.extractfile("lib/libcrypto.so.3").read(), b"crypto-fixture")
+
     def test_security_scanner_fixture_requires_registry_credentials(self):
         scanner = Path(__file__).with_name("ci-qa-security-trivy.py")
         target = "ghcr.io/team/app@sha256:" + "a" * 64
@@ -102,7 +129,12 @@ class DeployQaTests(unittest.TestCase):
         connection.request("GET", "/v2/team/deploy-qa/tags/list?n=100", headers=headers)
         response = connection.getresponse()
         self.assertEqual(json.loads(response.read())["tags"], sorted(registry.tags))
-        self.assertEqual(registry.authenticated, 4)
+        connection.request("HEAD", "/v2/team/deploy-qa/manifests/" + fixtures[0][0], headers=headers)
+        response = connection.getresponse()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.getheader("Docker-Content-Digest"), fixtures[0][0])
+        self.assertEqual(response.read(), b"")
+        self.assertEqual(registry.authenticated, 5)
 
     def test_queue_acceptance_requires_a_report_before_runtime_access(self):
         result = subprocess.run([sys.executable, str(Path(__file__).with_name("ci-qa-deploy.py")),

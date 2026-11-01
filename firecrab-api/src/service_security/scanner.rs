@@ -172,7 +172,14 @@ async fn refresh_database(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    let child = cmd.spawn().map_err(|_| "scanner_error")?;
+    inherit_trust(&mut cmd);
+    let child = cmd.spawn().map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "scanner_missing"
+        } else {
+            "scanner_error"
+        }
+    })?;
     output(child, 1024 * 1024).await?;
     let updated = database_version(executable, home.path(), &cache).await?;
     chrono::DateTime::parse_from_rfc3339(&updated)
@@ -267,6 +274,14 @@ async fn run(
         .map_err(|_| "scanner_error")?;
     drop(file);
     let cache = root.join("cache");
+    // A newly installed scanner or an expired cache must be refreshed even
+    // when an operator requests a scan between scheduled database checks.
+    if database_version(executable, private.path(), &cache)
+        .await
+        .is_err()
+    {
+        refresh_database(executable, &root).await?;
+    }
     let platform = match std::env::consts::ARCH {
         "x86_64" => "linux/amd64",
         "aarch64" => "linux/arm64",
@@ -286,6 +301,7 @@ async fn run(
             "",
             "--quiet",
             "--no-progress",
+            "--skip-db-update",
             "--format",
             "json",
             "--scanners",
@@ -305,6 +321,7 @@ async fn run(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    inherit_trust(&mut cmd);
     let child = cmd.spawn().map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             "scanner_missing"
@@ -334,7 +351,14 @@ async fn database_version(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    let child = cmd.spawn().map_err(|_| "scanner_error")?;
+    inherit_trust(&mut cmd);
+    let child = cmd.spawn().map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "scanner_missing"
+        } else {
+            "scanner_error"
+        }
+    })?;
     let version = output(child, 1024 * 1024).await?;
     let version: serde_json::Value =
         serde_json::from_slice(&version).map_err(|_| "database_unavailable")?;
@@ -347,6 +371,15 @@ async fn database_version(
         return Err("database_stale");
     }
     Ok(updated.into())
+}
+
+/// Honor the host operator's CA configuration without forwarding credentials.
+fn inherit_trust(command: &mut tokio::process::Command) {
+    for name in ["SSL_CERT_FILE", "SSL_CERT_DIR"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
 }
 
 async fn output(mut child: tokio::process::Child, limit: usize) -> Result<Vec<u8>, &'static str> {
@@ -457,6 +490,55 @@ printf '{"SchemaVersion":2,"ArtifactName":"%s","ArtifactType":"container_image",
         assert_eq!(findings[0].fixed_version.as_deref(), Some("2"));
         assert!(!updated.is_empty());
         assert_eq!(std::fs::read_dir(work).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn requested_scan_refreshes_missing_database_before_scanning() {
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("fake-trivy");
+        std::fs::write(&script, r##"#!/bin/sh
+set -eu
+state=$(dirname "$0")/db-ready
+if [ "$1" = version ]; then
+  [ -f "$state" ] || exit 1
+  printf '{"VulnerabilityDB":{"UpdatedAt":"%s"}}' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  exit 0
+fi
+case "$*" in *--download-db-only*) touch "$state"; exit 0;; esac
+for arg do target="$arg"; done
+printf '{"SchemaVersion":2,"ArtifactName":"%s","ArtifactType":"container_image","Metadata":{"RepoDigests":["%s"]},"Results":[{"Target":"alpine","Packages":[{"Name":"openssl"}]}]}' "$target" "$target"
+"##).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let work = root.path().join("work");
+        let (findings, _, _) = run(&script, &work, "ghcr.io/a/b@sha256:abc", &credential())
+            .await
+            .unwrap();
+        assert!(root.path().join("db-ready").exists());
+        assert!(findings.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a real Trivy executable and authenticated local OCI fixture"]
+    async fn real_authenticated_registry_scans_service_image() {
+        let executable = std::env::var("FIRECRAB_TEST_TRIVY").unwrap();
+        let root = std::env::var("FIRECRAB_TEST_TRIVY_ROOT").unwrap();
+        let target = std::env::var("FIRECRAB_TEST_TRIVY_TARGET").unwrap();
+        let registry = target.split('/').next().unwrap().to_owned();
+        let auth = RegistryCredential {
+            registry,
+            username: "team".into(),
+            secret: "local-deploy-qa-only".into(),
+        };
+        let (findings, _, _) = run(Path::new(&executable), Path::new(&root), &target, &auth)
+            .await
+            .unwrap();
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.cve == "CVE-2025-15467"
+                    && finding.package == "libcrypto3"
+                    && finding.installed_version == "3.0.15-r0")
+        );
     }
 
     #[tokio::test]
