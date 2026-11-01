@@ -16,7 +16,7 @@ test("SEC9: CRUD survives an API restart and leaves only encrypted values on dis
   expect(created).not.toHaveProperty("value");
   await page.getByRole("button", { name: "Edit qa-DB_PASSWORD", exact: true }).click();
   await expect(page.getByLabel("Secret value", { exact: true })).toBeHidden();
-  await expect(page.getByLabel("Secret value", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("Secret value", { exact: true })).toHaveCount(0);
   await page.getByLabel("Description", { exact: true }).fill("qa-description-only");
   await page.getByRole("button", { name: "Save secret", exact: true }).click();
   await expect(page.getByText("qa-description-only", { exact: true })).toBeVisible();
@@ -146,7 +146,7 @@ test("SEC13: Firecrab proxy credentials survive edits and restarts; provider fai
     await openSecrets(page, local);
     await page.getByRole("tab", { name: /External connections/ }).click();
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
-    await page.getByRole("radiogroup", { name: "Provider", exact: true }).getByRole("radio", { name: "Firecrab · PipeSecrets", exact: true }).check();
+    await page.getByLabel("Provider", { exact: true }).selectOption("firecrab");
     await page.getByLabel("Connection name", { exact: true }).fill("qa-proxy");
     await page.getByLabel("Base URL", { exact: true }).fill(`http://127.0.0.1:${address.port}`);
     await page.getByLabel("Bearer token", { exact: true }).fill("qa-private-credential");
