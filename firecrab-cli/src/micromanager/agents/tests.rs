@@ -583,3 +583,24 @@ fn vm_project_is_cloned_once_and_recovered_after_native_metadata_loss() {
     fs::remove_file(runtime.home.join("vm-repository.json")).unwrap();
     assert!(runtime.vm_project().is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn github_auth_reuses_pending_requests_and_never_runs_a_model() {
+    let (root, runtime) = guest_fixture(false);
+    fs::write(
+        root.path().join("github-status"),
+        "PENDING\nCODE:AB12-CD34\n",
+    )
+    .unwrap();
+    let first = runtime.connect_github().unwrap();
+    let reopened = runtime.connect_github().unwrap();
+    assert_eq!(first, reopened);
+    assert_eq!(first["userCode"], "AB12-CD34");
+    assert!(runtime.records().unwrap().is_empty());
+    let remote = fs::read_to_string(root.path().join("remote-calls.jsonl")).unwrap();
+    assert!(!remote.contains("nohup"));
+    assert!(!remote.contains("'agent' 'start'"));
+    let (_, connected) = guest_fixture(true);
+    assert_eq!(connected.connect_github().unwrap()["state"], "connected");
+}

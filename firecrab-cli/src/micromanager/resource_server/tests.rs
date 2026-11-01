@@ -455,7 +455,7 @@ async fn native_agent_controls_are_scoped_to_the_selected_controller() {
     )
     .await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
-    for suffix in ["tasks", "prepare", "login", "project"] {
+    for suffix in ["tasks", "prepare", "login", "github", "project"] {
         let path = format!(
             "/api/service/agents/microvms/{}/{suffix}",
             uuid::Uuid::new_v4()

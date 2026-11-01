@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 pub mod automation;
 pub mod editor;
+pub mod github;
 mod guest;
 pub mod project;
 pub mod terminal;
@@ -504,6 +505,7 @@ impl Runtime {
             status["vmId"] = json!(guest.id);
             status["githubConnected"] = json!(guest.authenticated.contains("github"));
             status["githubAvailable"] = json!(guest.available.contains("gh"));
+            status["github"] = self.github_status()?;
             status["project"] = self.vm_project()?;
             status["preparation"] = self.preparation()?;
         }
