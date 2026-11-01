@@ -2,6 +2,7 @@
 mod db;
 mod package;
 mod proxy;
+mod stop;
 #[cfg(test)]
 mod tests;
 use super::*;
@@ -18,10 +19,15 @@ struct Open {
 }
 /// Register private editor metadata and explicit open operations.
 pub(super) fn routes() -> Router<AppState> {
-    Router::new().route(
-        "/api/ai-sandbox/projects/{project}/workspace/editors/{view}",
-        get(read).put(start),
-    )
+    Router::new()
+        .route(
+            "/api/ai-sandbox/projects/{project}/workspace/editors/{view}",
+            get(read).put(start),
+        )
+        .route(
+            "/api/ai-sandbox/projects/{project}/workspace/editors/{view}/stop",
+            post(stop::request),
+        )
 }
 pub(super) use db::SCHEMA;
 pub(crate) use proxy::dispatch;
@@ -31,7 +37,15 @@ pub(super) fn private_attempt(db: &super::db::ProjectDb, id: Uuid) -> Result<boo
 }
 /// Expose routing metadata without the guest token or native attempt identity.
 fn response(project: Uuid, e: &Editor) -> serde_json::Value {
-    serde_json::json!({"id":e.id,"viewId":e.view,"workingDirectory":e.directory,"file":e.file,"openRequest":e.open_request,"status":e.status,"host":proxy::host(project,e.id)})
+    serde_json::json!({"id":e.id,"viewId":e.view,"workingDirectory":e.directory,"file":e.file,"openRequest":e.open_request,"status":e.status,"instance":instance(e),"bundleRevision":e.bundle_revision,"host":proxy::host(project,e.id)})
+}
+/// An opaque execution identity supports conditional stops without exposing a native PTY ID.
+fn instance(editor: &Editor) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"firecrab-private-editor-instance-v1\0");
+    hash.update(editor.id.as_bytes());
+    hash.update(editor.attempt.as_bytes());
+    format!("{:x}", hash.finalize())
 }
 /// Commit the authoritative record before updating the derived routing cache.
 fn persist(ctx: &files::Files, editor: &Editor) -> Result<(), Error> {
@@ -54,6 +68,18 @@ fn current(
 ) -> Result<(), AppError> {
     if e.caller.principal != caller.principal {
         return Err(denied(id));
+    }
+    if state
+        .workspaces
+        .editor_cache
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&(b.project_id, e.id))
+        .is_some_and(|active| {
+            active.attempt != e.attempt || matches!(active.status.as_str(), "stopping" | "stopped")
+        })
+    {
+        return Err(Error::Conflict("The private editor execution ended or changed").response(id));
     }
     {
         use std::os::unix::fs::MetadataExt;
@@ -99,9 +125,14 @@ async fn read(
         let b = binding(&state, project)?;
         let db = open(&state, &b)?;
         let mut e = db.editor(caller, view, true)?;
-        if current(&state, caller, &b, &e, id.0).is_err() {
+        if matches!(e.status.as_str(), "ready" | "starting")
+            && current(&state, caller, &b, &e, id.0).is_err()
+        {
             e.status = "interrupted".into();
         }
+        caller
+            .project(&state, project, SandboxPermission::Read)
+            .map_err(|_| Error::Denied)?;
         Ok(Json(response(project, &e)))
     })
     .await
@@ -166,6 +197,9 @@ async fn start(
         terminals::execute(&state,caller,&ctx.binding,id.0)?;
         ctx.db.view(caller,view).map_err(|e|e.response(id.0))?;
         let existing=match ctx.db.editor(caller,view,true){Ok(e)=>Some(e),Err(Error::Missing)=>None,Err(e)=>return Err(e.response(id.0))};
+        if existing.as_ref().is_some_and(|e|e.status=="stopping") {
+            return Err(Error::Conflict("The previous editor stop is still being reconciled").response(id.0));
+        }
         if let Some(mut e)=existing.clone()
             &&e.runtime==ctx.runtime&&e.generation==ctx.binding.generation&&e.directory==request.working_directory&&e.status=="ready"{
                 let reply=terminals_guest::request(&mut ctx,terminals_guest::frame(e.attempt,2,0,0,0,&[]).map_err(|e|e.response(id.0))?).await;
@@ -186,14 +220,14 @@ async fn start(
         terminals::execute(&state,caller,&ctx.binding,id.0)?;
         let mut editor=Editor{id:existing.as_ref().map(|e|e.id).unwrap_or_else(Uuid::new_v4),view,caller,directory:request.working_directory.clone(),file:request.file,
             open_request:request.request_id,runtime:ctx.runtime,generation:ctx.binding.generation,attempt:Uuid::new_v4(),proof:None,
-            token:format!("{}{}",Uuid::new_v4().simple(),Uuid::new_v4().simple()),parent_origin:origin,status:"starting".into()};
+            token:format!("{}{}",Uuid::new_v4().simple(),Uuid::new_v4().simple()),parent_origin:origin,bundle_revision:Some(package::revision().map_err(|e|e.response(id.0))?),status:"starting".into()};
         persist(&ctx,&editor).map_err(|e|e.response(id.0))?;
         let frame=terminals_guest::frame(editor.attempt,1,0,24,80,editor.directory.as_bytes()).map_err(|e|e.response(id.0))?;
         let native=terminals_guest::request(&mut ctx,frame).await.map_err(|e|e.response(id.0))?;
         editor.proof=Some(native.proof);persist(&ctx,&editor).map_err(|e|e.response(id.0))?;
         current(&state,caller,&ctx.binding,&editor,id.0)?;
         package::install(&mut ctx,&archive,&editor).await.map_err(|e|e.response(id.0))?;
-        let package=package::guest_package().map_err(|e|e.response(id.0))?;
+        let package=package::guest_package(editor.bundle_revision.as_deref()).map_err(|e|e.response(id.0))?;
         let config=serde_json::json!({"id":editor.id,"attempt":editor.attempt,"uid":editor.proof.as_ref().map(|p|p.uid),"token":editor.token});
         let setup=format!("set -eu\nbase64 -d <<'FIRECRAB_EDITOR_PREPARE' | {package}/node - {}\n{}\nFIRECRAB_EDITOR_PREPARE\n",
             STANDARD.encode(serde_json::to_vec(&config).map_err(|_|AppError::internal(id.0))?),STANDARD.encode(include_str!("editors/editor/prepare.cjs")));
@@ -247,19 +281,24 @@ pub(super) fn start_maintenance(state: AppState) {
                         continue;
                     };
                     for mut record in records {
-                        if !matches!(record.status.as_str(), "ready" | "starting") {
+                        if !matches!(record.status.as_str(), "ready" | "starting" | "stopping") {
                             continue;
                         }
                         let id = Uuid::new_v4();
                         let local = state.clone();
                         let _ = files::run(state.workspaces.file_slots.clone(), id, async move {
                             let b = binding(&local, project).map_err(|e| e.response(id))?;
-                            let allowed = current(&local, record.caller, &b, &record, id).is_ok();
                             let running = guest::binding(&local, b.vm_id).ok();
                             if running != Some(record.runtime) || b.generation != record.generation
                             {
-                                record.status = "interrupted".into();
                                 let db = open(&local, &b).map_err(|e| e.response(id))?;
+                                let Some(latest) =
+                                    db.recovery_editor(&record).map_err(|e| e.response(id))?
+                                else {
+                                    return Ok(());
+                                };
+                                record = latest;
+                                record.status = "interrupted".into();
                                 db.save_editor(&record).map_err(|e| e.response(id))?;
                                 local
                                     .workspaces
@@ -277,6 +316,19 @@ pub(super) fn start_maintenance(state: AppState) {
                                 id,
                             )
                             .await?;
+                            let Some(latest) = ctx
+                                .db
+                                .recovery_editor(&record)
+                                .map_err(|e| e.response(id))?
+                            else {
+                                return Ok(());
+                            };
+                            record = latest;
+                            let allowed =
+                                current(&local, record.caller, &ctx.binding, &record, id).is_ok();
+                            if record.status == "stopping" {
+                                return stop::finish(&mut ctx, &mut record, id).await;
+                            }
                             let state = terminals_guest::request(
                                 &mut ctx,
                                 terminals_guest::frame(record.attempt, 2, 0, 0, 0, &[])

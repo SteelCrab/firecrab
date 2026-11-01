@@ -32,6 +32,9 @@ pub(crate) struct Editor {
     pub token: String,
     /// Validated dashboard origin permitted to frame this editor.
     pub parent_origin: String,
+    /// Immutable code identity. Absent on records created before versioned bundles.
+    #[serde(default)]
+    pub bundle_revision: Option<String>,
     /// Confirmed lifecycle state; recovery never replays a launch.
     pub status: String,
 }
@@ -69,6 +72,16 @@ impl super::super::db::ProjectDb {
             return Err(Error::Denied);
         }
         Ok(editor)
+    }
+    /// Re-read under the project lock; an old maintenance snapshot cannot revive a replacement.
+    pub(super) fn recovery_editor(&self, observed: &Editor) -> Result<Option<Editor>, Error> {
+        let current = self.editor(observed.caller, observed.id, false)?;
+        if current.attempt != observed.attempt
+            || !matches!(current.status.as_str(), "ready" | "starting" | "stopping")
+        {
+            return Ok(None);
+        }
+        Ok(Some(current))
     }
     /// Commit a private editor record and reserve its native attempt identity.
     pub(super) fn save_editor(&self, e: &Editor) -> Result<(), Error> {

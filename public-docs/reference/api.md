@@ -529,6 +529,8 @@ Project workspace routes extend the authenticated Sandbox project API at
 | `POST /files/restore` | Append a new version from earlier contents |
 | `GET /file-operations` | Inspect durable write outcomes |
 | `POST /file-operations/{id}/reconcile` | Recover that exact admitted write |
+| `GET`, `PUT /editors/{view}` | Read or explicitly open the verified caller's private editor |
+| `POST /editors/{view}/stop` | Stop only the execution selected by `{expectedInstance}`; retain editor data and private drafts |
 
 Saved instruction context:
 

@@ -186,20 +186,30 @@ async fn serve(
     let (mut parts, body) = request.into_parts();
     let workbench = parts.method == axum::http::Method::GET && parts.uri.path() == "/";
     let caller = Caller::from_request_parts(&mut parts, &state).await?;
+    let retained = matches!(
+        parts.uri.path(),
+        "/_firecrab/session" | "/_firecrab/draft" | "/_firecrab/drafts"
+    );
+    let session_metadata = parts.uri.path() == "/_firecrab/session";
     let local = state.clone();
     let (b, record, directory) = blocking(id, move || {
         caller
             .project(&local, project, SandboxPermission::Read)
             .map_err(|_| Error::Denied)?;
         let b = binding(&local, project)?;
-        let cached = local
-            .workspaces
-            .editor_cache
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(&(project, editor))
-            .cloned();
-        let e = match cached {
+        // Retained routes query authoritative metadata even without a live VM.
+        let cached = if retained {
+            None
+        } else {
+            local
+                .workspaces
+                .editor_cache
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .get(&(project, editor))
+                .cloned()
+        };
+        let mut e = match cached {
             Some(e) => e,
             None => {
                 let db = open(&local, &b)?;
@@ -214,10 +224,24 @@ async fn serve(
             }
         };
         let directory = super::super::db::project_directory(&local.workspaces.root, &b, false)?;
-        current(&local, caller, &b, &e, id).map_err(|_| Error::Denied)?;
-        if e.status != "ready" || e.proof.is_none() {
+        if e.caller.principal != caller.principal {
+            return Err(Error::Denied);
+        }
+        if !retained {
+            current(&local, caller, &b, &e, id).map_err(|_| Error::Denied)?;
+        }
+        if !retained && (e.status != "ready" || e.proof.is_none()) {
             return Err(Error::Conflict("The private editor is not ready"));
         }
+        if session_metadata
+            && matches!(e.status.as_str(), "ready" | "starting")
+            && current(&local, caller, &b, &e, id).is_err()
+        {
+            e.status = "interrupted".into();
+        }
+        caller
+            .project(&local, project, SandboxPermission::Read)
+            .map_err(|_| Error::Denied)?;
         Ok((b, e, directory))
     })
     .await?;
@@ -254,7 +278,11 @@ async fn serve(
         // A startup scan performs concurrent file reads. Wait for a definitive lock
         // rejection instead of permanently failing the filesystem extension's activation.
         for attempt in 0..12 {
-            current(&state, caller, &b, &record, id)?;
+            if !retained {
+                current(&state, caller, &b, &record, id)?;
+            }
+            // Retained private buffers remain accessible after process/VM termination.
+            // Their own routes recheck project grants and private caller identity.
             let mut replay = Request::new(Body::from(payload.clone()));
             *replay.method_mut() = parts.method.clone();
             *replay.uri_mut() = parts.uri.clone();
@@ -287,7 +315,8 @@ async fn serve(
         .proof
         .as_ref()
         .ok_or_else(|| Error::Conflict("Missing editor process identity").response(id))?;
-    let package = package::guest_package().map_err(|e| e.response(id))?;
+    let package =
+        package::guest_package(record.bundle_revision.as_deref()).map_err(|e| e.response(id))?;
     let socket = format!("/workspace/shared/.firecrab-workspace/editors/{editor}/data/server.sock");
     let channel = guest::project_editor_stream(
         &state,

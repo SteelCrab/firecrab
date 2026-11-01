@@ -105,6 +105,9 @@ jobs:
       - name: Project workspace live QA ownership guards
         run: python3 scripts/test-ci-qa-project-workspace.py
 
+      - name: Project editor immutable bundle publication (root filesystem fixture)
+        run: sudo node --test firecrab-frontend/tests/editor-bundle.test.mjs
+
       - name: Sandbox recovery QA ownership and fault guards
         run: python3 scripts/test-ci-qa-ai-sandbox-recovery.py
 

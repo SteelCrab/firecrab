@@ -1615,6 +1615,20 @@ impl tokio::io::AsyncWrite for WorkspaceStream {
         std::pin::Pin::new(&mut self.get_mut().input).poll_shutdown(cx)
     }
 }
+/// Only controller-generated immutable bundle paths can enter the root SSH transport.
+fn editor_package_path(package: &str) -> bool {
+    matches!(
+        package,
+        "/workspace/shared/.firecrab-workspace/editor-package/openvscode-server-v1.109.5-linux-arm64"
+            | "/workspace/shared/.firecrab-workspace/editor-package/openvscode-server-v1.109.5-linux-x64"
+    ) || package
+        .strip_prefix("/workspace/shared/.firecrab-workspace/editor-package/bundles/")
+        .is_some_and(|s| {
+            s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+}
 pub(crate) fn project_editor_stream(
     state: &AppState,
     binding: &Binding,
@@ -1628,13 +1642,7 @@ pub(crate) fn project_editor_stream(
         .and_then(|p| p.strip_suffix("/data/server.sock"))
         .and_then(|p| Uuid::parse_str(p).ok().map(|id| (p, id)))
         .is_some_and(|(text, id)| !id.is_nil() && text == id.to_string());
-    if !matches!(
-        package,
-        "/workspace/shared/.firecrab-workspace/editor-package/openvscode-server-v1.109.5-linux-arm64"
-            | "/workspace/shared/.firecrab-workspace/editor-package/openvscode-server-v1.109.5-linux-x64"
-    ) || uid < 100000
-        || !valid_socket
-    {
+    if !editor_package_path(package) || uid < 100000 || !valid_socket {
         return Err(io::Error::other("Invalid pinned editor transport"));
     }
     let code = STANDARD.encode(include_str!(
@@ -1659,4 +1667,33 @@ pub(crate) fn project_editor_stream(
         input,
         output,
     })
+}
+
+#[cfg(test)]
+mod editor_transport_tests {
+    use super::editor_package_path;
+    #[test]
+    fn only_pinned_or_canonical_bundle_paths_enter_editor_transport() {
+        let root = "/workspace/shared/.firecrab-workspace/editor-package";
+        assert!(editor_package_path(&format!(
+            "{root}/openvscode-server-v1.109.5-linux-arm64"
+        )));
+        assert!(editor_package_path(&format!(
+            "{root}/bundles/{}",
+            "a0".repeat(32)
+        )));
+        for bad in [
+            "..",
+            "/tmp/node",
+            &"A".repeat(64),
+            &"a".repeat(63),
+            &format!("{};", "a".repeat(63)),
+        ] {
+            assert!(!editor_package_path(&format!("{root}/bundles/{bad}")));
+        }
+        assert!(!editor_package_path(&format!(
+            "{root}/bundles/{}/../node",
+            "a".repeat(64)
+        )));
+    }
 }

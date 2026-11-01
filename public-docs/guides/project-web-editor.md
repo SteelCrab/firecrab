@@ -14,9 +14,19 @@ Select **Personal Page · Web VS Code** or open a file from the shared folder. E
 
 The pinned OpenVSCode server runs inside the project's verified workload VM as an unprivileged native terminal process. The controller never passes Pipe AI provider credentials into the guest. The editor proxy checks project and VM execution rights, caller ownership, and runtime binding. Editor hosts cannot call controller, provider, or other project APIs.
 
+New editor processes record an immutable code-bundle revision in their private metadata. Each revision has its own package path on the retained volume. Official binaries are linked from the pinned base package; custom extension files are published in a new directory. Starting another editor cannot replace a running editor's code. Existing editor records keep their legacy package path until their process ends. An explicit reopen after termination uses the current revision and the retained private editor data.
+
+Incomplete package stages are never used as executable bundles. A retry validates a completed revision before reuse. Old completed bundles and stages from interrupted invocations are retained; automatic package garbage collection is not implemented.
+
 The editor uses a virtual `firecrab:` filesystem. Reads and saves go through the authorized project file API. A save includes the file version it was based on. If another tab changed the saved file, the old buffer remains dirty and the save fails. Preserve the draft and compare the latest saved file before retrying.
 
 Private buffers retain their saved base version. An accepted private draft survives API restart and VM restart. Discarded buffers retain a revision tombstone that rejects stale requests. The extension provides **Firecrab: Open Unsaved Draft Recovery Copy** and **Firecrab: Retry Private Draft Persistence** commands.
+
+The editor metadata includes an opaque `instance` identity for its current native execution. An operator can POST `{ "expectedInstance": "<instance from metadata>" }` to `/api/ai-sandbox/projects/{project}/workspace/editors/{view}/stop`. A completed retry returns the retained status, including with a stopped VM. A request for an earlier execution conflicts after a replacement starts. A new stop requires the caller's project and VM execution rights.
+
+Stop intent is committed before contacting the guest. Background recovery verifies the original process proof and finishes an uncertain stop. It does not replay launch commands. An unconfirmed or missing established process scope stays unresolved instead of being reported as a confirmed stop. The process stop preserves the project volume, private editor directory, view, and drafts. Private draft reads/writes remain authorized through the scoped editor gateway after the process stops; shared-file access still requires a ready editor/runtime.
+
+This API stops the native execution only. It does not close a browser iframe or automatically discard a dirty document. Browser-client flush/detach integration and its live acceptance remain pending.
 
 ## Terminals
 
