@@ -319,3 +319,43 @@ async fn instruction_capture_rejects_supplied_context_identity_with_json_error()
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.get("error").is_some());
 }
+
+#[test]
+fn a_replaced_database_owner_cannot_admit_or_reacknowledge_instruction_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = db::ProjectDb::open(
+        &dir.path().join("state/projects"),
+        &registration(),
+        Uuid::new_v4(),
+        true,
+    )
+    .unwrap();
+    let mut snapshot = ProjectInstructionSnapshot {
+        id: Uuid::new_v4(),
+        directory: String::new(),
+        created_at: 1,
+        sha256: instructions::digest("", &[]).unwrap(),
+        files: vec![],
+    };
+    let actor = Caller::default();
+    db.save_instruction_snapshot(actor, &snapshot).unwrap();
+    db.conn
+        .execute("UPDATE identity SET epoch=epoch+1 WHERE singleton=1", [])
+        .unwrap();
+    assert!(matches!(
+        db.save_instruction_snapshot(actor, &snapshot),
+        Err(Error::Busy)
+    ));
+    snapshot.id = Uuid::new_v4();
+    assert!(matches!(
+        db.save_instruction_snapshot(actor, &snapshot),
+        Err(Error::Busy)
+    ));
+    assert_eq!(
+        db.conn
+            .query_row::<i64, _, _>("SELECT count(*) FROM instruction_snapshots", [], |row| row
+                .get(0))
+            .unwrap(),
+        1
+    );
+}

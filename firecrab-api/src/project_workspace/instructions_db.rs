@@ -37,6 +37,7 @@ impl db::ProjectDb {
         caller: Caller,
         snapshot: &ProjectInstructionSnapshot,
     ) -> Result<(), Error> {
+        self.check_owner()?;
         instructions::validate(snapshot)?;
         match self.instruction_snapshot(caller, snapshot.id) {
             Ok(existing) if existing == *snapshot => return Ok(()),
