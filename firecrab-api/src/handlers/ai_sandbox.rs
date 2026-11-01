@@ -800,6 +800,17 @@ pub async fn create_task(
         return Ok((StatusCode::OK, Json(previous.task)));
     }
     ai_sandbox::coordination::validate(&input).map_err(|e| invalid(id, "coordination", e))?;
+    if let Some(snapshot) = input.instruction_snapshot_id
+        && (snapshot.is_nil()
+            || input.kind != SandboxTaskKind::Code
+            || project.spec.environment_id.is_some())
+    {
+        return Err(invalid(
+            id,
+            "instructionSnapshotId",
+            "Saved rules require a non-empty snapshot and a code task on the project's selected VM",
+        ));
+    }
     let serialized = serde_json::to_string(&input).map_err(|_| AppError::internal(id.0))?;
     if ai_sandbox::redact(&accounts, &serialized) != serialized {
         return Err(invalid(
@@ -959,7 +970,36 @@ pub async fn create_task(
             "Retained Workspace source or Git base changed. Restore its original source/ref or explicitly select a new Environment.",
         ));
     }
+    let instructions = if let Some(snapshot) = input.instruction_snapshot_id {
+        let runtime = runtime.ok_or_else(|| {
+            invalid(
+                id,
+                "instructionSnapshotId",
+                "Saved rules require an admitted project runtime",
+            )
+        })?;
+        let captured = crate::project_workspace::task_instructions(
+            state.clone(),
+            caller,
+            project_id,
+            runtime.vm_id,
+            snapshot,
+            id.0,
+        )
+        .await?;
+        if captured.contains_credentials(&accounts) {
+            return Err(invalid(
+                id,
+                "instructionSnapshotId",
+                "Saved rules must not contain connected provider credentials",
+            ));
+        }
+        Some(captured)
+    } else {
+        None
+    };
     let saved = SavedTask {
+        instructions,
         caller,
         task: SandboxTask {
             git_commit,

@@ -265,6 +265,7 @@ pub fn attempt(state: &AppState, saved: &super::SavedTask) -> Result<(), String>
         SandboxPermission::Execute,
     ));
     saved.caller.require_all(state, &rights)?;
+    super::instructions::verify(state, saved)?;
     let project = state
         .store
         .sandbox_project(saved.task.project_id)

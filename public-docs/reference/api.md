@@ -539,7 +539,11 @@ Saved instruction context:
 | PUT | `/api/ai-sandbox/projects/{id}/workspace/instructions/snapshots/{snapshot}` | Capture saved root-to-selected-directory `AGENTS.md` context with `{directory}` under a stable UUID. |
 | GET | `/api/ai-sandbox/projects/{id}/workspace/instructions/snapshots/{snapshot}` | Read the verified caller's immutable saved context, including while the workload VM is stopped. |
 
-See [saved project instructions](../guides/project-instructions.md) for limits, private access, retries, and the pending task-admission integration.
+Sandbox code-task admission accepts optional `instructionSnapshotId` to retain and apply
+that caller's saved context. See [saved task instructions](../guides/sandbox-saved-instructions.md)
+for prerequisites, runtime fencing and the current isolated-copy execution boundary.
+
+See [saved project instructions](../guides/project-instructions.md) for limits, private access and retries.
 
 See [workspace retention and checkpoints](../guides/project-workspaces.md) and
 [file API bodies, permissions and limits](../guides/project-workspace-files.md).

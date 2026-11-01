@@ -3,6 +3,7 @@ use firecrab_api_types::*;
 
 pub(super) fn saved(project: Uuid, index: u64) -> SavedTask {
     SavedTask {
+        instructions: None,
         caller: Default::default(),
         project: SandboxProjectSpec {
             context: Default::default(),
@@ -33,6 +34,7 @@ pub(super) fn saved(project: Uuid, index: u64) -> SavedTask {
             attempt_id: Uuid::new_v4(),
             runtime: None,
             request: SandboxTaskInput {
+                instruction_snapshot_id: None,
                 coordination: Default::default(),
                 environment_role: None,
                 kind: SandboxTaskKind::Chat,

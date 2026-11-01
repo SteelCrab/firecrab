@@ -71,6 +71,11 @@ in #414 and #496. Complete each phase's exit criterion before its dependent work
 
 **Exit criterion:** a real model performs an authorized task in its bound project folder and returns the result through the existing Sandbox lifecycle. Verify instruction revision capture, cancellation/recovery, migration recovery, and rejected cross-project access for the supported runtime paths.
 
+Saved instruction selection is implemented for the existing isolated-copy Sandbox
+engine. See [task instruction selection](../guides/sandbox-saved-instructions.md).
+Direct retained-folder execution and folder-agent session UI remain pending;
+this partial integration does not satisfy Phase 5's full exit criterion.
+
 ### 6. Official-source skill catalog and installation
 
 **Depends on:** Phase 5.

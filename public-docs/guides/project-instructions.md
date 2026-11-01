@@ -20,4 +20,11 @@ Rules must be UTF-8 without NUL bytes. Each file is limited to 32 KiB. The total
 
 ## Integration status
 
-This endpoint is a foundation for #550. Sandbox task admission does not yet consume these snapshots. It does not start a model, dispatch a task, or install a skill. Project-local task migration and provider-backed agent acceptance remain pending. No provider connection is available for the current live model gate.
+The capture endpoint itself does not dispatch a task or install a skill. Existing
+Sandbox code-task admission can select a snapshot using `instructionSnapshotId`.
+The accepted saved bytes and resource binding are retained in the private task
+record. See [saved instructions for tasks](sandbox-saved-instructions.md).
+
+Task selection requires completed project-local task migration. Direct retained-folder
+execution, folder-agent sessions and provider-backed acceptance remain pending.
+No provider connection is available for the current live model gate.

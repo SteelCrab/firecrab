@@ -209,6 +209,9 @@ pub struct SandboxTaskInput {
     /// Managed Environment role; required when the Environment has multiple roles.
     #[serde(default)]
     pub environment_role: Option<String>,
+    /// Explicit caller-private saved AGENTS.md context; never a live editor buffer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction_snapshot_id: Option<Uuid>,
 }
 
 /// A declared test is backed by one retained guest-command event, never a model assertion.

@@ -5,7 +5,9 @@ pub(crate) mod editors;
 mod files;
 mod files_db;
 mod files_guest;
+mod instruction_tasks;
 mod instructions;
+pub(crate) use instruction_tasks::{task_instructions, validate_task_instructions};
 mod instructions_db;
 #[cfg(test)]
 mod instructions_tests;
@@ -16,7 +18,7 @@ mod terminals_guest;
 #[cfg(test)]
 mod terminals_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod views;
 mod views_db;
 #[cfg(test)]

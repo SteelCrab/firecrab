@@ -40,6 +40,7 @@ pub(super) async fn fixture() -> (tempfile::TempDir, AppState, SavedTask) {
         runtime_id: Uuid::new_v4(),
     };
     let saved = SavedTask {
+        instructions: None,
         results_exported: false,
         execution_mode: None,
         caller: Default::default(),
@@ -70,6 +71,7 @@ pub(super) async fn fixture() -> (tempfile::TempDir, AppState, SavedTask) {
             attempt_id: Uuid::new_v4(),
             runtime: Some(runtime),
             request: SandboxTaskInput {
+                instruction_snapshot_id: None,
                 coordination: Default::default(),
                 environment_role: None,
                 kind: SandboxTaskKind::Code,

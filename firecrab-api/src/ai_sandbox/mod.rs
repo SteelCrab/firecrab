@@ -8,6 +8,7 @@ pub mod files;
 mod git;
 pub mod guest;
 pub mod guest_protocol;
+mod instructions;
 pub mod model;
 pub mod workspace;
 
@@ -29,7 +30,7 @@ use tokio::sync::{Mutex as AsyncMutex, Semaphore, watch};
 use uuid::Uuid;
 
 mod types;
-pub use types::{GuestBinding, ModelProof, SavedTask};
+pub use types::{GuestBinding, ModelProof, SavedInstructions, SavedTask};
 
 /// In-memory execution coordination; all externally meaningful state is durable.
 #[derive(Debug)]
@@ -573,6 +574,23 @@ async fn execute(
         history.push(json!({"role":"user","content":previous.request.input}));
         history.push(json!({"role":"assistant","content":previous.result}));
     }
+    let instruction_index =
+        if let Some(message) = instructions::message(saved, &[]).map_err(execution_error)? {
+            saved.task.events.push(SandboxEvent {
+                sequence: saved.task.events.len(),
+                at: now(),
+                name: "instruction_context".into(),
+                input: instructions::audit(saved).map_err(execution_error)?,
+                output: "Applied the admitted saved instruction versions".into(),
+                stderr: String::new(),
+                exit_code: None,
+            });
+            let index = history.len();
+            history.push(message);
+            Some(index)
+        } else {
+            None
+        };
     history.push(json!({"role":"user","content":saved.task.request.input}));
     let mut tools = if code { model::tools() } else { vec![] };
     let maximum = if code { 24 } else { 1 };
@@ -606,6 +624,12 @@ async fn execute(
             .ai_connections()
             .map_err(|_| execution_error("Cannot load AI connections"))?;
         connections.push(account.clone());
+        if let Some(index) = instruction_index {
+            // Refresh raw-field redaction after account refresh, before JSON escaping.
+            history[index] = instructions::message(saved, &connections)
+                .map_err(execution_error)?
+                .ok_or_else(|| execution_error("Admitted saved rules disappeared"))?;
+        }
         history = serde_json::from_str(&redact(
             &connections,
             &serde_json::to_string(&history).map_err(execution_error)?,

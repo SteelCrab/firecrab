@@ -134,7 +134,7 @@ async fn reopen_state(root: &std::path::Path) -> AppState {
         .await
         .unwrap()
 }
-pub(super) async fn fixture() -> (tempfile::TempDir, AppState, Binding) {
+pub(crate) async fn fixture() -> (tempfile::TempDir, AppState, Binding) {
     let dir = tempfile::tempdir().unwrap();
     let state = reopen_state(dir.path()).await;
     let b = registration();
@@ -216,7 +216,7 @@ pub(super) async fn call(
     let data = to_bytes(output.into_body(), 1024 * 1024).await.unwrap();
     (status, serde_json::from_slice(&data).unwrap())
 }
-pub(super) async fn bind(state: &AppState, b: &Binding) -> Value {
+pub(crate) async fn bind(state: &AppState, b: &Binding) -> Value {
     let (status, value) = call(
         state,
         "PUT",

@@ -70,6 +70,7 @@ async fn real_guest_operator_transport_runs_exports_cancels_and_cleans_owned_dat
         model: "no-provider-used".into(),
     };
     let mut saved = SavedTask {
+        instructions: None,
         caller: Default::default(),
         task: SandboxTask {
             git_commit: None,
@@ -84,6 +85,7 @@ async fn real_guest_operator_transport_runs_exports_cancels_and_cleans_owned_dat
             attempt_id: Uuid::new_v4(),
             runtime: Some(guest::binding(&state, target.vm_id).unwrap()),
             request: SandboxTaskInput {
+                instruction_snapshot_id: None,
                 coordination: Default::default(),
                 environment_role: None,
                 kind: SandboxTaskKind::Code,

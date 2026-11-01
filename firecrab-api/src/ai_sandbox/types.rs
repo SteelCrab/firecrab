@@ -45,4 +45,20 @@ pub struct SavedTask {
     /// Environment-owned execution isolation fixed at admission; absent for borrowed VMs.
     #[serde(default)]
     pub execution_mode: Option<SandboxExecutionMode>,
+    /// Immutable saved rules and their retained project binding, fixed before dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<SavedInstructions>,
+}
+
+/// Saved instruction provenance; it contains no model account configuration.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct SavedInstructions {
+    /// Private project database selected at admission.
+    pub database_id: uuid::Uuid,
+    /// Retained project volume selected at admission.
+    pub volume_id: uuid::Uuid,
+    /// Reject a later runtime handoff instead of silently reusing context.
+    pub generation: u64,
+    /// Exact ordered saved-file versions; private editor drafts are never included.
+    pub snapshot: ProjectInstructionSnapshot,
 }
