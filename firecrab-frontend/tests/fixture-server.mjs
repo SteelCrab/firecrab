@@ -587,6 +587,7 @@ export async function createFixtureServer(root, initialRows = 100) {
       res.end(JSON.stringify({ error: { message: error.message } }));
     }
   });
+  fixture.onUpgrade = (handler) => server.on("upgrade", handler);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   fixture.url = `http://127.0.0.1:${server.address().port}`;
   fixture.close = () =>

@@ -85,6 +85,12 @@
   border-radius: 50%;
   background: currentColor;
 }
+.console-geometry {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font: 12px var(--mono);
+  white-space: nowrap;
+}
 .console-status.connected {
   background: var(--green-soft);
   color: var(--green-ink);

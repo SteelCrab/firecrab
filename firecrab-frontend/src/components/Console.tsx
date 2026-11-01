@@ -54,6 +54,12 @@ const STATUS_CLASS: Record<Status, string> = {
  * Mirrors `CONSOLE_SESSION_ENDED_CLOSE_CODE` in `firecrab-api-types`.
  */
 const SESSION_ENDED_CLOSE_CODE = 4000;
+const CONSOLE_PROTOCOL = "firecrab.console.v1";
+
+type Geometry = {
+  status: "pending" | "applied" | "unavailable";
+  size: { rows: number; cols: number } | null;
+};
 
 /** Named color schemes. Font stack is shared in `lib/terminal.ts` (CJK fallbacks). */
 const THEMES: Record<string, { label: string; theme: ITheme }> = {
@@ -179,6 +185,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   }, []);
 
   const [status, setStatus] = useState<Status>("connecting");
+  const [geometry, setGeometry] = useState<Geometry | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [reconnectKey, setReconnectKey] = useState(0);
   const [vm, setVm] = useState<VmResponse | null>(null);
@@ -311,6 +318,23 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
         socket.send(new TextEncoder().encode(data));
       }
     });
+    const reportSize = () => {
+      const socket = socketRef.current;
+      if (
+        !disposed &&
+        socket?.readyState === WebSocket.OPEN &&
+        socket.protocol === CONSOLE_PROTOCOL &&
+        term.rows >= 2 &&
+        term.rows <= 1000 &&
+        term.cols >= 2 &&
+        term.cols <= 1000
+      ) {
+        socket.send(
+          JSON.stringify({ type: "resize", rows: term.rows, cols: term.cols }),
+        );
+      }
+    };
+    const resizeListener = term.onResize(reportSize);
 
     const ro = new ResizeObserver(() => {
       if (!disposed) scheduleFit();
@@ -364,7 +388,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
 
       setStatus(isRetry ? "reconnecting" : "connecting");
 
-      const socket = new WebSocket(consoleWsUrl(vmId));
+      const socket = new WebSocket(consoleWsUrl(vmId), CONSOLE_PROTOCOL);
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
 
@@ -372,8 +396,14 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
         if (disposed || socketRef.current !== socket) return;
         reconnectAttemptRef.current = 0;
         setStatus("connected");
+        setGeometry(
+          socket.protocol === CONSOLE_PROTOCOL
+            ? { status: "pending", size: null }
+            : null,
+        );
         term.options.disableStdin = false;
         scheduleFit();
+        reportSize();
         term.focus();
       };
 
@@ -381,6 +411,32 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
         if (disposed || socketRef.current !== socket) return;
         const live = termRef.current;
         if (!live) return;
+        if (
+          socket.protocol === CONSOLE_PROTOCOL &&
+          typeof event.data === "string"
+        ) {
+          try {
+            const value = JSON.parse(event.data);
+            if (value?.type === "resize") {
+              const size = value.size;
+              if (
+                ["pending", "applied", "unavailable"].includes(value.status) &&
+                (size === null ||
+                  (size &&
+                    Number.isInteger(size.rows) &&
+                    Number.isInteger(size.cols) &&
+                    size.rows >= 2 &&
+                    size.rows <= 1000 &&
+                    size.cols >= 2 &&
+                    size.cols <= 1000))
+              )
+                setGeometry({ status: value.status, size });
+              return;
+            }
+          } catch {
+            /* Legacy text output is still displayed below. */
+          }
+        }
         live.write(
           typeof event.data === "string"
             ? event.data
@@ -487,6 +543,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
       window.clearTimeout(bootTimer);
       clearReconnectTimer();
       dataListener.dispose();
+      resizeListener.dispose();
       ro.disconnect();
       window.removeEventListener("resize", onWinResize);
       window.removeEventListener("keydown", onKey);
@@ -618,6 +675,29 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
             <span className="console-status-dot" aria-hidden="true" />
             {statusLabel}
           </span>
+
+          {geometry && (
+            <span
+              className="console-geometry"
+              data-status={
+                status === "connected" ? geometry.status : "unavailable"
+              }
+              title={
+                geometry.status === "unavailable"
+                  ? t(
+                      "Guest terminal resize unavailable",
+                      "게스트 터미널 크기 변경 불가",
+                    )
+                  : t("Guest terminal size", "게스트 터미널 크기")
+              }
+            >
+              {geometry.size
+                ? `${geometry.size.cols} × ${geometry.size.rows}`
+                : geometry.status === "unavailable"
+                  ? t("Size unavailable", "크기 확인 불가")
+                  : t("Resizing…", "크기 적용 중…")}
+            </span>
+          )}
 
           <div
             className="segmented console-tabs"
@@ -780,7 +860,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
       <div className={showDetails ? "console-body" : "console-body no-details"}>
         <div className="console-main">
           <div
-            className="console-surface"
+            className="console-surface terminal-output"
             hidden={surfaceTab !== "serial"}
             ref={containerRef}
             style={{ background: THEMES[prefs.themeId].theme.background }}
