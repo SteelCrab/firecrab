@@ -227,12 +227,16 @@ fn render_content(app: &Shared) {
         return;
     }
     let cluster_focus = advanced::cluster::focused_input();
+    let security_view = (app.borrow().route == "security").then(security::capture_view);
     let (html, loaded) = {
         let state = app.borrow();
         (render::content(&state), state.loaded)
     };
     app.borrow_mut().rendering = true;
     set_html("content", &html);
+    if let Some(view) = security_view {
+        security::restore_view(view);
+    }
     update_summary(app);
     advanced::cluster::restore_focus(cluster_focus);
     app.borrow_mut().rendering = false;

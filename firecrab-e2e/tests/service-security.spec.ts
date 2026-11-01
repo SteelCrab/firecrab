@@ -14,8 +14,12 @@ test("Security shows deployment identity and never reports unavailable scans as 
   await expect(security).toHaveAttribute("aria-current", "page");
   await expect(security.locator("xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' sidebar-group ')][1]").locator(".sidebar-group-label")).toHaveText("AI");
   await expect(page.getByText("orders-api", { exact: true })).toBeVisible();
+  await expect(page.getByText("CVE scan pending", { exact: true })).toBeVisible();
+  await expect(page.getByText("No recent structured access logs", { exact: true })).toBeVisible();
+  await expect(page.getByText("deploy-1", { exact: true })).not.toBeVisible();
+  await page.getByText("Evidence and history", { exact: true }).click();
   await expect(page.getByText("deploy-1", { exact: true })).toBeVisible();
-  await expect(page.getByRole("cell").filter({ hasText: "CVE scan pending · No recent structured access logs" })).toBeVisible();
+  await page.getByText("Coverage and limitations", { exact: true }).click();
   await expect(page.getByText(/CVE scans check supported packages/)).toBeVisible();
   if (process.env.SECURITY_SCREENSHOT) await page.screenshot({ path: process.env.SECURITY_SCREENSHOT });
 });
@@ -27,8 +31,10 @@ test("Security shows a limited log signal with evidence and guidance", async ({ 
       signals: [{ kind: "repeated_access_denials", severity: "medium", count: 12, source: "structured application access logs", recommendation: "Review access logs and authentication policy." }] }],
     cveScan: "unavailable", threatDetection: "limited", aiAnalysis: "unavailable"
   } } });
-  await expect(page.getByText("Image digest unavailable · Activity signals: 1")).toBeVisible();
-  await expect(page.getByText("401/403 records: 12")).toContainText("Severity: medium");
+  await expect(page.getByText("Image digest unavailable", { exact: true })).toBeVisible();
+  await expect(page.getByText("Activity detected", { exact: true })).toBeVisible();
+  await expect(page.getByText("401/403 records: 12", { exact: true })).toBeVisible();
+  await expect(page.getByText("Medium", { exact: true })).toBeVisible();
   await expect(page.getByText(/Review access logs and authentication policy/)).toBeVisible();
 });
 
@@ -49,7 +55,7 @@ test("Security sends an explicit AI request and shows guidance", async ({ page }
     }
   } });
   await page.getByRole("button", { name: "Explain with AI" }).click();
-  await expect(page.getByText("AI guidance: Review the authentication policy.")).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "AI guidance" }).getByText("Review the authentication policy.")).toBeVisible();
   expect(selection).toEqual({ connectionId: "connection", model: "verified-model" });
   if (process.env.SECURITY_AI_SCREENSHOT) await page.screenshot({ path: process.env.SECURITY_AI_SCREENSHOT });
 });
@@ -65,11 +71,14 @@ test("Security shows CVE evidence, fixes, and retained release activity", async 
   } } });
   const cve = page.getByRole("link", { name: "CVE-2025-15467" });
   await expect(cve).toHaveAttribute("href", "https://nvd.nist.gov/vuln/detail/CVE-2025-15467");
-  await expect(page.getByText(/libcrypto3 3.0.15-r0/)).toContainText("Update to 3.0.16-r0");
-  await expect(page.getByText(/Release: deploy-1/)).toContainText("replica-old");
+  await expect(page.locator(".security-findings > li").filter({ has: cve })).toContainText("Update to 3.0.16-r0");
+  await page.getByText("Evidence and history", { exact: true }).click();
+  await expect(page.getByText(/Release: deploy-1/)).toBeVisible();
+  await expect(page.getByText(/Replicas: replica-old/)).toBeVisible();
+  await page.getByText("Coverage and limitations", { exact: true }).click();
   await expect(page.getByText(/Ingress logs are unavailable/)).toBeVisible();
   await expect(page.getByText(/The image OS is no longer supported/)).toBeVisible();
-  await page.getByText(/Previous release: deploy-1/).click();
+  await expect(page.getByText(/Previous release: deploy-1/)).toBeVisible();
   await expect(page.getByRole("link", { name:"CVE-2024-12345" })).toBeVisible();
   await expect(page.getByText(/Scanned replicas: replica-old/)).toBeVisible();
   if (process.env.SECURITY_CVE_SCREENSHOT) await page.screenshot({ path: process.env.SECURITY_CVE_SCREENSHOT, fullPage: true });
@@ -102,6 +111,7 @@ test("Security identifies workloads outside its coverage", async ({ page }) => {
   await openDashboard(page, { hash: "#/security", routes: { "/api/service-security": {
     services: [], unsupportedWorkloads: [{ id:"cluster-id", name:"cluster-service", reason:"cluster_managed" }, { id:"db-id", name:"orders-db", reason:"database_connection_unlinked" }]
   } } });
+  await page.getByText("Coverage and limitations", { exact: true }).click();
   await expect(page.getByText(/Standalone MicroVMs, cluster-managed services, and database connections without linked images or logs are not checked/)).toBeVisible();
   await expect(page.getByRole("heading", { name:"Items not checked" })).toBeVisible();
   await expect(page.getByText("cluster-service · Cluster-managed service")).toBeVisible();
@@ -114,8 +124,10 @@ test("Security explains limited ingress coverage and detected loss", async ({ pa
   await openDashboard(page, { hash: "#/security", routes: { "/api/service-security": {
     services: [{ id:"a", name:"api", deploymentId:"one", digest:null, sampledRecords:0, signals:[], activityHistory:[{ deploymentId:"one", replicaIds:[], bucketStart:1793310000, count:12, severity:"medium", source:"ingress HTTP status codes", recommendation:"Review ingress and authentication configuration." }] }], unsupportedWorkloads:[{ id:"db-id", name:"orders-db", reason:"database_connection_unlinked" }], ingressLogs:"limited"
   } } });
+  await page.getByText("Coverage and limitations", { exact: true }).click();
   await expect(page.getByText(/limited ingress 401\/403 counts/)).toBeVisible();
   await expect(page.getByText(/ingress HTTP status codes/)).toBeVisible();
+  await page.getByText("Evidence and history", { exact: true }).click();
   await expect(page.getByText(/Replicas: Unavailable/)).toBeVisible();
   if (process.env.SECURITY_INGRESS_SCREENSHOT) await page.screenshot({ path: process.env.SECURITY_INGRESS_SCREENSHOT, fullPage: true });
 });
@@ -124,6 +136,7 @@ test("Security reports known ingress event loss", async ({ page }) => {
   await openDashboard(page, { hash: "#/security", routes: { "/api/service-security": {
     services: [], ingressLogs:"degraded"
   } } });
+  await page.getByText("Coverage and limitations", { exact: true }).click();
   await expect(page.getByText(/Some ingress security events were lost/)).toBeVisible();
 });
 
@@ -143,6 +156,7 @@ test("Security links database connections to an operator-selected service", asyn
       await route.fulfill({ status:204, body:"" });
     }
   }});
+  await page.getByText(/^Database connections/).click();
   await expect(page.getByText(/Firecrab does not verify this link/)).toBeVisible();
   await expect(page.getByText(/Authentication failures: 12/)).toBeVisible();
   await page.getByLabel("orders-db").selectOption("a");
@@ -153,4 +167,73 @@ test("Security links database connections to an operator-selected service", asyn
   await page.getByRole("button", { name:"Unlink" }).click();
   await expect(page.getByText("Not linked", { exact:true })).toBeVisible();
   expect(writes[1]).toEqual({ method:"DELETE", body:null });
+});
+
+
+test("Security keeps findings compact and preserves disclosure and model choices", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  let request: unknown;
+  const digest = `sha256:${"a".repeat(64)}`;
+  await openDashboard(page, { hash: "#/security", routes: {
+    "/api/service-security": {
+      services: [
+        { id: "api", name: "inference-api", deploymentId: "release-orders-current", digest, sampledRecords: 24,
+          scan: { status: "complete", findings: [{ cve: "CVE-2025-15467", package: "libcrypto3", installedVersion: "3.0.15-r0", fixedVersion: "3.0.16-r0", severity: "critical", advisorySource: "Alpine Secdb", target: "alpine 3.17" }] } },
+        { id: "db", name: "api-gateway", deploymentId: "release-db-current", digest: null, sampledRecords: 12,
+          activityHistory: [{ deploymentId: "release-db-current", replicaIds: ["replica-db"], count: 12, severity: "medium", source: "ingress HTTP status codes", recommendation: "Review the authentication policy for repeated access denials." }] },
+        { id: "worker", name: "image-worker", deploymentId: "release-worker-current", digest, sampledRecords: 0, scan: { status: "scanner_missing", findings: [] } },
+      ], unsupportedWorkloads: [{ id: "external-db", name: "analytics-db", reason: "database_connection_unlinked" }], ingressLogs: "limited",
+    },
+    "/api/pipe/ai/connections": [{ id: "connection", name: "AI account" }],
+    "/api/ai-sandbox/connections/connection/models": { models: [{ id: "model-one", name: "Model one", verified: true }, { id: "model-two", name: "Model two", verified: true }] },
+    "/api/service-security/api/analysis": async route => {
+      request = route.request().postDataJSON();
+      await route.fulfill({ json: { serviceId: "api", deploymentId: "release-orders-current", text: "Update libcrypto3 to the fixed version, then redeploy and rescan the service." } });
+    },
+  }});
+  await expect(page.locator(".security-overview")).toContainText("Services to review2");
+  await expect(page.locator(".security-overview")).toContainText("Images scanned1 / 3");
+  await expect(page.locator(".security-overview")).toContainText("Outside coverage1");
+  await expect(page.getByRole("article", { name: "inference-api" }).getByText(digest, { exact: true })).not.toBeVisible();
+  await page.getByText("AI guidance settings", { exact: true }).click();
+  await page.getByLabel("AI model", { exact: true }).selectOption({ label: "AI account · Model two" });
+  const orders = page.getByRole("article", { name: "inference-api" });
+  await page.getByText("AI guidance settings", { exact: true }).click();
+  await orders.getByText("Evidence and history", { exact: true }).click();
+  await orders.getByRole("button", { name: "Explain with AI" }).click();
+  await expect(orders.getByRole("complementary", { name: "AI guidance" })).toContainText("Update libcrypto3");
+  expect(request).toEqual({ connectionId: "connection", model: "model-two" });
+  await expect(orders.locator(".security-evidence")).toHaveAttribute("open", "");
+  await page.getByText("AI guidance settings", { exact: true }).click();
+  await expect(page.getByLabel("AI model", { exact: true })).toHaveValue(JSON.stringify({ connectionId: "connection", model: "model-two" }));
+  await page.getByText("AI guidance settings", { exact: true }).click();
+  await orders.getByText("Evidence and history", { exact: true }).click();
+  if (process.env.SECURITY_OVERVIEW_SCREENSHOT) await page.screenshot({ path: process.env.SECURITY_OVERVIEW_SCREENSHOT, fullPage: true });
+  if (process.env.SECURITY_KOREAN_SCREENSHOT) {
+    await page.getByLabel("Language", { exact: true }).selectOption("ko");
+    await expect(page.getByRole("heading", { name: "서버리스 보안" })).toBeVisible();
+    await page.screenshot({ path: process.env.SECURITY_KOREAN_SCREENSHOT, fullPage: true });
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.locator(".security-page").evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await expect(orders.locator("[data-action=security-scan]")).toBeVisible();
+  if (process.env.SECURITY_MOBILE_SCREENSHOT) await page.screenshot({ path: process.env.SECURITY_MOBILE_SCREENSHOT, fullPage: true });
+});
+
+
+test("Security prioritizes severe CVEs without hiding remaining findings", async ({ page }) => {
+  await openDashboard(page, { hash: "#/security", routes: { "/api/service-security": {
+    services: [{ id: "a", name: "api", deploymentId: "one", digest: "sha256:abc", scan: { status: "complete", findings: [
+      { cve: "CVE-2024-10001", severity: "low", package: "low-package" },
+      { cve: "CVE-2024-10002", severity: "critical", package: "critical-package" },
+      { cve: "CVE-2024-10003", severity: "high", package: "high-package" },
+      { cve: "CVE-2024-10004", severity: "medium", package: "medium-package" },
+    ] }}],
+  }}});
+  const links = page.locator(".security-findings a:visible");
+  await expect(links).toHaveText(["CVE-2024-10002", "CVE-2024-10003", "CVE-2024-10004"]);
+  await expect(page.getByRole("link", { name: "CVE-2024-10001" })).not.toBeVisible();
+  await page.getByText("More CVE findings (1)", { exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("link", { name: "CVE-2024-10001" })).toBeVisible();
 });

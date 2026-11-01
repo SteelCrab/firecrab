@@ -1,6 +1,6 @@
 //! On-demand explanations of aggregate service security signals.
 use crate::{
-    Shared, api, element,
+    Shared, api, document, element,
     model::{list, text},
     render_content,
 };
@@ -15,6 +15,57 @@ pub struct State {
     pub models: Vec<Value>,
     pub explanations: BTreeMap<String, Value>,
     pub busy: bool,
+}
+
+/// Keep disclosures and operator selections stable when async data redraws the page.
+pub struct View {
+    expanded: Vec<String>,
+    selections: Vec<(String, String)>,
+}
+
+pub fn capture_view() -> View {
+    let mut view = View {
+        expanded: Vec::new(),
+        selections: Vec::new(),
+    };
+    if let Ok(items) = document().query_selector_all(".security-page details[open][id]") {
+        for index in 0..items.length() {
+            if let Some(node) = items.item(index)
+                && let Ok(item) = node.dyn_into::<web_sys::Element>()
+            {
+                view.expanded.push(item.id());
+            }
+        }
+    }
+    if let Ok(items) = document().query_selector_all(".security-page select[id]") {
+        for index in 0..items.length() {
+            if let Some(node) = items.item(index)
+                && let Ok(select) = node.dyn_into::<HtmlSelectElement>()
+            {
+                view.selections.push((select.id(), select.value()));
+            }
+        }
+    }
+    view
+}
+
+pub fn restore_view(view: View) {
+    for id in view.expanded {
+        if let Some(item) = element(&id) {
+            let _ = item.set_attribute("open", "");
+        }
+    }
+    for (id, value) in view.selections {
+        if let Some(item) = element(&id)
+            && let Ok(select) = item.dyn_into::<HtmlSelectElement>()
+        {
+            let fallback = select.value();
+            select.set_value(&value);
+            if select.selected_index() < 0 {
+                select.set_value(&fallback);
+            }
+        }
+    }
 }
 
 pub fn load(app: &Shared) {

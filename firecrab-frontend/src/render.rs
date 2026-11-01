@@ -4182,8 +4182,19 @@ mod uptime_tests {
     }
 }
 
+fn security_severity(app: &App, severity: &str) -> String {
+    let (tone, label) = match severity {
+        "critical" => ("danger", tr(app, "Critical", "치명적")),
+        "high" => ("danger", tr(app, "High", "높음")),
+        "medium" => ("warning", tr(app, "Medium", "보통")),
+        "low" => ("neutral", tr(app, "Low", "낮음")),
+        _ => ("neutral", tr(app, "Unknown", "확인 불가")),
+    };
+    format!("<span class=\"security-badge\" data-tone=\"{tone}\">{label}</span>")
+}
+
 fn security_cve_findings(app: &App, findings: &[Value]) -> String {
-    let mut out = String::new();
+    let mut out = String::from("<ul class=\"security-findings\">");
     for finding in findings.iter().take(100) {
         let cve = text(finding, "cve");
         let fixed = text(finding, "fixedVersion");
@@ -4201,11 +4212,17 @@ fn security_cve_findings(app: &App, findings: &[Value]) -> String {
                 fixed
             )
         };
-        out.push_str(&format!("<p><a href=\"https://nvd.nist.gov/vuln/detail/{}\" target=\"_blank\" rel=\"noopener noreferrer\">{}</a> · {}: {}<br>{} {} · {}<br>{}: {}<br>{}</p>", escape(cve),escape(cve),tr(app,"Severity","심각도"),escape(text(finding,"severity")),escape(text(finding,"package")),escape(text(finding,"installedVersion")),escape(text(finding,"target")),tr(app,"Advisory source","취약점 출처"),escape(text(finding,"advisorySource")),escape(&action)));
+        out.push_str(&format!(
+            "<li><div class=\"security-finding-title\">{}<a href=\"https://nvd.nist.gov/vuln/detail/{}\" target=\"_blank\" rel=\"noopener noreferrer\">{}</a></div><div class=\"security-finding-body\"><p><strong>{} {}</strong> · {}</p><p class=\"security-meta\">{}: {} · {}</p></div></li>",
+            security_severity(app, text(finding, "severity")), escape(cve), escape(cve),
+            escape(text(finding, "package")), escape(text(finding, "installedVersion")), escape(&action),
+            tr(app, "Advisory source", "취약점 출처"), escape(text(finding, "advisorySource")), escape(text(finding, "target"))
+        ));
     }
+    out.push_str("</ul>");
     if findings.len() > 100 {
         out.push_str(&format!(
-            "<p>{}</p>",
+            "<p class=\"security-meta\">{}</p>",
             tr(
                 app,
                 "Only the first 100 findings are shown.",
@@ -4216,30 +4233,117 @@ fn security_cve_findings(app: &App, findings: &[Value]) -> String {
     out
 }
 
-fn service_security(app: &App) -> String {
-    let title = tr(app, "Serverless security", "서버리스 보안");
-    let explanation = match text(&app.resource, "ingressLogs") {
-        "limited" => tr(
-            app,
-            "CVE scans check supported packages in deployed images. Activity detection uses structured application logs and limited ingress 401/403 counts. Some ingress events may be missed. Counts may overlap between sources. AI receives CVE IDs, severities, fix versions and aggregate activity counts. It does not receive raw logs.",
-            "CVE 검사는 배포 이미지에서 지원되는 패키지를 확인한다. 활동 탐지는 구조화된 애플리케이션 로그와 제한된 인그레스 401/403 횟수를 사용한다. 일부 인그레스 이벤트가 누락될 수 있다. 두 출처의 횟수는 중복될 수 있다. AI에는 CVE 번호, 심각도, 수정 버전과 활동 집계만 전달한다. 원본 로그는 전달하지 않는다.",
+fn security_scan_status(app: &App, scan: &Value, digest: &str) -> String {
+    match text(scan, "status") {
+        "complete" => format!(
+            "{}: {}",
+            tr(app, "Reported CVEs", "확인된 CVE"),
+            list(&scan["findings"]).len()
         ),
-        "degraded" => tr(
+        "stale" | "database_stale" => tr(app, "CVE data is stale", "CVE 정보가 오래됨").into(),
+        "scanner_missing" => tr(
             app,
-            "CVE scans check supported packages in deployed images. Some ingress security events were lost. Activity detection also uses structured application logs. AI receives CVE IDs, severities, fix versions and aggregate activity counts. It does not receive raw logs.",
-            "CVE 검사는 배포 이미지에서 지원되는 패키지를 확인한다. 일부 인그레스 보안 이벤트가 누락됐다. 활동 탐지는 구조화된 애플리케이션 로그도 사용한다. AI에는 CVE 번호, 심각도, 수정 버전과 활동 집계만 전달한다. 원본 로그는 전달하지 않는다.",
-        ),
-        _ => tr(
+            "CVE scanner is not installed",
+            "CVE 검사기가 설치되지 않음",
+        )
+        .into(),
+        "registry_auth_unavailable" => tr(
             app,
-            "CVE scans check supported packages in deployed images. Activity detection covers structured application logs only. Ingress logs are unavailable. Reapply the Pipe configuration if ingress is running. AI receives CVE IDs, severities, fix versions and aggregate activity counts. It does not receive raw logs.",
-            "CVE 검사는 배포 이미지에서 지원되는 패키지를 확인한다. 활동 탐지는 구조화된 애플리케이션 로그만 확인한다. 인그레스 로그는 사용할 수 없다. 인그레스가 실행 중이면 Pipe 설정을 다시 적용한다. AI에는 CVE 번호, 심각도, 수정 버전과 활동 집계만 전달한다. 원본 로그는 전달하지 않는다.",
-        ),
+            "Registry authentication unavailable",
+            "레지스트리 인증 불가",
+        )
+        .into(),
+        "unsupported_platform" | "invalid_image" => tr(
+            app,
+            "CVE scan unsupported for this image",
+            "이 이미지의 CVE 검사를 지원하지 않음",
+        )
+        .into(),
+        "report_invalid" => tr(
+            app,
+            "Invalid CVE scanner report",
+            "CVE 검사 보고서가 올바르지 않음",
+        )
+        .into(),
+        "scanner_error" | "scanner_timeout" | "report_too_large" | "database_unavailable" => {
+            tr(app, "CVE scan failed", "CVE 검사 실패").into()
+        }
+        _ if digest.is_empty() => tr(app, "Image digest unavailable", "이미지 식별값 없음").into(),
+        _ => tr(app, "CVE scan pending", "CVE 검사 대기").into(),
+    }
+}
+
+fn security_activity_finding(app: &App, event: &Value) -> String {
+    let label = if text(event, "source") == "PostgreSQL JSON authentication logs" {
+        tr(app, "Authentication failures", "인증 실패")
+    } else {
+        tr(app, "401/403 records", "401/403 기록")
     };
+    format!(
+        "<li><div class=\"security-finding-title\">{}<strong>{}: {}</strong></div><div class=\"security-finding-body\"><p>{}</p><p class=\"security-meta\">{}: {}</p></div></li>",
+        security_severity(app, text(event, "severity")),
+        label,
+        event["count"].as_u64().unwrap_or_default(),
+        escape(text(event, "recommendation")),
+        tr(app, "Source", "출처"),
+        escape(text(event, "source"))
+    )
+}
+
+fn security_replicas(value: &Value) -> String {
+    list(value)
+        .iter()
+        .filter_map(Value::as_str)
+        .map(escape)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn service_security(app: &App) -> String {
+    let services = list(&app.resource["services"]);
+    let unsupported = list(&app.resource["unsupportedWorkloads"]);
+    let needs_review = services
+        .iter()
+        .filter(|service| {
+            !list(&service["scan"]["findings"]).is_empty()
+                || !list(&service["signals"]).is_empty()
+                || list(&service["activityHistory"])
+                    .iter()
+                    .any(|event| text(event, "deploymentId") == text(service, "deploymentId"))
+        })
+        .count();
+    let scanned = services
+        .iter()
+        .filter(|service| text(&service["scan"], "status") == "complete")
+        .count();
     let mut out = format!(
-        "<section class=\"security-page\"><h2>{}</h2><p role=\"status\">{}</p>",
-        escape(title),
-        escape(explanation)
+        "<section class=\"security-page\"><header class=\"security-heading\"><h2>{}</h2><p>{}</p></header><dl class=\"security-overview\" aria-label=\"{}\"><div><dt>{}</dt><dd>{}</dd></div><div><dt>{}</dt><dd>{}<span> / {}</span></dd></div><div><dt>{}</dt><dd>{}</dd></div></dl>",
+        tr(app, "Serverless security", "서버리스 보안"),
+        tr(
+            app,
+            "Review vulnerabilities, unusual activity, and recommended actions.",
+            "취약점과 이상 활동을 확인하고 조치 방향을 검토한다."
+        ),
+        tr(app, "Security overview", "보안 요약"),
+        tr(app, "Services to review", "확인이 필요한 서비스"),
+        needs_review,
+        tr(app, "Images scanned", "이미지 검사 완료"),
+        scanned,
+        services.len(),
+        tr(app, "Outside coverage", "검사 범위 밖"),
+        unsupported.len()
     );
+    if text(&app.resource, "ingressLogs") == "degraded" {
+        out.push_str(&format!(
+            "<p class=\"security-warning\" role=\"status\">{}</p>",
+            tr(
+                app,
+                "Ingress event collection needs attention.",
+                "인그레스 이벤트 수집 상태를 확인해야 한다."
+            )
+        ));
+    }
+    out.push_str(&format!("<div class=\"security-toolbar\"><h3>{}</h3><details id=\"security-ai-settings\" class=\"security-ai-settings\"><summary>{}</summary><div>", tr(app, "Services", "서비스"), tr(app, "AI guidance settings", "AI 조치 안내 설정")));
     if app.security.models.is_empty() {
         out.push_str(&format!(
             "<p>{} <a href=\"#/ai-sandbox\">{}</a></p>",
@@ -4256,8 +4360,7 @@ fn service_security(app: &App) -> String {
             tr(app, "AI model", "AI 모델")
         ));
         for model in &app.security.models {
-            let selection =
-                serde_json::json!({"connectionId": model["connectionId"], "model":model["model"]});
+            let selection = json!({"connectionId": model["connectionId"], "model": model["model"]});
             out.push_str(&format!(
                 "<option value=\"{}\">{} · {}</option>",
                 escape(&selection.to_string()),
@@ -4267,13 +4370,202 @@ fn service_security(app: &App) -> String {
         }
         out.push_str("</select>");
     }
-    out.push_str(&format!("<p>{}</p>", tr(app,
-        "Security checks cover deployed MicroServices. Standalone MicroVMs, cluster-managed services, and database connections without linked images or logs are not checked.",
-        "보안 검사는 배포된 마이크로서비스를 확인한다. 단독 마이크로VM, 클러스터 관리 서비스, 이미지나 로그가 연결되지 않은 데이터베이스 연결은 검사하지 않는다.")));
-    let unsupported = list(&app.resource["unsupportedWorkloads"]);
+    out.push_str(&format!(
+        "<p class=\"security-meta\">{}</p></div></details></div><div class=\"security-services\">",
+        tr(
+            app,
+            "AI explains findings and suggests actions. It does not change your services.",
+            "AI는 결과를 설명하고 조치를 제안한다. 서비스를 직접 변경하지 않는다."
+        )
+    ));
+    if services.is_empty() {
+        out.push_str(&format!(
+            "<div class=\"security-empty\">{}<p>{}</p><a href=\"#/services\">{}</a></div>",
+            tr(
+                app,
+                "No service deployment records.",
+                "서비스 배포 기록이 없다."
+            ),
+            tr(
+                app,
+                "Deploy a MicroService to see its security findings here.",
+                "마이크로서비스를 배포하면 보안 결과를 확인할 수 있다."
+            ),
+            tr(app, "View services", "서비스 보기")
+        ));
+    }
+    for service in services {
+        let id = text(service, "id");
+        let digest = text(service, "digest");
+        let scan = &service["scan"];
+        let mut findings = list(&scan["findings"]).to_vec();
+        findings.sort_by_key(|finding| match text(finding, "severity") {
+            "critical" => 0,
+            "high" => 1,
+            "medium" => 2,
+            "low" => 3,
+            _ => 4,
+        });
+        let signals = list(&service["signals"]);
+        let history = list(&service["activityHistory"]);
+        let current: Vec<_> = history
+            .iter()
+            .filter(|event| text(event, "deploymentId") == text(service, "deploymentId"))
+            .collect();
+        let activity = if !signals.is_empty() || !current.is_empty() {
+            tr(app, "Activity detected", "활동 신호 확인")
+        } else if service["sampledRecords"].as_u64().unwrap_or(0) == 0 {
+            tr(
+                app,
+                "No recent structured access logs",
+                "최근 구조화된 접근 로그 없음",
+            )
+        } else {
+            tr(
+                app,
+                "No activity signal in sampled logs",
+                "확인한 로그에 활동 신호 없음",
+            )
+        };
+        out.push_str(&format!("<article class=\"security-service\" aria-labelledby=\"security-name-{}\"><header class=\"security-service-heading\"><div><h4 id=\"security-name-{}\">{}</h4><p class=\"security-service-status\"><span class=\"security-scan-status\" data-complete=\"{}\">{}</span><span>{}</span></p></div><div class=\"security-actions\">",
+            escape(id), escape(id), escape(text(service, "name")), text(scan, "status") == "complete", escape(&security_scan_status(app, scan, digest)), activity));
+        if !digest.is_empty() {
+            out.push_str(&format!("<button type=\"button\" class=\"btn\" data-action=\"security-scan\" data-id=\"{}\" {}>{}</button>", escape(id), if app.security.busy { "disabled" } else { "" }, tr(app, "Scan now", "지금 검사")));
+        }
+        if (!signals.is_empty()
+            || !history.is_empty()
+            || (text(scan, "status") == "complete" && !findings.is_empty()))
+            && !app.security.models.is_empty()
+        {
+            out.push_str(&format!("<button type=\"button\" class=\"btn security-guidance-button\" data-action=\"security-explain\" data-id=\"{}\" {}>{}</button>", escape(id), if app.security.busy { "disabled" } else { "" }, tr(app, "Explain with AI", "AI 조치 안내")));
+        }
+        out.push_str("</div></header>");
+        if service["logGap"] == true {
+            out.push_str(&format!(
+                "<p class=\"security-warning\">{}</p>",
+                tr(
+                    app,
+                    "Some application logs may be missing.",
+                    "일부 애플리케이션 로그가 누락되었을 수 있다."
+                )
+            ));
+        }
+        for limit in list(&scan["limitations"]) {
+            let warning = match limit.as_str().unwrap_or("") {
+                "os_end_of_support" => tr(
+                    app,
+                    "The image OS is no longer supported; CVE coverage may be incomplete.",
+                    "이미지 운영체제의 지원이 종료되어 CVE 검사 범위가 불완전할 수 있다.",
+                ),
+                "os_not_detected" => tr(
+                    app,
+                    "The image OS was not detected; OS package coverage is unavailable.",
+                    "이미지 운영체제를 확인하지 못해 OS 패키지 검사 범위를 알 수 없다.",
+                ),
+                "non_cve_advisories_omitted" => tr(
+                    app,
+                    "Some advisories without CVE identifiers are not shown.",
+                    "CVE 번호가 없는 일부 권고는 표시되지 않는다.",
+                ),
+                _ => tr(
+                    app,
+                    "CVE scan coverage is limited.",
+                    "CVE 검사 범위가 제한된다.",
+                ),
+            };
+            out.push_str(&format!(
+                "<p class=\"security-warning\">{}</p>",
+                escape(warning)
+            ));
+        }
+        out.push_str(&security_cve_findings(
+            app,
+            &findings[..findings.len().min(3)],
+        ));
+        if findings.len() > 3 {
+            out.push_str(&format!("<details class=\"security-disclosure\" id=\"security-more-{}\"><summary>{} ({})</summary>{}</details>", escape(id), tr(app, "More CVE findings", "나머지 CVE 결과"), findings.len() - 3, security_cve_findings(app, &findings[3..])));
+        }
+        if !signals.is_empty() || !current.is_empty() {
+            out.push_str("<ul class=\"security-findings\">");
+            for signal in signals {
+                out.push_str(&security_activity_finding(app, signal));
+            }
+            for event in current.iter().take(20) {
+                out.push_str(&security_activity_finding(app, event));
+            }
+            out.push_str("</ul>");
+        }
+        if let Some(explanation) = app.security.explanations.get(id)
+            && text(explanation, "deploymentId") == text(service, "deploymentId")
+        {
+            out.push_str(&format!(
+                "<aside class=\"security-guidance\" aria-label=\"{}\"><h5>{}</h5><p>{}</p></aside>",
+                tr(app, "AI guidance", "AI 조치 안내"),
+                tr(app, "AI guidance", "AI 조치 안내"),
+                escape(text(explanation, "text"))
+            ));
+        }
+        out.push_str(&format!("<details class=\"security-disclosure security-evidence\" id=\"security-evidence-{}\"><summary>{}</summary><div class=\"security-evidence-body\"><dl class=\"security-metadata\"><dt>{}</dt><dd>{}</dd><dt>{}</dt><dd class=\"mono\">{}</dd><dt>{}</dt><dd>{}</dd>",
+            escape(id), tr(app, "Evidence and history", "근거와 이전 기록"), tr(app, "Deployment", "배포"), escape(text(service, "deploymentId")), tr(app, "Image digest", "이미지 식별값"), escape(if digest.is_empty() { "—" } else { digest }), tr(app, "Current replicas", "현재 복제본"), security_replicas(&service["replicaIds"])));
+        if let Some(scanned_at) = scan["scannedAt"].as_i64() {
+            out.push_str(&format!(
+                "<dt>{}</dt><dd>{}</dd><dt>{}</dt><dd>{}</dd>",
+                tr(app, "Scan time (Unix)", "검사 시각 (Unix)"),
+                scanned_at,
+                tr(app, "Database updated", "DB 갱신"),
+                escape(text(scan, "databaseUpdatedAt"))
+            ));
+        }
+        out.push_str("</dl>");
+        for event in history.iter().take(20) {
+            let replicas = security_replicas(&event["replicaIds"]);
+            out.push_str(&format!("<div class=\"security-history\"><p><strong>{}: {}</strong> · {}: {}</p><p class=\"security-meta\">{}: {} · {}: {}</p><ul class=\"security-findings\">{}</ul></div>",
+                tr(app, "Release", "릴리스"), escape(text(event, "deploymentId")), tr(app, "Window (Unix)", "시작 시각 (Unix)"), event["bucketStart"].as_i64().unwrap_or_default(), tr(app, "Replicas", "복제본"), if replicas.is_empty() { tr(app, "Unavailable", "확인 불가").to_owned() } else { replicas }, tr(app, "Severity", "심각도"), escape(text(event, "severity")), if text(event, "deploymentId") == text(service, "deploymentId") { String::new() } else { security_activity_finding(app, event) }));
+        }
+        for previous in list(&service["previousScans"]).iter().take(20) {
+            out.push_str(&format!("<div class=\"security-history\"><h5>{}: {}</h5><p class=\"security-meta\">{}: {} · {}: {} · {}: {}</p><p class=\"security-meta\">{}: {}</p>{}</div>",
+                tr(app, "Previous release", "이전 릴리스"), escape(text(previous, "deploymentId")), tr(app, "Image digest", "이미지 식별값"), escape(text(previous, "digest")), tr(app, "Scan status", "검사 상태"), escape(text(previous, "status")), tr(app, "Scan time (Unix)", "검사 시각 (Unix)"), previous["scannedAt"].as_i64().unwrap_or_default(), tr(app, "Scanned replicas", "검사 시 복제본"), security_replicas(&previous["replicaIds"]), security_cve_findings(app, list(&previous["findings"]))));
+        }
+        out.push_str("</div></details></article>");
+    }
+    out.push_str("</div>");
+    let databases = list(&app.resource["databases"]);
+    if !databases.is_empty() {
+        out.push_str(&format!("<details class=\"security-disclosure security-settings\" id=\"security-databases\"><summary>{} <span>({})</span></summary><p>{}</p>", tr(app, "Database connections", "데이터베이스 연결"), databases.len(),
+            tr(app, "Select the MicroService that runs each database. Confirm the connection points to that service; Firecrab does not verify this link. Findings appear under the selected service.", "각 데이터베이스를 실행하는 마이크로서비스를 선택한다. 연결 대상이 해당 서비스인지 직접 확인한다. Firecrab은 연결 대상을 검증하지 않는다. 탐지 결과는 선택한 서비스에 표시된다.")));
+        for database in databases {
+            let id = text(database, "id");
+            let linked = text(database, "serviceId");
+            out.push_str(&format!("<div class=\"security-database-row\"><label for=\"security-db-{}\">{}<span class=\"security-meta\">{}</span></label><select id=\"security-db-{}\"><option value=\"\">{}</option>", escape(id), escape(text(database, "name")), if linked.is_empty() { tr(app, "Not linked", "연결되지 않음") } else if text(database, "serviceName").is_empty() { tr(app, "Linked service unavailable", "연결된 서비스를 사용할 수 없음") } else { tr(app, "Linked", "연결됨") }, escape(id), tr(app, "Select a service", "서비스 선택")));
+            for service in services {
+                let service_id = text(service, "id");
+                out.push_str(&format!(
+                    "<option value=\"{}\" {}>{}</option>",
+                    escape(service_id),
+                    if service_id == linked { "selected" } else { "" },
+                    escape(text(service, "name"))
+                ));
+            }
+            out.push_str(&format!("</select><div class=\"security-actions\"><button type=\"button\" class=\"btn\" data-action=\"security-database-link\" data-id=\"{}\" {}>{}</button>", escape(id), if app.security.busy || services.is_empty() { "disabled" } else { "" }, tr(app, "Link", "연결")));
+            if !linked.is_empty() {
+                out.push_str(&format!("<button type=\"button\" class=\"btn\" data-action=\"security-database-unlink\" data-id=\"{}\" {}>{}</button>", escape(id), if app.security.busy { "disabled" } else { "" }, tr(app, "Unlink", "연결 해제")));
+            }
+            out.push_str("</div></div>");
+        }
+        out.push_str("</details>");
+    }
+    out.push_str(&format!("<details class=\"security-disclosure security-settings\" id=\"security-coverage\"><summary>{}</summary><p>{}</p><p>{}</p><p>{}</p>",
+        tr(app, "Coverage and limitations", "검사 범위와 제한"),
+        tr(app, "CVE scans check supported packages in deployed images. AI receives CVE IDs, severities, fix versions and aggregate activity counts. It does not receive raw logs.", "CVE 검사는 배포 이미지에서 지원되는 패키지를 확인한다. AI에는 CVE 번호, 심각도, 수정 버전과 활동 집계만 전달한다. 원본 로그는 전달하지 않는다."),
+        match text(&app.resource, "ingressLogs") {
+            "limited" => tr(app, "Activity detection uses structured application logs and limited ingress 401/403 counts. Some ingress events may be missed. Counts may overlap between sources.", "활동 탐지는 구조화된 애플리케이션 로그와 제한된 인그레스 401/403 횟수를 사용한다. 일부 이벤트는 누락될 수 있다. 출처별 횟수는 중복될 수 있다."),
+            "degraded" => tr(app, "Some ingress security events were lost. Activity detection also uses structured application logs.", "일부 인그레스 보안 이벤트가 누락됐다. 활동 탐지는 구조화된 애플리케이션 로그도 사용한다."),
+            _ => tr(app, "Ingress logs are unavailable. Reapply the Pipe configuration if ingress is running. Activity detection covers structured application logs only.", "인그레스 로그는 사용할 수 없다. 인그레스가 실행 중이면 Pipe 설정을 다시 적용한다. 활동 탐지는 구조화된 애플리케이션 로그만 확인한다."),
+        },
+        tr(app, "Standalone MicroVMs, cluster-managed services, and database connections without linked images or logs are not checked.", "단독 마이크로VM, 클러스터 관리 서비스, 이미지나 로그가 연결되지 않은 데이터베이스 연결은 검사하지 않는다.")));
     if !unsupported.is_empty() {
         out.push_str(&format!(
-            "<h3>{}</h3><ul>",
+            "<h4>{}</h4><ul class=\"security-unsupported\">",
             tr(app, "Items not checked", "검사하지 않는 항목")
         ));
         for workload in unsupported {
@@ -4294,295 +4586,11 @@ fn service_security(app: &App) -> String {
             out.push_str(&format!(
                 "<li>{} · {}</li>",
                 escape(text(workload, "name")),
-                escape(reason)
+                reason
             ));
         }
         out.push_str("</ul>");
     }
-    let services = list(&app.resource["services"]);
-    let databases = list(&app.resource["databases"]);
-    if !databases.is_empty() {
-        out.push_str(&format!("<h3>{}</h3><p>{}</p>",
-            tr(app, "Database connections", "데이터베이스 연결"),
-            tr(app, "Select the MicroService that runs each database. Confirm the connection points to that service; Firecrab does not verify this link. Findings appear under the selected service.", "각 데이터베이스를 실행하는 마이크로서비스를 선택한다. 연결 대상이 해당 서비스인지 직접 확인한다. Firecrab은 연결 대상을 검증하지 않는다. 탐지 결과는 선택한 서비스에 표시된다.")));
-        for database in databases {
-            let id = text(database, "id");
-            let linked = text(database, "serviceId");
-            out.push_str(&format!("<div><label for=\"security-db-{}\">{}</label> <select id=\"security-db-{}\"><option value=\"\">{}</option>",
-                escape(id), escape(text(database, "name")), escape(id), tr(app, "Select a service", "서비스 선택")));
-            for service in services {
-                let service_id = text(service, "id");
-                out.push_str(&format!(
-                    "<option value=\"{}\" {}>{}</option>",
-                    escape(service_id),
-                    if service_id == linked { "selected" } else { "" },
-                    escape(text(service, "name"))
-                ));
-            }
-            out.push_str(&format!("</select> <button type=\"button\" class=\"btn\" data-action=\"security-database-link\" data-id=\"{}\" {}>{}</button>", escape(id), if app.security.busy || services.is_empty() { "disabled" } else { "" }, tr(app, "Link", "연결")));
-            if !linked.is_empty() {
-                out.push_str(&format!(" <button type=\"button\" class=\"btn\" data-action=\"security-database-unlink\" data-id=\"{}\" {}>{}</button>", escape(id), if app.security.busy { "disabled" } else { "" }, tr(app, "Unlink", "연결 해제")));
-                if text(database, "serviceName").is_empty() {
-                    out.push_str(&format!(
-                        " <span>{}</span>",
-                        tr(
-                            app,
-                            "Linked service unavailable",
-                            "연결된 서비스를 사용할 수 없음"
-                        )
-                    ));
-                }
-            } else {
-                out.push_str(&format!(
-                    " <span>{}</span>",
-                    tr(app, "Not linked", "연결되지 않음")
-                ));
-            }
-            out.push_str("</div>");
-        }
-    }
-    if services.is_empty() {
-        out.push_str(&format!(
-            "<p>{}</p>",
-            tr(
-                app,
-                "No service deployment records.",
-                "서비스 배포 기록이 없다."
-            )
-        ));
-    } else {
-        out.push_str(&format!("<div class=\"table-scroll\"><table class=\"wasm-table\"><thead><tr><th>{}</th><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>", tr(app, "Service", "서비스"), tr(app, "Deployment", "배포"), tr(app, "Image digest", "이미지 식별값"), tr(app, "Coverage", "검사 상태")));
-        for service in services {
-            let digest = text(service, "digest");
-            let count = list(&service["signals"]).len();
-            let sampled = service["sampledRecords"].as_u64().unwrap_or(0);
-            let scan = &service["scan"];
-            let findings = list(&scan["findings"]);
-            let scan_status = match text(scan, "status") {
-                "complete" => format!(
-                    "{}: {}",
-                    tr(app, "Reported CVEs", "확인된 CVE"),
-                    findings.len()
-                ),
-                "stale" | "database_stale" => {
-                    tr(app, "CVE data is stale", "CVE 정보가 오래됨").into()
-                }
-                "scanner_missing" => tr(
-                    app,
-                    "CVE scanner is not installed",
-                    "CVE 검사기가 설치되지 않음",
-                )
-                .into(),
-                "registry_auth_unavailable" => tr(
-                    app,
-                    "Registry authentication unavailable",
-                    "레지스트리 인증 불가",
-                )
-                .into(),
-                "unsupported_platform" | "invalid_image" => tr(
-                    app,
-                    "CVE scan unsupported for this image",
-                    "이 이미지의 CVE 검사를 지원하지 않음",
-                )
-                .into(),
-                "report_invalid" => tr(
-                    app,
-                    "Invalid CVE scanner report",
-                    "CVE 검사 보고서가 올바르지 않음",
-                )
-                .into(),
-                "scanner_error"
-                | "scanner_timeout"
-                | "report_too_large"
-                | "database_unavailable" => tr(app, "CVE scan failed", "CVE 검사 실패").into(),
-                _ if digest.is_empty() => {
-                    tr(app, "Image digest unavailable", "이미지 식별값 없음").into()
-                }
-                _ => tr(app, "CVE scan pending", "CVE 검사 대기").into(),
-            };
-            let activity = if sampled == 0 {
-                tr(
-                    app,
-                    "No recent structured access logs",
-                    "최근 구조화된 접근 로그 없음",
-                )
-                .to_owned()
-            } else if count == 0 {
-                tr(
-                    app,
-                    "No activity signal in sampled logs",
-                    "확인한 로그에 활동 신호 없음",
-                )
-                .to_owned()
-            } else {
-                format!("{}: {}", tr(app, "Activity signals", "활동 신호"), count)
-            };
-            let mut details = format!("{} · {}", escape(&scan_status), escape(&activity));
-            if !digest.is_empty() {
-                details.push_str(&format!("<p><button type=\"button\" class=\"btn\" data-action=\"security-scan\" data-id=\"{}\" {}>{}</button></p>", escape(text(service,"id")), if app.security.busy { "disabled" } else { "" },tr(app,"Scan now","지금 검사")));
-            }
-            if service["logGap"] == true {
-                details.push_str(&format!(
-                    "<p>{}</p>",
-                    tr(
-                        app,
-                        "Some application logs may be missing.",
-                        "일부 애플리케이션 로그가 누락되었을 수 있다."
-                    )
-                ));
-            }
-            let replicas = list(&service["replicaIds"])
-                .iter()
-                .filter_map(|id| id.as_str())
-                .map(escape)
-                .collect::<Vec<_>>()
-                .join(", ");
-            if !replicas.is_empty() {
-                details.push_str(&format!(
-                    "<p>{}: {}</p>",
-                    tr(app, "Current replicas", "현재 복제본"),
-                    replicas
-                ));
-            }
-            if !scan.is_null() && scan["scannedAt"].as_i64().is_some() {
-                details.push_str(&format!(
-                    "<p>{}: {} · {}: {}</p>",
-                    tr(app, "Scan time (Unix)", "검사 시각 (Unix)"),
-                    scan["scannedAt"].as_i64().unwrap_or_default(),
-                    tr(app, "Database updated", "DB 갱신"),
-                    escape(text(scan, "databaseUpdatedAt"))
-                ));
-            }
-            for limit in list(&scan["limitations"]) {
-                let warning = match limit.as_str().unwrap_or("") {
-                    "os_end_of_support" => tr(
-                        app,
-                        "The image OS is no longer supported; CVE coverage may be incomplete.",
-                        "이미지 운영체제의 지원이 종료되어 CVE 검사 범위가 불완전할 수 있다.",
-                    ),
-                    "os_not_detected" => tr(
-                        app,
-                        "The image OS was not detected; OS package coverage is unavailable.",
-                        "이미지 운영체제를 확인하지 못해 OS 패키지 검사 범위를 알 수 없다.",
-                    ),
-                    "non_cve_advisories_omitted" => tr(
-                        app,
-                        "Some advisories without CVE identifiers are not shown.",
-                        "CVE 번호가 없는 일부 권고는 표시되지 않는다.",
-                    ),
-                    _ => tr(
-                        app,
-                        "CVE scan coverage is limited.",
-                        "CVE 검사 범위가 제한된다.",
-                    ),
-                };
-                details.push_str(&format!("<p>{}</p>", escape(warning)));
-            }
-            details.push_str(&security_cve_findings(app, findings));
-            for previous in list(&service["previousScans"]).iter().take(20) {
-                let previous_findings = list(&previous["findings"]);
-                details.push_str(&format!(
-                    "<details><summary>{}: {} · {}: {} · {}: {}</summary><p>{}: {} · {}: {}</p>",
-                    tr(app, "Previous release", "이전 릴리스"),
-                    escape(text(previous, "deploymentId")),
-                    tr(app, "Image digest", "이미지 식별값"),
-                    escape(text(previous, "digest")),
-                    tr(app, "Recorded CVEs", "기록된 CVE"),
-                    previous_findings.len(),
-                    tr(app, "Scan status", "검사 상태"),
-                    escape(text(previous, "status")),
-                    tr(app, "Scan time (Unix)", "검사 시각 (Unix)"),
-                    previous["scannedAt"].as_i64().unwrap_or_default()
-                ));
-                let replicas = list(&previous["replicaIds"])
-                    .iter()
-                    .filter_map(|id| id.as_str())
-                    .map(escape)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                if !replicas.is_empty() {
-                    details.push_str(&format!(
-                        "<p>{}: {}</p>",
-                        tr(app, "Scanned replicas", "검사 시 복제본"),
-                        replicas
-                    ));
-                }
-                details.push_str(&security_cve_findings(app, previous_findings));
-                details.push_str("</details>");
-            }
-            for signal in list(&service["signals"]) {
-                details.push_str(&format!(
-                    "<p>{}: {} · {}: {}<br>{}: {}<br>{}</p>",
-                    tr(app, "401/403 records", "401/403 기록"),
-                    signal["count"].as_u64().unwrap_or(0),
-                    tr(app, "Severity", "심각도"),
-                    escape(text(signal, "severity")),
-                    tr(app, "Source", "출처"),
-                    escape(text(signal, "source")),
-                    escape(text(signal, "recommendation"))
-                ));
-            }
-            let history = list(&service["activityHistory"]);
-            for event in history.iter().take(20) {
-                let replicas = list(&event["replicaIds"])
-                    .iter()
-                    .filter_map(|id| id.as_str())
-                    .map(escape)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let replicas = if replicas.is_empty() {
-                    tr(app, "Unavailable", "확인 불가").to_owned()
-                } else {
-                    replicas
-                };
-                details.push_str(&format!(
-                    "<p>{}: {} · {}: {} · {}: {}<br>{}: {} · {}: {}<br>{}: {}<br>{}</p>",
-                    tr(app, "Release", "릴리스"),
-                    escape(text(event, "deploymentId")),
-                    tr(app, "Window (Unix)", "시작 시각 (Unix)"),
-                    event["bucketStart"].as_i64().unwrap_or_default(),
-                    if text(event, "source") == "PostgreSQL JSON authentication logs" {
-                        tr(app, "Authentication failures", "인증 실패")
-                    } else {
-                        tr(app, "401/403 records", "401/403 기록")
-                    },
-                    event["count"].as_u64().unwrap_or_default(),
-                    tr(app, "Severity", "심각도"),
-                    escape(text(event, "severity")),
-                    tr(app, "Source", "출처"),
-                    escape(text(event, "source")),
-                    tr(app, "Replicas", "복제본"),
-                    replicas,
-                    escape(text(event, "recommendation"))
-                ));
-            }
-            let id = text(service, "id");
-            if (count > 0
-                || !history.is_empty()
-                || (text(scan, "status") == "complete" && !findings.is_empty()))
-                && !app.security.models.is_empty()
-            {
-                details.push_str(&format!("<button type=\"button\" class=\"btn\" data-action=\"security-explain\" data-id=\"{}\" {}>{}</button>", escape(id), if app.security.busy { "disabled" } else { "" }, tr(app, "Explain with AI", "AI로 분석")));
-            }
-            if let Some(explanation) = app.security.explanations.get(id)
-                && text(explanation, "deploymentId") == text(service, "deploymentId")
-            {
-                details.push_str(&format!(
-                    "<p>{}: {}</p>",
-                    tr(app, "AI guidance", "AI 조치 안내"),
-                    escape(text(explanation, "text"))
-                ));
-            }
-            out.push_str(&format!(
-                "<tr><td>{}</td><td>{}</td><td class=\"mono\">{}</td><td>{}</td></tr>",
-                escape(text(service, "name")),
-                escape(text(service, "deploymentId")),
-                escape(if digest.is_empty() { "—" } else { digest }),
-                details
-            ));
-        }
-        out.push_str("</tbody></table></div>");
-    }
-    out.push_str("</section>");
+    out.push_str("</details></section>");
     out
 }
