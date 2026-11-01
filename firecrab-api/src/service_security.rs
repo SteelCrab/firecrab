@@ -36,8 +36,17 @@ pub(crate) struct Service {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct UnsupportedWorkload {
+    id: Uuid,
+    name: String,
+    reason: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct Coverage {
     services: Vec<Service>,
+    unsupported_workloads: Vec<UnsupportedWorkload>,
     cve_scan: &'static str,
     threat_detection: &'static str,
     ai_analysis: &'static str,
@@ -59,10 +68,16 @@ pub(crate) async fn get(
         )
     })?;
     let store = state.store.clone();
-    let services = database(request.0, move || {
+    let (services, unsupported_workloads) = database(request.0, move || {
         let mut services = Vec::new();
+        let mut unsupported_workloads = Vec::new();
         for service in store.list_micro_services()? {
             if store.service_is_controller_owned(service.id)? {
+                unsupported_workloads.push(UnsupportedWorkload {
+                    id: service.id,
+                    name: service.spec.name,
+                    reason: "cluster_managed",
+                });
                 continue;
             }
             if let Some(deployment) = store.service_deployment(service.id)? {
@@ -124,11 +139,12 @@ pub(crate) async fn get(
                 });
             }
         }
-        Ok(services)
+        Ok((services, unsupported_workloads))
     })
     .await?;
     Ok(Json(Coverage {
         services,
+        unsupported_workloads,
         cve_scan: "scheduled",
         threat_detection: "limited",
         ai_analysis: "on_demand",
@@ -247,6 +263,7 @@ mod tests {
             .unwrap()
             .0;
         assert!(result.services.is_empty());
+        assert!(result.unsupported_workloads.is_empty());
         assert_eq!(result.cve_scan, "scheduled");
         assert_eq!(result.threat_detection, "limited");
         assert_eq!(result.ai_analysis, "on_demand");
@@ -288,6 +305,26 @@ mod tests {
                 id: Uuid::new_v4(),
                 spec: undeployed,
             })
+            .unwrap();
+        let unsupported_id = Uuid::new_v4();
+        let unsupported: MicroServiceSpec = serde_json::from_value(json!({
+            "name": "cluster-service", "image": "example.test/cluster:v1", "port": 8080,
+            "ram": 128, "cpu": 1, "env": {"PRIVATE_VALUE":"cluster-secret"}
+        }))
+        .unwrap();
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse {
+                id: unsupported_id,
+                spec: unsupported,
+            })
+            .unwrap();
+        rusqlite::Connection::open(root.path().join("state.db"))
+            .unwrap()
+            .execute(
+                "INSERT INTO cluster_service_workers(id,data) VALUES (?1,'{}')",
+                [unsupported_id.to_string()],
+            )
             .unwrap();
         let deployment: MicroServiceDeployment = serde_json::from_value(json!({
             "id": deployment_id, "serviceId": service_id, "phase": "running", "spec": spec,
@@ -339,6 +376,16 @@ mod tests {
             result["services"][0]["scan"]["findings"][0]["cve"],
             "CVE-2025-15467"
         );
+        assert_eq!(
+            result["unsupportedWorkloads"][0]["id"],
+            unsupported_id.to_string()
+        );
+        assert_eq!(result["unsupportedWorkloads"][0]["name"], "cluster-service");
+        assert_eq!(
+            result["unsupportedWorkloads"][0]["reason"],
+            "cluster_managed"
+        );
+        assert!(!result.to_string().contains("cluster-secret"));
         assert!(!result.to_string().contains("secret-value"));
         assert_eq!(result["cveScan"], "scheduled");
     }

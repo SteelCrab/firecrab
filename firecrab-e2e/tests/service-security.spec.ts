@@ -78,12 +78,13 @@ test("Security shows CVE evidence, fixes, and retained release activity", async 
 test("Security reports a missing scanner and stale CVE data", async ({ page }) => {
   await openDashboard(page, { hash: "#/security", routes: { "/api/service-security": {
     services: [
-      { id:"a", name:"api", deploymentId:"one", digest:"sha256:1", sampledRecords:0, signals:[], scan:{ status:"scanner_missing", findings:[] } },
+      { id:"a", name:"api", deploymentId:"one", digest:"sha256:1", sampledRecords:0, signals:[], logGap:true, scan:{ status:"scanner_missing", findings:[] } },
       { id:"b", name:"worker", deploymentId:"two", digest:"sha256:2", sampledRecords:0, signals:[], scan:{ status:"stale", findings:[] } }
     ]
   } } });
   await expect(page.getByText(/CVE scanner is not installed/)).toBeVisible();
   await expect(page.getByText(/CVE data is stale/)).toBeVisible();
+  await expect(page.getByText(/Some application logs may be missing/)).toBeVisible();
 });
 
 test("Security queues a manual CVE rescan", async ({ page }) => {
@@ -94,4 +95,14 @@ test("Security queues a manual CVE rescan", async ({ page }) => {
   } });
   await page.getByRole("button", { name:"Scan now" }).click();
   await expect.poll(() => requested).toBe(true);
+});
+
+
+test("Security identifies workloads outside its coverage", async ({ page }) => {
+  await openDashboard(page, { hash: "#/security", routes: { "/api/service-security": {
+    services: [], unsupportedWorkloads: [{ id:"cluster-id", name:"cluster-service", reason:"cluster_managed" }]
+  } } });
+  await expect(page.getByText(/Standalone MicroVMs and cluster-managed services are not checked/)).toBeVisible();
+  await expect(page.getByRole("heading", { name:"Local workloads not checked" })).toBeVisible();
+  await expect(page.getByText("cluster-service · Cluster-managed service")).toBeVisible();
 });

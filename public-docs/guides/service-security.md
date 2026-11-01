@@ -1,6 +1,6 @@
 # Serverless service security
 
-The Security page under AI shows findings for deployed MicroServices. Access is restricted to the operator.
+The Security page under AI shows findings for deployed MicroServices. Access is restricted to the operator. Standalone MicroVMs and cluster-managed services are not scanned. The API and page list locally registered cluster-managed services excluded from security checks.
 
 ## CVE scanning
 

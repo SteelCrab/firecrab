@@ -4255,6 +4255,32 @@ fn service_security(app: &App) -> String {
         }
         out.push_str("</select>");
     }
+    out.push_str(&format!("<p>{}</p>", tr(app,
+        "Security checks cover deployed MicroServices. Standalone MicroVMs and cluster-managed services are not checked.",
+        "보안 검사는 배포된 마이크로서비스를 확인한다. 단독 마이크로VM과 클러스터 관리 서비스는 검사하지 않는다.")));
+    let unsupported = list(&app.resource["unsupportedWorkloads"]);
+    if !unsupported.is_empty() {
+        out.push_str(&format!(
+            "<h3>{}</h3><ul>",
+            tr(
+                app,
+                "Local workloads not checked",
+                "검사하지 않는 로컬 워크로드"
+            )
+        ));
+        for workload in unsupported {
+            let reason = match text(workload, "reason") {
+                "cluster_managed" => tr(app, "Cluster-managed service", "클러스터 관리 서비스"),
+                _ => tr(app, "Unsupported workload", "지원하지 않는 워크로드"),
+            };
+            out.push_str(&format!(
+                "<li>{} · {}</li>",
+                escape(text(workload, "name")),
+                escape(reason)
+            ));
+        }
+        out.push_str("</ul>");
+    }
     let services = list(&app.resource["services"]);
     if services.is_empty() {
         out.push_str(&format!(
