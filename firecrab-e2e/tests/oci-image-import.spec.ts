@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { createNetwork, importOci } from "./support/wasmDashboard";
+import { createNetwork, importOci } from "./support/dashboard";
 import { ApiCleanup } from "../src/api.js";
 import { openVmTab, vmPanel } from "./support/vmPanel";
 import {
@@ -93,7 +93,9 @@ test("creates a VM from the imported image and asserts the guest service started
   );
 
   await openEnglish(page, "/#/networks");
-  await expect(page.locator("#content")).toHaveAttribute("data-loaded", "true");
+  await expect(
+    page.getByRole("button", { name: "New network", exact: true }),
+  ).toBeVisible();
   if ((await page.locator("table.network-table tbody tr").count()) === 0) {
     await createNetwork(page, NETWORK_NAME, NETWORK_CIDR);
     const networks = await api.listNetworks();
@@ -104,17 +106,17 @@ test("creates a VM from the imported image and asserts the guest service started
   await openEnglish(page, "/#/vms");
   await page.locator("#vm-list-add").click();
   await expect(page).toHaveURL(/#\/vms\/new$/);
-  await expect(page.locator("#field-template")).toBeEnabled({
+  await expect(page.locator("#vm-image")).toBeEnabled({
     timeout: 15_000,
   });
   await expect(
-    page.locator(`#field-template option[value="${alias()}"]`),
+    page.locator(`#vm-image option[value="${alias()}"]`),
   ).toHaveCount(1, {
     timeout: 15_000,
   });
-  await page.locator("#field-name").fill(VM_NAME);
-  await page.locator("#field-template").selectOption(alias());
-  await expect(page.locator("#field-microNetworkId")).not.toHaveValue("");
+  await page.locator("#vm-name").fill(VM_NAME);
+  await page.locator("#vm-image").selectOption(alias());
+  await expect(page.locator("#vm-micro-network")).not.toHaveValue("");
   await page.locator("#editor button[type=submit]").click();
   await expect(page).toHaveURL(/#\/vms(?:\?vm=.+)?$/);
 
@@ -122,7 +124,7 @@ test("creates a VM from the imported image and asserts the guest service started
   await expect(row).toBeVisible();
   // Row actions live behind the Actions toggle now.
   await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
-  await page.getByRole("menuitem", { name: "start", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Start", exact: true }).click();
   await expect(row.locator(".vm-status-label")).toHaveAttribute(
     "data-state",
     /running|error/,

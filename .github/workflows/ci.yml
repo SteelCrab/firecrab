@@ -166,7 +166,9 @@ jobs:
           sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-firecrab-address.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress
           sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-api.py --api "$bin/firecrab-api" --helper "$bin/firecrab-helper" --ingress target/ingress/firecrab-ingress
           cp "$profiles"/*.profraw "$CARGO_LLVM_COV_TARGET_DIR/"
-          cargo llvm-cov report --lcov --output-path lcov.info
+          # Opt-in, owned-VM QA harnesses are tests, not shipped runtime code.
+          # Keep every production module in coverage; these harnesses need explicit QA resources.
+          cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex '/micromanager/agents/qa/'
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v7
@@ -503,8 +505,16 @@ jobs:
     # Playwright specs tagged @dashboard fake the API or console they need, so
     # they run without KVM or the net helper. Guest-boot halves stay manual.
     runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v7
+
+      - name: Free unused runner SDKs
+        # This job uses Rust, Node and Chrome; leave room for restored coverage artifacts.
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -517,6 +527,13 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-
 
+      - name: Remove unused incremental artifacts
+        run: |
+          if [ -d target ]; then
+            find target -type d -name incremental -prune -exec rm -rf {} +
+          fi
+          df -h /
+
       - name: Install pinned toolchain
         run: rustup show
 
@@ -528,7 +545,6 @@ jobs:
             firecrab-frontend/package-lock.json
             firecrab-e2e/package-lock.json
 
-      - uses: ./.github/actions/setup-wasm
 
       - name: Install dashboard and E2E dependencies
         run: |
@@ -560,17 +576,13 @@ jobs:
             target/qa/secrets
           retention-days: 14
 
-  wasm-terminal:
-    name: WASM terminal (${{ matrix.browser }}, production)
+  react-terminal:
+    name: React terminal (${{ matrix.browser }}, production)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         browser: [chromium, firefox, webkit]
-    env:
-      FIRECRAB_MOCKED_E2E_PRODUCTION: "1"
-      FIRECRAB_MOCKED_E2E_CROSS_BROWSER: "1"
-      FIRECRAB_MOCKED_E2E_BASE_URL: http://127.0.0.1:8099
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -580,28 +592,19 @@ jobs:
           cache-dependency-path: |
             firecrab-frontend/package-lock.json
             firecrab-e2e/package-lock.json
-      - uses: ./.github/actions/setup-wasm
-      - name: Install dashboard and browser test dependencies
+      - name: Install dependencies and browser
         run: |
           npm ci --prefix firecrab-frontend
           npm ci --prefix firecrab-e2e
-          npx --prefix firecrab-e2e playwright install --with-deps ${{ matrix.browser }}
-      - name: Check WASM browser test types
-        run: node firecrab-e2e/node_modules/tsrs/bin/tsrs -p firecrab-e2e/tsconfig.wasm.json
-      - name: Check the production WASM console and session behavior
-        run: >-
-          npm run test:mocked --prefix firecrab-e2e --
-          tests/wasm-terminal.spec.ts tests/console-session.spec.ts
-          --project ${{ matrix.browser }}
-      - name: Verify standalone WASM artifacts
-        run: node --test firecrab-e2e/scripts/test-terminal-build.mjs
-      - name: WASM terminal browser results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: wasm-terminal-${{ matrix.browser }}
-          path: firecrab-e2e/test-results
-          retention-days: 14
+          npx --prefix firecrab-frontend playwright install --with-deps ${{ matrix.browser }}
+      - name: Build and test terminal
+        env:
+          FIRECRAB_TERMINAL_BROWSER: ${{ matrix.browser }}
+        run: |
+          npm run build --prefix firecrab-frontend
+          node --test firecrab-frontend/tests/terminal-ui.test.mjs
+          node --test firecrab-e2e/scripts/test-terminal-build.mjs
+          FIRECRAB_MOCKED_E2E_PRODUCTION=1 FIRECRAB_MOCKED_E2E_CROSS_BROWSER=1 npm run test:mocked --prefix firecrab-e2e -- tests/console-session.spec.ts --grep @dashboard --project ${{ matrix.browser }}
 
   pipe-databases:
     name: PIPE databases (real API, PostgreSQL, MySQL, TLS and browser)
@@ -636,7 +639,6 @@ jobs:
           cache-dependency-path: |
             firecrab-frontend/package-lock.json
             firecrab-e2e/package-lock.json
-      - uses: ./.github/actions/setup-wasm
 
       - name: Build dashboard
         run: |
@@ -770,7 +772,6 @@ jobs:
             firecrab-frontend/package-lock.json
             firecrab-e2e/package-lock.json
 
-      - uses: ./.github/actions/setup-wasm
 
       - name: Install cargo-llvm-cov for runtime QA
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -927,10 +928,11 @@ jobs:
           FIRECRAB_E2E_REQUIRE_GUEST_BOOT: "1"
           FIRECRAB_E2E_REQUIRE_RUNNING_API: "1"
           FIRECRAB_E2E_REQUIRE_GUEST_RESIZE: "1"
+          FIRECRAB_E2E_PRODUCTION: "1"
         run: |
-          # Report console failures before running the broad dashboard suite.
+          # Fixture suites run in e2e-dashboard with private API ports.
           npm run test:console --prefix firecrab-e2e 2>&1 | tee target/qa/console-browser.log
-          npm test --prefix firecrab-e2e -- --grep-invert 'terminal session end' 2>&1 | tee target/qa/browser.log
+          npm run test:guest --prefix firecrab-e2e 2>&1 | tee target/qa/browser.log
 
       - name: QA nginx env, port-forward, shells
         if: ${{ !cancelled() && steps.install-service.outcome == 'success' && steps.enable-kvm.outcome == 'success' && steps.guest-kernel.outcome == 'success' }}
@@ -1211,7 +1213,7 @@ jobs:
           done
 
   frontend:
-    name: Frontend (Rust/WASM lint, tests, build)
+    name: Frontend (React lint, tests, build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -1225,7 +1227,6 @@ jobs:
           cache: npm
           cache-dependency-path: firecrab-frontend/package-lock.json
 
-      - uses: ./.github/actions/setup-wasm
       - run: npm ci
       - run: npm ci --prefix ../firecrab-e2e
       - run: ../firecrab-e2e/node_modules/.bin/playwright install --with-deps chromium

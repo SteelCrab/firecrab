@@ -1,0 +1,105 @@
+import type { VmState, VmResponse } from "./bindings";
+
+export type VmAction = "start" | "pause" | "resume" | "stop" | "delete";
+
+/** Display name for each VM state, as `t(english, korean)` arguments. */
+export const VM_STATE_LABELS: Record<VmState, [string, string]> = {
+  created: ["Created", "생성됨"],
+  starting: ["Starting", "시작 중"],
+  running: ["Running", "실행 중"],
+  pausing: ["Pausing", "일시정지 중"],
+  paused: ["Paused", "일시정지됨"],
+  resuming: ["Resuming", "재개 중"],
+  stopping: ["Stopping", "중지 중"],
+  stopped: ["Stopped", "중지됨"],
+  error: ["Error", "오류"],
+};
+
+/** RAM is restricted to powers of two, matching how cloud instance sizes
+ * are usually picked (and the server's own validation). */
+export const RAM_OPTIONS_MIB = [
+  128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768,
+] as const;
+
+/** Next valid RAM value in `direction` from `current` — snaps a non-power-of-two
+ * legacy value (e.g. a VM created before this constraint existed) to the
+ * nearest option in that direction instead of jumping to a list index. */
+export function stepRamValue(current: number, direction: 1 | -1): number {
+  const options = RAM_OPTIONS_MIB;
+  const exact = options.indexOf(current as (typeof options)[number]);
+  if (exact !== -1) {
+    const next = Math.min(Math.max(exact + direction, 0), options.length - 1);
+    return options[next];
+  }
+  if (direction === 1) {
+    return (
+      options.find((option) => option > current) ?? options[options.length - 1]
+    );
+  }
+  return (
+    [...options].reverse().find((option) => option < current) ?? options[0]
+  );
+}
+
+/** Lifecycle actions the API accepts for a VM in `state`; everything else 409s. */
+export function availableActions(state: VmState): VmAction[] {
+  switch (state) {
+    case "created":
+    case "stopped":
+    case "error":
+      return ["start", "delete"];
+    case "running":
+      return ["pause", "stop"];
+    case "paused":
+      return ["resume", "stop"];
+    case "pausing":
+      return ["pause", "resume", "stop"];
+    case "resuming":
+      return ["resume", "pause", "stop"];
+    case "starting":
+    case "stopping":
+      return [];
+    default:
+      return [];
+  }
+}
+
+export const VM_ACTION_LABELS: Record<VmAction, [string, string]> = {
+  start: ["Start", "시작"],
+  pause: ["Pause", "일시정지"],
+  resume: ["Resume", "재개"],
+  stop: ["Stop", "중지"],
+  delete: ["Delete", "삭제"],
+};
+
+/** cpu/ram/disk edits only take effect on the next start, so they're only
+ * accepted while no Firecracker process is live for this VM. */
+export function isEditableState(state: VmState): boolean {
+  return state === "created" || state === "stopped" || state === "error";
+}
+
+/** Env can be replaced while running; the guest service is restarted. */
+export function isEnvEditableState(state: VmState): boolean {
+  return isEditableState(state) || state === "running";
+}
+
+/** Port forwards apply live via nft, including on a running VM. */
+export function isPortEditableState(state: VmState): boolean {
+  return isEditableState(state) || state === "running";
+}
+
+/** Managed VMs are observable here; only their owning service changes them. */
+export function isInstanceVm(vm: Pick<VmResponse, "purpose">): boolean {
+  return !vm.purpose || vm.purpose === "instance";
+}
+
+export function vmActionLabels(
+  action: VmAction,
+  state: VmState,
+): [string, string] {
+  if (action === "pause" && (state === "pausing" || state === "resuming"))
+    return ["Retry pause", "일시정지 다시 시도"];
+  if (action === "resume" && (state === "resuming" || state === "pausing"))
+    return ["Retry resume", "재개 다시 시도"];
+  return VM_ACTION_LABELS[action];
+}

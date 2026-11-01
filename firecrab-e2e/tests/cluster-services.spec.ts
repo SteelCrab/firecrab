@@ -42,22 +42,22 @@ async function open(page: Page, loseFirstResponse = false) {
     };
   }
   await openDashboard(page, { routes, hash: "#/cluster", locale: "en" });
-  // Controller services are the third tab of the cluster screen.
-  await page.getByRole("tab", { name: /Controller services/ }).click();
+  // Services remain separate from host inventory and VM placements.
+  await page.getByRole("button", { name: "Services", exact: true }).click();
   return writes;
 }
 
 async function fill(page: Page, configuration?: { state: any; credentials: any; env: any }) {
-  const form = page.getByRole("region", { name: "Controller service form" });
+  const form = page.getByRole("form", { name: "Controller service form" });
   await form.getByLabel("Service name", { exact: true }).fill("web");
   await form.getByLabel("Pinned OCI image", { exact: true }).fill(IMAGE);
   await form.getByRole("checkbox", { name: "Worker A", exact: true }).check();
   await form.getByRole("checkbox", { name: "Worker B", exact: true }).check();
   if (configuration) {
-    await form.getByText("Application state and configuration", { exact: true }).click();
-    await form.getByLabel("Application state contract (JSON)", { exact: true }).fill(JSON.stringify(configuration.state));
-    await form.getByLabel("Environment variables (JSON)", { exact: true }).fill(JSON.stringify(configuration.env));
-    await form.getByLabel("Versioned controller credentials (JSON)", { exact: true }).fill(JSON.stringify(configuration.credentials));
+    await form.getByText("Application configuration", { exact: true }).click();
+    await form.getByRole("textbox", { name: "State (JSON)", exact: true }).fill(JSON.stringify(configuration.state));
+    await form.getByRole("textbox", { name: "Environment (JSON)", exact: true }).fill(JSON.stringify(configuration.env));
+    await form.getByRole("textbox", { name: "Credentials (JSON)", exact: true }).fill(JSON.stringify(configuration.credentials));
   }
   await form.getByRole("button", { name: "Create service", exact: true }).click();
 }
@@ -67,7 +67,7 @@ test("creates a shared release, preserves state and credential versions on edit,
   const state = { mode: "external_state", sessions: "SESSION_URL", requestsDuplicateSafe: true, backgroundWork: "duplicate_safe" };
   const credentials = { TOKEN: { secretId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", version: 3 } };
   await fill(page, { state, credentials, env: { SESSION_URL: "rediss://sessions.example" } });
-  const card = page.locator(`[data-cluster-service="${SERVICE}"]`);
+  const card = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "web", exact: true }) });
   await expect(card).toBeVisible();
   expect(writes[0].key).toBeTruthy();
   expect(writes[0].body.service).toMatchObject({ name: "web", image: IMAGE, replicas: 2 });
@@ -91,13 +91,13 @@ test("creates a shared release, preserves state and credential versions on edit,
 test("reload retries an unknown create result using the exact saved key and request", async ({ page }) => {
   const writes = await open(page, true);
   await fill(page);
-  await expect(page.getByRole("button", { name: "Retry saved service request", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
   const first = structuredClone(writes[0]);
   await page.reload();
-  await page.getByRole("tab", { name: /Controller services/ }).click();
-  await page.getByRole("button", { name: "Retry saved service request", exact: true }).click();
+  await page.getByRole("button", { name: "Services", exact: true }).click();
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
   await expect.poll(() => writes.length).toBe(2);
   expect(writes[1]).toEqual(first);
-  await expect(page.locator("[data-cluster-service]")).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "Retry saved service request", exact: true })).toBeHidden();
+  await expect(page.getByRole("article")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeHidden();
 });

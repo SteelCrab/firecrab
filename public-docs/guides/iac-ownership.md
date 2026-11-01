@@ -216,7 +216,7 @@ touch /tmp/firecrab-iac-qa.stop
 ```
 
 Install the existing E2E browser dependencies first; `FIRECRAB_IAC_QA_CHANNEL=chrome` selects installed Chrome.
-The check uses actual HTTP and compiled WASM, with isolated SQLite fixture records.
+The check uses actual HTTP and compiled React dashboard, with isolated SQLite fixture records.
 It verifies direct-mutation rejection, the durable acknowledgement, desktop and mobile rendering.
 The actual CLI discovers a native cleanup failure, recovers its original operation and checks the immutable retry.
 It does not boot Linux/KVM workloads or run a Terraform provider.

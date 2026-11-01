@@ -240,8 +240,6 @@ if ! command -v rustup >/dev/null; then
 fi
 export PATH="$HOME/.cargo/bin:$PATH"
 npm ci --prefix firecrab-e2e
-rustup target add wasm32-unknown-unknown
-cargo install wasm-pack --version 0.14.0 --locked
 npm ci --prefix firecrab-frontend
 ./firecrab-e2e/node_modules/.bin/playwright install --with-deps chromium
 export FIRECRAB_E2E_REUSE_SERVER=1

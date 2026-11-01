@@ -140,18 +140,6 @@ pub fn prepare(source: &Path) -> Result<PathBuf, Error> {
         // Even reinstalling the same lock must invalidate Vite's module cache.
         fs::write(stamp, format!("{revision}\n{}", Uuid::new_v4()))?;
     }
-    if frontend.join("Cargo.toml").is_file() {
-        report!("[BUILD] dashboard: Rust/WASM");
-        let status = Command::new("node")
-            .arg(frontend.join("scripts/wasm.mjs"))
-            .current_dir(&frontend)
-            .status()?;
-        if !status.success() {
-            return Err(Error::Failed(
-                "dashboard WASM build failed; see build output above".into(),
-            ));
-        }
-    }
     Ok(source)
 }
 
@@ -215,6 +203,21 @@ fn running(client: &Client, expected: &Session, url: &str) -> bool {
         .and_then(reqwest::blocking::Response::error_for_status)
         .and_then(|response| response.json::<Session>())
         .is_ok_and(|actual| actual == *expected)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn agent_terminal_proxy_ready(client: &Client, state: &Session) -> bool {
+    client
+        .get(format!("{}{CONTROL}", state.url()))
+        .header("X-Firecrab-Dev-Session", state.session.to_string())
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .is_ok_and(|response| {
+            response
+                .headers()
+                .get("x-firecrab-agent-terminal")
+                .is_some_and(|value| value == "1")
+        })
 }
 
 /// Serialize dashboard transitions for this installation.
@@ -320,6 +323,170 @@ pub fn clean(home: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// Read the selected native controller's existing identity without creating state.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn check_backend_identity(home: &Path, actual: Option<&str>) -> Result<(), Error> {
+    let expected: String =
+        serde_json::from_slice(&fs::read(home.join("runtime/resource-controller-id.json"))?)?;
+    if Uuid::parse_str(&expected).is_err() || actual != Some(expected.as_str()) {
+        return Err(Error::Failed(
+            "the development API does not belong to the selected instance; refusing to connect"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn connected_session(instance: &super::instance::Instance) -> Result<Option<Session>, Error> {
+    let path = instance
+        .managed_home
+        .join("runtime/dev-dashboard-connected.json");
+    let state: Session = match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !state.isolated
+        || !state.source.is_absolute()
+        || state.port == 0
+        || state.api_port != instance.api_port
+        || state.resource_port != instance.resource_port
+        || [instance.api_port, instance.resource_port].contains(&state.port)
+    {
+        return Err(Error::Failed(
+            "connected dashboard ownership does not match the selected development instance".into(),
+        ));
+    }
+    Ok(Some(state))
+}
+
+/// Foreground frontend development against an explicitly selected existing backend.
+/// This does not start, stop, deploy or modify the guest or its workloads.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn serve_existing(
+    source: &Path,
+    instance: &super::instance::Instance,
+    port: u16,
+) -> Result<i32, Error> {
+    let client = client()?;
+    let status = client
+        .get(format!("http://127.0.0.1:{}/api/host", instance.api_port))
+        .send()?
+        .error_for_status()?
+        .json::<firecrab_api_types::HostStatusResponse>()?;
+    check_backend_identity(
+        &instance.managed_home,
+        status
+            .platform
+            .as_ref()
+            .and_then(|platform| platform.controller_id.as_deref()),
+    )?;
+    let source = prepare(source)?;
+    let _lock = lock(&instance.managed_home)?;
+    let connected = connected_session(instance)?;
+    let previous = read_session(&instance.managed_home)?;
+    let owner = connected
+        .as_ref()
+        .filter(|state| state.port == port)
+        .or_else(|| previous.as_ref().filter(|state| state.port == port));
+    check_listening_port(&client, owner, port)?;
+    let dependencies = fs::read_to_string(
+        source.join("firecrab-frontend/node_modules/.firecrab-dev-dependencies"),
+    )?;
+    if let Some(current) = connected.as_ref().filter(|state| {
+        state.port == port
+            && state.source == source
+            && state.dependencies == dependencies
+            && agent_terminal_proxy_ready(&client, state)
+    }) && running(&client, current, &current.url())
+    {
+        report!(
+            "[DASHBOARD] {} (existing frontend; API and VMs unchanged)",
+            current.url()
+        );
+        return Ok(0);
+    }
+    if let Some(current) = connected.as_ref() {
+        stop_session(&client, current, &current.url())?;
+    }
+    if let Some(current) = previous.as_ref().filter(|state| state.port == port) {
+        stop_session(&client, current, &current.url())?;
+    }
+    let state = Session {
+        source: source.clone(),
+        session: Uuid::new_v4(),
+        dependencies,
+        port,
+        api_port: instance.api_port,
+        resource_port: instance.resource_port,
+        isolated: true,
+    };
+    let script = tempfile::Builder::new().suffix(".mjs").tempfile()?;
+    fs::write(script.path(), SERVER)?;
+    let mut child = Command::new("node")
+        .current_dir(
+            script
+                .path()
+                .parent()
+                .ok_or_else(|| Error::Failed("dashboard script directory is missing".into()))?,
+        )
+        .arg(
+            script
+                .path()
+                .file_name()
+                .ok_or_else(|| Error::Failed("dashboard script name is missing".into()))?,
+        )
+        .arg(&source)
+        .arg(port.to_string())
+        .env("FIRECRAB_DEV_SESSION", state.session.to_string())
+        .env("FIRECRAB_DEV_DEPENDENCIES", &state.dependencies)
+        .env("FIRECRAB_DEV_API_PORT", state.api_port.to_string())
+        .env(
+            "FIRECRAB_DEV_RESOURCE_PORT",
+            state.resource_port.to_string(),
+        )
+        .env("FIRECRAB_DEV_ISOLATED", "1")
+        .spawn()?;
+    let started = Instant::now();
+    while !running(&client, &state, &state.url()) {
+        if child.try_wait()?.is_some() || started.elapsed() > Duration::from_secs(10) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Error::Failed(
+                "connected dashboard failed to start; the API and VMs were not changed".into(),
+            ));
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let recorded = (|| -> Result<(), Error> {
+        use std::io::Write;
+        let mut record = tempfile::NamedTempFile::new_in(instance.managed_home.join("runtime"))?;
+        record.write_all(&serde_json::to_vec(&state)?)?;
+        record
+            .persist(
+                instance
+                    .managed_home
+                    .join("runtime/dev-dashboard-connected.json"),
+            )
+            .map_err(|error| error.error)?;
+        Ok(())
+    })();
+    if let Err(error) = recorded {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
+    drop(_lock);
+    report!(
+        "[API] existing development instance: http://127.0.0.1:{}/",
+        instance.api_port
+    );
+    report!("[SOURCE] dashboard: {}", source.display());
+    report!("[DASHBOARD] http://localhost:{port}/ (Ctrl+C stops only this dashboard)");
+    Ok(child.wait()?.code().unwrap_or(1))
+}
+
 /// Launch one detached Node process, or reuse the matching healthy dashboard.
 pub fn start(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
     let instance = super::instance::load(home)?;
@@ -352,6 +519,8 @@ pub fn start(source: &Path, home: &Path, port: u16) -> Result<(), Error> {
             && previous.api_port == api_port
             && previous.resource_port == resource_port
             && previous.isolated == isolated
+            && fs::read_to_string(home.join("runtime/dev-dashboard.mjs"))
+                .is_ok_and(|script| script == SERVER)
             && running(&client, &previous, &url)
         {
             return report_ready(&client, home, &url);

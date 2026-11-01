@@ -10,7 +10,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-RUNTIME_ROOTS = {"firecrab-api", "firecrab-helper", "firecrab-cli", "firecrab-frontend"}
+RUNTIME_ROOTS = {"firecrab-api", "firecrab-helper", "firecrab-cli"}
 NOTICE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT", "AUTHORS")
 
 # Keep the mechanical release gate deliberately small and fail closed. These are
@@ -368,7 +368,7 @@ def render_notices(
         "",
         "This file is generated from target-filtered Cargo metadata and the frontend",
         "npm lockfile during the release build. Runtime entries are reachable by the",
-        "distributed host binaries, the WASM dashboard, or non-dev npm packages.",
+        "distributed host binaries, the React dashboard, or non-dev npm packages.",
         "Build/test-only dependencies are inventoried separately at the end.",
         "",
         f"Runtime dependencies: {len(runtime)}",

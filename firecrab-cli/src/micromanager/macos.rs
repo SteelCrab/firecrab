@@ -201,6 +201,7 @@ pub fn run(command: Command) -> Result<i32, Error> {
             release,
             restore,
             yes,
+            ..
         } => {
             let layout = lifecycle::Layout::from_process_env()?;
             let private_logs = private_runtime(&layout.managed_home)?;
@@ -664,6 +665,16 @@ fn host_capability(layout: &lifecycle::Layout) -> debug::Capability {
             "host capability helper returned no valid report: {error}"
         )),
     }
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn agent_ssh_arguments(home: &Path) -> Result<Vec<OsString>, super::resource::Error> {
+    let settings = ssh::load(home).map_err(|e| super::resource::Error::Invalid(e.to_string()))?;
+    Ok(ssh::arguments(
+        &home.join("runtime"),
+        &settings,
+        ssh::Session::Command,
+    ))
 }
 
 /// A root shell in the management VM over its key-only SSH, or one command

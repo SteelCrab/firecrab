@@ -1,8 +1,17 @@
 # Guest console dimensions
 
-The browser console uses the Ghostty WASM core. A separate control path updates
+The React browser console uses xterm.js. A separate control path updates
 the guest's ttyS0 dimensions so foreground programs receive SIGWINCH and redraw.
 The shell remains the same shared serial session; no independent PTY is created.
+
+## Connection state and service logs
+
+The browser opens a console socket only after REST confirms that the VM is running.
+Stopping, pausing, or deleting a VM closes the socket and cancels reconnect attempts without clearing the terminal history. A running VM reconnects automatically after a temporary transport failure. Ending the guest shell still requires **New session**.
+An unavailable metadata sample does not close an established connection. Older metadata replies cannot override a newer VM state. A different VM UUID gets a separate terminal instance.
+
+The guest SSH launcher writes authentication records to `/var/log/firecrab/sshd.log` instead of the serial console. The directory is root-owned with mode `0700`; the file uses `0600`. Authentication logging stays enabled, and the launcher's incoming file-creation mask is preserved.
+The updated launcher is installed when the updated API specializes a guest disk. Frontend hot reload does not modify an existing guest SSH process. Development backend activation restarts API/helper services; restoring or cleaning development overrides also stops workload VMs. Backend activation is separate from a frontend-only refresh.
 
 ## Requirements
 
@@ -129,8 +138,7 @@ shared minimum, disconnect, stale replies, handshake, coalescing and cleanup.
 Browser checks:
 
 ```sh
-FIRECRAB_MOCKED_E2E_PRODUCTION=1 FIRECRAB_MOCKED_E2E_CROSS_BROWSER=1 \
-  npm run test:mocked --prefix firecrab-e2e -- tests/wasm-terminal.spec.ts
+node --test firecrab-frontend/tests/terminal-ui.test.mjs
 ```
 
 The booted-guest console check additionally compares `stty size` with both browser

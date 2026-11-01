@@ -82,7 +82,8 @@ async fn secret_preflight_rejects_missing_and_invalid_values_without_creating_re
             Extension(RequestId(id)),
             Path(id.to_string()),
             ValidatedJson(DeployMicroServiceRequest {
-                host_port: 30100,
+                // Secret validation must not depend on another test's host listener.
+                host_port: 0,
                 micro_network_id: None,
             }),
         )
@@ -843,8 +844,7 @@ async fn replicas_inherit_the_group_before_boot_and_redeploy_with_the_same_selec
         snapshot.spec = spec.clone();
         snapshot.request = DeployMicroServiceRequest {
             micro_network_id: Some(network.id),
-            // Security-group inheritance does not require public host ports.
-            host_port: 0,
+            host_port: free_port_range(spec.replicas),
         };
         validate_placement(&state, &spec, &snapshot.request, snapshot.id)
             .await

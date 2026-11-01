@@ -63,10 +63,9 @@ pub async fn start_kernel_install(
         return Err(AppError::not_found(request_id.0));
     }
     if state.kernel_installs.is_running(&version) {
-        return Err(AppError::conflict(
-            "kernel_install_in_progress",
-            "a kernel install is already running for this version",
-            request_id.0,
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(kernel_manager::snapshot(&state.kernel_installs, &version)),
         ));
     }
 
@@ -91,10 +90,9 @@ pub async fn start_kernel_install(
     {
         Ok(snapshot) => snapshot,
         Err("running") => {
-            return Err(AppError::conflict(
-                "kernel_install_in_progress",
-                "a kernel install is already running for this version",
-                request_id.0,
+            return Ok((
+                StatusCode::ACCEPTED,
+                Json(kernel_manager::snapshot(&state.kernel_installs, &version)),
             ));
         }
         Err(_) => return Err(AppError::internal(request_id.0)),
@@ -300,19 +298,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_kernel_install_rejects_a_second_running_job() {
+    async fn start_kernel_install_reconnects_to_the_same_running_job() {
         let directory = tempdir().unwrap();
         let mut state = empty_state(directory.path()).await;
         state.kernel_installs = ImageInstallTracker::disabled();
-        state.kernel_installs.begin("7.2.2").unwrap();
+        let started = state.kernel_installs.begin("7.2.2").unwrap();
+        state
+            .kernel_installs
+            .set_download_progress("7.2.2", 1234, Some(5678));
 
         let result =
-            start_kernel_install(State(state), Path("7.2.2".to_owned()), request_id()).await;
+            start_kernel_install(State(state.clone()), Path("7.2.2".to_owned()), request_id())
+                .await;
 
-        assert_eq!(
-            result.err().unwrap().into_response().status(),
-            StatusCode::CONFLICT
-        );
+        let response = result.unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let snapshot: firecrab_api_types::KernelInstallResponse =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(snapshot.started_at_ms, started.started_at_ms);
+        assert_eq!(snapshot.log, started.log);
+        assert_eq!(snapshot.downloaded_bytes, Some(1234));
+        assert_eq!(snapshot.total_bytes, Some(5678));
+        assert!(state.kernel_installs.is_running("7.2.2"));
     }
 
     #[tokio::test]
