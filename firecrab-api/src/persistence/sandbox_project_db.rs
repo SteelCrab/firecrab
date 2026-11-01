@@ -284,6 +284,10 @@ impl Store {
         }
         Ok(results)
     }
+    /// Keep the matched volume unchanged while an interrupted handoff is frozen.
+    pub(crate) fn sandbox_vm_migration_pending(&self, vm: Uuid) -> Result<bool, PersistenceError> {
+        Ok(self.lock().query_row("SELECT EXISTS(SELECT 1 FROM project_workspaces w JOIN sandbox_task_routes r ON r.project_id=w.project_id WHERE w.vm_id=?1 AND r.phase!='project')", [vm.to_string()], |row| row.get(0))?)
+    }
     pub(crate) fn sandbox_storage_status(
         &self,
         project: Uuid,

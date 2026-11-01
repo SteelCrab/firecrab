@@ -209,4 +209,76 @@ mod tests {
             receipt
         );
     }
+    #[tokio::test]
+    async fn prepared_migration_blocks_vm_start_until_the_same_handoff_completes() {
+        let (_dir, state, b) = fixture().await;
+        bind(&state, &b).await;
+        let b = binding(&state, b.project_id).unwrap();
+        let db = open(&state, &b).unwrap();
+        db.mark_initialized().unwrap();
+        drop(db);
+        let base = format!("/api/ai-sandbox/projects/{}/workspace", b.project_id);
+        let checkpoint = Uuid::new_v4();
+        let operation = Uuid::new_v4();
+        let (status, body) = call(
+            &state,
+            "PUT",
+            &format!("{base}/checkpoints/{checkpoint}"),
+            json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let db = open(&state, &b).unwrap();
+        db.conn.execute_batch("CREATE TRIGGER pause_migration BEFORE INSERT ON sandbox_migration BEGIN SELECT RAISE(ABORT,'pause'); END;").unwrap();
+        drop(db);
+        let path = format!("{base}/sandbox-migrations/{operation}");
+        assert_ne!(
+            call(
+                &state,
+                "PUT",
+                &path,
+                json!({"checkpointId":checkpoint}),
+                None
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert!(state.store.sandbox_vm_migration_pending(b.vm_id).unwrap());
+        assert!(
+            !state
+                .store
+                .sandbox_vm_migration_pending(Uuid::new_v4())
+                .unwrap()
+        );
+        let previous = state.vms.lock().unwrap().get(&b.vm_id).unwrap().state;
+        let result = handlers::vms::start_vm_request(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(b.vm_id.to_string()),
+        )
+        .await;
+        assert_eq!(result.unwrap_err().code(), "sandbox_migration_pending");
+        assert_eq!(
+            state.vms.lock().unwrap().get(&b.vm_id).unwrap().state,
+            previous
+        );
+        let db = open(&state, &b).unwrap();
+        db.conn
+            .execute_batch("DROP TRIGGER pause_migration")
+            .unwrap();
+        drop(db);
+        let (status, receipt) = call(
+            &state,
+            "PUT",
+            &path,
+            json!({"checkpointId":checkpoint}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{receipt}");
+        assert_eq!(receipt["storage"], "project");
+        assert!(!state.store.sandbox_vm_migration_pending(b.vm_id).unwrap());
+    }
 }

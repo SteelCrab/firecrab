@@ -1129,7 +1129,6 @@ async fn claim_start(
 ) -> Result<(Uuid, VmRecord), AppError> {
     let id = parse_id(&id, request_id.0)?;
     let _guard = state.lock_vm(id).await;
-    let _network_guard = state.network_mutations.lock().await;
     let vm = state
         .vms
         .lock()
@@ -1137,6 +1136,20 @@ async fn claim_start(
         .get(&id)
         .cloned()
         .ok_or_else(|| AppError::not_found(request_id.0))?;
+    let store = state.store.clone();
+    let migration_pending =
+        tokio::task::spawn_blocking(move || store.sandbox_vm_migration_pending(id))
+            .await
+            .map_err(|_| AppError::internal(request_id.0))?
+            .map_err(|_| AppError::internal(request_id.0))?;
+    if migration_pending {
+        return Err(AppError::conflict(
+            "sandbox_migration_pending",
+            "Resume the prepared Sandbox project migration before starting this VM",
+            request_id.0,
+        ));
+    }
+    let _network_guard = state.network_mutations.lock().await;
     if !state
         .store
         .vm_block_storages(id)

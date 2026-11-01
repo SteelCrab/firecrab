@@ -79,6 +79,8 @@ re-copy records or require the workload to remain stopped forever.
 
 Retry an interrupted operation with its original operation and checkpoint IDs.
 A crash before target commit leaves the source frozen and available for reads.
+Starting the bound workload VM is blocked until the same handoff completes. This
+keeps the stopped volume matched to the retained checkpoint during recovery.
 A crash after target commit causes the retry to validate the retained target copy
 before registry cutover. A crash after cutover returns the existing receipt.
 A different operation does not take over a prepared migration. A changed target,
@@ -121,7 +123,7 @@ acceptance remain pending.
   secure path tests. Its macOS run does not pass; hosted Linux CI is required.
   This limitation is not hidden by ignoring or weakening those tests.
 
-Local results: 15 focused persistence tests and 67 workspace tests pass. API and
+Local results: 15 focused persistence tests and 68 workspace tests pass. API and
 API-types Clippy with `-D warnings`, formatting and whitespace checks pass. The
 console resize fixture now emits each observed size marker in one `printf` so
 periodic guest output cannot split its prefix and value. TypeScript syntax is
