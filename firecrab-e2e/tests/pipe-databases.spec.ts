@@ -784,9 +784,9 @@ test.describe("PIPE databases @dashboard", () => {
         exact: true,
       })
       .click();
-    await expect(
-      panel.getByText("Connection removed. The source database is unchanged."),
-    ).toBeVisible();
+    await expect(panel.getByRole("status")).toHaveText(
+      "Connection removed. The source database is unchanged.",
+    );
     expect(mock.removes).toEqual([id]);
     await expect(
       panel.getByLabel("Database browser", { exact: true }),
