@@ -1,6 +1,6 @@
 //! Durable, bounded service log pages and per-runtime collection cursors.
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -75,6 +75,50 @@ fn bounded(message: &str) -> (String, bool) {
     (format!("{}…", &message[..end]), true)
 }
 
+// Guest output arrives in arbitrary chunks. Reconstruct a partial JSON line from
+// the already retained log records without persisting a second copy of secrets.
+fn security_prefix(
+    conn: &Connection,
+    service: Uuid,
+    vm: Uuid,
+    runtime: Uuid,
+    stream: &str,
+    sequence: i64,
+) -> Result<String, PersistenceError> {
+    let mut stmt = conn.prepare(
+        "SELECT message FROM service_observation_logs WHERE service_id=?1 AND vm_id=?2 AND runtime_id=?3 AND stream=?4 AND sequence<?5 ORDER BY sequence DESC LIMIT 16",
+    )?;
+    let messages = stmt.query_map(
+        params![
+            service.to_string(),
+            vm.to_string(),
+            runtime.to_string(),
+            stream,
+            sequence
+        ],
+        |row| row.get::<_, String>(0),
+    )?;
+    let mut prefix = String::new();
+    for message in messages {
+        let message = message?;
+        let tail = message
+            .rsplit_once('\n')
+            .map_or(message.as_str(), |(_, tail)| tail);
+        if tail.len() + prefix.len() > MAX_MESSAGE_BYTES {
+            return Ok(String::new());
+        }
+        prefix.insert_str(0, tail);
+        if message.contains('\n') {
+            break;
+        }
+    }
+    // A complete JSON value without a newline was already counted.
+    if serde_json::from_str::<serde_json::Value>(&prefix).is_ok() {
+        prefix.clear();
+    }
+    Ok(prefix)
+}
+
 impl Store {
     /// Remove expired history even when a service no longer emits records.
     pub(crate) fn prune_service_observations(&self) -> Result<(), PersistenceError> {
@@ -98,6 +142,16 @@ impl Store {
             "DELETE FROM service_observation_events WHERE timestamp < ?1",
             [now.div_euclid(1000).saturating_sub(HISTORY_MS / 1000)],
         )?;
+        for table in [
+            "service_security_activity",
+            "service_security_ingress",
+            "service_security_database_activity",
+        ] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE bucket < ?1"),
+                [cutoff.div_euclid(1000)],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -154,6 +208,7 @@ impl Store {
         if !owner_exists {
             return Ok(());
         }
+        let release = super::security_activity::release_for_replica(&tx, service, vm)?;
         let mut gap = lost;
         let mut added = 0;
         for record in records {
@@ -170,7 +225,26 @@ impl Store {
             }
             let (message, clipped) = bounded(&record.message);
             gap |= clipped;
-            added += tx.execute("INSERT OR IGNORE INTO service_observation_logs(service_id,vm_id,runtime_id,sequence,timestamp_ms,stream,message) VALUES (?1,?2,?3,?4,?5,?6,?7)", params![service_id, vm_id, runtime_id, sequence, record.timestamp, record.stream, message])?;
+            let inserted = tx.execute("INSERT OR IGNORE INTO service_observation_logs(service_id,vm_id,runtime_id,sequence,timestamp_ms,stream,message) VALUES (?1,?2,?3,?4,?5,?6,?7)", params![service_id, vm_id, runtime_id, sequence, record.timestamp, record.stream, message])?;
+            added += inserted;
+            if inserted > 0
+                && let Some(release) = release
+            {
+                let prefix = if lost || clipped {
+                    String::new()
+                } else {
+                    security_prefix(&tx, service, vm, runtime, &record.stream, sequence)?
+                };
+                super::security_activity::record(
+                    &tx,
+                    service,
+                    release,
+                    vm,
+                    record.timestamp,
+                    &(prefix + &message),
+                    now,
+                )?;
+            }
         }
         let previous_loss: Option<i64> = tx.query_row("SELECT loss_at FROM service_observation_cursors WHERE service_id=?1 AND vm_id=?2 AND runtime_id=?3", params![service_id, vm_id, runtime_id], |row| row.get(0)).optional()?.flatten();
         tx.execute("INSERT INTO service_observation_cursors(service_id,vm_id,runtime_id,sequence,status,loss_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(service_id,vm_id,runtime_id) DO UPDATE SET sequence=MAX(sequence,excluded.sequence),status=excluded.status,loss_at=COALESCE(excluded.loss_at,loss_at),updated_at=excluded.updated_at", params![service_id, vm_id, runtime_id, next, status, gap.then_some(now), now])?;
@@ -351,6 +425,13 @@ mod tests {
                 conn.execute("INSERT INTO service_observation_logs(service_id, vm_id, runtime_id, sequence, timestamp_ms, stream, message) VALUES (?1, ?2, 'runtime', 1, ?3, 'stdout', 'line')", params![service, vm, at]).unwrap();
                 conn.execute("INSERT INTO service_observation_cursors(service_id, vm_id, runtime_id, sequence, status, updated_at) VALUES (?1, ?2, 'runtime', 1, 'inactive', ?3)", params![service, vm, at]).unwrap();
                 conn.execute("INSERT INTO service_observation_events(service_id, timestamp, kind, severity, message) VALUES (?1, ?2, 'test', 'info', 'event')", params![service, at / 1000]).unwrap();
+                for table in [
+                    "service_security_activity",
+                    "service_security_ingress",
+                    "service_security_database_activity",
+                ] {
+                    conn.execute(&format!("INSERT INTO {table}(service_id,deployment_id,vm_id,bucket,denied) VALUES (?1,'release',?2,?3,10)"), params![service,vm,at / 1000]).unwrap();
+                }
             }
         }
         store.prune_service_observations_at(now).unwrap();
@@ -359,6 +440,9 @@ mod tests {
             "service_observation_logs",
             "service_observation_events",
             "service_observation_cursors",
+            "service_security_activity",
+            "service_security_ingress",
+            "service_security_database_activity",
         ] {
             let count: i64 = conn
                 .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {

@@ -35,11 +35,9 @@ async fn all_unready_endpoints_keep_the_owned_hostname_and_return_503_until_read
     assert_eq!(suspended.routes.len(), 1);
     assert_eq!(suspended.routes[0].owner, Some(owner(&record)));
     assert!(suspended.routes[0].upstreams.is_empty());
-    assert!(
-        suspended
-            .nginx()
-            .contains("location / { root /dev/null; try_files /unready =503; }")
-    );
+    assert!(suspended.nginx().lines().any(|line| {
+        line.contains("location / {") && line.contains("root /dev/null; try_files /unready =503;")
+    }));
     assert!(!suspended.nginx().contains("upstream fc_route_0"));
     assert!(record.domain_route_owned);
     assert!(before_cleanup(&state, &record).await.is_err());

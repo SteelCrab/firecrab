@@ -1,0 +1,6 @@
+#!/bin/sh
+if pg_isready -q -h 127.0.0.1 -p 5432 -U postgres; then
+    printf 'Content-Type: text/plain\r\n\r\nhealthy\n'
+else
+    printf 'Status: 503 Service Unavailable\r\nContent-Type: text/plain\r\n\r\nstarting\n'
+fi
