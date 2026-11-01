@@ -1,4 +1,8 @@
 //! Private, authenticated OpenVSCode sessions use the retained project folder and native UID scope.
+mod clients;
+mod clients_db;
+#[cfg(test)]
+mod clients_tests;
 mod db;
 mod package;
 mod proxy;
@@ -20,6 +24,7 @@ struct Open {
 /// Register private editor metadata and explicit open operations.
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
+        .merge(clients::routes())
         .route(
             "/api/ai-sandbox/projects/{project}/workspace/editors/{view}",
             get(read).put(start),
@@ -29,6 +34,7 @@ pub(super) fn routes() -> Router<AppState> {
             post(stop::request),
         )
 }
+pub(super) use clients_db::SCHEMA as CLIENT_SCHEMA;
 pub(super) use db::SCHEMA;
 pub(crate) use proxy::dispatch;
 /// Prevent public terminal creation from adopting a private editor UID scope.
@@ -37,7 +43,7 @@ pub(super) fn private_attempt(db: &super::db::ProjectDb, id: Uuid) -> Result<boo
 }
 /// Expose routing metadata without the guest token or native attempt identity.
 fn response(project: Uuid, e: &Editor) -> serde_json::Value {
-    serde_json::json!({"id":e.id,"viewId":e.view,"workingDirectory":e.directory,"file":e.file,"openRequest":e.open_request,"status":e.status,"instance":instance(e),"bundleRevision":e.bundle_revision,"host":proxy::host(project,e.id)})
+    serde_json::json!({"id":e.id,"viewId":e.view,"workingDirectory":e.directory,"file":e.file,"openRequest":e.open_request,"status":e.status,"instance":instance(e),"bundleRevision":e.bundle_revision,"browserProtocol":e.browser_protocol,"host":proxy::host(project,e.id)})
 }
 /// An opaque execution identity supports conditional stops without exposing a native PTY ID.
 fn instance(editor: &Editor) -> String {
@@ -220,7 +226,7 @@ async fn start(
         terminals::execute(&state,caller,&ctx.binding,id.0)?;
         let mut editor=Editor{id:existing.as_ref().map(|e|e.id).unwrap_or_else(Uuid::new_v4),view,caller,directory:request.working_directory.clone(),file:request.file,
             open_request:request.request_id,runtime:ctx.runtime,generation:ctx.binding.generation,attempt:Uuid::new_v4(),proof:None,
-            token:format!("{}{}",Uuid::new_v4().simple(),Uuid::new_v4().simple()),parent_origin:origin,bundle_revision:Some(package::revision().map_err(|e|e.response(id.0))?),status:"starting".into()};
+            token:format!("{}{}",Uuid::new_v4().simple(),Uuid::new_v4().simple()),parent_origin:origin,bundle_revision:Some(package::revision().map_err(|e|e.response(id.0))?),browser_protocol:Some(1),status:"starting".into()};
         persist(&ctx,&editor).map_err(|e|e.response(id.0))?;
         let frame=terminals_guest::frame(editor.attempt,1,0,24,80,editor.directory.as_bytes()).map_err(|e|e.response(id.0))?;
         let native=terminals_guest::request(&mut ctx,frame).await.map_err(|e|e.response(id.0))?;

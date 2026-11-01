@@ -5,13 +5,13 @@ use axum::{
     http::{Request, StatusCode},
 };
 use serde_json::json;
-fn person() -> Caller {
+pub(super) fn person() -> Caller {
     serde_json::from_value(
         json!({"principal":SandboxPrincipal::Host(Uuid::new_v4()),"operator":false}),
     )
     .unwrap()
 }
-fn record(caller: Caller, view: Uuid, b: &Binding) -> Editor {
+pub(super) fn record(caller: Caller, view: Uuid, b: &Binding) -> Editor {
     Editor {
         id: Uuid::new_v4(),
         view,
@@ -29,6 +29,7 @@ fn record(caller: Caller, view: Uuid, b: &Binding) -> Editor {
         token: "b".repeat(64),
         parent_origin: "http://localhost:5523".into(),
         bundle_revision: None,
+        browser_protocol: None,
         status: "starting".into(),
     }
 }
@@ -396,7 +397,7 @@ async fn editor_stop_is_private_idempotent_and_cannot_terminate_a_replacement() 
     assert_eq!(db.view(alice, view).unwrap().document["retained"], true);
 }
 
-async fn private_gateway(
+pub(super) async fn private_gateway(
     state: AppState,
     host: &str,
     uri: &str,

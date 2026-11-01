@@ -245,7 +245,15 @@ pub(super) fn page(a: &App) -> String {
                 t.layout.zoom * 100.,
                 button("cw-reset", "", tr(a, "Reset view", "화면 초기화")),
                 if t.editor.is_some() { "" } else { "hidden" },
-                button("cw-back", "", tr(a, "Back to canvas", "캔버스로 돌아가기")),
+                format_args!(
+                    "{}{}",
+                    button("cw-back", "", tr(a, "Back to canvas", "캔버스로 돌아가기")),
+                    button(
+                        "cw-editor-close",
+                        &t.identity.id,
+                        tr(a, "Close editor", "에디터 닫기")
+                    )
+                ),
                 tr(
                     a,
                     "Personal Page · Web VS Code",
@@ -259,8 +267,9 @@ pub(super) fn page(a: &App) -> String {
         .map(|t| t.error.as_str())
         .filter(|e| !e.is_empty())
         .unwrap_or(&s.error);
+    let closing=s.tabs.iter().filter(|t|t.closing.is_some()).map(|t|format!("<div class=\"cw-close-notice\" role=\"status\"><span>{}</span><button data-action=\"cw-close-retry\" data-id=\"{}\" {}>{}</button><button data-action=\"cw-close-keep\" data-id=\"{}\" {}>{}</button></div>",tr(a,if t.busy{"Confirming private draft save…"}else{"Editor retained until its private drafts are confirmed."},if t.busy{"개인 초안 저장을 확인한다…"}else{"개인 초안 저장을 확인할 때까지 에디터를 유지한다."}),escape(&t.identity.id),if t.busy{"disabled"}else{""},tr(a,"Retry close","닫기 재시도"),escape(&t.identity.id),if t.busy{"disabled"}else{""},tr(a,"Keep editing","계속 편집"))).collect::<String>();
     format!(
-        "<div class=\"cw-app\"><aside class=\"cw-sidebar\"><a class=\"cw-brand\" href=\"#/ai-canvas\"><img src=\"/firecrab.png\" alt=\"\" width=\"24\" height=\"24\"><div><strong>firecrab</strong><small>private microvm cloud</small></div></a><p class=\"cw-nav-label\">WORKSPACE</p><button class=\"cw-nav-current\" data-action=\"cw-back\">▦ AI Canvas</button>{sidebar}<footer><a href=\"#/vms\">{}</a><label for=\"language\">KO / EN</label><select id=\"language\"><option value=\"ko\" {}>한국어</option><option value=\"en\" {}>English</option></select></footer></aside><main class=\"cw-main\"><header class=\"cw-header\"><span>AI / <strong>AI Canvas</strong></span><span id=\"cw-save-state\">{}</span>{}</header><div class=\"cw-tabs\"><div role=\"tablist\" aria-label=\"{}\">{tabs}</div><button data-action=\"cw-new\" aria-label=\"{}\">+</button></div><div id=\"cw-error\" role=\"status\">{}</div><div class=\"cw-body\">{body}</div></main></div><div id=\"menu-root\"></div><div id=\"modal-root\"></div><div id=\"palette-root\"></div><div id=\"tooltip-root\"></div>",
+        "<div class=\"cw-app\"><aside class=\"cw-sidebar\"><a class=\"cw-brand\" href=\"#/ai-canvas\"><img src=\"/firecrab.png\" alt=\"\" width=\"24\" height=\"24\"><div><strong>firecrab</strong><small>private microvm cloud</small></div></a><p class=\"cw-nav-label\">WORKSPACE</p><button class=\"cw-nav-current\" data-action=\"cw-back\">▦ AI Canvas</button>{sidebar}<footer><a href=\"#/vms\">{}</a><label for=\"language\">KO / EN</label><select id=\"language\"><option value=\"ko\" {}>한국어</option><option value=\"en\" {}>English</option></select></footer></aside><main class=\"cw-main\"><header class=\"cw-header\"><span>AI / <strong>AI Canvas</strong></span><span id=\"cw-save-state\">{}</span>{}</header><div class=\"cw-tabs\"><div role=\"tablist\" aria-label=\"{}\">{tabs}</div><button data-action=\"cw-new\" aria-label=\"{}\">+</button></div><div id=\"cw-error\" role=\"status\">{}</div>{closing}<div class=\"cw-body\">{body}</div></main></div><div id=\"menu-root\"></div><div id=\"modal-root\"></div><div id=\"palette-root\"></div><div id=\"tooltip-root\"></div>",
         tr(a, "Dashboard", "대시보드"),
         if a.locale == "ko" { "selected" } else { "" },
         if a.locale == "en" { "selected" } else { "" },

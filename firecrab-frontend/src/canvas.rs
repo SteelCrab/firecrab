@@ -1,4 +1,5 @@
 //! Real canvas views use project APIs; local storage contains only tab identities.
+mod editor;
 mod pty;
 mod revisions;
 mod view;
@@ -79,6 +80,9 @@ struct Tab {
     retryable: bool,
     pending: Option<(u64, Value)>,
     editor: Option<String>,
+    editor_client: Option<editor::Client>,
+    editor_opened: bool,
+    closing: Option<editor::Close>,
     workspace: Value,
     files: Vec<Value>,
     terminals: Vec<Value>,
@@ -105,6 +109,9 @@ impl Tab {
             retryable: false,
             pending: None,
             editor: None,
+            editor_client: None,
+            editor_opened: false,
+            closing: None,
             workspace: Value::Null,
             files: vec![],
             terminals: vec![],
@@ -576,35 +583,21 @@ pub fn action(app: &Shared, action: &str, id: &str) -> bool {
             render(app);
             open_tab(app.clone());
         }
-        "cw-close" => {
-            let mut a = app.borrow_mut();
-            let Some(t) = a.canvas.tabs.iter().find(|t| t.identity.id == id) else {
-                return true;
-            };
-            if t.changed != t.saved || t.pending.is_some() {
-                a.canvas.error = "Save this tab before closing it".into();
-                drop(a);
-                render(app);
-                return true;
-            }
-            a.canvas.tabs.retain(|t| t.identity.id != id);
-            if a.canvas.active == id {
-                a.canvas.active = a
-                    .canvas
-                    .tabs
-                    .first()
-                    .map(|t| t.identity.id.clone())
-                    .unwrap_or_default();
-            }
-            remember(&a.canvas);
-            drop(a);
-            if app.borrow().canvas.tabs.is_empty() {
-                action_new(app);
-            } else {
-                render(app);
-                open_tab(app.clone());
+        "cw-close" => editor::start(app, id, editor::Close::Tab),
+        "cw-editor-close" => editor::start(app, id, editor::Close::Editor),
+        "cw-close-retry" => {
+            let kind = app
+                .borrow()
+                .canvas
+                .tabs
+                .iter()
+                .find(|t| t.identity.id == id)
+                .and_then(|t| t.closing);
+            if let Some(kind) = kind {
+                editor::start(app, id, kind);
             }
         }
+        "cw-close-keep" => editor::keep(app, id),
         "cw-open" => {
             let project = element("cw-project-select")
                 .and_then(|e| e.dyn_into::<HtmlSelectElement>().ok())
@@ -742,6 +735,29 @@ pub fn action(app: &Shared, action: &str, id: &str) -> bool {
     }
     true
 }
+fn remove_tab(app: &Shared, identity: &Identity) {
+    let mut a = app.borrow_mut();
+    a.canvas
+        .tabs
+        .retain(|t| t.identity.id != identity.id || t.identity.project != identity.project);
+    if a.canvas.active == identity.id {
+        a.canvas.active = a
+            .canvas
+            .tabs
+            .first()
+            .map(|t| t.identity.id.clone())
+            .unwrap_or_default();
+    }
+    remember(&a.canvas);
+    dirty(&mut a);
+    drop(a);
+    if app.borrow().canvas.tabs.is_empty() {
+        action_new(app);
+    } else {
+        render(app);
+        open_tab(app.clone());
+    }
+}
 fn action_new(app: &Shared) {
     action(app, "cw-new", "");
 }
@@ -865,7 +881,7 @@ fn open_editor(app: Shared, file: Option<String>) {
     let Some(t) = tab_mut(&mut a.canvas) else {
         return;
     };
-    if t.busy {
+    if t.busy || t.closing.is_some() {
         return;
     }
     t.busy = true;
@@ -875,67 +891,48 @@ fn open_editor(app: Shared, file: Option<String>) {
     drop(a);
     render(&app);
     spawn_local(async move {
-        let result=workspace_request("PUT",&format!("{}/editors/{}",base(&identity.project),identity.id),Some(&json!({"viewId":identity.id,"workingDirectory":folder,"file":file,"requestId":uuid()}))).await;
+        let result=async {
+            let opened=workspace_request("PUT",&format!("{}/editors/{}",base(&identity.project),identity.id),Some(&json!({"viewId":identity.id,"workingDirectory":folder,"file":file,"requestId":uuid()}))).await?;
+            let existing=app.borrow().canvas.tabs.iter().find(|t|t.identity.id==identity.id&&t.identity.project==identity.project).and_then(|t|t.editor_client.clone());
+            if let Some(client)=existing {
+                if client.instance==text(&opened,"instance")&&client.directory==text(&opened,"workingDirectory") {
+                    if let Some(t)=app.borrow_mut().canvas.tabs.iter_mut().find(|t|t.identity.id==identity.id&&t.identity.project==identity.project){t.editor=Some(client.url);}
+                    return Ok::<(),String>(());
+                }
+                if let Some(t)=app.borrow_mut().canvas.tabs.iter_mut().find(|t|t.identity.id==identity.id&&t.identity.project==identity.project){t.closing=Some(editor::Close::Editor);}
+                render(&app);
+                editor::detach(&app,&identity).await?;
+            }
+            let host=opened["host"].as_str().ok_or("Missing editor host")?;
+            if !host.ends_with(".editor.localhost")||host.contains(['/',':']) {return Err("Invalid editor origin".into());}
+            let protocol=window().location().protocol().unwrap_or_else(|_|"http:".into());
+            let port=window().location().port().unwrap_or_default();
+            let client=if opened["browserProtocol"]==1 {Some(uuid())}else{None};
+            let uri=format!("{protocol}//{host}{}/?folder={}{}",if port.is_empty(){String::new()}else{format!(":{port}")},api::encode(&format!("firecrab://{}/{}",text(&opened,"id"),text(&opened,"workingDirectory"))),client.as_ref().map(|id|format!("&firecrabClient={id}")).unwrap_or_default());
+            if pty::binding("can-attach-editor",JsValue::from_str(&json!({"id":identity.id,"url":uri,"client":client}).to_string())).as_bool()!=Some(true) {
+                return Err("The previous browser editor is retained. Preserve its recovery data before replacing this older client.".into());
+            }
+            if let Some(client)=&client {
+                workspace_request("PUT",&format!("{}/editors/{}/clients/{client}",base(&identity.project),identity.id),Some(&json!({"instance":opened["instance"]}))).await?;
+            }
+            let mut a=app.borrow_mut();
+            let t=a.canvas.tabs.iter_mut().find(|t|t.identity.id==identity.id&&t.identity.project==identity.project).ok_or("The canvas changed while opening its editor")?;
+            t.editor_client=client.map(|id|editor::Client{id,instance:text(&opened,"instance").into(),directory:text(&opened,"workingDirectory").into(),url:uri.clone(),pending:None,window_proof:None});
+            t.editor_opened=true;t.editor=Some(uri);t.closing=None;Ok(())
+        }.await;
         if let Some(t) = app
             .borrow_mut()
             .canvas
             .tabs
             .iter_mut()
-            .find(|t| t.identity.id == identity.id)
+            .find(|t| t.identity.id == identity.id && t.identity.project == identity.project)
         {
             t.busy = false;
-        }
-        match result {
-            Ok(editor) => {
-                let Some(host) = editor["host"].as_str() else {
-                    return;
-                };
-                // A guest editor must always use a distinct, project-scoped origin.
-                if !host.ends_with(".editor.localhost") || host.contains(['/', ':']) {
-                    return;
-                }
-                let protocol = window()
-                    .location()
-                    .protocol()
-                    .unwrap_or_else(|_| "http:".into());
-                let port = window().location().port().unwrap_or_default();
-                let uri = format!(
-                    "{protocol}//{host}{}/?folder={}",
-                    if port.is_empty() {
-                        String::new()
-                    } else {
-                        format!(":{port}")
-                    },
-                    api::encode(&format!(
-                        "firecrab://{}/{}",
-                        text(&editor, "id"),
-                        text(&editor, "workingDirectory")
-                    ))
-                );
-                if let Some(t) = app
-                    .borrow_mut()
-                    .canvas
-                    .tabs
-                    .iter_mut()
-                    .find(|t| t.identity.id == identity.id)
-                {
-                    t.editor = Some(uri);
-                }
-                render(&app);
-            }
-            Err(e) => {
-                if let Some(t) = app
-                    .borrow_mut()
-                    .canvas
-                    .tabs
-                    .iter_mut()
-                    .find(|t| t.identity.id == identity.id)
-                {
-                    t.error = e;
-                }
-                render(&app);
+            if let Err(error) = result {
+                t.error = error;
             }
         }
+        render(&app);
     });
 }
 pub fn install(app: &Shared) -> Result<(), JsValue> {

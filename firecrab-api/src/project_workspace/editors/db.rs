@@ -35,6 +35,9 @@ pub(crate) struct Editor {
     /// Immutable code identity. Absent on records created before versioned bundles.
     #[serde(default)]
     pub bundle_revision: Option<String>,
+    /// Browser flush/detach protocol supported by this immutable extension bundle.
+    #[serde(default)]
+    pub browser_protocol: Option<u32>,
     /// Confirmed lifecycle state; recovery never replays a launch.
     pub status: String,
 }

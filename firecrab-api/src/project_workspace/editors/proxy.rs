@@ -134,8 +134,12 @@ pub(crate) async fn dispatch(
     }
 }
 /// Supply the actor-owned workbench token without URL credentials or parent-domain cookies.
-fn workbench_configuration(bytes: &[u8], token: &str) -> Result<Vec<u8>, Error> {
-    if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+fn workbench_configuration(
+    bytes: &[u8],
+    token: &str,
+    browser: Option<(Uuid, Uuid, &str)>,
+) -> Result<Vec<u8>, Error> {
+    if !clients::canonical_sha(token) {
         return Err(Error::Conflict("Invalid retained editor authentication"));
     }
     let mut html = std::str::from_utf8(bytes)
@@ -156,16 +160,126 @@ fn workbench_configuration(bytes: &[u8], token: &str) -> Result<Vec<u8>, Error> 
         .find('>')
         .ok_or(Error::Conflict("Invalid editor workbench configuration"))?
         + start;
-    let marker = "data-settings=\"{";
-    let offset = html[start..end].find(marker).ok_or(Error::Conflict(
+    let marker = "data-settings=\"";
+    let value_start = html[start..end].find(marker).ok_or(Error::Conflict(
         "Unsupported editor workbench configuration",
     ))? + start
         + marker.len();
-    html.insert_str(
-        offset,
-        &format!("&quot;connectionToken&quot;:&quot;{token}&quot;,"),
-    );
+    let value_end = html[value_start..end]
+        .find('"')
+        .ok_or(Error::Conflict("Invalid editor workbench settings"))?
+        + value_start;
+    // Decode ampersands last so escaped literal entity text is not decoded twice.
+    let decoded = html[value_start..value_end]
+        .replace("&quot;", "\"")
+        .replace("&#34;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    let mut settings: serde_json::Value = serde_json::from_str(&decoded)
+        .map_err(|_| Error::Conflict("Invalid editor workbench settings"))?;
+    let values = settings
+        .as_object_mut()
+        .ok_or(Error::Conflict("Invalid editor workbench settings"))?;
+    values.insert("connectionToken".into(), serde_json::json!(token));
+    if let Some((client, proof, origin)) = browser {
+        let defaults = values
+            .entry("configurationDefaults")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or(Error::Conflict("Invalid editor configuration defaults"))?;
+        // Web VS Code defaults to auto-saving. Preserve private buffers until an
+        // explicit save; user preferences can still opt into auto-save.
+        defaults.insert("files.autoSave".into(), serde_json::json!("off"));
+        defaults.insert("firecrab.browserClientId".into(), serde_json::json!(client));
+        defaults.insert(
+            "firecrab.browserWindowProof".into(),
+            serde_json::json!(proof),
+        );
+        defaults.insert("firecrab.parentOrigin".into(), serde_json::json!(origin));
+    }
+    let encoded = serde_json::to_string(&settings)?
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    html.replace_range(value_start..value_end, &encoded);
+    if browser.is_some() {
+        // Reuse the pinned document's script nonce, preserving its CSP restrictions.
+        let nonce = html.split("<script").skip(1).find_map(|tag| {
+            let tag = tag.split('>').next()?;
+            let start = tag.find("nonce=\"")? + 7;
+            let value = tag[start..].split('"').next()?;
+            (value.len() <= 128
+                && !value.is_empty()
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"+/_-=".contains(&b)))
+            .then_some(value.to_string())
+        });
+        let nonce = nonce.map(|n| format!(" nonce=\"{n}\"")).unwrap_or_default();
+        let at = html.rfind("</body>").unwrap_or(html.len());
+        html.insert_str(
+            at,
+            &format!("<script{nonce} src=\"/_firecrab/browser-bridge.js\"></script>"),
+        );
+    }
     Ok(html.into_bytes())
+}
+/// Browser identities are explicit and canonical; duplicate query values are rejected.
+fn workbench_client(query: Option<&str>) -> Result<Option<Uuid>, Error> {
+    let url = reqwest::Url::parse(&format!("http://editor.localhost/?{}", query.unwrap_or("")))
+        .map_err(|_| Error::Invalid("Invalid editor browser query"))?;
+    let mut result = None;
+    for (key, value) in url.query_pairs().filter(|(key, _)| key == "firecrabClient") {
+        let _ = key;
+        let id =
+            Uuid::parse_str(&value).map_err(|_| Error::Invalid("Invalid editor browser client"))?;
+        if result.is_some() || id.is_nil() || value != id.to_string() {
+            return Err(Error::Invalid(
+                "Use one canonical editor browser client identity",
+            ));
+        }
+        result = Some(id);
+    }
+    Ok(result)
+}
+/// Fixed gateway paths cannot escape the current private editor/view.
+fn client_suffix(endpoint: &str, view: Uuid) -> Result<Option<String>, Error> {
+    let parts: Vec<_> = endpoint.split('/').collect();
+    if parts.first() == Some(&"clients") {
+        if !(parts.len() == 2 || parts.len() == 3 && matches!(parts[2], "control" | "report")) {
+            return Err(Error::Missing);
+        }
+        let id = Uuid::parse_str(parts[1]).map_err(|_| Error::Missing)?;
+        if id.is_nil() || id.to_string() != parts[1] {
+            return Err(Error::Missing);
+        }
+        return Ok(Some(format!(
+            "editors/{view}/clients/{}{}",
+            id,
+            parts.get(2).map(|s| format!("/{s}")).unwrap_or_default()
+        )));
+    }
+    if parts.first() == Some(&"closed-snapshots") {
+        if parts.len() == 1 {
+            return Ok(Some(format!("editors/{view}/closed-snapshots")));
+        }
+        if parts.len() != 3 {
+            return Err(Error::Missing);
+        }
+        let id = Uuid::parse_str(parts[1]).map_err(|_| Error::Missing)?;
+        let revision = parts[2].parse::<u64>().map_err(|_| Error::Missing)?;
+        if id.is_nil() || id.to_string() != parts[1] || revision.to_string() != parts[2] {
+            return Err(Error::Missing);
+        }
+        return Ok(Some(format!(
+            "editors/{view}/closed-snapshots/{id}/{revision}"
+        )));
+    }
+    Ok(None)
 }
 /// Authorize private workbench traffic and recheck active streams after upgrades.
 async fn serve(
@@ -188,8 +302,17 @@ async fn serve(
     let caller = Caller::from_request_parts(&mut parts, &state).await?;
     let retained = matches!(
         parts.uri.path(),
-        "/_firecrab/session" | "/_firecrab/draft" | "/_firecrab/drafts"
-    );
+        "/_firecrab/session"
+            | "/_firecrab/draft"
+            | "/_firecrab/drafts"
+            | "/_firecrab/browser-bridge.js"
+    ) || parts.uri.path().starts_with("/_firecrab/clients/")
+        || parts.uri.path().starts_with("/_firecrab/closed-snapshots");
+    let browser_client = if workbench {
+        workbench_client(parts.uri.query()).map_err(|e| e.response(id))?
+    } else {
+        None
+    };
     let session_metadata = parts.uri.path() == "/_firecrab/session";
     let local = state.clone();
     let (b, record, directory) = blocking(id, move || {
@@ -223,6 +346,21 @@ async fn serve(
                 e
             }
         };
+        if e.caller.principal != caller.principal {
+            return Err(Error::Denied);
+        }
+        if workbench && e.browser_protocol == Some(1) {
+            let client = browser_client.ok_or(Error::Invalid(
+                "Open this editor through AI Canvas to register its browser client",
+            ))?;
+            let db = open(&local, &b)?;
+            let c = db.editor_client(&e, client)?;
+            if c.instance != instance(&e) || c.command == "detach" {
+                return Err(Error::Conflict(
+                    "This browser client ended or belongs to another editor execution",
+                ));
+            }
+        }
         let directory = super::super::db::project_directory(&local.workspaces.root, &b, false)?;
         if e.caller.principal != caller.principal {
             return Err(Error::Denied);
@@ -247,18 +385,38 @@ async fn serve(
     .await?;
     let path = parts.uri.path().to_string();
     if let Some(endpoint) = path.strip_prefix("/_firecrab/") {
+        if endpoint == "browser-bridge.js" {
+            if parts.method != axum::http::Method::GET {
+                return Err(Error::Missing.response(id));
+            }
+            return Ok((
+                [
+                    (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+                    (header::CACHE_CONTROL, "no-store"),
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                ],
+                include_str!("editor/browser-bridge.js"),
+            )
+                .into_response());
+        }
         if endpoint == "session" {
             if parts.method != axum::http::Method::GET {
                 return Err(Error::Invalid("Use GET for editor session state").response(id));
             }
             return Ok(Json(response(project, &record)).into_response());
         }
-        let suffix = match endpoint {
-            "files" => "files".to_string(),
-            "tree" => "files/tree".into(),
-            "draft" => format!("views/{}/draft", record.view),
-            "drafts" => format!("views/{}/drafts", record.view),
-            _ => return Err(Error::Missing.response(id)),
+        let suffix = if let Some(suffix) =
+            client_suffix(endpoint, record.view).map_err(|e| e.response(id))?
+        {
+            suffix
+        } else {
+            match endpoint {
+                "files" => "files".to_string(),
+                "tree" => "files/tree".into(),
+                "draft" => format!("views/{}/draft", record.view),
+                "drafts" => format!("views/{}/drafts", record.view),
+                _ => return Err(Error::Missing.response(id)),
+            }
         };
         let query = parts
             .uri
@@ -403,7 +561,31 @@ async fn serve(
         .await
         .map_err(|_| Error::Conflict("Workbench configuration timed out").response(id))?
         .map_err(|_| Error::Conflict("Workbench configuration exceeds its limit").response(id))?;
-        let html = workbench_configuration(&bytes, &record.token).map_err(|e| e.response(id))?;
+        let window_proof = browser_client.map(|_| Uuid::new_v4());
+        let html = workbench_configuration(
+            &bytes,
+            &record.token,
+            browser_client
+                .zip(window_proof)
+                .map(|(c, p)| (c, p, record.parent_origin.as_str())),
+        )
+        .map_err(|e| e.response(id))?;
+        if let Some((client, proof)) = browser_client.zip(window_proof) {
+            let local = state.clone();
+            let original = instance(&record);
+            blocking(id, move || {
+                let b = binding(&local, project)?;
+                let db = open(&local, &b)?;
+                let e = db.editor(caller, editor, false)?;
+                if e.status != "ready" || instance(&e) != original {
+                    return Err(Error::Conflict(
+                        "The editor changed before browser activation",
+                    ));
+                }
+                db.activate_editor_client(&e, client, proof)
+            })
+            .await?;
+        }
         current(&state, caller, &b, &record, id)?;
         headers.remove(header::CONTENT_LENGTH);
         headers.remove(header::ETAG);
@@ -461,18 +643,68 @@ mod tests {
         let original = br#"<meta id="vscode-workbench-web-configuration" data-settings="{&quot;remoteAuthority&quot;:&quot;scoped.editor.localhost&quot;}">"#;
         let a = "a".repeat(64);
         let b = "b".repeat(64);
-        let first = String::from_utf8(workbench_configuration(original, &a).unwrap()).unwrap();
-        let second = String::from_utf8(workbench_configuration(original, &b).unwrap()).unwrap();
+        let first =
+            String::from_utf8(workbench_configuration(original, &a, None).unwrap()).unwrap();
+        let second =
+            String::from_utf8(workbench_configuration(original, &b, None).unwrap()).unwrap();
         assert!(first.contains(&a));
         assert!(!first.contains(&b));
         assert!(second.contains(&b));
         assert!(first.contains("&quot;remoteAuthority&quot;:&quot;scoped.editor.localhost&quot;"));
         assert!(
-            workbench_configuration(&[original.as_slice(), original.as_slice()].concat(), &a)
-                .is_err()
+            workbench_configuration(
+                &[original.as_slice(), original.as_slice()].concat(),
+                &a,
+                None
+            )
+            .is_err()
         );
-        assert!(workbench_configuration(b"<html></html>", &a).is_err());
-        assert!(workbench_configuration(original, "invalid").is_err());
+        assert!(workbench_configuration(b"<html></html>", &a, None).is_err());
+        assert!(workbench_configuration(original, "invalid", None).is_err());
+    }
+    #[test]
+    fn browser_defaults_preserve_other_settings_and_only_accept_canonical_client_routes() {
+        let client = Uuid::new_v4();
+        let original=br#"<meta id="vscode-workbench-web-configuration" data-settings="{&quot;configurationDefaults&quot;:{&quot;files.autoSave&quot;:&quot;afterDelay&quot;},&quot;banner&quot;:&quot;&amp;quot;literal&lt;&quot;}">"#;
+        let html = String::from_utf8(
+            workbench_configuration(
+                original,
+                &"a".repeat(64),
+                Some((client, Uuid::new_v4(), "http://localhost")),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(html.contains(&client.to_string()));
+        assert!(html.contains("&quot;files.autoSave&quot;:&quot;off&quot;"));
+        assert!(!html.contains("afterDelay"));
+        assert!(html.contains("&amp;quot;literal&lt;"));
+        assert_eq!(
+            workbench_client(Some(&format!("folder=x&firecrabClient={client}"))).unwrap(),
+            Some(client)
+        );
+        for query in [
+            format!("firecrabClient={client}&firecrabClient={client}"),
+            "firecrabClient=00000000-0000-0000-0000-000000000000".into(),
+            format!("firecrabClient={}", client.to_string().to_uppercase()),
+        ] {
+            assert!(workbench_client(Some(&query)).is_err());
+        }
+        let view = Uuid::new_v4();
+        assert_eq!(
+            client_suffix(&format!("clients/{client}/report"), view)
+                .unwrap()
+                .unwrap(),
+            format!("editors/{view}/clients/{client}/report")
+        );
+        for bad in [
+            format!("clients/{client}/api/vms"),
+            format!("clients/{client}/../../api"),
+            format!("closed-snapshots/{client}/01"),
+            "clients/not-a-client".into(),
+        ] {
+            assert!(client_suffix(&bad, view).is_err());
+        }
     }
     #[test]
     fn hosts_round_trip_and_reject_unscoped_or_noncanonical_names() {

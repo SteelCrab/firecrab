@@ -122,7 +122,7 @@ fn additive_schema_six_preserves_saved_files_and_private_views() {
     )
     .unwrap();
     db.conn
-        .execute_batch("DROP TABLE instruction_snapshots; PRAGMA user_version=5")
+        .execute_batch("DROP TABLE private_editor_snapshots; DROP TABLE private_editor_clients; DROP TABLE instruction_snapshots; PRAGMA user_version=5")
         .unwrap();
     drop(db);
     binding.provisioning = false;
@@ -141,7 +141,7 @@ fn additive_schema_six_preserves_saved_files_and_private_views() {
         .conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(schema, 6);
+    assert_eq!(schema, db::SCHEMA_VERSION);
 }
 
 #[test]

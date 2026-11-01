@@ -123,7 +123,7 @@ pub(super) fn attach(app: &Shared) {
     let editor = t
         .editor
         .as_ref()
-        .map(|url| json!({"id":t.identity.id,"url":url}));
+        .map(|url| json!({"id":t.identity.id,"url":url,"client":t.editor_client.as_ref().map(|c|c.id.as_str())}));
     let references: std::collections::BTreeSet<_> = a
         .canvas
         .tabs

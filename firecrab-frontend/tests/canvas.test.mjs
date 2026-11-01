@@ -5,6 +5,8 @@ import { chromium } from '../../firecrab-e2e/node_modules/playwright-core/index.
 import { expect } from '../../firecrab-e2e/node_modules/@playwright/test/index.mjs';
 import { createFixtureServer } from './fixture-server.mjs';
 import { installCanvasHistoryFixture } from './canvas-fixture.mjs';
+import { installCanvasEditorFixture } from './editor-fixture.mjs';
+import { randomUUID } from 'node:crypto';
 
 let fixture, browser, context, page, errors;
 before(async () => {
@@ -89,4 +91,89 @@ test('canvas pages older retained versions and reloads without dispatching a res
   await expect(page.locator('.cw-history li')).toHaveCount(100);
   assert.equal(canvas.restoreRequests.length, 0);
   assert.equal(canvas.restoreCount, 0);
+});
+
+
+// Controller-only browser regressions. The stub is not Web VS Code or a VM.
+async function openEditorController() {
+  const canvas=installCanvasEditorFixture(fixture);
+  await page.route('**/*',async route=>{
+    const url=new URL(route.request().url());
+    if(!url.hostname.endsWith('.editor.localhost'))return route.continue();
+    const id=url.searchParams.get('firecrabClient'),proof=randomUUID();canvas.activate(id,proof);
+    return route.fulfill({contentType:'text/html',body:`<h1>Controller fixture · no native editor</h1><script>
+      addEventListener('message',event=>{
+        if(event.source===parent&&event.origin===${JSON.stringify(fixture.url)}&&event.data.type==='firecrab-window-proof')
+          parent.postMessage({...event.data,windowProof:${JSON.stringify(proof)}},event.origin);
+      });</script>`});
+  });
+  await page.goto(`${fixture.url}/#/ai-canvas`);
+  await page.getByLabel('Project',{exact:true}).selectOption(canvas.project);
+  await page.getByRole('button',{name:'Open project',exact:true}).click();
+  await page.getByRole('button',{name:'Personal Page · Web VS Code',exact:true}).click();
+  await expect(page.locator('iframe')).toHaveCount(1);
+  await expect.poll(()=>[...canvas.clients.values()].some(c=>c.activations.length>0)).toBe(true);
+  return {canvas,id:[...canvas.clients.keys()][0]};
+}
+
+test('closing an editor waits for a window-bound snapshot and preserves its native process',async()=>{
+  const {canvas,id}=await openEditorController();
+  await page.getByRole('button',{name:'Close editor',exact:true}).click();
+  await expect.poll(()=>canvas.clients.get(id).command).toBe('close');
+  await expect(page.locator('iframe')).toHaveAttribute('inert','');
+  await expect(page.getByRole('tab')).toHaveCount(1);
+  canvas.acknowledge(id);
+  await expect(page.locator('iframe')).toHaveCount(0);
+  assert.equal(canvas.clients.get(id).status,'detached');assert.equal(canvas.stopRequests,0);
+  await page.getByRole('button',{name:'Personal Page · Web VS Code',exact:true}).click();
+  await expect(page.locator('iframe')).toHaveCount(1);
+  await expect.poll(()=>canvas.clients.size).toBe(2);
+  assert.equal(canvas.editors.size,1);
+});
+
+test('failed tab close retains its iframe and Keep editing waits for a worker acknowledgement',async()=>{
+  const {canvas,id}=await openEditorController();
+  await page.getByRole('button',{name:'Close tab',exact:true}).click();
+  await expect.poll(()=>canvas.clients.get(id).command).toBe('close');
+  Object.assign(canvas.clients.get(id),{status:'error',error:'Private draft storage unavailable'});
+  await expect(page.getByRole('button',{name:'Keep editing',exact:true})).toBeEnabled();
+  await page.getByRole('button',{name:'Keep editing',exact:true}).click();
+  await expect.poll(()=>canvas.clients.get(id).command).toBe('cancel');
+  await expect(page.locator('iframe')).toHaveAttribute('inert','');
+  canvas.reportActive(id);
+  await expect(page.locator('iframe')).not.toHaveAttribute('inert','');
+  await expect(page.getByRole('tab')).toHaveCount(1);
+  await page.getByRole('button',{name:'Close tab',exact:true}).click();
+  await expect.poll(()=>canvas.clients.get(id).command).toBe('close');canvas.acknowledge(id);
+  await expect(page.locator('iframe')).toHaveCount(0);assert.equal(canvas.stopRequests,0);
+  await expect(page.getByRole('heading',{name:'A new workspace',exact:true})).toBeVisible();
+});
+
+test('an accepted ambiguous close reply reconciles without reloading its iframe',async()=>{
+  const {canvas,id}=await openEditorController();canvas.loseNextControlAck();
+  const source=await page.locator('iframe').getAttribute('src');
+  await page.getByRole('button',{name:'Close editor',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Retry close',exact:true})).toBeEnabled();
+  await page.getByRole('button',{name:'Retry close',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Retry close',exact:true})).toBeDisabled();
+  assert.equal(canvas.controls.length,1);
+  assert.equal(await page.locator('iframe').getAttribute('src'),source);
+  canvas.acknowledge(id);await expect(page.locator('iframe')).toHaveCount(0);
+  assert.equal(canvas.stopRequests,0);
+});
+
+
+test('an unaccepted close reply retries its original operation identity',async()=>{
+  const {canvas,id}=await openEditorController();const requests=[];
+  await page.route('**/clients/*/control',async route=>{
+    requests.push(route.request().postDataJSON());
+    if(requests.length===1)return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{message:'Request did not reach storage'}})});
+    return route.fallback();
+  });
+  await page.getByRole('button',{name:'Close editor',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Retry close',exact:true})).toBeEnabled();
+  await page.getByRole('button',{name:'Retry close',exact:true}).click();
+  await expect.poll(()=>canvas.clients.get(id).command).toBe('close');
+  assert.deepEqual(requests[0],requests[1]);canvas.acknowledge(id);
+  await expect(page.locator('iframe')).toHaveCount(0);assert.equal(canvas.stopRequests,0);
 });

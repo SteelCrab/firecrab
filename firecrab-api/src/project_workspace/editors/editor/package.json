@@ -1,7 +1,7 @@
 {
   "name": "project-workspace",
   "publisher": "firecrab",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "Firecrab Project Workspace",
   "description": "Authorized project files and private unsaved buffers.",
   "engines": {
@@ -31,7 +31,30 @@
       {
         "command": "firecrabWorkspace.retryDrafts",
         "title": "Firecrab: Retry Private Draft Persistence"
+      },
+      {
+        "command": "firecrabWorkspace.closedDrafts",
+        "title": "Firecrab: Open Closed Editor Recovery Copy"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Firecrab",
+      "properties": {
+        "firecrab.browserClientId": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "description": "Browser identity supplied by the authorized Firecrab workbench.",
+          "restricted": true
+        },
+        "firecrab.browserWindowProof": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "restricted": true,
+          "description": "Window identity supplied by the authorized Firecrab workbench."
+        }
+      }
+    }
   }
 }

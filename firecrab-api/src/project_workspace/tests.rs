@@ -1053,7 +1053,7 @@ fn workspace_files_additive_schema_upgrade_preserves_v1_identity_and_document() 
     db.save_document(0, &json!({"kept":"v1 metadata"})).unwrap();
     db.conn
         .execute_batch(
-            "DROP TABLE instruction_snapshots; DROP TABLE private_editor_attempts; DROP TABLE private_editors; DROP TABLE private_receipts; DROP TABLE private_drafts; DROP TABLE private_views; DROP TABLE terminal_controls; DROP TABLE terminal_output; DROP TABLE terminal_sessions; DROP TABLE file_operations; DROP TABLE file_versions; PRAGMA user_version=1;",
+            "DROP TABLE private_editor_snapshots; DROP TABLE private_editor_clients; DROP TABLE instruction_snapshots; DROP TABLE private_editor_attempts; DROP TABLE private_editors; DROP TABLE private_receipts; DROP TABLE private_drafts; DROP TABLE private_views; DROP TABLE terminal_controls; DROP TABLE terminal_output; DROP TABLE terminal_sessions; DROP TABLE file_operations; DROP TABLE file_versions; PRAGMA user_version=1;",
         )
         .unwrap();
     drop(db);
@@ -1363,7 +1363,7 @@ async fn workspace_files_schema_upgrade_keeps_completed_v1_checkpoints_readable(
         let legacy = rusqlite::Connection::open(saved.join("project.db")).unwrap();
         legacy
             .execute_batch(
-                "DROP TABLE instruction_snapshots; DROP TABLE private_editor_attempts; DROP TABLE private_editors; DROP TABLE private_receipts; DROP TABLE private_drafts; DROP TABLE private_views; DROP TABLE terminal_controls; DROP TABLE terminal_output; DROP TABLE terminal_sessions; DROP TABLE file_operations; DROP TABLE file_versions; PRAGMA user_version=1;",
+                "DROP TABLE private_editor_snapshots; DROP TABLE private_editor_clients; DROP TABLE instruction_snapshots; DROP TABLE private_editor_attempts; DROP TABLE private_editors; DROP TABLE private_receipts; DROP TABLE private_drafts; DROP TABLE private_views; DROP TABLE terminal_controls; DROP TABLE terminal_output; DROP TABLE terminal_sessions; DROP TABLE file_operations; DROP TABLE file_versions; PRAGMA user_version=1;",
             )
             .unwrap();
     }

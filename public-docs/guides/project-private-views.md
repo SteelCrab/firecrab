@@ -71,3 +71,5 @@ or an active draft.
 Limits reject the attempted mutation explicitly and preserve prior data.
 Tab closure retains its data. Permanent deletion and retention maintenance
 must follow the project's explicit data lifecycle.
+
+See [Private editor browser lifecycle](project-editor-browser-close.md) for acknowledged close snapshots, resume controls, and browser shutdown limits.
