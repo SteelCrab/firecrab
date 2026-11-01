@@ -920,11 +920,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/pipe/ai/connections/{id}/login",
-            post(handlers::pipe_ai::login_start),
+            post(handlers::pipe_ai::login_start)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
         )
         .route(
             "/api/pipe/ai/logins/{id}",
-            get(handlers::pipe_ai::login_status),
+            get(handlers::pipe_ai::login_status)
+                .delete(handlers::pipe_ai::login_cancel)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
         )
         .route("/auth/callback", get(handlers::pipe_ai::login_callback))
         .route(
@@ -949,7 +952,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
                 .delete(handlers::code_workspaces::delete)
                 .layer(middleware::from_fn(handlers::secrets::no_store)),
         )
-        .route("/api/pipe/ai/connections", get(handlers::pipe_ai::list))
+        .route(
+            "/api/pipe/ai/connections",
+            get(handlers::pipe_ai::list).layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
         .route(
             "/api/code/workspaces/{id}/verify",
             post(handlers::code_workspaces::verify)
@@ -957,7 +963,9 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/pipe/ai/connections/{id}",
-            axum::routing::put(handlers::pipe_ai::save).delete(handlers::pipe_ai::disconnect),
+            axum::routing::put(handlers::pipe_ai::save)
+                .delete(handlers::pipe_ai::disconnect)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
         )
         .route(
             "/api/pipe/ai/connections/{id}/verify",

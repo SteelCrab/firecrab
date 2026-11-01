@@ -37,9 +37,11 @@ enable operations. The earlier local interactive mockup is not runtime evidence.
    OpenCode uses OpenAI or Anthropic API keys. Claude Code uses Anthropic keys.
 4. Save the workspace. The resulting detail view shows the persisted settings.
 
-Account-management links open the existing screens in another tab. Return to
-setup and reload connections to reuse the new account without copying its
-credential. An incompatible or disconnected selection prevents saving with that
+GitHub management opens its existing screen in another tab. AI AUTH opens the
+shared account manager in CODE and keeps the setup fields. Returning reloads
+connections to reuse the account without copying its credential. See
+[CODE AI AUTH](code-ai-auth.md) for login, replacement, cancellation and checks.
+An incompatible or disconnected selection prevents saving with that
 agent. Saving checks current account metadata in the existing write transaction.
 It does not verify CLI sign-in, provision a VM, open VS Code or run an agent.
 

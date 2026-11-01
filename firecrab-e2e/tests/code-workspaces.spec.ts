@@ -34,7 +34,7 @@ for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) {
     await expect(page.locator("#code-details")).toContainText(locale === "en" ? "Agent authentication is not verified here." : "이 화면에서는 에이전트 인증을 검증하지 않습니다.");
     await expect(page.locator("#detail-panel")).toBeHidden();
     if (locale === "en") await page.screenshot({ path: info.outputPath(`code-workspaces-en-${width}.png`), fullPage: true });
-    const auth = page.getByRole("link", { name: locale === "en" ? "Manage AI AUTH" : "AI AUTH 관리", exact: true });
+    const auth = page.getByRole("button", { name: locale === "en" ? "Manage AI AUTH" : "AI AUTH 관리", exact: true });
     await auth.scrollIntoViewIfNeeded();
     await expect(auth).toBeInViewport();
     if (locale === "en") await page.screenshot({ path: info.outputPath(`code-workspaces-en-auth-${width}.png`), fullPage: true });
@@ -148,5 +148,5 @@ test("configuration and runtime cannot inject markup or enable an agent @dashboa
   await expect(page.locator("#code-details")).toContainText("Account is incompatible with the selected agent");
   await expect(page.locator("#code-details [role=alert]")).toHaveText("File synchronization failed. The VM was kept running.");
   await expect(page.getByRole("button", { name: /Run agent|Open editor/ })).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Manage AI AUTH" })).toHaveAttribute("href", "#/pipe/ai");
+  await expect(page.getByRole("button", { name: "Manage AI AUTH" })).toHaveAttribute("data-action", "code-auth-open");
 });

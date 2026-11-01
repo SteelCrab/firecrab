@@ -1,4 +1,5 @@
 //! CODE reads saved configuration and current runtime observations. No credentials are fetched.
+pub(crate) mod auth;
 mod setup;
 mod view;
 use crate::{App, Shared, api, document, element, render_content};
@@ -111,6 +112,7 @@ pub struct State {
     error: Option<Problem>,
     query: String,
     setup: Option<setup::Setup>,
+    auth: auth::State,
 }
 
 fn uuid(id: &str) -> bool {
@@ -131,6 +133,9 @@ fn tr<'a>(app: &App, en: &'a str, ko: &'a str) -> &'a str {
     if app.locale == "ko" { ko } else { en }
 }
 pub fn api_status(app: &App) -> (&'static str, &'static str) {
+    if auth::is_open(app) {
+        return auth::api_status(app);
+    }
     if app.route == "code/new" {
         return setup::api_status(app);
     }
@@ -198,6 +203,10 @@ fn decode_runtime(id: &str, value: Value) -> Result<Runtime, Problem> {
 }
 
 pub fn load(app: Shared) {
+    if auth::is_open(&app.borrow()) {
+        auth::load(app);
+        return;
+    }
     if app.borrow().route == "code/new" {
         setup::load(app);
         return;
@@ -246,11 +255,15 @@ pub fn load(app: Shared) {
         state.code.runtime = observation;
         match records {
             Ok(records) => {
+                if state.code.workspaces != records {
+                    auth::invalidate(&mut state);
+                }
                 state.code.workspaces = records;
                 state.code.error = None;
                 state.connection_error.clear();
             }
             Err(error) => {
+                auth::invalidate(&mut state);
                 state.code.workspaces.clear();
                 state.code.error = Some(error);
             }
@@ -263,6 +276,9 @@ pub fn load(app: Shared) {
 }
 
 pub fn action(app: &Shared, action: &str) -> bool {
+    if auth::action(app, action) {
+        return true;
+    }
     if setup::action(app, action) {
         return true;
     }

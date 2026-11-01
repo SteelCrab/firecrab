@@ -487,7 +487,7 @@ pub fn page(app: &App) -> String {
     let actions = match section {
         "code" if app.route == "code/new" => String::new(),
         "code" => format!(
-            "<a class=\"btn primary\" href=\"#/code/new\">{}</a>",
+            "<button class=\"btn\" type=\"button\" data-action=\"code-auth-open\">AI AUTH</button><a class=\"btn primary\" href=\"#/code/new\">{}</a>",
             tr(app, "New workspace", "새 워크스페이스")
         ),
         // The create page is the target of this button.

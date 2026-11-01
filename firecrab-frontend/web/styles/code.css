@@ -1,4 +1,11 @@
 /* CODE reuses the dashboard's flat surfaces, typography and focus styles. */
+.code-auth-manager { min-width: 0; max-width: 1000px; margin: 0 auto; }
+.code-auth-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.code-auth-heading h2 { font-size: 18px; margin: 0; }
+.code-auth-manager > .code-hint { margin: 0 0 24px; }
+.code-auth-check { display: grid; justify-items: start; gap: 10px; margin-top: 20px; }
+.code-auth-check p { margin: 0; }
+.code-credential-result { color: var(--text-2); font-size: 12px; line-height: 1.7; }
 .code-setup { width: min(100%, 780px); margin: 0 auto; }
 .code-setup-intro { margin: 0 0 16px; color: var(--text-2); font-size: 13px; line-height: 1.7; }
 .code-setup-connections { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 24px; }

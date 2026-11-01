@@ -397,6 +397,51 @@ async fn pipe_ai_chatgpt_account_login_saves_identity_without_a_model_or_inferen
 }
 
 #[tokio::test]
+async fn pipe_ai_cancel_login_keeps_saved_accounts_and_blocks_callback_replay() {
+    let f = fixture().await;
+    let id = Uuid::new_v4();
+    call(&f.app, "PUT", &connection_path(id), input("existing")).await;
+    let before = serde_json::to_value(f.state.store.ai_connection(id).unwrap().unwrap()).unwrap();
+    let (_, start) = call(
+        &f.app,
+        "POST",
+        &format!("{}/login", connection_path(id)),
+        json!({"name":"Renew account"}),
+    )
+    .await;
+    let login = format!("/api/pipe/ai/logins/{}", start["loginId"].as_str().unwrap());
+    let guard = f.state.pipe_ai_mutations.lock().await;
+    assert_eq!(
+        call(&f.app, "DELETE", &login, Value::Null).await.0,
+        StatusCode::CONFLICT
+    );
+    drop(guard);
+    let (status, cancelled) = call(&f.app, "DELETE", &login, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(cancelled["status"], "failed");
+    assert_eq!(
+        call(&f.app, "DELETE", &login, Value::Null).await.1,
+        cancelled
+    );
+    assert_eq!(call(&f.app, "GET", &login, Value::Null).await.1, cancelled);
+    let callback = format!(
+        "/auth/callback?state={}&code=must-not-exchange",
+        start["loginId"].as_str().unwrap()
+    );
+    assert!(
+        !call(&f.app, "GET", &callback, Value::Null)
+            .await
+            .0
+            .is_success()
+    );
+    assert!(f.provider.grants.lock().unwrap().is_empty());
+    assert_eq!(
+        serde_json::to_value(f.state.store.ai_connection(id).unwrap().unwrap()).unwrap(),
+        before
+    );
+}
+
+#[tokio::test]
 async fn pipe_ai_connection_proves_inference_and_redacts_public_views() {
     let f = fixture().await;
     let id = Uuid::new_v4();

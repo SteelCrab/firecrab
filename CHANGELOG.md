@@ -25,6 +25,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Reuse the Pipe AI account manager inside CODE for ChatGPT sign-in, OpenAI and
+  Anthropic API keys, replacement and disconnect. Cancel pending sign-ins through
+  the same lifecycle, retain workspace drafts, and display revision-bound provider
+  credential checks without claiming CLI agent authentication (#560).
 - Add one CODE workspace setup flow for GitHub repository/branch discovery,
   runtime/resources, agent selection and compatible existing AI AUTH accounts.
   Persist credential-free configuration and reconcile unknown save results with

@@ -49,11 +49,62 @@ fn action(en: &str, ko: &str, action: &str, id: &str, disabled: bool) -> String 
         },
     )
 }
+pub fn engaged(app: &App) -> bool {
+    let s = &app.advanced.ai;
+    !s.id.is_empty() || s.busy || s.login.is_some()
+}
+pub fn blocking(app: &App) -> bool {
+    app.advanced.ai.busy || app.advanced.ai.login.is_some()
+}
+fn in_code(app: &App) -> bool {
+    crate::code::auth::is_open(app)
+}
+fn current(app: &App, generation: u64) -> bool {
+    app.generation == generation && (app.route == "pipe/ai" || in_code(app))
+}
+fn rows(app: &App) -> &[Value] {
+    if in_code(app) {
+        crate::code::auth::rows(app)
+    } else {
+        list(&app.resource)
+    }
+}
+fn loaded(app: &App) -> bool {
+    if in_code(app) {
+        crate::code::auth::loaded(app)
+    } else {
+        app.loaded
+    }
+}
+fn load_error(app: &App) -> &str {
+    if in_code(app) {
+        crate::code::auth::error(app)
+    } else {
+        &app.connection_error
+    }
+}
+fn dirty(app: &mut App, value: bool) {
+    app.dirty = value || crate::code::auth::parent_dirty(app);
+}
+fn publish(app: &mut App, value: Value) {
+    if in_code(app) {
+        crate::code::auth::publish(app, value);
+    } else {
+        app.resource = value;
+    }
+}
+fn reload(app: &Shared) {
+    if in_code(&app.borrow()) {
+        crate::code::auth::load(app.clone());
+    } else {
+        crate::refresh(app.clone());
+    }
+}
 pub fn content(app: &App) -> String {
     let s = &app.advanced.ai;
     let editing = !s.id.is_empty();
     let locked = s.busy || s.login.is_some();
-    let rows = list(&app.resource);
+    let rows = rows(app);
     let mut out = format!(
         "<section class=\"pipe-ai\" aria-label=\"Pipe AI\"><header class=\"pipe-ai-heading\">{}</header>",
         if !rows.is_empty() {
@@ -62,14 +113,14 @@ pub fn content(app: &App) -> String {
                 "연결 추가",
                 "ai-edit-chatgpt",
                 "",
-                locked || editing || !app.loaded,
+                locked || editing || !loaded(app),
             )
         } else {
             String::new()
         }
     );
     let error = if s.error.is_empty() {
-        &app.connection_error
+        load_error(app)
     } else {
         &s.error
     };
@@ -79,9 +130,9 @@ pub fn content(app: &App) -> String {
     if !s.notice.is_empty() {
         out.push_str(&format!("<p role=\"status\">{}</p>", escape(&s.notice)));
     }
-    if !app.loaded {
+    if !loaded(app) {
         out.push_str("<p role=\"status\">Loading connections…</p>");
-    } else if !app.connection_error.is_empty() {
+    } else if !load_error(app).is_empty() {
         out.push_str(&action("Retry", "다시 시도", "ai-retry", "", locked));
     } else if rows.is_empty() && !editing {
         out.push_str(&empty_state(
@@ -115,6 +166,13 @@ pub fn content(app: &App) -> String {
         }
         if let Some(login) = &s.login {
             out.push_str(&format!("<p role=\"status\">{} <a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">{}</a></p>",tr("Waiting for sign-in…","로그인을 기다리는 중…"),escape(text(login,"authorizationUrl")),tr("Open ChatGPT sign-in","ChatGPT 로그인 열기")));
+            out.push_str(&action(
+                "Cancel sign-in",
+                "로그인 취소",
+                "ai-cancel-login",
+                "",
+                s.busy,
+            ));
         }
         out.push_str(&format!(
             "<button type=\"submit\"{disabled}>{}</button>",
@@ -268,21 +326,25 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
     if !action.starts_with("ai-") {
         return false;
     }
+    if action == "ai-cancel-login" {
+        cancel_login(app);
+        return true;
+    }
     if app.borrow().advanced.ai.busy || app.borrow().advanced.ai.login.is_some() {
         return true;
     }
     match action {
-        "ai-retry" => crate::refresh(app.clone()),
+        "ai-retry" => reload(app),
         "ai-cancel" => {
             let mut state = app.borrow_mut();
             state.advanced.ai = State::default();
-            state.dirty = false;
+            dirty(&mut state, false);
             drop(state);
             render_content(app);
         }
         "ai-edit-key" | "ai-edit-chatgpt" => {
             let mut state = app.borrow_mut();
-            let row = list(&state.resource)
+            let row = rows(&state)
                 .iter()
                 .find(|row| row["id"] == id)
                 .cloned()
@@ -316,7 +378,7 @@ pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
                         authentication: method.into(),
                         ..State::default()
                     };
-                    state.dirty = true;
+                    dirty(&mut state, true);
                 }
             }
             drop(state);
@@ -352,6 +414,7 @@ fn write(app: &Shared, method: &'static str, id: &str, body: Option<Value>) {
     {
         let mut state = app.borrow_mut();
         state.advanced.ai.busy = true;
+        state.advanced.ai.key.clear();
         state.advanced.ai.error.clear();
         state.advanced.ai.notice.clear();
     }
@@ -366,7 +429,7 @@ fn write(app: &Shared, method: &'static str, id: &str, body: Option<Value>) {
     spawn_local(async move {
         let result = api::request(method, &path, body.as_ref()).await;
         let mut state = app.borrow_mut();
-        if state.generation != generation || state.route != "pipe/ai" {
+        if !current(&state, generation) {
             return;
         }
         state.advanced.ai.busy = false;
@@ -390,14 +453,14 @@ fn write(app: &Shared, method: &'static str, id: &str, body: Option<Value>) {
                 }
             }
             Ok(value) => {
-                let mut rows = list(&state.resource).to_vec();
+                let mut rows = rows(&state).to_vec();
                 rows.retain(|row| row["id"] != id);
                 if method != "DELETE" {
                     rows.push(value.clone());
                     state.advanced.ai = State::default();
-                    state.dirty = false;
+                    dirty(&mut state, false);
                 }
-                state.resource = json!(rows);
+                publish(&mut state, json!(rows));
                 state.advanced.ai.notice=if method!="DELETE"{tr("Account verified and saved.","계정 연결을 확인하고 저장했다.")}else if value["remoteRevocationConfirmed"]==false{tr("Disconnected locally. Remote revocation was not confirmed. Disconnect Firecrab in ChatGPT settings.","로컬 연결을 해제했다. 원격 토큰 폐기는 확인하지 못했다. ChatGPT 설정에서 Firecrab 연결을 해제한다.")}else{tr("Account disconnected.","계정 연결을 해제했다.")}.into();
             }
         }
@@ -421,8 +484,7 @@ fn poll_login(app: Shared, generation: u64) {
         )
         .await;
         let mut state = app.borrow_mut();
-        if state.generation != generation
-            || state.route != "pipe/ai"
+        if !current(&state, generation)
             || state
                 .advanced
                 .ai
@@ -434,39 +496,43 @@ fn poll_login(app: Shared, generation: u64) {
         }
         let mut again = false;
         let mut connected = false;
-        match result {
-            Err(error) => {
-                state.advanced.ai.error = error;
-                state.advanced.ai.login = None;
-            }
-            Ok(value) if value["status"] == "connected" => {
-                state.advanced.ai = State::default();
-                state.dirty = false;
-                connected = true;
-                state.advanced.ai.notice =
-                    tr("ChatGPT account connected.", "ChatGPT 계정을 연결했다.").into();
-            }
-            Ok(value) if value["status"] == "failed" => {
-                state.advanced.ai.error = value["message"]
-                    .as_str()
-                    .unwrap_or(tr("ChatGPT login failed.", "ChatGPT 로그인에 실패했다."))
+        if state.advanced.ai.busy {
+            again = true;
+        } else {
+            match result {
+                Err(error) => {
+                    state.advanced.ai.error = error;
+                    state.advanced.ai.login = None;
+                }
+                Ok(value) if value["status"] == "connected" => {
+                    state.advanced.ai = State::default();
+                    dirty(&mut state, false);
+                    connected = true;
+                    state.advanced.ai.notice =
+                        tr("ChatGPT account connected.", "ChatGPT 계정을 연결했다.").into();
+                }
+                Ok(value) if value["status"] == "failed" => {
+                    state.advanced.ai.error = value["message"]
+                        .as_str()
+                        .unwrap_or(tr("ChatGPT login failed.", "ChatGPT 로그인에 실패했다."))
+                        .into();
+                    state.advanced.ai.login = None;
+                }
+                Ok(_) if js_sys::Date::now() >= state.advanced.ai.deadline => {
+                    state.advanced.ai.error = tr(
+                        "ChatGPT login expired. Start again.",
+                        "ChatGPT 로그인이 만료됐다. 다시 시작한다.",
+                    )
                     .into();
-                state.advanced.ai.login = None;
+                    state.advanced.ai.login = None;
+                }
+                Ok(_) => again = true,
             }
-            Ok(_) if js_sys::Date::now() >= state.advanced.ai.deadline => {
-                state.advanced.ai.error = tr(
-                    "ChatGPT login expired. Start again.",
-                    "ChatGPT 로그인이 만료됐다. 다시 시작한다.",
-                )
-                .into();
-                state.advanced.ai.login = None;
-            }
-            Ok(_) => again = true,
         }
         drop(state);
         render_content(&app);
         if connected {
-            crate::refresh(app.clone());
+            reload(&app);
         }
         if again {
             let callback = Closure::once_into_js(move || {
@@ -479,6 +545,64 @@ fn poll_login(app: Shared, generation: u64) {
                 1500,
             );
         }
+    });
+}
+
+fn cancel_login(app: &Shared) {
+    let mut state = app.borrow_mut();
+    if state.advanced.ai.busy {
+        return;
+    }
+    let Some(login) = state.advanced.ai.login.as_ref() else {
+        return;
+    };
+    let id = text(login, "loginId").to_owned();
+    let generation = state.generation;
+    state.advanced.ai.busy = true;
+    drop(state);
+    render_content(app);
+    let app = app.clone();
+    spawn_local(async move {
+        let result = api::request(
+            "DELETE",
+            &format!("/api/pipe/ai/logins/{}", api::encode(&id)),
+            None,
+        )
+        .await;
+        let mut state = app.borrow_mut();
+        if !current(&state, generation)
+            || state
+                .advanced
+                .ai
+                .login
+                .as_ref()
+                .is_none_or(|v| v["loginId"] != id)
+        {
+            return;
+        }
+        state.advanced.ai.busy = false;
+        match result {
+            Ok(value) if value["status"] != "working" => {
+                state.advanced.ai = State::default();
+                dirty(&mut state, false);
+                state.advanced.ai.notice = if value["status"] == "connected" {
+                    tr("Account already connected.", "계정이 이미 연결됐습니다.")
+                } else {
+                    tr("Sign-in cancelled.", "로그인을 취소했습니다.")
+                }
+                .into();
+            }
+            _ => {
+                state.advanced.ai.error = tr(
+                    "Sign-in is still being processed. Retry cancellation or wait for its result.",
+                    "로그인을 처리하고 있습니다. 취소를 다시 시도하거나 결과를 기다려 주세요.",
+                )
+                .into()
+            }
+        }
+        drop(state);
+        render_content(&app);
+        reload(&app);
     });
 }
 

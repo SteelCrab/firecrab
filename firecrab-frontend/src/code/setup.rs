@@ -123,7 +123,8 @@ fn live(app: &App, generation: u64) -> bool {
     app.route == "code/new" && app.generation == generation && app.code.setup.is_some()
 }
 pub fn saving(app: &App) -> bool {
-    app.route == "code/new" && app.code.setup.as_ref().is_some_and(|s| s.busy)
+    super::auth::blocking(app)
+        || (app.route == "code/new" && app.code.setup.as_ref().is_some_and(|s| s.busy))
 }
 pub fn api_status(app: &App) -> (&'static str, &'static str) {
     match app.code.setup.as_ref() {
@@ -275,6 +276,9 @@ fn metadata(app: &Shared) {
         repositories(&app, 1);
         render_content(&app);
     });
+}
+pub(super) fn reload_accounts(app: &Shared) {
+    metadata(app);
 }
 fn repositories(app: &Shared, page: u32) {
     let mut a = app.borrow_mut();

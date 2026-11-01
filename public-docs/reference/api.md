@@ -436,6 +436,7 @@ Pipe AI UI manages accounts only. Model verification, selection, and response ro
 | DELETE | `/api/pipe/ai/connections/{id}` | Remove credentials/defaults; return `{deleted, remoteRevocationConfirmed}` |
 | POST | `/api/pipe/ai/connections/{id}/login` | Start official ChatGPT login with `{name, model?: string}`; no inference unless `model` is supplied; return `{loginId, authorizationUrl, expiresIn}` |
 | GET | `/api/pipe/ai/logins/{id}` | Return `{status, message}`; status is `pending`, `working`, `connected`, or `failed` |
+| DELETE | `/api/pipe/ai/logins/{id}` | Cancel unconsumed sign-in without deleting a saved account; completed sign-in remains connected; callback processing shares the mutation gate |
 | GET | `/auth/callback` | One-time state-bound OAuth callback; never returns tokens to the browser |
 | GET | `/api/pipe/ai/projects/{id}/model` | Saved `{connectionId, model}` or null |
 | PUT | `/api/pipe/ai/projects/{id}/model` | Persist a verified `{connectionId, model}` |

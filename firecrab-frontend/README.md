@@ -18,8 +18,10 @@ owners and branches. It reads the configuration and selected runtime every three
 seconds, with navigation fences for late responses. A failed read removes stale
 runtime readiness; access failures also remove previously displayed records.
 
-The view shows the current GitHub/AI AUTH account references and links to their
-existing management screens. Account presence is not agent authentication.
+The view shows current GitHub/AI AUTH account references. CODE hosts the existing
+Pipe AI account manager without leaving the current setup or copying credentials.
+ChatGPT login, API-key replacement, disconnect and pending-login cancellation
+use that shared service. Account presence is not agent authentication.
 MicroVM readiness is not editor or agent readiness. **New workspace** opens
 `#/code/new`: choose a GitHub repository/branch, runtime/resources, and an optional
 agent with a compatible existing AI AUTH account. Catalog calls are read-only;
@@ -32,7 +34,7 @@ in #560. See the
 Browser contracts run against the production WASM build without a live API:
 
 ```sh
-FIRECRAB_MOCKED_E2E_PRODUCTION=1 npm run test:mocked --prefix firecrab-e2e -- tests/code-workspaces.spec.ts tests/code-setup.spec.ts
+FIRECRAB_MOCKED_E2E_PRODUCTION=1 npm run test:dashboard --prefix firecrab-e2e -- tests/code-workspaces.spec.ts tests/code-setup.spec.ts tests/code-ai-auth.spec.ts tests/pipe-ai.spec.ts
 ```
 
 Run that command from the repository root. It covers English/Korean desktop and

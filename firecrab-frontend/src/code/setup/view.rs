@@ -24,6 +24,12 @@ fn input(app: &App, key: &str, en: &str, ko: &str, value: &str, attrs: &str) -> 
     )
 }
 fn link(app: &App, path: &str, en: &str, ko: &str) -> String {
+    if path == "pipe/ai" {
+        return format!(
+            "<button type=\"button\" class=\"btn\" data-action=\"code-auth-open\">{}</button>",
+            tr(app, en, ko)
+        );
+    }
     format!(
         "<a class=\"code-text-link\" href=\"#/{path}\" target=\"_blank\" rel=\"noopener\">{} ↗</a>",
         tr(app, en, ko)

@@ -3,6 +3,9 @@ use crate::model::{escape, lowercase};
 use std::fmt::Write;
 
 pub fn content(app: &App) -> String {
+    if auth::is_open(app) {
+        return auth::content(app);
+    }
     if app.route == "code/new" {
         return setup::content(app);
     }
@@ -192,7 +195,7 @@ fn detail(app: &App, workspace: &Workspace) -> String {
     if let Some(agent) = &spec.agent {
         let _ = write!(
             auth,
-            "<div class=\"code-auth-row\"><div><strong>{} · AI AUTH</strong><p>{}</p><code>{}</code></div><a class=\"code-text-link\" href=\"#/pipe/ai\">{}</a></div><p class=\"code-hint\">{}</p>",
+            "<div class=\"code-auth-row\"><div><strong>{} · AI AUTH</strong><p>{}</p><code>{}</code></div><button class=\"btn\" type=\"button\" data-action=\"code-auth-open\">{}</button></div><p class=\"code-hint\">{}</p>",
             agent_name(app, &agent.agent),
             connection(app, &workspace.connections.ai),
             escape(&agent.connection_id),
@@ -210,6 +213,7 @@ fn detail(app: &App, workspace: &Workspace) -> String {
             tr(app, "No agent selected", "선택된 에이전트 없음")
         );
     }
+    auth.push_str(&crate::code::auth::verification(app, workspace));
     out.push_str(&section(tr(app, "Account connections", "계정 연결"), &auth));
     out.push_str(&runtime_section(app, &app.code.runtime));
     out.push_str(&section(tr(app, "Configuration", "설정"), &config));
