@@ -32,10 +32,11 @@ export async function createFixtureServer(root, initialRows = 100) {
   root = resolve(root);
   const files = new Map();
   const fixture = {
-    requests: [], failNext: null, delayNext: null, handlers: new Map(), state: {},
+    requests: [], failNext: null, delayNext: null, handlers: new Map(), matchHandler: null, state: {},
     reset(rows = initialRows) {
       this.requests = [];
       this.handlers.clear();
+      this.matchHandler = null;
       this.failNext = null;
       this.delayNext = null;
       this.state = { vms: Array.from({ length: rows }, (_, i) => vm(i)), services: [structuredClone(service)], networks: [structuredClone(network)], storages: [structuredClone(storage)], images: [structuredClone(image)], shells: [structuredClone(shell)],
@@ -79,7 +80,7 @@ export async function createFixtureServer(root, initialRows = 100) {
       for await (const chunk of req) { raw += chunk; if (raw.length > 2_000_000) return send(413, { error: { message: 'Request too large' } }); }
       const body = raw ? JSON.parse(raw) : null;
       fixture.requests.push({ path, method, body, query: Object.fromEntries(url.searchParams) });
-      const handler = fixture.handlers.get(`${method} ${path}`);
+      const handler = fixture.handlers.get(`${method} ${path}`) ?? fixture.matchHandler?.({ method, path });
       if (handler) return await handler({ req, res, url, body, send, fixture });
       if (fixture.delayNext?.path === path) { const delay = fixture.delayNext; fixture.delayNext = null; await new Promise(resolve => setTimeout(resolve, delay.ms)); }
       if (fixture.failNext?.path === path && (!fixture.failNext.method || fixture.failNext.method === method)) { const failure = fixture.failNext; fixture.failNext = null; return send(failure.status ?? 422, { error: { message: failure.message ?? 'Fixture rejected the request', fields: failure.fields } }); }

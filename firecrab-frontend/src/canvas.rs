@@ -1,5 +1,6 @@
 //! Real canvas views use project APIs; local storage contains only tab identities.
 mod pty;
+mod revisions;
 mod view;
 use crate::{
     App, Shared, api, document, element,
@@ -83,6 +84,11 @@ struct Tab {
     terminals: Vec<Value>,
     views: Vec<Value>,
     history: Vec<Value>,
+    history_path: Option<String>,
+    history_generation: u64,
+    history_loading: bool,
+    history_more: bool,
+    revisions: revisions::State,
     loaded: bool,
     busy: bool,
     error: String,
@@ -104,6 +110,11 @@ impl Tab {
             terminals: vec![],
             views: vec![],
             history: vec![],
+            history_path: None,
+            history_generation: 0,
+            history_loading: false,
+            history_more: false,
+            revisions: revisions::State::default(),
             loaded: false,
             busy: false,
             error: String::new(),
@@ -666,6 +677,17 @@ pub fn action(app: &Shared, action: &str, id: &str) -> bool {
         "cw-terminals" => pty::catalog(app.clone()),
         "cw-attach" => pty::attach_existing(app),
         "cw-history" => history(app.clone(), (!id.is_empty()).then_some(id.to_string())),
+        "cw-history-older" => history_older(app.clone()),
+        "cw-compare" => revisions::compare(app.clone(), id),
+        "cw-restore" => revisions::restore(app.clone()),
+        "cw-restore-retry" => revisions::retry(app.clone()),
+        "cw-file-reconcile" => revisions::reconcile(app.clone(), id),
+        "cw-compare-close" => {
+            if let Some(t) = tab_mut(&mut app.borrow_mut().canvas) {
+                t.revisions.comparison = None;
+            }
+            render(app);
+        }
         "cw-editor" => open_editor(app.clone(), (!id.is_empty()).then_some(id.to_string())),
         "cw-reconcile" => {
             let a = app.borrow();
@@ -755,10 +777,52 @@ fn history(app: Shared, path: Option<String>) {
     };
     let identity = t.identity.clone();
     drop(a);
+    history_for(app, identity, path);
+}
+fn history_for(app: Shared, identity: Identity, path: Option<String>) {
+    revisions::catalog(app.clone(), identity.clone());
+    history_page(app, identity, path, None);
+}
+fn history_older(app: Shared) {
+    let a = app.borrow();
+    let Some(t) = tab(&a.canvas) else {
+        return;
+    };
+    if t.history_loading || !t.history_more {
+        return;
+    }
+    let Some(before) = t.history.last().and_then(|r| r["id"].as_u64()) else {
+        return;
+    };
+    let identity = t.identity.clone();
+    let path = t.history_path.clone();
+    drop(a);
+    history_page(app, identity, path, Some(before));
+}
+fn history_page(app: Shared, identity: Identity, path: Option<String>, before: Option<u64>) {
+    let generation = {
+        let mut a = app.borrow_mut();
+        let Some(t) = a
+            .canvas
+            .tabs
+            .iter_mut()
+            .find(|t| t.identity.id == identity.id && t.identity.project == identity.project)
+        else {
+            return;
+        };
+        t.history_generation += 1;
+        t.history_loading = true;
+        if before.is_none() {
+            t.history_path = path.clone();
+        }
+        t.history_generation
+    };
+    render(&app);
     spawn_local(async move {
-        let query = path
-            .map(|p| format!("?path={}", api::encode(&p)))
-            .unwrap_or_default();
+        let mut query = format!("?path={}", api::encode(path.as_deref().unwrap_or("")));
+        if let Some(before) = before {
+            query += &format!("&before={before}");
+        }
         let result = workspace_request(
             "GET",
             &format!("{}/files/history{query}", base(&identity.project)),
@@ -770,16 +834,32 @@ fn history(app: Shared, path: Option<String>) {
             .canvas
             .tabs
             .iter_mut()
-            .find(|t| t.identity.id == identity.id)
+            .find(|t| t.identity.id == identity.id && t.identity.project == identity.project)
         {
+            if t.history_generation != generation {
+                return;
+            }
+            t.history_loading = false;
             match result {
-                Ok(rows) => t.history = list(&rows).to_vec(),
+                Ok(rows) => {
+                    let rows = list(&rows);
+                    t.history_more = rows.len() == 100;
+                    if before.is_none() {
+                        t.history.clear();
+                    }
+                    for row in rows {
+                        if !t.history.iter().any(|old| old["id"] == row["id"]) {
+                            t.history.push(row.clone());
+                        }
+                    }
+                }
                 Err(e) => t.error = e,
             }
         }
         render(&app);
     });
 }
+
 fn open_editor(app: Shared, file: Option<String>) {
     let mut a = app.borrow_mut();
     let Some(t) = tab_mut(&mut a.canvas) else {

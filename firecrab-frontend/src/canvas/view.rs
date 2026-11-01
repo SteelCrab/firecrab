@@ -337,28 +337,7 @@ fn card(a: &App, t: &Tab, n: &Node) -> String {
                 button("cw-history", "", tr(a, "History", "기록"))
             )
         }
-        "history" => {
-            let rows = t
-                .history
-                .iter()
-                .map(|r| {
-                    format!(
-                        "<li><span>v{}</span><strong>{}</strong><small>{} B</small></li>",
-                        r["id"],
-                        escape(text(r, "path")),
-                        r["byteLength"]
-                    )
-                })
-                .collect::<String>();
-            format!(
-                "{}<ul class=\"cw-history\">{rows}</ul>",
-                button(
-                    "cw-history",
-                    "",
-                    tr(a, "Load retained history", "저장된 기록 불러오기")
-                )
-            )
-        }
+        "history" => revisions::card(a, t),
         "terminal" => pty::card(a, t, n),
         _ => String::new(),
     };

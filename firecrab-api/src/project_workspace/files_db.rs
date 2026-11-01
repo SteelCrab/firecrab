@@ -299,7 +299,7 @@ impl ProjectDb {
     }
 
     pub(super) fn file_operations(&self, path: &str) -> Result<Vec<ProjectFileOperation>, Error> {
-        let mut query = self.conn.prepare("SELECT id,expected_version,author,version_id,state,path FROM file_operations WHERE (?1='' OR path=?1) ORDER BY created_at DESC,id LIMIT 100")?;
+        let mut query = self.conn.prepare("SELECT id,expected_version,author,version_id,state,path FROM file_operations WHERE (?1='' OR path=?1) ORDER BY (state='pending') DESC,created_at DESC,id LIMIT 100")?;
         let rows = query.query_map([path], |r| {
             Ok((
                 r.get::<_, String>(0)?,

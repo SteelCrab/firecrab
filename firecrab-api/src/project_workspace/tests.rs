@@ -1508,3 +1508,42 @@ fn inherited_descriptors_do_not_retain_completed_project_or_service_locks() {
     assert!(opened.is_ok(), "The completed operation remained locked");
     assert!(service.is_ok(), "The stopped service remained locked");
 }
+
+#[test]
+fn recovery_catalog_keeps_old_pending_writes_ahead_of_completed_receipts() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = db::ProjectDb::open(
+        &dir.path().join("state/projects"),
+        &registration(),
+        Uuid::new_v4(),
+        true,
+    )
+    .unwrap();
+    let pending = db
+        .stage_file(file_operation("pending.txt", 0, b"pending"))
+        .unwrap();
+    for index in 0..105 {
+        let op = db
+            .stage_file(file_operation(
+                &format!("finished-{index}.txt"),
+                0,
+                b"saved",
+            ))
+            .unwrap();
+        db.finish_file(op.id).unwrap();
+    }
+    db.conn
+        .execute(
+            "UPDATE file_operations SET created_at=0 WHERE id=?1",
+            [pending.id.to_string()],
+        )
+        .unwrap();
+    let catalog = db.file_operations("").unwrap();
+    assert_eq!(catalog.len(), 100);
+    assert_eq!(catalog[0].id, pending.id);
+    assert!(matches!(
+        catalog[0].status,
+        ProjectFileOperationStatus::Pending
+    ));
+    assert_eq!(db.file_operations("pending.txt").unwrap()[0].id, pending.id);
+}

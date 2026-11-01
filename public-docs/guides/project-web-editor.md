@@ -22,14 +22,22 @@ Private buffers retain their saved base version. An accepted private draft survi
 
 Add a terminal to create a new native shell. Use the retained-session selector to attach an existing terminal. Closing a panel disconnects its client and releases its input lease. It does not replay a command or create a replacement shell. A terminal interrupted by VM shutdown keeps its recorded output.
 
+## Version comparison and restore
+
+Add a **Version history** panel. Select **Compare** to read the selected retained version beside the current saved file. Text previews display at most 64 KiB per side. Binary files show their byte lengths and SHA-256 values. Download links retain the complete selected bytes. Use **Load older history** to page beyond the latest 100 records.
+
+**Restore selected version** creates a new shared version. Its request retains the exact current version shown in the comparison and a stable operation UUID. A concurrent change rejects the restore. Compare again before explicitly starting a new restore. Restoration preserves earlier history and private editor drafts.
+
+An uncertain response keeps the original request. **Retry the same restore** reuses its UUID, selected version, and saved base. **Check saved outcome** reconciles that exact durable operation. The retained operation catalog prioritizes pending operations. Reopening a history panel can recover pending operations after a browser restart. A refresh never dispatches a restore automatically.
+
 ## Current support
 
 - Scoped `*.editor.localhost` origins on the controller's port.
 - Pinned OpenVSCode 1.109.5 on Linux arm64/x64 with glibc. The real editor gate uses Ubuntu 26.04; Alpine is not an editor target.
-- Authorized file reads/saves, private buffers, independent views, shared directory navigation, native terminals, and retained file-history listing.
+- Authorized file reads/saves, private buffers, independent views, shared directory navigation, native terminals, and retained file-history listing, comparison, and explicit restore.
 - Folder creation, file rename, and deletion currently use a project terminal. The virtual filesystem rejects those IDE operations.
 - IDE extensions must support virtual workspaces. Native workspace extensions can have additional limitations.
 
-This is an implementation slice of #550. History compare/restore controls, final editor-session cleanup, remaining model/skills integration, production service-user QA, and cross-host restore acceptance remain pending. Do not treat this guide or its screenshots as full issue acceptance.
+This is an implementation slice of #550. Final editor-session cleanup, remaining model/skills integration, production service-user QA, and cross-host restore acceptance remain pending. Do not treat this guide or its screenshots as full issue acceptance.
 
 See [private views](project-private-views.md), [workspace files](project-workspace-files.md), and [real editor recovery evidence](../development/project-editor-recovery-2026-11-01.md).
