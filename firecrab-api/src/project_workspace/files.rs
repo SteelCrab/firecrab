@@ -204,6 +204,21 @@ impl Files {
         Ok(())
     }
 
+    /// Observe saved bytes after settling any earlier operation receipt.
+    pub(super) async fn saved_version(&mut self, path: &str) -> Result<Option<Version>, Error> {
+        self.recover_pending(path).await?;
+        self.current(path).await
+    }
+    /// Verify that a selected directory exists within the retained volume.
+    pub(super) async fn directory(&mut self, path: &str) -> Result<(), Error> {
+        match self
+            .request(wire::frame(1, path, Uuid::nil(), None, &[])?)
+            .await?
+        {
+            Reply::Data(bytes) => wire::entries(&bytes).map(|_| ()),
+            Reply::Rejected(code) => Err(wire::rejected(code)),
+        }
+    }
     async fn current(&mut self, path: &str) -> Result<Option<Version>, Error> {
         match self
             .request(wire::frame(2, path, Uuid::nil(), None, &[])?)

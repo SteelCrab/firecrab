@@ -11,7 +11,7 @@ use std::{
 use uuid::Uuid;
 
 /// Private schema with an additive file-history migration from version 1.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 /// SQLite application identity prevents opening an unrelated database.
 const APPLICATION_ID: i64 = 0x46575031;
 /// Maximum serialized size of a project metadata object.
@@ -193,6 +193,10 @@ impl ProjectDb {
         }
         if version < 5 {
             conn.execute_batch(super::editors::SCHEMA)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        if version < 6 {
+            conn.execute_batch(super::instructions_db::SCHEMA)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         let epoch = epoch

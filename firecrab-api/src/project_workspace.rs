@@ -5,6 +5,10 @@ pub(crate) mod editors;
 mod files;
 mod files_db;
 mod files_guest;
+mod instructions;
+mod instructions_db;
+#[cfg(test)]
+mod instructions_tests;
 mod terminals;
 mod terminals_db;
 mod terminals_guest;
@@ -312,6 +316,7 @@ pub fn routes() -> Router<AppState> {
         .merge(terminals::routes())
         .merge(views::routes())
         .merge(editors::routes())
+        .merge(instructions::routes())
 }
 /// Read project metadata even when the workload VM is stopped.
 async fn get_workspace(

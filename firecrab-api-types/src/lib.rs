@@ -2874,3 +2874,6 @@ mod tests {
         );
     }
 }
+
+mod workspace_instructions;
+pub use workspace_instructions::*;

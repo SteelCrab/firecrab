@@ -530,6 +530,15 @@ Project workspace routes extend the authenticated Sandbox project API at
 | `GET /file-operations` | Inspect durable write outcomes |
 | `POST /file-operations/{id}/reconcile` | Recover that exact admitted write |
 
+Saved instruction context:
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| PUT | `/api/ai-sandbox/projects/{id}/workspace/instructions/snapshots/{snapshot}` | Capture saved root-to-selected-directory `AGENTS.md` context with `{directory}` under a stable UUID. |
+| GET | `/api/ai-sandbox/projects/{id}/workspace/instructions/snapshots/{snapshot}` | Read the verified caller's immutable saved context, including while the workload VM is stopped. |
+
+See [saved project instructions](../guides/project-instructions.md) for limits, private access, retries, and the pending task-admission integration.
+
 See [workspace retention and checkpoints](../guides/project-workspaces.md) and
 [file API bodies, permissions and limits](../guides/project-workspace-files.md).
 
