@@ -16,6 +16,8 @@ import {
   ChevronDown,
   Folder,
   CodeXml,
+  Columns3,
+  SquareTerminal,
   X,
 } from "lucide-react";
 import { useI18n } from "../i18n";
@@ -33,6 +35,7 @@ import AgentTerminalView from "./AgentTerminal";
 import Screen from "./layout/Screen";
 import AppDialog from "./ui/AppDialog";
 import AgentTaskForm from "./AgentTaskForm";
+import AgentTaskBoard from "./AgentTaskBoard";
 import AgentEnvironment from "./AgentEnvironment";
 import AgentRepository from "./AgentRepository";
 import AgentAutomation from "./AgentAutomation";
@@ -153,6 +156,15 @@ function VmAgentWorkspace({
   const host = useHostStatus();
   const vm = vms.find((v) => v.id === vmId);
   const cliKey = `firecrab.agentCli.${controllerId}.${vmId}`;
+  const viewKey = `firecrab.agentView.${controllerId}.${vmId}`;
+  const [view, setView] = useState<"board" | "terminals">(() =>
+    localStorage.getItem(viewKey) === "terminals" ? "terminals" : "board",
+  );
+  const changeView = (next: "board" | "terminals") => {
+    localStorage.setItem(viewKey, next);
+    setView(next);
+  };
+
   const [cli, setCli] = useState(() => {
     const saved = localStorage.getItem(cliKey) || "";
     return ["codex", "claude", "copilot"].includes(saved) ? saved : "";
@@ -331,6 +343,7 @@ function VmAgentWorkspace({
           vmId,
         );
         setSelection({ ids: [agent.id], initialized: true });
+        changeView("terminals");
       }
       if (kind !== "start") await refresh();
     } catch (e) {
@@ -351,6 +364,18 @@ function VmAgentWorkspace({
     );
   }, []);
   const agents = status?.agents || [];
+  const tasks = agents.filter((agent) => agent.role !== "authentication");
+  const working = tasks.filter(
+    (agent) =>
+      !agent.closed &&
+      agent.state === "working" &&
+      !agent.hasPendingTask &&
+      !agent.taskDeliveryUncertain,
+  ).length;
+  const openTask = (id: string) => {
+    setSelection({ ids: [id], initialized: true });
+    changeView("terminals");
+  };
   const visible = agents.filter(
     (a) =>
       (filter === "all"
@@ -469,47 +494,33 @@ function VmAgentWorkspace({
             )}
           </p>
         )}
-        {!agents.length ? (
-          <div className="am-start">
-            {cliReady ? (
-              <AgentTaskForm
-                inline
-                draft={{ ...starter, cli }}
-                onChange={setStarter}
-                onSubmit={(e) => void create(e, starter)}
-                busy={creating}
-                canControl={canLaunch}
-                drivers={status.drivers}
-                error={createError}
-              />
-            ) : (
-              <div className="am-runtime-unavailable">
-                <h2>{t("Ready when you are", "작업 준비")}</h2>
-                <p>
-                  {status
-                    ? t(
-                        "Choose a coding CLI above to start a task in this MicroVM.",
-                        "위에서 코딩 CLI를 선택하고 계정을 연결하면 작업을 시작할 수 있다.",
-                      )
+        <div className={`am-workflow ${!agents.length ? "am-empty" : ""}`}>
+          <header className="am-workflow-head">
+            <div className="am-workflow-heading">
+              <h2>{t("Multi-agent workspace", "멀티 에이전트 작업 공간")}</h2>
+              <p>
+                {t(
+                  "Tasks call agents on demand. Follow their work on the board.",
+                  "작업을 시작하면 에이전트를 호출한다. 진행 상태는 보드에서 확인한다.",
+                )}
+              </p>
+            </div>
+            <div className="am-workflow-actions">
+              {status && (
+                <span className="am-worker-count">
+                  <span
+                    className={`am-dot ${stale || !identityMatches || !working ? "idle" : "working"}`}
+                    aria-hidden="true"
+                  />
+                  {stale || !identityMatches
+                    ? t("Checking connection", "연결 확인 중")
                     : t(
-                        "Choose a MicroVM and CLI to start.",
-                        "MicroVM과 사용할 CLI를 선택한다.",
+                        `${working} ${working === 1 ? "agent" : "agents"} working`,
+                        `에이전트 ${working}개 실행 중`,
                       )}
-                </p>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="am-shell">
-            <aside
-              className="am-agent-list"
-              aria-label={t("Agents", "에이전트")}
-            >
-              <div className="am-list-head">
-                <h2>
-                  {t("Tasks", "작업")}
-                  <span>{agents.filter((a) => !a.closed).length}</span>
-                </h2>
+                </span>
+              )}
+              {agents.length > 0 && (
                 <label className="am-filter">
                   <span className="sr-only">
                     {t("Agent status filter", "에이전트 상태 필터")}
@@ -518,7 +529,17 @@ function VmAgentWorkspace({
                     value={filter}
                     onChange={(e) => setFilter(e.target.value)}
                   >
-                    {["all", "working", "blocked", "idle", "closed"]
+                    {[
+                      "all",
+                      "working",
+                      "blocked",
+                      "idle",
+                      "done",
+                      "failed",
+                      "disconnected",
+                      "unknown",
+                      "closed",
+                    ]
                       .filter(
                         (state) =>
                           state === "all" ||
@@ -532,14 +553,14 @@ function VmAgentWorkspace({
                       .map((state) => (
                         <option key={state} value={state}>
                           {state === "all"
-                            ? t("Active tasks", "진행 중인 작업")
+                            ? t("Current tasks", "현재 작업")
                             : t(...labels[state])}
                         </option>
                       ))}
                   </select>
                   <ChevronDown aria-hidden="true" />
                 </label>
-              </div>
+              )}
               {agents.length > 4 && (
                 <label className="am-search">
                   <span className="sr-only">
@@ -552,72 +573,167 @@ function VmAgentWorkspace({
                   />
                 </label>
               )}
-              {visible.map((agent) => (
-                <button
-                  key={agent.id}
-                  className={`am-agent ${selected.includes(agent.id) ? "selected" : ""}`}
-                  aria-pressed={selected.includes(agent.id)}
-                  onClick={() => toggle(agent.id)}
-                >
-                  <AgentBrandIcon kind={agent.kind} />
-                  <span className="am-agent-copy">
-                    <strong title={agent.name}>{agent.name}</strong>
-                    <small className="am-agent-provider">
-                      {agentName(agent.kind)}
-                    </small>
-                  </span>
-                  <span className="am-selection-mark" aria-hidden="true">
-                    {selected.includes(agent.id) && <Check />}
-                  </span>
-                  <span className="am-agent-state">
-                    <span
-                      className={`am-dot ${agent.state}`}
-                      aria-hidden="true"
-                    />
-                    {t(...(labels[agent.state] || labels.unknown))}
-                  </span>
-                </button>
-              ))}
-              {!visible.length && (
-                <p className="am-list-hint">
-                  {t(
-                    "No agents match this filter.",
-                    "조건에 맞는 에이전트가 없다.",
-                  )}
-                </p>
-              )}
-            </aside>
-            <section
-              className="am-sessions"
-              aria-label={t("Agent sessions", "에이전트 세션")}
-            >
-              <div
-                className={`am-panels ${selectedAgents.length > 1 ? "split" : ""}`}
+              <nav
+                className="am-workflow-views"
+                aria-label={t("Workspace view", "작업 화면")}
               >
-                {selectedAgents.map((agent) => (
-                  <AgentPane
-                    key={agent.id}
-                    agent={agent}
-                    vm={vm}
-                    controllerId={status?.controllerId || ""}
-                    vmId={vmId}
-                    canControl={canControl}
-                    onUpdate={updateAgent}
-                  />
-                ))}
-                {!selectedAgents.length && (
-                  <div className="am-no-selection">
-                    <PanelLeftClose aria-hidden="true" />
-                    {t(
-                      "Select an agent to open its session.",
-                      "에이전트를 선택하면 세션을 확인할 수 있다.",
-                    )}
-                  </div>
-                )}
+                <button
+                  type="button"
+                  aria-pressed={view === "board"}
+                  onClick={() => changeView("board")}
+                >
+                  <Columns3 aria-hidden="true" />
+                  {t("Board", "보드")}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={view === "terminals"}
+                  onClick={() => changeView("terminals")}
+                >
+                  <SquareTerminal aria-hidden="true" />
+                  {t("Terminals", "터미널")}
+                </button>
+              </nav>
+            </div>
+          </header>
+          {view === "board" &&
+            agents.some(
+              (agent) => agent.role === "authentication" && !agent.closed,
+            ) && (
+              <div className="am-auth-sessions">
+                <span>{t("CLI account sessions", "CLI 계정 연결 세션")}</span>
+                {agents
+                  .filter(
+                    (agent) => agent.role === "authentication" && !agent.closed,
+                  )
+                  .map((agent) => (
+                    <button
+                      type="button"
+                      key={agent.id}
+                      onClick={() => openTask(agent.id)}
+                    >
+                      <AgentBrandIcon kind={agent.kind} />
+                      {agent.name}
+                    </button>
+                  ))}
               </div>
-            </section>
-          </div>
-        )}
+            )}
+          <AgentTaskBoard
+            agents={visible.filter((agent) => agent.role !== "authentication")}
+            hidden={view !== "board"}
+            stale={stale || (!!status && !identityMatches)}
+            known={!!status}
+            onOpen={openTask}
+          />
+          {!agents.length ? (
+            <div className="am-start">
+              {cliReady ? (
+                <AgentTaskForm
+                  inline
+                  draft={{ ...starter, cli }}
+                  onChange={setStarter}
+                  onSubmit={(e) => void create(e, starter)}
+                  busy={creating}
+                  canControl={canLaunch}
+                  drivers={status.drivers}
+                  error={createError}
+                />
+              ) : (
+                <div className="am-runtime-unavailable">
+                  <h2>{t("Ready when you are", "작업 준비")}</h2>
+                  <p>
+                    {status
+                      ? t(
+                          "Choose a coding CLI above to start a task in this MicroVM.",
+                          "위에서 코딩 CLI를 선택하고 계정을 연결하면 작업을 시작할 수 있다.",
+                        )
+                      : t(
+                          "Choose a MicroVM and CLI to start.",
+                          "MicroVM과 사용할 CLI를 선택한다.",
+                        )}
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="am-shell" hidden={view !== "terminals"}>
+              <aside
+                className="am-agent-list"
+                aria-label={t("Agents", "에이전트")}
+              >
+                <div className="am-list-head">
+                  <h2>
+                    {t("Sessions", "세션")}
+                    <span>{agents.filter((a) => !a.closed).length}</span>
+                  </h2>
+                </div>
+                {visible.map((agent) => (
+                  <button
+                    key={agent.id}
+                    className={`am-agent ${selected.includes(agent.id) ? "selected" : ""}`}
+                    aria-pressed={selected.includes(agent.id)}
+                    onClick={() => toggle(agent.id)}
+                  >
+                    <AgentBrandIcon kind={agent.kind} />
+                    <span className="am-agent-copy">
+                      <strong title={agent.name}>{agent.name}</strong>
+                      <small className="am-agent-provider">
+                        {agentName(agent.kind)}
+                      </small>
+                    </span>
+                    <span className="am-selection-mark" aria-hidden="true">
+                      {selected.includes(agent.id) && <Check />}
+                    </span>
+                    <span className="am-agent-state">
+                      <span
+                        className={`am-dot ${agent.state}`}
+                        aria-hidden="true"
+                      />
+                      {t(...(labels[agent.state] || labels.unknown))}
+                    </span>
+                  </button>
+                ))}
+                {!visible.length && (
+                  <p className="am-list-hint">
+                    {t(
+                      "No agents match this filter.",
+                      "조건에 맞는 에이전트가 없다.",
+                    )}
+                  </p>
+                )}
+              </aside>
+              <section
+                className="am-sessions"
+                aria-label={t("Agent sessions", "에이전트 세션")}
+              >
+                <div
+                  className={`am-panels ${selectedAgents.length > 1 ? "split" : ""}`}
+                >
+                  {selectedAgents.map((agent) => (
+                    <AgentPane
+                      key={agent.id}
+                      agent={agent}
+                      vm={vm}
+                      controllerId={status?.controllerId || ""}
+                      vmId={vmId}
+                      canControl={canControl}
+                      onUpdate={updateAgent}
+                    />
+                  ))}
+                  {!selectedAgents.length && (
+                    <div className="am-no-selection">
+                      <PanelLeftClose aria-hidden="true" />
+                      {t(
+                        "Select an agent to open its session.",
+                        "에이전트를 선택하면 세션을 확인할 수 있다.",
+                      )}
+                    </div>
+                  )}
+                </div>
+              </section>
+            </div>
+          )}
+        </div>
         {creatingVm && (
           <AppDialog
             label={t("New Sandbox MicroVM", "작업용 MicroVM 만들기")}

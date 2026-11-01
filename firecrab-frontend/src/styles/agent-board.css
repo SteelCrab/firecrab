@@ -1,0 +1,307 @@
+.am-workflow {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.am-workflow > [hidden] {
+  display: none !important;
+}
+.am-workflow-head {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 22px 26px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.am-workflow-heading h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+.am-workflow-heading p {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.am-workflow-actions {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.am-worker-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.am-worker-count .am-dot.working {
+  background: var(--green);
+}
+.am-workflow-actions .am-search {
+  margin: 0;
+}
+.am-workflow-actions .am-search input {
+  width: 160px;
+}
+.am-workflow-actions .am-filter {
+  max-width: 155px;
+}
+.am-workflow-views {
+  display: flex;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+.am-workflow-views button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font: 500 12px/1.4 var(--font);
+  color: var(--text-3);
+  cursor: pointer;
+}
+.am-workflow-views button[aria-pressed="true"] {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border);
+  box-shadow: var(--shadow-xs);
+}
+.am-workflow-views svg {
+  width: 14px;
+  height: 14px;
+}
+.am-task-board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(216px, 1fr));
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  align-items: stretch;
+  gap: 16px;
+  padding: 24px 26px;
+  overflow: auto;
+  background: var(--bg-subtle);
+  scrollbar-width: thin;
+}
+.am-board-column {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.am-board-column > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 3px 14px;
+  color: var(--text-3);
+}
+.am-board-column > header > svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+.am-board-column.working > header > svg {
+  color: var(--green);
+}
+.am-board-column.attention > header > svg {
+  color: var(--amber);
+}
+.am-board-column.done > header > svg {
+  color: var(--indigo-ink);
+}
+.am-board-column h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.am-board-count {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.am-board-cards {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  min-height: 100px;
+  padding: 4px 2px;
+}
+.am-board-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  width: 100%;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  box-shadow: var(--shadow-xs);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+.am-board-card:focus-visible,
+.am-workflow-views button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.am-board-card > strong {
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.am-board-card-provider {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.am-board-card-provider .am-agent-brand {
+  width: 20px;
+  height: 20px;
+}
+.am-board-card-provider > svg {
+  width: 13px;
+  height: 13px;
+  margin-left: auto;
+  color: var(--text-4);
+}
+.am-board-card-model {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+.am-board-card-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.am-board-card-state.working {
+  color: var(--green-ink);
+}
+.am-board-card-state.attention {
+  color: var(--amber-ink);
+}
+.am-board-empty {
+  display: flex;
+  min-height: 80px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-4);
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  font-size: 14px;
+}
+.am-task-board[data-stale="true"] .am-board-card-state {
+  color: var(--text-3);
+}
+.am-task-board[data-stale="true"] .am-board-column > header > svg {
+  color: var(--text-3);
+}
+.am-workflow.am-empty {
+  overflow: auto;
+}
+.am-workflow.am-empty > .am-task-board {
+  flex: 0 0 auto;
+  min-height: 205px;
+}
+.am-workflow.am-empty > .am-start {
+  flex: 1 0 auto;
+  padding: 26px;
+}
+.am-workflow.am-empty .am-runtime-unavailable {
+  margin: 0 auto;
+}
+.am-auth-sessions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 26px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-3);
+}
+.am-auth-sessions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text-2);
+  font: inherit;
+  cursor: pointer;
+}
+.am-auth-sessions .am-agent-brand {
+  width: 18px;
+  height: 18px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .am-board-card:hover {
+    border-color: var(--border-strong);
+    box-shadow: 0 3px 12px #18181b08;
+  }
+}
+@media (max-width: 700px) {
+  .am-workflow {
+    overflow: visible;
+  }
+  .am-workflow-head {
+    padding: 18px 16px;
+    gap: 14px;
+  }
+  .am-workflow-actions {
+    width: 100%;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .am-task-board {
+    flex: 0 0 auto;
+    min-height: 340px;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 20px 16px;
+    gap: 12px;
+  }
+  .am-workflow.am-empty > .am-task-board {
+    min-height: 195px;
+  }
+  .am-workflow.am-empty > .am-start {
+    padding: 22px 16px;
+  }
+  .am-auth-sessions {
+    padding: 10px 16px;
+  }
+}

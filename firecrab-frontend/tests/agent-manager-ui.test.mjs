@@ -32,6 +32,7 @@ async function setup(
     authenticated = true,
     project = true,
     github,
+    view = "terminals",
   } = {},
 ) {
   const fixture = await createFixtureServer(
@@ -370,6 +371,13 @@ async function setup(
     if (selectCli)
       await page.getByRole("radio", { name: "Codex", exact: true }).check();
   }
+  if (view === "terminals")
+    await page
+      .getByRole("button", {
+        name: locale === "ko" ? "터미널" : "Terminals",
+        exact: true,
+      })
+      .click();
   return { fixture, page, state };
 }
 
@@ -561,6 +569,9 @@ test("ending a session requires confirmation and keeps its retained output", asy
 
 test("a different native controller cannot receive agent commands", async (t) => {
   const { page, state } = await setup(t, { mismatch: true });
+  await expect(page.locator(".am-worker-count")).toContainText(
+    "Checking connection",
+  );
   await expect(page.getByRole("alert")).toContainText("does not match");
   await expect(
     page.getByRole("button", { name: "New task", exact: true }),
@@ -1334,4 +1345,177 @@ test("A failed VM connection keeps the source row and hides technical errors unt
   await expect(
     page.getByRole("textbox", { name: "Task", exact: true }),
   ).toHaveValue("Keep this task draft");
+});
+
+for (const [width, locale] of [
+  [1440, "en"],
+  [390, "ko"],
+]) {
+  test(`the task board follows parallel CLI work at ${width}px in ${locale}`, async (t) => {
+    const { page, state } = await setup(t, { width, locale, view: "board" });
+    const board = page.getByRole("region", {
+      name: locale === "ko" ? "작업 보드" : "Task board",
+      exact: true,
+    });
+    const working = board.getByRole("region", {
+      name: locale === "ko" ? "실행 중" : "Working",
+      exact: true,
+    });
+    const attention = board.getByRole("region", {
+      name: locale === "ko" ? "입력·확인 필요" : "Needs attention",
+      exact: true,
+    });
+    const done = board.getByRole("region", {
+      name: locale === "ko" ? "완료" : "Done",
+      exact: true,
+    });
+    await expect(board).toBeVisible();
+    await expect(
+      page.getByRole("button", {
+        name: locale === "ko" ? "보드" : "Board",
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(working.locator('[data-task-id="builder"]')).toBeVisible();
+    await expect(attention.locator('[data-task-id="reviewer"]')).toBeVisible();
+    await expect(
+      working.locator('[data-agent-kind="codex"] img'),
+    ).toBeVisible();
+    await expect(
+      attention.locator('[data-agent-kind="claude"] img'),
+    ).toBeVisible();
+    state.agents.find((agent) => agent.id === "reviewer").state = "working";
+    await expect(working.locator('[data-task-id="reviewer"]')).toBeVisible();
+    await expect(page.locator(".am-worker-count")).toContainText(
+      locale === "ko" ? "에이전트 2개 실행 중" : "2 agents working",
+    );
+    state.agents.find((agent) => agent.id === "builder").state = "done";
+    await expect(done.locator('[data-task-id="builder"]')).toBeVisible();
+    await expect(working.locator('[data-task-id="builder"]')).toHaveCount(0);
+    assert.equal(
+      state.calls.filter((call) => call.method === "POST").length,
+      0,
+    );
+    assert(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    );
+    await page.screenshot({
+      path: `/private/tmp/firecrab-agent-board-${locale}-${width}.png`,
+      fullPage: false,
+    });
+    await working.locator('[data-task-id="reviewer"]').click();
+    const pane = page.getByRole("region", { name: "Reviewer", exact: true });
+    await expect(pane.getByRole("log")).toBeVisible();
+    const streams = state.streams.length;
+    await page
+      .getByRole("button", {
+        name: locale === "ko" ? "보드" : "Board",
+        exact: true,
+      })
+      .click();
+    await expect(board).toBeVisible();
+    await page
+      .getByRole("button", {
+        name: locale === "ko" ? "터미널" : "Terminals",
+        exact: true,
+      })
+      .click();
+    await expect(pane.getByRole("log")).toBeVisible();
+    assert.equal(
+      state.streams.length,
+      streams,
+      "Changing views must keep the existing PTY connection",
+    );
+    await page.reload();
+    await expect(pane.getByRole("log")).toBeVisible();
+    assert.equal(
+      state.calls.filter((call) => call.method === "POST").length,
+      0,
+    );
+  });
+}
+
+test("the board starts one CLI only after submitting a task", async (t) => {
+  const { page, state } = await setup(t, { empty: true, view: "board" });
+  const board = page.getByRole("region", { name: "Task board", exact: true });
+  await expect(board).toBeVisible();
+  await expect(board.locator("[data-task-id]")).toHaveCount(0);
+  assert.equal(state.calls.filter((call) => call.method === "POST").length, 0);
+  const form = page.locator(".am-inline-task");
+  await form
+    .getByLabel("Task", { exact: true })
+    .fill("Build the account settings");
+  await form.getByRole("button", { name: "Start task", exact: true }).click();
+  await expect(
+    board.getByRole("button", { name: /Build the account settings/ }),
+  ).toBeVisible();
+  assert.equal(state.calls.filter((call) => call.method === "POST").length, 1);
+  assert.equal(
+    state.calls.find((call) => call.method === "POST").path,
+    "/tasks",
+  );
+  await page.reload();
+  await expect(
+    board.getByRole("button", { name: /Build the account settings/ }),
+  ).toBeVisible();
+  assert.equal(state.calls.filter((call) => call.method === "POST").length, 1);
+});
+
+test("the board distinguishes undelivered work from completion and account sessions", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  state.agents = [
+    {
+      ...session("waiting", "Prepare the feature", "done"),
+      hasPendingTask: true,
+    },
+    {
+      ...session("uncertain", "Check delivery", "working"),
+      taskDeliveryUncertain: true,
+    },
+    { ...session("login", "Codex sign in", "working"), role: "authentication" },
+  ];
+  const board = page.getByRole("region", { name: "Task board", exact: true });
+  await expect(
+    board
+      .getByRole("region", { name: "Waiting", exact: true })
+      .locator('[data-task-id="waiting"]'),
+  ).toContainText("Waiting for CLI setup");
+  await expect(
+    board
+      .getByRole("region", { name: "Needs attention", exact: true })
+      .locator('[data-task-id="uncertain"]'),
+  ).toContainText("Check task delivery");
+  await expect(
+    board
+      .getByRole("region", { name: "Done", exact: true })
+      .locator("[data-task-id]"),
+  ).toHaveCount(0);
+  await expect(board.locator('[data-task-id="login"]')).toHaveCount(0);
+  await expect(page.locator(".am-worker-count")).toContainText(
+    "0 agents working",
+  );
+  await expect(page.locator(".am-auth-sessions")).toContainText(
+    "Codex sign in",
+  );
+  assert.equal(state.calls.filter((call) => call.method === "POST").length, 0);
+});
+
+test("a disconnected board marks its last observation and recovers without starting work", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  const card = page
+    .getByRole("region", { name: "Task board", exact: true })
+    .locator('[data-task-id="builder"]');
+  await expect(card).toContainText("Working");
+  state.fail = true;
+  await expect(page.locator(".am-connection-error")).toBeVisible();
+  await expect(card).toContainText("Last known state");
+  await expect(page.locator(".am-worker-count")).toContainText(
+    "Checking connection",
+  );
+  state.fail = false;
+  await expect(card).toContainText("Working");
+  await expect(page.locator(".am-connection-error")).toHaveCount(0);
+  assert.equal(state.calls.filter((call) => call.method === "POST").length, 0);
 });
