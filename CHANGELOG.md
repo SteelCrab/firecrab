@@ -39,6 +39,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572),
   workspace preparation, accounts, AI tasks, app verification and preview.
 - Connect a fixed Firecrab app address to the guest-owned preview tunnel and
   explicitly verify its public HTTPS response before opening the app preview.
+- CODE workspaces connect GitHub checkouts, retained MicroVMs, Web VS Code,
+  terminals and assigned AI AUTH agents through the React dashboard.
+- Repository defaults and existing AI AUTH accounts keep setup short.
+  Interrupted operations and agent requests recover without automatic replay.
 
 ### Changed
 

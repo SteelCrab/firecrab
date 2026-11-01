@@ -37,6 +37,7 @@ import SecurityGroups from "./components/SecurityGroups";
 import MicroStorages from "./components/MicroStorages";
 import MicroServices from "./components/MicroServices";
 import Shell from "./components/Shell";
+import Code from "./components/Code";
 import Pipe from "./components/Pipe";
 import Shells from "./components/Shells";
 import CommandPalette from "./components/CommandPalette";
@@ -424,6 +425,12 @@ export default function App() {
               vmId={route.vmId}
               create={route.createSchedule}
               scheduleId={route.scheduleId}
+            />
+          )}
+          {route.kind === "shell" && view === "code" && (
+            <Code
+              path={route.codePath ?? "code"}
+              onUnsavedChange={setHasUnsavedChanges}
             />
           )}
           {view === "networks" && (

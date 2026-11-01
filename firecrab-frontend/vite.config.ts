@@ -64,6 +64,12 @@ export default defineConfig(({ command, isPreview }) => {
       },
     ],
     server: { host: "127.0.0.1", port: 8080, strictPort: true, proxy },
-    build: { target: "es2022", assetsInlineLimit: 0 },
+    build: {
+      target: "es2022",
+      assetsInlineLimit: 0,
+      rollupOptions: {
+        input: { main: "index.html", codeTerminal: "code-terminal.html" },
+      },
+    },
   };
 });

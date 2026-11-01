@@ -221,6 +221,24 @@ impl LoginRegistry {
             .ok_or(Failure::Login)
     }
 
+    /// Cancel an unconsumed attempt without deleting or replacing a saved account.
+    /// The API mutation gate serializes this with callback exchange and persistence.
+    pub fn cancel(&self, state: Uuid) -> Result<AiLoginStatus, Failure> {
+        let mut attempts = self.0.lock().map_err(|_| Failure::Login)?;
+        let attempt = attempts
+            .get_mut(&state)
+            .filter(|a| a.expires > Instant::now())
+            .ok_or(Failure::Login)?;
+        if attempt.status.status == "pending" {
+            attempt.pending = None;
+            attempt.status = AiLoginStatus {
+                status: "failed".into(),
+                message: Some("Sign-in cancelled.".into()),
+            };
+        }
+        Ok(attempt.status.clone())
+    }
+
     /// Invalidate every outstanding attempt when its connection is replaced or removed.
     pub fn cancel_connection(&self, id: Uuid) {
         if let Ok(mut attempts) = self.0.lock() {

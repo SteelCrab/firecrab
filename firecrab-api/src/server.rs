@@ -204,6 +204,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             crate::pool::guard::reject_pool_owned,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::code_runtime::guard::reject_vm_mutation,
         ));
 
     let rest = Router::new()
@@ -914,6 +918,19 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // Registry authentication and manifest GETs retain their bounded inspection deadline.
     let inspection = Router::new()
         .route(
+            "/api/code/agent-auth/adapters",
+            get(handlers::code_workspaces::agent_auth::catalog)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
+        .route(
+            "/api/code/workspaces/{id}/agent-auth/verify",
+            post(handlers::code_workspaces::agent_auth::verify)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
+        .merge(handlers::code_workspaces::runtime::routes())
+        .merge(crate::code_editor::routes())
+        .merge(crate::code_agent_run::routes())
+        .route(
             "/api/pipe/database-rabbitmq",
             axum::routing::put(handlers::pipe_database_events::rabbitmq_save),
         )
@@ -927,17 +944,52 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/pipe/ai/connections/{id}/login",
-            post(handlers::pipe_ai::login_start),
+            post(handlers::pipe_ai::login_start)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
         )
         .route(
             "/api/pipe/ai/logins/{id}",
-            get(handlers::pipe_ai::login_status),
+            get(handlers::pipe_ai::login_status)
+                .delete(handlers::pipe_ai::login_cancel)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
         )
         .route("/auth/callback", get(handlers::pipe_ai::login_callback))
-        .route("/api/pipe/ai/connections", get(handlers::pipe_ai::list))
+        .route(
+            "/api/code/workspaces",
+            get(handlers::code_workspaces::list)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
+        .route(
+            "/api/code/github/repositories",
+            get(handlers::code_workspaces::catalog::repositories)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
+        .route(
+            "/api/code/github/branches",
+            get(handlers::code_workspaces::catalog::branches)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
+        .route(
+            "/api/code/workspaces/{id}",
+            get(handlers::code_workspaces::get)
+                .put(handlers::code_workspaces::save)
+                .delete(handlers::code_workspaces::delete)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
+        .route(
+            "/api/pipe/ai/connections",
+            get(handlers::pipe_ai::list).layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
+        .route(
+            "/api/code/workspaces/{id}/verify",
+            post(handlers::code_workspaces::verify)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
         .route(
             "/api/pipe/ai/connections/{id}",
-            axum::routing::put(handlers::pipe_ai::save).delete(handlers::pipe_ai::disconnect),
+            axum::routing::put(handlers::pipe_ai::save)
+                .delete(handlers::pipe_ai::disconnect)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
         )
         .route(
             "/api/pipe/ai/connections/{id}/verify",
@@ -1063,10 +1115,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     };
 
     app.layer(middleware::from_fn_with_state(
-        state,
+        state.clone(),
         crate::ai_sandbox::access::restrict_delegates,
     ))
     .layer(middleware::from_fn_with_state(policy, enforce_origin))
+    .layer(middleware::from_fn_with_state(
+        (state, config.static_root.clone()),
+        crate::code_editor::isolate,
+    ))
     .layer(middleware::from_fn(assign_request_id))
 }
 
@@ -2074,6 +2130,18 @@ mod quick_tunnels_tests;
 #[cfg(test)]
 #[path = "server_pipe_auth_tests.rs"]
 mod pipe_auth_tests;
+
+#[cfg(test)]
+#[path = "server_code_workspaces_tests.rs"]
+mod code_workspaces_tests;
+
+#[cfg(test)]
+#[path = "server_code_verification_tests.rs"]
+mod code_verification_tests;
+
+#[cfg(test)]
+#[path = "server_code_runtime_tests.rs"]
+mod code_runtime_tests;
 
 #[cfg(test)]
 #[path = "server_pipe_ai_tests.rs"]

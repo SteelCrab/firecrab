@@ -114,6 +114,14 @@ pub struct AppState {
     pub(crate) store: Store,
     /// Fixed-endpoint provider client; credentials remain in the private store.
     pub(crate) pipe_ai: crate::pipe_ai::OpenAi,
+    /// Fixed-origin repository checker; accepts only saved GitHub credentials.
+    pub(crate) code_github: crate::code_verification::Github,
+    /// Bound detached CODE provisioning across all workspaces.
+    #[cfg(test)]
+    pub(crate) code_agent_test_origin: Option<String>,
+    pub(crate) code_agent_runs: Arc<crate::code_agent_run::Runs>,
+    pub(crate) code_jobs: Arc<Semaphore>,
+    pub(crate) code_editor: Arc<crate::code_editor::Editors>,
     pub(crate) pipe_ai_anthropic: crate::pipe_ai::anthropic::Anthropic,
     pub(crate) pipe_ai_logins: Arc<crate::pipe_ai::LoginRegistry>,
     /// Serializes inference with disconnect/rotation, so successful disconnect blocks new calls.
@@ -220,6 +228,12 @@ impl AppState {
             stack_apply_admission: Arc::new(AsyncMutex::new(())),
             stack_source_permits: Arc::new(Semaphore::new(4)),
             pipe_ai: crate::pipe_ai::OpenAi::new(),
+            code_github: crate::code_verification::Github::new(),
+            #[cfg(test)]
+            code_agent_test_origin: None,
+            code_agent_runs: Arc::new(crate::code_agent_run::Runs::default()),
+            code_jobs: Arc::new(Semaphore::new(2)),
+            code_editor: Arc::new(crate::code_editor::Editors::default()),
             pipe_ai_anthropic: crate::pipe_ai::anthropic::Anthropic::new(),
             pipe_ai_logins: Arc::new(crate::pipe_ai::LoginRegistry::default()),
             pipe_ai_mutations: Arc::new(AsyncMutex::new(())),

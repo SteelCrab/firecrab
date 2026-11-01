@@ -339,6 +339,19 @@ pub async fn login_status(
     ))
 }
 
+pub async fn login_cancel(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    Path(key): Path<Uuid>,
+) -> Result<Json<AiLoginStatus>, AppError> {
+    let _guard = gate(&state, id)?;
+    state
+        .pipe_ai_logins
+        .cancel(key)
+        .map(Json)
+        .map_err(|e| failed(e, id))
+}
+
 #[derive(serde::Deserialize)]
 pub struct LoginCallback {
     state: Uuid,
