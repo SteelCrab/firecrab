@@ -1,6 +1,6 @@
 //! Durable, bounded service log pages and per-runtime collection cursors.
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -73,6 +73,50 @@ fn bounded(message: &str) -> (String, bool) {
         end -= 1;
     }
     (format!("{}…", &message[..end]), true)
+}
+
+// Guest output arrives in arbitrary chunks. Reconstruct a partial JSON line from
+// the already retained log records without persisting a second copy of secrets.
+fn security_prefix(
+    conn: &Connection,
+    service: Uuid,
+    vm: Uuid,
+    runtime: Uuid,
+    stream: &str,
+    sequence: i64,
+) -> Result<String, PersistenceError> {
+    let mut stmt = conn.prepare(
+        "SELECT message FROM service_observation_logs WHERE service_id=?1 AND vm_id=?2 AND runtime_id=?3 AND stream=?4 AND sequence<?5 ORDER BY sequence DESC LIMIT 16",
+    )?;
+    let messages = stmt.query_map(
+        params![
+            service.to_string(),
+            vm.to_string(),
+            runtime.to_string(),
+            stream,
+            sequence
+        ],
+        |row| row.get::<_, String>(0),
+    )?;
+    let mut prefix = String::new();
+    for message in messages {
+        let message = message?;
+        let tail = message
+            .rsplit_once('\n')
+            .map_or(message.as_str(), |(_, tail)| tail);
+        if tail.len() + prefix.len() > MAX_MESSAGE_BYTES {
+            return Ok(String::new());
+        }
+        prefix.insert_str(0, tail);
+        if message.contains('\n') {
+            break;
+        }
+    }
+    // A complete JSON value without a newline was already counted.
+    if serde_json::from_str::<serde_json::Value>(&prefix).is_ok() {
+        prefix.clear();
+    }
+    Ok(prefix)
 }
 
 impl Store {
@@ -186,13 +230,18 @@ impl Store {
             if inserted > 0
                 && let Some(release) = release
             {
+                let prefix = if lost || clipped {
+                    String::new()
+                } else {
+                    security_prefix(&tx, service, vm, runtime, &record.stream, sequence)?
+                };
                 super::security_activity::record(
                     &tx,
                     service,
                     release,
                     vm,
                     record.timestamp,
-                    &message,
+                    &(prefix + &message),
                     now,
                 )?;
             }

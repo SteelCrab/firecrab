@@ -141,7 +141,27 @@ def run_database_security(api, wait_for, network, spec_a, fixture, evidence):
                            for event in row["activityHistory"]):
                 return row
             return None
-        wait_for(detected, timeout=120, message="real PostgreSQL authentication failures were not detected")
+        try:
+            wait_for(detected, timeout=120, message="real PostgreSQL authentication failures were not detected")
+        except AssertionError:
+            # Preserve only counts in CI artifacts, never database logs or addresses.
+            logs = list(reversed(api.call("GET", path + "/observability")["logs"]))
+            def count_failures(text):
+                count = 0
+                for line in text.splitlines():
+                    try:
+                        value = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(value, dict) and value.get("error_severity") == "FATAL" and value.get("state_code") in ("28P01", "28000"):
+                        count += 1
+                return count
+            metrics["diagnostics"] = {
+                "logFrames": len(logs),
+                "completeAuthLines": sum(count_failures(item["message"]) for item in logs),
+                "reassembledAuthLines": sum(count_failures("".join(item["message"] for item in logs if item["stream"] == stream)) for stream in ("stdout", "stderr")),
+            }
+            raise
         metrics["stages"].append("real PostgreSQL authentication failures retain service, release and replica without connection details")
         api.call("DELETE", f"/api/service-security/databases/{connection}/link")
         unlinked = api.call("GET", "/api/service-security")

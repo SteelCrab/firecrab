@@ -361,12 +361,45 @@ mod tests {
         assert_eq!(findings[0].deployment_id, deployment.to_string());
         let payload = serde_json::to_string(&findings).unwrap();
         assert!(!payload.contains("private-password") && !payload.contains("192.0.2.1"));
+        // Real guest reads can split PostgreSQL JSON lines at arbitrary byte boundaries.
+        let text = "{\"error_severity\":\"FATAL\",\"state_code\":\"28P01\"}\n".repeat(10);
+        let mut split = text.find("state_code").unwrap() + 4;
+        let mut logs = Vec::new();
+        let mut start = 0;
+        while start < text.len() {
+            let end = split.min(text.len());
+            logs.push(InputLog {
+                sequence: logs.len() as u64 + 3,
+                timestamp: chrono::Utc::now().timestamp_millis(),
+                stream: "stderr".into(),
+                message: text[start..end].into(),
+            });
+            start = end;
+            split += 43;
+        }
+        let next = logs.last().unwrap().sequence;
+        state
+            .store
+            .append_service_logs(service, (vm, runtime), next, "active", false, &logs)
+            .unwrap();
+        state
+            .store
+            .append_service_logs(service, (vm, runtime), next, "active", false, &logs)
+            .unwrap();
+        assert_eq!(state.store.security_activity(service).unwrap()[0].count, 20);
         state.store.remove_security_database_link(database).unwrap();
         state
             .store
-            .append_service_logs(service, (vm, runtime), 3, "active", false, &[make(3)])
+            .append_service_logs(
+                service,
+                (vm, runtime),
+                next + 1,
+                "active",
+                false,
+                &[make(next + 1)],
+            )
             .unwrap();
-        assert_eq!(state.store.security_activity(service).unwrap()[0].count, 10);
+        assert_eq!(state.store.security_activity(service).unwrap()[0].count, 20);
         assert!(
             state
                 .store
