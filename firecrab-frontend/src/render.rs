@@ -206,6 +206,7 @@ pub fn navigation_icon(name: &str) -> String {
         "services" => "m12 3 9 5v8l-9 5-9-5V8l9-5Zm0 10 9-5M12 13 3 8M12 13v8M7.5 5.5l9 5v5",
         "stacks" => "m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5",
         "cluster" => "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
+        "ai-canvas" => "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z",
         "networks" => "M9 3h6v6H9zM3 15h6v6H3zM15 15h6v6h-6zM12 9v3M6 15v-3h12v3",
         "security-groups" => {
             "M12 3c3 2 6 3 8 3v6c0 5-5 8-8 10-3-2-8-5-8-10V6c2 0 5-1 8-3Zm-4 9 3 3 5-6"
