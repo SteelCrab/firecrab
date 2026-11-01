@@ -1,7 +1,5 @@
 [workspace]
 resolver = "3"
-# The browser crate has its own target and lockfile.
-exclude = ["firecrab-frontend"]
 members = [
     "firecrab-api",
     "firecrab-pki",

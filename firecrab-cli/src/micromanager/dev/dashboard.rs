@@ -140,18 +140,6 @@ pub fn prepare(source: &Path) -> Result<PathBuf, Error> {
         // Even reinstalling the same lock must invalidate Vite's module cache.
         fs::write(stamp, format!("{revision}\n{}", Uuid::new_v4()))?;
     }
-    if frontend.join("Cargo.toml").is_file() {
-        report!("[BUILD] dashboard: Rust/WASM");
-        let status = Command::new("node")
-            .arg(frontend.join("scripts/wasm.mjs"))
-            .current_dir(&frontend)
-            .status()?;
-        if !status.success() {
-            return Err(Error::Failed(
-                "dashboard WASM build failed; see build output above".into(),
-            ));
-        }
-    }
     Ok(source)
 }
 

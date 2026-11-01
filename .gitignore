@@ -17,6 +17,7 @@ __pycache__/
 # Frontend build output / dependencies
 firecrab-frontend/dist/
 node_modules/
+.vite/
 
 # Packaged M2Image release artifacts (scripts/package-m2images.sh)
 /dist/
@@ -53,3 +54,4 @@ logs
 
 # MacOS
 .DS_Store
+/test-results/

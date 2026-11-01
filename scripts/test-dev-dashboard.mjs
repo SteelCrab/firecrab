@@ -48,11 +48,10 @@ test("embedded dashboard starts real Vite and authenticates shutdown", { timeout
   assert.ok(!html.includes(session), "public bootstrap must not expose the ownership credential");
   assert.equal(page.headers.get("content-security-policy"), null);
   assert.equal((await fetch(`${url}/@vite/client`)).status, 200);
-  const terminal = await fetch(`${url}/src/lib/wasmTerminal.ts`);
+  const terminal = await fetch(`${url}/src/components/Console.tsx`);
   assert.equal(terminal.status, 200, await terminal.text());
-  const wasm = await fetch(`${url}/node_modules/ghostty-web/dist/ghostty-vt.wasm`);
-  assert.equal(wasm.status, 200);
-  assert.equal(WebAssembly.validate(await wasm.arrayBuffer()), true);
+  const main = await fetch(`${url}/src/main.tsx`);
+  assert.equal(main.status, 200, await main.text());
   assert.equal((await fetch(`${url}/__firecrab_dev/stop`, { method: "POST" })).status, 403);
   assert.equal((await fetch(`${url}/__firecrab_dev/stop`, { method: "POST", headers: { "X-Firecrab-Dev-Session": randomUUID() } })).status, 403);
   assert.equal((await fetch(`${url}/__firecrab_dev/stop`, { method: "POST", headers })).status, 202);
@@ -199,7 +198,7 @@ test("development API proxy preserves the dashboard origin on a custom port", { 
   process.env.FIRECRAB_DEV_API_PORT = String(upstream.address().port);
   let config;
   try {
-    ({ config } = await loadConfigFromFile({ command: "serve", mode: "test" }, resolve(frontend, "vite.config.js")));
+    ({ config } = await loadConfigFromFile({ command: "serve", mode: "test" }, resolve(frontend, "vite.config.ts")));
   } finally {
     if (previousPort === undefined) delete process.env.FIRECRAB_DEV_API_PORT;
     else process.env.FIRECRAB_DEV_API_PORT = previousPort;

@@ -599,22 +599,22 @@ fn installs_missing_locked_dependencies_and_reports_invalid_locks() {
     assert!(!sentinel.exists());
     fs::write(&sentinel, "stale").unwrap();
 
-    // Reproduce a branch update that adds Ghostty while Vite is already installed.
-    let ghostty = frontend.join("fixture-ghostty");
+    // Reproduce a branch update that adds a terminal package while Vite is already installed.
+    let ghostty = frontend.join("fixture-terminal");
     fs::create_dir(&ghostty).unwrap();
     fs::write(
         ghostty.join("package.json"),
-        r#"{"name":"ghostty-web","version":"1.0.0"}"#,
+        r#"{"name":"terminal-fixture","version":"1.0.0"}"#,
     )
     .unwrap();
-    fs::write(ghostty.join("ghostty-vt.wasm"), "fixture wasm").unwrap();
-    fs::write(frontend.join("package.json"), r#"{"name":"dashboard-fixture","version":"1.0.0","dependencies":{"vite":"file:./fixture-vite","ghostty-web":"file:./fixture-ghostty"}}"#).unwrap();
-    fs::write(frontend.join("package-lock.json"), r#"{"name":"dashboard-fixture","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"dashboard-fixture","version":"1.0.0","dependencies":{"vite":"file:./fixture-vite","ghostty-web":"file:./fixture-ghostty"}},"node_modules/vite":{"resolved":"fixture-vite","link":true},"fixture-vite":{"name":"vite","version":"1.0.0"},"node_modules/ghostty-web":{"resolved":"fixture-ghostty","link":true},"fixture-ghostty":{"name":"ghostty-web","version":"1.0.0"}}}"#).unwrap();
+    fs::write(ghostty.join("terminal.js"), "fixture terminal").unwrap();
+    fs::write(frontend.join("package.json"), r#"{"name":"dashboard-fixture","version":"1.0.0","dependencies":{"vite":"file:./fixture-vite","terminal-fixture":"file:./fixture-terminal"}}"#).unwrap();
+    fs::write(frontend.join("package-lock.json"), r#"{"name":"dashboard-fixture","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{"":{"name":"dashboard-fixture","version":"1.0.0","dependencies":{"vite":"file:./fixture-vite","terminal-fixture":"file:./fixture-terminal"}},"node_modules/vite":{"resolved":"fixture-vite","link":true},"fixture-vite":{"name":"vite","version":"1.0.0"},"node_modules/terminal-fixture":{"resolved":"fixture-terminal","link":true},"fixture-terminal":{"name":"terminal-fixture","version":"1.0.0"}}}"#).unwrap();
     prepare(fixture.source.path()).unwrap();
     assert!(frontend.join("node_modules/vite/package.json").is_file());
     assert!(
         frontend
-            .join("node_modules/ghostty-web/ghostty-vt.wasm")
+            .join("node_modules/terminal-fixture/terminal.js")
             .is_file()
     );
     assert!(!sentinel.exists());
@@ -632,27 +632,5 @@ fn installs_missing_locked_dependencies_and_reports_invalid_locks() {
             .unwrap_err()
             .to_string()
             .contains("dependency installation failed")
-    );
-}
-
-#[test]
-fn wasm_build_failure_is_reported_before_starting_the_dashboard() {
-    let fixture = Fixture::new();
-    let frontend = fixture.source.path().join("firecrab-frontend");
-    fs::write(frontend.join("Cargo.toml"), "[workspace]\n").unwrap();
-    fs::create_dir(frontend.join("scripts")).unwrap();
-    fs::write(frontend.join("scripts/wasm.mjs"), "process.exit(42)").unwrap();
-    assert!(
-        prepare(fixture.source.path())
-            .unwrap_err()
-            .to_string()
-            .contains("dashboard WASM build failed")
-    );
-    assert!(
-        !fixture
-            .home
-            .path()
-            .join("runtime/dev-dashboard.json")
-            .exists()
     );
 }

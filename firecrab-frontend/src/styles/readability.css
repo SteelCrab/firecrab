@@ -1,0 +1,491 @@
+/* Readable dashboard controls at normal browser zoom. */
+:root {
+  --control-height: 44px;
+  --control-height-sm: 38px;
+}
+body {
+  font-size: 19.5px;
+  line-height: 1.5;
+}
+.btn {
+  font-size: 16px;
+}
+.btn.sm {
+  font-size: 14px;
+}
+.field label,
+.field-error {
+  font-size: 16px;
+}
+.input,
+.field
+  :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  font-size: 17px;
+  min-height: var(--control-height);
+}
+.sidebar-item {
+  min-height: 42px;
+  height: auto;
+  font-size: 16px;
+}
+.sidebar-group-label,
+.sidebar-host,
+.sidebar-count {
+  font-size: 14px;
+}
+.sidebar-name {
+  font-size: 17px;
+}
+.sidebar-search {
+  min-height: 44px;
+  font-size: 16px;
+}
+.vm-table {
+  font-size: 16px;
+}
+.screen-title {
+  font-size: 20px;
+}
+@media (min-width: 1100px) {
+  .app-frame {
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+}
+@media (max-width: 600px) {
+  body {
+    font-size: 17px;
+  }
+}
+.panel-title,
+.detail-embed .panel-title {
+  font-size: 18px;
+}
+.panel h3:not(.panel-title) {
+  font-size: 17px;
+}
+.panel-intro,
+.empty,
+.detail-list li {
+  font-size: 16px;
+}
+
+.vm-list {
+  font-size: 18px;
+}
+.vm-list th {
+  font-size: 16px;
+  min-height: 44px;
+}
+.vm-list tbody tr {
+  height: 75px;
+}
+.vm-row-name {
+  font-size: 18px;
+  line-height: 1.4;
+}
+.vm-row-sub,
+.vm-list .mono,
+.vm-usage-value {
+  font-size: 16px;
+}
+.vm-summary-item dt {
+  font-size: 18px;
+}
+.vm-summary-value {
+  font-size: 33px;
+  font-weight: 650;
+}
+.vm-summary-value small {
+  font-size: 19.5px;
+}
+.vm-summary-bar {
+  height: 6px;
+}
+.vm-filter {
+  font-size: 16px;
+  min-height: 40px;
+}
+.detail-title {
+  font-size: 27px;
+}
+.detail-meta,
+.detail-meta .mono {
+  font-size: 16px;
+}
+.detail-sec-head h3,
+.props dt,
+.props dd {
+  font-size: 17px;
+}
+.prop-value .mono,
+.detail-note,
+.prop-lock,
+.detail-tabs .tab {
+  font-size: 16px;
+}
+.vm-usage-description,
+.vm-usage-card-label,
+.vm-usage-card-basis,
+.vm-usage-history-note {
+  font-size: 16px;
+}
+.vm-usage-chart-scale,
+.vm-usage-chart-time {
+  font-size: 13px;
+}
+.vm-timeline-time,
+.vm-timeline-detail {
+  font-size: 16px;
+}
+.vm-list tbody .icon-btn {
+  width: 38px;
+  height: 38px;
+}
+@media (max-width: 600px) {
+  .vm-row-name {
+    font-size: 18px;
+  }
+  .vm-row-sub {
+    font-size: 15px;
+  }
+  .vm-summary-item dt {
+    font-size: 15px;
+  }
+  .vm-summary-value {
+    font-size: 26px;
+  }
+  .props {
+    grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr);
+  }
+}
+
+.sidebar-item {
+  text-decoration: none;
+}
+.vm-list-footer {
+  padding: 12px 24px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 15px;
+}
+
+.screen-main,
+.vm-list-scroll {
+  container-type: inline-size;
+}
+.vm-list col.vm-col-actions {
+  width: 150px;
+}
+.vm-filters {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.vm-summary-value {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.vm-summary-value small {
+  white-space: nowrap;
+}
+@container (max-width:860px) {
+  .vm-list .vm-col-ip,
+  .vm-list .vm-col-mem {
+    display: none;
+  }
+}
+@container (max-width:640px) {
+  .vm-list .vm-col-cpu {
+    display: none;
+  }
+  .vm-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .vm-search {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+@media (max-width: 767px) {
+  .vm-list col.vm-col-actions {
+    width: 0;
+  }
+}
+
+.auth-setup-overview {
+  display: grid;
+  gap: 8px;
+  margin: 0 20px 16px;
+}
+.auth-setup-overview details {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.auth-setup-overview summary {
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 500;
+}
+.auth-setup ol {
+  padding-left: 24px;
+  font-size: 16px;
+}
+.auth-setup li + li {
+  margin-top: 8px;
+}
+.screen .vm-table.service-table td {
+  padding: 12px 16px;
+}
+.screen .vm-table.service-table .service-name {
+  font-size: 19.5px;
+  line-height: 24px;
+}
+.screen .vm-table.service-table .cell-sub {
+  line-height: 20px;
+  margin-top: 4px;
+}
+.screen .vm-table.service-table .service-domain {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.package-registration {
+  width: min(700px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  padding: 26px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+}
+.package-registration::backdrop {
+  background: rgba(15, 18, 22, 0.35);
+}
+.package-registration .detail-list li {
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  align-items: center;
+}
+.network-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.network-editor form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.network-editor .form-footer {
+  margin-top: auto;
+}
+.network-choice {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.network-choice legend {
+  margin-bottom: 8px;
+  font-size: 16px;
+}
+.network-choice label {
+  position: relative;
+  cursor: pointer;
+}
+.network-choice input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  inset: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.network-choice span {
+  display: block;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 16px;
+}
+.network-choice input:checked + span {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+.network-choice input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.screen .network-table .col-detail {
+  display: none;
+}
+.screen .network-table td.actions {
+  white-space: nowrap;
+  width: 104px;
+}
+.screen .network-table {
+  width: 100%;
+  table-layout: fixed;
+}
+.screen .network-table td,
+.screen .network-table th {
+  overflow-wrap: anywhere;
+}
+.screen .network-table th:first-child {
+  width: 24%;
+}
+@media (max-width: 767px) {
+  .screen.has-panel .screen-header-end > .btn {
+    display: none;
+  }
+}
+@media (max-width: 767px) {
+  .screen-header {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .screen-header .screen-crumbs {
+    flex-shrink: 0;
+  }
+  .screen-header-end {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+}
+.app-dialog {
+  box-sizing: border-box;
+  width: min(880px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  padding: 26px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  overflow: auto;
+}
+.app-dialog::backdrop {
+  background: rgba(15, 18, 22, 0.35);
+}
+.app-dialog form {
+  display: grid;
+  gap: 18px;
+}
+.app-dialog label {
+  display: grid;
+  gap: 8px;
+}
+.app-dialog input,
+.app-dialog select,
+.app-dialog textarea {
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.app-dialog pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 24rem;
+  overflow: auto;
+}
+.app-dialog .panel {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.service-form-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.service-form-editor .service-wizard {
+  flex: 1;
+  min-height: 0;
+}
+.service-runtime:has(#service-deploy-form),
+#service-panel-overview:has(#service-deploy-form) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 100%;
+}
+#service-deploy-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+.app-dialog label:has(input[type="checkbox"]),
+.app-dialog label:has(input[type="radio"]) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.app-dialog input[type="checkbox"],
+.app-dialog input[type="radio"] {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+/* Closed native dialogs must stay hidden inside flex and grid containers. */
+dialog:not([open]) {
+  display: none !important;
+}
+
+@media (max-width: 767px) {
+  .screen-header {
+    height: auto;
+    min-height: 64px;
+    padding-block: 12px;
+  }
+}
+
+@media (max-width: 767px) {
+  .screen-header .screen-crumbs {
+    flex-shrink: 1;
+    max-width: calc(100vw - 70px);
+  }
+  .screen-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+.pipe-service-menu {
+  z-index: 120;
+}
+
+@media (max-width: 600px) {
+  .screen-crumbs > :not(.screen-title) {
+    display: none;
+  }
+}
+
+.service-form-editor .service-wizard {
+  display: flex;
+  flex-direction: column;
+}
+
+.props dd > .mono {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.release-table tbody tr {
+  height: 75px;
+}
+@media (max-width: 600px) {
+  .detail-tabs {
+    flex-wrap: wrap;
+  }
+}
+
+#service-deploy-form {
+  align-items: stretch;
+}
+#service-deploy-form .form-footer {
+  align-self: stretch;
+}

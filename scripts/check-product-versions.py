@@ -18,13 +18,11 @@ def main():
         if actual != version:
             problems.append(f"{path}: {actual!r}, expected {version}")
 
-    for path in ["Cargo.lock", "firecrab-frontend/Cargo.lock"]:
+    for path in ["Cargo.lock"]:
         lock = tomllib.loads((ROOT / path).read_text())
         for package in lock["package"]:
             if package["name"].startswith("firecrab-"):
                 expect(f"{path}: {package['name']}", package["version"])
-    frontend = tomllib.loads((ROOT / "firecrab-frontend/Cargo.toml").read_text())
-    expect("firecrab-frontend/Cargo.toml", frontend["package"]["version"])
     for directory in ["firecrab-frontend", "firecrab-e2e"]:
         package = json.loads((ROOT / directory / "package.json").read_text())
         lock = json.loads((ROOT / directory / "package-lock.json").read_text())
