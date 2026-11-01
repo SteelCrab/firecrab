@@ -26,7 +26,7 @@ fn failure_threshold_hysteresis_and_stable_health_bound_restart_loops() {
         assert!(record.instances[0].healthy);
         assert!(!admit(&mut record, now));
     }
-    observe(&mut record, &[VmState::Stopped], &[false], 11);
+    observe(&mut record, &[VmState::Running], &[false], 11);
     assert_eq!(record.phase, ServicePhase::Degraded);
     assert!(admit(&mut record, 11));
     assert_eq!(record.recovery.as_ref().unwrap().replicas[&id].attempts, 1);
@@ -345,4 +345,31 @@ async fn repair_keeps_the_release_and_encrypted_environment_after_database_reope
             .unwrap(),
         "recovery-private-frozen-value"
     );
+}
+
+#[test]
+fn confirmed_exit_withdraws_on_first_observation_and_preserves_the_healthy_peer() {
+    for state in [VmState::Stopped, VmState::Error] {
+        let mut record = running();
+        let victim = record.instances[0].vm_id;
+        let mut healthy = record.instances[0].clone();
+        healthy.vm_id = Uuid::new_v4();
+        healthy.ipv4 = "127.0.0.2".into();
+        record.instances.push(healthy.clone());
+        record.spec.replicas = 2;
+        observe(&mut record, &[state, VmState::Running], &[false, true], 1);
+        assert!(!record.instances[0].healthy);
+        assert!(record.instances[1].healthy);
+        assert_eq!(record.instances[1].vm_id, healthy.vm_id);
+        assert_eq!(
+            routes::ready(&record, None).unwrap(),
+            [format!("{}:{}", healthy.ipv4, record.spec.port)
+                .parse::<std::net::SocketAddr>()
+                .unwrap()]
+        );
+        assert!(admit(&mut record, 1));
+        let repair = record.recovery.as_ref().unwrap().repair.as_ref().unwrap();
+        assert_eq!(repair.vm_id, victim);
+        assert_eq!(repair.stage, ReplicaRepairStage::Withdraw);
+    }
 }
