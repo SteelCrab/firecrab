@@ -163,7 +163,9 @@ jobs:
           sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-firecrab-address.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress
           sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-api.py --api "$bin/firecrab-api" --helper "$bin/firecrab-helper" --ingress target/ingress/firecrab-ingress
           cp "$profiles"/*.profraw "$CARGO_LLVM_COV_TARGET_DIR/"
-          cargo llvm-cov report --lcov --output-path lcov.info
+          # Opt-in, owned-VM QA harnesses are tests, not shipped runtime code.
+          # Keep every production module in coverage; these harnesses need explicit QA resources.
+          cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex '/micromanager/agents/qa/'
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v7

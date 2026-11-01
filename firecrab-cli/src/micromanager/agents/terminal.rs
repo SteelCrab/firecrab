@@ -11,6 +11,7 @@ const BUSY: &str = "FIRECRAB_TERMINAL_BUSY";
 const BUSY_REASON: &str = "Verification is running in this workspace. Terminal control was released; input was not retried.";
 
 #[cfg(test)]
+#[path = "qa/terminal.rs"]
 mod qa;
 
 #[derive(Deserialize)]

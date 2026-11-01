@@ -896,3 +896,7 @@ impl Runtime {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "agents/qa/herdr.rs"]
+mod manual_qa;
