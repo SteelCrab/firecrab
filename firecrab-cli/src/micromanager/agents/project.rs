@@ -207,6 +207,10 @@ impl Runtime {
             saved.project.branch,
         ))
     }
+    pub(super) fn owns_workspace(&self, agent: &Agent) -> bool {
+        agent.role != "authentication"
+            && (agent.cwd == WORKSPACE || agent.cwd == format!("/workspace/firecrab/{}", agent.id))
+    }
 }
 
 #[cfg(test)]

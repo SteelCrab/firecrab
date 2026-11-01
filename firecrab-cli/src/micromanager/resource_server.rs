@@ -176,6 +176,10 @@ fn router_for(home: PathBuf, platform: resource::Platform) -> Router {
                     "/api/service/agents/microvms/{vm}/{id}/resume",
                     post(resume_vm_agent_task),
                 )
+                .route(
+                    "/api/service/agents/microvms/{vm}/{id}/automation",
+                    get(vm_automation_status).post(run_vm_automation),
+                )
                 .route("/api/service/agents", get(agent_status))
                 .route("/api/service/agents/tasks", post(start_agent_task))
                 .route("/api/service/agents/{id}", get(inspect_agent))
@@ -203,6 +207,32 @@ async fn vm_agent_status(
         let mut value = super::agents::Runtime::for_vm(&controller.home, vm, true)?.status()?;
         value["controllerId"] = serde_json::json!(resource::controller_id(&controller.home)?);
         Ok(Json(value))
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn vm_automation_status(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        super::agents::Runtime::for_vm(&controller.home, vm, false)?
+            .automation_status(id)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn run_vm_automation(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+    Json(input): Json<super::agents::automation::Request>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller.agents.try_lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?
+            .automate(id, input)
+            .map(Json)
     })
     .await
     .map_err(|e| Error::Invalid(e.to_string()))?

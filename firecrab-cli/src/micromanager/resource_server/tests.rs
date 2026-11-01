@@ -467,6 +467,19 @@ async fn native_agent_controls_are_scoped_to_the_selected_controller() {
         .await;
         assert_eq!(status, StatusCode::CONFLICT);
     }
+    for action in ["automation"] {
+        let path = format!(
+            "/api/service/agents/microvms/{}/{}/{action}",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4()
+        );
+        let (status, _, _) = response(
+            app.clone(),
+            request("POST", &path, Some("another-controller"), r#"{}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
     let task_path = "/api/service/agents/tasks";
     let empty_task =
         json!({"id":uuid::Uuid::new_v4(),"input":"  ","cwd":dir.path(),"cli":"","model":""});
