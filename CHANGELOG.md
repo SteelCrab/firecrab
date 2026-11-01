@@ -25,6 +25,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Open CODE Web VS Code and real guest PTY terminals for the retained workspace.
+  Prepare a SHA-256-pinned code-server release, use authenticated session-specific
+  browser origins and private SSH forwarding, and revoke access on workspace or
+  runtime changes while retaining project files (#560).
+
 - Connect CODE workspace and editor status views to MicroVM provisioning, start
   and stop. Choose existing images, internet-enabled networks and storage roots,
   clone the saved repository/branch, retain working files on resume, and recover

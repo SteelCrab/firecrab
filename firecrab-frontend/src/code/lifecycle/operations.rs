@@ -132,6 +132,7 @@ fn run(app: &Shared, p: Pending, send: bool) {
     a.code.lifecycle.error = "";
     a.code.lifecycle.retryable = false;
     invalidate_observations(&mut a);
+    editor::invalidate(&mut a);
     auth::context_changed(&mut a);
     let (generation, epoch) = (a.generation, a.code.lifecycle.epoch);
     drop(a);

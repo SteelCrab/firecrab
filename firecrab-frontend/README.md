@@ -25,8 +25,9 @@ use that shared service. Account presence is not agent authentication.
 **Choose AI AUTH** updates a saved workspace's agent/account reference with a
 revision check and interrupted-save recovery. Removing the assignment keeps the
 shared account connected. `#/code/{workspace-uuid}/editor` displays the same live
-AUTH states. Its editor, terminal and agent controls remain disabled until their
-runtime adapters are verified.
+AUTH states. **Prepare editor and terminal** starts the pinned editor service on
+a ready MicroVM. Explicit links open its authenticated, separate browser site.
+Agent execution remains disabled until its runtime integration is complete.
 The [agent adapter check](../public-docs/guides/code-agent-auth.md) discovers fixed
 CLI recipes and checks provider credentials plus isolated CLI configuration in a
 ready MicroVM. Unsupported handoffs remain disabled. Disposable verification
@@ -41,13 +42,17 @@ to the revision-checked MicroVM provision/start/stop APIs. Saving configuration
 does not provision a VM. Lost lifecycle responses retain the original request in
 session storage; checking observes the saved operation before an explicit retry.
 Conflicting configurations or operations block replay. Stop/start preserve the
-same checkout. Editor and agent execution remain separate scope items in #560. See the
+same checkout. The [CODE editor](../public-docs/guides/code-editor.md) reuses that
+checkout through private SSH forwarding. Its standalone terminal entry uses the
+existing Ghostty renderer and a fixed authenticated WebSocket; it contains no
+dashboard or shared account credentials. Agent execution remains a separate scope
+item in #560. See the
 [CODE guide](../public-docs/guides/code-workspaces.md) for the current API.
 
 Browser contracts run against the production WASM build without a live API:
 
 ```sh
-FIRECRAB_MOCKED_E2E_PRODUCTION=1 npm run test:dashboard --prefix firecrab-e2e -- tests/code-workspaces.spec.ts tests/code-setup.spec.ts tests/code-ai-auth.spec.ts tests/code-auth-states.spec.ts tests/code-agent-auth.spec.ts tests/code-runtime-controls.spec.ts tests/pipe-ai.spec.ts
+FIRECRAB_MOCKED_E2E_PRODUCTION=1 npm run test:dashboard --prefix firecrab-e2e -- tests/code-workspaces.spec.ts tests/code-setup.spec.ts tests/code-ai-auth.spec.ts tests/code-auth-states.spec.ts tests/code-agent-auth.spec.ts tests/code-runtime-controls.spec.ts tests/code-web-editor.spec.ts tests/pipe-ai.spec.ts
 ```
 
 Run that command from the repository root. It covers English/Korean desktop and

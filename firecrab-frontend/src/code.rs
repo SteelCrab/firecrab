@@ -60,7 +60,7 @@ struct Connections {
     github: String,
     ai: String,
 }
-#[derive(Deserialize, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct Runtime {
     workspace_id: String,
@@ -77,14 +77,14 @@ struct Runtime {
     placement: Placement,
     error: Option<String>,
 }
-#[derive(Deserialize, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct Placement {
     template: Template,
     micro_network_id: String,
     storage_root: String,
 }
-#[derive(Deserialize, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq)]
 struct Template {
     name: String,
     version: String,
@@ -123,6 +123,7 @@ pub struct State {
     auth: auth::State,
     agent_auth: agent_auth::State,
     lifecycle: lifecycle::State,
+    editor: editor::State,
     binding: Option<binding::Draft>,
     binding_epoch: u64,
     observation_epoch: u64,
@@ -155,7 +156,7 @@ pub fn is_editor(route: &str) -> bool {
     workspace_id(route).is_some() && route.ends_with("/editor")
 }
 pub fn saving(app: &App) -> bool {
-    lifecycle::busy(app) || binding::busy(app) || setup::saving(app)
+    app.code.editor.busy || lifecycle::busy(app) || binding::busy(app) || setup::saving(app)
 }
 pub fn change(app: &Shared, node: &Element) -> bool {
     lifecycle::change(app, node) || binding::change(app, node) || setup::change(app, node)
@@ -312,6 +313,7 @@ pub fn load(app: Shared) {
         }
         drop(state);
         lifecycle::load(app.clone());
+        editor::load(app.clone());
         agent_auth::load(app.clone());
         if changed {
             render_content(&app);
@@ -320,6 +322,12 @@ pub fn load(app: Shared) {
 }
 
 pub fn action(app: &Shared, action: &str) -> bool {
+    if editor::action(app, action) {
+        return true;
+    }
+    if app.borrow().code.editor.busy && action.starts_with("code-") {
+        return true;
+    }
     if lifecycle::action(app, action) {
         return true;
     }

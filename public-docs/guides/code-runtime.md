@@ -3,7 +3,8 @@
 CODE can provision a dedicated MicroVM and clone its selected GitHub branch into `/home/fc-code/project`.
 Start and stop reuse existing VM lifecycle APIs.
 Stopping preserves the root disk, Git metadata, local commits, and uncommitted files.
-This API does not launch Web VS Code, a terminal session, or an AI agent.
+Use the separate [editor controls](code-editor.md) to open Web VS Code and a terminal.
+Runtime lifecycle requests do not automatically launch them or an AI agent.
 
 ## Dashboard controls
 

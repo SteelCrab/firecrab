@@ -41,6 +41,8 @@ sqlparser = { version = "0.63", default-features = false, features = ["std", "vi
 tar = { version = "0.4.46", default-features = false }
 thiserror = { workspace = true }
 tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.29.0"
+tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7", features = ["cors", "fs"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
@@ -57,4 +59,3 @@ tempfile = "3.27.0"
 # and its progress heartbeat — in virtual time against the real production
 # constants, without leaking a test-only clock into the shipped binary.
 tokio = { version = "1", features = ["test-util"] }
-tower = { version = "0.5.3", features = ["util"] }

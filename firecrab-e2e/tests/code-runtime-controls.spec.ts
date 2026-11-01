@@ -25,6 +25,7 @@ async function open(page:Page, options:{locale?:"en"|"ko";setup?:boolean;running
     const request=r.request(),path=new URL(request.url()).pathname,method=request.method();
     const send=(json:unknown,status=200)=>r.fulfill({json,status});
     if(method!=="GET")state.writes.push({path,method,body:request.postDataJSON()});
+    if(method==="GET"&&/^\/api\/code\/workspaces\/[^/]+\/editor$/.test(path))return send(null);
     if(path==="/api/images")return state.outage?send({error:{code:"unavailable"}},503):send(state.images);
     if(path==="/api/micro-networks")return send(state.networks);
     if(path==="/api/storage")return send(state.storage);

@@ -191,6 +191,24 @@ impl Driver for Fake {
 async fn code_runtime_rest_provision_stop_and_resume_reuse_the_reserved_vm_and_saved_repository() {
     use crate::templates::{TemplateRegistry, TemplateSpec};
     let mut f = fixture().await;
+    // This tiny admission fixture needs only the image minimum, not 16 GiB of host space.
+    let mut spec = f.state.store.code_workspace(f.id).unwrap().unwrap().spec;
+    spec.resources.disk_gb = 1;
+    assert!(matches!(
+        f.state
+            .store
+            .write_code_workspace(
+                f.id,
+                CodeWorkspaceWrite {
+                    expected_revision: 1,
+                    spec
+                },
+                2
+            )
+            .unwrap(),
+        WriteResult::Written(_)
+    ));
+
     std::fs::write(f.dir.path().join("kernel"), b"kernel").unwrap();
     std::fs::write(f.dir.path().join("rootfs"), b"rootfs").unwrap();
     f.state.templates = TemplateRegistry::from_specs(
@@ -210,7 +228,7 @@ async fn code_runtime_rest_provision_stop_and_resume_reuse_the_reserved_vm_and_s
         crate::handlers::micro_networks::test_support::seed_internet_micro_network(&f.state);
     f.app = router(&f.state).layer(Extension(LocalOperator));
     let path = format!("/api/code/workspaces/{}/runtime", f.id);
-    let body = json!({"expectedRevision":1,"template":"dev","microNetworkId":network,"storageRoot":f.state.storage.default_id()});
+    let body = json!({"expectedRevision":2,"template":"dev","microNetworkId":network,"storageRoot":f.state.storage.default_id()});
     let (status, first) = call(&f, "POST", &path, body.clone()).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{first}");
     let duplicate = call(&f, "POST", &path, body).await.1;
@@ -235,7 +253,7 @@ async fn code_runtime_rest_provision_stop_and_resume_reuse_the_reserved_vm_and_s
         &f,
         "POST",
         &format!("{path}/stop"),
-        json!({"expectedRevision":1}),
+        json!({"expectedRevision":2}),
     )
     .await;
     assert_eq!(stopped.0, StatusCode::ACCEPTED);
@@ -250,7 +268,7 @@ async fn code_runtime_rest_provision_stop_and_resume_reuse_the_reserved_vm_and_s
         &f,
         "POST",
         &format!("{path}/start"),
-        json!({"expectedRevision":1}),
+        json!({"expectedRevision":2}),
     )
     .await;
     assert_eq!(resumed.0, StatusCode::ACCEPTED);

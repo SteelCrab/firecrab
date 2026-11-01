@@ -5,6 +5,7 @@ mod bootstrap;
 mod ci_deploy;
 mod cluster;
 mod code_agent_auth;
+mod code_editor;
 mod code_runtime;
 mod code_verification;
 mod console;

@@ -24,8 +24,8 @@ AI AUTH management uses the shared Pipe AI manager in place.
 revision check. It can reuse an existing account or explicitly remove this
 workspace's assignment. The shared account remains connected for other workspaces.
 **Editor status** opens `#/code/{workspace-uuid}/editor` with the same live AUTH
-states. Web VS Code, terminal and agent execution remain disabled pending their
-runtime integrations. See [CODE AI AUTH](code-ai-auth.md) for assignment,
+states. Prepare and open Web VS Code and the terminal for a ready MicroVM.
+See [CODE editor](code-editor.md). Assigned agent execution remains a separate scope item. See [CODE AI AUTH](code-ai-auth.md) for assignment,
 approval, disconnect and recovery states.
 
 Choose **New workspace** (`#/code/new`) to create saved configuration in one flow.

@@ -916,6 +916,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
                 .layer(middleware::from_fn(handlers::secrets::no_store)),
         )
         .merge(handlers::code_workspaces::runtime::routes())
+        .merge(crate::code_editor::routes())
         .route(
             "/api/pipe/database-rabbitmq",
             axum::routing::put(handlers::pipe_database_events::rabbitmq_save),
@@ -1102,10 +1103,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     };
 
     app.layer(middleware::from_fn_with_state(
-        state,
+        state.clone(),
         crate::ai_sandbox::access::restrict_delegates,
     ))
     .layer(middleware::from_fn_with_state(policy, enforce_origin))
+    .layer(middleware::from_fn_with_state(
+        (state, config.static_root.clone()),
+        crate::code_editor::isolate,
+    ))
     .layer(middleware::from_fn(assign_request_id))
 }
 

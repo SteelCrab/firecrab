@@ -28,7 +28,11 @@ export default defineConfig(({ command }) => {
     '/api': { target: apiTarget, changeOrigin: false },
     '/auth/callback': { target: apiTarget, changeOrigin: false },
     '/ws': { target: `ws://127.0.0.1:${apiPort}`, ws: true },
+    '^/': { target: apiTarget, ws: true, changeOrigin: false, bypass(req) {
+      const editor=(req.headers.host||'').split(':')[0].endsWith('.code.localhost');
+      if (!editor || /^\/(web\/|@|node_modules\/)/.test(req.url)) return req.url;
+    } },
   } },
-  build: { target: 'es2022', assetsInlineLimit: 0 },
+  build: { target: 'es2022', assetsInlineLimit: 0, rollupOptions: { input: { main: fileURLToPath(new URL('./index.html', import.meta.url)), terminal: fileURLToPath(new URL('./code-terminal.html', import.meta.url)) } } },
   };
 });

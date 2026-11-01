@@ -188,6 +188,9 @@ fn known(r: &Runtime) -> bool {
     ["ready", "stopped", "failed", "reconcile_required"].contains(&r.phase.as_str())
         && ["start", "stop"].contains(&r.action.as_str())
 }
+pub(super) fn unresolved(app: &App) -> bool {
+    busy(app) || app.code.lifecycle.request.is_some()
+}
 fn available(app: &App, w: &Workspace, action: &Action) -> bool {
     if busy(app)
         || app.code.lifecycle.request.is_some()
