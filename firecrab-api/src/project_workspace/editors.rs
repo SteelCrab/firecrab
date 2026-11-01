@@ -76,7 +76,7 @@ fn current(
         .unwrap_or_else(|p| p.into_inner())
         .get(&(b.project_id, e.id))
         .is_some_and(|active| {
-            active.attempt != e.attempt || matches!(active.status.as_str(), "stopping" | "stopped")
+            active.attempt != e.attempt || !matches!(active.status.as_str(), "ready" | "starting")
         })
     {
         return Err(Error::Conflict("The private editor execution ended or changed").response(id));

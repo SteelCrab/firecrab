@@ -20,7 +20,7 @@ Stop intent is saved before guest I/O. An owned worker continues after HTTP disc
 
 Maintenance re-reads the current editor under the project lock. It cannot overwrite a replacement attempt or revive a completed stop from an earlier snapshot. Proxy streams reject an ended/replaced execution. Private draft routes remain available under verified caller/project rights while the process or VM is stopped. No browser iframe is destroyed by this backend change.
 
-HTTP regressions cover private ownership, repeated completed stops, stale stop rejection after replacement, read-only admission denial, forged request fields, stopped-runtime private draft save/retry/read, operator isolation, and grant revocation. A DB regression covers stale maintenance observations and newer file-opening metadata.
+HTTP regressions cover private ownership, repeated completed stops, stale stop rejection after replacement, read-only admission denial, forged request fields, stopped-runtime private draft save/retry/read, operator isolation, and grant revocation. A DB regression covers stale maintenance observations and newer file-opening metadata. A stream-authorization regression rejects stopped, stopping, interrupted, and replaced executions before guest transport access.
 
 ## Validation
 
@@ -38,7 +38,7 @@ cargo fmt --all -- --check
 python3 scripts/check-doc-links.py
 ```
 
-Local results: all 9 Node filesystem tests, all 57 project-workspace API tests, the editor transport path regression, API/types clippy, formatting, and documentation checks pass. The copied Homebrew Node fixture sets its macOS library lookup path; it does not change product runtime configuration.
+Local results: all 9 Node filesystem tests, all 58 project-workspace API tests, the editor transport path regression, API/types clippy, formatting, and documentation checks pass. The copied Homebrew Node fixture sets its macOS library lookup path; it does not change product runtime configuration.
 
 The frontend test command includes the new Node suite. Linux CI also runs it as root against temporary filesystem fixtures. That CI step is not live editor or VM acceptance.
 

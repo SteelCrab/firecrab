@@ -638,3 +638,48 @@ fn maintenance_rechecks_the_current_execution_and_keeps_newer_open_metadata() {
         latest.attempt
     );
 }
+
+#[tokio::test]
+async fn an_ended_or_replaced_editor_cannot_keep_its_old_proxy_stream_authorized() {
+    use axum::response::IntoResponse;
+    let (_dir, state, b) = fixture().await;
+    let caller = person();
+    let original = record(caller, Uuid::new_v4(), &b);
+    let key = (b.project_id, original.id);
+    for status in ["stopping", "stopped", "interrupted"] {
+        let mut ended = original.clone();
+        ended.status = status.into();
+        state
+            .workspaces
+            .editor_cache
+            .lock()
+            .unwrap()
+            .insert(key, ended);
+        let error = current(&state, caller, &b, &original, Uuid::new_v4()).unwrap_err();
+        let response = error.into_response();
+        let body = to_bytes(response.into_body(), 16384).await.unwrap();
+        assert!(
+            String::from_utf8(body.to_vec())
+                .unwrap()
+                .contains("execution ended or changed")
+        );
+    }
+    let mut replacement = original.clone();
+    replacement.attempt = Uuid::new_v4();
+    replacement.status = "ready".into();
+    state
+        .workspaces
+        .editor_cache
+        .lock()
+        .unwrap()
+        .insert(key, replacement);
+    let response = current(&state, caller, &b, &original, Uuid::new_v4())
+        .unwrap_err()
+        .into_response();
+    let body = to_bytes(response.into_body(), 16384).await.unwrap();
+    assert!(
+        String::from_utf8(body.to_vec())
+            .unwrap()
+            .contains("execution ended or changed")
+    );
+}
