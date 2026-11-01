@@ -118,6 +118,13 @@ async function openEditorController() {
 
 test('closing an editor waits for a window-bound snapshot and preserves its native process',async()=>{
   const {canvas,id}=await openEditorController();
+  // Closing just the editor must retain a canvas whose metadata save failed.
+  await page.route('**/views/*',route=>route.request().method()==='PUT'
+    ? route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{message:'Canvas storage unavailable'}})}) : route.fallback());
+  await page.getByRole('button',{name:'Back to canvas',exact:true}).click();
+  await page.getByRole('button',{name:'Private note',exact:true}).click();
+  await expect(page.locator('#cw-error')).toContainText('Canvas storage unavailable');
+  await page.getByRole('button',{name:'Personal Page · Web VS Code',exact:true}).click();
   await page.getByRole('button',{name:'Close editor',exact:true}).click();
   await expect.poll(()=>canvas.clients.get(id).command).toBe('close');
   await expect(page.locator('iframe')).toHaveAttribute('inert','');
@@ -125,6 +132,7 @@ test('closing an editor waits for a window-bound snapshot and preserves its nati
   canvas.acknowledge(id);
   await expect(page.locator('iframe')).toHaveCount(0);
   assert.equal(canvas.clients.get(id).status,'detached');assert.equal(canvas.stopRequests,0);
+  await expect(page.getByRole('article')).toHaveCount(1);
   await page.getByRole('button',{name:'Personal Page · Web VS Code',exact:true}).click();
   await expect(page.locator('iframe')).toHaveCount(1);
   await expect.poll(()=>canvas.clients.size).toBe(2);

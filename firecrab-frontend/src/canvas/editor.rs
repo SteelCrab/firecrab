@@ -203,7 +203,7 @@ pub(super) fn start(app: &Shared, id: &str, kind: Close) {
         if t.busy {
             return;
         }
-        if t.changed != t.saved || t.pending.is_some() {
+        if kind == Close::Tab && (t.changed != t.saved || t.pending.is_some()) {
             t.error = "Save this canvas layout before closing it".into();
             drop(a);
             render(app);

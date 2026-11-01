@@ -4,7 +4,7 @@ Related: #550 and Draft PR #562. This behavior remains unmerged.
 
 ## Close and reopen
 
-Use **Close editor** to dispose the current editor surface. Use the Canvas tab close button to close its workspace tab. **Back to canvas** only hides the editor and keeps its document alive.
+Use **Close editor** to dispose the current editor surface. Use the Canvas tab close button to close its workspace tab. **Back to canvas** only hides the editor and keeps its document alive. Closing only the editor preserves unsaved Canvas layout changes, including pending/failed metadata saves. Closing a Canvas tab requires its layout to be confirmed first.
 
 An explicit close freezes that iframe, waits for pending shared saves, and asks the browser extension to persist its current text through the existing private draft API. The controller verifies accepted revisions and content hashes. It atomically stores an immutable copy of those exact bytes with the open-file list and active file in the private project SQLite DB. Only its acknowledgement permits detaching that window. The workload editor process, project DB, volume, and other clients remain retained.
 
