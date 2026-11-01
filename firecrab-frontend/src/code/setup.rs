@@ -1,5 +1,6 @@
 //! One configuration flow. Private credentials remain in the existing account services.
 mod view;
+use super::accounts::{Account, compatible};
 use super::*;
 use crate::{model::text, window};
 use serde_json::json;
@@ -24,25 +25,6 @@ impl Choice {
     fn key(&self) -> String {
         format!("{}/{}", self.owner, self.repository)
     }
-}
-#[derive(Deserialize)]
-struct Account {
-    id: String,
-    name: String,
-    provider: String,
-    authentication: String,
-}
-fn compatible(agent: &str, account: &Account) -> bool {
-    matches!(
-        (
-            agent,
-            account.provider.as_str(),
-            account.authentication.as_str()
-        ),
-        ("codex", "openai", "api_key" | "chatgpt")
-            | ("claude_code" | "opencode", "anthropic", "api_key")
-            | ("opencode", "openai", "api_key")
-    ) && uuid(&account.id)
 }
 pub(super) struct Setup {
     id: String,
@@ -226,7 +208,7 @@ fn metadata(app: &Shared) {
         s.accounts.clear();
         s.ai_error = false;
         match accounts.and_then(|v| {
-            serde_json::from_value::<Vec<Account>>(v).map_err(|_| api::Failure {
+            super::accounts::parse(v).ok_or_else(|| api::Failure {
                 status: None,
                 message: String::new(),
                 fields: Default::default(),

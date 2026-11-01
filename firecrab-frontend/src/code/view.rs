@@ -9,18 +9,28 @@ pub fn content(app: &App) -> String {
     if app.route == "code/new" {
         return setup::content(app);
     }
-    let label = tr(app, "Search workspaces", "워크스페이스 검색");
     let mut out = format!(
-        "<section id=\"code-workspaces\" aria-label=\"{}\"><div class=\"code-toolbar\"><p>{}</p><div class=\"code-tools\"><input id=\"code-search\" type=\"search\" aria-label=\"{label}\" placeholder=\"{label}\" value=\"{}\"><button id=\"code-refresh\" class=\"btn\" type=\"button\" data-action=\"code-refresh\">{}</button></div></div>",
-        tr(app, "CODE workspaces", "CODE 워크스페이스"),
-        tr(
-            app,
-            "Your repositories, development environments and AI AUTH connections.",
-            "저장소, 개발 환경과 AI AUTH 연결을 확인합니다."
-        ),
-        escape(&app.code.query),
-        tr(app, "Refresh", "새로고침")
+        "<section id=\"code-workspaces\" aria-label=\"{}\">",
+        if is_editor(&app.route) {
+            tr(app, "Workspace editor", "워크스페이스 편집기")
+        } else {
+            tr(app, "CODE workspaces", "CODE 워크스페이스")
+        }
     );
+    if !is_editor(&app.route) {
+        let label = tr(app, "Search workspaces", "워크스페이스 검색");
+        let _ = write!(
+            out,
+            "<div class=\"code-toolbar\"><p>{}</p><div class=\"code-tools\"><input id=\"code-search\" type=\"search\" aria-label=\"{label}\" placeholder=\"{label}\" value=\"{}\"><button id=\"code-refresh\" class=\"btn\" type=\"button\" data-action=\"code-refresh\">{}</button></div></div>",
+            tr(
+                app,
+                "Your repositories, development environments and AI AUTH connections.",
+                "저장소, 개발 환경과 AI AUTH 연결을 확인합니다."
+            ),
+            escape(&app.code.query),
+            tr(app, "Refresh", "새로고침")
+        );
+    }
     if !app.loaded {
         out.push_str(&empty(tr(
             app,
@@ -36,7 +46,19 @@ pub fn content(app: &App) -> String {
             "아직 워크스페이스가 없습니다.",
         )));
     } else {
-        let selected = selected(&app.route, &app.code.workspaces);
+        let selected = binding::selected(app);
+        if is_editor(&app.route) {
+            match selected {
+                Some(w) => out.push_str(&editor::content(app, w)),
+                None => out.push_str(&empty(tr(
+                    app,
+                    "This workspace no longer exists.",
+                    "이 워크스페이스는 더 이상 존재하지 않습니다.",
+                ))),
+            }
+            out.push_str("</section>");
+            return out;
+        }
         out.push_str("<div class=\"code-layout\">");
         out.push_str(&workspace_list(app, selected));
         out.push_str("<div id=\"code-details\" class=\"code-details\">");
@@ -192,30 +214,17 @@ fn detail(app: &App, workspace: &Workspace) -> String {
         connection(app, &workspace.connections.github),
         tr(app, "Manage GitHub", "GitHub 관리")
     );
-    if let Some(agent) = &spec.agent {
-        let _ = write!(
-            auth,
-            "<div class=\"code-auth-row\"><div><strong>{} · AI AUTH</strong><p>{}</p><code>{}</code></div><button class=\"btn\" type=\"button\" data-action=\"code-auth-open\">{}</button></div><p class=\"code-hint\">{}</p>",
-            agent_name(app, &agent.agent),
-            connection(app, &workspace.connections.ai),
-            escape(&agent.connection_id),
-            tr(app, "Manage AI AUTH", "AI AUTH 관리"),
-            tr(
-                app,
-                "An account reference does not confirm agent sign-in. Agent authentication is not verified here.",
-                "계정을 지정해도 에이전트 로그인이 확인되지는 않습니다. 이 화면에서는 에이전트 인증을 검증하지 않습니다."
-            )
-        );
-    } else {
-        let _ = write!(
-            auth,
-            "<div class=\"code-auth-row\"><div><strong>AI AUTH</strong><p>{}</p></div></div>",
-            tr(app, "No agent selected", "선택된 에이전트 없음")
-        );
-    }
+    auth.push_str(&binding::content(app, workspace));
     auth.push_str(&crate::code::auth::verification(app, workspace));
     out.push_str(&section(tr(app, "Account connections", "계정 연결"), &auth));
     out.push_str(&runtime_section(app, &app.code.runtime));
+    let _ = write!(
+        out,
+        "<section class=\"code-section\"><h3>{}</h3><a class=\"btn\" href=\"#/code/{}/editor\">{}</a></section>",
+        tr(app, "Editor", "편집기"),
+        workspace.id,
+        tr(app, "Editor status", "편집기 상태")
+    );
     out.push_str(&section(tr(app, "Configuration", "설정"), &config));
     out
 }
@@ -291,7 +300,7 @@ fn runtime_section(app: &App, state: &RuntimeState) -> String {
     };
     section(tr(app, "MicroVM environment", "MicroVM 환경"), &body)
 }
-fn connection<'a>(app: &App, state: &str) -> &'a str {
+pub(super) fn connection<'a>(app: &App, state: &str) -> &'a str {
     match state {
         "present_unverified" => tr(
             app,
@@ -325,7 +334,7 @@ fn runtime_name<'a>(app: &App, name: &str) -> &'a str {
         _ => tr(app, "Unknown environment", "알 수 없는 개발 환경"),
     }
 }
-fn agent_name<'a>(app: &App, name: &str) -> &'a str {
+pub(super) fn agent_name<'a>(app: &App, name: &str) -> &'a str {
     match name {
         "codex" => "Codex",
         "claude_code" => "Claude Code",

@@ -25,6 +25,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Add CODE account assignment and reuse states to saved workspaces and their
+  editor AUTH panel. Preserve shared accounts when removing an assignment,
+  recover interrupted revision-checked saves, and reflect missing or incompatible
+  connections without enabling unverified editor or agent execution (#560).
 - Reuse the Pipe AI account manager inside CODE for ChatGPT sign-in, OpenAI and
   Anthropic API keys, replacement and disconnect. Cancel pending sign-ins through
   the same lifecycle, retain workspace drafts, and display revision-bound provider

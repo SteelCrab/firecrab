@@ -1,4 +1,15 @@
 /* CODE reuses the dashboard's flat surfaces, typography and focus styles. */
+.code-editor-layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 32px; }
+.code-editor-layout > section { min-width: 0; }
+.code-account-state { min-width: 0; }
+.code-account-state > strong { font-size: 13px; }
+.code-account-state > p { font-size: 12px; line-height: 1.7; }
+.code-account-state code { overflow-wrap: anywhere; font-size: 11px; color: var(--text-3); }
+.code-account-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.code-binding { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
+.code-binding h4 { font-size: 13px; margin-bottom: 16px; }
+.code-binding fieldset { display: grid; gap: 16px; min-width: 0; border: 0; padding: 0; margin: 0; }
+@media (max-width: 900px) { .code-editor-layout { grid-template-columns: minmax(0, 1fr); gap: 0; } }
 .code-auth-manager { min-width: 0; max-width: 1000px; margin: 0 auto; }
 .code-auth-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .code-auth-heading h2 { font-size: 18px; margin: 0; }

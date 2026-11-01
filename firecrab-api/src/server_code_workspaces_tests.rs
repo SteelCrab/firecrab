@@ -202,6 +202,63 @@ async fn code_workspaces_persist_update_and_delete_metadata_without_creating_res
 }
 
 #[tokio::test]
+async fn code_workspaces_reassign_reused_accounts_without_disconnect_or_stale_overwrite() {
+    let f = fixture().await;
+    let first = format!("{ROOT}/{}", Uuid::new_v4());
+    let second = format!("{ROOT}/{}", Uuid::new_v4());
+    let original = input(f.connection);
+    assert_eq!(
+        call(&f.app, "PUT", &first, original.clone()).await.0,
+        StatusCode::OK
+    );
+    let mut reused = original.clone();
+    reused["spec"]["name"] = json!("worker");
+    assert_eq!(call(&f.app, "PUT", &second, reused).await.0, StatusCode::OK);
+    let replacement = Uuid::new_v4();
+    f.state
+        .store
+        .save_ai_connection(&account(
+            replacement,
+            AiProvider::Anthropic,
+            AiAuthentication::ApiKey,
+        ))
+        .unwrap();
+    let mut desired = original.clone();
+    desired["expectedRevision"] = json!(1);
+    desired["spec"]["agent"] = json!({"agent":"claude_code","connectionId":replacement});
+    let (status, saved) = call(&f.app, "PUT", &first, desired).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["revision"], 2);
+    assert_eq!(saved["connections"]["ai"], "present_unverified");
+    let mut stale = original;
+    stale["expectedRevision"] = json!(1);
+    assert_eq!(
+        call(&f.app, "PUT", &first, stale).await.0,
+        StatusCode::CONFLICT
+    );
+    let observed = call(&f.app, "GET", &second, Value::Null).await.1;
+    assert_eq!(observed["revision"], 1);
+    assert_eq!(
+        observed["spec"]["agent"]["connectionId"],
+        f.connection.to_string()
+    );
+    let mut remove = json!({"expectedRevision":2,"spec":saved["spec"]});
+    remove["spec"]["agent"] = Value::Null;
+    assert_eq!(call(&f.app, "PUT", &first, remove).await.0, StatusCode::OK);
+    assert!(f.state.store.ai_connection(f.connection).unwrap().is_some());
+    assert!(f.state.store.ai_connection(replacement).unwrap().is_some());
+    f.state.store.delete_ai_connection(f.connection).unwrap();
+    assert_eq!(
+        call(&f.app, "GET", &second, Value::Null).await.1["connections"]["ai"],
+        "missing"
+    );
+    assert_eq!(
+        call(&f.app, "GET", &first, Value::Null).await.1["connections"]["ai"],
+        "not_required"
+    );
+}
+
+#[tokio::test]
 async fn code_workspaces_observe_disconnection_and_account_replacement_without_losing_configuration()
  {
     let f = fixture().await;

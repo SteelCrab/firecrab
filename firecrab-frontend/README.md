@@ -22,6 +22,11 @@ The view shows current GitHub/AI AUTH account references. CODE hosts the existin
 Pipe AI account manager without leaving the current setup or copying credentials.
 ChatGPT login, API-key replacement, disconnect and pending-login cancellation
 use that shared service. Account presence is not agent authentication.
+**Choose AI AUTH** updates a saved workspace's agent/account reference with a
+revision check and interrupted-save recovery. Removing the assignment keeps the
+shared account connected. `#/code/{workspace-uuid}/editor` displays the same live
+AUTH states. Its editor, terminal and agent controls remain disabled until their
+runtime adapters are verified.
 MicroVM readiness is not editor or agent readiness. **New workspace** opens
 `#/code/new`: choose a GitHub repository/branch, runtime/resources, and an optional
 agent with a compatible existing AI AUTH account. Catalog calls are read-only;
@@ -34,7 +39,7 @@ in #560. See the
 Browser contracts run against the production WASM build without a live API:
 
 ```sh
-FIRECRAB_MOCKED_E2E_PRODUCTION=1 npm run test:dashboard --prefix firecrab-e2e -- tests/code-workspaces.spec.ts tests/code-setup.spec.ts tests/code-ai-auth.spec.ts tests/pipe-ai.spec.ts
+FIRECRAB_MOCKED_E2E_PRODUCTION=1 npm run test:dashboard --prefix firecrab-e2e -- tests/code-workspaces.spec.ts tests/code-setup.spec.ts tests/code-ai-auth.spec.ts tests/code-auth-states.spec.ts tests/pipe-ai.spec.ts
 ```
 
 Run that command from the repository root. It covers English/Korean desktop and

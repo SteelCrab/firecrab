@@ -44,6 +44,12 @@ pub fn publish(app: &mut App, value: Value) {
 pub(super) fn invalidate(app: &mut App) {
     app.code.auth.report = None;
 }
+pub(super) fn context_changed(app: &mut App) {
+    app.code.auth.epoch += 1;
+    app.code.auth.checking = false;
+    app.code.auth.report = None;
+    app.code.auth.check_error.clear();
+}
 pub fn api_status(app: &App) -> (&'static str, &'static str) {
     if !error(app).is_empty() {
         ("down", tr(app, "Status unavailable", "상태 확인 불가"))
@@ -57,7 +63,11 @@ pub fn content(app: &App) -> String {
     format!(
         "<section id=\"code-workspaces\" class=\"code-auth-manager\"><header class=\"code-auth-heading\"><h2>AI AUTH</h2><button class=\"btn\" type=\"button\" data-action=\"code-auth-close\" {}>{}</button></header><p class=\"code-hint\">{}</p>{}</section>",
         if ai::engaged(app) { "disabled" } else { "" },
-        tr(app, "Back to workspace", "워크스페이스로 돌아가기"),
+        if is_editor(&app.route) {
+            tr(app, "Back to editor", "편집기로 돌아가기")
+        } else {
+            tr(app, "Back to workspace", "워크스페이스로 돌아가기")
+        },
         tr(
             app,
             "These accounts are shared with Pipe AI. Replacing or disconnecting one affects every workspace that uses it. Account connection does not confirm agent sign-in.",
@@ -113,10 +123,11 @@ pub fn action(app: &Shared, action: &str) -> bool {
     match action {
         "code-auth-open" => {
             let mut a = app.borrow_mut();
-            if a.code.auth.open || a.busy {
+            if a.code.auth.open || a.busy || binding::locked(&a) {
                 return true;
             }
             a.code.auth.open = true;
+            invalidate_observations(&mut a);
             a.code.auth.epoch += 1;
             a.code.auth.loading = false;
             a.code.auth.rows = None;
@@ -145,6 +156,7 @@ pub fn action(app: &Shared, action: &str) -> bool {
             if setup {
                 super::setup::reload_accounts(app);
             } else {
+                binding::reload_accounts(app);
                 super::load(app.clone());
             }
             render_content(app);
@@ -156,10 +168,10 @@ pub fn action(app: &Shared, action: &str) -> bool {
 }
 fn check(app: &Shared) {
     let mut a = app.borrow_mut();
-    if a.code.auth.checking || a.code.auth.open {
+    if a.code.auth.checking || a.code.auth.open || a.code.binding.is_some() {
         return;
     }
-    let Some(w) = selected(&a.route, &a.code.workspaces) else {
+    let Some(w) = binding::selected(&a) else {
         return;
     };
     let (id, revision, spec, generation, epoch) = (
@@ -189,7 +201,7 @@ fn check(app: &Shared) {
             return;
         }
         a.code.auth.checking = false;
-        let current = selected(&a.route, &a.code.workspaces).is_some_and(|w| {
+        let current = binding::selected(&a).is_some_and(|w| {
             w.id == id
                 && w.revision == revision
                 && json!(w.spec) == spec
@@ -208,7 +220,11 @@ pub(super) fn verification(app: &App, workspace: &Workspace) -> String {
     let s = &app.code.auth;
     let mut out = format!(
         "<div class=\"code-auth-check\"><button class=\"btn\" type=\"button\" data-action=\"code-auth-verify\" {}>{}</button>",
-        if s.checking { "disabled" } else { "" },
+        if s.checking || app.code.binding.is_some() {
+            "disabled"
+        } else {
+            ""
+        },
         if s.checking {
             tr(app, "Checking connections…", "연결 확인 중…")
         } else {
@@ -246,6 +262,16 @@ pub(super) fn verification(app: &App, workspace: &Workspace) -> String {
                 app,
                 "Provider credentials verified · Anthropic API key",
                 "서비스 자격 증명 확인됨 · Anthropic API 키",
+            ),
+            ("failed", _) if ai["reason"] == "consent_required" => tr(
+                app,
+                "Approval required. Sign in again from AI AUTH to grant access.",
+                "승인이 필요합니다. AI AUTH에서 다시 로그인하여 접근을 승인해 주세요.",
+            ),
+            ("failed", _) if ai["reason"] == "authentication_rejected" => tr(
+                app,
+                "Authentication rejected. Reconnect the assigned account in AI AUTH.",
+                "인증이 거부됐습니다. AI AUTH에서 할당된 계정을 다시 연결해 주세요.",
             ),
             _ => tr(
                 app,

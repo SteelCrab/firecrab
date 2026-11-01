@@ -25,6 +25,47 @@ This table is configuration eligibility. Runtime authentication adapters remain
 separate implementation work. OpenAI also distinguishes ChatGPT sign-in from
 [API-key authentication](https://learn.chatgpt.com/docs/auth).
 
+## Assign or remove an account after setup
+
+Choose **Choose AI AUTH** in workspace details to change its saved agent and
+account reference. Existing accounts can be reused without another sign-in.
+Only compatible configuration methods appear in the account choices. Missing
+selections stay visible until an operator chooses a replacement.
+
+**Save assignment** sends the original full configuration with only its agent
+binding changed and the revision originally read. A concurrent configuration
+change requires cancellation and review. It cannot be overwritten by a stale
+assignment. A pending MicroVM operation can also reject the change.
+
+If a response is lost, **Check saved assignment** reads that workspace first.
+It recognizes only the intended next revision with the exact desired settings.
+If the original revision remains unchanged, it retries the original request.
+Newer settings are never overwritten. This draft lasts for the current view;
+reloading the page reads the saved configuration and sends no assignment write.
+
+Select **No agent (remove assignment)** to remove this workspace's binding.
+The shared account stays connected for other workspaces. This operation does not
+require account metadata when no agent is selected. **Manage AI AUTH** instead
+manages the shared account lifecycle and retains the assignment draft on return.
+
+## Workspace and editor states
+
+**Editor status** opens `#/code/{workspace-uuid}/editor`. It reads the same saved
+workspace and live account observations as workspace details. Missing or
+disconnected, incompatible, present but unverified, unknown and no-agent states
+use the same panel. Disconnecting a shared account affects every referencing
+workspace on its next read without deleting their configuration or references.
+
+The shared manager shows ChatGPT approval progress, cancellation, success and
+failure. It returns to the editor through **Back to editor**. Approval does not
+automatically assign the account. A provider check that requires consent or
+rejects credentials directs the operator to reconnect through AI AUTH.
+
+This editor shell displays real account state. Web VS Code, terminal and agent
+controls remain disabled until their runtime integrations are implemented and
+verified. Account presence, provider approval and a ready MicroVM do not enable
+execution. Late reads cannot restore a previous assignment after a saved change.
+
 ## Replace, disconnect and cancel
 
 Replacing a key or signing in again keeps the connection UUID. Every workspace

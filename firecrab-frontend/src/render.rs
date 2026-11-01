@@ -564,6 +564,12 @@ pub fn page(app: &App) -> String {
 }
 
 fn crumbs(app: &App) -> (Option<&'static str>, &'static str) {
+    if crate::code::is_editor(&app.route) {
+        return (
+            Some(tr(app, "Workspaces", "워크스페이스")),
+            tr(app, "Editor", "편집기"),
+        );
+    }
     match app.route.as_str() {
         "code/new" => (
             Some(tr(app, "Workspaces", "워크스페이스")),

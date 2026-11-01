@@ -82,4 +82,78 @@ fn untrusted_names_and_unknown_states_are_safe_in_both_languages() {
     assert!(!is_route("code/../../vms"));
     assert!(!is_route("code/00000000-0000-0000-0000-000000000000"));
     assert!(is_route(&format!("code/{ID}")));
+    assert!(is_route(&format!("code/{ID}/editor")));
+    assert!(!is_route(&format!("code/{ID}/editor/extra")));
+    assert!(!is_route("code/new/editor"));
+    assert!(!is_route(
+        "code/00000000-0000-0000-0000-000000000000/editor"
+    ));
+}
+
+#[test]
+fn editor_observes_workspace_auth_without_enabling_unverified_tools() {
+    let mut app = App {
+        route: format!("code/{ID}/editor"),
+        loaded: true,
+        ..App::default()
+    };
+    for (state, label) in [
+        ("missing", "Account missing or disconnected"),
+        ("incompatible", "Account is incompatible"),
+        ("present_unverified", "Account present"),
+        ("new_ready_state", "Account status unknown"),
+    ] {
+        let mut w = workspace();
+        w["connections"]["ai"] = json!(state);
+        app.code.workspaces = decode_workspaces(json!([w])).ok().unwrap();
+        let html = content(&app);
+        assert!(html.contains(label));
+        assert!(html.contains("Agent authentication is not verified here."));
+        assert!(html.contains("disabled>Run agent"));
+        assert!(html.contains("disabled>Open Web VS Code"));
+        assert!(!html.contains("<iframe"));
+    }
+    let mut w = workspace();
+    w["spec"]["agent"] = Value::Null;
+    w["connections"]["ai"] = json!("not_required");
+    app.code.workspaces = decode_workspaces(json!([w])).ok().unwrap();
+    assert!(content(&app).contains("No agent selected"));
+}
+
+#[test]
+fn account_choices_match_the_server_contract_and_reject_ambiguous_metadata() {
+    use firecrab_api_types::{AiAuthentication, AiConnection, AiProvider, CodeAgent};
+    for (name, agent) in [
+        ("codex", CodeAgent::Codex),
+        ("claude_code", CodeAgent::ClaudeCode),
+        ("opencode", CodeAgent::OpenCode),
+    ] {
+        for provider in [AiProvider::Openai, AiProvider::Anthropic] {
+            for authentication in [AiAuthentication::ApiKey, AiAuthentication::Chatgpt] {
+                let public = AiConnection {
+                    id: ID.parse().unwrap(),
+                    name: "Shared".into(),
+                    provider,
+                    authentication,
+                    endpoint: "https://provider.invalid".into(),
+                    models: vec![],
+                    streaming: false,
+                    tool_calls: false,
+                };
+                let browser: accounts::Account = serde_json::from_value(json!(public)).unwrap();
+                assert_eq!(
+                    accounts::compatible(name, &browser),
+                    agent.provider_compatible(&public)
+                );
+            }
+        }
+    }
+    let a = json!({"id":ID,"name":"Shared","provider":"openai","authentication":"api_key"});
+    assert!(accounts::parse(json!([a.clone(), a])).is_none());
+    assert!(
+        accounts::parse(
+            json!([{"id":"bad","name":"Shared","provider":"openai","authentication":"api_key"}])
+        )
+        .is_none()
+    );
 }

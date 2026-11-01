@@ -1,11 +1,14 @@
 //! CODE reads saved configuration and current runtime observations. No credentials are fetched.
+mod accounts;
 pub(crate) mod auth;
+mod binding;
+mod editor;
 mod setup;
 mod view;
 use crate::{App, Shared, api, document, element, render_content};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-pub use setup::{change, saving, submit};
+pub use setup::submit;
 pub use view::content;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
@@ -14,7 +17,7 @@ use web_sys::{Element, HtmlElement, HtmlInputElement};
 const WORKSPACES: &str = "/api/code/workspaces";
 
 // Browser projections of the public API. Unknown additive fields are ignored.
-#[derive(Deserialize, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct Workspace {
     id: String,
@@ -50,7 +53,7 @@ struct Agent {
     agent: String,
     connection_id: String,
 }
-#[derive(Deserialize, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq)]
 struct Connections {
     github: String,
     ai: String,
@@ -111,8 +114,16 @@ pub struct State {
     runtime: RuntimeState,
     error: Option<Problem>,
     query: String,
+    selection: Option<String>,
     setup: Option<setup::Setup>,
     auth: auth::State,
+    binding: Option<binding::Draft>,
+    binding_epoch: u64,
+    observation_epoch: u64,
+}
+fn invalidate_observations(app: &mut App) {
+    app.code.observation_epoch += 1;
+    app.refreshing = false;
 }
 
 fn uuid(id: &str) -> bool {
@@ -127,7 +138,21 @@ fn uuid(id: &str) -> bool {
         && id.bytes().any(|b| b != b'0' && b != b'-')
 }
 pub fn is_route(route: &str) -> bool {
-    route == "code" || route == "code/new" || route.strip_prefix("code/").is_some_and(uuid)
+    route == "code" || route == "code/new" || workspace_id(route).is_some()
+}
+fn workspace_id(route: &str) -> Option<&str> {
+    let path = route.strip_prefix("code/")?;
+    let id = path.strip_suffix("/editor").unwrap_or(path);
+    uuid(id).then_some(id)
+}
+pub fn is_editor(route: &str) -> bool {
+    workspace_id(route).is_some() && route.ends_with("/editor")
+}
+pub fn saving(app: &App) -> bool {
+    binding::busy(app) || setup::saving(app)
+}
+pub fn change(app: &Shared, node: &Element) -> bool {
+    binding::change(app, node) || setup::change(app, node)
 }
 fn tr<'a>(app: &App, en: &'a str, ko: &'a str) -> &'a str {
     if app.locale == "ko" { ko } else { en }
@@ -148,7 +173,7 @@ pub fn api_status(app: &App) -> (&'static str, &'static str) {
     }
 }
 fn selected<'a>(route: &str, workspaces: &'a [Workspace]) -> Option<&'a Workspace> {
-    if let Some(id) = route.strip_prefix("code/") {
+    if let Some(id) = workspace_id(route) {
         workspaces.iter().find(|w| w.id == id)
     } else {
         workspaces.first()
@@ -216,8 +241,10 @@ pub fn load(app: Shared) {
         return;
     }
     state.refreshing = true;
+    state.code.observation_epoch += 1;
+    let epoch = state.code.observation_epoch;
     let generation = state.generation;
-    let route = state.route.clone();
+    let route = binding::observation_route(&state);
     drop(state);
     spawn_local(async move {
         let records = match api::request_detailed("GET", WORKSPACES, None, None).await {
@@ -225,7 +252,7 @@ pub fn load(app: Shared) {
             Err(error) => Err(error.into()),
         };
         // Navigation fences both response publication and the next request.
-        if app.borrow().generation != generation {
+        if app.borrow().generation != generation || app.borrow().code.observation_epoch != epoch {
             return;
         }
         let observation = match &records {
@@ -236,7 +263,7 @@ pub fn load(app: Shared) {
             Err(error) => RuntimeState::Failed(*error),
         };
         let mut state = app.borrow_mut();
-        if state.generation != generation {
+        if state.generation != generation || state.code.observation_epoch != epoch {
             return;
         }
         state.refreshing = false;
@@ -277,6 +304,9 @@ pub fn load(app: Shared) {
 
 pub fn action(app: &Shared, action: &str) -> bool {
     if auth::action(app, action) {
+        return true;
+    }
+    if binding::action(app, action) {
         return true;
     }
     if setup::action(app, action) {

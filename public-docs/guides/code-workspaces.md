@@ -17,8 +17,16 @@ The view refreshes every three seconds. An unavailable runtime is shown as
 unavailable, not as ready or unprovisioned. A runtime 404 means unprovisioned
 only after the workspace is confirmed to still exist. Access failures remove
 previously displayed records. Missing, changed and incompatible account
-references are shown separately. The GitHub and AI AUTH management links reuse
-the existing Pipe screens.
+references are shown separately. GitHub management reuses its Pipe screen.
+AI AUTH management uses the shared Pipe AI manager in place.
+
+**Choose AI AUTH** changes the saved workspace's agent/account binding with a
+revision check. It can reuse an existing account or explicitly remove this
+workspace's assignment. The shared account remains connected for other workspaces.
+**Editor status** opens `#/code/{workspace-uuid}/editor` with the same live AUTH
+states. Web VS Code, terminal and agent execution remain disabled pending their
+runtime integrations. See [CODE AI AUTH](code-ai-auth.md) for assignment,
+approval, disconnect and recovery states.
 
 Choose **New workspace** (`#/code/new`) to create saved configuration in one flow.
 The dashboard does not request credentials or execute an agent. Account presence

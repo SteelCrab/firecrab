@@ -274,30 +274,12 @@ pub fn content(app: &App) -> String {
     }
     out.push_str(&select(app, "agent", "Agent", "에이전트", &options));
     if let Some(binding) = &s.spec.agent {
-        let mut options = option(
-            "",
-            tr(app, "Select a compatible account", "호환 계정 선택"),
-            &binding.connection_id,
-        );
+        let options = super::super::accounts::choices(app, &s.accounts, binding);
         let accounts = s
             .accounts
             .iter()
             .filter(|a| compatible(&binding.agent, a))
             .collect::<Vec<_>>();
-        for a in &accounts {
-            let method = if a.authentication == "chatgpt" {
-                "ChatGPT"
-            } else if a.provider == "anthropic" {
-                "Anthropic API key"
-            } else {
-                "OpenAI API key"
-            };
-            options.push_str(&option(
-                &a.id,
-                &format!("{} · {method}", a.name),
-                &binding.connection_id,
-            ));
-        }
         out.push_str(&select(
             app,
             "account",
