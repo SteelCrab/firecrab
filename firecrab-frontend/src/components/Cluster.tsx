@@ -611,6 +611,15 @@ export default function Cluster() {
               <article className="panel" key={s.id}>
                 <h3>{s.spec.service.name}</h3>
                 <p>
+                  <span>
+                    {t("Generation", "세대")}: {s.generation}
+                  </span>{" "}
+                  ·{" "}
+                  <span>
+                    {t("Desired", "목표 상태")}: {s.desired}
+                  </span>
+                </p>
+                <p>
                   {s.id} · {s.desired} / {s.observed} · {s.spec.service.image}
                 </p>
                 <button
@@ -677,7 +686,14 @@ export default function Cluster() {
                 </button>
               </p>
             ) : (
-              <form className="panel" onSubmit={saveService}>
+              <form
+                className="panel"
+                aria-label={t(
+                  "Controller service form",
+                  "컨트롤러 서비스 양식",
+                )}
+                onSubmit={saveService}
+              >
                 <h3>
                   {editing
                     ? t("Update service release", "서비스 릴리스 수정")
