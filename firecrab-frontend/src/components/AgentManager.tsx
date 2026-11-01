@@ -281,7 +281,18 @@ function VmAgentWorkspace({
   };
   const create = async (e: FormEvent, request: AgentTask) => {
     e.preventDefault();
-    if (!request.input.trim() || creating || !canLaunch) return;
+    const chosenCli = request.cli || cli;
+    const chosenDriver = status?.drivers.find(
+      (driver) => driver.id === chosenCli,
+    );
+    if (
+      !request.input.trim() ||
+      creating ||
+      !canLaunch ||
+      !chosenDriver?.available ||
+      (["codex", "claude"].includes(chosenCli) && !chosenDriver.authenticated)
+    )
+      return;
     setCreating(true);
     setCreateError("");
     try {
@@ -290,7 +301,7 @@ function VmAgentWorkspace({
         {
           id: request.id,
           input: request.input,
-          cli,
+          cli: chosenCli,
           model: request.model,
         },
         status?.controllerId,
@@ -776,7 +787,7 @@ function VmAgentWorkspace({
             onClose={() => setEditor(null)}
           >
             <AgentTaskForm
-              draft={{ ...editor, cli }}
+              draft={editor}
               onChange={setEditor}
               onSubmit={(e) => void create(e, editor)}
               onCancel={() => setEditor(null)}

@@ -1,6 +1,7 @@
 import type { FormEvent } from "react";
 import { useI18n } from "../i18n";
 import type { AgentTask, AgentStatus } from "../api/agents";
+import AgentBrandIcon from "./icons/AgentBrandIcon";
 
 export default function AgentTaskForm({
   draft,
@@ -64,6 +65,38 @@ export default function AgentTaskForm({
             onChange={(e) => onChange({ ...draft, input: e.target.value })}
           />
         </label>
+        {!inline && (
+          <fieldset className="am-task-drivers">
+            <legend>{t("Agent", "담당 에이전트")}</legend>
+            <div className="am-cli-choice-grid">
+              {drivers
+                .filter((driver) =>
+                  ["codex", "claude", "copilot"].includes(driver.id),
+                )
+                .map((driver) => (
+                  <label key={driver.id} className="am-cli-choice">
+                    <input
+                      type="radio"
+                      name="task-cli"
+                      aria-label={t(
+                        `${driver.name} for this task`,
+                        `${driver.name}로 이 작업 실행`,
+                      )}
+                      checked={draft.cli === driver.id}
+                      disabled={
+                        !driver.available || driver.authenticated === false
+                      }
+                      onChange={() =>
+                        onChange({ ...draft, cli: driver.id, model: "" })
+                      }
+                    />
+                    <AgentBrandIcon kind={driver.id} />
+                    <span>{driver.name}</span>
+                  </label>
+                ))}
+            </div>
+          </fieldset>
+        )}
         <details className="am-task-settings">
           <summary>{t("Model", "모델")}</summary>
           <label className="am-task-model-field">
@@ -100,7 +133,10 @@ export default function AgentTaskForm({
               !canControl ||
               !draft.input.trim() ||
               !drivers.some(
-                (d) => d.available && (!draft.cli || d.id === draft.cli),
+                (d) =>
+                  d.available &&
+                  d.authenticated !== false &&
+                  (!draft.cli || d.id === draft.cli),
               )
             }
           >

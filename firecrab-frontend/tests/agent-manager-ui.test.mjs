@@ -1502,6 +1502,30 @@ test("the board distinguishes undelivered work from completion and account sessi
   assert.equal(state.calls.filter((call) => call.method === "POST").length, 0);
 });
 
+test("a board task can call Claude without changing the VM's selected Codex environment", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  await page.getByRole("button", { name: "New task", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "New task", exact: true });
+  await dialog
+    .getByRole("radio", { name: "Claude Code for this task", exact: true })
+    .check();
+  await dialog
+    .getByRole("textbox", { name: "Task", exact: true })
+    .fill("Review the API changes");
+  await dialog.getByRole("button", { name: "Start task", exact: true }).click();
+  const task = page
+    .getByRole("region", { name: "Task board", exact: true })
+    .getByRole("button", { name: /Review the API changes/ });
+  await expect(task.locator('[data-agent-kind="claude"]')).toBeVisible();
+  await expect(
+    page.getByRole("radio", { name: "Codex", exact: true }),
+  ).toBeChecked();
+  const calls = state.calls.filter((call) => call.method === "POST");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, "/tasks");
+  assert.equal(calls[0].body.cli, "claude");
+});
+
 test("a disconnected board marks its last observation and recovers without starting work", async (t) => {
   const { page, state } = await setup(t, { view: "board" });
   const card = page

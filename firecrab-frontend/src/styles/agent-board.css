@@ -305,3 +305,17 @@
     padding: 10px 16px;
   }
 }
+
+.am-task-drivers {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.am-task-drivers legend {
+  margin-bottom: 8px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.am-task-drivers .am-cli-choice-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
