@@ -60,6 +60,207 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 #[tokio::test]
+async fn vm_agent_operations_reject_damaged_private_identity_without_falling_back() {
+    use super::super::agents;
+    use futures_util::FutureExt;
+    let root = tempfile::tempdir().unwrap();
+    // Guest::connect must fail while reading private state, before any request to the primary API.
+    fs::write(
+        root.path().join("dev-instance.json"),
+        b"invalid-private-identity",
+    )
+    .unwrap();
+    let controller = Arc::new(Controller {
+        home: root.path().into(),
+        platform: resource::tests::platform(),
+        agents: Mutex::new(()),
+        editors: Mutex::new(()),
+    });
+    let state = || State(controller.clone());
+    let vm = uuid::Uuid::new_v4();
+    let id = uuid::Uuid::new_v4();
+    let cli = || {
+        Json(VmCli {
+            cli: "codex".into(),
+            id: Some(id),
+        })
+    };
+    let operations = [
+        ("status", vm_agent_status(state(), RoutePath(vm)).boxed()),
+        (
+            "automation status",
+            vm_automation_status(state(), RoutePath((vm, id))).boxed(),
+        ),
+        (
+            "editor status",
+            vm_editor_status(state(), RoutePath((vm, id))).boxed(),
+        ),
+        (
+            "open editor",
+            open_vm_editor(state(), RoutePath((vm, id))).boxed(),
+        ),
+        (
+            "stop editor",
+            stop_vm_editor(state(), RoutePath((vm, id))).boxed(),
+        ),
+        (
+            "automation",
+            run_vm_automation(
+                state(),
+                RoutePath((vm, id)),
+                Json(agents::automation::Request {
+                    action: "run".into(),
+                    id,
+                    config: Default::default(),
+                }),
+            )
+            .boxed(),
+        ),
+        (
+            "start task",
+            start_vm_agent_task(
+                state(),
+                RoutePath(vm),
+                Json(agents::TaskStart {
+                    id,
+                    input: "test task".into(),
+                    cwd: String::new(),
+                    repository: String::new(),
+                    branch: String::new(),
+                    cli: "codex".into(),
+                    model: String::new(),
+                }),
+            )
+            .boxed(),
+        ),
+        (
+            "connect GitHub",
+            connect_vm_github(state(), RoutePath(vm)).boxed(),
+        ),
+        (
+            "repositories",
+            vm_github_repositories(state(), RoutePath(vm)).boxed(),
+        ),
+        (
+            "project",
+            setup_vm_project(
+                state(),
+                RoutePath(vm),
+                Json(agents::project::Setup {
+                    repository: "owner/repo".into(),
+                    branch: String::new(),
+                }),
+            )
+            .boxed(),
+        ),
+        (
+            "prepare",
+            prepare_vm_agents(state(), RoutePath(vm), cli()).boxed(),
+        ),
+        (
+            "login",
+            login_vm_agent(state(), RoutePath(vm), cli()).boxed(),
+        ),
+        (
+            "resume",
+            resume_vm_agent_task(state(), RoutePath((vm, id))).boxed(),
+        ),
+        (
+            "inspect",
+            inspect_vm_agent(state(), RoutePath((vm, id))).boxed(),
+        ),
+        (
+            "input",
+            input_vm_agent(
+                state(),
+                RoutePath((vm, id)),
+                Json(agents::Input {
+                    text: Some("hello".into()),
+                    key: None,
+                }),
+            )
+            .boxed(),
+        ),
+        (
+            "close",
+            close_vm_agent(state(), RoutePath((vm, id))).boxed(),
+        ),
+    ];
+    for (name, operation) in operations {
+        let error = operation.await.expect_err(name);
+        assert!(
+            error.to_string().contains("expected value"),
+            "{name}: {error}"
+        );
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
+async fn concurrent_vm_mutations_return_conflict_without_entering_the_guest() {
+    use futures_util::FutureExt;
+    let root = tempfile::tempdir().unwrap();
+    let controller = Arc::new(Controller {
+        home: root.path().into(),
+        platform: resource::tests::platform(),
+        agents: Mutex::new(()),
+        editors: Mutex::new(()),
+    });
+    let (ready, locked) = tokio::sync::oneshot::channel();
+    let (release, finish) = std::sync::mpsc::channel();
+    let shared = controller.clone();
+    let worker = tokio::task::spawn_blocking(move || {
+        let _held = shared.agents.lock().unwrap();
+        ready.send(()).unwrap();
+        let _ = finish.recv();
+    });
+    locked.await.unwrap();
+    let state = || State(controller.clone());
+    let vm = uuid::Uuid::new_v4();
+    let id = uuid::Uuid::new_v4();
+    let operations = [
+        prepare_vm_agents(
+            state(),
+            RoutePath(vm),
+            Json(VmCli {
+                cli: "codex".into(),
+                id: None,
+            }),
+        )
+        .boxed(),
+        login_vm_agent(
+            state(),
+            RoutePath(vm),
+            Json(VmCli {
+                cli: "codex".into(),
+                id: Some(id),
+            }),
+        )
+        .boxed(),
+        resume_vm_agent_task(state(), RoutePath((vm, id))).boxed(),
+        input_vm_agent(
+            state(),
+            RoutePath((vm, id)),
+            Json(super::super::agents::Input {
+                text: Some("test".into()),
+                key: None,
+            }),
+        )
+        .boxed(),
+        close_vm_agent(state(), RoutePath((vm, id))).boxed(),
+    ];
+    for operation in operations {
+        assert_eq!(
+            operation.await.unwrap_err().into_response().status(),
+            StatusCode::CONFLICT
+        );
+    }
+    release.send(()).unwrap();
+    worker.await.unwrap();
+    assert!(!root.path().join("runtime/agents").exists());
+}
+
+#[tokio::test]
 async fn agent_terminal_upgrade_requires_the_origin_controller_and_bounded_size() {
     use tokio_tungstenite::{
         connect_async,

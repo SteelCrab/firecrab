@@ -3,6 +3,9 @@ use super::*;
 use std::collections::HashSet;
 use std::net::IpAddr;
 
+#[cfg(all(test, unix))]
+mod tests;
+
 pub(super) const GUEST_PATH: &str = "/root/.local/bin:/usr/local/bin:/usr/bin:/bin:/sbin";
 
 pub(super) fn quote(value: &str) -> String {

@@ -3,6 +3,9 @@ use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::net::{Ipv4Addr, TcpListener};
 
+#[cfg(all(test, unix))]
+mod transport_tests;
+
 const BASE: &str = "/root/.local/share/firecrab/web-vscode";
 const INSTALL: &str = "/root/.local/share/firecrab/web-vscode-install";
 const INSTALL_WORKER: &str = r#"

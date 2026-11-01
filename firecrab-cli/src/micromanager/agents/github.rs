@@ -1,6 +1,9 @@
 //! Browser device authorization through GitHub CLI inside the selected MicroVM.
 use super::*;
 
+#[cfg(all(test, unix))]
+mod transport_tests;
+
 impl Runtime {
     pub fn github_status(&self) -> Result<Value, Error> {
         let guest = self

@@ -2,6 +2,9 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
 
+#[cfg(all(test, unix))]
+mod transport_tests;
+
 #[derive(Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {

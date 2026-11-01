@@ -14,6 +14,9 @@ const BUSY_REASON: &str = "Verification is running in this workspace. Terminal c
 #[path = "qa/terminal.rs"]
 mod qa;
 
+#[cfg(all(test, unix))]
+mod transport_tests;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Attach {

@@ -213,15 +213,32 @@ fn a_task_calls_the_cli_only_after_nonempty_work_is_submitted() {
 }
 
 #[cfg(unix)]
-fn guest_fixture(authenticated: bool) -> (tempfile::TempDir, Runtime) {
+pub(super) fn guest_fixture(authenticated: bool) -> (tempfile::TempDir, Runtime) {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
     let ssh = root.path().join("ssh");
     fs::write(&ssh,r##"#!/usr/bin/env python3
 import json,sys,pathlib,shlex
 root=pathlib.Path(__file__).parent
+if '-N' in sys.argv:
+ import socket,os
+ spec=sys.argv[sys.argv.index('-L')+1].split(':')
+ assert spec[0]=='127.0.0.1' and spec[2]=='127.0.0.1'
+ sock=socket.socket();sock.bind(('127.0.0.1',int(spec[1])));sock.listen()
+ with (root/'forward-pids.jsonl').open('a') as f:f.write(json.dumps({'pid':os.getpid(),'port':int(spec[1])})+'\n')
+ while True:
+  conn,_=sock.accept();conn.close()
 script=shlex.split(sys.argv[-1])[-1]
 with (root/'remote-calls.jsonl').open('a') as f:f.write(json.dumps(script)+'\n')
+replies=root/'shell-replies.json'
+if replies.exists():
+ for match,reply in json.loads(replies.read_text()).items():
+  if match in script:
+   import time
+   time.sleep(reply.get('delayMs',0)/1000)
+   print(reply.get('out',''),end='')
+   print(reply.get('err',''),end='',file=sys.stderr)
+   sys.exit(reply.get('status',0))
 args=shlex.split(script)
 if script.startswith('if [ -f /root/.local/share/firecrab/vm-repository.json') and (root/'guest-project.json').exists():
  import base64
@@ -525,4 +542,101 @@ fn github_auth_reuses_pending_requests_and_never_runs_a_model() {
     assert!(!remote.contains("'agent' 'start'"));
     let (_, connected) = guest_fixture(true);
     assert_eq!(connected.connect_github().unwrap()["state"], "connected");
+}
+
+#[cfg(unix)]
+pub(super) fn workspace_fixture() -> (tempfile::TempDir, Runtime, Agent) {
+    let (root, runtime) = guest_fixture(true);
+    let agent = Agent {
+        id: Uuid::new_v4(),
+        name: "Transport QA".into(),
+        role: "qa".into(),
+        kind: "codex".into(),
+        cwd: project::WORKSPACE.into(),
+        model: String::new(),
+        workspace_id: "w1".into(),
+        pane_id: "w1:p1".into(),
+        terminal_id: "guest-terminal".into(),
+        closed: false,
+        launch_error: None,
+        last_output: String::new(),
+        request_digest: String::new(),
+        pending_task: None,
+    };
+    runtime.save(std::slice::from_ref(&agent)).unwrap();
+    (root, runtime, agent)
+}
+#[cfg(unix)]
+pub(super) fn shell_replies(root: &Path, replies: Value) {
+    fs::write(
+        root.join("shell-replies.json"),
+        serde_json::to_vec(&replies).unwrap(),
+    )
+    .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn environment_preparation_is_single_flight_and_retains_success_or_failure_logs() {
+    for (exit, expected) in [(0, "ready"), (7, "failed")] {
+        let (root, runtime, _) = workspace_fixture();
+        shell_replies(
+            root.path(),
+            json!({"timeout 900": {
+                "out":"FIRECRAB_STEP=1\nFIRECRAB_STEP=3\n", "status":exit, "delayMs":200
+            }}),
+        );
+        assert_eq!(runtime.prepare("codex").unwrap()["state"], "installing");
+        assert!(matches!(runtime.prepare("codex"), Err(Error::Busy)));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let value = runtime.preparation().unwrap();
+            assert!(value.get("pid").is_none());
+            if value["state"] != "installing" {
+                assert_eq!(value["state"], expected);
+                assert_eq!(value["step"], 3);
+                assert!(value["log"].as_str().unwrap().contains("FIRECRAB_STEP=3"));
+                assert_eq!(value["error"].is_null(), exit == 0);
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "VM preparation fixture did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let calls = fs::read_to_string(root.path().join("remote-calls.jsonl")).unwrap();
+        assert_eq!(
+            calls.lines().filter(|s| s.contains("timeout 900")).count(),
+            1
+        );
+        assert!(runtime.prepare("gemini").is_err());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn interrupted_setup_is_observed_without_replaying_guest_commands() {
+    let (root, runtime, _) = workspace_fixture();
+    resource::write(
+        &runtime.home.join("preparation.json"),
+        &json!({"state":"installing","pid":u32::MAX,"cli":"codex"}),
+    )
+    .unwrap();
+    fs::write(
+        runtime.home.join("preparation.log"),
+        format!(
+            "{}\nFIRECRAB_STEP=4\nFIRECRAB_STEP=99\nFIRECRAB_STEP=bad\n",
+            "x".repeat(20000)
+        ),
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let value = runtime.preparation().unwrap();
+        assert_eq!(value["state"], "interrupted");
+        assert_eq!(value["step"], 4);
+        assert!(value["log"].as_str().unwrap().len() <= 16384);
+        assert!(value.get("pid").is_none());
+    }
+    assert!(!root.path().join("remote-calls.jsonl").exists());
 }
