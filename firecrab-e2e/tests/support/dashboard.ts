@@ -6,9 +6,12 @@ export async function importOci(page: Page, reference: string, alias: string) {
     .click();
   await page.locator("#oci-reference").fill(reference);
   await page.getByRole("button", { name: "Inspect", exact: true }).click();
-  await expect(page.locator(".subpanel")).toContainText(alias, {
-    timeout: 30_000,
-  });
+  await expect(page.locator(".subpanel > dl.detail-fields")).toContainText(
+    alias,
+    {
+      timeout: 30_000,
+    },
+  );
   const accepted = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&

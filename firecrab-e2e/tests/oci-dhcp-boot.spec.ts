@@ -305,10 +305,10 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   await expect(page.locator(".ssh-overlay")).toHaveCount(0);
   // Its SSH button opens the same dialog as the row menu below.
   await vmPanel(page)
-    .getByRole("button", { name: "SSH connection", exact: true })
+    .getByRole("button", { name: "SSH", exact: true })
     .click();
   const panelSsh = page.getByRole("dialog", {
-    name: "SSH connection",
+    name: `SSH — ${DHCP_VM_NAME}`,
     exact: true,
   });
   await expect(
@@ -328,7 +328,7 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   await sshRow.getByRole("button", { name: /^Actions$|^작업$/ }).click();
   await page.getByRole("menuitem", { name: /SSH connect|SSH 연결/ }).click();
   const sshDialog = page.getByRole("dialog", {
-    name: "SSH connection",
+    name: `SSH — ${DHCP_VM_NAME}`,
     exact: true,
   });
   await expect(sshDialog).toContainText(detail!.sshHostFingerprint!);

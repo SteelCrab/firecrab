@@ -159,8 +159,8 @@ fn starts_reuses_stops_and_resumes_the_selected_checkout() {
 #[test]
 fn different_managed_homes_keep_their_dashboards_and_stop_independently() {
     let first = Fixture::new();
-    let second = Fixture::new();
     first.start().unwrap();
+    let second = Fixture::new();
     second.start().unwrap();
     let selected = second.state();
     assert_ne!(first.state().session, selected.session);
@@ -194,15 +194,16 @@ fn a_private_instance_passes_its_backend_ports_to_the_owned_server() {
 
 #[test]
 fn copied_sessions_cannot_control_primary_or_other_private_dashboards() {
+    // Bind each port before the next fixture asks the OS for a free port.
     let primary = Fixture::new();
-    let first = Fixture::new();
-    let second = Fixture::new();
-    let first_instance = first.private_instance("0123456789abcdef", 45121, 45122);
-    let second_instance = second.private_instance("fedcba9876543210", 45123, 45124);
     primary.start().unwrap();
     let primary_server = DashboardGuard(primary.state());
+    let first = Fixture::new();
+    let first_instance = first.private_instance("0123456789abcdef", 45121, 45122);
     first.start_private(&first_instance).unwrap();
     let first_server = DashboardGuard(read_session(&first_instance.managed_home).unwrap().unwrap());
+    let second = Fixture::new();
+    let second_instance = second.private_instance("fedcba9876543210", 45123, 45124);
     second.start_private(&second_instance).unwrap();
     let second_server = DashboardGuard(
         read_session(&second_instance.managed_home)
@@ -445,8 +446,8 @@ fn switches_checkouts_by_stopping_only_the_previous_owned_server() {
 #[test]
 fn changing_ports_stops_the_previous_dashboard_and_remembers_the_new_port() {
     let fixture = Fixture::new();
-    let other = Fixture::new();
     fixture.start().unwrap();
+    let other = Fixture::new();
     let original = fixture.state();
     start(&fixture.source(), fixture.home.path(), other.port).unwrap();
     let selected = fixture.state();
