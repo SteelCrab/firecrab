@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { createNetwork } from "./support/wasmDashboard";
+import { createNetwork } from "./support/dashboard";
 import { ApiCleanup } from "../src/api.js";
 import {
   IPV6_E2E_V4_CIDR,
@@ -43,14 +43,28 @@ test("IPv6 defaults to IPv4-only and supports SLAAC or DHCPv6", async ({
   page,
 }) => {
   await openEnglish(page, "/#/networks");
-  await page.locator(".screen-header").getByRole("button", { name: "New network", exact: true }).click();
-  const mode = page.getByRole("radiogroup", { name: "IPv6 address mode", exact: true });
-  await expect(mode.getByRole("radio", { name: "Default", exact: true })).toBeChecked();
-  await expect(page.locator("#field-ipv6Cidr")).toHaveValue("");
+  await page
+    .locator(".screen-header")
+    .getByRole("button", { name: "New network", exact: true })
+    .click();
+  const mode = page.getByRole("radiogroup", {
+    name: "IPv6 address mode",
+    exact: true,
+  });
+  await expect(
+    mode.getByRole("radio", { name: "Default", exact: true }),
+  ).toBeChecked();
+  await expect(
+    page.getByRole("textbox", { name: "IPv6 prefix (optional)", exact: true }),
+  ).toHaveValue("");
   await mode.getByRole("radio", { name: "SLAAC", exact: true }).check();
-  await expect(mode.getByRole("radio", { name: "SLAAC", exact: true })).toBeChecked();
+  await expect(
+    mode.getByRole("radio", { name: "SLAAC", exact: true }),
+  ).toBeChecked();
   await mode.getByRole("radio", { name: "DHCPv6", exact: true }).check();
-  await expect(mode.getByRole("radio", { name: "DHCPv6", exact: true })).toBeChecked();
+  await expect(
+    mode.getByRole("radio", { name: "DHCPv6", exact: true }),
+  ).toBeChecked();
 });
 
 test("creates an IPv4-only network and an auto-ULA dual-stack network", async ({

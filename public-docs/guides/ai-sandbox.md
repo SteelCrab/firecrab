@@ -1,137 +1,54 @@
 # AI Sandbox
 
-AI Sandbox uses accounts connected in [Pipe AI](pipe-ai.md) to select models, converse, edit a project, and run commands inside a MicroVM.
-Pipe AI remains the account-management page.
-Open **AI → AI Sandbox**, or `/#/ai-sandbox`.
-See [Sandbox access](sandbox-access.md) for caller identity, resource grants, and immutable runtime references.
+AI Sandbox opens the native multi-agent workspace at `/#/ai-sandbox`.
+Select a MicroVM, connect a coding CLI, and submit a task. No separate Sandbox project setup or model-task workspace is required.
 
-## Start a project
+## Manage CLI agents in a MicroVM
 
-1. Connect an account in Pipe AI.
-2. Create a Sandbox project. Select an account and refresh its model list, or enter a model ID.
-3. Choose **Verify access**. Enable tool verification for code tasks. Verification consumes provider usage.
-4. Save a default model and optional project instructions.
-5. For code tasks, set an absolute project directory **on the API host** and select a running user MicroVM.
+The workspace runs coding CLIs inside the selected MicroVM. Project folders and login credentials stay in that VM. It does not accept a host project path or copy a host CLI account into the VM.
 
-On macOS and Windows, the API host is managed Debian. A path on the desktop is not automatically a path inside managed Debian.
-Conversation mode uses instructions and recent completed conversation. It does not read source files or execute tools.
-Select **Code task** to give the model file and guest-command tools.
-The composer can override the default model for one attempt without changing the project default.
+1. Select a regular MicroVM or use **New MicroVM** to create one without leaving the workspace. Start or resume it before connecting. Internal service VMs cannot be selected.
+2. Select **GitHub AUTH**. **Prepare GitHub AUTH** installs only the GitHub tools when needed; selecting or installing a coding CLI is not required. Copy the one-time code, open **Authorize on GitHub**, and approve **GitHub CLI** in the browser. The screen detects completion automatically. Pending requests survive browser/native-service restarts. An expired or denied request can be started again without an HTTP 409.
+3. Choose a repository from the authenticated account, including private repositories, or enter `owner/repository`. Connect it once to this MicroVM. All new tasks and Web VS Code use `/workspace/firecrab/project`; new tasks do not clone again, reset local edits or switch branches. Use a different VM for another repository. An empty VM folder can also be initialized explicitly. Existing sessions keep their original folders.
+4. Choose **Codex** or **Claude Code** explicitly. **Prepare CLI environment** installs Herdr and the selected coding CLI inside that VM. Automatic installation supports Debian, Ubuntu and Alpine. Select **Connect CLI account** and finish its login terminal. Then enter the task and select **Start task**. GitHub AUTH and coding-provider authentication are separate. No model task runs during authentication.
+5. If the CLI asks for first-run setup or project trust, finish that prompt in its terminal. **Send waiting task** then delivers the saved task explicitly. An uncertain delivery is shown for inspection instead of being replayed automatically.
+6. Follow tasks in the default **Board** view. Cards show their coding CLI and move between **Waiting**, **Working**, **Needs attention**, and **Done** as the native runtime reports progress. Select a card to open its terminal. In **Terminals**, select up to four sessions in the side list. Click a terminal to type directly into that CLI. The **…** menu contains interruption, automation and session closure. Closing a session requires confirmation and retains its final output. No automatic commit, push or pull request is made.
 
-## Provider contracts
+**New task** lets you choose a connected Codex or Claude Code account for that task. Several tasks can run in parallel in the same VM workspace. A CLI session is created only when **Start task** is submitted. Opening the board, switching views and reloading do not launch or resend work. The view choice is saved per VM. Account login sessions stay outside the task board; CLI setup and uncertain task delivery remain visible for inspection.
 
-| Account | Discovery | Inference and native tools |
-| --- | --- | --- |
-| OpenAI API key | `GET https://api.openai.com/v1/models`, `data[].id` | Responses API with native function calls and correlated `function_call_output` |
-| ChatGPT sign-in | Same endpoint with OAuth; visible `models[].slug` and `display_name` | Public Responses API; functions grouped in the `sandbox` namespace; required completed SSE response |
-| Anthropic API key | `GET https://api.anthropic.com/v1/models`, `data[].id` | `POST https://api.anthropic.com/v1/messages`; `anthropic-version: 2026-10-21`; native `tool_use` / `tool_result` |
+The native localhost dashboard and `service dev` use the existing management connection to reach the selected VM. Each managed home and VM gets separate Firecrab session metadata and a private named [Herdr](https://herdr.dev/tui/docs/agents/) runtime. The bridge validates the controller, VM UUID, running state and pinned guest SSH key before connecting. It never falls back to a host coding CLI. A recycled terminal generation cannot receive input through an older session reference.
 
-A catalogue entry does not grant inference permission. A text probe must complete before a model can be selected.
-A separate harmless `sandbox_ready` call, tool result, and final response verify native tool support before code execution.
-Proofs are bound to the saved account, authentication method, provider adapter, and model. Credential changes invalidate access. Disconnect blocks new requests without fallback.
-Models are discovered or explicitly configured; the UI does not invent a fixed supported-model list.
-Discovery reads the first bounded provider page. Enter an exact model ID if a model is absent from that page, then verify it.
+Browser reloads do not stop CLI sessions. Stopping the selected VM disconnects them; restart it and inspect the session before retrying work. Preparing a CLI or closing a session does not start, stop or delete the VM. Files remain on the VM disk.
 
-OpenAI API-key and Anthropic turns use buffered provider JSON. ChatGPT uses `store: false`, `stream: true`, array input, and complete history over HTTP. It omits unsupported output-token limits and continuation IDs.
-The Dashboard, CLI, and MCP receive complete turn results. Incremental browser token delivery is not implemented.
-Provider calls use fixed official endpoints, no redirects, and no automatic inference retry.
+Installed GitHub Copilot commands can also be used. Automatic installation and sign-in controls cover Codex, Claude Code and GitHub CLI. Model overrides are supported for Codex and Claude Code. Provider usage can incur charges when the user starts work.
 
-These contracts follow the official [OpenAI function-calling guide](https://developers.openai.com/api/docs/guides/function-calling), [ChatGPT model catalogue](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference), [ChatGPT preview restrictions](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations), and [Anthropic client-tool protocol](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview).
-Claude Code login and subscription tokens are not used.
+Installation and authentication follow the official [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), [headless Codex authentication](https://learn.chatgpt.com/docs/auth#login-on-headless-devices), [Claude Code setup](https://code.claude.com/docs/en/setup) and [Herdr installation](https://herdr.dev/tui/docs/install/) instructions.
 
-## Files, commands, and review
+## Verification, GitHub Actions and tunnel previews
 
-Each code attempt captures the project settings and creates a private snapshot with its own Git repository and `ai/<attempt-id>` branch.
-It does not change the source repository's branch or index.
-The model can list, read, replace, and delete allowed files in that copy.
-Paths cannot escape the opened project directory. Symlinks, hard links, devices, Git metadata, common credential files, and dependency/build directories are excluded. The configured private database and sidecars are never copied, even with a custom filename. Files containing a known connected credential are also omitted. Common generated output (`node_modules`, `target`, `dist`, `coverage`, Python caches, npm caches and Cargo registry/git caches) stays out of review; project `.cargo/config.toml` remains available.
-Known connected account credentials are redacted from context, results, and activity. Do not put other secrets in source files or task prompts.
+Open a coding session's **… → Automation and preview** menu.
 
-`run_command` uses the selected VM's operator SSH key and pinned host key. The VM must be running, have a current network lease and runtime identity, and permit operator SSH.
-The Linux API host needs `/usr/bin/git` and `/usr/bin/ssh`. The guest needs a POSIX shell, `tar` with `--exclude` support, `timeout`, `flock` with timed locks, user-management utilities, and direct UID switching with no-new-privileges. Install util-linux `setpriv` in the selected development VM. The injected BusyBox alone does not satisfy this requirement. A read-only prerequisite probe runs before staging; missing helpers fail explicitly.
-A task gets a dedicated unprivileged guest user and project directory. Commands receive a clean environment without provider credentials or SSH-agent forwarding. No-new-privileges prevents gaining privileges through setuid executables.
-Packages and other generated dependencies remain available between commands within the same attempt.
-The selected VM is borrowed exclusively by the Sandbox project. A service-owned/internal VM cannot be selected.
+1. Review **Execution settings**. Commands run in that task's existing MicroVM workspace. Install the project's runtime/toolchain in the VM first. Test commands must finish; `CI=true` disables watch mode in tools that support it. The optional test app must stay in the foreground and listen on `127.0.0.1` or `0.0.0.0` at the selected port.
+2. **Run verification** runs tests, an optional Trivy scan, the optional build and the optional test app in that order. A failure stops the sequence. High/critical dependency vulnerabilities, exposed secrets and configuration findings block the build/app stages. Missing scanners, database download failures and incomplete reports are not reported as a clean scan. The first scan installs the checksum-verified pinned Trivy release.
+3. The job runs inside the VM with a workspace lock. Browser/native-server restarts do not restart it. A VM reboot interrupts it. Results and bounded displayed logs remain available. Stop the owned test app before another run; other processes are never stopped by PID alone.
+4. **Create workflow** creates `.github/workflows/firecrab-checks.yml` in the VM. It runs the configured tests, security scan and build on pushes, pull requests and manual dispatch. It uses a pinned checkout action and read-only repository permissions. Existing files are not overwritten. Inspect and push the changes separately; creation does not publish a commit, PR or production deployment.
+5. **Load workflow runs** reads recent GitHub Actions runs through the GitHub account connected inside the VM. Each run shows its branch, commit and result. This is separate from the local verification result.
+6. After verification passes and the app is ready, **Create test URL** starts a dedicated Cloudflare Quick Tunnel inside the selected VM. The first use downloads the official connector and verifies its GitHub-published SHA-256 digest. The temporary HTTPS address is public. Browser/native-server restarts find the same recorded process. Stopping or deleting the VM ends the connection; an IP address reused by another VM cannot inherit it. Existing Pipe routes and tunnels are untouched.
+7. **Check HTTPS** makes an explicit external request to this task's recorded Quick Tunnel origin. It displays the HTTP status and response time without following redirects. A connector's running state alone is not proof that public HTTPS works. **Stop tunnel** stops that connector. **Stop test app** stops its tunnel first, then only the recorded app process group after checking its boot and process start identity. A stopped tunnel can be started again while the verified app remains running.
 
-Commands run with that user's normal guest filesystem and network permissions. This is MicroVM isolation from the host, not an additional container or network sandbox inside the VM. Use a dedicated development VM without sensitive guest data.
-The API never runs a model-provided host shell command. The root SSH helper only stages files, supervises the owned user, exports changes, and cleans up owned data.
+This provides test-environment deployment. Production release targets, credentials and approval rules must be configured separately. No production deployment is performed automatically.
 
-Open a task to inspect its result, native tool arguments, stdout, stderr, exit code, and before/after file contents and modes.
-Only **Apply selected files** changes the original source. Finish or reconcile an active project attempt before applying another result. Every selected original content and mode must still match the snapshot before writes begin.
-Atomic source writes preserve existing file ownership; new directories and files inherit project ownership.
-Imported modes preserve the original source read/write permissions and accept executable-bit changes; they do not add privilege bits.
-A source conflict stops apply. An I/O failure attempts to restore earlier writes; this is not a filesystem transaction.
-Text changes support apply. Binary changes remain in the private retained workspace and require manual inspection.
-Applying files does not make a commit in the user's source repository.
+## Control an agent terminal
 
-## Limits and recovery
+Click the task's terminal to type directly into its existing CLI session. Enter, Tab, arrow keys, Ctrl+C and paste go to that terminal. There is no separate reply box or send button. Resize the pane to resize its PTY. Scroll inside the terminal to read its history; hold Shift to select text when the CLI uses the mouse.
 
-| Limit | Value |
-| --- | --- |
-| Concurrent attempts per controller / project | 2 / 1 |
-| Pending attempts per controller | 16 |
-| Attempt deadline / native turns | 10 minutes / 24 |
-| Command timeout | 1–120 seconds |
-| Command stdout / stderr | 64 KiB each; excess stops the command |
-| Project snapshot | 32 MiB, 4,096 files, depth 32 |
-| Individual file / file-tool read | 1 MiB / 32 KiB |
-| Prompt / project instructions | 32 KiB / 16 KiB |
-| Provider response / assistant text | 1 MiB / 64 KiB |
-| Provider history / tool-result context | 192 KiB / 16 KiB per stream |
-| Recent conversation context | Up to 12 complete pairs within 48 KiB |
-| Retained tasks per project / list page | 500 / 50 |
+Closing a browser tab or deselecting a task releases terminal control without stopping the agent. **Reconnect terminal** attaches to the same session. Input is never replayed after a disconnect. A session controlled by another client is not taken over automatically. **End session** explicitly stops its CLI. Completed sessions retain read-only output. Verification blocks new terminal input while its workspace is being checked.
 
-Task lists use an indexed summary; full bounded activity and file contents are fetched only for task detail.
-The full bounded activity stays in the task record when model-context output is clipped.
-The model receives an explicit clipping notice. Older conversations remain saved and can be paged in the UI or REST API.
-A context, output, or time limit is an explicit outcome, not a fabricated successful result.
+## Edit task files with Web VS Code
 
-Tasks move through **Waiting → Preparing → In progress → Result → Applied**.
-Failure and confirmed cancellation retain the attempt identity, received activity, and reviewable changes. An interrupted SSH request may not provide partial stdout/stderr; missing output is not reported as a completed command.
-Stop requests interrupt network waits; local file operations finish before final review. A provider may still charge for an interrupted request.
-Every command has an immutable invocation ID and a matching completion record. Guest cancellation checks the recorded supervisor identity, invocation completion, and dedicated UID before confirming termination. It exports before removing the owned guest user and directory. Root-owned lock and cancellation tombstones remain to reject late stage/run requests. A supervisor that disappears without completion proof remains uncertain until reconciliation or a guest reboot.
-The controller never stops or deletes the borrowed VM or its network.
-An export/cleanup failure keeps guest data and reports **Needs reconciliation**.
+1. Select a coding task and choose **Web VS Code** beside its workspace path.
+2. On first use, Firecrab installs the official OpenVSCode Server inside that MicroVM. The connection page shows installation progress.
+3. The editor opens `/workspace/firecrab/project`, the same VM folder used by every new CLI task. Existing sessions retain `/workspace/firecrab/TASK_UUID`. Saving edits changes those files directly. Guest-side changes appear in the editor too.
+4. Reopening the editor reuses its recorded server and private SSH connection. It does not create another project or copy files to the desktop.
 
-An API restart marks active attempts **Interrupted**. Nothing is automatically replayed.
-Use **Reconcile attempt** to stop/recover the recorded attempt before retrying or deleting its project.
-Reconciliation can reconnect to the same VM after a reboot; the guest boot marker prevents signalling an old supervisor PID in another boot.
-If the VM, SSH identity, or retained workspace is unavailable, recovery remains blocked instead of deleting unconfirmed data.
-**New attempt** creates a fresh immutable attempt ID and records the previous task as `retryOf`.
-
-Deleting a project removes only its saved conversation and controller-owned attempt copies after execution/reconciliation finishes. Source files and borrowed VMs remain.
-Back up the private database and adjacent `.sandbox` directory together if retained code changes are needed.
-
-## CLI and local stdio MCP
-
-All entry points use `/api/ai-sandbox`; the CLI/MCP process does not receive provider credentials.
-Use `--api` or an existing `--host` profile to select the same API as the Dashboard.
-
-```sh
-firecrab sandbox projects
-firecrab sandbox models CONNECTION_UUID --discover
-firecrab sandbox verify CONNECTION_UUID MODEL_ID --tools
-firecrab sandbox save-project PROJECT_UUID < project.json
-firecrab sandbox run PROJECT_UUID TASK_UUID < task.json
-firecrab sandbox tasks PROJECT_UUID
-firecrab sandbox inspect TASK_UUID
-firecrab sandbox cancel TASK_UUID
-firecrab sandbox reconcile TASK_UUID
-firecrab sandbox apply TASK_UUID src/health.ts
-```
-
-`project.json` contains `{name, sourcePath, vmId, selection: {connectionId, model}, instructions}`.
-`task.json` contains `{kind: "chat" | "code", input, selection?: {connectionId, model}, retryOf?: UUID}`.
-Reuse the same task UUID and identical request after an uncertain admission response. This returns the existing attempt and does not run a second one.
-Use `GET /api/ai-sandbox/projects/PROJECT_UUID/tasks?before=TASK_UUID` for an older page and `?since=UNIX_MILLISECONDS` for incremental updates.
-
-Run `firecrab mcp` for the existing stdio adapter.
-Its `sandbox_*` tools cover projects, models, verification, task admission, inspection, cancellation, reconciliation, and selected-file apply.
-Task start advertises guest execution. Apply advertises destructive source modification and requires explicit reviewed paths.
-EOF does not delete retained data or borrowed resources.
-
-Managed environments and retained preview controls are described in
-[Sandbox environments](sandbox-environments.md) and
-[Sandbox control](sandbox-control.md). Task dependencies and bounded retries
-reuse this task lifecycle. Interactive browser terminals belong to Canvas #496,
-which remains on hold until AI Sandbox implementation and direct QA are accepted.
+The editor uses a token-protected guest loopback listener and a pinned SSH loopback forward. It does not publish a test tunnel. Workspace Trust prompts remain enabled. Login sessions do not expose an editor button.

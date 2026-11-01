@@ -1,0 +1,63 @@
+/* Shared controls for MicroVM CLI tasks and the editor connection page. */
+.screen[data-view="ai-sandbox"] .screen-body {
+  padding: 0;
+  overflow: hidden;
+}
+.screen[data-view="ai-sandbox"] form label {
+  font-size: 15px;
+  color: var(--text-2);
+}
+.screen[data-view="ai-sandbox"]
+  :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 var(--font);
+}
+.screen[data-view="ai-sandbox"] textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+.screen[data-view="ai-sandbox"] input:is([type="checkbox"], [type="radio"]) {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--text);
+  flex: none;
+  margin: 0;
+}
+.screen[data-view="ai-sandbox"] label:has(> input[type="checkbox"]) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.screen[data-view="ai-sandbox"] fieldset {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 18px;
+  margin: 0;
+}
+.screen[data-view="ai-sandbox"] fieldset legend {
+  padding: 0 6px;
+  color: var(--text-2);
+  font-size: 15px;
+}
+.screen[data-view="ai-sandbox"] .app-dialog {
+  width: min(820px, calc(100vw - 32px));
+  padding: 28px;
+}
+.screen[data-view="ai-sandbox"] .app-dialog > form {
+  gap: 0;
+}
+@media (max-width: 780px) {
+  .screen[data-view="ai-sandbox"] .screen-body {
+    overflow: auto;
+  }
+}

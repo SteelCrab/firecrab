@@ -61,6 +61,15 @@ impl PkgManager {
     /// One generic name can map to two packages, so this returns a list.
     pub fn packages_for<'a>(&self, generic: &'a str) -> Vec<&'a str> {
         match (self, generic) {
+            (Self::AptGet, "kernel-compiler") => vec!["build-essential"],
+            (Self::Dnf | Self::Zypper, "kernel-compiler") => vec!["gcc", "make"],
+            (Self::Pacman, "kernel-compiler") => vec!["base-devel"],
+            (Self::Apk, "kernel-compiler") => vec!["build-base"],
+            (Self::AptGet, "kernel-headers") => vec!["libelf-dev", "libssl-dev"],
+            (Self::Dnf, "kernel-headers") => vec!["elfutils-libelf-devel", "openssl-devel"],
+            (Self::Zypper, "kernel-headers") => vec!["libelf-devel", "libopenssl-devel"],
+            (Self::Pacman, "kernel-headers") => vec!["libelf", "openssl"],
+            (Self::Apk, "kernel-headers") => vec!["elfutils-dev", "openssl-dev"],
             (Self::AptGet, "mysql-client") => vec!["mariadb-client"],
             (Self::Dnf, "postgresql-client") => vec!["postgresql"],
             (Self::Dnf, "mysql-client") => vec!["mariadb"],

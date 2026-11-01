@@ -99,10 +99,10 @@ class ReleaseComplianceTests(unittest.TestCase):
         self.assertEqual(runtime, {"runtime"})
         self.assertEqual(build, {"dev", "macro"})
 
-    def test_wasm_runtime_dependencies_are_included(self):
+    def test_cargo_workspace_runtime_dependencies_are_included(self):
         with tempfile.TemporaryDirectory() as tmp:
             metadata = self.cargo_fixture(Path(tmp))
-            metadata["packages"][0]["name"] = "firecrab-frontend"
+            metadata["packages"][0]["name"] = "firecrab-api"
             runtime, build = rc.cargo_sets(metadata)
         self.assertEqual(runtime, {"runtime"})
         self.assertEqual(build, {"dev", "macro"})

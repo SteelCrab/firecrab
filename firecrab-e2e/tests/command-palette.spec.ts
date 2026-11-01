@@ -11,7 +11,8 @@ async function open(page: Page, locale: "en" | "ko" = "en") {
   await expect(page.getByText("api-gateway", { exact: true })).toBeVisible();
 }
 
-const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette", exact: true });
+const palette = (page: Page) =>
+  page.getByRole("dialog", { name: "Command palette", exact: true });
 const search = (page: Page) => palette(page).getByRole("combobox");
 
 test.describe("command palette", () => {
@@ -22,7 +23,9 @@ test.describe("command palette", () => {
     await page.keyboard.press("ControlOrMeta+k");
     await expect(palette(page)).toBeVisible();
     await expect(search(page)).toBeFocused();
-    await expect(palette(page).getByRole("group", { name: "Go to" })).toBeVisible();
+    await expect(
+      palette(page).getByRole("group", { name: "Go to" }),
+    ).toBeVisible();
 
     await page.keyboard.press("Escape");
     await expect(palette(page)).toHaveCount(0);
@@ -38,7 +41,9 @@ test.describe("command palette", () => {
 
   test("opens from the navigation search button", async ({ page }) => {
     await open(page);
-    await page.getByRole("button", { name: "Search and go", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Search and go", exact: true })
+      .click();
     await expect(palette(page)).toBeVisible();
   });
 
@@ -82,11 +87,17 @@ test.describe("command palette", () => {
     await page.goto("/#/host");
     await page.keyboard.press("ControlOrMeta+k");
     await search(page).fill("postgres");
-    await palette(page).getByRole("option", { name: /postgres-main/ }).click();
+    await palette(page)
+      .getByRole("option", { name: /postgres-main/ })
+      .click();
 
     await expect(palette(page)).toHaveCount(0);
     await expect(page).toHaveURL(/#\/vms(?:\?vm=.+)?$/);
-    await expect(page.getByRole("complementary", { name: "MicroVM detail" }).getByRole("heading", { name: "postgres-main" })).toBeVisible();
+    await expect(
+      page
+        .getByRole("complementary", { name: "MicroVM detail" })
+        .getByRole("heading", { name: "postgres-main" }),
+    ).toBeVisible();
   });
 
   test("has no entry that toggles the detail panel", async ({ page }) => {
@@ -115,11 +126,48 @@ test.describe("command palette", () => {
 
   test("uses Korean labels", async ({ page }) => {
     await open(page, "ko");
-    await page.getByRole("button", { name: "검색 및 이동", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name: "명령 팔레트", exact: true });
+    await page
+      .getByRole("button", { name: "검색 및 이동", exact: true })
+      .click();
+    const dialog = page.getByRole("dialog", {
+      name: "명령 팔레트",
+      exact: true,
+    });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("group", { name: "이동" })).toBeVisible();
     await dialog.getByRole("combobox").fill("커널");
     await expect(dialog.getByRole("option")).toHaveCount(1);
   });
+});
+
+test("VM selection from the palette preserves a cancelled resource draft", async ({
+  page,
+}) => {
+  await open(page);
+  await page
+    .getByRole("button", { name: "postgres-main", exact: true })
+    .click();
+  const detail = page.getByRole("complementary", {
+    name: "MicroVM detail",
+    exact: true,
+  });
+  await detail.getByRole("button", { name: "Edit spec", exact: true }).click();
+  await detail.getByLabel("vCPU", { exact: true }).fill("3");
+  const choose = async () => {
+    await page.keyboard.press("ControlOrMeta+k");
+    await search(page).fill("api-gateway");
+    await palette(page).getByRole("option").first().click();
+  };
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await choose();
+  await expect(
+    detail.getByRole("heading", { name: "postgres-main", exact: true }),
+  ).toBeVisible();
+  await expect(detail.getByLabel("vCPU", { exact: true })).toHaveValue("3");
+  page.once("dialog", (dialog) => dialog.accept());
+  await choose();
+  await expect(
+    detail.getByRole("heading", { name: "api-gateway", exact: true }),
+  ).toBeVisible();
+  await expect(detail.getByLabel("vCPU", { exact: true })).toHaveCount(0);
 });

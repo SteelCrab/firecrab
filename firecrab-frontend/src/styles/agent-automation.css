@@ -1,0 +1,258 @@
+.app-dialog:has(.aa-dialog) {
+  width: min(780px, calc(100vw - 32px));
+  max-width: 780px;
+  padding: 0;
+}
+.aa-dialog {
+  padding: 28px;
+  color: var(--text, #202126);
+}
+.aa-head,
+.aa-section-title,
+.aa-actions,
+.aa-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.aa-head {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.aa-head h2 {
+  margin: 4px 0 0;
+  font-size: 24px;
+  letter-spacing: -0.5px;
+}
+.aa-head span,
+.aa-intro,
+.aa-section p,
+.aa-dialog small {
+  color: var(--muted, #71717a);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.aa-intro {
+  margin: 14px 0 24px;
+  max-width: 66ch;
+}
+.aa-section {
+  padding: 23px 0;
+  border-top: 1px solid var(--line, #e7e7ec);
+}
+.aa-section:last-child {
+  padding-bottom: 0;
+}
+.aa-section-title svg {
+  width: 19px;
+  height: 19px;
+  color: #686874;
+}
+.aa-section h3 {
+  font-size: 16px;
+  margin: 0;
+}
+.aa-actions {
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.aa-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.aa-actions svg,
+.aa-preview svg,
+.aa-github-runs svg,
+.aa-proof svg {
+  width: 15px;
+  height: 15px;
+}
+.aa-settings {
+  margin-top: 16px;
+}
+.aa-settings summary,
+.aa-log summary {
+  font-size: 13px;
+  cursor: pointer;
+  color: #555660;
+}
+.aa-fields {
+  display: grid;
+  gap: 14px;
+  padding-top: 16px;
+}
+.aa-fields > label {
+  display: grid;
+  gap: 7px;
+  font-size: 13px;
+}
+.aa-fields input:not([type="checkbox"]) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 39px;
+  padding: 8px 10px;
+  border: 1px solid var(--line, #e7e7ec);
+  border-radius: 7px;
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  background: var(--surface, #fff);
+}
+.aa-fields > .aa-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.5;
+}
+.aa-check input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin: 2px 0 0;
+}
+.aa-run {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--line, #e7e7ec);
+  border-radius: 8px;
+  margin-top: 16px;
+  font-size: 13px;
+}
+.aa-run.passed,
+.aa-proof {
+  color: #128445;
+}
+.aa-run.failed,
+.aa-run.findings,
+.aa-run.interrupted {
+  color: #ad3a31;
+}
+.aa-findings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin: 14px 0;
+  font-size: 13px;
+}
+.aa-findings strong {
+  margin-left: 6px;
+}
+.aa-error {
+  color: #b4232d;
+  background: #fff2f2;
+  padding: 10px 12px;
+  border-radius: 7px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.aa-message {
+  font-size: 13px;
+  padding: 12px;
+  border: 1px solid #d5e9dc;
+  border-radius: 7px;
+  color: #176a38;
+  overflow-wrap: anywhere;
+}
+.aa-log {
+  margin-top: 16px;
+}
+.aa-log pre {
+  background: #191b20;
+  color: #e6e6eb;
+  border-radius: 7px;
+  padding: 14px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.aa-preview {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding: 12px;
+  background: #f7f7fa;
+  border-radius: 8px;
+}
+.aa-preview a,
+.aa-github-runs a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  color: inherit;
+}
+.aa-proof {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.aa-github-runs {
+  list-style: none;
+  padding: 0;
+  margin: 15px 0 0;
+}
+.aa-github-runs li {
+  display: grid;
+  gap: 5px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line, #e7e7ec);
+}
+.aa-github-runs span {
+  font-size: 12px;
+  color: #71717a;
+}
+@media (max-width: 600px) {
+  .aa-dialog {
+    padding: 20px;
+  }
+  .aa-head h2 {
+    font-size: 21px;
+  }
+  .aa-run {
+    flex-wrap: wrap;
+  }
+}
+
+.aa-stages {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 14px 0;
+}
+.aa-stages li {
+  border-top: 3px solid #e6e6eb;
+  padding-top: 8px;
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+}
+.aa-stages .done {
+  border-color: #14934b;
+}
+.aa-stages .running {
+  border-color: #446de3;
+}
+.aa-stages .failed {
+  border-color: #bf4f41;
+}
+.aa-stages .skipped {
+  opacity: 0.6;
+}
+.aa-stages small {
+  font-size: 11px;
+}
+@media (max-width: 600px) {
+  .aa-stages {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 14px;
+  }
+}

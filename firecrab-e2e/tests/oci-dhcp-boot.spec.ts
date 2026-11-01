@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 
 import { expect, test, type Page } from "@playwright/test";
 
-import { createNetwork, importOci } from "./support/wasmDashboard";
+import { createNetwork, importOci } from "./support/dashboard";
 import { ApiCleanup } from "../src/api.js";
 import { openVmTab, vmPanel } from "./support/vmPanel";
 import {
@@ -215,18 +215,27 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   await openEnglish(page, "/#/vms");
   await page.locator("#vm-list-add").click();
   await expect(page).toHaveURL(/#\/vms\/new$/);
-  await expect(page.locator("#field-template")).toBeEnabled({
+  await expect(page.locator("#vm-image")).toBeEnabled({
     timeout: 15_000,
   });
   await expect(
-    page.locator(`#field-template option[value="${alias()}"]`),
+    page.locator(`#vm-image option[value="${alias()}"]`),
   ).toHaveCount(1, {
     timeout: 15_000,
   });
-  await page.locator("#field-name").fill(DHCP_VM_NAME);
-  await page.locator("#field-template").selectOption(alias());
-  await page.locator("#field-microNetworkId").selectOption(createdNetworkId!);
-  await page.locator("#field-portForwards").fill(`${DHCP_HOST_PORT}:80/tcp`);
+  await page.locator("#vm-name").fill(DHCP_VM_NAME);
+  await page.locator("#vm-image").selectOption(alias());
+  await page.locator("#vm-micro-network").selectOption(createdNetworkId!);
+  await page.getByText("Advanced options", { exact: true }).click();
+  await page
+    .getByRole("button", { name: "+ Add Port Forward Rule", exact: true })
+    .click();
+  await page
+    .getByRole("spinbutton", { name: "Guest port 1", exact: true })
+    .fill("80");
+  await page
+    .getByRole("spinbutton", { name: "Host port 1", exact: true })
+    .fill(String(DHCP_HOST_PORT));
 
   await page.locator("#editor button[type=submit]").click();
   await expect(page).toHaveURL(/#\/vms(?:\?vm=.+)?$/);
@@ -235,7 +244,7 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   await expect(row).toBeVisible();
   // Row actions live behind the Actions toggle now.
   await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
-  await page.getByRole("menuitem", { name: "start", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Start", exact: true }).click();
   await expect(row.locator(".vm-status-label")).toHaveAttribute(
     "data-state",
     /running|error/,
@@ -267,9 +276,8 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
     .click();
   await expect(
     vmPanel(page)
-      .locator(".wasm-property dt")
-      .filter({ hasText: /^IPv4$/ })
-      .locator("+ dd"),
+      .getByText(/^172\.30\.94\./)
+      .first(),
   ).toContainText(/172\.30\.94\./);
   const ports = vmPanel(page).getByRole("region", { name: "Port forwarding" });
   await expect(ports).toContainText(String(DHCP_HOST_PORT));
@@ -297,10 +305,10 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   await expect(page.locator(".ssh-overlay")).toHaveCount(0);
   // Its SSH button opens the same dialog as the row menu below.
   await vmPanel(page)
-    .getByRole("button", { name: "SSH connection", exact: true })
+    .getByRole("button", { name: "SSH", exact: true })
     .click();
   const panelSsh = page.getByRole("dialog", {
-    name: "SSH connection",
+    name: `SSH — ${DHCP_VM_NAME}`,
     exact: true,
   });
   await expect(
@@ -320,7 +328,7 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   await sshRow.getByRole("button", { name: /^Actions$|^작업$/ }).click();
   await page.getByRole("menuitem", { name: /SSH connect|SSH 연결/ }).click();
   const sshDialog = page.getByRole("dialog", {
-    name: "SSH connection",
+    name: `SSH — ${DHCP_VM_NAME}`,
     exact: true,
   });
   await expect(sshDialog).toContainText(detail!.sshHostFingerprint!);
@@ -370,7 +378,11 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
 
   // SSH port forward: the panel writes host:PORT → guest 22 through the same
   // endpoint the detail modal uses, and then prints the `ssh -p` command.
-  await page.locator("#ssh-host-port").fill(String(DHCP_SSH_HOST_PORT));
+  const hostPort = page.getByRole("spinbutton", {
+    name: "Host port",
+    exact: true,
+  });
+  await hostPort.fill(String(DHCP_SSH_HOST_PORT));
   await page
     .getByRole("button", {
       name: /Create SSH port forward|SSH 포트 포워드 만들기/,
@@ -403,7 +415,7 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
       name: /Remove SSH port forward|SSH 포트 포워드 제거/,
     })
     .click();
-  await expect(page.locator("#ssh-host-port")).toBeVisible();
+  await expect(hostPort).toBeVisible();
   const afterRemove = await api.getVm(detail!.id);
   expect(afterRemove?.portForwards?.some((pf) => pf.guestPort === 22)).toBe(
     false,

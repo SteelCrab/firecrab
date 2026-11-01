@@ -5,7 +5,7 @@ on:
     tags:
       - 'v*'
   pull_request:
-    branches: [main]
+    branches: [main, "release/v0.5.0"]
   workflow_dispatch:
 
 env:
@@ -256,9 +256,7 @@ jobs:
           cache: npm
           cache-dependency-path: firecrab-frontend/package-lock.json
 
-      - uses: ./.github/actions/setup-wasm
-
-      - name: Build Rust/WASM dashboard
+      - name: Build React dashboard
         run: |
           npm ci
           npm run build
@@ -291,7 +289,6 @@ jobs:
       - name: Fetch dependency sources
         run: |
           cargo fetch --locked
-          cargo fetch --manifest-path firecrab-frontend/Cargo.toml --locked
 
       - name: Install frontend runtime dependencies
         run: npm ci --omit=dev
@@ -348,9 +345,6 @@ jobs:
               --filter-platform "$target" > "$path"
             metadata_args+=(--cargo-metadata "$path")
           done
-          cargo metadata --manifest-path firecrab-frontend/Cargo.toml \
-            --format-version=1 --locked --filter-platform wasm32-unknown-unknown > cargo-metadata-wasm.json
-          metadata_args+=(--cargo-metadata cargo-metadata-wasm.json)
           python3 scripts/release_compliance.py \
             "${metadata_args[@]}" \
             --frontend-lock firecrab-frontend/package-lock.json \
