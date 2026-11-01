@@ -149,10 +149,10 @@ test("SEC13: Firecrab proxy credentials survive edits and restarts; provider fai
     await page.getByLabel("Provider", { exact: true }).selectOption("firecrab");
     await page.getByLabel("Connection name", { exact: true }).fill("qa-proxy");
     await page.getByLabel("Base URL", { exact: true }).fill(`http://127.0.0.1:${address.port}`);
-    await page.getByLabel("Bearer token", { exact: true }).fill("qa-private-credential");
+    await page.getByLabel("Bearer token (optional)", { exact: true }).fill("qa-private-credential");
     await page.getByRole("button", { name: "Save connection", exact: true }).click();
     await page.getByRole("button", { name: "Edit connection qa-proxy", exact: true }).click();
-    await expect(page.getByLabel("Bearer token", { exact: true })).toHaveValue("");
+    await expect(page.getByLabel("Bearer token (optional)", { exact: true })).toHaveValue("");
     await page.getByRole("button", { name: "Save connection", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Edit connection", exact: true })).toHaveCount(0);
     expect(JSON.stringify((await local.request("GET", "/connections")).body)).not.toContain("qa-private-credential");

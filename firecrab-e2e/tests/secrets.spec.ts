@@ -460,6 +460,11 @@ test.describe("Secrets web console @dashboard", () => {
       .getByRole("button", { name: "Save connection", exact: true })
       .click();
     expect(writes[0].body.provider).toBe("awsSecretsManager");
+    expect(Object.keys(writes[0].body.settings as object).sort()).toEqual([
+      "baseUrl",
+      "prefix",
+      "region",
+    ]);
     await page
       .getByRole("button", {
         name: "Edit connection AWS production",
@@ -486,11 +491,7 @@ test.describe("Secrets web console @dashboard", () => {
     ).toHaveAttribute("type", "password");
     await expect(
       page.getByLabel("Provider", { exact: true }).locator("option"),
-    ).toHaveText([
-      "Infisical",
-      "AWS Secrets Manager",
-      "Firecrab · PipeSecrets",
-    ]);
+    ).toHaveText(["Firecrab · PipeSecrets", "AWS Secrets Manager"]);
     await expect(page.getByLabel("Project ID", { exact: true })).toHaveCount(0);
     await expect(page.getByLabel("Secret path", { exact: true })).toHaveCount(
       0,

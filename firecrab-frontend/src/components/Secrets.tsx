@@ -586,8 +586,8 @@ export default function Secrets({
                   {connections.length
                     ? t("No matching connections.", "검색 결과가 없다.")
                     : t(
-                        "Connect Infisical, AWS Secrets Manager or another Firecrab instance.",
-                        "Infisical, AWS Secrets Manager 또는 다른 Firecrab 인스턴스를 연결한다.",
+                        "Connect AWS Secrets Manager or another Firecrab instance.",
+                        "AWS Secrets Manager 또는 다른 Firecrab 인스턴스를 연결한다.",
                       )}
                 </p>
               ) : (
@@ -604,13 +604,6 @@ export default function Secrets({
                             ? `${connection.settings.region} · ${connection.settings.prefix || "*"}`
                             : connection.settings.baseUrl}
                         </p>
-                        {connection.provider === "infisical" && (
-                          <p>
-                            {connection.settings.projectId} ·{" "}
-                            {connection.settings.environment} ·{" "}
-                            {connection.settings.secretPath}
-                          </p>
-                        )}
                       </div>
                       <div className="secrets-actions">
                         <button

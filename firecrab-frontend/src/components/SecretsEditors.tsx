@@ -151,9 +151,6 @@ export function SecretEditor({
 
 const EMPTY_SETTINGS: ConnectionSettings = {
   baseUrl: "",
-  projectId: "",
-  environment: "",
-  secretPath: "/",
   region: "ap-northeast-2",
   prefix: "",
 };
@@ -170,13 +167,10 @@ export function SecretConnectionEditor({
   const { t } = useI18n();
   const [name, setName] = useState(connection?.name ?? "");
   const [provider, setProvider] = useState<SecretProvider>(
-    connection?.provider ?? "infisical",
+    connection?.provider ?? "firecrab",
   );
   const [settings, setSettings] = useState<ConnectionSettings>(
-    connection?.settings ?? {
-      ...EMPTY_SETTINGS,
-      baseUrl: "https://us.infisical.com",
-    },
+    connection?.settings ?? { ...EMPTY_SETTINGS },
   );
   const [credentials, setCredentials] = useState<Record<string, string>>({});
   const [cleared, setCleared] = useState<Set<string>>(new Set());
@@ -297,20 +291,14 @@ export function SecretConnectionEditor({
                 setProvider(next);
                 setCredentials({});
                 setCleared(new Set());
-                setSettings({
-                  ...EMPTY_SETTINGS,
-                  baseUrl:
-                    next === "infisical" ? "https://us.infisical.com" : "",
-                });
+                setSettings({ ...EMPTY_SETTINGS });
               }}
             >
-              {(["infisical", "awsSecretsManager", "firecrab"] as const).map(
-                (item) => (
-                  <option value={item} key={item}>
-                    {providerLabel(item)}
-                  </option>
-                ),
-              )}
+              {(["firecrab", "awsSecretsManager"] as const).map((item) => (
+                <option value={item} key={item}>
+                  {providerLabel(item)}
+                </option>
+              ))}
             </select>
           </Field>
           {provider !== "awsSecretsManager" && (
@@ -323,47 +311,9 @@ export function SecretConnectionEditor({
                 onChange={(event) =>
                   updateSetting("baseUrl", event.target.value)
                 }
-                placeholder={
-                  provider === "firecrab"
-                    ? "https://firecrab.example.com"
-                    : "https://us.infisical.com"
-                }
+                placeholder="https://firecrab.example.com"
               />
             </Field>
-          )}
-          {provider === "infisical" && (
-            <>
-              <Field label={t("Project ID", "프로젝트 ID")}>
-                <input
-                  required
-                  value={settings.projectId}
-                  onChange={(event) =>
-                    updateSetting("projectId", event.target.value)
-                  }
-                />
-              </Field>
-              <Field label={t("Environment", "환경")}>
-                <input
-                  required
-                  value={settings.environment}
-                  onChange={(event) =>
-                    updateSetting("environment", event.target.value)
-                  }
-                  placeholder="prod"
-                />
-              </Field>
-              <Field label={t("Secret path", "시크릿 경로")}>
-                <input
-                  required
-                  value={settings.secretPath}
-                  onChange={(event) =>
-                    updateSetting("secretPath", event.target.value)
-                  }
-                  placeholder="/"
-                />
-              </Field>
-              {credential("token", t("Access token", "액세스 토큰"))}
-            </>
           )}
           {provider === "awsSecretsManager" && (
             <>

@@ -1,6 +1,6 @@
 import { fetchJson } from "./client";
 
-export type SecretProvider = "firecrab" | "infisical" | "awsSecretsManager";
+export type SecretProvider = "firecrab" | "awsSecretsManager";
 export type TransferDirection = "import" | "export";
 
 export interface SecretSource {
@@ -23,9 +23,6 @@ export interface SecretSummary {
 
 export interface ConnectionSettings {
   baseUrl: string;
-  projectId: string;
-  environment: string;
-  secretPath: string;
   region: string;
   prefix: string;
 }
@@ -50,7 +47,6 @@ export interface TransferPreview {
 export const providerLabel = (provider: SecretProvider) =>
   ({
     firecrab: "Firecrab · PipeSecrets",
-    infisical: "Infisical",
     awsSecretsManager: "AWS Secrets Manager",
   })[provider];
 
