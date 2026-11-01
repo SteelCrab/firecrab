@@ -46,6 +46,7 @@ export interface PipeSnapshot {
 }
 
 export type FirecrabTarget =
+  | { type: "preview"; vm_id: string; url: string }
   | { type: "apps"; upstreams: string[] }
   | { type: "nginx"; host: string };
 export interface FirecrabAddress {

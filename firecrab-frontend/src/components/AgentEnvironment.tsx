@@ -6,6 +6,7 @@ import { consolePageUrl } from "../navigation";
 import AgentBrandIcon from "./icons/AgentBrandIcon";
 
 type Props = {
+  compact?: boolean;
   vms: VmResponse[];
   vmId: string;
   cli: string;
@@ -61,7 +62,7 @@ export default function AgentEnvironment(p: Props) {
       className="am-environment"
       aria-label={t("Execution environment", "실행 환경")}
     >
-      <div className="am-vm-row">
+      <div className="am-vm-row" hidden={p.compact}>
         <label htmlFor="am-vm">MicroVM</label>
         <select
           id="am-vm"
@@ -97,7 +98,7 @@ export default function AgentEnvironment(p: Props) {
         <p className="am-environment-note">
           {t(
             "Choose or create a MicroVM. Agents and repository files run inside that VM.",
-            "MicroVM을 선택하거나 만든다. 에이전트와 저장소 파일은 선택한 VM 안에서 실행한다.",
+            "VM을 선택하거나 새로 만들어 주세요. 코드와 AI는 이 VM 안에서 실행돼요.",
           )}
         </p>
       ) : vm.state !== "running" ? (
@@ -105,7 +106,7 @@ export default function AgentEnvironment(p: Props) {
           <p>
             {t(
               "Start this MicroVM to connect its coding workspace.",
-              "작업 공간에 연결하려면 이 MicroVM을 시작한다.",
+              "작업 공간에 연결하려면 VM을 시작해 주세요.",
             )}
           </p>
           <button
@@ -203,8 +204,8 @@ export default function AgentEnvironment(p: Props) {
                     ? "Preparing GitHub tools inside this MicroVM."
                     : "Preparing tools and the selected CLI inside this MicroVM.",
                   p.status?.preparation?.cli === "github"
-                    ? "이 MicroVM 안에 GitHub 인증 도구를 준비한다."
-                    : "이 MicroVM 안에 기본 도구와 선택한 CLI를 준비한다.",
+                    ? "이 VM에 GitHub 로그인 도구를 설치해요."
+                    : "이 VM에 기본 도구와 선택한 AI를 설치해요.",
                 )}
               </span>
             </div>

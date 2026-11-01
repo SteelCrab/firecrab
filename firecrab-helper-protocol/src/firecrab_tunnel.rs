@@ -43,6 +43,13 @@ pub fn subdomain(value: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Target {
+    /// A VM-owned Quick Tunnel; stopping its guest cannot route to a recycled VM IP.
+    Preview {
+        /// Coding workspace VM identity; never inferred from an IP address.
+        vm_id: Uuid,
+        /// Literal HTTPS trycloudflare.com origin reported by the guest connector.
+        url: String,
+    },
     /// Publish the selected VM apps through an automatically managed connector.
     Apps {
         /// Distinct app IP:port addresses.
@@ -123,6 +130,9 @@ impl Request {
         }
         if let Self::Save { target, .. } | Self::Connect { target, .. } = self {
             match target {
+                Target::Preview { vm_id, url } if vm_id.is_nil() || !valid_preview_url(url) => {
+                    return Err("Select a running workspace preview".into());
+                }
                 Target::Apps { upstreams } => {
                     super::pipe::validate_upstreams(upstreams, None, "Firecrab Tunnel")
                         .map_err(|error| error.to_string())?;
@@ -138,6 +148,22 @@ impl Request {
         }
         Ok(())
     }
+}
+
+/// Only a literal public Quick Tunnel origin is accepted; no paths, credentials or ports.
+pub fn valid_preview_url(value: &str) -> bool {
+    let Some(label) = value
+        .strip_prefix("https://")
+        .and_then(|value| value.strip_suffix(".trycloudflare.com"))
+    else {
+        return false;
+    };
+    (3..=63).contains(&label.len())
+        && !label.starts_with('-')
+        && !label.ends_with('-')
+        && label
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
 }
 
 /// Non-secret status returned through Pipe inspection.
@@ -160,6 +186,34 @@ pub struct Address {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn workspace_preview_is_a_strict_public_origin() {
+        use super::*;
+        assert!(valid_preview_url("https://one-two-three.trycloudflare.com"));
+        for url in [
+            "http://one.trycloudflare.com",
+            "https://127.0.0.1",
+            "https://one.trycloudflare.com:443",
+            "https://one.trycloudflare.com/secret",
+            "https://one.trycloudflare.com?token=secret",
+            "https://one.trycloudflare.com@127.0.0.1",
+            "https://other.one.trycloudflare.com",
+            "https://-one.trycloudflare.com",
+        ] {
+            assert!(!valid_preview_url(url), "{url}");
+        }
+        assert!(
+            Request::Save {
+                subdomain: "my-app".into(),
+                target: Target::Preview {
+                    vm_id: Uuid::nil(),
+                    url: "https://one.trycloudflare.com".into()
+                }
+            }
+            .validate()
+            .is_err()
+        );
+    }
     use super::*;
 
     #[test]
