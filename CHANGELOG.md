@@ -72,6 +72,8 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Fixed
 
+- Wait for the initial pool list before showing New pool, so an empty-list
+  response cannot remove the button while the creation flow is opening (#559).
 - Match live OCI image inspection, image deletion and SSH browser checks to
   the current React dashboard controls. Allow guest actions up to 30 seconds.
 - Prevent dashboard isolation test fixtures from selecting the same free port

@@ -259,7 +259,7 @@ export default function Pools() {
             )}
           </p>
         </div>
-        {!showCreate && (
+        {(pools !== null || listError !== null) && !showCreate && (
           <button className="btn" onClick={() => setCreateOpen(true)}>
             <Plus aria-hidden="true" />
             {t("New pool", "새 풀")}
