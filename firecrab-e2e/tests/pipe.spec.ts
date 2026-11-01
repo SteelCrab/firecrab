@@ -1,4 +1,4 @@
-import { installWasmClock } from "./support/wasmClock.js";
+import { installTestClock } from "./support/clock.js";
 import { expect, test, type Page } from "@playwright/test";
 import type { PipeConfig, PipeSnapshot } from "../types/api/pipe";
 import type { VmResponse } from "../types/bindings/VmResponse";
@@ -94,7 +94,10 @@ async function serviceMenu(page: Page, name = "Nginx") {
   const region = name === "Nginx" ? "Route" : "Cloudflare Named Tunnel";
   await page
     .getByRole("region", { name: region, exact: true })
-    .getByRole("button", { name: `${name} actions`, exact: true })
+    .getByRole("button", {
+      name: `${name === "Nginx" ? "Nginx" : "Cloudflare Tunnel"} actions`,
+      exact: true,
+    })
     .click();
   return page.getByRole("menu");
 }
@@ -103,7 +106,7 @@ async function serviceMenu(page: Page, name = "Nginx") {
 async function switchCard(page: Page, title: string) {
   await page
     .getByRole("navigation", { name: "Pipe navigation", exact: true })
-    .getByRole("link", { name: "Pipe", exact: true })
+    .getByRole("link", { name: "Overview", exact: true })
     .click();
   await page
     .getByRole("region", { name: "Pipe", exact: true })
@@ -112,9 +115,7 @@ async function switchCard(page: Page, title: string) {
 }
 
 async function editNginx(page: Page) {
-  await (
-    await serviceMenu(page)
-  )
+  await (await serviceMenu(page))
     .getByRole("menuitem", { name: "Edit", exact: true })
     .click();
 }
@@ -631,27 +632,85 @@ async function editRoutes(page: Page) {
   await page.getByRole("button", { name: "Edit routes", exact: true }).click();
 }
 async function save(page: Page) {
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page
+    .getByRole("button", {
+      name: /^(Save|Create temporary URL|Connect address|Connect and publish)$/,
+    })
+    .click();
 }
+async function openConnector(page: Page) {
+  const url = page.url();
+  if (url.endsWith("named-tunnel")) return;
+  await page
+    .getByRole("button", {
+      name: url.endsWith("firecrab-tunnel")
+        ? "Add fixed address"
+        : "Add tunnel",
+      exact: true,
+    })
+    .click();
+}
+const routeHost = (page: Page) =>
+  page.getByLabel(/^(Nginx route domain|Route domain)$/);
+async function namedTarget(page: Page) {
+  await page
+    .getByLabel(
+      page.url().endsWith("firecrab-tunnel") ? "Connection target" : "Target",
+      { exact: true },
+    )
+    .selectOption(page.url().endsWith("firecrab-tunnel") ? "nginx" : "routes");
+  await routeHost(page).selectOption("app.example.com");
+}
+async function selectApps(page: Page, addresses: string[]) {
+  for (const address of addresses)
+    await page
+      .locator("label.pipe-app-option")
+      .filter({ hasText: address })
+      .getByRole("checkbox")
+      .check();
+}
+async function quickAction(page: Page, name: string, action: string) {
+  await page
+    .getByRole("button", { name: name + " actions", exact: true })
+    .click();
+  await page.getByRole("menuitem", { name: action, exact: true }).click();
+}
+
 test.describe("Pipe cards @dashboard", () => {
-  test("excludes private service routes from public connector targets", async ({ page }) => {
-    const savedRoutes: PipeConfig["routes"] = [...initial.config.routes, {
-      host: "orders.internal", pathPrefix: "/", upstreams: ["172.30.36.4:8080"],
-      owner: { serviceId: QUICK_ID, deploymentId: SECOND_QUICK_ID },
-      network: { micro_network_id: QUICK_ID, gateway: "172.30.36.1", prefix: 24 },
-    }];
+  test("excludes private service routes from public connector targets", async ({
+    page,
+  }) => {
+    const savedRoutes: PipeConfig["routes"] = [
+      ...initial.config.routes,
+      {
+        host: "orders.internal",
+        pathPrefix: "/",
+        upstreams: ["172.30.36.4:8080"],
+        owner: { serviceId: QUICK_ID, deploymentId: SECOND_QUICK_ID },
+        network: {
+          micro_network_id: QUICK_ID,
+          gateway: "172.30.36.1",
+          prefix: 24,
+        },
+      },
+    ];
     await open(page, { savedRoutes, card: "firecrab-tunnel" });
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
-    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
-    await expect(page.getByLabel("Route host", { exact: true }).locator('option[value="orders.internal"]')).toHaveCount(0);
-    await expect(page.getByLabel("Route host", { exact: true }).locator('option[value="app.example.com"]')).toHaveCount(1);
+    await openConnector(page);
+    await namedTarget(page);
+    await expect(
+      routeHost(page).locator('option[value="orders.internal"]'),
+    ).toHaveCount(0);
+    await expect(
+      routeHost(page).locator('option[value="app.example.com"]'),
+    ).toHaveCount(1);
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await page.goto("/#/pipe/quick-tunnel");
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
-    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
-    await expect(page.getByLabel("Route host", { exact: true }).locator('option[value="orders.internal"]')).toHaveCount(0);
+    await openConnector(page);
+    await namedTarget(page);
+    await expect(
+      routeHost(page).locator('option[value="orders.internal"]'),
+    ).toHaveCount(0);
   });
-
 
   test("opens all nine destinations from their cards", async ({ page }) => {
     await open(page, { card: null });
@@ -751,11 +810,15 @@ test.describe("Pipe cards @dashboard", () => {
     page,
   }) => {
     const m = await open(page, { configuredTunnel: true });
-    for (const name of ["Stop ingress", "Restart tunnel"]) {
-      page.once("dialog", (d) => d.accept());
-      await page.getByRole("button", { name, exact: true }).click();
-      await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
-    }
+    await (await serviceMenu(page))
+      .getByRole("menuitem", { name: "Stop", exact: true })
+      .click();
+    await expect.poll(() => m.actions.length).toBe(1);
+    await page.goto("/#/pipe/named-tunnel");
+    await (await serviceMenu(page, "Cloudflare Named Tunnel"))
+      .getByRole("menuitem", { name: "Restart", exact: true })
+      .click();
+    await expect.poll(() => m.actions.length).toBe(2);
     expect(m.actions).toEqual([
       { service: "ingress", action: "stop" },
       { service: "tunnel", action: "restart" },
@@ -771,8 +834,8 @@ test.describe("Pipe cards @dashboard", () => {
     await page
       .getByLabel("Listen address", { exact: true })
       .fill("127.0.0.1:8090");
-    await page
-      .getByRole("button", { name: "Restart ingress", exact: true })
+    await (await serviceMenu(page))
+      .getByRole("menuitem", { name: "Restart", exact: true })
       .click();
     await expect(page.getByRole("alert")).toContainText(
       "service operation failed",
@@ -786,15 +849,19 @@ test.describe("Pipe cards @dashboard", () => {
     page,
   }) => {
     const m = await open(page, { card: "quick-tunnel" });
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await openConnector(page);
     await page.getByLabel("Name", { exact: true }).fill("Public web");
-    const apps = page.getByLabel("App addresses (one per line)", {
-      exact: true,
-    });
-    expect(await apps.locator("option").allTextContents()).not.toEqual(
+    const apps = page.getByRole("group", { name: "Public apps", exact: true });
+    expect(
+      await apps
+        .locator("input:not(:disabled)")
+        .evaluateAll((inputs) =>
+          inputs.map((input) => input.closest("label")!.textContent),
+        ),
+    ).not.toEqual(
       expect.arrayContaining([expect.stringContaining("stopped-app")]),
     );
-    await apps.selectOption(["172.30.36.2:80", "172.30.36.4:8080"]);
+    await selectApps(page, ["172.30.36.2:80", "172.30.36.4:8080"]);
     await save(page);
     await expect(editor(page)).toHaveCount(0);
     expect(m.quickSaves[0]).toMatchObject({
@@ -819,10 +886,19 @@ test.describe("Pipe cards @dashboard", () => {
       },
     };
     const m = await open(page, { card: "quick-tunnel", quickTunnels: [saved] });
-    await page.getByRole("button", { name: "Edit", exact: true }).click();
-    await expect(
-      page.getByLabel("App addresses (one per line)", { exact: true }),
-    ).toHaveValues(["172.30.36.2:80", "10.90.0.8:8080"]);
+    await page
+      .getByRole("button", { name: / actions$/ })
+      .last()
+      .click();
+    await page.getByRole("menuitem", { name: "Edit", exact: true }).click();
+    await page.getByLabel("Name", { exact: true }).fill("Renamed public web");
+    for (const address of saved.target.upstreams)
+      await expect(
+        page
+          .locator("label.pipe-app-option")
+          .filter({ hasText: address })
+          .getByRole("checkbox"),
+      ).toBeChecked();
     await save(page);
     await expect.poll(() => m.quickSaves.length).toBe(1);
     expect(m.quickSaves[0].target).toMatchObject({
@@ -836,10 +912,14 @@ test.describe("Pipe cards @dashboard", () => {
       card: "quick-tunnel",
       quickTunnels: [webTunnel],
     });
-    await page.getByRole("button", { name: "Edit", exact: true }).click();
-    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
     await page
-      .getByLabel("Route host", { exact: true })
+      .getByRole("button", { name: / actions$/ })
+      .last()
+      .click();
+    await page.getByRole("menuitem", { name: "Edit", exact: true }).click();
+    await namedTarget(page);
+    await page
+      .getByLabel("Route domain", { exact: true })
       .selectOption("app.example.com");
     await save(page);
     await expect.poll(() => m.quickSaves.length).toBe(1);
@@ -855,11 +935,9 @@ test.describe("Pipe cards @dashboard", () => {
       card: "quick-tunnel",
       quickFailure: "The selected app is unavailable",
     });
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await openConnector(page);
     await page.getByLabel("Name", { exact: true }).fill("draft");
-    await page
-      .getByLabel("App addresses (one per line)", { exact: true })
-      .selectOption("172.30.36.2:80");
+    await selectApps(page, ["172.30.36.2:80"]);
     await save(page);
     await expect(page.getByRole("alert")).toContainText(
       "selected app is unavailable",
@@ -871,18 +949,10 @@ test.describe("Pipe cards @dashboard", () => {
       card: "quick-tunnel",
       quickTunnels: [webTunnel, apiTunnel],
     });
-    await page
-      .locator('[data-path="/api/pipe/quick-tunnels/' + QUICK_ID + '/service"][aria-label="Stop"]')
-      .click();
+    await quickAction(page, "Public web", "Stop");
     await expect.poll(() => m.quickActions.length).toBe(1);
     page.once("dialog", (d) => d.accept());
-    await page
-      .locator(
-        '[data-method=DELETE][data-path="/api/pipe/quick-tunnels/' +
-          QUICK_ID +
-          '"]',
-      )
-      .click();
+    await quickAction(page, "Public web", "Delete");
     await expect.poll(() => m.quickDeletes).toEqual([QUICK_ID]);
     expect(m.snapshot.quickTunnels?.map((t) => t.id)).toEqual([
       SECOND_QUICK_ID,
@@ -892,53 +962,57 @@ test.describe("Pipe cards @dashboard", () => {
     page,
   }) => {
     const m = await open(page, { card: "firecrab-tunnel" });
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await openConnector(page);
     await page
-      .getByLabel("Ownership token", { exact: true })
+      .getByLabel("Connection token", { exact: true })
       .fill(CONNECTION_TOKEN);
-    await page
-      .getByLabel("App addresses (one per line)", { exact: true })
-      .selectOption("172.30.36.2:80");
+    await selectApps(page, ["172.30.36.2:80"]);
     await save(page);
     await expect(editor(page)).toHaveCount(0);
     expect(m.firecrabSaves[0]).toMatchObject({
       token: CONNECTION_TOKEN,
       target: { type: "apps" },
     });
-    await page.getByRole("button", { name: "Edit", exact: true }).click();
-    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
+    await page
+      .getByRole("button", { name: / actions$/ })
+      .last()
+      .click();
+    await page.getByRole("menuitem", { name: "Edit", exact: true }).click();
+    await namedTarget(page);
     await save(page);
     await expect.poll(() => m.firecrabSaves.length).toBe(2);
     expect(m.firecrabSaves[1]).toEqual({
       subdomain: "my-app",
-      target: { type: "nginx" },
+      target: { type: "nginx", host: "app.example.com" },
     });
   });
   test("keeps a rejected Firecrab token editable", async ({ page }) => {
     await open(page, { card: "firecrab-tunnel", firecrabFailure: true });
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await openConnector(page);
     await page
-      .getByLabel("Ownership token", { exact: true })
+      .getByLabel("Connection token", { exact: true })
       .fill(CONNECTION_TOKEN);
-    await page.getByRole("radiogroup", { name: "Target", exact: true }).getByRole("radio", { name: "Named route", exact: true }).check();
+    await namedTarget(page);
     await save(page);
     await expect(page.getByRole("alert")).toContainText("invalid or revoked");
     await expect(
-      page.getByLabel("Ownership token", { exact: true }),
+      page.getByLabel("Connection token", { exact: true }),
     ).toHaveValue(CONNECTION_TOKEN);
   });
   test("loads Cloudflare zones from an explicit token and connects a saved hostname", async ({
     page,
   }) => {
     const m = await open(page, { card: "named-tunnel" });
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await openConnector(page);
     await page
-      .getByLabel("API token", { exact: true })
+      .getByLabel("Cloudflare API token", { exact: true })
       .fill("private-cloudflare-token");
-    await page.getByRole("button", { name: "Load zones", exact: true }).click();
-    await expect(page.getByLabel("Hostname", { exact: true })).toHaveValue(
-      "app.example.com",
-    );
+    await page
+      .getByRole("button", { name: "Load domains", exact: true })
+      .click();
+    await page
+      .getByLabel("Route domain", { exact: true })
+      .selectOption("app.example.com");
     await save(page);
     await expect(editor(page)).toHaveCount(0);
     expect(m.namedConnections[0]).toMatchObject({
@@ -956,15 +1030,21 @@ test.describe("Pipe cards @dashboard", () => {
     page,
   }) => {
     const m = await open(page, { card: "named-tunnel" });
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
-    await page.getByLabel("API token", { exact: true }).fill("token-one");
-    await page.getByRole("button", { name: "Load zones", exact: true }).click();
-    await expect(page.getByLabel("Hostname", { exact: true })).toHaveValue(
-      "app.example.com",
-    );
-    await page.getByLabel("API token", { exact: true }).fill("token-two");
+    await openConnector(page);
+    await page
+      .getByLabel("Cloudflare API token", { exact: true })
+      .fill("token-one");
+    await page
+      .getByRole("button", { name: "Load domains", exact: true })
+      .click();
+    await page
+      .getByLabel("Route domain", { exact: true })
+      .selectOption("app.example.com");
+    await page
+      .getByLabel("Cloudflare API token", { exact: true })
+      .fill("token-two");
     await expect(
-      page.getByLabel("Zone", { exact: true }).locator("option"),
+      page.getByLabel("Cloudflare domain", { exact: true }),
     ).toHaveCount(0);
     expect(m.zoneRequests).toEqual(["token-one"]);
   });
@@ -987,11 +1067,74 @@ test.describe("Pipe cards @dashboard", () => {
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await open(page, { locale: "ko" });
-    await page.locator("[data-action=create][data-id=route]").click();
+    await page
+      .getByRole("button", { name: "라우트 일괄 수정", exact: true })
+      .click();
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
     ).toBe(true);
   });
+});
+
+test("Pipe keeps its grouped overview and service navigation after React migration", async ({
+  page,
+}) => {
+  await open(page, { card: null });
+  const content = page.locator("#content");
+  await expect(content.locator(".pipe-group h2")).toHaveText([
+    "Connections",
+    "Public addresses",
+    "Data",
+  ]);
+  const expected = [
+    "auth",
+    "ai",
+    "firecrab-tunnel",
+    "quick-tunnel",
+    "named-tunnel",
+    "route",
+    "storage",
+    "registry",
+    "database",
+  ];
+  expect(
+    await content
+      .locator("a.pipe-row")
+      .evaluateAll((links) =>
+        links.map((link) => link.getAttribute("href")?.split("/").at(-1)),
+      ),
+  ).toEqual(expected);
+  const navigation = page.getByRole("navigation", {
+    name: "Pipe navigation",
+    exact: true,
+  });
+  await expect(navigation.getByRole("link")).toHaveCount(10);
+  await expect(navigation.locator('[aria-current="page"]')).toHaveAttribute(
+    "href",
+    "#/pipe",
+  );
+  await navigation.getByRole("link", { name: "Routing", exact: true }).click();
+  await expect(
+    page.getByRole("region", { name: "Route", exact: true }),
+  ).toBeVisible();
+  await expect(navigation.locator('[aria-current="page"]')).toHaveAttribute(
+    "href",
+    "#/pipe/route",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await navigation.getByRole("link", { name: "Account", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Connect GitHub", exact: true }),
+  ).toBeVisible();
+  await expect(navigation.locator('[aria-current="page"]')).toHaveAttribute(
+    "href",
+    "#/pipe/auth",
+  );
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
 });

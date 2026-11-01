@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 
 /** Use WebIDL 32-bit timer handles when Playwright returns synthetic 1e12 IDs. */
-export async function installWasmClock(page: Page): Promise<void> {
+export async function installTestClock(page: Page): Promise<void> {
   await page.clock.install();
   await page.addInitScript(() =>
     queueMicrotask(() => {

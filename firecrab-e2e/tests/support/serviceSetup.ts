@@ -2,19 +2,21 @@ import { expect, type Page } from "@playwright/test";
 
 /** The panel of a selected MicroService. */
 export const servicePanel = (page: Page) =>
-  page.getByRole("complementary", { name: "MicroService detail" });
+  page.getByRole("complementary", { name: /^MicroService (detail|상세)$/ });
 
 /**
  * The header's "New MicroService" link to the page that creates one. An empty list shows the same
  * link again in its empty state, so the header is named by place.
  */
 export const newServiceButton = (page: Page) =>
-  page.locator(".screen-header").getByRole("link", { name: "New MicroService", exact: true });
+  page
+    .locator(".screen-header")
+    .getByRole("link", { name: "New MicroService", exact: true });
 
 /** Opens the panel head's More menu (Stop service, Edit configuration, Delete) unless it is open. */
 export async function openMoreMenu(page: Page) {
   const panel = servicePanel(page);
-  if ((await panel.locator("#vm-more-actions[open]").count()) === 0) {
+  if ((await page.getByRole("menu").count()) === 0) {
     await panel.getByLabel("More", { exact: true }).click();
   }
 }
@@ -22,17 +24,27 @@ export async function openMoreMenu(page: Page) {
 /** Opens a service from its row, then starts its Deploy form from the panel head. */
 export async function openDeployForm(page: Page, name = "orders") {
   await page.getByRole("button", { name: `Open ${name}`, exact: true }).click();
-  await servicePanel(page).getByRole("button", { name: "Deploy", exact: true }).click();
+  await servicePanel(page)
+    .getByRole("button", { name: "Deploy", exact: true })
+    .click();
 }
 
-export async function serviceAction(page: Page, name: string, action: "Edit" | "Delete") {
+export async function serviceAction(
+  page: Page,
+  name: string,
+  action: "Edit" | "Delete",
+) {
   const panel = servicePanel(page);
   // Overlay panels cover the list actions on narrower screens.
   if (await panel.isVisible()) {
-    await panel.getByRole("button", { name: "Close detail", exact: true }).click();
+    await panel
+      .getByRole("button", { name: "Close detail", exact: true })
+      .click();
   }
   await page.getByLabel(`Actions for ${name}`, { exact: true }).click();
-  await page.getByRole("button", { name: `${action} ${name}`, exact: true }).click();
+  await page
+    .getByRole("menuitem", { name: `${action} ${name}`, exact: true })
+    .click();
 }
 
 export async function serviceStep(page: Page, target: number) {
@@ -53,6 +65,15 @@ export async function serviceStep(page: Page, target: number) {
       String(current),
     );
   }
+  if (target === 3) {
+    for (const name of [
+      "Bulk edit environment",
+      "Bulk edit secret references",
+    ]) {
+      const toggle = page.getByRole("button", { name, exact: true });
+      if (await toggle.isVisible()) await toggle.click();
+    }
+  }
 }
 export async function selectServiceApp(
   page: Page,
@@ -68,4 +89,12 @@ export async function selectServiceApp(
 export async function saveService(page: Page) {
   await serviceStep(page, 4);
   await page.locator("#editor button[type=submit]").click();
+  await expect
+    .poll(async () => {
+      if (!(await page.locator("#editor").isVisible())) return true;
+      for (const alert of await page.getByRole("alert").all())
+        if (await alert.isVisible()) return true;
+      return false;
+    })
+    .toBe(true);
 }

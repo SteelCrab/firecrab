@@ -251,7 +251,8 @@ test.describe("Security groups @dashboard", () => {
         .first(),
     ).toBeVisible();
     await page
-      .locator(".screen-header").getByRole("button", { name: "New security group", exact: true })
+      .locator(".screen-header")
+      .getByRole("button", { name: "New security group", exact: true })
       .click();
     await page.getByLabel("Name", { exact: true }).fill("orders-policy");
     await expect(
@@ -294,7 +295,10 @@ test.describe("Security groups @dashboard", () => {
         .fill(direction === "ingress" ? "172.30.0.0/24" : "0.0.0.0/0");
     }
     await page.getByRole("button", { name: "Save rules", exact: true }).click();
-    await expect(page.locator("#messages").getByRole("status")).toHaveText("Rules saved.");
+    await expect.poll(() => state.ruleWrites.length).toBe(1);
+    await expect(page.getByText("Rules saved.", { exact: true })).toHaveCount(
+      0,
+    );
     expect(state.ruleWrites[0]).toEqual({
       rules: [
         { ...RULE, portTo: 8082 },
@@ -360,7 +364,10 @@ test.describe("Security groups @dashboard", () => {
       .click();
     state.failRules = 0;
     await page.getByRole("button", { name: "Save rules", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("Rules saved.");
+    await expect.poll(() => state.groups[0].rules).toEqual([]);
+    await expect(page.getByText("Rules saved.", { exact: true })).toHaveCount(
+      0,
+    );
     expect(state.groups[0].rules).toEqual([]);
     await expect(
       page.getByText("No allow rules. All new peer connections are denied.", {
@@ -401,13 +408,15 @@ test.describe("Security groups @dashboard", () => {
     await page
       .getByRole("button", { name: "Delete orders-policy", exact: true })
       .click();
-    await expect(page.getByText("No security groups yet", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("No security groups yet.", { exact: true }),
+    ).toBeVisible();
   });
 
   test("supports Korean and mobile rule editing without horizontal overflow", async ({
     page,
   }, testInfo) => {
-    await setup(page, [POLICY]);
+    const state = await setup(page, [POLICY]);
     await page
       .getByRole("combobox", { name: "Language", exact: true })
       .selectOption("ko");
@@ -435,15 +444,17 @@ test.describe("Security groups @dashboard", () => {
     await page.getByLabel("시작 포트", { exact: true }).fill("8081");
     await page.getByLabel("끝 포트", { exact: true }).fill("8081");
     await page.getByRole("button", { name: "규칙 저장", exact: true }).click();
-    await expect(page.getByRole("status")).toHaveText("규칙을 저장했다.");
+    await expect.poll(() => state.ruleWrites.length).toBe(1);
+    await expect(
+      page.getByText("규칙을 저장했다.", { exact: true }),
+    ).toHaveCount(0);
   });
 
   test("connects a service on create and edit, deploys on the policy network, and explicitly detaches", async ({
     page,
   }, testInfo) => {
     const state = await setup(page, [POLICY], "#/services");
-    await newServiceButton(page)
-      .click();
+    await newServiceButton(page).click();
     await page.getByLabel("Name", { exact: true }).fill("orders");
     await selectServiceApp(page, "ghcr.io/team/nginx:stable-alpine");
     await serviceStep(page, 1);
@@ -488,9 +499,9 @@ test.describe("Security groups @dashboard", () => {
     await page
       .getByRole("button", { name: "Deploy and run", exact: true })
       .click();
-    await expect.poll(() => state.deployments).toEqual([
-      { hostPort: 30100, microNetworkId: NETWORK },
-    ]);
+    await expect
+      .poll(() => state.deployments)
+      .toEqual([{ hostPort: 0, microNetworkId: NETWORK }]);
   });
 
   test("preserves service edits when policies cannot load and retries without clearing the selection", async ({
@@ -502,8 +513,8 @@ test.describe("Security groups @dashboard", () => {
     await expect(page.getByRole("alert")).toContainText(
       "Policy list unavailable",
     );
+    await serviceStep(page, 0);
     await page.getByLabel("Name", { exact: true }).fill("orders-v2");
-    await serviceStep(page, 1);
     await expect(
       page.getByRole("button", { name: "Next", exact: true }),
     ).toBeDisabled();

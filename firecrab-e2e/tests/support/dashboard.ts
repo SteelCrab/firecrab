@@ -4,11 +4,11 @@ export async function importOci(page: Page, reference: string, alias: string) {
   await page
     .getByRole("button", { name: "Import OCI image", exact: true })
     .click();
-  await page.locator("#field-reference").fill(reference);
+  await page.locator("#oci-reference").fill(reference);
   await page
-    .getByRole("button", { name: "Inspect image", exact: true })
+    .getByRole("button", { name: "Inspect", exact: true })
     .click();
-  await expect(page.locator("#form-result")).toContainText(alias, {
+  await expect(page.locator(".subpanel")).toContainText(alias, {
     timeout: 30_000,
   });
   const accepted = page.waitForResponse(
@@ -16,7 +16,7 @@ export async function importOci(page: Page, reference: string, alias: string) {
       response.request().method() === "POST" &&
       new URL(response.url()).pathname === "/api/oci/import",
   );
-  await page.locator("#editor button[type=submit]").click();
+  await page.locator("#oci-import").click();
   const response = await accepted;
   expect(response.ok(), await response.text()).toBe(true);
   await expect
@@ -45,22 +45,19 @@ export async function createNetwork(
   cidr: string,
   dualStack = false,
 ) {
-  await expect(page.locator("#content")).toHaveAttribute("data-loaded", "true");
-  await page.locator(".screen-header").getByRole("button", { name: "New network", exact: true }).click();
-  await page.locator("#field-name").fill(name);
-  await page.locator("#field-subnetCidr").fill(cidr);
-  const mode = page.getByRole("radiogroup", { name: "IPv6 address mode", exact: true });
-  await expect(mode.getByRole("radio", { name: "Default", exact: true })).toBeChecked();
-  if (dualStack) await mode.getByRole("radio", { name: "SLAAC", exact: true }).check();
+  await page.locator("#mn-name").fill(name);
+  await page.locator("#mn-subnet").fill(cidr);
+  await expect(page.locator("#mn-ipv6-enable")).toHaveValue("off");
+  if (dualStack) await page.locator("#mn-ipv6-enable").selectOption("on");
   const pending = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
       new URL(response.url()).pathname === "/api/micro-networks",
   );
-  await page.locator("#editor button[type=submit]").click();
+  await page.locator("form.create-grid button[type=submit]").click();
   const response = await pending;
   expect(response.ok(), await response.text()).toBe(true);
   await expect(
-    page.locator("table.network-table tbody tr").filter({ hasText: name }),
+    page.locator("table.vm-table tbody tr").filter({ hasText: name }),
   ).toBeVisible({ timeout: 30_000 });
 }

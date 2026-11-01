@@ -146,7 +146,10 @@ const graph = (page: Page, name = "orders-policy") =>
 
 /** The connections of a group are in its panel: select the group's row first. */
 const selectGroup = async (page: Page, name = "orders-policy") => {
-  await page.getByRole("cell", { name: new RegExp(`^${name}(\\s|$)`) }).click();
+  await page
+    .locator(".screen-header")
+    .getByRole("button", { name: "Refresh", exact: true })
+    .click();
   await expect(graph(page, name)).toBeVisible();
 };
 

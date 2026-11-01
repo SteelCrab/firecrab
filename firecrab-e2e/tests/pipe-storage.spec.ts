@@ -24,6 +24,10 @@ interface Options {
 }
 
 async function open(page: Page, options: Options = {}) {
+  await page.route(
+    /^https:\/\/(?:fonts\.(?:googleapis|gstatic)\.com|cdn\.jsdelivr\.net)\//,
+    (route) => route.abort(),
+  );
   let rows = options.empty
     ? []
     : [
@@ -199,13 +203,18 @@ async function open(page: Page, options: Options = {}) {
 async function browse(page: Page) {
   const panel = page.locator("#detail-panel");
   if (await panel.isVisible()) {
-    await panel.getByRole("button", { name: "Close detail", exact: true }).click();
+    await panel
+      .getByRole("button", { name: "Close detail", exact: true })
+      .click();
   }
   await page
     .getByRole("button", { name: "Open files in Reports", exact: true })
     .click();
   await expect(
-    page.getByRole("region", { name: "S3 object browser", exact: true }),
+    page.getByRole("region", {
+      name: /^(S3 object browser|S3 파일 조회)$/,
+      exact: true,
+    }),
   ).toBeVisible();
 }
 async function connect(page: Page) {
@@ -214,27 +223,35 @@ async function connect(page: Page) {
     .click();
   await page.getByLabel("Bucket", { exact: true }).fill("reports-bucket");
 }
+async function moreOptions(page: Page) {
+  const options = page.locator(".s3-options");
+  if (!(await options.getAttribute("open").then((value) => value !== null)))
+    await options.locator("summary").click();
+}
 const editor = (page: Page) => page.locator("#editor");
 async function save(page: Page) {
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByRole("dialog").locator("button[type=submit]").click();
 }
 test.describe("PipeStorage @dashboard", () => {
   test("opens S3 from its card and protects service-bound connections", async ({
     page,
   }) => {
     await open(page, { overview: true, bound: true });
-    await page.locator('#content a.pipe-row[href="#/pipe/storage"]').click();
+    await page.locator('#content a[href="#/pipe/storage"]').click();
     await expect(
       page.getByRole("region", { name: "PipeStorage", exact: true }),
     ).toContainText("web");
+    await page
+      .getByRole("button", { name: "Reports actions", exact: true })
+      .click();
     await expect(
-      page.getByRole("button", { name: "Edit connection", exact: true }),
+      page.getByRole("menuitem", { name: "Edit connection", exact: true }),
     ).toBeDisabled();
     await expect(
-      page.getByRole("button", { name: "Disconnect", exact: true }),
+      page.getByRole("menuitem", { name: "Disconnect", exact: true }),
     ).toBeDisabled();
     await expect(
-      page.getByRole("button", { name: "Check connection", exact: true }),
+      page.getByRole("menuitem", { name: "Check connection", exact: true }),
     ).toBeEnabled();
     await browse(page);
   });
@@ -243,7 +260,7 @@ test.describe("PipeStorage @dashboard", () => {
   }) => {
     const m = await open(page, { empty: true });
     await connect(page);
-    await page.getByLabel("Folder", { exact: true }).fill("team");
+    await page.getByLabel("Folder (optional)", { exact: true }).fill("team");
     await expect(page.getByLabel("Region", { exact: true })).toHaveValue(
       "ap-northeast-2",
     );
@@ -263,11 +280,11 @@ test.describe("PipeStorage @dashboard", () => {
   }) => {
     const m = await open(page, { empty: true });
     await connect(page);
-    await page.getByLabel("Name", { exact: true }).fill("Reports");
+    await moreOptions(page);
+    await page.getByLabel("Name (optional)", { exact: true }).fill("Reports");
     await page
-      .getByRole("radiogroup", { name: "Credentials", exact: true })
-      .getByRole("radio", { name: "Separate AWS keys", exact: true })
-      .check();
+      .getByLabel("Credentials", { exact: true })
+      .selectOption("connection");
     await page
       .getByLabel("AWS access key ID", { exact: true })
       .fill("FIXTURE_KEY");
@@ -275,7 +292,7 @@ test.describe("PipeStorage @dashboard", () => {
       .getByLabel("AWS secret access key", { exact: true })
       .fill("private-secret");
     await page
-      .getByLabel("Session token", { exact: true })
+      .getByLabel("Session token (optional)", { exact: true })
       .fill("private-session");
     await save(page);
     await expect(editor(page)).toHaveCount(0);
@@ -285,10 +302,16 @@ test.describe("PipeStorage @dashboard", () => {
       sessionToken: "private-session",
     });
     await page
-      .getByRole("button", { name: "Edit connection", exact: true })
+      .getByRole("button", { name: "Reports actions", exact: true })
       .click();
-    await expect(page.locator("#field-secretAccessKey")).toHaveValue("");
-    await page.getByLabel("Name", { exact: true }).fill("Changed");
+    await page
+      .getByRole("menuitem", { name: "Edit connection", exact: true })
+      .click();
+    await expect(
+      page.getByLabel("AWS secret access key", { exact: true }),
+    ).toHaveCount(0);
+    await moreOptions(page);
+    await page.getByLabel("Name (optional)", { exact: true }).fill("Changed");
     await save(page);
     await expect.poll(() => m.writes.length).toBe(2);
     expect(m.writes[1]).not.toHaveProperty("credentials");
@@ -305,21 +328,24 @@ test.describe("PipeStorage @dashboard", () => {
     await browse(page);
     await page.getByRole("button", { name: "Load more", exact: true }).click();
     await expect(
-      page.getByRole("cell", { name: /^next\.csv(\s|$)/ }),
+      page.getByRole("cell", { name: /^next\.csv(\s|$)/ }).first(),
     ).toBeVisible();
     expect(new URLSearchParams(m.listings[1]).get("cursor")).toBe(
       "opaque+/=&cursor",
     );
-    const row = page
-      .getByRole("row")
-      .filter({
-        has: page.getByRole("cell", { name: UNICODE_FILE, exact: true }),
-      });
+    const row = page.getByRole("row").filter({
+      has: page.getByRole("cell", { name: UNICODE_FILE, exact: true }),
+    });
     const download = page.waitForEvent("download");
-    await row.getByRole("button", { name: "Download", exact: true }).click();
+    await row.getByRole("button", { name: UNICODE_FILE, exact: true }).click();
     expect((await download).suggestedFilename()).toMatch(/^한글 \+%[?_]\.csv$/);
     page.once("dialog", (d) => d.accept());
-    await row.getByRole("button", { name: "Delete file", exact: true }).click();
+    await row
+      .getByRole("button", { name: `${UNICODE_FILE} actions`, exact: true })
+      .click();
+    await page
+      .getByRole("menuitem", { name: "Delete file", exact: true })
+      .click();
     await expect(row).toHaveCount(0);
     expect(m.operations.map((o) => [o.method, o.key])).toEqual([
       ["GET", `team/${UNICODE_FILE}`],
@@ -331,23 +357,25 @@ test.describe("PipeStorage @dashboard", () => {
   }) => {
     await open(page, { reject: true, readOnly: true });
     await page
-      .getByRole("button", { name: "Edit connection", exact: true })
+      .getByRole("button", { name: "Reports actions", exact: true })
       .click();
-    await page.getByLabel("Name", { exact: true }).fill("Changed");
+    await page
+      .getByRole("menuitem", { name: "Edit connection", exact: true })
+      .click();
+    await moreOptions(page);
+    await page.getByLabel("Name (optional)", { exact: true }).fill("Changed");
     await save(page);
     await expect(page.getByRole("alert")).toContainText("AWS rejected");
     await expect(
-      page.getByLabel("Name", { exact: true }),
+      page.getByLabel("Name (optional)", { exact: true }),
     ).toHaveValue("Changed");
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await browse(page);
-    await page
-      .getByLabel("File", { exact: true })
-      .setInputFiles({
-        name: "denied.bin",
-        mimeType: "application/octet-stream",
-        buffer: Buffer.from("denied"),
-      });
+    await page.getByLabel("File", { exact: true }).setInputFiles({
+      name: "denied.bin",
+      mimeType: "application/octet-stream",
+      buffer: Buffer.from("denied"),
+    });
     await page.getByRole("button", { name: "Upload", exact: true }).click();
     await expect(page.getByRole("alert")).toContainText("S3 denied");
     await expect(page.getByLabel("File name", { exact: true })).toHaveValue(
@@ -359,13 +387,11 @@ test.describe("PipeStorage @dashboard", () => {
   }) => {
     const m = await open(page, { failUploads: 1 });
     await browse(page);
-    await page
-      .getByLabel("File", { exact: true })
-      .setInputFiles({
-        name: "upload.bin",
-        mimeType: "application/octet-stream",
-        buffer: Buffer.from("bytes"),
-      });
+    await page.getByLabel("File", { exact: true }).setInputFiles({
+      name: "upload.bin",
+      mimeType: "application/octet-stream",
+      buffer: Buffer.from("bytes"),
+    });
     await page.getByRole("button", { name: "Upload", exact: true }).click();
     await expect(page.getByRole("alert")).toContainText(
       "temporarily unavailable",
@@ -374,7 +400,7 @@ test.describe("PipeStorage @dashboard", () => {
     page.once("dialog", (d) => d.accept());
     await page.getByRole("button", { name: "Upload", exact: true }).click();
     await expect(
-      page.getByRole("cell", { name: /^upload\.bin(\s|$)/ }),
+      page.getByRole("cell", { name: /^upload\.bin(\s|$)/ }).first(),
     ).toBeVisible();
     expect(m.operations.filter((o) => o.method === "PUT")).toMatchObject([
       { key: "team/upload.bin", size: 5, overwrite: "false" },
@@ -386,20 +412,20 @@ test.describe("PipeStorage @dashboard", () => {
   }) => {
     const m = await open(page, { folders: true });
     await browse(page);
-    await page
-      .getByRole("button", { name: "team/archive/", exact: true })
-      .click();
+    await page.getByRole("button", { name: "archive", exact: true }).click();
     await expect(
-      page.getByRole("cell", { name: /^report\.csv(\s|$)/ }),
+      page.getByRole("cell", { name: /^report\.csv(\s|$)/ }).first(),
     ).toBeVisible();
+    await page.getByRole("button", { name: "2025", exact: true }).click();
     await page
-      .getByRole("button", { name: "team/archive/2025/", exact: true })
+      .getByRole("button", { name: "Enter folder path", exact: true })
       .click();
     await expect(
       page.getByLabel("Directory prefix", { exact: true }),
     ).toHaveValue("team/archive/2025/");
+    await page.getByRole("button", { name: "team/", exact: true }).click();
     await page
-      .getByRole("button", { name: "Root folder", exact: true })
+      .getByRole("button", { name: "Enter folder path", exact: true })
       .click();
     await expect(
       page.getByLabel("Directory prefix", { exact: true }),
@@ -422,21 +448,23 @@ test.describe("PipeStorage @dashboard", () => {
     await connect(page);
     await page.getByLabel("Bucket", { exact: true }).fill("draft-bucket");
     page.once("dialog", (d) => d.dismiss());
-    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
+    await page.evaluate(() => {
+      location.hash = "#/vms";
+    });
     await expect(page.getByLabel("Bucket", { exact: true })).toHaveValue(
       "draft-bucket",
     );
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await browse(page);
-    await page
-      .getByLabel("File", { exact: true })
-      .setInputFiles({
-        name: "unsaved.bin",
-        mimeType: "application/octet-stream",
-        buffer: Buffer.from("bytes"),
-      });
+    await page.getByLabel("File", { exact: true }).setInputFiles({
+      name: "unsaved.bin",
+      mimeType: "application/octet-stream",
+      buffer: Buffer.from("bytes"),
+    });
     page.once("dialog", (d) => d.dismiss());
-    await page.getByRole("link", { name: "MicroVM", exact: true }).click();
+    await page.evaluate(() => {
+      location.hash = "#/vms";
+    });
     await expect(page.getByLabel("File name", { exact: true })).toHaveValue(
       "unsaved.bin",
     );
@@ -447,17 +475,36 @@ test.describe("PipeStorage @dashboard", () => {
     }) => {
       await page.setViewportSize({ width: 390, height: 844 });
       await open(page, { locale: locale === "ko" ? "ko" : undefined });
-      await page.locator("[data-action=create][data-id=pipe-storage]").click();
+      await page
+        .getByRole("button", {
+          name: locale === "ko" ? "버킷 연결" : "Connect bucket",
+          exact: true,
+        })
+        .click();
       await expect(editor(page)).toBeVisible();
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= innerWidth,
         ),
       ).toBe(true);
-      await page.locator("[data-action=cancel]").click();
-      await page.locator("[data-action=storage-browse]").click();
+      await page
+        .getByRole("dialog")
+        .getByRole("button", {
+          name: locale === "ko" ? "취소" : "Cancel",
+          exact: true,
+        })
+        .click();
+      await page
+        .getByRole("button", {
+          name: locale === "ko" ? "Reports 파일 열기" : "Open files in Reports",
+          exact: true,
+        })
+        .click();
       await expect(
-        page.getByRole("region", { name: "S3 object browser", exact: true }),
+        page.getByRole("region", {
+          name: /^(S3 object browser|S3 파일 조회)$/,
+          exact: true,
+        }),
       ).toBeVisible();
       expect(
         await page.evaluate(

@@ -16,13 +16,14 @@ const requireGuestBoot = ["1", "true", "yes"].includes(
   process.env.FIRECRAB_E2E_REQUIRE_GUEST_BOOT ?? "",
 );
 if (requireGuestBoot && skipGuestBoot) {
-  throw new Error("Guest boot is required for this run; remove FIRECRAB_E2E_SKIP_GUEST_BOOT");
+  throw new Error(
+    "Guest boot is required for this run; remove FIRECRAB_E2E_SKIP_GUEST_BOOT",
+  );
 }
 const inCi = Boolean(process.env.CI) || Boolean(process.env.GITHUB_ACTIONS);
-const baseURL = (process.env.FIRECRAB_E2E_BASE_URL ?? "http://localhost:8080").replace(
-  /\/$/,
-  "",
-);
+const baseURL = (
+  process.env.FIRECRAB_E2E_BASE_URL ?? "http://localhost:8080"
+).replace(/\/$/, "");
 
 /**
  * Browser E2E for issue #90 — local OCI fixture only (no Docker Hub pull).
@@ -47,7 +48,11 @@ const baseURL = (process.env.FIRECRAB_E2E_BASE_URL ?? "http://localhost:8080").r
 export default defineConfig({
   testDir: "tests",
   // Live DB checks require the disposable QA runner and its private API.
-  testIgnore: ["**/pipe-databases-live.spec.ts", "**/pipe-storage-live.spec.ts", "**/pipe-storage-account-live.spec.ts"],
+  testIgnore: [
+    "**/pipe-databases-live.spec.ts",
+    "**/pipe-storage-live.spec.ts",
+    "**/pipe-storage-account-live.spec.ts",
+  ],
   fullyParallel: false,
   workers: 1,
   retries: 0,
@@ -82,6 +87,10 @@ export default defineConfig({
     },
     {
       command: "npm run dev",
+      env: {
+        ...process.env,
+        FIRECRAB_DEV_API_PORT: process.env.FIRECRAB_DEV_API_PORT ?? "5523",
+      },
       cwd: frontend,
       url: "http://localhost:8080",
       reuseExistingServer: reuseExistingServer || !inCi,

@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 
 import { expect, test, type Page } from "@playwright/test";
 
-import { createNetwork, importOci } from "./support/wasmDashboard";
+import { createNetwork, importOci } from "./support/dashboard";
 import { ApiCleanup } from "../src/api.js";
 import { openVmTab, vmPanel } from "./support/vmPanel";
 import {

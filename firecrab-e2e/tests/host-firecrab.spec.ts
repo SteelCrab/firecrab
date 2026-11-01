@@ -72,9 +72,9 @@ test.describe("Host Firecrab panel @dashboard", () => {
     ]);
 
     await expect(page.locator(".host-title")).toHaveText("Debian GNU/Linux 13 (trixie)");
-    await expect(page.locator(".host-info").nth(0)).toContainText("arm64");
-    expect(await page.locator(".host-info").count()).toBe(2);
-    const host = await page.locator(".host-info").nth(0).boundingBox();
+    await expect(page.getByRole("region", { name:"Host system",exact:true })).toContainText("arm64");
+    await expect(page.getByRole("region", { name:"Management Linux",exact:true })).toContainText(HOST.platform.kernel);
+    const host = await page.getByRole("region", { name:"Management Linux",exact:true }).boundingBox();
     const firecrab = await panel.boundingBox();
     expect(firecrab!.y).toBeGreaterThanOrEqual(host!.y + host!.height);
     await page.screenshot({ path: testInfo.outputPath("host-en.png"), fullPage: true });
