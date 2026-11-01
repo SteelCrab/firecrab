@@ -38,6 +38,28 @@ impl Store {
         .collect()
     }
 
+    /// Return only identifiers and names for security coverage; never load connection URIs.
+    pub(crate) fn pipe_database_security_names(
+        &self,
+    ) -> Result<Vec<(Uuid, String)>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(
+            "SELECT id, json_extract(spec, '$.name') FROM pipe_databases ORDER BY rowid",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.map(|row| {
+            let (id, name) = row?;
+            let parsed = Uuid::parse_str(&id).map_err(|_| PersistenceError::CorruptRecord {
+                id,
+                reason: "invalid database identifier".into(),
+            })?;
+            Ok((parsed, name))
+        })
+        .collect()
+    }
+
     /// Load one connection input, returning None when the identifier is unknown.
     pub fn pipe_database(&self, id: Uuid) -> Result<Option<DatabaseRecord>, PersistenceError> {
         let row: Option<(String, String)> = self

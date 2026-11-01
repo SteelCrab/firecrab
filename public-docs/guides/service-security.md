@@ -1,6 +1,6 @@
 # Serverless service security
 
-The Security page under AI shows findings for deployed MicroServices. Access is restricted to the operator. Standalone MicroVMs and cluster-managed services are not scanned. The API and page list locally registered cluster-managed services excluded from security checks.
+The Security page under AI shows findings for deployed MicroServices. Access is restricted to the operator. Standalone MicroVMs and cluster-managed services are not scanned. The API and page list locally registered cluster-managed services excluded from security checks. Saved Pipe database connections do not link an image or service logs, so the connection itself is shown as not checked. If the database also runs as a supported MicroService, its service deployment is listed separately.
 
 ## CVE scanning
 

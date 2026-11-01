@@ -141,6 +141,13 @@ pub(crate) async fn get(
                 });
             }
         }
+        for (id, name) in store.pipe_database_security_names()? {
+            unsupported_workloads.push(UnsupportedWorkload {
+                id,
+                name,
+                reason: "database_connection_unlinked",
+            });
+        }
         Ok((services, unsupported_workloads))
     })
     .await?;
@@ -331,6 +338,14 @@ mod tests {
                 [unsupported_id.to_string()],
             )
             .unwrap();
+        let database_id = Uuid::new_v4();
+        let database: crate::pipe_databases::DatabaseInput = serde_json::from_value(json!({
+            "name":"orders-db", "provider":"local", "uri":"postgres://db-user:private-db-secret@private-db-host/orders"
+        })).unwrap();
+        state
+            .store
+            .save_pipe_database(database_id, &database)
+            .unwrap();
         let deployment: MicroServiceDeployment = serde_json::from_value(json!({
             "id": deployment_id, "serviceId": service_id, "phase": "running", "spec": spec,
             "request": {"hostPort": 0}, "digest": "sha256:1234", "instances": [], "log": [], "error": null
@@ -390,6 +405,17 @@ mod tests {
             result["unsupportedWorkloads"][0]["reason"],
             "cluster_managed"
         );
+        assert_eq!(
+            result["unsupportedWorkloads"][1]["id"],
+            database_id.to_string()
+        );
+        assert_eq!(result["unsupportedWorkloads"][1]["name"], "orders-db");
+        assert_eq!(
+            result["unsupportedWorkloads"][1]["reason"],
+            "database_connection_unlinked"
+        );
+        assert!(!result.to_string().contains("private-db-secret"));
+        assert!(!result.to_string().contains("private-db-host"));
         assert!(!result.to_string().contains("cluster-secret"));
         assert!(!result.to_string().contains("secret-value"));
         assert_eq!(result["cveScan"], "scheduled");

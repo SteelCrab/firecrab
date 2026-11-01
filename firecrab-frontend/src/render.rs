@@ -4268,21 +4268,22 @@ fn service_security(app: &App) -> String {
         out.push_str("</select>");
     }
     out.push_str(&format!("<p>{}</p>", tr(app,
-        "Security checks cover deployed MicroServices. Standalone MicroVMs and cluster-managed services are not checked.",
-        "보안 검사는 배포된 마이크로서비스를 확인한다. 단독 마이크로VM과 클러스터 관리 서비스는 검사하지 않는다.")));
+        "Security checks cover deployed MicroServices. Standalone MicroVMs, cluster-managed services, and database connections without linked images or logs are not checked.",
+        "보안 검사는 배포된 마이크로서비스를 확인한다. 단독 마이크로VM, 클러스터 관리 서비스, 이미지나 로그가 연결되지 않은 데이터베이스 연결은 검사하지 않는다.")));
     let unsupported = list(&app.resource["unsupportedWorkloads"]);
     if !unsupported.is_empty() {
         out.push_str(&format!(
             "<h3>{}</h3><ul>",
-            tr(
-                app,
-                "Local workloads not checked",
-                "검사하지 않는 로컬 워크로드"
-            )
+            tr(app, "Items not checked", "검사하지 않는 항목")
         ));
         for workload in unsupported {
             let reason = match text(workload, "reason") {
                 "cluster_managed" => tr(app, "Cluster-managed service", "클러스터 관리 서비스"),
+                "database_connection_unlinked" => tr(
+                    app,
+                    "Database connection: image and logs not linked",
+                    "데이터베이스 연결: 이미지와 로그가 연결되지 않음",
+                ),
                 _ => tr(app, "Unsupported workload", "지원하지 않는 워크로드"),
             };
             out.push_str(&format!(

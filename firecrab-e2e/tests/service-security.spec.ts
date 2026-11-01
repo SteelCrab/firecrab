@@ -100,18 +100,19 @@ test("Security queues a manual CVE rescan", async ({ page }) => {
 
 test("Security identifies workloads outside its coverage", async ({ page }) => {
   await openDashboard(page, { hash: "#/security", routes: { "/api/service-security": {
-    services: [], unsupportedWorkloads: [{ id:"cluster-id", name:"cluster-service", reason:"cluster_managed" }]
+    services: [], unsupportedWorkloads: [{ id:"cluster-id", name:"cluster-service", reason:"cluster_managed" }, { id:"db-id", name:"orders-db", reason:"database_connection_unlinked" }]
   } } });
-  await expect(page.getByText(/Standalone MicroVMs and cluster-managed services are not checked/)).toBeVisible();
-  await expect(page.getByRole("heading", { name:"Local workloads not checked" })).toBeVisible();
+  await expect(page.getByText(/Standalone MicroVMs, cluster-managed services, and database connections without linked images or logs are not checked/)).toBeVisible();
+  await expect(page.getByRole("heading", { name:"Items not checked" })).toBeVisible();
   await expect(page.getByText("cluster-service · Cluster-managed service")).toBeVisible();
+  await expect(page.getByText("orders-db · Database connection: image and logs not linked")).toBeVisible();
 });
 
 
 test("Security explains limited ingress coverage and detected loss", async ({ page }) => {
   if (process.env.SECURITY_INGRESS_SCREENSHOT) await page.setViewportSize({ width: 1440, height: 1000 });
   await openDashboard(page, { hash: "#/security", routes: { "/api/service-security": {
-    services: [{ id:"a", name:"api", deploymentId:"one", digest:null, sampledRecords:0, signals:[], activityHistory:[{ deploymentId:"one", replicaIds:[], bucketStart:1793310000, count:12, severity:"medium", source:"ingress HTTP status codes", recommendation:"Review ingress and authentication configuration." }] }], ingressLogs:"limited"
+    services: [{ id:"a", name:"api", deploymentId:"one", digest:null, sampledRecords:0, signals:[], activityHistory:[{ deploymentId:"one", replicaIds:[], bucketStart:1793310000, count:12, severity:"medium", source:"ingress HTTP status codes", recommendation:"Review ingress and authentication configuration." }] }], unsupportedWorkloads:[{ id:"db-id", name:"orders-db", reason:"database_connection_unlinked" }], ingressLogs:"limited"
   } } });
   await expect(page.getByText(/limited ingress 401\/403 counts/)).toBeVisible();
   await expect(page.getByText(/ingress HTTP status codes/)).toBeVisible();
