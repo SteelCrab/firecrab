@@ -36,6 +36,15 @@ class DeployQaTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("requires --observability", result.stderr)
 
+    def test_ingress_denial_fixture_returns_http_403(self):
+        fixture = qa.image_fixture(b"busybox-fixture", "A")
+        manifest = json.loads(fixture[1])
+        raw = gzip.decompress(fixture[2][manifest["layers"][0]["digest"]])
+        with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+            script = archive.extractfile("www/cgi-bin/security-denied").read()
+        result = subprocess.run(["/bin/sh"], input=script, capture_output=True, check=True)
+        self.assertEqual(result.stdout, b"Status: 403 Forbidden\r\nContent-Type: text/plain\r\n\r\ndenied\n")
+
     def test_security_image_contains_only_fixture_packages_and_their_libraries(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory) / "layer.tar.gz"

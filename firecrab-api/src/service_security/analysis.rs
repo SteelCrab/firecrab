@@ -50,7 +50,7 @@ pub(crate) async fn explain(
         .find(|service| service.id == service_id)
         .ok_or_else(|| AppError::not_found(request.0))?;
     let cves: Vec<_> = service.scan.as_ref().filter(|scan| scan.status == "complete").map(|scan| scan.findings.iter().take(100).map(|finding| json!({"cve":finding.cve,"severity":finding.severity,"fixedVersion":finding.fixed_version})).collect()).unwrap_or_default();
-    let historical: Vec<_> = service.activity_history.iter().take(20).map(|event| json!({"count":event.count,"severity":event.severity,"bucketStart":event.bucket_start})).collect();
+    let historical: Vec<_> = service.activity_history.iter().take(20).map(|event| json!({"count":event.count,"severity":event.severity,"bucketStart":event.bucket_start,"source":event.source})).collect();
     if service.signals.is_empty() && cves.is_empty() && historical.is_empty() {
         return Err(AppError::conflict(
             "security_no_signals",
@@ -89,7 +89,7 @@ pub(crate) async fn explain(
         .ai_connections()
         .map_err(|_| AppError::internal(request.0))?;
     let prompt = format!(
-        "Explain these aggregated service security signals and suggest practical next steps. The signals are observations, not confirmed attacks. Do not infer missing facts. Data: {signals}"
+        "Explain these aggregated service security signals and suggest practical next steps. The signals are observations, not confirmed attacks. Different sources may cover the same requests; do not add their counts. Do not infer missing facts. Data: {signals}"
     );
     let prompt = ai_sandbox::redact(&connections, &prompt);
     let history = [json!({"role":"user","content":prompt})];

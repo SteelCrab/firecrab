@@ -201,6 +201,10 @@ impl Store {
             [id.to_string()],
         )?;
         tx.execute(
+            "DELETE FROM service_security_ingress WHERE service_id = ?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
             "DELETE FROM service_security_scans WHERE service_id = ?1",
             [id.to_string()],
         )?;

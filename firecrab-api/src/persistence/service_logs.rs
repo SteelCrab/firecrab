@@ -98,6 +98,12 @@ impl Store {
             "DELETE FROM service_observation_events WHERE timestamp < ?1",
             [now.div_euclid(1000).saturating_sub(HISTORY_MS / 1000)],
         )?;
+        for table in ["service_security_activity", "service_security_ingress"] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE bucket < ?1"),
+                [cutoff.div_euclid(1000)],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -366,6 +372,9 @@ mod tests {
                 conn.execute("INSERT INTO service_observation_logs(service_id, vm_id, runtime_id, sequence, timestamp_ms, stream, message) VALUES (?1, ?2, 'runtime', 1, ?3, 'stdout', 'line')", params![service, vm, at]).unwrap();
                 conn.execute("INSERT INTO service_observation_cursors(service_id, vm_id, runtime_id, sequence, status, updated_at) VALUES (?1, ?2, 'runtime', 1, 'inactive', ?3)", params![service, vm, at]).unwrap();
                 conn.execute("INSERT INTO service_observation_events(service_id, timestamp, kind, severity, message) VALUES (?1, ?2, 'test', 'info', 'event')", params![service, at / 1000]).unwrap();
+                for table in ["service_security_activity", "service_security_ingress"] {
+                    conn.execute(&format!("INSERT INTO {table}(service_id,deployment_id,vm_id,bucket,denied) VALUES (?1,'release',?2,?3,10)"), params![service,vm,at / 1000]).unwrap();
+                }
             }
         }
         store.prune_service_observations_at(now).unwrap();
@@ -374,6 +383,8 @@ mod tests {
             "service_observation_logs",
             "service_observation_events",
             "service_observation_cursors",
+            "service_security_activity",
+            "service_security_ingress",
         ] {
             let count: i64 = conn
                 .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {

@@ -3,6 +3,7 @@
 mod activity;
 mod analysis;
 pub(crate) mod cve;
+mod ingress;
 mod scanner;
 use axum::{
     Extension, Json,
@@ -67,6 +68,7 @@ pub(crate) async fn get(
             request.0,
         )
     })?;
+    let ingress_logs = ingress::status(&state);
     let store = state.store.clone();
     let (services, unsupported_workloads) = database(request.0, move || {
         let mut services = Vec::new();
@@ -148,7 +150,7 @@ pub(crate) async fn get(
         cve_scan: "scheduled",
         threat_detection: "limited",
         ai_analysis: "on_demand",
-        ingress_logs: "unavailable",
+        ingress_logs,
     }))
 }
 
@@ -216,7 +218,10 @@ pub(crate) async fn rescan(
     Ok(StatusCode::ACCEPTED)
 }
 
-pub(crate) use scanner::start;
+pub(crate) fn start(state: AppState) {
+    scanner::start(state.clone());
+    ingress::start(state);
+}
 
 /// Explicit, operator-requested explanation of aggregate activity.
 pub(crate) use analysis::explain;

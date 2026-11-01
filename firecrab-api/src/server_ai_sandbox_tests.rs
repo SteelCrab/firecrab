@@ -789,6 +789,16 @@ async fn service_security_explanation_sends_only_aggregate_evidence() {
         .store
         .append_service_logs(service, (vm, Uuid::new_v4()), 1, "active", false, &[input])
         .unwrap();
+    f.state
+        .store
+        .save_security_ingress(&[crate::persistence::security_activity::IngressRecord {
+            service_id: service,
+            deployment_id: deployment,
+            vm_id: Some(vm),
+            bucket: chrono::Utc::now().timestamp().div_euclid(60) * 60,
+            count: 10,
+        }])
+        .unwrap();
     let (status, response) = call(&f.app, "POST", &endpoint, selection).await;
     assert_eq!(status, StatusCode::OK, "{response}");
     assert_eq!(response["serviceId"], service.to_string());
@@ -796,6 +806,9 @@ async fn service_security_explanation_sends_only_aggregate_evidence() {
     let requests = f.provider.requests.lock().unwrap();
     let payload = requests.last().unwrap().to_string();
     assert!(payload.contains("repeated_access_denials"));
+    assert!(payload.contains("ingress HTTP status codes"));
+    assert!(payload.contains("do not add their counts"));
+    assert!(!payload.contains("172.30.0.5"));
     assert!(!payload.contains("private-secret"));
     assert!(!payload.contains("172.30.0.5"));
     assert!(!payload.contains("sandbox-private-key"));

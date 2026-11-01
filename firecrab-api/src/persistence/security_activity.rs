@@ -13,6 +13,12 @@ CREATE TABLE IF NOT EXISTS service_security_activity (
  PRIMARY KEY(service_id,deployment_id,vm_id,bucket)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS service_security_activity_owner ON service_security_activity(service_id,bucket);
+CREATE TABLE IF NOT EXISTS service_security_ingress (
+ service_id TEXT NOT NULL, deployment_id TEXT NOT NULL, vm_id TEXT NOT NULL,
+ bucket INTEGER NOT NULL, denied INTEGER NOT NULL,
+ PRIMARY KEY(service_id,deployment_id,vm_id,bucket)
+) STRICT;
+CREATE INDEX IF NOT EXISTS service_security_ingress_owner ON service_security_ingress(service_id,bucket);
 ";
 
 #[derive(Debug, Serialize)]
@@ -97,54 +103,124 @@ pub(super) fn record(
     Ok(())
 }
 
+/// One bounded aggregate from the local ingress collector.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug)]
+pub(crate) struct IngressRecord {
+    /// Owner of the route that emitted the event.
+    pub service_id: Uuid,
+    /// Deployment owning the observed route generation.
+    pub deployment_id: Uuid,
+    /// Matching backend, when its address is still known.
+    pub vm_id: Option<Uuid>,
+    /// Start of the one-minute aggregate in Unix seconds.
+    pub bucket: i64,
+    /// Number of 401/403 responses in this aggregate.
+    pub count: u64,
+}
+
 impl Store {
+    /// Persist ingress counts only for releases owned by the service.
+    #[cfg(any(target_os = "linux", test))]
+    pub(crate) fn save_security_ingress(
+        &self,
+        records: &[IngressRecord],
+    ) -> Result<(), PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let cutoff = chrono::Utc::now()
+            .timestamp()
+            .saturating_sub(7 * 24 * 60 * 60);
+        let mut affected = BTreeSet::new();
+        for record in records {
+            if record.count == 0
+                || record.bucket < cutoff
+                || record.bucket > chrono::Utc::now().timestamp().saturating_add(60)
+            {
+                continue;
+            }
+            tx.execute("INSERT INTO service_security_ingress(service_id,deployment_id,vm_id,bucket,denied) SELECT ?1,?2,?3,?4,?5 WHERE EXISTS (SELECT 1 FROM micro_service_attempts WHERE id=?2 AND service_id=?1) ON CONFLICT(service_id,deployment_id,vm_id,bucket) DO UPDATE SET denied=MIN(1000000,denied+excluded.denied)", params![record.service_id.to_string(),record.deployment_id.to_string(),record.vm_id.map(|id| id.to_string()).unwrap_or_default(),record.bucket,record.count.min(1000000) as i64])?;
+            affected.insert(record.service_id);
+        }
+        for service in affected {
+            tx.execute("DELETE FROM service_security_ingress WHERE service_id=?1 AND (bucket < ?2 OR rowid NOT IN (SELECT rowid FROM service_security_ingress WHERE service_id=?1 ORDER BY bucket DESC,rowid DESC LIMIT 10000))", params![service.to_string(),cutoff])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub(crate) fn security_activity(
         &self,
         service: Uuid,
     ) -> Result<Vec<Activity>, PersistenceError> {
         let conn = self.lock();
-        let mut stmt = conn.prepare("SELECT deployment_id,vm_id,bucket,denied FROM service_security_activity WHERE service_id=?1 AND bucket>=?2 ORDER BY bucket DESC LIMIT 10000")?;
-        let rows = stmt.query_map(
-            params![
-                service.to_string(),
-                chrono::Utc::now()
-                    .timestamp()
-                    .saturating_sub(7 * 24 * 60 * 60)
-            ],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                ))
-            },
-        )?;
-        let mut grouped: BTreeMap<(String, i64), (u64, BTreeSet<String>)> = BTreeMap::new();
-        for row in rows {
-            let (release, replica, bucket, count) = row?;
-            let item = grouped.entry((release, bucket)).or_default();
-            item.0 = item
-                .0
-                .saturating_add(u64::try_from(count).unwrap_or_default());
-            item.1.insert(replica);
+        let mut grouped: BTreeMap<(&str, String, i64), (u64, BTreeSet<String>)> = BTreeMap::new();
+        for (table, source) in [
+            ("service_security_activity", "application"),
+            ("service_security_ingress", "ingress"),
+        ] {
+            let sql = format!(
+                "SELECT deployment_id,vm_id,bucket,denied FROM {table} WHERE service_id=?1 AND bucket>=?2 ORDER BY bucket DESC LIMIT 10000"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(
+                params![
+                    service.to_string(),
+                    chrono::Utc::now()
+                        .timestamp()
+                        .saturating_sub(7 * 24 * 60 * 60)
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )?;
+            for row in rows {
+                let (release, replica, bucket, count) = row?;
+                let item = grouped.entry((source, release, bucket)).or_default();
+                item.0 = item
+                    .0
+                    .saturating_add(u64::try_from(count).unwrap_or_default());
+                if !replica.is_empty() {
+                    item.1.insert(replica);
+                }
+            }
         }
         let mut findings = Vec::new();
-        for (deployment_id, end) in grouped.keys() {
+        for (kind, deployment_id, end) in grouped.keys() {
             let mut count = 0u64;
             let mut replica_ids = BTreeSet::new();
             for (_, (value, replicas)) in grouped.range(
-                (deployment_id.clone(), end.saturating_sub(240))..=(deployment_id.clone(), *end),
+                (*kind, deployment_id.clone(), end.saturating_sub(240))
+                    ..=(*kind, deployment_id.clone(), *end),
             ) {
                 count = count.saturating_add(*value);
                 replica_ids.extend(replicas.iter().cloned());
             }
             if count >= 10 {
+                let (source, recommendation) = if *kind == "ingress" {
+                    (
+                        "ingress HTTP status codes",
+                        "Review ingress and authentication configuration for repeated 401/403 responses.",
+                    )
+                } else {
+                    (
+                        "structured application logs with status codes",
+                        "Review the matching application logs and authentication policy for repeated 401/403 status codes.",
+                    )
+                };
                 findings.push(Activity {
-                    deployment_id:deployment_id.clone(), replica_ids:replica_ids.into_iter().collect(),
-                    bucket_start:end.saturating_sub(240), count, severity:"medium",
-                    source:"structured application logs with status codes",
-                    recommendation:"Review the matching application logs and authentication policy for repeated 401/403 status codes.",
+                    deployment_id: deployment_id.clone(),
+                    replica_ids: replica_ids.into_iter().collect(),
+                    bucket_start: end.saturating_sub(240),
+                    count,
+                    severity: "medium",
+                    source,
+                    recommendation,
                 });
             }
         }
@@ -162,6 +238,60 @@ mod tests {
     };
     use firecrab_api_types::{MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn ingress_signals_are_scoped_to_real_releases_and_removed_with_service() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::with_db_file(
+            TemplateRegistry::from_specs(root.path(), std::iter::empty()).unwrap(),
+            root.path().join("state.db"),
+        )
+        .await
+        .unwrap();
+        let service = Uuid::new_v4();
+        let release = Uuid::new_v4();
+        let vm = Uuid::new_v4();
+        let spec: MicroServiceSpec = serde_json::from_value(
+            json!({"name":"web","image":"ghcr.io/team/web:v1","port":8080,"ram":128,"cpu":1}),
+        )
+        .unwrap();
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse {
+                id: service,
+                spec: spec.clone(),
+            })
+            .unwrap();
+        let deployment: MicroServiceDeployment = serde_json::from_value(json!({"id":release,"serviceId":service,"phase":"running","spec":spec,"request":{"hostPort":0},"instances":[],"log":[],"error":null})).unwrap();
+        state.store.save_service_deployment(&deployment).unwrap();
+        let bucket = chrono::Utc::now().timestamp().div_euclid(60) * 60;
+        state
+            .store
+            .save_security_ingress(&[
+                IngressRecord {
+                    service_id: service,
+                    deployment_id: release,
+                    vm_id: Some(vm),
+                    bucket,
+                    count: 10,
+                },
+                IngressRecord {
+                    service_id: service,
+                    deployment_id: Uuid::new_v4(),
+                    vm_id: None,
+                    bucket,
+                    count: 100,
+                },
+            ])
+            .unwrap();
+        let findings = state.store.security_activity(service).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].count, 10);
+        assert_eq!(findings[0].source, "ingress HTTP status codes");
+        assert_eq!(findings[0].replica_ids, vec![vm.to_string()]);
+        state.store.delete_micro_service(service).unwrap();
+        assert!(state.store.security_activity(service).unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn retained_signal_spans_minute_boundaries_and_replicas() {

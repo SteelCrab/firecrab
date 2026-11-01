@@ -4218,11 +4218,23 @@ fn security_cve_findings(app: &App, findings: &[Value]) -> String {
 
 fn service_security(app: &App) -> String {
     let title = tr(app, "Serverless security", "서버리스 보안");
-    let explanation = tr(
-        app,
-        "CVE scans check supported packages in deployed images. Activity detection covers structured application logs only. Ingress logs are unavailable. AI receives CVE IDs, severities, fix versions and aggregate activity counts. It does not receive raw logs.",
-        "CVE 검사는 배포 이미지에서 지원되는 패키지를 확인한다. 활동 탐지는 구조화된 애플리케이션 로그만 확인한다. 인그레스 로그는 사용할 수 없다. AI에는 CVE 번호, 심각도, 수정 버전과 활동 집계만 전달한다. 원본 로그는 전달하지 않는다.",
-    );
+    let explanation = match text(&app.resource, "ingressLogs") {
+        "limited" => tr(
+            app,
+            "CVE scans check supported packages in deployed images. Activity detection uses structured application logs and limited ingress 401/403 counts. Some ingress events may be missed. Counts may overlap between sources. AI receives CVE IDs, severities, fix versions and aggregate activity counts. It does not receive raw logs.",
+            "CVE 검사는 배포 이미지에서 지원되는 패키지를 확인한다. 활동 탐지는 구조화된 애플리케이션 로그와 제한된 인그레스 401/403 횟수를 사용한다. 일부 인그레스 이벤트가 누락될 수 있다. 두 출처의 횟수는 중복될 수 있다. AI에는 CVE 번호, 심각도, 수정 버전과 활동 집계만 전달한다. 원본 로그는 전달하지 않는다.",
+        ),
+        "degraded" => tr(
+            app,
+            "CVE scans check supported packages in deployed images. Some ingress security events were lost. Activity detection also uses structured application logs. AI receives CVE IDs, severities, fix versions and aggregate activity counts. It does not receive raw logs.",
+            "CVE 검사는 배포 이미지에서 지원되는 패키지를 확인한다. 일부 인그레스 보안 이벤트가 누락됐다. 활동 탐지는 구조화된 애플리케이션 로그도 사용한다. AI에는 CVE 번호, 심각도, 수정 버전과 활동 집계만 전달한다. 원본 로그는 전달하지 않는다.",
+        ),
+        _ => tr(
+            app,
+            "CVE scans check supported packages in deployed images. Activity detection covers structured application logs only. Ingress logs are unavailable. Reapply the Pipe configuration if ingress is running. AI receives CVE IDs, severities, fix versions and aggregate activity counts. It does not receive raw logs.",
+            "CVE 검사는 배포 이미지에서 지원되는 패키지를 확인한다. 활동 탐지는 구조화된 애플리케이션 로그만 확인한다. 인그레스 로그는 사용할 수 없다. 인그레스가 실행 중이면 Pipe 설정을 다시 적용한다. AI에는 CVE 번호, 심각도, 수정 버전과 활동 집계만 전달한다. 원본 로그는 전달하지 않는다.",
+        ),
+    };
     let mut out = format!(
         "<section class=\"security-page\"><h2>{}</h2><p role=\"status\">{}</p>",
         escape(title),
@@ -4471,6 +4483,11 @@ fn service_security(app: &App) -> String {
                     .map(escape)
                     .collect::<Vec<_>>()
                     .join(", ");
+                let replicas = if replicas.is_empty() {
+                    tr(app, "Unavailable", "확인 불가").to_owned()
+                } else {
+                    replicas
+                };
                 details.push_str(&format!(
                     "<p>{}: {} · {}: {} · {}: {}<br>{}: {} · {}: {}<br>{}: {}<br>{}</p>",
                     tr(app, "Release", "릴리스"),

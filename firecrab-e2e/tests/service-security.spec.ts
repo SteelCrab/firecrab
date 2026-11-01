@@ -106,3 +106,22 @@ test("Security identifies workloads outside its coverage", async ({ page }) => {
   await expect(page.getByRole("heading", { name:"Local workloads not checked" })).toBeVisible();
   await expect(page.getByText("cluster-service · Cluster-managed service")).toBeVisible();
 });
+
+
+test("Security explains limited ingress coverage and detected loss", async ({ page }) => {
+  if (process.env.SECURITY_INGRESS_SCREENSHOT) await page.setViewportSize({ width: 1440, height: 1000 });
+  await openDashboard(page, { hash: "#/security", routes: { "/api/service-security": {
+    services: [{ id:"a", name:"api", deploymentId:"one", digest:null, sampledRecords:0, signals:[], activityHistory:[{ deploymentId:"one", replicaIds:[], bucketStart:1793310000, count:12, severity:"medium", source:"ingress HTTP status codes", recommendation:"Review ingress and authentication configuration." }] }], ingressLogs:"limited"
+  } } });
+  await expect(page.getByText(/limited ingress 401\/403 counts/)).toBeVisible();
+  await expect(page.getByText(/ingress HTTP status codes/)).toBeVisible();
+  await expect(page.getByText(/Replicas: Unavailable/)).toBeVisible();
+  if (process.env.SECURITY_INGRESS_SCREENSHOT) await page.screenshot({ path: process.env.SECURITY_INGRESS_SCREENSHOT, fullPage: true });
+});
+
+test("Security reports known ingress event loss", async ({ page }) => {
+  await openDashboard(page, { hash: "#/security", routes: { "/api/service-security": {
+    services: [], ingressLogs:"degraded"
+  } } });
+  await expect(page.getByText(/Some ingress security events were lost/)).toBeVisible();
+});
