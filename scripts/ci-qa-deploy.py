@@ -35,6 +35,7 @@ from deploy_recovery_qa import run_recovery
 from deploy_queue_qa import run_queue
 from deploy_ci_qa import run_ci
 from deploy_observation_qa import run_observation
+from deploy_database_security_qa import image_fixture as database_image_fixture, run_database_security
 from public_tunnel_credentials import load_credentials, verify_registration
 from public_tunnel_fixture import image_fixture as public_image_fixture, static_elf_arch
 from public_tunnel_setup import run_fixture_services
@@ -277,6 +278,8 @@ def run(args, evidence):
     api = Api(args.api)
     api.ready()
     require_empty_host(api)
+    if args.database_image_archive:
+        assert not api.call("GET", "/api/pipe/databases"), "refusing existing database connections"
     credentials = load_credentials(args.public_token) if args.public_tunnel else None
     if args.public_tunnel:
         evidence["publicTarget"] = {"hostname": platform.node(), "architecture": platform.machine(),
@@ -294,7 +297,8 @@ def run(args, evidence):
         if expected_arch is None or static_elf_arch(binary) != expected_arch:
             raise ValueError("fixture architecture must match the host")
         public_fixtures = [public_image_fixture(binary, label) for label in ["A", "B"]]
-    all_fixtures = fixtures + public_fixtures
+    database_fixtures = [database_image_fixture(args.database_image_archive)] if args.database_image_archive else []
+    all_fixtures = fixtures + public_fixtures + database_fixtures
     registry = Registry(all_fixtures)
     images = Path(args.images)
     registrations = images / ".templates.json"
@@ -493,9 +497,11 @@ def run(args, evidence):
                 run_ci(api, wait_for, traffic, network, spec_a, fixtures, ingress_port, evidence)
             if args.observability:
                 if args.security_base_layer:
-                    with real_security_scanner(args.security_trivy), trusted_registry(fixtures):
+                    with real_security_scanner(args.security_trivy), trusted_registry(fixtures + database_fixtures):
                         api.ready()
                         run_observation(api, wait_for, traffic, network, spec_a, ingress_port, evidence, real_scanner=True)
+                        if database_fixtures:
+                            run_database_security(api, wait_for, network, spec_a, database_fixtures[0], evidence)
                 else:
                     run_observation(api, wait_for, traffic, network, spec_a, ingress_port, evidence)
             if args.public_tunnel:
@@ -561,6 +567,7 @@ if __name__ == "__main__":
     parser.add_argument("--observability", action="store_true", help="run isolated app logs, API restart, events and OTLP acceptance")
     parser.add_argument("--security-base-layer", type=Path, help="verified Alpine image layer for real CVE acceptance")
     parser.add_argument("--security-trivy", type=Path, help="real Trivy executable for security acceptance")
+    parser.add_argument("--database-image-archive", type=Path, help="Docker save archive of the real PostgreSQL security fixture")
     parser.add_argument("--public-tunnel", action="store_true", help="run explicitly approved public Tunnel acceptance")
     parser.add_argument("--public-target-approved", action="store_true", help="confirm separate approval for the host and public test addresses")
     parser.add_argument("--public-token", nargs=2, action="append", metavar=("LABEL", "PRIVATE_FILE"), help="owned qa- label and private token file; repeat twice")
@@ -569,6 +576,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if bool(args.security_base_layer) != bool(args.security_trivy) or (args.security_base_layer and not args.observability):
         parser.error("real security acceptance requires --observability, --security-base-layer and --security-trivy")
+    if args.database_image_archive and not (args.observability and args.security_base_layer and args.security_trivy):
+        parser.error("database security acceptance requires --observability and real security scanner inputs")
     if (args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability or args.public_tunnel) and not args.report:
         parser.error("extended acceptance requires --report")
     if args.public_tunnel:

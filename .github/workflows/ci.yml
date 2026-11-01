@@ -881,6 +881,11 @@ jobs:
           tar -xzf target/qa/trivy.tar.gz -C target/qa trivy
           sudo install -m 0755 target/qa/trivy /usr/local/bin/firecrab-ci-real-trivy
           python3 scripts/ci-qa-security-layer.py target/qa/security-alpine-layer.tar.gz
+          # Build a real PostgreSQL workload for the MicroVM database security acceptance.
+          docker build -t firecrab-postgres-security-qa:ci scripts/fixtures/security-postgres
+          python3 scripts/test-security-postgres-image.py firecrab-postgres-security-qa:ci
+          docker image save firecrab-postgres-security-qa:ci -o target/qa/security-postgres.tar
+          sudo apt-get install -y --no-install-recommends postgresql-client
           sudo install -d -o firecrab -g firecrab -m 0700 /var/lib/firecrab/data/security-scanner/cache
           sudo -u firecrab /usr/local/bin/firecrab-ci-real-trivy image --config '' --quiet --no-progress --download-db-only \
             --cache-dir /var/lib/firecrab/data/security-scanner/cache
@@ -914,8 +919,8 @@ jobs:
 
       - name: Deploy with real MicroVMs and Nginx
         if: ${{ !cancelled() && steps.guest-kernel.outcome == 'success' }}
-        timeout-minutes: 25
-        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation --replica-recovery --queue-controls --automatic-deploy --ci-deploy --observability --security-base-layer target/qa/security-alpine-layer.tar.gz --security-trivy /usr/local/bin/firecrab-ci-real-trivy --report target/qa/secret-rotation.json 2>&1 | tee target/qa/deploy.log
+        timeout-minutes: 35
+        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation --replica-recovery --queue-controls --automatic-deploy --ci-deploy --observability --security-base-layer target/qa/security-alpine-layer.tar.gz --security-trivy /usr/local/bin/firecrab-ci-real-trivy --database-image-archive target/qa/security-postgres.tar --report target/qa/secret-rotation.json 2>&1 | tee target/qa/deploy.log
 
       - name: Retain Deploy acceptance evidence
         if: always()

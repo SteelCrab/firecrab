@@ -23,10 +23,101 @@ import deploy_auto_qa as automatic
 import deploy_fleet_qa as fleet
 import deploy_recovery_qa as recovery
 import deploy_observation_qa as observation
+import deploy_database_security_qa as database_security
 
 module = importlib.util.spec_from_file_location("deploy_qa", Path(__file__).with_name("ci-qa-deploy.py"))
 qa = importlib.util.module_from_spec(module)
 module.loader.exec_module(qa)
+
+
+class DatabaseSecurityQaTests(unittest.TestCase):
+    def saved_image(self, directory, corrupt=False, classic=False):
+        raw = b"test OCI layer"
+        compressed = gzip.compress(raw, mtime=0)
+        arch = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}[__import__("platform").machine()]
+        config = json.dumps({"os": "linux", "architecture": arch,
+            "config": {"Entrypoint": ["/usr/local/bin/firecrab-postgres-qa"]},
+            "rootfs": {"type": "layers", "diff_ids": [database_security.digest(b"wrong" if corrupt else raw)]}}).encode()
+        config_path = database_security.digest(config).split(":")[1] + ".json" if classic else "blobs/sha256/" + database_security.digest(config).split(":")[1]
+        layer_path = "legacy/layer.tar" if classic else "blobs/sha256/" + database_security.digest(compressed).split(":")[1]
+        entries = {"manifest.json": json.dumps([{"Config": config_path, "Layers": [layer_path]}]).encode(),
+                   config_path: config, layer_path: raw if classic else compressed}
+        path = Path(directory) / "fixture.tar"
+        with tarfile.open(path, "w") as archive:
+            for name, data in entries.items():
+                item = tarfile.TarInfo(name)
+                item.size = len(data)
+                archive.addfile(item, io.BytesIO(data))
+        return path, raw
+
+    def test_docker_archive_checks_layer_digests_before_serving_image(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path, raw = self.saved_image(directory)
+            image, manifest, blobs = database_security.image_fixture(path)
+            self.assertEqual(image, database_security.digest(manifest))
+            layer = json.loads(manifest)["layers"][0]
+            self.assertEqual(gzip.decompress(blobs[layer["digest"]]), raw)
+            classic, _ = self.saved_image(directory, classic=True)
+            _, classic_manifest, classic_blobs = database_security.image_fixture(classic)
+            self.assertEqual(gzip.decompress(classic_blobs[json.loads(classic_manifest)["layers"][0]["digest"]]), raw)
+            path, _ = self.saved_image(directory, corrupt=True)
+            with self.assertRaisesRegex(ValueError, "layer digest mismatch"):
+                database_security.image_fixture(path)
+
+    def test_database_acceptance_requires_real_scanner_and_report(self):
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name("ci-qa-deploy.py")),
+            "--disposable-host", "--database-image-archive", "/tmp/image.tar"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("requires --observability and real security scanner inputs", result.stderr)
+
+    def test_database_security_links_scans_detects_and_cleans_up(self):
+        class Api:
+            def __init__(self):
+                self.linked = False
+                self.scanned = False
+                self.stopped = False
+                self.calls = []
+            def call(self, method, path, body=None, allowed=None):
+                self.calls.append((method, path, body))
+                if (method, path) == ("GET", "/api/pipe/databases"): return []
+                if (method, path) == ("POST", "/api/micro-services"): return {"id":"service"}
+                if (method, path) == ("GET", "/api/micro-services/service/deployment"):
+                    return {"id":"release", "phase":"stopped" if self.stopped else "running", "digest":"sha256:test", "instances":[{"vmId":"replica", "ipv4":"192.0.2.8"}]}
+                if (method, path) == ("POST", "/api/pipe/databases"): return {"id":"database"}
+                if path == "/api/service-security/databases/database/link":
+                    self.linked = method == "PUT"
+                    return None
+                if (method, path) == ("POST", "/api/service-security/service/scan"):
+                    self.scanned = True
+                    return None
+                if (method, path) == ("GET", "/api/service-security"):
+                    return {"databases":[{"id":"database", "serviceId":"service" if self.linked else None}],
+                        "unsupportedWorkloads":[] if self.linked else [{"id":"database", "reason":"database_connection_unlinked"}],
+                        "services":[{"id":"service", "scan":{"status":"complete", "deploymentId":"release", "digest":"sha256:test", "replicaIds":["replica"]} if self.scanned else None,
+                        "activityHistory":[{"source":database_security.SOURCE, "deploymentId":"release", "replicaIds":["replica"], "count":10}]}]}
+                if (method, path) == ("POST", "/api/micro-services/service/stop"): self.stopped = True
+                return None
+        def wait(check, **_):
+            result = check()
+            if not result: raise AssertionError("condition did not pass")
+            return result
+        for bad_login in (True, False):
+            api = Api()
+            spec = {"port":8080, "healthPath":"/health", "env":{}, "secrets":{}}
+            failed = Mock(returncode=1 if bad_login else 0, stderr="password authentication failed")
+            evidence = {}
+            with patch.object(database_security.subprocess, "run", return_value=failed) as psql, patch("builtins.print"):
+                if bad_login:
+                    database_security.run_database_security(api, wait, "network", spec, ("sha256:test",), evidence)
+                    self.assertEqual(psql.call_count, 10)
+                    self.assertEqual(psql.call_args.kwargs["env"]["PGPASSWORD"], database_security.BAD_PASSWORD)
+                    self.assertEqual(len(evidence["databaseSecurity"]["stages"]), 4)
+                else:
+                    with self.assertRaisesRegex(AssertionError, "did not reject"):
+                        database_security.run_database_security(api, wait, "network", spec, ("sha256:test",), evidence)
+                self.assertIn(("DELETE", "/api/pipe/databases/database", None), api.calls)
+                self.assertIn(("DELETE", "/api/micro-services/service", None), api.calls)
+                self.assertEqual(evidence["databaseSecurity"]["cleanupErrors"], [])
 
 
 class DeployQaTests(unittest.TestCase):
