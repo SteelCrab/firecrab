@@ -22,6 +22,8 @@ pub use quick_tunnels::{
 
 /// Nginx Unix socket used to confirm that a route generation is serving requests.
 pub const STATUS_SOCKET: &str = "/run/firecrab-ingress/status.sock";
+/// Best-effort, local security event receiver owned by the API.
+pub const SECURITY_SOCKET: &str = "/run/firecrab-security/events.sock";
 /// Independent systemd unit that owns the Cloudflare connector.
 pub const TUNNEL_UNIT: &str = "firecrab-tunnel.service";
 /// Internal Host header used only by the anonymous Cloudflare connector.
@@ -327,7 +329,7 @@ impl Config {
     /// Standalone config: never includes or edits the host's nginx.conf.
     pub fn nginx(&self) -> String {
         let mut text = format!(
-            "worker_processes auto;\nworker_shutdown_timeout 0;\npid nginx.pid;\nerror_log stderr notice;\nevents {{ worker_connections 1024; }}\nhttp {{\n  server_names_hash_bucket_size 512;\n  access_log off;\n  server_tokens off;\n  client_body_temp_path body;\n  proxy_temp_path proxy;\n  map $http_upgrade $fc_connection {{ default upgrade; '' ''; }}\n  map $http_x_forwarded_proto $fc_proto {{ default $scheme; https https; http http; }}\n  server {{ listen unix:{STATUS_SOCKET}; location / {{ return 200 \"{}\"; }} }}\n",
+            "worker_processes auto;\nworker_shutdown_timeout 0;\npid nginx.pid;\nerror_log stderr notice;\nevents {{ worker_connections 1024; }}\nhttp {{\n  server_names_hash_bucket_size 512;\n  access_log off;\n  server_tokens off;\n  client_body_temp_path body;\n  proxy_temp_path proxy;\n  map $http_upgrade $fc_connection {{ default upgrade; '' ''; }}\n  map $http_x_forwarded_proto $fc_proto {{ default $scheme; https https; http http; }}\n  map $status $fc_security_denied {{ default 0; 401 1; 403 1; }}\n  log_format fc_security_probe 'probe';\n  server {{ listen unix:{STATUS_SOCKET}; access_log syslog:server=unix:{SECURITY_SOCKET},facility=local7,tag=fc_security,nohostname fc_security_probe; location / {{ return 200 \"{}\"; }} }}\n",
             self.generation()
         );
         let has_quick_tunnels = self.quick_tunnel.is_some() || !self.quick_tunnels.is_empty();
@@ -371,6 +373,11 @@ impl Config {
                             }),
                     );
                 }
+            }
+        }
+        for (index, route) in self.routes.iter().chain(quick_routes.iter()).enumerate() {
+            if let Some(owner) = &route.owner {
+                text.push_str(&format!("  log_format fc_security_{index} escape=json '{{\"serviceId\":\"{}\",\"deploymentId\":\"{}\",\"status\":$status,\"upstream\":\"$upstream_addr\",\"at\":$msec}}';\n", owner.service_id, owner.deployment_id));
             }
         }
         let mut hosts: BTreeMap<(SocketAddr, &str), Vec<(usize, &Route)>> = BTreeMap::new();
@@ -454,15 +461,22 @@ impl Config {
                     vec![format!("= \"{prefix}\""), format!("^~ \"{prefix}/\"")]
                 };
                 for location in locations {
+                    let access_log = if route.owner.is_some() {
+                        format!(
+                            " access_log syslog:server=unix:{SECURITY_SOCKET},facility=local7,tag=fc_security,nohostname fc_security_{index} if=$fc_security_denied;"
+                        )
+                    } else {
+                        String::new()
+                    };
                     if route.upstreams.is_empty() {
                         // try_files runs after access checks; this non-directory root cannot serve content.
-                        text.push_str(&format!("    location {location} {{ root /dev/null; try_files /unready =503; }}\n"));
+                        text.push_str(&format!("    location {location} {{{access_log} root /dev/null; try_files /unready =503; }}\n"));
                         continue;
                     }
                     // An upstream may exit after a valid long response wait.
                     // Bound attempts by distinct peers, not time already spent waiting.
                     let attempts = route.upstreams.len();
-                    text.push_str(&format!("    location {location} {{\n      proxy_pass http://fc_route_{index};\n      proxy_http_version 1.1;\n      proxy_set_header Host {proxy_host};\n      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n      proxy_set_header X-Forwarded-Proto {proto};\n      proxy_set_header Upgrade $http_upgrade;\n      proxy_set_header Connection $fc_connection;\n      proxy_connect_timeout 2s;\n      proxy_read_timeout 30s;\n      proxy_next_upstream error timeout http_500 http_502 http_503 http_504;\n      proxy_next_upstream_timeout 0;\n      proxy_next_upstream_tries {attempts};\n    }}\n"));
+                    text.push_str(&format!("    location {location} {{{access_log}\n      proxy_pass http://fc_route_{index};\n      proxy_http_version 1.1;\n      proxy_set_header Host {proxy_host};\n      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n      proxy_set_header X-Forwarded-Proto {proto};\n      proxy_set_header Upgrade $http_upgrade;\n      proxy_set_header Connection $fc_connection;\n      proxy_connect_timeout 2s;\n      proxy_read_timeout 30s;\n      proxy_next_upstream error timeout http_500 http_502 http_503 http_504;\n      proxy_next_upstream_timeout 0;\n      proxy_next_upstream_tries {attempts};\n    }}\n"));
                 }
             }
             if !has_fallback {
@@ -700,6 +714,30 @@ mod tests {
     fn config() -> Config {
         serde_json::from_value(json!({"routes":[{"host":"app.example.com","upstreams":["127.0.0.1:9000","127.0.0.1:9001"]},{"host":"app.example.com","pathPrefix":"/api","upstreams":["127.0.0.1:9002"]}]})).unwrap()
     }
+    #[test]
+    fn ingress_security_logs_only_owned_denials_without_client_data() {
+        let mut config = config();
+        config.routes[0].owner = Some(ServiceRouteOwner {
+            service_id: Uuid::from_u128(1),
+            deployment_id: Uuid::from_u128(2),
+        });
+        let text = config.nginx();
+        assert!(text.contains("map $status $fc_security_denied { default 0; 401 1; 403 1; }"));
+        assert!(text.contains("fc_security_0 if=$fc_security_denied"));
+        assert!(!text.contains("fc_security_1 if=$fc_security_denied"));
+        let format = text
+            .lines()
+            .find(|line| line.contains("log_format fc_security_0"))
+            .unwrap();
+        assert!(format.contains(&Uuid::from_u128(1).to_string()));
+        assert!(format.contains(&Uuid::from_u128(2).to_string()));
+        assert!(!format.contains("$request"));
+        assert!(!format.contains("$remote_addr"));
+        if let Some(path) = std::env::var_os("FIRECRAB_TEST_NGINX_CONFIG") {
+            std::fs::write(path, text).unwrap();
+        }
+    }
+
     #[test]
     fn old_manifests_and_snapshots_do_not_require_quick_tunnel_fields() {
         let config = config();

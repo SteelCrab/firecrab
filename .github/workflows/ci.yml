@@ -873,10 +873,27 @@ jobs:
           npm ci --prefix firecrab-e2e
           npm run test:runner --prefix firecrab-e2e
           ./firecrab-e2e/node_modules/.bin/playwright install --with-deps chromium
-          # Reuse the installed API; its OCI toolbox comes from the local
-          # static binary so the fixture does not pull a Docker Hub image.
+          # Reuse the installed API and a locally built OCI toolbox.
+          # Security acceptance also uses a digest-verified Alpine layer.
           sudo mkdir -p /run/systemd/system/firecrab-api.service.d
-          printf '[Service]\nEnvironment=FIRECRAB_OCI_TOOLBOX_PATH=/usr/bin/busybox\n' \
+          sudo install -m 0755 scripts/ci-qa-security-trivy.py /usr/local/bin/firecrab-ci-security-trivy
+          # Real scanner and immutable Alpine layer are used only by the security acceptance.
+          mkdir -p target/qa
+          curl -fsSL --retry 3 --connect-timeout 20 -o target/qa/trivy.tar.gz \
+            https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz
+          printf '%s  %s\n' c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0 target/qa/trivy.tar.gz | sha256sum -c -
+          tar -xzf target/qa/trivy.tar.gz -C target/qa trivy
+          sudo install -m 0755 target/qa/trivy /usr/local/bin/firecrab-ci-real-trivy
+          python3 scripts/ci-qa-security-layer.py target/qa/security-alpine-layer.tar.gz
+          # Build a real PostgreSQL workload for the MicroVM database security acceptance.
+          docker build -t firecrab-postgres-security-qa:ci scripts/fixtures/security-postgres
+          python3 scripts/test-security-postgres-image.py firecrab-postgres-security-qa:ci
+          docker image save firecrab-postgres-security-qa:ci -o target/qa/security-postgres.tar
+          sudo apt-get install -y --no-install-recommends postgresql-client
+          sudo install -d -o firecrab -g firecrab -m 0700 /var/lib/firecrab/data/security-scanner/cache
+          sudo -u firecrab /usr/local/bin/firecrab-ci-real-trivy image --config '' --quiet --no-progress --download-db-only \
+            --cache-dir /var/lib/firecrab/data/security-scanner/cache
+          printf '[Service]\nEnvironment=FIRECRAB_OCI_TOOLBOX_PATH=/usr/bin/busybox\nEnvironment=FIRECRAB_SECURITY_TRIVY=/usr/local/bin/firecrab-ci-security-trivy\n' \
             | sudo tee /run/systemd/system/firecrab-api.service.d/90-ci-e2e.conf
           sudo systemctl daemon-reload
           sudo systemctl restart firecrab-api
@@ -906,8 +923,8 @@ jobs:
 
       - name: Deploy with real MicroVMs and Nginx
         if: ${{ !cancelled() && steps.guest-kernel.outcome == 'success' }}
-        timeout-minutes: 25
-        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation --replica-recovery --queue-controls --automatic-deploy --ci-deploy --observability --report target/qa/secret-rotation.json 2>&1 | tee target/qa/deploy.log
+        timeout-minutes: 35
+        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation --replica-recovery --queue-controls --automatic-deploy --ci-deploy --observability --security-base-layer target/qa/security-alpine-layer.tar.gz --security-trivy /usr/local/bin/firecrab-ci-real-trivy --database-image-archive target/qa/security-postgres.tar --report target/qa/secret-rotation.json 2>&1 | tee target/qa/deploy.log
 
       - name: Retain Deploy acceptance evidence
         if: always()
@@ -1067,6 +1084,7 @@ jobs:
           vm_unit=firecrab-vm-00000000000000000000000000000001.service
           sudo systemd-run --unit="$vm_unit" --collect --quiet sleep 600
           systemctl is-active --quiet "$vm_unit"
+          sudo rm -f /usr/local/bin/firecrab-ci-security-trivy /usr/local/bin/firecrab-ci-real-trivy
           sudo ./install.sh --uninstall
           if systemctl is-active --quiet firecrab-api; then
             echo 'FAILED: firecrab-api is still active after uninstall'

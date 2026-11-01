@@ -2,6 +2,7 @@
 
 import base64
 import contextlib
+import hashlib
 import http.server
 import http.client
 import json
@@ -61,6 +62,12 @@ class MetadataRegistry:
             def do_GET(self):
                 if self.proxy():
                     return
+                self.serve_registry(True)
+
+            def do_HEAD(self):
+                self.serve_registry(False)
+
+            def serve_registry(self, send_body):
                 if self.headers.get("Authorization") != expected:
                     self.send_response(401)
                     self.send_header("WWW-Authenticate", 'Basic realm="Deploy QA"')
@@ -83,8 +90,10 @@ class MetadataRegistry:
                 body = body if body is not None else b"missing"
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Content-Type", mime)
+                self.send_header("Docker-Content-Digest", "sha256:" + hashlib.sha256(body).hexdigest())
                 self.end_headers()
-                self.wfile.write(body)
+                if send_body:
+                    self.wfile.write(body)
 
             def log_message(self, *args):
                 pass

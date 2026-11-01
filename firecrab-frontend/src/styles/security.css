@@ -1,0 +1,535 @@
+/* Security: findings first, technical evidence on demand. */
+.security-page {
+  width: 100%;
+  max-width: 1080px;
+}
+.security-heading h2 {
+  margin: 0 0 8px;
+  font-size: 21px;
+  letter-spacing: -0.4px;
+}
+.security-page p {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.security-heading p {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 13px;
+}
+.security-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 24px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+}
+.security-overview > div {
+  padding: 18px 24px;
+}
+.security-overview > div + div {
+  border-left: 1px solid var(--border);
+}
+.security-overview dt {
+  color: var(--text-3);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.security-overview dd {
+  margin: 0;
+  font-size: 25px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+}
+.security-overview dd span {
+  color: var(--text-4);
+  font-size: 15px;
+  font-weight: 400;
+}
+.security-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.security-toolbar h3 {
+  font-size: 13px;
+  margin: 0;
+  font-weight: 600;
+}
+.security-page summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-2);
+  width: fit-content;
+}
+.security-page summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+.security-ai-settings {
+  position: relative;
+}
+.security-ai-settings > div {
+  position: absolute;
+  right: 0;
+  z-index: 3;
+  width: 310px;
+  max-width: 75vw;
+  padding: 16px;
+  margin-top: 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xs);
+}
+.security-ai-settings label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.security-ai-settings select {
+  width: 100%;
+}
+.security-services {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.security-service {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+.security-service-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px;
+}
+.security-service-heading > div:first-child {
+  min-width: 0;
+}
+.security-service-heading h4 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.security-service-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.security-scan-status[data-complete="false"] {
+  color: var(--amber-ink);
+}
+.security-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.security-page .btn {
+  white-space: nowrap;
+}
+.security-guidance-button {
+  border-color: var(--border-strong);
+  background: var(--bg-subtle);
+}
+.security-findings {
+  margin: 0;
+  padding: 0 22px;
+  list-style: none;
+}
+.security-findings > li {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.7fr) minmax(0, 1.3fr);
+  gap: 10px 20px;
+  padding: 16px 0;
+  border-top: 1px solid var(--border-soft);
+}
+.security-finding-title {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+}
+.security-finding-title a,
+.security-finding-title strong {
+  line-height: 22px;
+  font-weight: 500;
+}
+.security-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.security-badge[data-tone="danger"] {
+  color: var(--red-ink);
+  background: var(--red-soft);
+}
+.security-badge[data-tone="warning"] {
+  color: var(--amber-ink);
+  background: var(--amber-soft);
+}
+.security-badge[data-tone="neutral"] {
+  color: var(--text-2);
+  background: var(--gray-soft);
+}
+.security-finding-body p {
+  margin: 0;
+  font-size: 12px;
+}
+.security-finding-body strong {
+  font-weight: 500;
+}
+.security-page .security-meta {
+  color: var(--text-3);
+  font-size: 11px;
+  margin-top: 4px;
+}
+.security-warning {
+  margin: 0 22px 14px;
+  color: var(--amber-ink);
+  font-size: 12px;
+}
+.security-disclosure {
+  padding: 14px 22px;
+  border-top: 1px solid var(--border);
+}
+.security-evidence {
+  background: var(--bg-subtle);
+}
+.security-evidence-body {
+  padding-top: 14px;
+  font-size: 12px;
+}
+.security-metadata {
+  display: grid;
+  grid-template-columns: 145px minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 0;
+}
+.security-metadata dt {
+  color: var(--text-3);
+}
+.security-metadata dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.security-history {
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+  padding-top: 12px;
+}
+.security-history h5,
+.security-guidance h5 {
+  font-size: 12px;
+  margin: 0 0 6px;
+}
+.security-history .security-findings {
+  padding: 0;
+}
+.security-history > p {
+  margin: 4px 0;
+}
+.security-guidance {
+  padding: 16px;
+  margin: 0 22px 18px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--bg-subtle);
+}
+.security-guidance p {
+  font-size: 12px;
+  margin: 0;
+  white-space: pre-wrap;
+}
+.security-settings {
+  padding: 16px 0;
+}
+.security-settings > p {
+  max-width: 85ch;
+  font-size: 12px;
+  color: var(--text-3);
+  margin: 14px 0;
+}
+.security-settings h4 {
+  font-size: 12px;
+  margin: 16px 0 8px;
+}
+.security-database-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border-soft);
+}
+.security-database-row label {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.security-database-row label span {
+  display: block;
+}
+.security-database-row select {
+  min-width: 0;
+  width: 100%;
+}
+.security-unsupported {
+  font-size: 12px;
+  color: var(--text-2);
+  padding-left: 18px;
+  line-height: 1.8;
+}
+.security-empty {
+  padding: 32px 22px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  text-align: center;
+  font-size: 13px;
+}
+.security-empty p {
+  color: var(--text-3);
+  margin: 8px 0 16px;
+  font-size: 12px;
+}
+@media (max-width: 767px) {
+  .security-overview > div {
+    padding: 14px 10px;
+  }
+  .security-overview dt {
+    font-size: 11px;
+  }
+  .security-overview dd {
+    font-size: 22px;
+  }
+  .security-service-heading {
+    flex-direction: column;
+    padding: 16px;
+  }
+  .security-findings {
+    padding: 0 16px;
+  }
+  .security-findings > li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .security-warning {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+  .security-disclosure {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .security-settings {
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .security-metadata {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .security-metadata dd {
+    margin-bottom: 8px;
+  }
+  .security-guidance {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+  .security-database-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Shared outlines distinguish status, findings, and actions. */
+.security-page svg {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+}
+.security-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.security-heading h2 svg {
+  width: 23px;
+  height: 23px;
+  color: var(--accent);
+}
+.security-overview dt,
+.security-toolbar h3,
+.security-guidance h5,
+.security-coverage-grid h5 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.security-overview dt svg {
+  color: var(--text-2);
+}
+.security-overview > div:first-child dt svg {
+  color: var(--amber-ink);
+}
+.security-page summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+}
+.security-page summary::-webkit-details-marker {
+  display: none;
+}
+.security-page summary::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  flex: none;
+  margin-right: 3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+}
+.security-page details[open] > summary::before {
+  transform: rotate(45deg);
+}
+.security-page summary svg {
+  color: var(--text-3);
+}
+.security-service-heading h4 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+.security-service-heading h4 > svg {
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+  color: var(--text-2);
+}
+.security-service-status {
+  margin-left: 42px;
+}
+.security-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 22px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-soft);
+}
+.security-group-title svg {
+  width: 14px;
+  height: 14px;
+  color: var(--text-3);
+}
+.security-group-count {
+  color: var(--text-3);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 0 5px;
+  line-height: 16px;
+  background: var(--bg);
+}
+.security-group-title + .security-findings > li:first-child {
+  border-top: 0;
+}
+.security-finding-body .security-fix {
+  margin-top: 5px;
+  color: var(--text-2);
+}
+.security-copy-line {
+  display: block;
+}
+.security-guidance h5 svg {
+  color: var(--accent);
+}
+.security-guidance p {
+  white-space: normal;
+}
+.security-coverage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.security-coverage-grid > section {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.security-coverage-grid h5 {
+  font-size: 12px;
+  font-weight: 500;
+  margin: 0 0 10px;
+}
+.security-coverage-grid h5 svg {
+  color: var(--text-3);
+}
+.security-coverage-grid p {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+@media (max-width: 767px) {
+  .security-overview dt {
+    align-items: flex-start;
+    gap: 5px;
+  }
+  .security-overview dt svg {
+    width: 13px;
+    height: 13px;
+    margin-top: 1px;
+  }
+  .security-overview dt {
+    font-size: 10px;
+  }
+  .security-service-status {
+    margin-left: 0;
+  }
+  .security-group-title {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .security-coverage-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.security-overview dt {
+  word-break: keep-all;
+}
+.security-finding-body p,
+.security-guidance p {
+  font-size: 13px;
+}
