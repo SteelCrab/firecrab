@@ -163,7 +163,7 @@ test("deletes the template, reinstalls through the API, and boots to FIRECRAB_NE
   await imageRow.click();
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete image", exact: true }).click();
-  await expect(imageRow).toContainText("Not installed", { timeout: 15_000 });
+  await expect(imageRow).toHaveCount(0, { timeout: 15_000 });
   await expect
     .poll(async () =>
       (await api.listImages()).some(
