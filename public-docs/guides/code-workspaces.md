@@ -23,7 +23,7 @@ AI AUTH management uses the shared Pipe AI manager in place.
 **Choose AI AUTH** changes the saved workspace's agent/account binding with a
 revision check. It can reuse an existing account or explicitly remove this
 workspace's assignment. The shared account remains connected for other workspaces.
-**Editor status** opens `#/code/{workspace-uuid}/editor` with the same live AUTH
+**Open workspace** opens `#/code/{workspace-uuid}/editor` with the same live AUTH
 states. Prepare and open Web VS Code and the terminal for a ready MicroVM.
 See [CODE editor](code-editor.md). Assigned agents can run explicitly in the same folder. See [CODE agent execution](code-agent-execution.md). See [CODE AI AUTH](code-ai-auth.md) for assignment,
 approval, disconnect and recovery states.
@@ -36,18 +36,17 @@ enable operations. The earlier local interactive mockup is not runtime evidence.
 
 ## Workspace setup
 
-1. Connect GitHub in the existing Pipe AUTH screen if needed. In setup, reload
-   connections, choose a repository and branch, and enter a workspace name.
-   Repository selection suggests its name when the name field is empty.
-2. Choose Node.js, Python or Rust and the CPU, RAM and disk capacity.
-3. Choose an agent and a compatible existing AI AUTH account, or explicitly
-   choose no agent. ChatGPT accounts are eligible for Codex configuration;
-   OpenCode uses OpenAI or Anthropic API keys. Claude Code uses Anthropic keys.
-4. Save the workspace. The resulting detail view shows the persisted settings.
-5. Choose an installed image, an internet-enabled MicroNetwork and a storage root.
-   Click **Create and start MicroVM** to clone the selected repository and branch.
-   Later, stop and start the same VM to preserve the working folder. See
-   [runtime controls and recovery](code-runtime.md#dashboard-controls).
+1. Connect GitHub once if needed, then select a repository.
+2. Keep its suggested name, default branch and environment. Python and Rust
+   repositories suggest their runtime from GitHub language metadata; other
+   repositories start with Node.js. **Settings** lets you override these choices.
+3. One runnable AI AUTH account is reused automatically with Codex for OpenAI keys
+   or Claude Code for Anthropic keys. Multiple accounts require one explicit
+   account choice. Other agents and workspace-only mode remain in **Settings**.
+4. Click **Create workspace** to open its task screen. Click **Start workspace**
+   when ready, then enter a task and run the agent. Existing image/network/storage
+   defaults are reused; advanced placement stays in **Workspace settings**.
+5. Stop/start retains the working folder. See [runtime controls](code-runtime.md#dashboard-controls).
 
 GitHub management opens its existing screen in another tab. AI AUTH opens the
 shared account manager in CODE and keeps the setup fields. Returning reloads
@@ -72,7 +71,8 @@ Setup does not overwrite the changed configuration.
 
 Both require the controller operator. Pages contain at most 20 choices and an
 optional `nextPage`; `page` is 1–1000. Repository pages return `account` and
-`repositories` (`owner`, `repository`, `defaultBranch`, `private`). Branch pages
+`repositories` (`owner`, `repository`, `defaultBranch`, `private`, and optional
+`language` for the runtime suggestion). Branch pages
 return `account`, `owner`, `repository` and `branches` (exact names). Disabled
 repositories are excluded. Discovery is read-only and is not checkout evidence.
 

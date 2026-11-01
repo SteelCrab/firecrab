@@ -11,6 +11,9 @@ pub struct CodeRepositoryChoice {
     pub repository: String,
     /// GitHub's suggested branch; branch discovery still checks the branch list.
     pub default_branch: String,
+    /// Primary language, used only to suggest an editable runtime default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     /// Whether the repository is private.
     pub private: bool,
 }

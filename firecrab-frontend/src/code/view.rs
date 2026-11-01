@@ -173,6 +173,25 @@ fn detail(app: &App, workspace: &Workspace) -> String {
         escape(&repo.repository),
         escape(&repo.branch)
     );
+    if let RuntimeState::Current(runtime) = &app.code.runtime {
+        let (label, _) = phase(app, &runtime.phase);
+        let _ = write!(
+            out,
+            "<p class=\"code-workspace-state\" role=\"status\">{label}</p>"
+        );
+    }
+    let _ = write!(
+        out,
+        "<p><a class=\"btn primary\" href=\"#/code/{}/editor\">{}</a></p><details id=\"code-overview-settings\" class=\"code-options\" {}><summary>{}</summary>",
+        workspace.id,
+        tr(app, "Open workspace", "워크스페이스 열기"),
+        if app.code.binding.is_some() || (lifecycle::unresolved(app) && !lifecycle::busy(app)) {
+            "open"
+        } else {
+            ""
+        },
+        tr(app, "Workspace settings", "워크스페이스 설정")
+    );
     let mut config = String::from("<dl class=\"code-properties\">");
     config.push_str(&property(
         app,
@@ -219,14 +238,8 @@ fn detail(app: &App, workspace: &Workspace) -> String {
     auth.push_str(&agent_auth::content(app, workspace));
     out.push_str(&runtime_section(app, workspace));
     out.push_str(&section(tr(app, "Account connections", "계정 연결"), &auth));
-    let _ = write!(
-        out,
-        "<section class=\"code-section\"><h3>{}</h3><a class=\"btn\" href=\"#/code/{}/editor\">{}</a></section>",
-        tr(app, "Editor", "편집기"),
-        workspace.id,
-        tr(app, "Editor status", "편집기 상태")
-    );
     out.push_str(&section(tr(app, "Configuration", "설정"), &config));
+    out.push_str("</details>");
     out
 }
 pub(super) fn runtime_section(app: &App, workspace: &Workspace) -> String {
@@ -328,7 +341,7 @@ pub(super) fn connection<'a>(app: &App, state: &str) -> &'a str {
         _ => tr(app, "Account status unknown", "계정 상태 알 수 없음"),
     }
 }
-fn runtime_name<'a>(app: &App, name: &str) -> &'a str {
+pub(super) fn runtime_name<'a>(app: &App, name: &str) -> &'a str {
     match name {
         "node_js" => "Node.js",
         "python" => "Python",

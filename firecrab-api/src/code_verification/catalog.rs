@@ -43,6 +43,7 @@ impl Github {
             name: String,
             full_name: String,
             default_branch: String,
+            language: Option<String>,
             private: bool,
             disabled: bool,
         }
@@ -66,6 +67,9 @@ impl Github {
                     repository: repo.name,
                     default_branch: repo.default_branch,
                     private: repo.private,
+                    language: repo
+                        .language
+                        .filter(|s| s.len() <= 64 && !s.chars().any(char::is_control)),
                 });
             }
         }

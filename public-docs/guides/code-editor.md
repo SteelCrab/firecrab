@@ -7,7 +7,7 @@ Preparing or opening them does not run the assigned AI agent or transfer its cre
 ## Open the workspace
 
 1. Create and start the [CODE runtime](code-runtime.md). Wait for **MicroVM ready**.
-2. Open **Editor status**, then click **Prepare editor and terminal**.
+2. Open the workspace, then click **Prepare editor and terminal**.
 3. Wait for preparation to finish. Choose **Open Web VS Code** or **Open terminal**.
 
 The editor and terminal open in separate tabs. The editor also includes its own

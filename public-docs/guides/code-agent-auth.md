@@ -24,7 +24,7 @@ is not silently converted to a Codex cache or substituted with another account.
 
 ## Verify the saved assignment
 
-Open a saved workspace or its **Editor status** view. **Verify agent AUTH**
+Open **Workspace settings** in a saved workspace. **Verify agent AUTH**
 requires a ready MicroVM, a compatible connected account and a supported recipe.
 Preinstall the exact CLI as `/usr/local/bin/codex`, `/usr/local/bin/claude`, or
 `/usr/local/bin/opencode`. The executable, resolved target and parent directories

@@ -9,7 +9,7 @@ Runtime lifecycle requests do not automatically launch them or an AI agent.
 ## Dashboard controls
 
 Save the workspace at **CODE → New workspace**, then open its detail view.
-The **MicroVM** section is also available in **Editor status**.
+The **MicroVM** section is also available in **Open workspace**.
 
 1. Choose an installed image that fits the saved disk capacity, an internet-enabled
    MicroNetwork and a registered storage root. The default root is selected when available.

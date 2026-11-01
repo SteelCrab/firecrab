@@ -76,10 +76,11 @@ async function open(page: Page, options: { locale?: "en" | "ko"; editor?: boolea
   });
   await page.goto(`/#/code/${id}${options.editor ? "/editor" : ""}`);
   await expect(page.locator(options.editor ? "#code-editor h2" : "#code-details h2")).toHaveText("web-app");
+  await page.locator(options.editor?"#code-workspace-settings > summary":"#code-overview-settings > summary").click();
   return { state, errors };
 }
 const assignment = (page: Page) => page.locator(".code-binding");
-const choose = (page: Page) => page.getByRole("button", { name: "Choose AI AUTH", exact: true }).click();
+const choose = async(page:Page)=>{const d=page.locator("#code-workspace-settings,#code-overview-settings").first();if(await d.count()&&await d.getAttribute("open")===null)await d.locator(":scope > summary").click();await page.getByRole("button",{name:"Choose AI AUTH",exact:true}).click();};
 const save = (page: Page) => page.getByRole("button", { name: "Save assignment", exact: true });
 
 for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) test(`${locale} reuse and remove an editor assignment at ${width}px @dashboard`, async ({ page }, info) => {
@@ -91,7 +92,7 @@ for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) tes
   await page.getByRole("combobox", { name: ko ? "AI AUTH 계정" : "AI AUTH account", exact: true }).selectOption(chat);
   await expect(assignment(page)).toContainText(ko ? "다시 로그인하지 않고" : "without signing in again");
   await expect(page.getByRole("button", { name: ko ? "에이전트 실행" : "Run agent", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: ko ? "Web VS Code 열기" : "Open Web VS Code", exact: true })).toBeDisabled();
+  await expect(page.getByRole("link", { name: ko ? "Web VS Code 열기" : "Open Web VS Code", exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.getByRole("button", { name: ko ? "할당 저장" : "Save assignment", exact: true }).scrollIntoViewIfNeeded();
   if (!ko) await page.screenshot({ path: info.outputPath(`code-auth-states-en-${width}.png`), fullPage: true });
@@ -110,8 +111,8 @@ for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) tes
 
 test("workspace and editor reflect shared disconnection and explicit recovery @dashboard", async ({ page }) => {
   const { state, errors } = await open(page); await page.clock.install();
-  await page.getByRole("link", { name: "Editor status", exact: true }).click();
-  await page.getByRole("button", { name: "Manage AI AUTH", exact: true }).click();
+  await page.getByRole("link", { name: "Open workspace", exact: true }).click();
+  await page.getByRole("button", { name: "AI AUTH", exact: true }).click();
   await page.getByRole("row").filter({ hasText: "Shared OpenAI" }).getByRole("button", { name: "Disconnect", exact: true }).click();
   await page.getByRole("button", { name: "Back to editor", exact: true }).click();
   await expect(page.locator("#code-editor-auth")).toContainText("Account missing or disconnected");
@@ -119,7 +120,7 @@ test("workspace and editor reflect shared disconnection and explicit recovery @d
   expect(state.records[0].spec.agent?.connectionId).toBe(key); expect(state.records[1].spec.agent?.connectionId).toBe(key);
   await choose(page); await page.getByRole("combobox", { name: "AI AUTH account", exact: true }).selectOption(chat); await save(page).click();
   await expect(assignment(page)).toHaveCount(0);
-  await page.getByRole("link", { name: "Back to workspace", exact: true }).click();
+  await page.locator("#code-editor .code-detail-head .code-text-link").click();
   await expect(page.locator("#code-details")).toContainText(chat); await expect(page.locator("#code-details")).toContainText("Account present · access not verified");
   await page.goto(`/#/code/${other}/editor`); await expect(page.locator("#code-editor-auth")).toContainText("Account missing or disconnected");
   expect(state.writes.filter(w => w.path.startsWith(base))).toHaveLength(1); expect(errors).toEqual([]);
@@ -205,7 +206,7 @@ test("assignment survives account management and retains its leave guard @dashbo
   await page.getByRole("button", { name: "Back to editor", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "AI AUTH account", exact: true })).toHaveValue(chat);
   let guarded = false; page.once("dialog", async d => { guarded = true; await d.dismiss(); });
-  await page.getByRole("link", { name: "Back to workspace", exact: true }).click();
+  await page.locator("#code-editor .code-detail-head .code-text-link").click();
   await expect.poll(() => guarded).toBe(true); await expect(page).toHaveURL(new RegExp(`${id}/editor$`));
   expect(state.writes).toHaveLength(0); expect(errors).toEqual([]);
 });

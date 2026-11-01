@@ -47,7 +47,7 @@ for(const locale of ['en','ko'])for(const width of [1280,390])test(`${locale} ru
  await page.getByRole('button',{name:ko?'실행 취소':'Cancel run',exact:true}).click();await expect(panel(page)).toContainText(ko?'취소됨':'Cancelled');expect(state.writes).toHaveLength(2);expect(errors).toEqual([]);
 });
 for(const [agent,provider] of [['claude_code','anthropic'],['opencode','openai'],['opencode','anthropic']])test(`${agent}/${provider} uses only its saved assignment @dashboard`,async({page})=>{
- const {state,errors,profile}=await open(page,{agent,provider});await page.getByLabel('Task',{exact:true}).fill('Update README');await page.getByLabel('Model ID (optional)',{exact:true}).fill('fixture-model');await expect(start(page)).toBeEnabled();await start(page).click();await expect(panel(page)).toContainText('Queued');
+ const {state,errors,profile}=await open(page,{agent,provider});await page.getByLabel('Task',{exact:true}).fill('Update README');await page.locator('#code-agent-options > summary').click();await page.getByLabel('Model ID (optional)',{exact:true}).fill('fixture-model');await expect(start(page)).toBeEnabled();await start(page).click();await expect(panel(page)).toContainText('Queued');
  expect(state.writes[0].body.model).toBe('fixture-model');expect(Object.keys(state.writes[0].body).sort()).toEqual(['expectedRevision','model','operationId','prompt','runtimeId','vmId']);expect(state.rows[0].adapterId).toBe(profile.id);expect(errors).toEqual([]);
 });
 test('lost start response and reload only observe the existing run @dashboard',async({page})=>{
@@ -76,4 +76,9 @@ test('history outage blocks new runs and fresh status recovers @dashboard',async
 });
 test('navigation drops a delayed observation and resumes polling on return @dashboard',async({page})=>{
  const {state,errors}=await open(page);await page.getByLabel('Task',{exact:true}).fill('Update README');await expect(start(page)).toBeEnabled();let release!:()=>void;state.historyDelay=()=>new Promise<void>(r=>{release=r;});await expect.poll(()=>Boolean(release)).toBe(true);await page.evaluate(()=>{location.hash='#/vms';});state.historyDelay=null;release();await page.evaluate(id=>{location.hash='#/code/'+id+'/editor';},id);await expect(page.getByLabel('Task',{exact:true})).toHaveValue('');await page.getByLabel('Task',{exact:true}).fill('New task after returning');await expect(start(page)).toBeEnabled();expect(errors).toEqual([]);
+});
+
+test('task is the only visible input and details survive observation polling @dashboard',async({page})=>{
+ const {state,errors}=await open(page);await expect(panel(page).getByText('Shared development AUTH',{exact:false})).toBeVisible();expect(await panel(page).locator('input:visible').count()).toBe(0);expect(await panel(page).locator('textarea:visible').count()).toBe(1);await expect(page.locator('#code-workspace-settings')).not.toHaveAttribute('open');
+ await page.locator('#code-agent-options > summary').click();await page.getByLabel('Model ID (optional)',{exact:true}).fill('fixture-model');await page.waitForTimeout(3300);await expect(page.getByLabel('Model ID (optional)',{exact:true})).toBeVisible();await expect(page.getByLabel('Model ID (optional)',{exact:true})).toHaveValue('fixture-model');expect(state.writes).toHaveLength(0);expect(errors).toEqual([]);
 });

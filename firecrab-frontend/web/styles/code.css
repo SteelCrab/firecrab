@@ -115,3 +115,25 @@
 .code-agent-output { max-height: 360px; overflow: auto; padding: 14px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); font: 12px/1.7 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .code-agent-history { margin-top: 20px; font-size: 12px; }
 .code-agent-history summary { cursor: pointer; }
+
+.code-options { margin: 20px 0; border-top: 1px solid var(--border); padding-top: 16px; font-size: 12px; min-width: 0; }
+.code-options > summary { cursor: pointer; color: var(--text-2); font-weight: 500; padding: 4px 0; }
+.code-options[open] > summary { margin-bottom: 16px; }
+#code-editor { width: 100%; max-width: 900px; margin: 0 auto; padding-bottom: 32px; }
+#code-editor .code-detail-head { margin-bottom: 20px; }
+#code-editor .code-detail-head h2 { margin-top: 14px; }
+#code-editor .code-editor-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; border-top: 0; padding: 8px 0 20px; }
+#code-editor .code-editor-tools .code-hint, #code-editor .code-editor-tools .code-account-actions { margin: 0; }
+.code-workspace-state { color: var(--text-3); font-size: 12px; margin: 0 0 8px; }
+.code-prepare-workspace { padding: 16px 0; display: flex; align-items: center; flex-wrap: wrap; gap: 16px; font-size: 13px; }
+.code-task-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.code-task-head h3 { margin: 0; flex: 1; }
+.code-task-head span { font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
+.code-task-head button { border: 0; padding: 4px; background: transparent; cursor: pointer; }
+#code-agent-execution .code-options { border-top: 0; padding-top: 0; margin: 14px 0; }
+.code-quick-setup { max-width: 760px; margin: auto; }
+.code-quick-setup .code-setup-intro { margin-bottom: 12px; }
+.code-quick-setup .code-default-summary { margin: 8px 0 0; color: var(--text-2); font-size: 13px; overflow-wrap: anywhere; }
+.code-quick-setup .code-setup-section { padding: 18px 0; }
+.code-quick-setup .code-setup-section h2 { font-size: 13px; margin-bottom: 12px; }
+@media(max-width:740px) { .code-task-head h3 { flex-basis: 100%; } #code-editor { max-width: 100%; } .code-quick-setup .code-capacity { grid-template-columns: 1fr; } }

@@ -3,23 +3,29 @@ use super::*;
 use crate::model::escape;
 
 pub(super) fn content(app: &App, w: &Workspace) -> String {
-    let tools = tools(app, w);
-    let microvm = view::runtime_section(app, w);
-    let checks = format!(
-        "{}{}",
+    let settings = format!(
+        "{}{}{}{}",
+        view::runtime_section(app, w),
+        binding::content(app, w),
         auth::verification(app, w),
         agent_auth::content(app, w)
     );
+    let toolbar = format!("{}{}", lifecycle::quick(app, w), tools(app, w));
     format!(
-        "<div id=\"code-editor\"><header class=\"code-detail-head\"><a class=\"code-text-link\" href=\"#/code/{}\">{}</a><h2>{}</h2><p>{}/{}</p></header><div class=\"code-editor-layout\"><div>{microvm}{tools}{}</div><section id=\"code-editor-auth\" class=\"code-section\" aria-label=\"AI AUTH\"><h3>AI AUTH</h3>{}{}</section></div></div>",
-        w.id,
-        tr(app, "Back to workspace", "워크스페이스로 돌아가기"),
+        "<div id=\"code-editor\"><header class=\"code-detail-head\"><a class=\"code-text-link\" href=\"#/code\">{}</a><h2>{}</h2><p>{}/{} · {}</p></header>{}{}<details id=\"code-workspace-settings\" class=\"code-options\" {}><summary>{}</summary><div id=\"code-editor-auth\">{settings}</div></details></div>",
+        tr(app, "Workspaces", "워크스페이스"),
         escape(&w.spec.name),
         escape(&w.spec.github.owner),
         escape(&w.spec.github.repository),
+        escape(&w.spec.github.branch),
+        toolbar,
         agent_run::content(app, w),
-        binding::content(app, w),
-        checks
+        if app.code.binding.is_some() || (lifecycle::unresolved(app) && !lifecycle::busy(app)) {
+            "open"
+        } else {
+            ""
+        },
+        tr(app, "Workspace settings", "워크스페이스 설정")
     )
 }
 
@@ -112,6 +118,13 @@ pub(super) fn load(app: Shared) {
     });
 }
 pub(super) fn action(app: &Shared, action: &str) -> bool {
+    if action == "code-workspace-settings" {
+        if let Some(details) = element("code-workspace-settings") {
+            let _ = details.set_attribute("open", "");
+            details.scroll_into_view();
+        }
+        return true;
+    }
     if action != "code-editor-prepare" {
         return false;
     }
@@ -161,41 +174,26 @@ fn tools(app: &App, w: &Workspace) -> String {
     let ready = current.is_some_and(|s| s.phase == "ready");
     let preparing = s.busy || current.is_some_and(|s| s.phase == "preparing");
     let status = if ready {
-        tr(
-            app,
-            "Web VS Code and terminal are ready for this workspace.",
-            "이 워크스페이스의 Web VS Code와 터미널이 준비됐습니다.",
-        )
+        tr(app, "Editor ready", "편집기 준비됨")
     } else if preparing {
-        tr(
-            app,
-            "Preparing Web VS Code and terminal…",
-            "Web VS Code와 터미널 준비 중…",
-        )
+        tr(app, "Preparing editor…", "편집기 준비 중…")
     } else {
-        tr(
-            app,
-            "Web VS Code is not connected yet. Account changes do not start an editor or terminal.",
-            "Web VS Code가 아직 연결되지 않았습니다. 계정을 변경해도 편집기나 터미널을 실행하지 않습니다.",
-        )
+        tr(app, "Editor not prepared", "편집기 준비 전")
     };
     let mut out = format!(
-        "<section class=\"code-section code-editor-tools\" aria-label=\"Web VS Code\"><h3>Web VS Code</h3><p class=\"code-hint\" role=\"status\">{status}</p><div class=\"code-account-actions\">"
+        "<section class=\"code-section code-editor-tools\" aria-label=\"Web VS Code\"><p class=\"code-hint\" role=\"status\">{status}</p><div class=\"code-account-actions\">"
     );
-    for (terminal, en, ko) in [
-        (false, "Open Web VS Code", "Web VS Code 열기"),
-        (true, "Open terminal", "터미널 열기"),
-    ] {
-        let label = tr(app, en, ko);
-        if ready {
-            out.push_str(&format!("<a class=\"btn\" href=\"{WORKSPACES}/{}/editor/open{}\" target=\"_blank\" rel=\"noopener noreferrer\">{label}</a>",w.id,if terminal{"?terminal=true"}else{""}));
-        } else {
-            out.push_str(&format!("<button class=\"btn\" disabled>{label}</button>"));
+    if ready {
+        for (terminal, en, ko) in [
+            (false, "Open Web VS Code", "Web VS Code 열기"),
+            (true, "Open terminal", "터미널 열기"),
+        ] {
+            out.push_str(&format!("<a class=\"btn\" href=\"{WORKSPACES}/{}/editor/open{}\" target=\"_blank\" rel=\"noopener noreferrer\">{}</a>",w.id,if terminal{"?terminal=true"}else{""},tr(app,en,ko)));
         }
     }
     if !ready {
         out.push_str(&format!(
-            "<button class=\"btn primary\" data-action=\"code-editor-prepare\" {}>{}</button>",
+            "<button class=\"btn\" data-action=\"code-editor-prepare\" {}>{}</button>",
             if preparing
                 || runtime(app, w).is_none()
                 || app.code.binding.is_some()
@@ -212,6 +210,6 @@ fn tools(app: &App, w: &Workspace) -> String {
     if s.error || current.is_some_and(|s| s.phase == "failed") {
         out.push_str(&format!("<p class=\"code-message\" role=\"alert\">{}</p>",tr(app,"Could not confirm editor readiness. Check its status or retry preparation. A supported Ubuntu/glibc image is required.","편집기 준비 상태를 확인하지 못했습니다. 상태를 확인하거나 준비를 재시도해 주세요. 지원되는 Ubuntu/glibc 이미지가 필요합니다.")));
     }
-    out.push_str(&format!("<p class=\"code-hint\">{}</p></section>",tr(app,"Opens in a separate authenticated site. Terminal commands run as the workspace user in /home/fc-code/project. Stop or restart ends this browser session.","인증된 별도 사이트에서 엽니다. 터미널 명령은 /home/fc-code/project에서 워크스페이스 사용자로 실행됩니다. 중지하거나 다시 시작하면 브라우저 세션이 종료됩니다.")));
+    out.push_str("</section>");
     out
 }

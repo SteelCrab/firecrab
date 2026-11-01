@@ -113,7 +113,7 @@ fn editor_observes_workspace_auth_without_enabling_unverified_tools() {
         assert!(html.contains(label));
         assert!(html.contains("Agent authentication is not verified here."));
         assert!(html.contains("disabled>Run agent"));
-        assert!(html.contains("disabled>Open Web VS Code"));
+        assert!(!html.contains("/editor/open"));
         assert!(!html.contains("<iframe"));
     }
     let mut w = workspace();

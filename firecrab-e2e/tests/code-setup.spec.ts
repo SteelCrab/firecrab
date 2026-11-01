@@ -1,10 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const key = "11111111-1111-4111-8111-111111111111", chat = "22222222-2222-4222-8222-222222222222", anthropic = "33333333-3333-4333-8333-333333333333";
-const repo = { owner: "team", repository: "web-app", defaultBranch: "main", private: true };
+const repo = { owner: "team", repository: "web-app", defaultBranch: "main", private: true, language:"Python" };
 const worker = { ...repo, repository: "worker" };
 type Workspace = { id: string; revision: number; spec: any; connections: { github: string; ai: string }; createdAtMs: number; updatedAtMs: number };
-async function open(page: Page, locale: "en" | "ko" = "en", options: { missing?: boolean; paged?: boolean; failure?: "committed" | "not_saved" } = {}) {
+async function open(page: Page, locale: "en" | "ko" = "en", options: { missing?: boolean; paged?: boolean; failure?: "committed" | "not_saved"; single?:boolean;quick?:boolean } = {}) {
   const state = { github: options.missing ? "" : "octocat", accounts: [
     { id: key, name: "OpenAI team", provider: "openai", authentication: "api_key" },
     { id: chat, name: "Personal ChatGPT", provider: "openai", authentication: "chatgpt" },
@@ -46,9 +46,11 @@ async function open(page: Page, locale: "en" | "ko" = "en", options: { missing?:
     if (path === "/api/vms") return send([]);
     return send({ error: { code: "not_found" } }, 404);
   });
-  await page.goto("/#/code/new"); return state;
+  if(options.single)state.accounts=state.accounts.slice(0,1);
+  await page.goto("/#/code/new");if(!options.quick)await page.locator("#code-setup-options > summary").click(); return state;
 }
 async function choose(page: Page, locale: "en" | "ko" = "en") {
+  await page.getByRole("combobox",{name:locale==="en"?"Agent":"에이전트",exact:true}).selectOption("none");
   await page.getByRole("textbox", { name: locale === "en" ? "Workspace name" : "워크스페이스 이름", exact: true }).fill("web-app");
   await page.getByRole("combobox", { name: locale === "en" ? "GitHub repository" : "GitHub 저장소", exact: true }).selectOption("team/web-app");
   await expect(page.getByRole("combobox", { name: locale === "en" ? "Branch" : "브랜치", exact: true })).toHaveValue("main");
@@ -67,9 +69,9 @@ for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) tes
   await expect(create).toBeEnabled(); await create.scrollIntoViewIfNeeded();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   if (!ko) await page.screenshot({ path: info.outputPath(`code-setup-en-${width}.png`), fullPage: true });
-  await create.click(); await expect(page).toHaveURL(/#\/code\/[0-9a-f-]{36}$/);
-  await expect(page.locator("#code-details h2")).toHaveText("web-app");
-  await expect(page.locator("#code-details")).toContainText(ko ? "MicroVM 생성 전" : "MicroVM not provisioned");
+  await create.click(); await expect(page).toHaveURL(/#\/code\/[0-9a-f-]{36}\/editor$/);
+  await expect(page.locator("#code-editor h2")).toHaveText("web-app");
+  await expect(page.locator("#code-editor")).toContainText(ko ? "MicroVM 생성 전" : "MicroVM not provisioned");
   expect(state.writes).toHaveLength(1);
   expect(state.writes[0].body).toEqual({ expectedRevision: 0, spec: { name: "web-app", github: { account: "octocat", owner: "team", repository: "web-app", branch: "feature/login" }, runtime: "python", resources: { cpu: 4, ram: 8192, diskGb: 32 }, agent: { agent: "codex", connectionId: chat } } });
   expect(state.mutations.every(call => /^PUT \/api\/code\/workspaces\/[0-9a-f-]{36}$/.test(call))).toBe(true);
@@ -85,8 +87,8 @@ test("account compatibility matches each agent and explicit no-agent creation @d
   await page.getByRole("button", { name: "Reload connections", exact: true }).click();
   await expect(page.getByRole("button", { name: "Create workspace", exact: true })).toBeDisabled();
   await expect(page.locator("#content")).toContainText("No compatible account");
-  await agent.selectOption(""); await expect(account).toHaveCount(0);
-  await page.getByRole("button", { name: "Create workspace", exact: true }).click(); await expect(page.locator("#code-details h2")).toHaveText("web-app");
+  await agent.selectOption("none"); await expect(account).toHaveCount(0);
+  await page.getByRole("button", { name: "Create workspace", exact: true }).click(); await expect(page.locator("#code-editor h2")).toHaveText("web-app");
   expect(state.writes[0].body.spec.agent).toBeNull(); expect(state.errors).toEqual([]);
 });
 test("missing GitHub, pagination and changed connections preserve entered settings @dashboard", async ({ page }) => {
@@ -120,7 +122,7 @@ for (const failure of ["committed", "not_saved"] as const) test(`unknown save ($
   page.once("dialog", d => d.accept()); await page.reload();
   await expect(page.getByRole("button", { name: "Check saved workspace", exact: true })).toBeEnabled();
   if (failure === "not_saved") await expect(page.locator("#api-status")).toHaveText("Live");
-  await page.getByRole("button", { name: "Check saved workspace", exact: true }).click(); await expect(page.locator("#code-details h2")).toHaveText("web-app");
+  await page.getByRole("button", { name: "Check saved workspace", exact: true }).click(); await expect(page.locator("#code-editor h2")).toHaveText("web-app");
   expect(state.writes).toHaveLength(failure === "committed" ? 1 : 2); expect(state.writes.every(write => JSON.stringify(write) === JSON.stringify(first))).toBe(true); expect(state.records).toHaveLength(1);
   expect(await page.evaluate(() => sessionStorage.getItem("firecrab.code.create.v1"))).toBeNull(); expect(state.errors).toEqual([]);
 });
@@ -139,6 +141,19 @@ test("an externally changed saved workspace is reviewed without another write @d
   await page.getByRole("button", { name: "Check saved workspace", exact: true }).click();
   await expect(page.locator("#code-setup-error")).toContainText("saved workspace changed");
   await page.getByRole("button", { name: "Review saved workspace", exact: true }).click();
-  await expect(page.locator("#code-details h2")).toHaveText("renamed-by-operator");
+  await expect(page.locator("#code-editor h2")).toHaveText("renamed-by-operator");
   expect(state.writes).toHaveLength(1); expect(state.errors).toEqual([]);
+});
+
+for(const locale of ['en','ko'] as const)for(const width of [1280,390])test(`${locale} repository-only setup at ${width}px @dashboard`,async({page},info)=>{
+ await page.setViewportSize({width,height:900});const state=await open(page,locale,{single:true,quick:true});const ko=locale==='ko';
+ await expect(page.locator('#code-setup-options')).not.toHaveAttribute('open');await expect(page.locator('#code-field-name')).toBeHidden();
+ await page.getByLabel(ko?'GitHub 저장소':'GitHub repository',{exact:true}).selectOption('team/web-app');
+ const create=page.getByRole('button',{name:ko?'워크스페이스 생성':'Create workspace',exact:true});await expect(create).toBeEnabled();
+ expect(await page.locator('#code-setup select:visible').count()).toBe(1);await expect(page.locator('.code-default-summary')).toContainText(['web-app','Codex']);
+ expect(state.mutations).toHaveLength(0);if(!ko)await page.screenshot({path:info.outputPath(`code-quick-setup-en-${width}.png`),fullPage:true});await create.click();
+ await expect(page).toHaveURL(/\/editor$/);expect(state.writes[0].body.spec).toMatchObject({name:'web-app',runtime:'python',resources:{cpu:2,ram:4096,diskGb:16},github:{branch:'main'},agent:{agent:'codex',connectionId:key}});expect(state.errors).toEqual([]);
+});
+test('multiple eligible accounts require one clear billing choice @dashboard',async({page})=>{
+ const state=await open(page,'en',{quick:true});await page.getByLabel('GitHub repository',{exact:true}).selectOption('team/web-app');const create=page.getByRole('button',{name:'Create workspace',exact:true});await expect(create).toBeDisabled();await page.getByLabel('AI account',{exact:true}).selectOption(anthropic);await expect(create).toBeEnabled();await page.getByLabel('AI account',{exact:true}).selectOption('');await expect(create).toBeDisabled();await page.getByLabel('AI account',{exact:true}).selectOption(anthropic);await expect(create).toBeEnabled();await create.click();expect(state.writes[0].body.spec.agent).toEqual({agent:'claude_code',connectionId:anthropic});
 });

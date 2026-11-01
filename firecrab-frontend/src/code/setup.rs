@@ -1,4 +1,5 @@
 //! One configuration flow. Private credentials remain in the existing account services.
+mod defaults;
 mod view;
 use super::accounts::{Account, compatible};
 use super::*;
@@ -20,6 +21,8 @@ struct Choice {
     owner: String,
     repository: String,
     default_branch: String,
+    #[serde(default)]
+    language: Option<String>,
 }
 impl Choice {
     fn key(&self) -> String {
@@ -45,6 +48,9 @@ pub(super) struct Setup {
     error: String,
     repo_error: String,
     ai_error: bool,
+    name_changed: bool,
+    runtime_changed: bool,
+    agent_changed: bool,
 }
 fn stored() -> Option<Pending> {
     let storage = window().session_storage().ok().flatten()?;
@@ -86,6 +92,15 @@ fn valid_spec(spec: &Spec) -> bool {
         })
 }
 fn can_save(s: &Setup) -> bool {
+    if s.ai_error && !s.agent_changed {
+        return false;
+    }
+    if !s.agent_changed
+        && s.spec.agent.is_none()
+        && s.accounts.iter().any(|a| defaults::preferred(a).is_some())
+    {
+        return false;
+    }
     valid_spec(&s.spec)
         && s.github == s.spec.github.account
         && !s.loading
@@ -148,6 +163,7 @@ pub fn load(app: Shared) {
             },
             agent: None,
         });
+    let restored = pending.is_some();
     {
         let mut a = app.borrow_mut();
         a.dirty = pending.is_some();
@@ -171,6 +187,9 @@ pub fn load(app: Shared) {
             error: String::new(),
             repo_error: String::new(),
             ai_error: false,
+            name_changed: restored,
+            runtime_changed: restored,
+            agent_changed: restored,
         });
     }
     metadata(&app);
@@ -254,6 +273,7 @@ fn metadata(app: &Shared) {
         {
             s.spec.agent.as_mut().unwrap().connection_id.clear();
         }
+        defaults::agent(s);
         drop(a);
         repositories(&app, 1);
         render_content(&app);
@@ -441,7 +461,10 @@ pub fn input(app: &Shared, node: &Element) -> bool {
     }
     let value = input.value();
     match key.as_str() {
-        "name" => s.spec.name = value,
+        "name" => {
+            s.spec.name = value;
+            s.name_changed = true;
+        }
         "cpu" => s.spec.resources.cpu = value.parse().unwrap_or(0),
         "disk" => s.spec.resources.disk_gb = value.parse().unwrap_or(0),
         _ => return false,
@@ -487,29 +510,51 @@ pub fn change(app: &Shared, node: &Element) -> bool {
                     repository: String::new(),
                     branch: String::new(),
                 });
-            if s.spec.name.is_empty() {
-                s.spec.name = s.spec.github.repository.chars().take(64).collect();
-            }
+            defaults::repository(s);
         }
         "branch" => s.spec.github.branch = value,
-        "runtime" => s.spec.runtime = value,
+        "runtime" => {
+            s.spec.runtime = value;
+            s.runtime_changed = true;
+        }
         "ram" => s.spec.resources.ram = value.parse().unwrap_or(0),
         "agent" => {
-            s.spec.agent = if value.is_empty() {
+            s.agent_changed = !value.is_empty();
+            s.spec.agent = if value.is_empty() || value == "none" {
                 None
             } else {
                 Some(Agent {
-                    connection_id: s
-                        .accounts
-                        .iter()
-                        .find(|c| compatible(&value, c))
-                        .map(|c| c.id.clone())
-                        .unwrap_or_default(),
+                    connection_id: defaults::account(s, &value),
                     agent: value,
                 })
             }
         }
+        "assignment" => {
+            if value.is_empty() {
+                s.spec.agent = None;
+                s.agent_changed = false;
+            } else {
+                let Some(account) = s.accounts.iter().find(|a| a.id == value) else {
+                    return true;
+                };
+                let Some(preferred) = defaults::preferred(account) else {
+                    return true;
+                };
+                let agent = s
+                    .spec
+                    .agent
+                    .as_ref()
+                    .filter(|a| compatible(&a.agent, account))
+                    .map_or(preferred, |a| a.agent.as_str());
+                s.spec.agent = Some(Agent {
+                    agent: agent.into(),
+                    connection_id: account.id.clone(),
+                });
+                s.agent_changed = true;
+            }
+        }
         "account" => {
+            s.agent_changed = true;
             if let Some(binding) = &mut s.spec.agent {
                 binding.connection_id = value;
             }
@@ -578,7 +623,7 @@ fn complete(app: &Shared, id: &str) {
             s.pending = None;
         }
     }
-    let _ = window().location().set_hash(&format!("/code/{id}"));
+    let _ = window().location().set_hash(&format!("/code/{id}/editor"));
 }
 pub fn submit(app: &Shared, form: &str) -> bool {
     if form != "code-setup" {

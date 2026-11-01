@@ -152,7 +152,8 @@ fn placement(app: &App, w: &Workspace) -> Option<Placement> {
         template: c
             .images
             .iter()
-            .find(|i| eligible_image(i, w))
+            .find(|i| eligible_image(i, w) && i.alias.starts_with("ubuntu"))
+            .or_else(|| c.images.iter().find(|i| eligible_image(i, w)))
             .map(|i| i.alias.clone())
             .unwrap_or_default(),
         micro_network_id: c
@@ -349,4 +350,67 @@ pub(super) fn action(app: &Shared, action: &str) -> bool {
         _ => return false,
     };
     true
+}
+
+pub(super) fn quick(app: &App, w: &Workspace) -> String {
+    if let RuntimeState::Current(r) = &app.code.runtime
+        && r.phase == "ready"
+        && !unresolved(app)
+    {
+        return format!(
+            "<p class=\"code-workspace-state\" role=\"status\">{}</p>",
+            tr(app, "Workspace ready", "워크스페이스 준비됨")
+        );
+    }
+    if app.code.lifecycle.request.is_some() {
+        return format!(
+            "<div class=\"code-prepare-workspace\"><p>{}</p><button class=\"btn\" data-action=\"code-workspace-settings\" {}>{}</button></div>",
+            tr(
+                app,
+                "Confirm the previous workspace request to continue.",
+                "이전 워크스페이스 요청을 확인해 주세요."
+            ),
+            if busy(app) { "disabled" } else { "" },
+            tr(app, "Review request", "요청 검토")
+        );
+    }
+    if let RuntimeState::Current(r) = &app.code.runtime
+        && pending(r)
+    {
+        return format!(
+            "<p class=\"code-workspace-state\" role=\"status\">{}</p>",
+            tr(app, "Preparing workspace…", "워크스페이스 준비 중…")
+        );
+    }
+    let action = if matches!(app.code.runtime, RuntimeState::Absent) {
+        Action::Create
+    } else {
+        Action::Start
+    };
+    if available(app, w, &action) {
+        format!(
+            "<div class=\"code-prepare-workspace\"><p>{}</p><button class=\"btn primary\" data-action=\"code-runtime-{}\">{}</button></div>",
+            tr(
+                app,
+                "Start this workspace to run your task.",
+                "작업을 실행하려면 워크스페이스를 시작합니다."
+            ),
+            if action == Action::Create {
+                "create"
+            } else {
+                "start"
+            },
+            tr(app, "Start workspace", "워크스페이스 시작")
+        )
+    } else {
+        format!(
+            "<div class=\"code-prepare-workspace\"><p>{}</p><button class=\"btn\" data-action=\"code-workspace-settings\">{}</button></div>",
+            tr(
+                app,
+                "Check workspace setup to continue.",
+                "워크스페이스 설정을 확인해 주세요."
+            ),
+            tr(app, "Workspace settings", "워크스페이스 설정")
+        )
+    }
 }

@@ -2,7 +2,7 @@ use super::*;
 const REPOS: &str = "/api/code/github/repositories?account=octocat";
 const BRANCHES: &str = "/api/code/github/branches?account=octocat&owner=team&repository=web-app";
 fn repo(n: usize) -> Value {
-    json!({"owner":{"login":"team"},"name":format!("app-{n}"),"full_name":format!("team/app-{n}"),"default_branch":"main","private":true,"disabled":false,"secret":"code-private-extra"})
+    json!({"owner":{"login":"team"},"name":format!("app-{n}"),"full_name":format!("team/app-{n}"),"default_branch":"main","private":true,"disabled":false,"language":"Python","secret":"code-private-extra"})
 }
 fn reply(f: &Fixture, path: &str, status: u16, value: Value) {
     f.remote
@@ -44,7 +44,8 @@ async fn code_catalog_paginates_sanitizes_and_reuses_only_the_github_credential(
     assert_eq!(page["nextPage"], 3);
     let public: CodeRepositoryPage = serde_json::from_value(page.clone()).unwrap();
     assert_eq!(public.repositories.len(), 20);
-    assert_eq!(page["repositories"][0].as_object().unwrap().len(), 4);
+    assert_eq!(page["repositories"][0].as_object().unwrap().len(), 5);
+    assert_eq!(public.repositories[0].language.as_deref(), Some("Python"));
     assert!(
         f.remote
             .queries

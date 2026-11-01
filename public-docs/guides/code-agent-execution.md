@@ -8,8 +8,8 @@ terminal. No second account login is required.
 
 1. Select an agent and existing AI AUTH in the workspace settings.
 2. Start the [CODE runtime](code-runtime.md). Wait for **MicroVM ready**.
-3. Open **Editor status**. Enter a **Task** under **Agent execution**.
-4. Leave **Model ID** empty for the pinned agent's default, or enter a provider model ID.
+3. Open the workspace and enter a **Task**. The assigned agent/account is shown beside it.
+4. Keep the agent default model. **Options** contains an optional model override.
 5. Click **Run agent**. Inspect its status and output. Open Web VS Code to review files.
 
 The first run installs the pinned native CLI when it is absent. Installation uses
@@ -31,7 +31,9 @@ See [agent AUTH recipes](code-agent-auth.md).
 
 Changing an assignment or opening a page does not start a task. A task can edit
 files and execute commands as the existing `fc-code` user. Model usage belongs to
-the assigned account. The model list in the observation includes accepted helper
+the assigned account. **Run details** contains CLI versions, models, usage and diagnostic codes.
+**Workspace settings** contains account assignment, optional checks and runtime controls.
+These panels retain their open state while observations refresh. The model list includes accepted helper
 calls made by the CLI. A model override must be honored by every provider request;
 an agent that requests another model is stopped.
 

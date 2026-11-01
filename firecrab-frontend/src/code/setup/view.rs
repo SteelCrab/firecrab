@@ -109,34 +109,18 @@ pub fn content(app: &App) -> String {
     } else {
         ""
     };
+    let chosen = format!("{}/{}", s.spec.github.owner, s.spec.github.repository);
     let mut out = format!(
-        "<section id=\"code-workspaces\" class=\"code-setup\"><p class=\"code-setup-intro\">{}</p><div class=\"code-setup-connections\">{} {} <button type=\"button\" class=\"btn\" data-action=\"code-reload-accounts\" {}>{}</button></div><form id=\"code-setup\"><fieldset {disabled}>",
+        "<section id=\"code-workspaces\" class=\"code-setup code-quick-setup\"><p class=\"code-setup-intro\">{}</p><form id=\"code-setup\"><fieldset {disabled}><section class=\"code-setup-section\"><div class=\"code-setup-fields\">",
         tr(
             app,
-            "Choose a repository, development environment and optional agent. Save the workspace to keep these settings.",
-            "저장소, 개발 환경과 에이전트를 선택합니다. 워크스페이스를 저장하면 이 설정이 유지됩니다."
-        ),
-        link(app, "pipe/auth", "Manage GitHub", "GitHub 관리"),
-        link(app, "pipe/ai", "Manage AI AUTH", "AI AUTH 관리"),
-        if s.loading || s.busy { "disabled" } else { "" },
-        tr(app, "Reload connections", "연결 새로 불러오기")
+            "Choose your repository. Start with the defaults.",
+            "저장소를 선택하면 기본 설정을 준비합니다."
+        )
     );
-    out.push_str(&format!("<section class=\"code-setup-section\"><h2><span>1</span> {}</h2><div class=\"code-setup-fields\">",tr(app,"Repository","저장소")));
-    out.push_str(&input(app,"name","Workspace name","워크스페이스 이름",&s.spec.name,"type=\"text\" maxlength=\"64\" required autocomplete=\"off\" aria-describedby=\"code-name-hint\""));
-    out.push_str(&format!("<p id=\"code-name-hint\" class=\"code-hint\">{}</p><p class=\"code-connected\">GitHub · {}</p>",
-        tr(app,"Use up to 64 letters, digits, dots, underscores or hyphens.","영문, 숫자, 점, 밑줄, 하이픈을 사용합니다. 최대 64자까지 입력할 수 있습니다."),
-        if s.github.is_empty() {tr(app,"Connect a GitHub account to choose a repository.","저장소를 선택하려면 GitHub 계정을 연결해 주세요.").into()} else {escape(&s.github)}));
-    if s.loading || s.repo_loading {
-        out.push_str(&format!(
-            "<p role=\"status\" class=\"code-hint\">{}</p>",
-            tr(
-                app,
-                "Loading repository choices…",
-                "저장소 목록을 불러오는 중…"
-            )
-        ));
+    if s.github.is_empty() {
+        out.push_str(&link(app, "pipe/auth", "Connect GitHub", "GitHub 연결"));
     }
-    let chosen = format!("{}/{}", s.spec.github.owner, s.spec.github.repository);
     let mut options = option("", tr(app, "Select a repository", "저장소 선택"), &chosen);
     for r in &s.repos {
         options.push_str(&option(&r.key(), &r.key(), &chosen));
@@ -156,6 +140,22 @@ pub fn content(app: &App) -> String {
         s.repo_next,
         s.repo_loading,
     ));
+    if s.loading || s.repo_loading || s.branch_loading {
+        out.push_str(&format!(
+            "<p role=\"status\" class=\"code-hint\">{}</p>",
+            tr(
+                app,
+                "Loading repository choices…",
+                "저장소 목록을 불러오는 중…"
+            )
+        ));
+    }
+    if !s.repo_error.is_empty() {
+        out.push_str(&format!(
+            "<p class=\"code-message\" role=\"alert\">{}</p>",
+            message(app, &s.repo_error)
+        ));
+    }
     if !s.github.is_empty()
         && !s.loading
         && !s.repo_loading
@@ -171,6 +171,99 @@ pub fn content(app: &App) -> String {
             )
         ));
     }
+    if !s.spec.github.repository.is_empty() {
+        out.push_str(&format!(
+            "<p class=\"code-default-summary\">{} · {} · {}</p>",
+            escape(&s.spec.name),
+            escape(&s.spec.github.branch),
+            super::super::view::runtime_name(app, &s.spec.runtime)
+        ));
+        if !s.branch_loading && s.spec.github.branch.is_empty() {
+            out.push_str(&format!("<p class=\"code-message\">{}</p>",tr(app,"Choose an available branch in Settings. An empty repository needs a first commit.","설정에서 사용 가능한 브랜치를 선택해 주세요. 빈 저장소에는 첫 커밋이 필요합니다.")));
+        }
+    }
+    out.push_str("</div></section><section class=\"code-setup-section\"><h2>AI AUTH</h2><div class=\"code-setup-fields\">");
+    let eligible = s
+        .accounts
+        .iter()
+        .filter_map(|a| defaults::preferred(a).map(|agent| (agent, a)))
+        .collect::<Vec<_>>();
+    if let Some(binding) = &s.spec.agent
+        && let Some(account) = s.accounts.iter().find(|a| a.id == binding.connection_id)
+    {
+        out.push_str(&format!(
+            "<p class=\"code-default-summary\">{} · {}</p>",
+            agent_name(&binding.agent),
+            escape(&account.name)
+        ));
+    }
+    if !eligible.is_empty()
+        && (eligible.len() > 1
+            || s.spec
+                .agent
+                .as_ref()
+                .is_some_and(|a| a.connection_id.is_empty()))
+        && !(s.agent_changed && s.spec.agent.is_none())
+    {
+        let selected = s
+            .spec
+            .agent
+            .as_ref()
+            .map(|a| a.connection_id.clone())
+            .unwrap_or_default();
+        let mut options = option(
+            "",
+            tr(app, "Choose an AI account", "AI 계정 선택"),
+            &selected,
+        );
+        for (_, account) in &eligible {
+            options.push_str(&option(
+                &account.id,
+                &format!(
+                    "{} · {}",
+                    account.name,
+                    if account.provider == "anthropic" {
+                        "Anthropic"
+                    } else {
+                        "OpenAI"
+                    }
+                ),
+                &selected,
+            ));
+        }
+        out.push_str(&select(
+            app,
+            "assignment",
+            "AI account",
+            "AI 계정",
+            &options,
+        ));
+    } else if s.agent_changed && s.spec.agent.is_none() {
+        out.push_str(&format!(
+            "<p>{}</p>",
+            tr(app, "Workspace only", "워크스페이스만 사용")
+        ));
+    } else if eligible.is_empty() {
+        out.push_str(&link(app, "pipe/ai", "Connect AI AUTH", "AI AUTH 연결"));
+    }
+    if s.spec.agent.as_ref().is_some_and(|a| {
+        a.connection_id.is_empty() && !s.accounts.iter().any(|c| compatible(&a.agent, c))
+    }) {
+        out.push_str(&format!("<p class=\"code-hint\">{}</p>",tr(app,"No compatible account. Connect one in AI AUTH, then reload connections.","호환되는 계정이 없습니다. AI AUTH에서 계정을 연결한 뒤 연결 정보를 새로 불러와 주세요.")));
+    }
+    if s.ai_error {
+        out.push_str(&format!("<p class=\"code-message\" role=\"alert\">{}</p>",tr(app,"AI AUTH accounts could not be loaded. Reload connections to select an agent account.","AI AUTH 계정을 불러오지 못했습니다. 연결 정보를 새로 불러와 주세요.")));
+    }
+    out.push_str("</div></section>");
+    out.push_str(&format!("<details id=\"code-setup-options\" class=\"code-options\" {}><summary>{}</summary><div class=\"code-setup-fields\">",if s.error=="code_workspace_name_taken"{"open"}else{""},tr(app,"Settings","설정")));
+    out.push_str(&input(
+        app,
+        "name",
+        "Workspace name",
+        "워크스페이스 이름",
+        &s.spec.name,
+        "maxlength=\"64\" required autocomplete=\"off\"",
+    ));
     let mut options = option(
         "",
         tr(app, "Select a branch", "브랜치 선택"),
@@ -180,26 +273,6 @@ pub fn content(app: &App) -> String {
         options.push_str(&option(name, name, &s.spec.github.branch));
     }
     out.push_str(&select(app, "branch", "Branch", "브랜치", &options));
-    if s.branch_loading {
-        out.push_str(&format!(
-            "<p class=\"code-hint\" role=\"status\">{}</p>",
-            tr(app, "Loading branches…", "브랜치를 불러오는 중…")
-        ));
-    }
-    if !s.spec.github.repository.is_empty()
-        && !s.branch_loading
-        && s.branches.is_empty()
-        && s.repo_error.is_empty()
-    {
-        out.push_str(&format!(
-            "<p class=\"code-hint\">{}</p>",
-            tr(
-                app,
-                "No branches found. An empty repository needs a first commit.",
-                "브랜치가 없습니다. 빈 저장소에는 첫 커밋이 필요합니다."
-            )
-        ));
-    }
     out.push_str(&more(
         app,
         "code-more-branches",
@@ -208,14 +281,6 @@ pub fn content(app: &App) -> String {
         s.branch_next,
         s.branch_loading,
     ));
-    if !s.repo_error.is_empty() {
-        out.push_str(&format!(
-            "<p class=\"code-message\" role=\"alert\">{}</p>",
-            message(app, &s.repo_error)
-        ));
-    }
-    out.push_str("</div></section>");
-    out.push_str(&format!("<section class=\"code-setup-section\"><h2><span>2</span> {}</h2><div class=\"code-setup-fields\">",tr(app,"Development environment","개발 환경")));
     let options = [
         ("node_js", "Node.js"),
         ("python", "Python"),
@@ -232,7 +297,7 @@ pub fn content(app: &App) -> String {
         "vCPU",
         "vCPU",
         &s.spec.resources.cpu.to_string(),
-        "type=\"number\" min=\"1\" max=\"32\" step=\"1\" required",
+        "type=\"number\" min=\"1\" max=\"32\" required",
     ));
     let options = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
         .iter()
@@ -251,58 +316,40 @@ pub fn content(app: &App) -> String {
         "Disk (GiB)",
         "디스크 (GiB)",
         &s.spec.resources.disk_gb.to_string(),
-        "type=\"number\" min=\"1\" max=\"500\" step=\"1\" required",
+        "type=\"number\" min=\"1\" max=\"500\" required",
     ));
-    out.push_str("</div></div></section>");
-    out.push_str(&format!("<section class=\"code-setup-section\"><h2><span>3</span> {}</h2><div class=\"code-setup-fields\">",tr(app,"Agent & AI AUTH","에이전트 및 AI AUTH")));
-    let selected = s.spec.agent.as_ref().map_or("", |a| a.agent.as_str());
-    let mut options = option(
-        "",
+    out.push_str("</div>");
+    let selected = s
+        .spec
+        .agent
+        .as_ref()
+        .map_or(if s.agent_changed { "none" } else { "" }, |a| {
+            a.agent.as_str()
+        });
+    let mut options = option("", tr(app, "Choose an agent", "에이전트 선택"), selected);
+    options.push_str(&option(
+        "none",
         tr(
             app,
             "No agent (workspace only)",
             "에이전트 없음 (워크스페이스만 생성)",
         ),
         selected,
-    );
-    for (id, label) in [
-        ("codex", "Codex"),
-        ("claude_code", "Claude Code"),
-        ("opencode", "OpenCode"),
-    ] {
-        options.push_str(&option(id, label, selected));
+    ));
+    for agent in ["codex", "claude_code", "opencode"] {
+        options.push_str(&option(agent, agent_name(agent), selected));
     }
     out.push_str(&select(app, "agent", "Agent", "에이전트", &options));
     if let Some(binding) = &s.spec.agent {
-        let options = super::super::accounts::choices(app, &s.accounts, binding);
-        let accounts = s
-            .accounts
-            .iter()
-            .filter(|a| compatible(&binding.agent, a))
-            .collect::<Vec<_>>();
         out.push_str(&select(
             app,
             "account",
             "AI AUTH account",
             "AI AUTH 계정",
-            &options,
+            &accounts::choices(app, &s.accounts, binding),
         ));
-        if accounts.is_empty() {
-            out.push_str(&format!("<p class=\"code-hint\">{}</p>",tr(app,"No compatible account. Connect one in AI AUTH, then reload connections.","호환되는 계정이 없습니다. AI AUTH에서 계정을 연결한 뒤 연결 정보를 새로 불러와 주세요.")));
-        }
     }
-    if s.ai_error {
-        out.push_str(&format!("<p class=\"code-message\" role=\"alert\">{}</p>",tr(app,"AI AUTH accounts could not be loaded. Reload connections to select an agent account.","AI AUTH 계정을 불러오지 못했습니다. 에이전트 계정을 선택하려면 연결 정보를 새로 불러와 주세요.")));
-    }
-    let _ = write!(
-        out,
-        "<p class=\"code-hint\">{}</p></div></section></fieldset>",
-        tr(
-            app,
-            "Account compatibility is checked when saving. Agent sign-in is verified separately.",
-            "저장할 때 계정 호환성을 확인합니다. 에이전트 로그인은 별도로 검증합니다."
-        )
-    );
+    out.push_str(&format!("<div class=\"code-account-actions\">{} {} <button class=\"btn\" type=\"button\" data-action=\"code-reload-accounts\">{}</button></div></div></details></fieldset>",link(app,"pipe/auth","Manage GitHub","GitHub 관리"),link(app,"pipe/ai","Manage AI AUTH","AI AUTH 관리"),tr(app,"Reload connections","연결 정보 새로 불러오기")));
     if s.pending.is_some() && !s.busy {
         out.push_str(&format!(
             "<p class=\"code-message\" role=\"status\">{}</p>",
@@ -318,9 +365,35 @@ pub fn content(app: &App) -> String {
     if s.error == "save_conflict" {
         out.push_str(&format!("<button class=\"btn\" type=\"button\" data-action=\"code-review-existing\">{}</button>",tr(app,"Review saved workspace","저장된 워크스페이스 검토")));
     }
-    out.push_str(&format!("<footer class=\"code-setup-footer\"><p>{}</p><div><a class=\"btn\" href=\"#/code\">{}</a><button id=\"code-save\" class=\"btn primary\" type=\"submit\" {}>{}</button></div></footer></form></section>",
-        tr(app,"Save these settings, then choose MicroVM placement to create and start it. No agent starts.","설정을 저장한 뒤 MicroVM 배치 정보를 선택하여 생성하고 시작합니다. 에이전트는 실행하지 않습니다."),tr(app,"Cancel","취소"),
-        if s.busy || (s.pending.is_none() && !can_save(s)) {"disabled"} else {""},
-        if s.busy {tr(app,"Saving…","저장 중…")} else if s.pending.is_some() {tr(app,"Check saved workspace","저장된 워크스페이스 확인")} else {tr(app,"Create workspace","워크스페이스 생성")}));
+    let label = if s.busy {
+        tr(app, "Saving…", "저장 중…")
+    } else if s.pending.is_some() {
+        tr(app, "Check saved workspace", "저장된 워크스페이스 확인")
+    } else {
+        tr(app, "Create workspace", "워크스페이스 생성")
+    };
+    let _ = write!(
+        out,
+        "<footer class=\"code-setup-footer\"><p>{}</p><div><a class=\"btn\" href=\"#/code\">{}</a><button id=\"code-save\" class=\"btn primary\" type=\"submit\" {}>{label}</button></div></footer></form></section>",
+        tr(
+            app,
+            "Start the workspace when you are ready to work.",
+            "작업할 준비가 되면 워크스페이스를 시작합니다."
+        ),
+        tr(app, "Cancel", "취소"),
+        if s.busy || (s.pending.is_none() && !can_save(s)) {
+            "disabled"
+        } else {
+            ""
+        }
+    );
     out
+}
+fn agent_name(agent: &str) -> &str {
+    match agent {
+        "codex" => "Codex",
+        "claude_code" => "Claude Code",
+        "opencode" => "OpenCode",
+        _ => agent,
+    }
 }

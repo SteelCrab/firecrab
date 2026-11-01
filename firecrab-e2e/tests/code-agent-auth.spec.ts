@@ -28,6 +28,7 @@ async function open(page: Page, options: { locale?: "en" | "ko"; agent?: string;
   });
   await page.goto(`/#/code/${id}/editor`);
   await expect(page.locator("#code-editor h2")).toHaveText("web-app");
+  await page.locator("#code-workspace-settings > summary").click();
   return { state, errors, profile };
 }
 const panel = (page: Page) => page.locator(".code-agent-auth");

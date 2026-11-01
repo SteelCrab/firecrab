@@ -48,7 +48,7 @@ async function open(page: Page, options: { locale?: "en" | "ko"; setup?: boolean
     if (path === "/api/vms") return send([]);
     return send({ error: { code: "not_found" } }, 404);
   });
-  await page.goto(options.setup ? "/#/code/new" : `/#/code/${workspaceId}`); return { state, errors };
+  await page.goto(options.setup ? "/#/code/new" : `/#/code/${workspaceId}`); await page.locator(options.setup?"#code-setup-options > summary":"#code-overview-settings > summary").click(); return { state, errors };
 }
 async function manage(page: Page, ko = false) { await page.getByRole("button", { name: ko ? "AI AUTH 관리" : "Manage AI AUTH", exact: true }).click(); }
 
@@ -71,7 +71,7 @@ for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) tes
   const select = page.getByRole("combobox", { name: ko ? "AI AUTH 계정" : "AI AUTH account", exact: true });
   await select.selectOption(state.connections[0].id);
   await page.getByRole("button", { name: ko ? "워크스페이스 생성" : "Create workspace", exact: true }).click();
-  await expect(page.locator("#code-details h2")).toHaveText("retained-draft");
+  await expect(page.locator("#code-editor h2")).toHaveText("retained-draft");
   expect(state.configs[0].spec.agent.connectionId).toBe(state.connections[0].id);
   expect(JSON.stringify(state.configs)).not.toContain("code-auth-private-key");
   expect(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }))).not.toContain("code-auth-private-key");

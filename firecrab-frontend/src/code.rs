@@ -129,6 +129,7 @@ pub struct State {
     binding: Option<binding::Draft>,
     binding_epoch: u64,
     observation_epoch: u64,
+    expanded: std::collections::BTreeSet<String>,
 }
 fn invalidate_observations(app: &mut App) {
     app.code.observation_epoch += 1;
@@ -377,6 +378,25 @@ pub fn input(app: &Shared, target: &Element) -> bool {
 
 /// Keep search cursor, keyboard focus and detail scroll position across observations.
 pub fn render(app: &Shared) {
+    if let Ok(nodes) = document().query_selector_all("#code-workspaces details[id]") {
+        let mut state = app.borrow_mut();
+        for i in 0..nodes.length() {
+            if let Some(detail) = nodes.item(i).and_then(|n| n.dyn_into::<Element>().ok()) {
+                if detail.has_attribute("open") {
+                    state.code.expanded.insert(detail.id());
+                } else {
+                    state.code.expanded.remove(&detail.id());
+                }
+            }
+        }
+    }
+    let expanded = app
+        .borrow()
+        .code
+        .expanded
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
     let focus = document().active_element().filter(|el| {
         el.closest("#code-workspaces").ok().flatten().is_some() && !el.id().is_empty()
     });
@@ -400,6 +420,11 @@ pub fn render(app: &Shared) {
     app.borrow_mut().rendering = true;
     crate::set_html("content", &html);
     app.borrow_mut().rendering = false;
+    for id in expanded {
+        if let Some(detail) = element(&id) {
+            let _ = detail.set_attribute("open", "");
+        }
+    }
     if let Some(status) = element("api-status") {
         let state = app.borrow();
         let (kind, label) = api_status(&state);

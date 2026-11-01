@@ -56,6 +56,7 @@ async function open(page:Page, options:{locale?:"en"|"ko";setup?:boolean;running
     return send({error:{code:"not_found"}},404);
   });
   await page.goto(options.setup?"/#/code/new":`/#/code/${id}`);
+  await page.locator(options.setup?"#code-setup-options > summary":"#code-overview-settings > summary").click();
   return {state,errors,advance,admit};
 }
 const create=(p:Page,ko=false)=>p.getByRole("button",{name:ko?"MicroVM 생성 및 시작":"Create and start MicroVM",exact:true});
@@ -66,7 +67,7 @@ for(const locale of ["en","ko"] as const)for(const width of [1280,390])test(`${l
   const ko=locale==="ko";await page.setViewportSize({width,height:1000});const {state,errors,advance}=await open(page,{locale,setup:true});
   await page.getByRole("textbox",{name:ko?"워크스페이스 이름":"Workspace name",exact:true}).fill("web-app");
   await page.getByRole("combobox",{name:ko?"GitHub 저장소":"GitHub repository",exact:true}).selectOption("team/web-app");
-  await control(page,ko?"워크스페이스 생성":"Create workspace").click();await expect(page.locator("#code-details h2")).toHaveText("web-app");
+  await control(page,ko?"워크스페이스 생성":"Create workspace").click();await expect(page.locator("#code-editor h2")).toHaveText("web-app");await page.locator("#code-workspace-settings > summary").click();
   await expect(create(page,ko)).toBeEnabled();expect(state.writes).toHaveLength(1);
   const images=page.getByRole("combobox",{name:ko?"설치된 이미지":"Installed image",exact:true});await expect(images.locator("option")).toHaveCount(2);
   await page.getByRole("combobox",{name:ko?"스토리지 루트":"Storage root",exact:true}).selectOption("archive");
@@ -87,7 +88,7 @@ for(const locale of ["en","ko"] as const)for(const width of [1280,390])test(`${l
 for(const width of [1280,390])test(`editor lifecycle controls retain the same runtime at ${width}px @dashboard`,async({page},info)=>{
   await page.setViewportSize({width,height:1000});
   const {state,errors,advance}=await open(page,{running:true});
-  await page.getByRole("link",{name:"Editor status",exact:true}).click();
+  await page.getByRole("link",{name:"Open workspace",exact:true}).click();await page.locator("#code-workspace-settings > summary").click();
   await expect(page.locator("#code-editor .code-runtime-status")).toHaveText("MicroVM ready");
   await control(page,"Stop MicroVM").click();await expect(page.locator(".code-runtime-status")).toHaveText("Queued");advance("stopped");
   await expect(control(page,"Start MicroVM")).toBeEnabled();await control(page,"Start MicroVM").click();await expect(page.locator(".code-runtime-status")).toHaveText("Queued");advance("ready");

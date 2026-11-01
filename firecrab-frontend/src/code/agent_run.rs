@@ -194,14 +194,24 @@ pub(super) fn load(app: Shared) {
     if a.code.agent_run.workspace != w.id || a.code.agent_run.generation != a.generation {
         let old = std::mem::take(&mut a.code.agent_run);
         let same = old.workspace == w.id;
-        let pending=restore(&w.id);
-        let prompt=pending.as_ref().and_then(|p|p.request["prompt"].as_str()).map(str::to_owned).unwrap_or_else(||if same{old.prompt}else{String::new()});
-        let model=pending.as_ref().and_then(|p|p.request["model"].as_str()).map(str::to_owned).unwrap_or_else(||if same{old.model}else{String::new()});
+        let pending = restore(&w.id);
+        let prompt = pending
+            .as_ref()
+            .and_then(|p| p.request["prompt"].as_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| if same { old.prompt } else { String::new() });
+        let model = pending
+            .as_ref()
+            .and_then(|p| p.request["model"].as_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| if same { old.model } else { String::new() });
         a.code.agent_run = State {
             workspace: w.id.clone(),
             generation: a.generation,
             epoch: old.epoch + 1,
-            pending, prompt, model,
+            pending,
+            prompt,
+            model,
             ..State::default()
         };
     }

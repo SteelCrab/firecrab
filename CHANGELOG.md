@@ -25,6 +25,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Simplify CODE setup and task screens with repository defaults, automatic reuse of
+  one runnable AI account, one explicit choice for multiple accounts, and collapsed
+  environment, model and diagnostic settings.
 - Run selected CODE agents with their assigned shared AI AUTH in the retained
   workspace. Keep provider keys on the controller, install pinned native CLIs,
   and add cancellation, durable single-use requests and bounded execution history.
