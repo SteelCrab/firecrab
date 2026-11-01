@@ -1,10 +1,8 @@
 //! Durable Sandbox records share the private controller database.
 use super::{PersistenceError, Store};
 use crate::ai_sandbox::{ModelProof, SavedTask};
-use firecrab_api_types::{
-    SandboxAccessPolicy, SandboxProject, SandboxTaskState, SandboxTaskSummary,
-};
-use rusqlite::{OptionalExtension, params};
+use firecrab_api_types::{SandboxProject, SandboxTaskState, SandboxTaskSummary};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
@@ -43,6 +41,31 @@ fn corrupt() -> PersistenceError {
     }
 }
 
+/// Called only after the native/IaC authority check in the same transaction.
+pub(super) fn delete_project_rows(
+    conn: &rusqlite::Connection,
+    id: Uuid,
+) -> Result<(), PersistenceError> {
+    conn.execute("DELETE FROM ai_sandbox_admissions WHERE task_id IN (SELECT id FROM ai_sandbox_tasks WHERE project_id=?1)",[id.to_string()])?;
+    conn.execute(
+        "DELETE FROM ai_sandbox_attempts WHERE project_id=?1",
+        [id.to_string()],
+    )?;
+    conn.execute(
+        "DELETE FROM ai_sandbox_task_index WHERE project_id=?1",
+        [id.to_string()],
+    )?;
+    conn.execute(
+        "DELETE FROM ai_sandbox_tasks WHERE project_id=?1",
+        [id.to_string()],
+    )?;
+    conn.execute(
+        "DELETE FROM ai_sandbox_projects WHERE id=?1",
+        [id.to_string()],
+    )?;
+    Ok(())
+}
+
 /// Save a compact derived projection in the same transaction as its canonical attempt.
 fn index_task(
     conn: &rusqlite::Connection,
@@ -65,29 +88,6 @@ impl Store {
             |row| row.get(0),
         )?)
     }
-    /// Missing host policies deny every delegated operation.
-    pub fn sandbox_access(&self, principal: Uuid) -> Result<SandboxAccessPolicy, PersistenceError> {
-        self.lock()
-            .query_row(
-                "SELECT spec FROM ai_sandbox_access WHERE principal=?1",
-                [principal.to_string()],
-                |row| row.get(0),
-            )
-            .optional()?
-            .map(decode)
-            .transpose()
-            .map(Option::unwrap_or_default)
-    }
-    /// Atomically replace one host's complete policy, including explicit revocation.
-    pub fn save_sandbox_access(
-        &self,
-        principal: Uuid,
-        policy: &SandboxAccessPolicy,
-    ) -> Result<(), PersistenceError> {
-        self.lock().execute("INSERT INTO ai_sandbox_access(principal,spec) VALUES(?1,?2) ON CONFLICT(principal) DO UPDATE SET spec=excluded.spec", params![principal.to_string(),encode(policy)?])?;
-        Ok(())
-    }
-
     /// Backfill legacy local-operator records before serving requests; never grant a remote host.
     pub fn rebuild_sandbox_references(&self) -> Result<(), PersistenceError> {
         loop {
@@ -129,7 +129,17 @@ impl Store {
     /// Save a project and its exclusive borrowed-VM reference.
     pub fn save_sandbox_project(&self, project: &SandboxProject) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !super::iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "sandbox_project".into(),
+                id: project.id.to_string(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        super::iac_native::ensure_project_available(&tx, project.id)?;
         let previous: Option<String> = tx
             .query_row(
                 "SELECT spec FROM ai_sandbox_projects WHERE id=?1",
@@ -149,29 +159,20 @@ impl Store {
         Ok(())
     }
     /// Delete metadata only; workspace removal is performed after ownership checks.
+    #[cfg(test)]
     pub fn delete_sandbox_project(&self, id: Uuid) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
-        let tx = conn.transaction()?;
-        tx.execute(
-            "DELETE FROM ai_sandbox_admissions WHERE task_id IN (SELECT id FROM ai_sandbox_tasks WHERE project_id=?1)",
-            [id.to_string()],
-        )?;
-        tx.execute(
-            "DELETE FROM ai_sandbox_attempts WHERE project_id=?1",
-            [id.to_string()],
-        )?;
-        tx.execute(
-            "DELETE FROM ai_sandbox_task_index WHERE project_id=?1",
-            [id.to_string()],
-        )?;
-        tx.execute(
-            "DELETE FROM ai_sandbox_tasks WHERE project_id=?1",
-            [id.to_string()],
-        )?;
-        tx.execute(
-            "DELETE FROM ai_sandbox_projects WHERE id=?1",
-            [id.to_string()],
-        )?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !super::iac_owners::public_write_allowed(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "sandbox_project".into(),
+                id: id.to_string(),
+            },
+        )? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        delete_project_rows(&tx, id)?;
         tx.commit()?;
         Ok(())
     }
@@ -352,7 +353,15 @@ impl Store {
     /// Save a checkpoint before starting provider or guest side effects.
     pub fn save_sandbox_task(&self, task: &SavedTask) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM ai_sandbox_tasks WHERE id=?1)",
+            [task.task.id.to_string()],
+            |row| row.get(0),
+        )?;
+        if !existing || task.task.state.active() || task.guest_pending || task.guest_staged {
+            super::iac_native::ensure_project_available(&tx, task.task.project_id)?;
+        }
         let runtime = task.task.runtime;
         validate_runtime(task)?;
         validate_outputs(task)?;

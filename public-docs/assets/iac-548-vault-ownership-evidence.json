@@ -1,0 +1,442 @@
+{
+  "capturedAt": "2026-10-31T08:08:27.157Z",
+  "captureDate": "2026-10-31",
+  "sourceCommit": "66596ba95204a8a7a4de2c3ec07d6196c1fa1a37",
+  "sourceDirty": false,
+  "focusResource": {
+    "kind": "volume",
+    "id": "2ae3eff2-c31d-4add-8283-3a6446a5df13"
+  },
+  "versions": {
+    "browser": "156.0.8078.76",
+    "node": "v26.12.1",
+    "rust": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "cli": "firecrab 0.4.1",
+    "architecture": "arm64"
+  },
+  "fixture": true,
+  "transport": "actual local Axum HTTP; no mocked API responses",
+  "runtime": "compiled WASM dashboard with disposable SQLite resource records; no Linux/KVM boot",
+  "ownership": {
+    "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+    "generation": 1,
+    "owner": {
+      "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+      "key": "firecrab_network.application",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "813457fa-ba6b-4c81-a7fb-0c7746949ad0",
+      "kind": "network"
+    }
+  },
+  "ownerships": [
+    {
+      "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+      "generation": 1,
+      "owner": {
+        "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+        "key": "firecrab_database_connection.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "2d397892-bf7f-4fbb-a21a-cb86cff1c230",
+        "kind": "database_connection"
+      }
+    },
+    {
+      "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+      "generation": 1,
+      "owner": {
+        "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+        "key": "firecrab_network.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "813457fa-ba6b-4c81-a7fb-0c7746949ad0",
+        "kind": "network"
+      }
+    },
+    {
+      "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+      "generation": 1,
+      "owner": {
+        "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+        "key": "firecrab_pool.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "8552f30c-7dc4-49f7-ace8-9b95cf1d3119",
+        "kind": "pool"
+      }
+    },
+    {
+      "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+      "generation": 1,
+      "owner": {
+        "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+        "key": "firecrab_queue.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "efc2a7b9-1283-4487-bec8-5c96d3f861b5",
+        "kind": "queue"
+      }
+    },
+    {
+      "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+      "generation": 1,
+      "owner": {
+        "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+        "key": "firecrab_schedule.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "d006991e-77ad-45dc-bb1c-ff6a6f8c79a3",
+        "kind": "schedule"
+      }
+    },
+    {
+      "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+      "resource": {
+        "kind": "secret",
+        "id": "cd12d9db-4bb9-4e15-8a20-71bccccc2ff9"
+      },
+      "generation": 3,
+      "owner": {
+        "manager": "terraform",
+        "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+        "key": "firecrab_secret.application"
+      }
+    },
+    {
+      "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+      "generation": 1,
+      "owner": {
+        "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+        "key": "firecrab_secret_connection.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "11e7bc4a-7c77-4d7c-8f2f-bbcddff2f286",
+        "kind": "secret_connection"
+      }
+    },
+    {
+      "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+      "generation": 1,
+      "owner": {
+        "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+        "key": "firecrab_security_group.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "27e5d032-4dd4-4758-a2a3-949268dc39fe",
+        "kind": "security_group"
+      }
+    },
+    {
+      "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+      "generation": 1,
+      "owner": {
+        "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+        "key": "firecrab_shell.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "84665d4d-5fd6-4f26-8503-ae7553a18aee",
+        "kind": "shell"
+      }
+    },
+    {
+      "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+      "generation": 1,
+      "owner": {
+        "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+        "key": "firecrab_storage_connection.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "bf63bafb-0e27-47b7-ab3d-e977c11d2dcf",
+        "kind": "storage_connection"
+      }
+    },
+    {
+      "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+      "generation": 1,
+      "owner": {
+        "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+        "key": "firecrab_storage_root.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "f5dad67e-1dc0-4ad8-a702-09ce67731a27",
+        "kind": "storage_root"
+      }
+    },
+    {
+      "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+      "resource": {
+        "kind": "volume",
+        "id": "2ae3eff2-c31d-4add-8283-3a6446a5df13"
+      },
+      "generation": 3,
+      "owner": {
+        "manager": "terraform",
+        "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+        "key": "firecrab_volume.application"
+      }
+    }
+  ],
+  "checks": [
+    "endpoint identity",
+    "43 inventory kinds; fourteen transfer adapters",
+    "actual ownership read",
+    "direct PATCH rejected with 409",
+    "11 configuration kinds reject direct DELETE with 409",
+    "immutable operation acknowledgement",
+    "12 ownership records in the actual dashboard",
+    "desktop dashboard",
+    "375px mobile without horizontal overflow",
+    "no browser page errors"
+  ],
+  "implementationCommit": "66596ba95204a8a7a4de2c3ec07d6196c1fa1a37",
+  "cliCycles": {
+    "identity": {
+      "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+      "inventoryKinds": [
+        "kernel",
+        "image",
+        "storage_root",
+        "volume",
+        "network",
+        "security_group",
+        "shell",
+        "vm",
+        "volume_attachment",
+        "pool",
+        "schedule",
+        "secret",
+        "secret_connection",
+        "auth",
+        "registry",
+        "service",
+        "service_auto_deploy",
+        "service_otlp",
+        "service_deploy_token",
+        "ingress",
+        "quick_tunnel",
+        "named_tunnel",
+        "firecrab_tunnel",
+        "database_connection",
+        "database_binding",
+        "database_events",
+        "database_rabbitmq",
+        "database_migration",
+        "storage_connection",
+        "queue_engine",
+        "queue",
+        "ai_connection",
+        "ai_model",
+        "sandbox_project",
+        "sandbox_access",
+        "sandbox_environment",
+        "sandbox_tunnel",
+        "cluster_host",
+        "cluster_placement",
+        "cluster_service",
+        "stack_source",
+        "management_settings",
+        "host_configuration"
+      ],
+      "transferKinds": [
+        "network",
+        "vm",
+        "service",
+        "storage_root",
+        "volume",
+        "security_group",
+        "shell",
+        "schedule",
+        "pool",
+        "queue",
+        "database_connection",
+        "storage_connection",
+        "secret",
+        "secret_connection"
+      ]
+    },
+    "cycles": {
+      "secret": {
+        "before": {
+          "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+          "generation": 1,
+          "owner": {
+            "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+            "key": "firecrab_secret.application",
+            "manager": "terraform"
+          },
+          "resource": {
+            "id": "cd12d9db-4bb9-4e15-8a20-71bccccc2ff9",
+            "kind": "secret"
+          }
+        },
+        "released": {
+          "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+          "resource": {
+            "kind": "secret",
+            "id": "cd12d9db-4bb9-4e15-8a20-71bccccc2ff9"
+          },
+          "generation": 2,
+          "owner": null
+        },
+        "replay": {
+          "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+          "resource": {
+            "kind": "secret",
+            "id": "cd12d9db-4bb9-4e15-8a20-71bccccc2ff9"
+          },
+          "generation": 2,
+          "owner": null
+        },
+        "reclaimed": {
+          "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+          "resource": {
+            "kind": "secret",
+            "id": "cd12d9db-4bb9-4e15-8a20-71bccccc2ff9"
+          },
+          "generation": 3,
+          "owner": {
+            "manager": "terraform",
+            "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+            "key": "firecrab_secret.application"
+          }
+        },
+        "releaseReceiptAfterReclaim": {
+          "operationId": "a02c11ad-b9ab-4865-b18c-6489792a3cf8",
+          "ownership": {
+            "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+            "resource": {
+              "kind": "secret",
+              "id": "cd12d9db-4bb9-4e15-8a20-71bccccc2ff9"
+            },
+            "generation": 2,
+            "owner": null
+          }
+        },
+        "current": {
+          "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+          "resource": {
+            "kind": "secret",
+            "id": "cd12d9db-4bb9-4e15-8a20-71bccccc2ff9"
+          },
+          "generation": 3,
+          "owner": {
+            "manager": "terraform",
+            "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+            "key": "firecrab_secret.application"
+          }
+        }
+      },
+      "volume": {
+        "before": {
+          "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+          "generation": 1,
+          "owner": {
+            "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+            "key": "firecrab_volume.application",
+            "manager": "terraform"
+          },
+          "resource": {
+            "id": "2ae3eff2-c31d-4add-8283-3a6446a5df13",
+            "kind": "volume"
+          }
+        },
+        "released": {
+          "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+          "resource": {
+            "kind": "volume",
+            "id": "2ae3eff2-c31d-4add-8283-3a6446a5df13"
+          },
+          "generation": 2,
+          "owner": null
+        },
+        "replay": {
+          "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+          "resource": {
+            "kind": "volume",
+            "id": "2ae3eff2-c31d-4add-8283-3a6446a5df13"
+          },
+          "generation": 2,
+          "owner": null
+        },
+        "reclaimed": {
+          "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+          "resource": {
+            "kind": "volume",
+            "id": "2ae3eff2-c31d-4add-8283-3a6446a5df13"
+          },
+          "generation": 3,
+          "owner": {
+            "manager": "terraform",
+            "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+            "key": "firecrab_volume.application"
+          }
+        },
+        "releaseReceiptAfterReclaim": {
+          "operationId": "d48ed707-f1fb-412f-809e-9cee8d036d7f",
+          "ownership": {
+            "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+            "resource": {
+              "kind": "volume",
+              "id": "2ae3eff2-c31d-4add-8283-3a6446a5df13"
+            },
+            "generation": 2,
+            "owner": null
+          }
+        },
+        "current": {
+          "endpointId": "661a33e7-cd45-4422-a7c9-911dbd622e42",
+          "resource": {
+            "kind": "volume",
+            "id": "2ae3eff2-c31d-4add-8283-3a6446a5df13"
+          },
+          "generation": 3,
+          "owner": {
+            "manager": "terraform",
+            "id": "f719b61a-d6d8-4699-826d-2eb3eeaaa374",
+            "key": "firecrab_volume.application"
+          }
+        }
+      }
+    }
+  },
+  "artifacts": {
+    "apiTest": {
+      "file": "target/debug/deps/firecrab_api-7761e04ec490778a",
+      "sha256": "b8aef6df1723edb5121b6cce694c713b84b330bccf4aaadacf226ac129077315"
+    },
+    "cli": {
+      "file": "target/debug/firecrab",
+      "sha256": "994583e5359703e4c0c59b2d233aae861bf02684cd57ad4115b5a830cb3cb835"
+    },
+    "wasm": {
+      "file": "firecrab-frontend/dist/assets/firecrab_frontend_bg-rBhAnhF3.wasm",
+      "sha256": "83eacf10fe38810fc3e836c1411f967cd14b9d9f492f3d2f40c5fbcf91827404"
+    }
+  },
+  "screenshots": {
+    "overview": {
+      "file": "public-docs/assets/iac-548-vault-ownership-overview-2026-10-31.png",
+      "sha256": "486df680ab0e091413290ff14932156a27a6cbbbbbce104001f5309918a96b05"
+    },
+    "desktop": {
+      "file": "public-docs/assets/iac-548-vault-ownership-desktop-2026-10-31.png",
+      "sha256": "fed7a41b217a7525d33b617632c864a6d2f6b24377d1607c1da2e2f7ab10e8a2"
+    },
+    "mobile": {
+      "file": "public-docs/assets/iac-548-vault-ownership-mobile-2026-10-31.png",
+      "sha256": "9991e19fc5130dd554e6e3e637035beafc67d25b8f26f9c0c3932df23752e10d"
+    }
+  }
+}

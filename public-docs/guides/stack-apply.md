@@ -132,7 +132,10 @@ Active applies prevent binding changes and registration deletion.
 
 The existing 64 KiB API request body limit applies, including the JSON request envelope.
 Offline validation's 1 MiB YAML limit does not raise that API limit.
-The planner and executor perform optimistic configuration checks; a multi-resource apply is not an atomic transaction with manual API edits.
+While an apply is queued or running, direct VM/network mutations of its bound or reserved resources return `409 stack_apply_busy`.
+Reads and apply-status polling remain available; request headers cannot bypass the ownership check.
+Admission is serialized with direct edits, within the normal API concurrency and timeout limits.
+The planner and executor still perform optimistic configuration checks; a multi-resource apply is not an atomic transaction with every service controller.
 Existing per-resource operations still enforce their locks and validation.
 Partial success is recorded rather than hidden.
 Git sources use [source synchronization](stack-git-source.md) as their sole apply writer.

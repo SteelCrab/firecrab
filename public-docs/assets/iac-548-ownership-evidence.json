@@ -1,0 +1,39 @@
+{
+  "capturedAt": "2026-10-30T04:05:44.915Z",
+  "sourceCommit": "f8115917bc548b89bcac7be9393b1fcb7cf35456",
+  "sourceDirty": false,
+  "versions": {
+    "browser": "156.0.8078.74",
+    "node": "v26.12.1",
+    "firecrab": "0.4.1",
+    "rust": "1.97.1"
+  },
+  "fixture": true,
+  "transport": "actual local Axum HTTP; no mocked API responses",
+  "runtime": "compiled WASM dashboard with disposable SQLite resource records; no Linux/KVM boot",
+  "ownership": {
+    "endpointId": "b727ec7f-9e72-48a8-b3ce-f868e9cfb7f4",
+    "resource": {
+      "kind": "network",
+      "id": "450c83f1-d166-46f5-b5a3-b23f42faf598"
+    },
+    "generation": 3,
+    "owner": {
+      "manager": "terraform",
+      "id": "a0fad150-a664-40fa-8600-b17636ed2320",
+      "key": "firecrab_network.application"
+    }
+  },
+  "checks": [
+    "endpoint identity",
+    "43 inventory kinds; three transfer adapters",
+    "actual ownership read",
+    "direct PATCH rejected with 409",
+    "immutable operation acknowledgement",
+    "desktop dashboard",
+    "375px mobile without horizontal overflow",
+    "no browser page errors",
+    "actual CLI release, identical request retry and reclaim preserve UUID"
+  ],
+  "apiTestBinarySha256": "be465794fe44be7f4bbc0de41f10f74c24eef71d3cf6de7fff1b9bbfe3082126"
+}

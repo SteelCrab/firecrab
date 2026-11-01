@@ -1,7 +1,7 @@
 //! Durable preview ownership claims; tombstones retain retirement evidence.
 use super::{PersistenceError, Store};
 use firecrab_api_types::SandboxTunnelBinding;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
 pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS ai_sandbox_tunnels (
@@ -271,7 +271,7 @@ impl Store {
         }
         let spec = serde_json::to_string(binding).map_err(|_| corrupt())?;
         let mut conn = self.lock();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let existing: Option<String> = tx
             .query_row(
                 "SELECT spec FROM ai_sandbox_tunnels WHERE id=?1",
@@ -301,6 +301,8 @@ impl Store {
             {
                 return Err(corrupt());
             }
+        } else {
+            super::iac_native::ensure_project_available(&tx, binding.project_id)?;
         }
         let claim = (!matches!(
             binding.state,

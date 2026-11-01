@@ -207,6 +207,26 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         ));
 
     let rest = Router::new()
+        .route("/api/iac/identity", get(handlers::iac::identity))
+        .route("/api/iac/owners", get(handlers::iac::owners))
+        .route("/api/iac/owner-changes/{id}", get(handlers::iac::operation))
+        .route(
+            "/api/iac/native-operations/{id}",
+            get(handlers::iac::native_operation),
+        )
+        .route(
+            "/api/iac/native-operations/resources/{kind}/{resource}",
+            get(handlers::iac::native_resource_operations),
+        )
+        .route(
+            "/api/iac/native-operations/{id}/recover",
+            post(handlers::iac::recover_native_operation),
+        )
+        .route("/api/iac/owners/{kind}/{id}", get(handlers::iac::owner))
+        .route(
+            "/api/iac/owners/transition",
+            post(handlers::iac::change_owner),
+        )
         .route(
             "/api/stacks",
             get(handlers::stacks::list).post(handlers::stacks::register),
@@ -214,7 +234,13 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/stacks/{name}/plan", post(handlers::stacks::plan))
         .route(
             "/api/stacks/{name}/source",
-            get(handlers::stack_sources::get).put(handlers::stack_sources::configure),
+            get(handlers::stack_sources::get)
+                .put(handlers::stack_sources::configure)
+                .delete(handlers::stack_sources::remove),
+        )
+        .route(
+            "/api/stacks/{name}/source/generation",
+            get(handlers::stack_sources::generation),
         )
         .route(
             "/api/stacks/{name}/source/check",
@@ -689,6 +715,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/shells/{id}/revisions/{revision_id}",
             get(handlers::shells::get_shell_revision),
         )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            handlers::stacks::protect_resources,
+        ))
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
@@ -781,6 +811,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/secrets/plans/{id}/apply",
             post(handlers::secrets::apply),
         )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            handlers::stacks::protect_resources,
+        ))
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
@@ -888,6 +922,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/ai-sandbox/tasks/{id}/artifacts/{artifact}",
             get(handlers::ai_sandbox::get_artifact),
         )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            handlers::stacks::protect_resources,
+        ))
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
@@ -942,6 +980,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::registries::repositories),
         )
         .route("/api/pipe/registry-tags", get(handlers::registries::tags))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            handlers::stacks::protect_resources,
+        ))
         .layer(cors.clone())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
