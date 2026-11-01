@@ -4,7 +4,7 @@ CODE persists workspace configuration and references to existing accounts.
 An explicit verification API checks repository reads and provider credentials.
 Configuration and verification requests allocate no VM or agent resources.
 Use the separate [CODE runtime API](code-runtime.md) to provision a MicroVM and clone the repository.
-The Rust/WASM dashboard now reads these APIs at **CODE → Workspaces** (`#/code`).
+The Rust/WASM dashboard reads these APIs at **CODE → Workspaces** (`#/code`).
 
 ## Dashboard
 
@@ -20,12 +20,57 @@ previously displayed records. Missing, changed and incompatible account
 references are shown separately. The GitHub and AI AUTH management links reuse
 the existing Pipe screens.
 
-This phase provides a read-only view. Use the APIs below and the runtime API
-for configuration and VM operations until their setup flow is integrated.
+Choose **New workspace** (`#/code/new`) to create saved configuration in one flow.
 The dashboard does not request credentials or execute an agent. Account presence
 does not prove repository permission or CLI authentication. A ready MicroVM
 does not prove that an editor or agent is ready. Unknown server states do not
 enable operations. The earlier local interactive mockup is not runtime evidence.
+
+## Workspace setup
+
+1. Connect GitHub in the existing Pipe AUTH screen if needed. In setup, reload
+   connections, choose a repository and branch, and enter a workspace name.
+   Repository selection suggests its name when the name field is empty.
+2. Choose Node.js, Python or Rust and the CPU, RAM and disk capacity.
+3. Choose an agent and a compatible existing AI AUTH account, or explicitly
+   choose no agent. ChatGPT accounts are eligible for Codex configuration;
+   OpenCode uses OpenAI or Anthropic API keys. Claude Code uses Anthropic keys.
+4. Save the workspace. The resulting detail view shows the persisted settings.
+
+Account-management links open the existing screens in another tab. Return to
+setup and reload connections to reuse the new account without copying its
+credential. An incompatible or disconnected selection prevents saving with that
+agent. Saving checks current account metadata in the existing write transaction.
+It does not verify CLI sign-in, provision a VM, open VS Code or run an agent.
+
+If a save response is lost, inputs lock to the original request. **Check saved
+workspace** reads that UUID before retrying the same revision-0 write. A pending
+request's UUID and credential-free configuration are retained in session storage
+when available, so reload can reconcile a completed write without creating a
+second workspace. Leave checks and duplicate-name errors do not delete records.
+If another operator changed the saved settings, review that workspace explicitly.
+Setup does not overwrite the changed configuration.
+
+## GitHub choices API
+
+- `GET /api/code/github/repositories?account=octocat&page=1`
+- `GET /api/code/github/branches?account=octocat&owner=team&repository=web-app&page=1`
+
+Both require the controller operator. Pages contain at most 20 choices and an
+optional `nextPage`; `page` is 1–1000. Repository pages return `account` and
+`repositories` (`owner`, `repository`, `defaultBranch`, `private`). Branch pages
+return `account`, `owner`, `repository` and `branches` (exact names). Disabled
+repositories are excluded. Discovery is read-only and is not checkout evidence.
+
+The server authenticates the saved GitHub login, uses only fixed GitHub API
+paths, limits response sizes and deadlines, and never follows redirects or
+provider pagination URLs. It rechecks the exact private credential document
+after IO. Removal or rotation yields `409 code_github_account_changed` without
+returning stale choices. Provider errors use safe `code_github_*` codes; provider
+bodies and credentials are not returned. Responses use `Cache-Control: no-store`.
+See GitHub's [repository listing](https://docs.github.com/en/rest/repos/repos#list-repositories-for-the-authenticated-user)
+and [branch listing](https://docs.github.com/en/rest/branches/branches#list-branches)
+contracts for provider access requirements.
 
 ## Access and storage
 

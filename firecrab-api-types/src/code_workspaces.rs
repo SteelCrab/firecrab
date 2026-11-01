@@ -102,8 +102,8 @@ pub struct CodeWorkspaceSpec {
     pub agent: Option<CodeAgentBinding>,
 }
 
-impl CodeWorkspaceSpec {
-    /// Validate bounded identifiers without executing Git or contacting account providers.
+impl CodeGithubRepository {
+    /// Validate repository identifiers for saved configuration and read-only discovery.
     pub fn validate(&self) -> BTreeMap<String, String> {
         let mut errors = BTreeMap::new();
         let mut check = |valid: bool, field: &str, message: &str| {
@@ -111,14 +111,9 @@ impl CodeWorkspaceSpec {
                 errors.insert(field.into(), message.into());
             }
         };
-        check(
-            name(&self.name, 64),
-            "spec.name",
-            "use 1–64 ASCII letters, digits, dots, underscores or hyphens",
-        );
         for (field, value) in [
-            ("spec.github.account", &self.github.account),
-            ("spec.github.owner", &self.github.owner),
+            ("spec.github.account", &self.account),
+            ("spec.github.owner", &self.owner),
         ] {
             check(
                 !value.is_empty()
@@ -133,14 +128,32 @@ impl CodeWorkspaceSpec {
             );
         }
         check(
-            name(&self.github.repository, 100) && !self.github.repository.ends_with(".git"),
+            name(&self.repository, 100) && !self.repository.ends_with(".git"),
             "spec.github.repository",
             "use a repository name without an owner, URL or .git suffix",
         );
         check(
-            branch(&self.github.branch),
+            branch(&self.branch),
             "spec.github.branch",
             "use an explicit valid branch name of at most 255 bytes",
+        );
+        errors
+    }
+}
+
+impl CodeWorkspaceSpec {
+    /// Validate bounded identifiers without executing Git or contacting account providers.
+    pub fn validate(&self) -> BTreeMap<String, String> {
+        let mut errors = self.github.validate();
+        let mut check = |valid: bool, field: &str, message: &str| {
+            if !valid {
+                errors.insert(field.into(), message.into());
+            }
+        };
+        check(
+            name(&self.name, 64),
+            "spec.name",
+            "use 1–64 ASCII letters, digits, dots, underscores or hyphens",
         );
         check(
             (1..=32).contains(&self.resources.cpu),

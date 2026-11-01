@@ -933,6 +933,16 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
                 .layer(middleware::from_fn(handlers::secrets::no_store)),
         )
         .route(
+            "/api/code/github/repositories",
+            get(handlers::code_workspaces::catalog::repositories)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
+        .route(
+            "/api/code/github/branches",
+            get(handlers::code_workspaces::catalog::branches)
+                .layer(middleware::from_fn(handlers::secrets::no_store)),
+        )
+        .route(
             "/api/code/workspaces/{id}",
             get(handlers::code_workspaces::get)
                 .put(handlers::code_workspaces::save)

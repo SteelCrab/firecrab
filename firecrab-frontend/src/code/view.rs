@@ -3,6 +3,9 @@ use crate::model::{escape, lowercase};
 use std::fmt::Write;
 
 pub fn content(app: &App) -> String {
+    if app.route == "code/new" {
+        return setup::content(app);
+    }
     let label = tr(app, "Search workspaces", "워크스페이스 검색");
     let mut out = format!(
         "<section id=\"code-workspaces\" aria-label=\"{}\"><div class=\"code-toolbar\"><p>{}</p><div class=\"code-tools\"><input id=\"code-search\" type=\"search\" aria-label=\"{label}\" placeholder=\"{label}\" value=\"{}\"><button id=\"code-refresh\" class=\"btn\" type=\"button\" data-action=\"code-refresh\">{}</button></div></div>",

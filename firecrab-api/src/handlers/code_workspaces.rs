@@ -16,6 +16,7 @@ use axum::{
     http::StatusCode,
 };
 use firecrab_api_types::{CodeWorkspace, CodeWorkspaceDelete, CodeWorkspaceWrite};
+pub mod catalog;
 pub mod runtime;
 mod verification;
 pub use verification::verify;

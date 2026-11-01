@@ -20,12 +20,16 @@ use std::{
 use tokio::sync::Notify;
 use tower::ServiceExt;
 
+#[path = "server_code_catalog_tests.rs"]
+mod catalog_tests;
+
 const SHA: &str = "1234567890abcdef1234567890abcdef12345678";
 const REF: &str = "/github/repos/team/web-app/git/ref/heads/feature%2Flogin";
 const SCOPES: &str = "openid resource.invoke chatgpt.tokens.use.direct offline_access";
 
 #[derive(Clone, Default)]
 struct Remote {
+    queries: Arc<Mutex<Vec<String>>>,
     requests: Arc<Mutex<Vec<(String, HeaderMap)>>>,
     replies: Arc<Mutex<HashMap<String, (u16, Value)>>>,
     pause: Arc<Mutex<Option<String>>>,
@@ -39,6 +43,11 @@ async fn provider(
     headers: HeaderMap,
 ) -> axum::response::Response {
     let path = uri.path().to_owned();
+    remote
+        .queries
+        .lock()
+        .unwrap()
+        .push(uri.query().unwrap_or_default().into());
     remote
         .requests
         .lock()

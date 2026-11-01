@@ -1,4 +1,5 @@
 //! Fixed-origin, read-only repository checks. No clone, inference, or agent execution.
+mod catalog;
 use crate::pipe_auth::SavedAuth;
 use firecrab_api_types::{
     CodeGithubRepository, CodeRepositoryVerification as Repository,
@@ -45,6 +46,20 @@ impl Github {
     }
 
     async fn get<T: DeserializeOwned>(&self, segments: &[&str], token: &str) -> Result<T, Failure> {
+        self.get_query(segments, token, &[]).await
+    }
+
+    async fn get_query<T: DeserializeOwned>(
+        &self,
+        segments: &[&str],
+        token: &str,
+        query: &[(&str, String)],
+    ) -> Result<T, Failure> {
+        let limit = if query.is_empty() {
+            MAX_BYTES
+        } else {
+            512 * 1024
+        };
         let mut url = self.origin.clone();
         url.path_segments_mut()
             .map_err(|_| Failure::InvalidResponse)?
@@ -52,6 +67,7 @@ impl Github {
         let mut response = self
             .client
             .get(url)
+            .query(query)
             .bearer_auth(token)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2026-03-10")
@@ -84,7 +100,7 @@ impl Github {
         }
         if response
             .content_length()
-            .is_some_and(|length| length > MAX_BYTES as u64)
+            .is_some_and(|length| length > limit as u64)
         {
             return Err(Failure::InvalidResponse);
         }
@@ -96,7 +112,7 @@ impl Github {
                 Failure::Unavailable
             }
         })? {
-            if chunk.len() > MAX_BYTES.saturating_sub(bytes.len()) {
+            if chunk.len() > limit.saturating_sub(bytes.len()) {
                 return Err(Failure::InvalidResponse);
             }
             bytes.extend_from_slice(&chunk);
@@ -104,15 +120,15 @@ impl Github {
         serde_json::from_slice(&bytes).map_err(|_| Failure::InvalidResponse)
     }
 
-    async fn branch(
+    async fn identity<'a>(
         &self,
-        spec: &CodeGithubRepository,
-        account: Option<&SavedAuth>,
-    ) -> Result<String, Failure> {
+        login: &str,
+        account: Option<&'a SavedAuth>,
+    ) -> Result<&'a str, Failure> {
         let Some(SavedAuth::Github { username, token }) = account else {
             return Err(Failure::Missing);
         };
-        if !username.eq_ignore_ascii_case(&spec.account) {
+        if !username.eq_ignore_ascii_case(login) {
             return Err(Failure::IdentityChanged);
         }
         if token.is_empty() || token.len() > 16384 || !token.bytes().all(|c| c.is_ascii_graphic()) {
@@ -123,9 +139,18 @@ impl Github {
             login: String,
         }
         let user: User = self.get(&["user"], token).await?;
-        if !user.login.eq_ignore_ascii_case(&spec.account) {
+        if !user.login.eq_ignore_ascii_case(login) {
             return Err(Failure::IdentityChanged);
         }
+        Ok(token)
+    }
+
+    async fn branch(
+        &self,
+        spec: &CodeGithubRepository,
+        account: Option<&SavedAuth>,
+    ) -> Result<String, Failure> {
+        let token = self.identity(&spec.account, account).await?;
         #[derive(Deserialize)]
         struct Repo {
             full_name: String,

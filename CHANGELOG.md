@@ -25,6 +25,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Add one CODE workspace setup flow for GitHub repository/branch discovery,
+  runtime/resources, agent selection and compatible existing AI AUTH accounts.
+  Persist credential-free configuration and reconcile unknown save results with
+  the original workspace ID. Saving does not start a VM or agent (#560).
 - Add CODE → Workspaces to the Rust/WASM dashboard with searchable saved
   configuration, deep links, current MicroVM observations, and GitHub/AI AUTH
   account-reference states. Retry failed reads without retaining stale readiness

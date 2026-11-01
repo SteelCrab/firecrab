@@ -12,6 +12,8 @@ mod queues;
 pub use queues::*;
 mod code_workspaces;
 pub use code_workspaces::*;
+mod code_catalog;
+pub use code_catalog::*;
 mod code_verification;
 pub use code_verification::*;
 mod code_runtime;

@@ -1000,6 +1000,9 @@ fn save_history_index(index: i32, url: Option<&str>) {
     }
 }
 fn allow_discard(app: &Shared) -> bool {
+    if code::saving(&app.borrow()) {
+        return false;
+    }
     if app
         .borrow()
         .databases
@@ -1226,6 +1229,7 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             return;
         }
         if databases::change(&language, &target)
+            || code::change(&language, &target)
             || sandbox::change(&language, &target)
             || volumes::input(&language, &target)
         {
@@ -1282,6 +1286,7 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             return;
         };
         if databases::submit(&submitted, &form)
+            || code::submit(&submitted, &form.id())
             || sandbox::submit(&submitted, &form.id())
             || advanced::queues::submit(&submitted, &form)
         {

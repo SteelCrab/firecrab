@@ -485,6 +485,11 @@ pub fn page(app: &App) -> String {
         (String::new(), String::new())
     };
     let actions = match section {
+        "code" if app.route == "code/new" => String::new(),
+        "code" => format!(
+            "<a class=\"btn primary\" href=\"#/code/new\">{}</a>",
+            tr(app, "New workspace", "새 워크스페이스")
+        ),
         // The create page is the target of this button.
         "vms" if app.route == "vms/new" => String::new(),
         "vms" => format!(
@@ -560,6 +565,10 @@ pub fn page(app: &App) -> String {
 
 fn crumbs(app: &App) -> (Option<&'static str>, &'static str) {
     match app.route.as_str() {
+        "code/new" => (
+            Some(tr(app, "Workspaces", "워크스페이스")),
+            tr(app, "New workspace", "새 워크스페이스"),
+        ),
         "vms/new" => (Some("MicroVM"), tr(app, "New MicroVM", "새 MicroVM")),
         "services/new" => (
             Some("MicroService"),

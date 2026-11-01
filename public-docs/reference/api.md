@@ -385,6 +385,8 @@ database snapshot and never claim that an agent is authenticated.
 | Method | Path | Contract |
 | --- | --- | --- |
 | GET | `/api/code/workspaces` | List configuration records by case-insensitive name |
+| GET | `/api/code/github/repositories?account=LOGIN&page=N` | Operator-only saved GitHub login discovery; at most 20 sanitized repository choices and optional `nextPage` |
+| GET | `/api/code/github/branches?account=LOGIN&owner=OWNER&repository=REPO&page=N` | Operator-only exact branch choices; recheck credentials after discovery and reject stale account results |
 | GET | `/api/code/workspaces/{id}` | Read configuration, revision, timestamps, and current `connections` observations |
 | PUT | `/api/code/workspaces/{id}` | Save `{expectedRevision, spec}`; revision 0 creates, later writes must match the saved revision |
 | DELETE | `/api/code/workspaces/{id}?expectedRevision=N` | Delete only the matching configuration revision; return `204` |

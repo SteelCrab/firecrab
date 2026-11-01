@@ -1,8 +1,10 @@
 //! CODE reads saved configuration and current runtime observations. No credentials are fetched.
+mod setup;
 mod view;
 use crate::{App, Shared, api, document, element, render_content};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+pub use setup::{change, saving, submit};
 pub use view::content;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
@@ -19,7 +21,7 @@ struct Workspace {
     spec: Spec,
     connections: Connections,
 }
-#[derive(Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 struct Spec {
     name: String,
     github: Repository,
@@ -27,21 +29,21 @@ struct Spec {
     resources: Resources,
     agent: Option<Agent>,
 }
-#[derive(Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 struct Repository {
     account: String,
     owner: String,
     repository: String,
     branch: String,
 }
-#[derive(Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct Resources {
     cpu: u32,
     ram: u32,
     disk_gb: u32,
 }
-#[derive(Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct Agent {
     agent: String,
@@ -108,6 +110,7 @@ pub struct State {
     runtime: RuntimeState,
     error: Option<Problem>,
     query: String,
+    setup: Option<setup::Setup>,
 }
 
 fn uuid(id: &str) -> bool {
@@ -122,12 +125,15 @@ fn uuid(id: &str) -> bool {
         && id.bytes().any(|b| b != b'0' && b != b'-')
 }
 pub fn is_route(route: &str) -> bool {
-    route == "code" || route.strip_prefix("code/").is_some_and(uuid)
+    route == "code" || route == "code/new" || route.strip_prefix("code/").is_some_and(uuid)
 }
 fn tr<'a>(app: &App, en: &'a str, ko: &'a str) -> &'a str {
     if app.locale == "ko" { ko } else { en }
 }
 pub fn api_status(app: &App) -> (&'static str, &'static str) {
+    if app.route == "code/new" {
+        return setup::api_status(app);
+    }
     if !app.loaded {
         ("checking", tr(app, "Checking…", "확인 중…"))
     } else if app.code.error.is_some() || matches!(app.code.runtime, RuntimeState::Failed(_)) {
@@ -192,6 +198,10 @@ fn decode_runtime(id: &str, value: Value) -> Result<Runtime, Problem> {
 }
 
 pub fn load(app: Shared) {
+    if app.borrow().route == "code/new" {
+        setup::load(app);
+        return;
+    }
     let mut state = app.borrow_mut();
     if state.refreshing || !is_route(&state.route) {
         return;
@@ -253,6 +263,9 @@ pub fn load(app: Shared) {
 }
 
 pub fn action(app: &Shared, action: &str) -> bool {
+    if setup::action(app, action) {
+        return true;
+    }
     if action != "code-refresh" || !is_route(&app.borrow().route) {
         return false;
     }
@@ -260,6 +273,9 @@ pub fn action(app: &Shared, action: &str) -> bool {
     true
 }
 pub fn input(app: &Shared, target: &Element) -> bool {
+    if setup::input(app, target) {
+        return true;
+    }
     if target.id() != "code-search" {
         return false;
     }
@@ -286,7 +302,9 @@ pub fn render(app: &Shared) {
         });
     let scroll = element("code-details").map(|el| el.scroll_top());
     let html = content(&app.borrow());
+    app.borrow_mut().rendering = true;
     crate::set_html("content", &html);
+    app.borrow_mut().rendering = false;
     if let Some(status) = element("api-status") {
         let state = app.borrow();
         let (kind, label) = api_status(&state);
