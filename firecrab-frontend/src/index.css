@@ -3129,3 +3129,74 @@ table.image-table tbody tr.is-selected td {
   gap: 20px;
   margin: 20px 0;
 }
+
+.queue-migration form :is(input, select) {
+  height: 48px;
+  min-height: 48px;
+  box-sizing: border-box;
+  font: 16px/1.5 var(--font);
+}
+.queue-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.queue-table th {
+  font-weight: 500;
+  text-align: left;
+  color: var(--text-3);
+}
+.queue-table :is(th, td) {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.queue-table tr[aria-selected="true"] {
+  background: var(--bg-active);
+}
+.queue-name {
+  border: 0;
+  padding: 4px 0;
+  color: var(--text);
+  background: transparent;
+  font: 500 14px/1.5 var(--font);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.queue-row-actions {
+  text-align: right;
+}
+.queue-row-actions .btn {
+  height: 36px;
+  font-size: 13px;
+  margin-left: 6px;
+}
+.queue-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin: 18px 0;
+}
+.queue-metrics dt {
+  color: var(--text-3);
+  font-size: 13px;
+}
+.queue-metrics dd {
+  font-size: 22px;
+  margin: 6px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 767px) {
+  .queue-migration form :is(input, select) {
+    height: 44px;
+    min-height: 44px;
+  }
+  .queue-table {
+    font-size: 12px;
+  }
+  .queue-table :is(th, td) {
+    padding: 8px 4px;
+  }
+  .queue-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

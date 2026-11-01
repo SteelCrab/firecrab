@@ -124,6 +124,14 @@ test.describe("Queue @dashboard", () => {
     await expect(page.getByText(/Queue API unavailable/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Create Queue", exact: true })).toBeDisabled();
     await expect(page.getByText("Unacknowledged", { exact: true })).toHaveCount(0);
+    state.fail = false;
+    await expect(page.getByText("Unacknowledged", { exact: true })).toBeVisible();
+    state.engine!.phase = "failed";
+    await expect(page.getByText("The engine needs attention", { exact: true })).toBeVisible();
+    await expect(page.getByText("Unacknowledged", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Show sender connection", exact: true })).toBeDisabled();
+    state.engine!.phase = "running";
+    await expect(page.getByText("Unacknowledged", { exact: true })).toBeVisible();
   });
   test("keeps the Queue page usable on a narrow screen", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 }); await open(page);

@@ -61,7 +61,7 @@ test("Queue setup keeps edits across polling and validation, then creates the en
     await page.getByRole("button", { name: "Install RabbitMQ" }).click();
     await expect(
       page.getByRole("region", { name: "Queue engine" }),
-    ).toContainText("installing");
+    ).toContainText("Installing");
     assert.deepEqual(
       fixture.requests
         .filter(

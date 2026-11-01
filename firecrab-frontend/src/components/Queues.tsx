@@ -75,6 +75,8 @@ export default function Queues() {
   const [selected, setSelected] = useState("");
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [secret, setSecret] = useState("");
+  const metricsReady =
+    !connectionError && snapshot?.engine?.phase === "running";
   const requestId = useRef(0);
   const revealId = useRef(0);
   const active = useRef(false);
@@ -88,13 +90,22 @@ export default function Queues() {
         fetchJson<Network[]>("/api/micro-networks"),
       ]);
       if (!active.current || request !== requestId.current) return;
+      if (engine?.phase !== "running") {
+        setMetrics(null);
+        revealId.current++;
+        setSecret("");
+      }
       setSnapshot({ engine, queues, networks });
       setConnectionError("");
     } catch (cause) {
-      if (active.current && request === requestId.current)
+      if (active.current && request === requestId.current) {
+        setMetrics(null);
+        revealId.current++;
+        setSecret("");
         setConnectionError(
           cause instanceof Error ? cause.message : String(cause),
         );
+      }
     }
   }, []);
   useEffect(() => {
@@ -110,7 +121,7 @@ export default function Queues() {
   }, [refresh]);
   useEffect(() => {
     revealId.current++;
-    if (!selected) return;
+    if (!selected || !metricsReady) return;
     let live = true;
     const poll = async () => {
       try {
@@ -128,7 +139,7 @@ export default function Queues() {
       live = false;
       window.clearInterval(timer);
     };
-  }, [selected]);
+  }, [selected, metricsReady]);
   useEffect(() => {
     const hide = () => {
       revealId.current++;
@@ -202,7 +213,7 @@ export default function Queues() {
       setName("");
   };
   const reveal = async (access: "publish" | "consume") => {
-    if (!selected || busy || connectionError) return;
+    if (!selected || busy || !metricsReady) return;
     setSecret("");
     setError("");
     const request = ++revealId.current;
@@ -220,6 +231,18 @@ export default function Queues() {
   };
   const queue = snapshot?.queues.find((item) => item.id === selected);
   const canAct = !busy && !connectionError;
+  const phaseLabel = (phase: string) => {
+    const labels: Record<string, string> = {
+      running: t("Running", "실행 중"),
+      installing: t("Installing", "설치 중"),
+      starting: t("Starting", "시작 중"),
+      stopped: t("Stopped", "중지됨"),
+      failed: t("Failed", "실패"),
+      ready: t("Ready", "준비됨"),
+      provisioning: t("Provisioning", "준비 중"),
+    };
+    return labels[phase] || phase;
+  };
   return (
     <Screen view="queues" live={false}>
       <div className="queue-migration">
@@ -236,7 +259,7 @@ export default function Queues() {
                 "RabbitMQ는 전용 MicroVM에서 실행된다.",
               )}
             </p>
-            <form onSubmit={install}>
+            <form id="queue-engine-form" onSubmit={install}>
               <fieldset disabled={!canAct}>
                 <label>
                   MicroNetwork{" "}
@@ -301,14 +324,24 @@ export default function Queues() {
               aria-label={t("Queue engine", "큐 엔진")}
             >
               <h2>RabbitMQ</h2>
-              <p>{snapshot.engine.phase}</p>
+              <p>{phaseLabel(snapshot.engine.phase)}</p>
+              {snapshot.engine.phase === "failed" && (
+                <p>
+                  {t("The engine needs attention", "엔진 상태를 확인해야 한다")}
+                </p>
+              )}
               {snapshot.engine.error && (
                 <p role="alert">{snapshot.engine.error}</p>
               )}
               {snapshot.engine.log && (
-                <details>
+                <details
+                  className="queue-engine-log"
+                  open={snapshot.engine.phase === "failed"}
+                >
                   <summary>{t("Installation log", "설치 로그")}</summary>
-                  <pre className="detail-log">{snapshot.engine.log}</pre>
+                  <pre className="detail-log queue-log">
+                    {snapshot.engine.log}
+                  </pre>
                 </details>
               )}
               {["failed", "stopped"].includes(snapshot.engine.phase) && (
@@ -334,7 +367,10 @@ export default function Queues() {
             </section>
             <section className="panel">
               <h2>{t("Create a queue", "큐 생성")}</h2>
-              <form onSubmit={(event) => void create(event)}>
+              <form
+                id="queue-create-form"
+                onSubmit={(event) => void create(event)}
+              >
                 <fieldset
                   disabled={!canAct || snapshot.engine.phase !== "running"}
                 >
@@ -385,59 +421,74 @@ export default function Queues() {
               {snapshot.queues.length === 0 ? (
                 <p>{t("No queues yet.", "아직 큐가 없다.")}</p>
               ) : (
-                <ul>
-                  {snapshot.queues.map((item) => (
-                    <li key={item.id}>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          revealId.current++;
-                          setSecret("");
-                          setMetrics(null);
-                          setSelected(item.id);
-                        }}
-                      >
-                        {item.name}
-                      </button>{" "}
-                      {item.phase}
-                      {item.error && <span>{item.error}</span>}
-                      {item.phase === "failed" && (
-                        <button
-                          className="btn"
-                          disabled={!canAct}
-                          onClick={() =>
-                            void perform(
-                              `/api/queues/${encodeURIComponent(item.id)}/retry`,
-                              "POST",
-                            )
-                          }
-                        >
-                          {t("Retry", "재시도")}
-                        </button>
-                      )}
-                      <button
-                        className="btn"
-                        disabled={!canAct || item.services.length > 0}
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              t(
-                                `Delete queue ${item.name}?`,
-                                `큐 ${item.name}을 삭제할까?`,
-                              ),
-                            )
-                          )
-                            void perform(
-                              `/api/queues/${encodeURIComponent(item.id)}`,
-                              "DELETE",
-                            );
-                        }}
-                      >
-                        {t("Delete", "삭제")}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                <table className="queue-table">
+                  <thead>
+                    <tr>
+                      <th>{t("Queue", "큐")}</th>
+                      <th>{t("State", "상태")}</th>
+                      <th>
+                        <span className="sr-only">{t("Actions", "작업")}</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {snapshot.queues.map((item) => (
+                      <tr key={item.id} aria-selected={selected === item.id}>
+                        <td>
+                          <button
+                            className="queue-name"
+                            onClick={() => {
+                              revealId.current++;
+                              setSecret("");
+                              setMetrics(null);
+                              setSelected(item.id);
+                            }}
+                          >
+                            {item.name}
+                          </button>
+                          {item.error && <span>{item.error}</span>}
+                        </td>
+                        <td>{phaseLabel(item.phase)}</td>
+                        <td className="queue-row-actions">
+                          {item.phase === "failed" && (
+                            <button
+                              className="btn"
+                              disabled={!canAct}
+                              onClick={() =>
+                                void perform(
+                                  `/api/queues/${encodeURIComponent(item.id)}/retry`,
+                                  "POST",
+                                )
+                              }
+                            >
+                              {t("Retry", "재시도")}
+                            </button>
+                          )}
+                          <button
+                            className="btn"
+                            disabled={!canAct || item.services.length > 0}
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  t(
+                                    `Delete queue ${item.name}?`,
+                                    `큐 ${item.name}을 삭제할까?`,
+                                  ),
+                                )
+                              )
+                                void perform(
+                                  `/api/queues/${encodeURIComponent(item.id)}`,
+                                  "DELETE",
+                                );
+                            }}
+                          >
+                            {t("Delete", "삭제")}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
             </section>
             {queue && (
@@ -446,24 +497,36 @@ export default function Queues() {
                 aria-label={t("Queue detail", "큐 상세")}
               >
                 <h2>{queue.name}</h2>
-                {metrics && (
-                  <p>
-                    {t("Waiting", "대기")}: {metrics.ready} ·{" "}
-                    {t("Unacknowledged", "처리 중")}: {metrics.unacknowledged} ·{" "}
-                    {t("Consumers", "수신자")}: {metrics.consumers} ·{" "}
-                    {t("Failed", "실패")}: {metrics.failed}
-                  </p>
+                {metricsReady && metrics && (
+                  <dl className="queue-metrics">
+                    <div>
+                      <dt>{t("Waiting", "대기 메시지")}</dt>
+                      <dd>{metrics.ready}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("Unacknowledged", "처리 중 메시지")}</dt>
+                      <dd>{metrics.unacknowledged}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("Consumers", "수신자")}</dt>
+                      <dd>{metrics.consumers}</dd>
+                    </div>
+                    <div>
+                      <dt>{t("Failed", "실패")}</dt>
+                      <dd>{metrics.failed}</dd>
+                    </div>
+                  </dl>
                 )}
                 <button
                   className="btn"
-                  disabled={!canAct}
+                  disabled={!canAct || !metricsReady}
                   onClick={() => void reveal("publish")}
                 >
                   {t("Show sender connection", "전송 연결 정보 보기")}
                 </button>
                 <button
                   className="btn"
-                  disabled={!canAct}
+                  disabled={!canAct || !metricsReady}
                   onClick={() => void reveal("consume")}
                 >
                   {t("Show receiver connection", "수신 연결 정보 보기")}
