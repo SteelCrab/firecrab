@@ -225,8 +225,15 @@ test.describe("console page", () => {
     expect(aside!.y).toBeGreaterThanOrEqual(terminal!.y + terminal!.height);
   });
 
-  test("the SSH tab shows the same SSH steps", async ({ page }) => {
+  test("the SSH tab preserves existing forwards", async ({ page }) => {
     await openConsole(page);
+    const writes: unknown[] = [];
+    await page.route(`**/api/vms/${RUNNING.id}/port-forwards`, (route) => {
+      expect(route.request().method()).toBe("PUT");
+      const { portForwards } = route.request().postDataJSON();
+      writes.push(portForwards);
+      return route.fulfill({ json: { ...RUNNING, portForwards } });
+    });
     await page.getByRole("tab", { name: "SSH" }).click();
     await expect(page.locator(".console-surface")).toBeHidden();
     for (const step of ["Private key", "Connect", "Verify host key"]) {
@@ -234,6 +241,31 @@ test.describe("console page", () => {
         page.getByRole("heading", { name: step, exact: true }),
       ).toBeVisible();
     }
+    const hostPort = page.getByRole("spinbutton", {
+      name: "Host port",
+      exact: true,
+    });
+    await hostPort.fill("2222");
+    await page
+      .getByRole("button", { name: "Create SSH port forward", exact: true })
+      .click();
+    await expect(hostPort).toHaveCount(0);
+    await expect(
+      page.getByText("ssh -p 2222 -i firecrab-api-gateway.pem root@<hostIP>", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Remove SSH port forward", exact: true })
+      .click();
+    await expect(hostPort).toBeVisible();
+    expect(writes).toEqual([
+      [
+        ...RUNNING.portForwards!,
+        { hostPort: 2222, guestPort: 22, protocol: "tcp" },
+      ],
+      RUNNING.portForwards,
+    ]);
   });
 
   test("terminal only hides the chrome until Esc", async ({ page }) => {
