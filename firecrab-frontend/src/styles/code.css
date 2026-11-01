@@ -1,0 +1,187 @@
+#code-workspaces {
+  max-width: 1100px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px;
+  min-width: 0;
+}
+#code-workspaces [hidden] {
+  display: none !important;
+}
+#code-editor {
+  max-width: 900px;
+  margin: 0 auto;
+}
+#code-workspaces .code-setup {
+  max-width: 760px;
+  margin: 24px auto;
+}
+#code-workspaces label {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+#code-workspaces input,
+#code-workspaces select,
+#code-workspaces textarea {
+  box-sizing: border-box;
+  max-width: 100%;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+#code-workspaces input[type="search"] {
+  max-width: 360px;
+}
+#code-workspaces textarea {
+  resize: vertical;
+  line-height: 1.6;
+  margin: 10px 0 8px;
+}
+#code-workspaces fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+#code-workspaces details {
+  border-top: 1px solid var(--border);
+  margin: 20px 0;
+  padding: 16px 0;
+}
+#code-workspaces summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-2);
+  padding: 6px 0;
+}
+#code-workspaces details[open] > summary {
+  margin-bottom: 16px;
+}
+#code-workspaces .code-section {
+  border-top: 1px solid var(--border);
+  padding: 22px 0;
+  margin-top: 20px;
+}
+#code-workspaces .code-section h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 16px;
+}
+#code-workspaces .code-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+#code-workspaces .code-toolbar,
+#code-workspaces .code-tools,
+#code-workspaces .code-actions,
+#code-workspaces footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+#code-workspaces .code-tools {
+  padding: 12px 0;
+}
+#code-workspaces .code-tools p {
+  font-size: 12px;
+  color: var(--text-2);
+}
+#code-workspaces .code-actions {
+  margin: 18px 0;
+}
+#code-workspaces footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+  margin-top: 20px;
+  padding-top: 20px;
+}
+#code-workspaces .code-detail-head h2 {
+  font-size: 21px;
+  margin: 18px 0 10px;
+}
+#code-workspaces .code-detail-head p,
+#code-workspaces .code-hint {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+#code-workspaces .code-task-head {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+#code-workspaces .code-task-head span {
+  font-size: 12px;
+  color: var(--text-2);
+}
+#code-workspaces .code-task-head h3 {
+  flex: 1;
+  margin: 0;
+}
+#code-workspaces .code-text-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  text-decoration: underline;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+#code-workspaces pre {
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 14px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+#code-workspaces .code-list {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 24px 0;
+}
+#code-workspaces .code-list a {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  padding: 14px 18px;
+  border-radius: 6px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+#code-workspaces .code-list a[aria-current] {
+  border-color: var(--text-2);
+}
+#code-workspaces .code-list span {
+  font-size: 12px;
+  color: var(--text-2);
+}
+@media (max-width: 740px) {
+  #code-workspaces {
+    padding: 16px;
+  }
+  #code-workspaces .code-fields {
+    grid-template-columns: 1fr;
+  }
+  #code-workspaces .code-task-head h3 {
+    flex-basis: 100%;
+  }
+}
