@@ -58,7 +58,7 @@ test.describe("Host Firecrab panel @dashboard", () => {
 
     const panel = page.getByRole("region", { name: "Firecrab" });
     await expect(panel.getByRole("heading", { name: "Firecrab" })).toBeVisible();
-    await expect(panel.locator("dt")).toHaveText(["Version", "Firecracker", "API service", "Helper service", "Install prefix", "Data directory", "Config directory", "systemd directory", "API address"]);
+    await expect(panel.locator("dt")).toHaveText(["Version", "Firecracker", "API service", "Help service", "Install prefix", "Data directory", "Config directory", "systemd directory", "API address"]);
     await expect(panel.locator("dd")).toHaveText([
       INFO.version,
       INFO.firecrackerVersion,
