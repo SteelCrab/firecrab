@@ -467,7 +467,7 @@ async fn native_agent_controls_are_scoped_to_the_selected_controller() {
         .await;
         assert_eq!(status, StatusCode::CONFLICT);
     }
-    for action in ["automation"] {
+    for action in ["automation", "editor", "editor/stop"] {
         let path = format!(
             "/api/service/agents/microvms/{}/{}/{action}",
             uuid::Uuid::new_v4(),

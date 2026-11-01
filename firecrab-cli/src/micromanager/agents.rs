@@ -14,6 +14,7 @@ use std::{
 use uuid::Uuid;
 
 pub mod automation;
+pub mod editor;
 mod guest;
 pub mod project;
 pub mod terminal;

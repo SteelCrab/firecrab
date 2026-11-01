@@ -21,6 +21,7 @@ struct Controller {
     home: PathBuf,
     platform: resource::Platform,
     agents: Mutex<()>,
+    editors: Mutex<()>,
 }
 
 const ORIGINS: [&str; 4] = [
@@ -130,6 +131,7 @@ fn router_for(home: PathBuf, platform: resource::Platform) -> Router {
         home,
         platform,
         agents: Mutex::new(()),
+        editors: Mutex::new(()),
     });
     Router::new()
         .route(
@@ -180,6 +182,14 @@ fn router_for(home: PathBuf, platform: resource::Platform) -> Router {
                     "/api/service/agents/microvms/{vm}/{id}/automation",
                     get(vm_automation_status).post(run_vm_automation),
                 )
+                .route(
+                    "/api/service/agents/microvms/{vm}/{id}/editor",
+                    get(vm_editor_status).post(open_vm_editor),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/{id}/editor/stop",
+                    post(stop_vm_editor),
+                )
                 .route("/api/service/agents", get(agent_status))
                 .route("/api/service/agents/tasks", post(start_agent_task))
                 .route("/api/service/agents/{id}", get(inspect_agent))
@@ -218,6 +228,50 @@ async fn vm_automation_status(
     tokio::task::spawn_blocking(move || {
         super::agents::Runtime::for_vm(&controller.home, vm, false)?
             .automation_status(id)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn vm_editor_status(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        super::agents::Runtime::for_vm(&controller.home, vm, false)?
+            .editor_status(id)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn open_vm_editor(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller
+            .editors
+            .lock()
+            .map_err(|_| Error::Invalid("Editor connection lock is unavailable.".into()))?;
+        super::agents::Runtime::for_vm(&controller.home, vm, false)?
+            .open_editor(id)
+            .map(Json)
+    })
+    .await
+    .map_err(|e| Error::Invalid(e.to_string()))?
+}
+async fn stop_vm_editor(
+    State(controller): State<Arc<Controller>>,
+    RoutePath((vm, id)): RoutePath<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<Json<serde_json::Value>, Error> {
+    tokio::task::spawn_blocking(move || {
+        let _lock = controller
+            .editors
+            .lock()
+            .map_err(|_| Error::Invalid("Editor connection lock is unavailable.".into()))?;
+        super::agents::Runtime::for_vm(&controller.home, vm, false)?
+            .stop_editor(id)
             .map(Json)
     })
     .await
