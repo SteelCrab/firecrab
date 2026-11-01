@@ -6,6 +6,25 @@ import {
   useSyncExternalStore,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import {
+  ArrowLeft,
+  ArrowUpLeft,
+  CopyPlus,
+  FileText,
+  Folder,
+  FolderOpen,
+  History,
+  Monitor,
+  PanelsTopLeft,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  SquareTerminal,
+  StickyNote,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import { useI18n } from "../i18n";
 import { canvasController as c } from "../canvas/controller";
 import { canvasPanes } from "../canvas-panes.js";
@@ -14,9 +33,26 @@ import type { Tab, Node as CanvasNode } from "../canvas/types";
 import "../styles/ai-canvas.css";
 
 type Props = { onUnsavedChange: (dirty: boolean) => void };
-const button = (action: () => void, label: string, disabled = false) => (
-  <button type="button" onClick={action} disabled={disabled}>
-    {label}
+const panelIcons = {
+  folder: Folder,
+  terminal: SquareTerminal,
+  note: StickyNote,
+  history: History,
+};
+const button = (
+  action: () => void,
+  label: string,
+  disabled = false,
+  Icon?: LucideIcon,
+) => (
+  <button
+    type="button"
+    className={Icon ? "cw-icon-label" : undefined}
+    onClick={action}
+    disabled={disabled}
+  >
+    {Icon && <Icon size={14} aria-hidden="true" />}
+    <span>{label}</span>
   </button>
 );
 export default function AiCanvas({ onUnsavedChange }: Props) {
@@ -164,17 +200,31 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
           </div>
         </a>
         <p className="cw-nav-label">WORKSPACE</p>
-        {button(() => {
-          if (tab) c.hideEditor(tab.id);
-        }, "▦ AI Canvas")}
+        <button
+          type="button"
+          className="cw-nav-current"
+          onClick={() => {
+            if (tab) c.hideEditor(tab.id);
+          }}
+        >
+          <PanelsTopLeft size={16} aria-hidden="true" />
+          <span>AI Canvas</span>
+        </button>
         {tab?.loaded && (
           <section className="cw-project-nav">
             <h2>{title(tab)}</h2>
             <small>/workspace/shared</small>
-            {button(() => void c.editor(tab), t("Open folder", "폴더 열기"))}
+            {button(
+              () => void c.editor(tab),
+              t("Open folder", "폴더 열기"),
+              false,
+              FolderOpen,
+            )}
             {button(
               () => void c.editor(tab),
               t("Personal Page · Web VS Code", "개인 페이지 · Web VS Code"),
+              false,
+              Monitor,
             )}
             <div className="cw-tree">
               {tab.layout.directory &&
@@ -184,7 +234,9 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
                       tab,
                       tab.layout.directory.split("/").slice(0, -1).join("/"),
                     ),
-                  "← ..",
+                  "..",
+                  false,
+                  ArrowUpLeft,
                 )}
               {tab.files.map((file) => {
                 const path =
@@ -199,7 +251,12 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
                         : void c.editor(tab, path)
                     }
                   >
-                    {file.directory ? "▱" : "▤"} {file.name}
+                    {file.directory ? (
+                      <Folder size={14} aria-hidden="true" />
+                    ) : (
+                      <FileText size={14} aria-hidden="true" />
+                    )}
+                    <span>{file.name}</span>
                   </button>
                 );
               })}
@@ -208,16 +265,27 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
             {button(
               () => c.add(tab, "folder"),
               t("Shared folder", "공용 작업 폴더"),
+              false,
+              Folder,
             )}
             {button(
               () => c.add(tab, "history"),
               t("Version history", "버전 기록"),
+              false,
+              History,
             )}
-            {button(() => void c.editor(tab, "AGENTS.md"), "AGENTS.md")}
+            {button(
+              () => void c.editor(tab, "AGENTS.md"),
+              "AGENTS.md",
+              false,
+              FileText,
+            )}
             <h3>{t("Workspace", "작업 공간")}</h3>
             {button(
               () => void c.createTerminal(tab),
               t("Add terminal", "터미널 추가"),
+              false,
+              SquareTerminal,
             )}
             <div className="cw-terminal-picker">
               <select
@@ -242,12 +310,21 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
               {button(
                 () => void c.catalog(tab),
                 t("Refresh sessions", "세션 새로고침"),
+                false,
+                RefreshCw,
               )}
             </div>
-            {button(() => c.add(tab, "note"), t("Private note", "개인 메모"))}
+            {button(
+              () => c.add(tab, "note"),
+              t("Private note", "개인 메모"),
+              false,
+              StickyNote,
+            )}
             {button(
               () => void c.files(tab),
               t("Refresh files", "파일 새로고침"),
+              false,
+              RefreshCw,
             )}
             <div className="cw-terminal-picker">
               <select
@@ -269,6 +346,8 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
               {button(
                 () => void c.views(tab),
                 t("Refresh saved canvases", "저장 목록 새로고침"),
+                false,
+                RefreshCw,
               )}
             </div>
           </section>
@@ -296,10 +375,17 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
               ? t("Unsaved changes", "미저장 변경")
               : t("Saved privately", "개인 화면 저장됨")}
           </span>
-          {button(() => void c.save(), t("Save layout", "화면 저장"))}
+          {button(
+            () => void c.save(),
+            t("Save layout", "화면 저장"),
+            false,
+            Save,
+          )}
           {button(
             () => c.fork(),
             t("Preserve layout in a new tab", "화면 배치를 새 탭으로 보존"),
+            false,
+            CopyPlus,
           )}
         </header>
         <div className="cw-tabs">
@@ -317,13 +403,14 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
                   aria-selected={item.id === c.active}
                   onClick={() => c.select(item.id)}
                 >
-                  ▦ {title(item)}
+                  <PanelsTopLeft size={14} aria-hidden="true" />
+                  <span>{title(item)}</span>
                 </button>
                 <button
                   aria-label={t("Close tab", "탭 닫기")}
                   onClick={() => void c.close(item, "tab")}
                 >
-                  ×
+                  <X size={13} aria-hidden="true" />
                 </button>
               </div>
             ))}
@@ -332,7 +419,7 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
             onClick={() => c.newCanvas()}
             aria-label={t("New empty canvas tab", "새 빈 캔버스 탭")}
           >
-            +
+            <Plus size={17} aria-hidden="true" />
           </button>
         </div>
         <div id="cw-error" role="status">
@@ -368,7 +455,9 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
         <div className="cw-body">
           {tab && !tab.project && (
             <div className="cw-empty">
-              <div className="cw-empty-icon">▦</div>
+              <div className="cw-empty-icon">
+                <PanelsTopLeft size={28} aria-hidden="true" />
+              </div>
               <h1>{t("A new workspace", "새 작업 공간")}</h1>
               <p>
                 {t(
@@ -469,18 +558,32 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
                   ))}
                 </div>
                 <div className="cw-tools">
-                  {button(() => c.add(tab, "folder"), t("Folder", "폴더"))}
+                  {button(
+                    () => c.add(tab, "folder"),
+                    t("Folder", "폴더"),
+                    false,
+                    Folder,
+                  )}
                   {button(
                     () => void c.createTerminal(tab),
                     t("Terminal", "터미널"),
+                    false,
+                    SquareTerminal,
                   )}
-                  {button(() => c.add(tab, "note"), t("Note", "메모"))}
+                  {button(
+                    () => c.add(tab, "note"),
+                    t("Note", "메모"),
+                    false,
+                    StickyNote,
+                  )}
                   <span>{Math.round(tab.layout.zoom * 100)}%</span>
                   {button(
                     () => {
                       c.reset(tab.id);
                     },
                     t("Reset view", "화면 초기화"),
+                    false,
+                    RotateCcw,
                   )}
                 </div>
               </section>
@@ -491,10 +594,14 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
                       c.hideEditor(tab.id);
                     },
                     t("Back to canvas", "캔버스로 돌아가기"),
+                    false,
+                    ArrowLeft,
                   )}
                   {button(
                     () => void c.close(tab, "editor"),
                     t("Close editor", "에디터 닫기"),
+                    false,
+                    X,
                   )}
                   <strong>
                     {t(
@@ -516,6 +623,7 @@ function CanvasCard({ tab, node }: { tab: Tab; node: CanvasNode }) {
   "use no memo";
   const { t } = useI18n();
   const session = terminalSessions.get(tab.project, node.id, tab.id);
+  const Icon = panelIcons[node.kind];
   const names = {
     folder: t("Shared folder", "공용 작업 폴더"),
     terminal: t("Terminal", "터미널"),
@@ -535,9 +643,18 @@ function CanvasCard({ tab, node }: { tab: Tab; node: CanvasNode }) {
     >
       <header className="cw-card-header">
         <div data-cw-drag>
+          <span className={"cw-node-icon cw-icon-" + node.kind}>
+            <Icon size={15} aria-hidden="true" />
+          </span>
           <strong>{names[node.kind]}</strong>
         </div>
-        {button(() => c.remove(tab, node.id), "×")}
+        <button
+          type="button"
+          aria-label={t("Remove panel", "패널 제거")}
+          onClick={() => c.remove(tab, node.id)}
+        >
+          <X size={14} aria-hidden="true" />
+        </button>
       </header>
       <div className="cw-node-body">
         {node.kind === "note" && (
@@ -564,7 +681,9 @@ function CanvasCard({ tab, node }: { tab: Tab; node: CanvasNode }) {
                       file.directory
                         ? void c.directory(tab, path)
                         : void c.editor(tab, path),
-                    (file.directory ? "▱ " : "▤ ") + file.name,
+                    file.name,
+                    false,
+                    file.directory ? Folder : FileText,
                   )}
                   {!file.directory &&
                     button(

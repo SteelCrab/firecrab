@@ -500,7 +500,7 @@
   background: var(--bg-hover);
   border-radius: 5px;
 }
-.cw-tools span {
+.cw-tools > span {
   font-size: 10px;
   color: var(--text-4);
   padding: 0 6px;
@@ -735,4 +735,74 @@
 }
 .cw-node-body > textarea {
   box-sizing: border-box;
+}
+
+/* Use the dashboard's Lucide set rather than font glyphs. */
+.cw-app svg.lucide {
+  flex-shrink: 0;
+  stroke-width: 1.75;
+}
+.cw-app .cw-icon-label,
+.cw-nav-current,
+.cw-tree button,
+.cw-tab [role="tab"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cw-icon-label > span,
+.cw-tab [role="tab"] > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cw-nav-current {
+  color: var(--accent);
+}
+.cw-tab > button:last-child,
+.cw-tabs > button,
+.cw-node > header > button {
+  display: grid;
+  place-items: center;
+}
+.cw-icon-note {
+  background: var(--amber-soft);
+  color: var(--amber-ink);
+}
+.cw-icon-history {
+  background: var(--indigo-soft);
+  color: var(--indigo-ink);
+}
+.cw-icon-terminal {
+  background: var(--green-soft);
+  color: var(--green-ink);
+}
+.cw-empty-icon {
+  display: grid;
+  place-items: center;
+}
+
+.cw-card-body > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.cw-card-body button {
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11px;
+}
+.cw-card-body button:hover {
+  background: var(--bg-hover);
+}
+.cw-card-body > div > button:first-child {
+  flex: 1;
+  text-align: left;
+}
+.cw-card-body > button {
+  margin-top: 16px;
+  background: var(--bg-sidebar);
 }
