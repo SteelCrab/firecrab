@@ -83,7 +83,10 @@ for (const locale of ["en", "ko"] as const)
       ).toBeVisible();
       await expect(
         page.getByRole("heading", {
-          name: locale === "ko" ? "코딩 작업 공간" : "Your coding workspace",
+          name:
+            locale === "ko"
+              ? "멀티 에이전트 작업 공간"
+              : "Multi-agent workspace",
           exact: true,
         }),
       ).toBeVisible();
