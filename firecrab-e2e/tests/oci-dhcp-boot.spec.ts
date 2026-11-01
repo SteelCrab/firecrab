@@ -378,7 +378,11 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
 
   // SSH port forward: the panel writes host:PORT → guest 22 through the same
   // endpoint the detail modal uses, and then prints the `ssh -p` command.
-  await page.locator("#ssh-host-port").fill(String(DHCP_SSH_HOST_PORT));
+  const hostPort = page.getByRole("spinbutton", {
+    name: "Host port",
+    exact: true,
+  });
+  await hostPort.fill(String(DHCP_SSH_HOST_PORT));
   await page
     .getByRole("button", {
       name: /Create SSH port forward|SSH 포트 포워드 만들기/,
@@ -411,7 +415,7 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
       name: /Remove SSH port forward|SSH 포트 포워드 제거/,
     })
     .click();
-  await expect(page.locator("#ssh-host-port")).toBeVisible();
+  await expect(hostPort).toBeVisible();
   const afterRemove = await api.getVm(detail!.id);
   expect(afterRemove?.portForwards?.some((pf) => pf.guestPort === 22)).toBe(
     false,
