@@ -132,7 +132,8 @@ mod linux {
         message.msg_iov = &mut vector;
         message.msg_iovlen = 1;
         message.msg_control = control.as_mut_ptr().cast();
-        message.msg_controllen = std::mem::size_of_val(&control);
+        // musl uses socklen_t for ancillary lengths; glibc uses usize.
+        message.msg_controllen = std::mem::size_of_val(&control) as _;
         // SAFETY: the fd is a live datagram socket and message points to writable buffers.
         let length = unsafe { libc::recvmsg(socket.as_raw_fd(), &mut message, libc::MSG_DONTWAIT) };
         if length < 0 {
@@ -152,7 +153,7 @@ mod linux {
             if current.cmsg_level == libc::SOL_SOCKET
                 && current.cmsg_type == libc::SCM_CREDENTIALS
                 && current.cmsg_len
-                    >= unsafe { libc::CMSG_LEN(std::mem::size_of::<libc::ucred>() as u32) } as usize
+                    >= unsafe { libc::CMSG_LEN(std::mem::size_of::<libc::ucred>() as u32) } as _
             {
                 // SAFETY: cmsg_len was checked and read_unaligned avoids alignment assumptions.
                 let credentials = unsafe {
