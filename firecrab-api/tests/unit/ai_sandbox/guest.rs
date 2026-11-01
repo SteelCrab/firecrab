@@ -1301,10 +1301,28 @@ async fn guest_transport_pins_the_selected_vm_and_refuses_a_changed_boot_or_stop
     assert_eq!(args.last().unwrap(), "/bin/sh -s");
     let lease = state.store.active_lease(id).unwrap().unwrap();
     assert!(args.iter().any(|a| a == &format!("root@{}", lease.ipv4)));
-    assert!(
-        std::fs::read_to_string(attempt.join("known_hosts"))
-            .unwrap()
-            .starts_with(&format!("{} ssh-ed25519 ", lease.ipv4))
+    let pinned = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix("UserKnownHostsFile="))
+        .map(std::path::PathBuf::from)
+        .expect("SSH must select its pinned host-key file");
+    assert_eq!(pinned.parent(), Some(attempt.as_path()));
+    assert_eq!(
+        std::fs::metadata(&pinned).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        std::fs::read_to_string(&pinned).unwrap(),
+        format!(
+            "{} {}\n",
+            lease.ipv4,
+            std::fs::read_to_string(&paths.host_public)
+                .unwrap()
+                .split_whitespace()
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
     );
     state
         .vms
