@@ -52,3 +52,11 @@ These images show test-fixture data, not a live project or a provider-backed age
 ![Restored file creates a new version](../assets/canvas-550-history-restored-2026-11-01.jpg)
 
 Remaining #550 acceptance includes editor-session cleanup, project-local Sandbox task migration, provider-backed folder agents, official skill installation, automated matched backups and cross-host restore. No test Pipe AI connection is currently available.
+
+## Approved work-branch baseline update
+
+After explicit user approval, main `5bba54f6ce775fb50aa820d881c5627ce62424b7` was synchronized into the #550 work branch only. The main branch and PR merge state were not changed. Main's unrelated feature reversions were preserved.
+
+Post-update checks pass: API/types clippy, 49 workspace tests, 205 frontend Rust tests, required frontend lint/build, and documentation checks. A fresh browser fixture confirms 19 dashboard menu entries, the AI Canvas link, project opening, file comparison, and a single append-only restore.
+
+Post-update compiled Canvas WASM SHA-256: `7647e2326e2ce6dc359cf0c61cd3a1a297f56f7847cbcf855af3d5709038f5f8`.

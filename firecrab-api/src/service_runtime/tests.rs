@@ -843,8 +843,7 @@ async fn replicas_inherit_the_group_before_boot_and_redeploy_with_the_same_selec
         snapshot.spec = spec.clone();
         snapshot.request = DeployMicroServiceRequest {
             micro_network_id: Some(network.id),
-            // Security-group inheritance does not require public host ports.
-            host_port: 0,
+            host_port: free_port_range(spec.replicas),
         };
         validate_placement(&state, &spec, &snapshot.request, snapshot.id)
             .await

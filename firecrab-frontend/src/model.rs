@@ -21,7 +21,6 @@ pub const VIEWS: &[(&str, &str, &str, &str)] = &[
     ("host", "system", "Host", "호스트"),
     ("ai-canvas", "ai", "AI Canvas", "AI Canvas"),
     ("ai-sandbox", "ai", "AI Sandbox", "AI Sandbox"),
-    ("security", "ai", "Security", "보안"),
 ];
 
 #[derive(Clone, Default, Deserialize, Serialize, PartialEq)]

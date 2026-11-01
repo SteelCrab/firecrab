@@ -339,12 +339,10 @@ test.describe("dashboard frame", () => {
 
   test("keeps the sidebar to menus and a compact host status", async ({ page }) => {
     await openDashboard(page, { vms: VMS, routes: { "/api/host": HOST } });
-    // Check the independent Canvas entry separately from the existing dashboard menus.
-    const items = nav(page).locator(".sidebar-item:not([href='#/ai-canvas'])");
-    await expect(nav(page).getByRole("link", { name: "AI Canvas", exact: true })).toHaveAttribute("href", "#/ai-canvas");
+    const items = nav(page).locator(".sidebar-item");
     await expect(items).toHaveCount(19); // one per VIEWS entry in src/model.rs
+    await expect(nav(page).getByRole("link", { name: "AI Canvas", exact: true })).toHaveAttribute("href", "#/ai-canvas");
     await expect(nav(page).getByRole("link", { name: "Stack", exact: true })).toHaveAttribute("href", "#/stacks");
-    await expect(nav(page).getByRole("link", { name: "Security", exact: true })).toHaveAttribute("href", "#/security");
     for (const item of await items.all()) await expect(item.locator("svg")).toHaveCount(1);
     await expect(nav(page).locator(".sidebar-item.active")).toHaveCSS("box-shadow", "none");
     await expect(nav(page).locator(".sidebar-search")).toHaveCSS("box-shadow", "none");
