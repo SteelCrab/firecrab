@@ -161,6 +161,7 @@ pub fn run(runner: &dyn CommandRunner, command: Command) -> Result<(), Error> {
         release,
         restore,
         yes,
+        ..
     } = command
     {
         let code = crate::micromanager::dev::instance::linux_dev(

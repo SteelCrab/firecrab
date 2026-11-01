@@ -634,3 +634,50 @@ fn installs_missing_locked_dependencies_and_reports_invalid_locks() {
             .contains("dependency installation failed")
     );
 }
+
+#[test]
+fn connecting_an_existing_backend_requires_its_saved_controller_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    assert!(super::check_backend_identity(directory.path(), None).is_err());
+    assert!(!directory.path().join("runtime").exists());
+    std::fs::create_dir(directory.path().join("runtime")).unwrap();
+    let selected = uuid::Uuid::new_v4().to_string();
+    std::fs::write(
+        directory.path().join("runtime/resource-controller-id.json"),
+        serde_json::to_vec(&selected).unwrap(),
+    )
+    .unwrap();
+    assert!(super::check_backend_identity(directory.path(), Some(&selected)).is_ok());
+    assert!(
+        super::check_backend_identity(directory.path(), Some(&uuid::Uuid::new_v4().to_string()))
+            .is_err()
+    );
+    assert!(super::check_backend_identity(directory.path(), None).is_err());
+}
+
+#[test]
+fn connected_dashboard_records_cannot_select_another_instances_backend() {
+    let fixture = Fixture::new();
+    let instance = fixture.private_instance("1234567890abcdef", 31001, 31002);
+    let state = Session {
+        source: fixture.source.path().join("different-frontend"),
+        session: Uuid::new_v4(),
+        dependencies: "deps".into(),
+        port: 31003,
+        api_port: 31001,
+        resource_port: 31002,
+        isolated: true,
+    };
+    let path = instance
+        .managed_home
+        .join("runtime/dev-dashboard-connected.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+    assert!(connected_session(&instance).unwrap().is_some());
+    let wrong = Session {
+        api_port: 5523,
+        ..state
+    };
+    fs::write(path, serde_json::to_vec(&wrong).unwrap()).unwrap();
+    assert!(connected_session(&instance).is_err());
+}

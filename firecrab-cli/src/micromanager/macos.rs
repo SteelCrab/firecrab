@@ -201,6 +201,7 @@ pub fn run(command: Command) -> Result<i32, Error> {
             release,
             restore,
             yes,
+            ..
         } => {
             let layout = lifecycle::Layout::from_process_env()?;
             let private_logs = private_runtime(&layout.managed_home)?;

@@ -207,6 +207,14 @@ pub enum Command {
         /// Checkout root (defaults to the current directory).
         #[arg(long, conflicts_with = "restore")]
         source: Option<std::path::PathBuf>,
+        /// Run only the dashboard against an existing worktree's development instance.
+        #[cfg(any(target_os = "macos", target_os = "windows", test))]
+        #[arg(long, requires = "connect_source", conflicts_with_all = ["restore", "release", "yes"])]
+        dashboard_only: bool,
+        /// Worktree whose existing API and VM data the dashboard should use.
+        #[cfg(any(target_os = "macos", target_os = "windows", test))]
+        #[arg(long, requires = "dashboard_only")]
+        connect_source: Option<std::path::PathBuf>,
         /// Development dashboard port (does not change the API port).
         #[arg(long, default_value_t = 8080, conflicts_with = "restore", value_parser = clap::value_parser!(u16).range(1..))]
         port: u16,
@@ -431,6 +439,34 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn dashboard_only_requires_an_explicit_existing_backend() {
+        let cli =
+            TestCli::try_parse_from(["test", "dev", "--dashboard-only", "--connect-source", "."])
+                .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Dev {
+                dashboard_only: true,
+                connect_source: Some(_),
+                ..
+            }
+        ));
+        assert!(TestCli::try_parse_from(["test", "dev", "--dashboard-only"]).is_err());
+        assert!(TestCli::try_parse_from(["test", "dev", "--connect-source", "."]).is_err());
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "dev",
+                "--dashboard-only",
+                "--connect-source",
+                ".",
+                "--restore"
+            ])
+            .is_err()
+        );
     }
 
     #[test]
