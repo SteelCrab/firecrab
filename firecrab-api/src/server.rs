@@ -955,6 +955,11 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     let observability = Router::new()
         .route("/api/service-security", get(crate::service_security::get))
         .route(
+            "/api/service-security/databases/{id}/link",
+            axum::routing::put(crate::service_security::link_database)
+                .delete(crate::service_security::unlink_database),
+        )
+        .route(
             "/api/service-security/{id}/scan",
             post(crate::service_security::rescan),
         )

@@ -53,6 +53,46 @@ pub fn load(app: &Shared) {
 }
 
 pub fn dispatch(app: &Shared, action: &str, id: &str) -> bool {
+    if action == "security-database-link" || action == "security-database-unlink" {
+        let linking = action == "security-database-link";
+        let selected = element(&format!("security-db-{id}"))
+            .and_then(|el| el.dyn_into::<HtmlSelectElement>().ok())
+            .map(|el| el.value())
+            .unwrap_or_default();
+        if linking && selected.is_empty() {
+            return true;
+        }
+        let app = app.clone();
+        let database = id.to_owned();
+        let generation = app.borrow().generation;
+        app.borrow_mut().security.busy = true;
+        render_content(&app);
+        spawn_local(async move {
+            let path = format!(
+                "/api/service-security/databases/{}/link",
+                api::encode(&database)
+            );
+            let body = json!({"serviceId": selected});
+            let result = api::request(
+                if linking { "PUT" } else { "DELETE" },
+                &path,
+                linking.then_some(&body),
+            )
+            .await;
+            let mut state = app.borrow_mut();
+            if state.generation != generation || state.route != "security" {
+                return;
+            }
+            state.security.busy = false;
+            match result {
+                Ok(_) => state.error.clear(),
+                Err(error) => state.error = error,
+            }
+            drop(state);
+            crate::refresh(app);
+        });
+        return true;
+    }
     if action == "security-scan" {
         let app = app.clone();
         let service = id.to_owned();

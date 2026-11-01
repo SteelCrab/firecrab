@@ -60,6 +60,52 @@ impl Store {
         .collect()
     }
 
+    /// List only operator-selected database-to-service associations.
+    pub(crate) fn security_database_links(&self) -> Result<Vec<(Uuid, Uuid)>, PersistenceError> {
+        let conn = self.lock();
+        let mut stmt =
+            conn.prepare("SELECT database_id, service_id FROM service_security_database_links")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.map(|row| {
+            let (database, service) = row?;
+            let bad = || PersistenceError::CorruptRecord {
+                id: database.clone(),
+                reason: "invalid database security link".into(),
+            };
+            Ok((
+                Uuid::parse_str(&database).map_err(|_| bad())?,
+                Uuid::parse_str(&service).map_err(|_| bad())?,
+            ))
+        })
+        .collect()
+    }
+
+    /// Link an existing database connection to a deployed, locally managed service.
+    pub(crate) fn set_security_database_link(
+        &self,
+        database: Uuid,
+        service: Uuid,
+    ) -> Result<bool, PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let changed = tx.execute("INSERT INTO service_security_database_links(database_id,service_id) SELECT ?1,?2 WHERE EXISTS(SELECT 1 FROM pipe_databases WHERE id=?1) AND EXISTS(SELECT 1 FROM micro_services WHERE id=?2) AND EXISTS(SELECT 1 FROM micro_service_deployments WHERE service_id=?2) AND NOT EXISTS(SELECT 1 FROM cluster_service_workers WHERE id=?2) ON CONFLICT(database_id) DO UPDATE SET service_id=excluded.service_id",params![database.to_string(),service.to_string()])?;
+        tx.commit()?;
+        Ok(changed > 0)
+    }
+
+    /// Remove an association without changing its database or service.
+    pub(crate) fn remove_security_database_link(
+        &self,
+        database: Uuid,
+    ) -> Result<bool, PersistenceError> {
+        Ok(self.lock().execute(
+            "DELETE FROM service_security_database_links WHERE database_id=?1",
+            [database.to_string()],
+        )? > 0)
+    }
+
     /// Load one connection input, returning None when the identifier is unknown.
     pub fn pipe_database(&self, id: Uuid) -> Result<Option<DatabaseRecord>, PersistenceError> {
         let row: Option<(String, String)> = self
@@ -92,10 +138,15 @@ impl Store {
 
     /// Remove only saved credentials and report whether a record existed.
     pub fn delete_pipe_database(&self, id: Uuid) -> Result<bool, PersistenceError> {
-        Ok(self
-            .lock()
-            .execute("DELETE FROM pipe_databases WHERE id = ?1", [id.to_string()])?
-            != 0)
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM service_security_database_links WHERE database_id=?1",
+            [id.to_string()],
+        )?;
+        let deleted = tx.execute("DELETE FROM pipe_databases WHERE id=?1", [id.to_string()])? > 0;
+        tx.commit()?;
+        Ok(deleted)
     }
 
     pub fn set_database_writes(&self, id: Uuid, enabled: bool) -> Result<bool, PersistenceError> {

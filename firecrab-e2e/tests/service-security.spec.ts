@@ -126,3 +126,31 @@ test("Security reports known ingress event loss", async ({ page }) => {
   } } });
   await expect(page.getByText(/Some ingress security events were lost/)).toBeVisible();
 });
+
+
+test("Security links database connections to an operator-selected service", async ({ page }) => {
+  let linked = false;
+  const writes: unknown[] = [];
+  await openDashboard(page, { hash:"#/security", routes: {
+    "/api/service-security": async route => route.fulfill({ json: {
+      services:[{ id:"a", name:"postgres", deploymentId:"one", digest:null, sampledRecords:0, signals:[], activityHistory:[{ deploymentId:"one", replicaIds:["replica"], bucketStart:1793310000, count:12, severity:"medium", source:"PostgreSQL JSON authentication logs", recommendation:"Review authentication policy." }] }],
+      databases:[{ id:"db-id", name:"orders-db", serviceId:linked ? "a" : null, serviceName:linked ? "postgres" : null }],
+      unsupportedWorkloads:linked ? [] : [{ id:"db-id", name:"orders-db", reason:"database_connection_unlinked" }]
+    }}),
+    "/api/service-security/databases/db-id/link": async route => {
+      writes.push({ method:route.request().method(), body:route.request().postData() ? route.request().postDataJSON() : null });
+      linked = route.request().method() === "PUT";
+      await route.fulfill({ status:204, body:"" });
+    }
+  }});
+  await expect(page.getByText(/Firecrab does not verify this link/)).toBeVisible();
+  await expect(page.getByText(/Authentication failures: 12/)).toBeVisible();
+  await page.getByLabel("orders-db").selectOption("a");
+  await page.getByRole("button", { name:"Link", exact:true }).click();
+  await expect(page.getByRole("button", { name:"Unlink" })).toBeVisible();
+  expect(writes[0]).toEqual({ method:"PUT", body:{ serviceId:"a" } });
+  if (process.env.SECURITY_DATABASE_SCREENSHOT) await page.screenshot({ path:process.env.SECURITY_DATABASE_SCREENSHOT, fullPage:true });
+  await page.getByRole("button", { name:"Unlink" }).click();
+  await expect(page.getByText("Not linked", { exact:true })).toBeVisible();
+  expect(writes[1]).toEqual({ method:"DELETE", body:null });
+});

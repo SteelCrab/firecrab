@@ -4279,6 +4279,11 @@ fn service_security(app: &App) -> String {
         for workload in unsupported {
             let reason = match text(workload, "reason") {
                 "cluster_managed" => tr(app, "Cluster-managed service", "클러스터 관리 서비스"),
+                "database_service_unavailable" => tr(
+                    app,
+                    "Linked service unavailable",
+                    "연결된 서비스를 사용할 수 없음",
+                ),
                 "database_connection_unlinked" => tr(
                     app,
                     "Database connection: image and logs not linked",
@@ -4295,6 +4300,47 @@ fn service_security(app: &App) -> String {
         out.push_str("</ul>");
     }
     let services = list(&app.resource["services"]);
+    let databases = list(&app.resource["databases"]);
+    if !databases.is_empty() {
+        out.push_str(&format!("<h3>{}</h3><p>{}</p>",
+            tr(app, "Database connections", "데이터베이스 연결"),
+            tr(app, "Select the MicroService that runs each database. Confirm the connection points to that service; Firecrab does not verify this link. Findings appear under the selected service.", "각 데이터베이스를 실행하는 마이크로서비스를 선택한다. 연결 대상이 해당 서비스인지 직접 확인한다. Firecrab은 연결 대상을 검증하지 않는다. 탐지 결과는 선택한 서비스에 표시된다.")));
+        for database in databases {
+            let id = text(database, "id");
+            let linked = text(database, "serviceId");
+            out.push_str(&format!("<div><label for=\"security-db-{}\">{}</label> <select id=\"security-db-{}\"><option value=\"\">{}</option>",
+                escape(id), escape(text(database, "name")), escape(id), tr(app, "Select a service", "서비스 선택")));
+            for service in services {
+                let service_id = text(service, "id");
+                out.push_str(&format!(
+                    "<option value=\"{}\" {}>{}</option>",
+                    escape(service_id),
+                    if service_id == linked { "selected" } else { "" },
+                    escape(text(service, "name"))
+                ));
+            }
+            out.push_str(&format!("</select> <button type=\"button\" class=\"btn\" data-action=\"security-database-link\" data-id=\"{}\" {}>{}</button>", escape(id), if app.security.busy || services.is_empty() { "disabled" } else { "" }, tr(app, "Link", "연결")));
+            if !linked.is_empty() {
+                out.push_str(&format!(" <button type=\"button\" class=\"btn\" data-action=\"security-database-unlink\" data-id=\"{}\" {}>{}</button>", escape(id), if app.security.busy { "disabled" } else { "" }, tr(app, "Unlink", "연결 해제")));
+                if text(database, "serviceName").is_empty() {
+                    out.push_str(&format!(
+                        " <span>{}</span>",
+                        tr(
+                            app,
+                            "Linked service unavailable",
+                            "연결된 서비스를 사용할 수 없음"
+                        )
+                    ));
+                }
+            } else {
+                out.push_str(&format!(
+                    " <span>{}</span>",
+                    tr(app, "Not linked", "연결되지 않음")
+                ));
+            }
+            out.push_str("</div>");
+        }
+    }
     if services.is_empty() {
         out.push_str(&format!(
             "<p>{}</p>",
@@ -4495,7 +4541,11 @@ fn service_security(app: &App) -> String {
                     escape(text(event, "deploymentId")),
                     tr(app, "Window (Unix)", "시작 시각 (Unix)"),
                     event["bucketStart"].as_i64().unwrap_or_default(),
-                    tr(app, "401/403 records", "401/403 기록"),
+                    if text(event, "source") == "PostgreSQL JSON authentication logs" {
+                        tr(app, "Authentication failures", "인증 실패")
+                    } else {
+                        tr(app, "401/403 records", "401/403 기록")
+                    },
                     event["count"].as_u64().unwrap_or_default(),
                     tr(app, "Severity", "심각도"),
                     escape(text(event, "severity")),

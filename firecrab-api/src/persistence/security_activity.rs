@@ -19,6 +19,15 @@ CREATE TABLE IF NOT EXISTS service_security_ingress (
  PRIMARY KEY(service_id,deployment_id,vm_id,bucket)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS service_security_ingress_owner ON service_security_ingress(service_id,bucket);
+CREATE TABLE IF NOT EXISTS service_security_database_links (
+ database_id TEXT PRIMARY KEY, service_id TEXT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS service_security_database_activity (
+ service_id TEXT NOT NULL, deployment_id TEXT NOT NULL, vm_id TEXT NOT NULL,
+ bucket INTEGER NOT NULL, denied INTEGER NOT NULL,
+ PRIMARY KEY(service_id,deployment_id,vm_id,bucket)
+) STRICT;
+CREATE INDEX IF NOT EXISTS service_security_database_activity_owner ON service_security_database_activity(service_id,bucket);
 ";
 
 #[derive(Debug, Serialize)]
@@ -85,21 +94,52 @@ pub(super) fn record(
     {
         return Ok(());
     }
-    let denied = message
-        .lines()
-        .filter(|line| {
-            serde_json::from_str::<serde_json::Value>(line)
-                .ok()
-                .and_then(|value| value.get("status").and_then(|status| status.as_u64()))
-                .is_some_and(|status| matches!(status, 401 | 403))
-        })
-        .count();
-    if denied == 0 {
-        return Ok(());
+    let mut http_denied = 0;
+    let mut database_denied = 0;
+    for line in message.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value
+            .get("status")
+            .and_then(|status| status.as_u64())
+            .is_some_and(|status| matches!(status, 401 | 403))
+        {
+            http_denied += 1;
+        }
+        if value
+            .get("error_severity")
+            .and_then(|severity| severity.as_str())
+            == Some("FATAL")
+            && value
+                .get("state_code")
+                .and_then(|code| code.as_str())
+                .is_some_and(|code| matches!(code, "28P01" | "28000"))
+        {
+            database_denied += 1;
+        }
+    }
+    if database_denied > 0 {
+        let linked: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM service_security_database_links WHERE service_id=?1)",
+            [service.to_string()],
+            |row| row.get(0),
+        )?;
+        if !linked {
+            database_denied = 0;
+        }
     }
     let bucket = timestamp_ms.div_euclid(60_000) * 60;
-    conn.execute("INSERT INTO service_security_activity(service_id,deployment_id,vm_id,bucket,denied) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(service_id,deployment_id,vm_id,bucket) DO UPDATE SET denied=MIN(1000000,denied+excluded.denied)", params![service.to_string(),deployment.to_string(),vm.to_string(),bucket,denied as i64])?;
-    conn.execute("DELETE FROM service_security_activity WHERE service_id=?1 AND (bucket < ?2 OR rowid NOT IN (SELECT rowid FROM service_security_activity WHERE service_id=?1 ORDER BY bucket DESC,rowid DESC LIMIT 10000))", params![service.to_string(),now_ms.div_euclid(1000).saturating_sub(7*24*60*60)])?;
+    for (table, denied) in [
+        ("service_security_activity", http_denied),
+        ("service_security_database_activity", database_denied),
+    ] {
+        if denied == 0 {
+            continue;
+        }
+        conn.execute(&format!("INSERT INTO {table}(service_id,deployment_id,vm_id,bucket,denied) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(service_id,deployment_id,vm_id,bucket) DO UPDATE SET denied=MIN(1000000,denied+excluded.denied)"), params![service.to_string(),deployment.to_string(),vm.to_string(),bucket,denied])?;
+        conn.execute(&format!("DELETE FROM {table} WHERE service_id=?1 AND (bucket < ?2 OR rowid NOT IN (SELECT rowid FROM {table} WHERE service_id=?1 ORDER BY bucket DESC,rowid DESC LIMIT 10000))"), params![service.to_string(),now_ms.div_euclid(1000).saturating_sub(7*24*60*60)])?;
+    }
     Ok(())
 }
 
@@ -158,6 +198,7 @@ impl Store {
         for (table, source) in [
             ("service_security_activity", "application"),
             ("service_security_ingress", "ingress"),
+            ("service_security_database_activity", "database"),
         ] {
             let sql = format!(
                 "SELECT deployment_id,vm_id,bucket,denied FROM {table} WHERE service_id=?1 AND bucket>=?2 ORDER BY bucket DESC LIMIT 10000"
@@ -202,16 +243,19 @@ impl Store {
                 replica_ids.extend(replicas.iter().cloned());
             }
             if count >= 10 {
-                let (source, recommendation) = if *kind == "ingress" {
-                    (
+                let (source, recommendation) = match *kind {
+                    "ingress" => (
                         "ingress HTTP status codes",
                         "Review ingress and authentication configuration for repeated 401/403 responses.",
-                    )
-                } else {
-                    (
+                    ),
+                    "database" => (
+                        "PostgreSQL JSON authentication logs",
+                        "Review database authentication policy and audit logs for repeated authentication failures.",
+                    ),
+                    _ => (
                         "structured application logs with status codes",
                         "Review the matching application logs and authentication policy for repeated 401/403 status codes.",
-                    )
+                    ),
                 };
                 findings.push(Activity {
                     deployment_id: deployment_id.clone(),
@@ -238,6 +282,100 @@ mod tests {
     };
     use firecrab_api_types::{MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn linked_database_counts_only_postgresql_authentication_codes_without_raw_data() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::with_db_file(
+            TemplateRegistry::from_specs(root.path(), std::iter::empty()).unwrap(),
+            root.path().join("state.db"),
+        )
+        .await
+        .unwrap();
+        let service = Uuid::new_v4();
+        let deployment = Uuid::new_v4();
+        let vm = Uuid::new_v4();
+        let database = Uuid::new_v4();
+        let runtime = Uuid::new_v4();
+        let spec: MicroServiceSpec = serde_json::from_value(
+            json!({"name":"database","image":"ghcr.io/team/db:v1","port":8080,"ram":128,"cpu":1}),
+        )
+        .unwrap();
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse {
+                id: service,
+                spec: spec.clone(),
+            })
+            .unwrap();
+        let release: MicroServiceDeployment = serde_json::from_value(json!({"id":deployment,"serviceId":service,"phase":"running","spec":spec,"request":{"hostPort":0},"instances":[{"vmId":vm,"ipv4":"10.1.2.3","hostPort":0,"state":"running","healthy":true}],"log":[],"error":null})).unwrap();
+        state.store.save_service_deployment(&release).unwrap();
+        let connection: crate::pipe_databases::DatabaseInput = serde_json::from_value(json!({"name":"db","provider":"local","uri":"postgres://user:password@db.example/test"})).unwrap();
+        state
+            .store
+            .save_pipe_database(database, &connection)
+            .unwrap();
+        let make = |sequence| {
+            InputLog { sequence, timestamp:chrono::Utc::now().timestamp_millis(),stream:"stderr".into(),message:"{\"error_severity\":\"FATAL\",\"state_code\":\"28P01\",\"message\":\"private-password\",\"remote_host\":\"192.0.2.1\"}\n".repeat(10) }
+        };
+        state
+            .store
+            .append_service_logs(service, (vm, runtime), 1, "active", false, &[make(1)])
+            .unwrap();
+        assert!(state.store.security_activity(service).unwrap().is_empty());
+        assert!(
+            state
+                .store
+                .set_security_database_link(database, service)
+                .unwrap()
+        );
+        let mut matching = make(2);
+        matching.message.push_str(&"{\"error_severity\":\"ERROR\",\"state_code\":\"28P01\"}\n{\"error_severity\":\"FATAL\",\"state_code\":\"23505\"}\n".repeat(10));
+        state
+            .store
+            .append_service_logs(
+                service,
+                (vm, runtime),
+                2,
+                "active",
+                false,
+                std::slice::from_ref(&matching),
+            )
+            .unwrap();
+        state
+            .store
+            .append_service_logs(
+                service,
+                (vm, runtime),
+                2,
+                "active",
+                false,
+                std::slice::from_ref(&matching),
+            )
+            .unwrap();
+        let findings = state.store.security_activity(service).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].source, "PostgreSQL JSON authentication logs");
+        assert_eq!(findings[0].count, 10);
+        assert_eq!(findings[0].replica_ids, vec![vm.to_string()]);
+        assert_eq!(findings[0].deployment_id, deployment.to_string());
+        let payload = serde_json::to_string(&findings).unwrap();
+        assert!(!payload.contains("private-password") && !payload.contains("192.0.2.1"));
+        state.store.remove_security_database_link(database).unwrap();
+        state
+            .store
+            .append_service_logs(service, (vm, runtime), 3, "active", false, &[make(3)])
+            .unwrap();
+        assert_eq!(state.store.security_activity(service).unwrap()[0].count, 10);
+        assert!(
+            state
+                .store
+                .set_security_database_link(database, service)
+                .unwrap()
+        );
+        state.store.delete_pipe_database(database).unwrap();
+        assert!(state.store.security_database_links().unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn ingress_signals_are_scoped_to_real_releases_and_removed_with_service() {

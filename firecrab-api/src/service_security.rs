@@ -10,7 +10,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
@@ -45,9 +45,25 @@ pub(crate) struct UnsupportedWorkload {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct DatabaseCoverage {
+    id: Uuid,
+    name: String,
+    service_id: Option<Uuid>,
+    service_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DatabaseLinkRequest {
+    service_id: Uuid,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct Coverage {
     services: Vec<Service>,
     unsupported_workloads: Vec<UnsupportedWorkload>,
+    databases: Vec<DatabaseCoverage>,
     cve_scan: &'static str,
     threat_detection: &'static str,
     ai_analysis: &'static str,
@@ -70,7 +86,7 @@ pub(crate) async fn get(
     })?;
     let ingress_logs = ingress::status(&state);
     let store = state.store.clone();
-    let (services, unsupported_workloads) = database(request.0, move || {
+    let (services, unsupported_workloads, databases) = database(request.0, move || {
         let mut services = Vec::new();
         let mut unsupported_workloads = Vec::new();
         for service in store.list_micro_services()? {
@@ -141,24 +157,98 @@ pub(crate) async fn get(
                 });
             }
         }
+        let links: std::collections::HashMap<_, _> =
+            store.security_database_links()?.into_iter().collect();
+        let mut databases = Vec::new();
         for (id, name) in store.pipe_database_security_names()? {
-            unsupported_workloads.push(UnsupportedWorkload {
+            let service_id = links.get(&id).copied();
+            let service_name = service_id.and_then(|id| {
+                services
+                    .iter()
+                    .find(|service| service.id == id)
+                    .map(|service| service.name.clone())
+            });
+            if service_name.is_none() {
+                unsupported_workloads.push(UnsupportedWorkload {
+                    id,
+                    name: name.clone(),
+                    reason: if service_id.is_some() {
+                        "database_service_unavailable"
+                    } else {
+                        "database_connection_unlinked"
+                    },
+                });
+            }
+            databases.push(DatabaseCoverage {
                 id,
                 name,
-                reason: "database_connection_unlinked",
+                service_id,
+                service_name,
             });
         }
-        Ok((services, unsupported_workloads))
+        Ok((services, unsupported_workloads, databases))
     })
     .await?;
     Ok(Json(Coverage {
         services,
         unsupported_workloads,
+        databases,
         cve_scan: "scheduled",
         threat_detection: "limited",
         ai_analysis: "on_demand",
         ingress_logs,
     }))
+}
+
+/// Link a database connection to the service that actually runs it.
+pub(crate) async fn link_database(
+    State(state): State<AppState>,
+    Extension(request): Extension<RequestId>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+    Json(input): Json<DatabaseLinkRequest>,
+) -> Result<StatusCode, AppError> {
+    caller.operator().map_err(|_| {
+        AppError::new(
+            StatusCode::FORBIDDEN,
+            "service_operator_required",
+            "Only the operator can manage service security",
+            request.0,
+        )
+    })?;
+    let store = state.store.clone();
+    let linked = database(request.0, move || {
+        store.set_security_database_link(id, input.service_id)
+    })
+    .await?;
+    if !linked {
+        return Err(AppError::conflict(
+            "database_security_link_invalid",
+            "Choose an existing connection and a deployed local service",
+            request.0,
+        ));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Remove only the operator-selected database association.
+pub(crate) async fn unlink_database(
+    State(state): State<AppState>,
+    Extension(request): Extension<RequestId>,
+    caller: Caller,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    caller.operator().map_err(|_| {
+        AppError::new(
+            StatusCode::FORBIDDEN,
+            "service_operator_required",
+            "Only the operator can manage service security",
+            request.0,
+        )
+    })?;
+    let store = state.store.clone();
+    database(request.0, move || store.remove_security_database_link(id)).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Queue an operator-requested scan without blocking the API on registry I/O.
@@ -374,7 +464,7 @@ mod tests {
         };
         state.store.save_security_scan(service_id, &scan).unwrap();
         let coverage = get(
-            State(state),
+            State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             Caller::default(),
         )
@@ -419,5 +509,73 @@ mod tests {
         assert!(!result.to_string().contains("cluster-secret"));
         assert!(!result.to_string().contains("secret-value"));
         assert_eq!(result["cveScan"], "scheduled");
+        let request = || Extension(RequestId(Uuid::new_v4()));
+        let delegate =
+            || serde_json::from_value(json!({"principal":"local", "operator":false})).unwrap();
+        let denied = link_database(
+            State(state.clone()),
+            request(),
+            delegate(),
+            Path(database_id),
+            Json(DatabaseLinkRequest { service_id }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(denied.into_response().status(), StatusCode::FORBIDDEN);
+        let denied = unlink_database(
+            State(state.clone()),
+            request(),
+            delegate(),
+            Path(database_id),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(denied.into_response().status(), StatusCode::FORBIDDEN);
+        let invalid = link_database(
+            State(state.clone()),
+            request(),
+            Caller::default(),
+            Path(database_id),
+            Json(DatabaseLinkRequest {
+                service_id: unsupported_id,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(invalid.into_response().status(), StatusCode::CONFLICT);
+        assert_eq!(
+            link_database(
+                State(state.clone()),
+                request(),
+                Caller::default(),
+                Path(database_id),
+                Json(DatabaseLinkRequest { service_id })
+            )
+            .await
+            .unwrap(),
+            StatusCode::NO_CONTENT
+        );
+        let linked = get(State(state.clone()), request(), Caller::default())
+            .await
+            .unwrap()
+            .0;
+        let linked = serde_json::to_value(linked).unwrap();
+        assert_eq!(linked["databases"][0]["serviceId"], service_id.to_string());
+        assert_eq!(linked["databases"][0]["serviceName"], "orders");
+        assert_eq!(linked["unsupportedWorkloads"].as_array().unwrap().len(), 1);
+        assert!(!linked.to_string().contains("private-db-secret"));
+        assert!(!linked.to_string().contains("private-db-host"));
+        assert_eq!(
+            unlink_database(
+                State(state.clone()),
+                request(),
+                Caller::default(),
+                Path(database_id)
+            )
+            .await
+            .unwrap(),
+            StatusCode::NO_CONTENT
+        );
+        assert!(state.store.security_database_links().unwrap().is_empty());
     }
 }
