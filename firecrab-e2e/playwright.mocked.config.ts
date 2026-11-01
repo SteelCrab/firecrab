@@ -37,6 +37,7 @@ export default defineConfig({
         ...process.env,
         FIRECRAB_DEV_API_PORT: "1",
         FIRECRAB_DEV_RESOURCE_PORT: "1",
+        FIRECRAB_E2E_PREVIEW_URL: baseURL,
       },
       command:
         process.env.FIRECRAB_MOCKED_E2E_PRODUCTION === "1"

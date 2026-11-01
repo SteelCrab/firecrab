@@ -86,10 +86,14 @@ export default defineConfig({
       timeout: 180_000,
     },
     {
-      command: "npm run dev",
+      command:
+        process.env.FIRECRAB_E2E_PRODUCTION === "1"
+          ? "node ../firecrab-e2e/scripts/serve-dashboard.mjs"
+          : "npm run dev",
       env: {
         ...process.env,
         FIRECRAB_DEV_API_PORT: process.env.FIRECRAB_DEV_API_PORT ?? "5523",
+        FIRECRAB_E2E_PREVIEW_URL: baseURL,
       },
       cwd: frontend,
       url: "http://localhost:8080",

@@ -13,7 +13,9 @@ const vite = fileURLToPath(
   ),
 );
 const address = new URL(
-  process.env.FIRECRAB_MOCKED_E2E_BASE_URL || "http://127.0.0.1:8097",
+  process.env.FIRECRAB_E2E_PREVIEW_URL ||
+    process.env.FIRECRAB_MOCKED_E2E_BASE_URL ||
+    "http://127.0.0.1:8097",
 );
 if (
   !["127.0.0.1", "localhost", "[::1]"].includes(address.hostname) ||

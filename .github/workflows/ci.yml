@@ -925,10 +925,11 @@ jobs:
           FIRECRAB_E2E_REQUIRE_GUEST_BOOT: "1"
           FIRECRAB_E2E_REQUIRE_RUNNING_API: "1"
           FIRECRAB_E2E_REQUIRE_GUEST_RESIZE: "1"
+          FIRECRAB_E2E_PRODUCTION: "1"
         run: |
-          # Report console failures before running the broad dashboard suite.
+          # Fixture suites run in e2e-dashboard with private API ports.
           npm run test:console --prefix firecrab-e2e 2>&1 | tee target/qa/console-browser.log
-          npm test --prefix firecrab-e2e -- --grep-invert 'terminal session end' 2>&1 | tee target/qa/browser.log
+          npm run test:guest --prefix firecrab-e2e 2>&1 | tee target/qa/browser.log
 
       - name: QA nginx env, port-forward, shells
         if: ${{ !cancelled() && steps.install-service.outcome == 'success' && steps.enable-kvm.outcome == 'success' && steps.guest-kernel.outcome == 'success' }}
