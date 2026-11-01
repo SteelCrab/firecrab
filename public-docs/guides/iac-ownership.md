@@ -20,6 +20,9 @@ See [safe source removal](iac-source-removal.md) for retained generations and re
 Other inventory kind names are recognized, but transition returns `unsupported_iac_resource` until their validation/activity adapter exists.
 A Terraform ownership record does not mean the Terraform provider is implemented.
 The Stack dashboard lists Terraform-owned resources and their ownership generation.
+Each native Stack and Terraform state owner has a separate card.
+Resource sections use the existing navigation icons, readable type labels and resource counts.
+An exact state-owner UUID separates Terraform cards; resource kinds do not merge different states.
 
 Storage roots, volumes, security groups, shells and schedules use their exact UUIDs.
 Volume creation/deletion and active schedule executions block ownership transfers.

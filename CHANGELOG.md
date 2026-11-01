@@ -25,6 +25,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Group Stack resources into icon sections with resource counts.
+  Keep native Stack registrations and Terraform state owners in separate cards,
+  and show each state owner once instead of repeating it for every resource (#548).
 - Add generation-checked Stack/Terraform ownership transfer for networks,
   standalone VMs, services, registered storage roots, volumes, security groups,
   shells, schedules, pools, queues, database and S3 connections, Secrets and Secret

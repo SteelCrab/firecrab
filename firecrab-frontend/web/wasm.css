@@ -192,10 +192,28 @@
 @media (hover: hover) { .pipe-card:hover { border-color: var(--border-strong); background: var(--bg-subtle); } }
 
 .stack-list { display: grid; gap: 16px; }
+.stack-list + .stack-list { margin-top: 16px; }
 .stack-card h2 { margin: 0 0 16px; font-size: 16px; }
+.stack-heading, .stack-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.stack-heading { justify-content: space-between; flex-wrap: wrap; margin-bottom: 16px; }
+.stack-title h2 { margin: 0; overflow-wrap: anywhere; }
+.stack-title > svg { flex: none; width: 20px; height: 20px; color: var(--text-2); }
+.stack-manager { flex: none; padding: 4px 8px; border-radius: var(--radius-sm); background: var(--bg-active); color: var(--text-2); font-size: 11px; font-weight: 600; }
+.stack-resource-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
+.stack-resource-group { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.stack-resource-heading { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--bg-subtle); }
+.stack-resource-heading h3 { flex: 1; min-width: 0; margin: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.stack-resource-icon { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-2); }
+.stack-resource-count { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.stack-resource { padding: 14px; border-top: 1px solid var(--border); }
+.stack-resource h4 { margin: 0 0 12px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.stack-source { padding-top: 16px; border-top: 1px solid var(--border); }
+.stack-source > h3 { margin: 0 0 14px; font-size: 13px; }
+@media (max-width: 900px) { .stack-resource-groups { grid-template-columns: minmax(0, 1fr); } }
 .stack-status { display: grid; grid-template-columns: minmax(100px, 160px) minmax(0, 1fr); gap: 8px 16px; margin: 0; }
 .stack-status dt { color: var(--text-2); }
 .stack-status dd { margin: 0; overflow-wrap: anywhere; }
+.stack-resource-properties { font-size: 12px; grid-template-columns: minmax(90px, 135px) minmax(0, 1fr); gap: 8px 12px; }
 .stack-guidance { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 12px; }
 .stack-guidance h3 { font-size: 14px; margin: 0 0 8px; }
 .stack-guidance p { margin: 6px 0; }

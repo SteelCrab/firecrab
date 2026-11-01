@@ -2,10 +2,13 @@
 use crate::{
     App, Shared, api,
     model::{escape, list, text},
-    render::{Icon, icon_button},
+    render::{Icon, icon_button, navigation_icon},
 };
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use wasm_bindgen_futures::spawn_local;
+
+mod resources;
 
 fn tr<'a>(app: &App, en: &'a str, ko: &'a str) -> &'a str {
     if app.locale == "ko" { ko } else { en }
@@ -143,15 +146,21 @@ pub fn content(app: &App) -> String {
     } else {
         &app.resource["stacks"]
     });
-    let owners: Vec<_> = list(&app.resource["owners"])
-        .iter()
-        .filter(|record| text(&record["owner"], "manager") == "terraform")
-        .collect();
+    let owners = list(&app.resource["owners"]);
+    let mut states: BTreeMap<&str, Vec<&Value>> = BTreeMap::new();
+    for record in owners {
+        if text(&record["owner"], "manager") == "terraform" {
+            states
+                .entry(text(&record["owner"], "id"))
+                .or_default()
+                .push(record);
+        }
+    }
     if rows.is_empty() {
         if app.connection_error.is_empty() {
             out.push_str(&format!(
                 "<p class=\"{}\">{}</p>",
-                if owners.is_empty() {
+                if states.is_empty() {
                     "empty-state"
                 } else {
                     "stack-guidance"
@@ -168,8 +177,14 @@ pub fn content(app: &App) -> String {
         let name = text(&row["stack"], "name");
         let source = &row["source"];
         out.push_str(&format!(
-            "<section class=\"wasm-card stack-card\"><h2>{}</h2>",
-            escape(name)
+            "<section class=\"wasm-card stack-card\" data-manager=\"stack\" data-owner-id=\"{}\"><header class=\"stack-heading\"><div class=\"stack-title\">{}<h2>{}</h2></div><span class=\"stack-manager\">Firecrab Stack</span></header>",
+            escape(text(&row["stack"], "id")), navigation_icon("stacks"), escape(name)
+        ));
+        let records = resources::native_records(row, owners);
+        out.push_str(&resources::groups(app, &records.iter().collect::<Vec<_>>()));
+        out.push_str(&format!(
+            "<section class=\"stack-source\"><h3>{}</h3>",
+            tr(app, "Git source", "Git 소스")
         ));
         if let Some(error) = row["error"].as_str() {
             out.push_str(&format!(
@@ -238,7 +253,7 @@ pub fn content(app: &App) -> String {
             }
             out.push_str(&format!("<section class=\"stack-guidance\"><h3>{}</h3><p>{}</p><p>{}</p></section>",tr(app,"Revert","되돌리기"),tr(app,"Revert the manifest in Git and review the resulting commit. Guest disks and application data are not restored.","Git에서 매니페스트를 되돌리고 새 커밋을 확인한다. 게스트 디스크와 앱 데이터는 복원되지 않는다."),tr(app,"Automatic mode applies the commit on the next poll when active. In detect-only or paused mode, run a manual sync.","자동 방식이 활성 상태면 다음 확인 때 커밋을 적용한다. 감지만 사용하거나 일시 중지한 경우 수동 동기화가 필요하다.")));
         }
-        out.push_str("</section>");
+        out.push_str("</section></section>");
     }
     out.push_str("</div>");
     if let Some(error) = app.resource["ownershipError"].as_str() {
@@ -252,20 +267,18 @@ pub fn content(app: &App) -> String {
             escape(error)
         ));
     }
-    if !owners.is_empty() {
-        out.push_str(&format!(
-            "<section class=\"wasm-card stack-card\"><h2>{}</h2>",
-            tr(app, "Terraform ownership", "Terraform 소유권")
+    if !states.is_empty() {
+        out.push_str("<div class=\"stack-list\">");
+        for (owner, records) in states {
+            out.push_str(&format!(
+            "<section class=\"wasm-card stack-card\" data-manager=\"terraform\" data-owner-id=\"{}\"><header class=\"stack-heading\"><div class=\"stack-title\">{}<h2>{}</h2></div><span class=\"stack-manager\">Terraform</span></header><dl class=\"stack-status stack-owner\"><dt>{}</dt><dd class=\"mono\">{}</dd></dl>",
+            escape(owner), navigation_icon("stacks"), tr(app, "Terraform ownership", "Terraform 소유권"),
+            tr(app,"State owner ID","상태 소유자 ID"),escape(owner)
         ));
-        for record in owners {
-            out.push_str(&format!("<dl class=\"stack-status\"><dt>{}</dt><dd>{}</dd><dt>{}</dt><dd class=\"mono\">{}</dd><dt>{}</dt><dd class=\"mono\">{}</dd><dt>{}</dt><dd class=\"mono\">{}</dd><dt>{}</dt><dd>{}</dd></dl>",
-                tr(app,"Resource","리소스"),escape(text(&record["resource"],"kind")),
-                tr(app,"Resource ID","리소스 ID"),escape(text(&record["resource"],"id")),
-                tr(app,"Terraform address","Terraform 주소"),escape(text(&record["owner"],"key")),
-                tr(app,"State owner ID","상태 소유자 ID"),escape(text(&record["owner"],"id")),
-                tr(app,"Ownership generation","소유권 세대"),record["generation"].as_u64().unwrap_or(0)));
+            out.push_str(&resources::groups(app, &records));
+            out.push_str("</section>");
         }
-        out.push_str("</section>");
+        out.push_str("</div>");
     }
     out
 }
@@ -324,5 +337,63 @@ mod tests {
         let html = content(&app);
         assert!(html.contains("Git source is not configured."));
         assert!(html.contains("Source unavailable: HTTP 500"));
+    }
+
+    #[test]
+    fn separates_terraform_states_before_grouping_their_resource_kinds() {
+        let app = App {
+            locale: "en".into(),
+            resource: json!({"stacks":[],"ownershipError":null,"owners":[
+                {"resource":{"kind":"network","id":"net-a"},"owner":{"manager":"terraform","id":"state-a","key":"network.primary"},"generation":1},
+                {"resource":{"kind":"volume","id":"vol-a"},"owner":{"manager":"terraform","id":"state-a","key":"volume.primary"},"generation":2},
+                {"resource":{"kind":"network","id":"net-b"},"owner":{"manager":"terraform","id":"state-b","key":"network.other"},"generation":3}
+            ]}),
+            ..App::default()
+        };
+        let html = content(&app);
+        let (first, second) = html.split_once("data-owner-id=\"state-b\"").unwrap();
+        assert!(first.contains("network.primary") && first.contains("volume.primary"));
+        assert!(!first.contains("network.other"));
+        assert!(second.contains("network.other") && !second.contains("volume.primary"));
+        assert_eq!(html.matches("data-kind=\"network\"").count(), 2);
+        assert!(html.contains("Networks") && html.contains("Volumes"));
+    }
+
+    #[test]
+    fn native_sections_include_legacy_bindings_without_inventing_ownership_generations() {
+        let app = App {
+            locale: "en".into(),
+            resource: json!({"stacks":[{"stack":{"id":"native","name":"Application","bindings":[
+                {"kind":"network","key":"existing-network","resourceId":"network-id"}
+            ]},"source":null}],"owners":[
+                {"resource":{"kind":"volume","id":"volume-id"},"owner":{"manager":"stack","id":"native","key":"existing-volume"},"generation":4},
+                {"resource":{"kind":"network","id":"foreign-id"},"owner":{"manager":"stack","id":"other-stack","key":"foreign-network"},"generation":1}
+            ],"ownershipError":null}),
+            ..App::default()
+        };
+        let html = content(&app);
+        assert!(html.contains("existing-network") && html.contains("existing-volume"));
+        assert!(!html.contains("foreign-network"));
+        assert_eq!(html.matches("Ownership generation").count(), 1);
+        assert!(html.contains("Git source is not configured."));
+    }
+
+    #[test]
+    fn a_later_transfer_observation_overrides_an_older_native_binding_snapshot() {
+        let app = App {
+            locale: "en".into(),
+            resource: json!({
+                "stacks":[{"stack":{"id":"native","name":"Application","bindings":[{"kind":"network","key":"old-binding","resourceId":"same-resource"}]},"source":null}],
+                "owners":[{"resource":{"kind":"network","id":"same-resource"},"owner":{"manager":"terraform","id":"state","key":"current-binding"},"generation":2}],"ownershipError":null
+            }),
+            ..App::default()
+        };
+        let html = content(&app);
+        assert!(!html.contains("old-binding"));
+        assert_eq!(
+            html.matches("data-resource-id=\"same-resource\"").count(),
+            1
+        );
+        assert!(html.contains("current-binding"));
     }
 }

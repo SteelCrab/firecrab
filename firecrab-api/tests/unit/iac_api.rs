@@ -1014,6 +1014,7 @@ async fn iac_owner_browser_fixture() {
     };
     let ownership = state.store.change_iac_resource_owner(&change).unwrap();
     let mut ownerships = vec![ownership.clone()];
+    let second_state = Uuid::new_v4();
     for kind in [
         "storage_root",
         "volume",
@@ -1038,7 +1039,11 @@ async fn iac_owner_browser_fixture() {
             expected_owner: before.owner,
             owner: Some(firecrab_stack::ResourceOwner {
                 manager: firecrab_stack::Manager::Terraform,
-                id: change.owner.as_ref().unwrap().id,
+                id: if matches!(kind, "pool" | "schedule" | "shell") {
+                    second_state
+                } else {
+                    change.owner.as_ref().unwrap().id
+                },
                 key: format!("firecrab_{kind}.application"),
             }),
         };

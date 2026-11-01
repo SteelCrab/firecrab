@@ -104,17 +104,38 @@ try {
   for (const owned of fixture.ownerships) {
     await page.getByText(owned.owner.key, { exact: true }).waitFor();
   }
+  const states = new Map();
+  for (const record of fixture.ownerships) {
+    if (!states.has(record.owner.id)) states.set(record.owner.id,[]);
+    states.get(record.owner.id).push(record);
+  }
+  assert.ok(states.size>=2,"fixture must exercise separate Terraform state owners");
+  assert.equal(await page.locator('.stack-card[data-manager="terraform"]').count(),states.size);
+  for(const [id,records] of states) {
+    const card=page.locator(`.stack-card[data-manager="terraform"][data-owner-id="${id}"]`);
+    assert.equal(await card.count(),1);
+    assert.deepEqual((await card.locator('.stack-resource').evaluateAll(items=>items.map(item=>item.dataset.resourceId))).sort(),records.map(item=>item.resource.id).sort());
+    for(const kind of new Set(records.map(item=>item.resource.kind))) {
+      const section=card.locator(`.stack-resource-group[data-kind="${kind}"]`);
+      assert.equal(await section.count(),1);
+      assert.equal(await section.locator('.stack-resource-heading svg').count(),1);
+      assert.equal(Number(await section.locator('.stack-resource-count').innerText()),records.filter(item=>item.resource.kind===kind).length);
+    }
+  }
+  const nativeCard=page.locator(`.stack-card[data-manager="stack"][data-owner-id="${fixture.nativeSourceStackId}"]`);
+  assert.equal(await nativeCard.locator(`.stack-resource[data-resource-id="${fixture.nativeSourceNetworkId}"]`).count(),1,"native bindings and ownership must not duplicate the resource");
   await page.evaluate(async () => { await document.fonts.ready; });
   await page.getByText(sourceName,{exact:true}).first().evaluate(element=>element.scrollIntoView({block:"start"}));
   await page.waitForTimeout(500);
   await page.screenshot({path:path.join(output,`iac-548-ownership-source-${captureDate}.png`),fullPage:true});
-  await page.getByText(fixture.ownerships[0].owner.key, { exact: true }).evaluate(element => element.scrollIntoView({ block: "center" }));
+  await page.locator('.stack-card[data-manager="terraform"]').first().evaluate(element => element.scrollIntoView({ block: "start" }));
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(output, `iac-548-ownership-overview-${captureDate}.png`), fullPage: true });
   const focus = fixture.ownerships.find(owned => owned.resource.kind === "volume") || ownership;
   async function focusOwnership() {
-    await page.getByText(focus.owner.key, { exact: true }).evaluate(element => element.scrollIntoView({ block: "center" }));
-    const generation = await page.getByText(String(focus.generation), { exact: true }).last().boundingBox();
+    const resource=page.locator(`.stack-resource[data-resource-id="${focus.resource.id}"]`);
+    await resource.evaluate(element => element.scrollIntoView({ block: "center" }));
+    const generation = await resource.getByText(String(focus.generation), { exact: true }).boundingBox();
     assert.ok(generation && generation.y >= 0 && generation.y + generation.height <= page.viewportSize().height, "the focused ownership generation must be fully visible");
   }
   await focusOwnership();
@@ -130,9 +151,9 @@ try {
   await writeFile(path.join(output, "iac-548-ownership-evidence.json"), JSON.stringify({
     capturedAt: new Date().toISOString(), captureDate, sourceCommit, sourceDirty, focusResource:focus.resource, versions:{browser:browser.version(),node:process.version}, fixture: true, transport: "actual local Axum HTTP; no mocked API responses",
     runtime: "compiled WASM dashboard with disposable SQLite resource records; no Linux/KVM boot",
-    ownership, ownerships:fixture.ownerships,nativeRecovery,sourceRemoval, checks: ["endpoint identity", `43 inventory kinds; ${capabilities.transferKinds.length} transfer adapters`, "actual ownership read", "direct PATCH rejected with 409", `${blockedConfigurations} configuration kinds reject direct DELETE with 409`, "immutable operation acknowledgement", `${fixture.ownerships.length} Terraform ownership records and one retained native binding in the actual dashboard`, "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
+    ownership, ownerships:fixture.ownerships,nativeRecovery,sourceRemoval, checks: ["endpoint identity", `43 inventory kinds; ${capabilities.transferKinds.length} transfer adapters`, "actual ownership read", "direct PATCH rejected with 409", `${blockedConfigurations} configuration kinds reject direct DELETE with 409`, "immutable operation acknowledgement", `${fixture.ownerships.length} Terraform ownership records and one retained native binding in the actual dashboard`, `${states.size} Terraform states remain separate; each resource kind has its own icon section and count`, "native bindings are displayed once", "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
   }, null, 2) + "\n");
-  console.log("Actual API ownership, mutation rejection, receipt and three dashboard screenshots verified.");
+  console.log("Actual API ownership, separate state cards, icon sections and four dashboard screenshots verified.");
 } finally {
   await browser.close();
 }
