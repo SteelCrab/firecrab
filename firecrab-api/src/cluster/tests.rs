@@ -467,6 +467,7 @@ async fn local_vm_resource_growth_cannot_consume_controller_reservations() {
     assert_eq!(response.status(), 201);
     let vm: VmResponse = response.json().await.unwrap();
     let update = UpdateVmResourcesRequest {
+        micro_network_id: None,
         cpu: 2,
         ram: 512,
         disk_gb: 2,

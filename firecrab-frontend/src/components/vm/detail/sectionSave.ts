@@ -21,6 +21,7 @@ import {
 
 export type VmSection =
   | "spec"
+  | "network"
   | "egress"
   | "env"
   | "storage"
@@ -36,6 +37,11 @@ export interface EnvRow {
 /** The inputs of one section while it is being edited. */
 export type VmSectionDraft =
   | { section: "spec"; cpu: string; ram: string; diskGb: string }
+  | {
+      section: "network";
+      microNetworkId: string;
+      securityGroupId: string | null;
+    }
   | { section: "egress"; egressPolicy: EgressPolicy }
   | { section: "security"; securityGroupId: string | null }
   | { section: "env"; rows: EnvRow[] }
@@ -43,7 +49,7 @@ export type VmSectionDraft =
   | { section: "shells"; shellIds: string[] }
   | { section: "ports"; portForwards: PortForward[] };
 
-/** Same rules as the API: cpu/ram/disk, storage, shells and egress only while no Firecracker process is live. */
+/** Resource and network edits require an inactive VM; env and ports have separate rules. */
 export function isSectionEditable(state: VmState, section: VmSection): boolean {
   switch (section) {
     case "env":
@@ -58,6 +64,12 @@ export function isSectionEditable(state: VmState, section: VmSection): boolean {
 /** A draft holding the VM's current values for `section`. */
 export function draftFor(vm: VmResponse, section: VmSection): VmSectionDraft {
   switch (section) {
+    case "network":
+      return {
+        section,
+        microNetworkId: vm.microNetworkId,
+        securityGroupId: vm.securityGroupId || null,
+      };
     case "spec":
       return {
         section,
@@ -142,6 +154,20 @@ export async function saveVmSection(
     egressPolicy: vm.egressPolicy,
   };
   switch (draft.section) {
+    case "network":
+      if (!draft.microNetworkId)
+        throw validation(
+          "Select a MicroNetwork.",
+          "microNetworkId",
+          "a MicroNetwork is required",
+        );
+      return updateVmResources(vm.id, {
+        ...resources,
+        microNetworkId: draft.microNetworkId,
+        ...(draft.securityGroupId !== (vm.securityGroupId || null)
+          ? { securityGroupId: draft.securityGroupId }
+          : {}),
+      });
     case "spec":
       return updateVmResources(vm.id, {
         ...resources,

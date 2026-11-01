@@ -853,8 +853,8 @@ pub async fn update_vm_port_forwards(
     Ok(Json(vm_response(&state, &record, lease.as_ref())))
 }
 
-/// Replaces cpu/ram/disk for a VM that has no live process. Applies on the
-/// *next* `start`, not to a running Firecracker instance.
+/// Updates inactive VM resources and network settings for the next start.
+/// Environment-only updates can also apply to a running guest.
 pub async fn update_vm(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -862,7 +862,20 @@ pub async fn update_vm(
     ValidatedJson(req): ValidatedJson<UpdateVmResourcesRequest>,
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
-    let _service_guard = if req.security_group_id.is_some() {
+    // The resource/lease commit and DHCP resync retain their guards when the
+    // HTTP client disconnects. A later update must not overtake this operation.
+    tokio::spawn(apply_vm_update(state, request_id, id, req))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+}
+
+async fn apply_vm_update(
+    state: AppState,
+    request_id: RequestId,
+    id: Uuid,
+    req: UpdateVmResourcesRequest,
+) -> Result<Json<VmResponse>, AppError> {
+    let _service_guard = if req.security_group_id.is_some() || req.micro_network_id.is_some() {
         Some(state.service_mutations.lock().await)
     } else {
         None
@@ -913,6 +926,64 @@ pub async fn update_vm(
         }
     }
     let _network_guard = state.network_mutations.lock().await;
+    let previous_vm = state
+        .vms
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found(request_id.0))?;
+    let network_change = match req.micro_network_id {
+        Some(network_id) => {
+            let store = state.store.clone();
+            let network = tokio::task::spawn_blocking(move || store.micro_network(network_id))
+                .await
+                .map_err(|_| AppError::internal(request_id.0))?
+                .map_err(|_| AppError::internal(request_id.0))?
+                .ok_or_else(|| {
+                    AppError::validation(
+                        BTreeMap::from([(
+                            "microNetworkId".into(),
+                            "MicroNetwork does not exist".into(),
+                        )]),
+                        request_id.0,
+                    )
+                })?;
+            if network_id != previous_vm.micro_network_id {
+                if previous_vm.purpose != crate::model::VmPurpose::Instance {
+                    return Err(AppError::conflict(
+                        "vm_managed",
+                        "Change this VM through its owning service or pool",
+                        request_id.0,
+                    ));
+                }
+                if crate::network_policy::vm_is_active(&state, &previous_vm)
+                    .map_err(|_| AppError::internal(request_id.0))?
+                {
+                    return Err(AppError::conflict(
+                        "network_in_use",
+                        "Stop the VM and wait for its previous runtime to exit before changing its MicroNetwork",
+                        request_id.0,
+                    ));
+                }
+                crate::service_runtime::ensure_vm_policy_editable(&state, id, request_id.0).await?;
+                crate::network_policy::validate_selection(
+                    &state,
+                    req.security_group_id
+                        .unwrap_or(previous_vm.security_group_id),
+                    Some(network_id),
+                    request_id.0,
+                )?;
+                Some(
+                    SubnetSpec::from_micro_network(&network)
+                        .ok_or_else(|| AppError::internal(request_id.0))?,
+                )
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
     if let Some(selection) = req.security_group_id {
         crate::service_runtime::ensure_vm_policy_editable(&state, id, request_id.0).await?;
         let vm = state
@@ -934,7 +1005,7 @@ pub async fn update_vm(
         crate::network_policy::validate_selection(
             &state,
             selection,
-            Some(vm.micro_network_id),
+            Some(req.micro_network_id.unwrap_or(vm.micro_network_id)),
             request_id.0,
         )?;
     }
@@ -945,7 +1016,9 @@ pub async fn update_vm(
     };
     let (updated, previous) = claim_resource_update(&state, id, &req, request_id.0)?;
     if state.cluster.worker.is_some()
-        && (updated.cpu > previous.0 || updated.ram > previous.1 || updated.disk_gb > previous.2)
+        && (updated.cpu > previous.cpu
+            || updated.ram > previous.ram
+            || updated.disk_gb > previous.disk_gb)
         && let Err(error) = crate::cluster::check_capacity(
             &state,
             id,
@@ -959,9 +1032,35 @@ pub async fn update_vm(
         restore_resources(&state, id, previous);
         return Err(crate::cluster::handlers::error(error, request_id));
     }
-    if let Err(error) = persist_update(&state, &updated, request_id.0).await {
+    let persisted = if let Some(subnet) = network_change {
+        let store = state.store.clone();
+        let record = updated.clone();
+        tokio::task::spawn_blocking(move || store.update_vm_network(&record, subnet))
+            .await
+            .map_err(|_| AppError::internal(request_id.0))
+            .and_then(|result| {
+                result.map(|_| ()).map_err(|error| match error {
+                    IpamError::PoolExhausted { .. } | IpamError::MacPoolExhausted => {
+                        AppError::validation(
+                            BTreeMap::from([("microNetworkId".into(), error.to_string())]),
+                            request_id.0,
+                        )
+                    }
+                    _ => AppError::internal(request_id.0),
+                })
+            })
+    } else {
+        persist_update(&state, &updated, request_id.0).await
+    };
+    if let Err(error) = persisted {
         restore_resources(&state, id, previous);
         return Err(error);
+    }
+    if network_change.is_some() {
+        sync_dhcp_leases(&state).await.map_err(|error| {
+            tracing::warn!(vm_id=%id, %error, "MicroNetwork changed but DHCP resync failed");
+            AppError::unavailable("MicroNetwork change was saved, but DHCP synchronization failed. Starting the VM retries synchronization.", request_id.0)
+        })?;
     }
     if updated.state == VmState::Running && req.env.is_some() {
         apply_env_to_running_guest(&state, id, &updated.env).await;
@@ -1007,14 +1106,15 @@ async fn apply_env_to_running_guest(state: &AppState, id: Uuid, env: &BTreeMap<S
     process.console.write_input(script.as_bytes()).await;
 }
 
-type PreviousResources = (
-    u8,
-    u32,
-    u16,
-    EgressPolicy,
-    BTreeMap<String, String>,
-    Option<Uuid>,
-);
+struct PreviousResources {
+    cpu: u8,
+    ram: u32,
+    disk_gb: u16,
+    egress_policy: EgressPolicy,
+    env: BTreeMap<String, String>,
+    security_group_id: Option<Uuid>,
+    micro_network_id: Uuid,
+}
 
 fn claim_resource_update(
     state: &AppState,
@@ -1045,18 +1145,22 @@ fn claim_resource_update(
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id));
     }
-    let previous = (
-        vm.cpu,
-        vm.ram,
-        vm.disk_gb,
-        vm.egress_policy,
-        vm.env.clone(),
-        vm.security_group_id,
-    );
+    let previous = PreviousResources {
+        cpu: vm.cpu,
+        ram: vm.ram,
+        disk_gb: vm.disk_gb,
+        egress_policy: vm.egress_policy,
+        env: vm.env.clone(),
+        security_group_id: vm.security_group_id,
+        micro_network_id: vm.micro_network_id,
+    };
     vm.cpu = req.cpu;
     vm.ram = req.ram;
     vm.disk_gb = req.disk_gb;
     vm.egress_policy = req.egress_policy;
+    if let Some(network_id) = req.micro_network_id {
+        vm.micro_network_id = network_id;
+    }
     if let Some(selection) = req.security_group_id {
         vm.security_group_id = selection;
     }
@@ -1072,14 +1176,13 @@ fn restore_resources(state: &AppState, id: Uuid, previous: PreviousResources) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(vm) = vms.get_mut(&id) {
-        (
-            vm.cpu,
-            vm.ram,
-            vm.disk_gb,
-            vm.egress_policy,
-            vm.env,
-            vm.security_group_id,
-        ) = previous;
+        vm.cpu = previous.cpu;
+        vm.ram = previous.ram;
+        vm.disk_gb = previous.disk_gb;
+        vm.egress_policy = previous.egress_policy;
+        vm.env = previous.env;
+        vm.security_group_id = previous.security_group_id;
+        vm.micro_network_id = previous.micro_network_id;
     }
 }
 
@@ -3276,6 +3379,9 @@ pub(crate) mod test_support {
             .unwrap();
     }
 }
+
+#[cfg(test)]
+mod network_update_tests;
 
 #[cfg(test)]
 mod tests {
@@ -5480,6 +5586,7 @@ while True:
 
     fn update_request(cpu: u8, ram: u32, disk_gb: u16) -> UpdateVmResourcesRequest {
         UpdateVmResourcesRequest {
+            micro_network_id: None,
             security_group_id: None,
             cpu,
             ram,

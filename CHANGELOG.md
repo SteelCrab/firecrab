@@ -8,7 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
-| [0.4.3](#043---2026-11-02) | 2026-11-02 | AI Sandbox quick start and dashboard validation |
+| [0.4.3](#043---2026-11-02) | 2026-11-02 | AI Sandbox, CODE workspaces and inactive VM network changes |
 | [0.4.2](#042---2026-11-01) | 2026-11-01 | React dashboard and MicroVM agent workspaces |
 | [0.4.1](#041---2026-10-30) | 2026-10-30 | Latest managed installations and cross-platform updates |
 | [0.4.0](#040---2026-10-30) | 2026-10-30 | [Changes since v0.3.1](https://github.com/SteelCrab/firecrab/compare/v0.3.1...v0.4.0) |
@@ -34,6 +34,9 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572),
 
 ### Added
 
+- Change an inactive MicroVM's MicroNetwork from its Overview or Network tab.
+  Save the VM settings and replacement IP lease together, then use the selected
+  network on the next start. See [#137](https://github.com/SteelCrab/firecrab/issues/137).
 - AI Sandbox quick start prepares Ubuntu 26.04 LTS with 2 vCPU, 4 GiB RAM,
   a 32 GiB disk and the selected coding tools. The right-side navigation connects
   workspace preparation, accounts, AI tasks, app verification and preview.
