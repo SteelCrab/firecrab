@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 
 async function fixture(t) {
   const original={window:globalThis.window,document:globalThis.document,ResizeObserver:globalThis.ResizeObserver};
-  const listeners=new Map(),frames=[];
+  const listeners=new Map(),frames=[],messages=[];
   globalThis.window={addEventListener:(name,fn)=>listeners.set(name,fn)};
-  globalThis.document={dispatchEvent(){},body:{appendChild:frame=>frames.push(frame)},getElementById:()=>({getBoundingClientRect:()=>({left:0,top:0,width:800,height:600})}),
+  globalThis.document={dispatchEvent(){},body:{appendChild:frame=>{frames.push(frame);frame.contentWindow.postMessage=(data,origin)=>messages.push({data,origin});frame.onload?.();}},getElementById:()=>({getBoundingClientRect:()=>({left:0,top:0,width:800,height:600})}),
     createElement:()=>({dataset:{},style:{},attributes:new Map(),writes:0,removed:false,inert:false,
       setAttribute(name,value){this.attributes.set(name,value);},getAttribute(name){return this.attributes.get(name)??null;},
       get src(){return this.attributes.get('src');},set src(value){this.attributes.set('src',value);this.writes++;},contentWindow:{postMessage(){}},remove(){this.removed=true;},blur(){this.blurred=true;}})};
@@ -16,7 +16,7 @@ async function fixture(t) {
   const attach=(id='tab-a',client='client-a',url='http://fixture.editor.localhost/?firecrabClient=client-a')=>call('attach',{surfaces:[],keep:[],editor:{id,client,url}});
   const proof='55000000-0000-4000-8000-000000000099';
   const activate=frame=>{frame.onload();listeners.get('message')({source:frame.contentWindow,origin:new URL(frame.src).origin,data:{type:'firecrab-window-proof',client:frame.dataset.client,windowProof:proof,challenge:frame.challenge}});};
-  return {call,attach,frames,listeners,activate,proof};
+  return {call,attach,frames,listeners,activate,proof,messages};
 }
 
 test('rendering and hiding an editor retain its existing document without reloading it',async t=>{
@@ -76,4 +76,12 @@ test('the workbench proof bridge answers only its real parent and preserves the 
   receive({source:{},origin:'http://parent.localhost',data});receive({source:parent,origin:'http://other.localhost',data});
   assert.equal(sent.length,0);receive({source:parent,origin:'http://parent.localhost',data});
   assert.equal(sent.length,1);assert.equal(sent[0].value.windowProof,'proof');assert.equal(sent[0].value.challenge,'fresh challenge');assert.equal(sent[0].origin,'http://parent.localhost');
+});
+
+
+test('an immediate iframe load sends its challenge to the bound editor origin',async t=>{
+  const f=await fixture(t);assert.doesNotThrow(()=>f.attach());
+  assert.equal(f.messages.length,1);assert.equal(f.messages[0].origin,'http://fixture.editor.localhost');
+  assert.equal(f.messages[0].data.type,'firecrab-window-proof');assert.equal(f.messages[0].data.client,'client-a');
+  assert.equal(typeof f.messages[0].data.challenge,'string');
 });

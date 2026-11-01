@@ -67,12 +67,11 @@ export function canvasPanes(action,payload) {
           editor.windowProof=null;editor.challenge=crypto.randomUUID();
           editor.contentWindow.postMessage({type:'firecrab-window-proof',client:editor.dataset.client,challenge:editor.challenge},new URL(editor.src).origin);
         };
-        editor.setAttribute('allow','clipboard-read; clipboard-write');document.body.appendChild(editor);editors.set(state.editor.id,editor);
+        editor.setAttribute('allow','clipboard-read; clipboard-write');editor.src=state.editor.url;document.body.appendChild(editor);editors.set(state.editor.id,editor);
       }
       // Never reload a live frame to switch an instance/folder before its flush acknowledgement.
       if(editor.getAttribute('src')&&editor.getAttribute('src')!==state.editor.url) return false;
       if(editor.dataset.client!==(state.editor.client||'')) return false;
-      if(!editor.getAttribute('src')) editor.src=state.editor.url;
       const slot=document.getElementById('cw-editor-slot');
       if(slot) {
         const place=()=>{const rect=slot.getBoundingClientRect();editor.style.left=`${rect.left}px`;editor.style.top=`${rect.top}px`;editor.style.width=`${rect.width}px`;editor.style.height=`${rect.height}px`;};
