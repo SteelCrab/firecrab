@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Preserve native database operation and endpoint identities across dashboard
+  reloads and lost responses without storing credentials or request bodies in
+  browser storage. Resolve original receipts before further changes, and retry
+  legacy pending bindings with their existing account UUID (#548).
+
 - Retain database binding account intents, generated credentials and parent
   reservations across interruption. Recover the original account, protect
   ownership transfers and preserve derived table grants under the original

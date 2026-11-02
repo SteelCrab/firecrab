@@ -128,6 +128,20 @@ cannot change account credentials, access policy or association. Active jobs
 also prevent ownership transfer. Full event/broker/declarative-migration lifecycle
 and expanded Stack/Terraform execution remain pending.
 
+## Dashboard retries
+
+The database dashboard retains the operation UUID and endpoint UUID before sending
+connection or binding changes. It stores no URI, password, certificate or request
+body in browser storage. Reloading the page reuses the original identity.
+A failed receipt lookup does not allocate a new create operation.
+
+After a lost acknowledgement the dashboard observes the original operation. A
+completed request displays its existing resource and a review notice. Pending or
+uncertain work links to Stack operations. Only a known failure before managed
+effects permits corrected input to use a new operation. A completion received
+after leaving the page remains unacknowledged until the resource can be shown.
+Legacy pending bindings offer Retry setup using their existing account UUID.
+
 ## Observe and recover
 
 The Stack dashboard lists running and uncertain native work, including resources

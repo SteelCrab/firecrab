@@ -484,3 +484,26 @@ async fn iac_database_binding_admitted_creation_survives_http_disconnect_without
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn iac_database_binding_legacy_pending_setup_preserves_its_existing_private_account() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, _, network) = fixture(root.path()).await;
+    let (record, binding) = setup(&state, root.path(), network);
+    state.store.save_database_binding(&binding).unwrap();
+    let intent = create(&state, &record, &binding);
+    assert_ne!(intent.operation.operation_id, binding.id);
+    let saved = state
+        .store
+        .database_binding_prepared(&intent)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.connection.uri, binding.connection.uri);
+    assert_eq!(saved.role, binding.role);
+    state.store.begin_database_binding_effects(&intent).unwrap();
+    state.store.finish_database_binding(&intent).unwrap();
+    let saved = state.store.database_bindings().unwrap().pop().unwrap();
+    assert_eq!(saved.id, binding.id);
+    assert_eq!(saved.connection.uri, binding.connection.uri);
+    assert!(saved.ready);
+}
