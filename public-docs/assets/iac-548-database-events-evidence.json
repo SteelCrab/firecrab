@@ -1,0 +1,59 @@
+{
+  "sourceCommit": "2f514a34ec5cf406de919adbf7aee76e3fb85fda",
+  "sourceDirty": false,
+  "capturedOn": "2026-11-02",
+  "fixture": true,
+  "scope": "seeded local capture record and injected uncertain checkpoint; nonresponsive fixture-owned TCP endpoint; no SQL or RabbitMQ execution",
+  "before": {
+    "operationId": "e15531dc-6897-4900-89f2-0cb89601046c",
+    "ownership": {
+      "endpointId": "245dcad1-b63a-4102-b9f1-4b660556f23b",
+      "resource": {
+        "kind": "database_events",
+        "id": "174aa130-23e6-4592-a2cb-8cfef548c057:a9793a3a-61c0-465c-bc80-dfd7841b5116"
+      },
+      "generation": 0,
+      "owner": null
+    },
+    "action": "detach_database_events",
+    "state": "needs_recovery",
+    "errorCode": "database_events_incomplete"
+  },
+  "after": {
+    "operationId": "e15531dc-6897-4900-89f2-0cb89601046c",
+    "ownership": {
+      "endpointId": "245dcad1-b63a-4102-b9f1-4b660556f23b",
+      "resource": {
+        "kind": "database_events",
+        "id": "174aa130-23e6-4592-a2cb-8cfef548c057:a9793a3a-61c0-465c-bc80-dfd7841b5116"
+      },
+      "generation": 0,
+      "owner": null
+    },
+    "action": "detach_database_events",
+    "state": "needs_recovery",
+    "errorCode": "database_events_incomplete",
+    "executionGeneration": 1
+  },
+  "checks": [
+    "actual Axum/SQLite API and compiled React dashboard",
+    "original qualified capture and operation UUID retained",
+    "actual reconnect failure leaves uncertainty and advances attempt to 1",
+    "fixture credentials absent from public receipts",
+    "English desktop/mobile cards without page overflow"
+  ],
+  "notRun": [
+    "live PostgreSQL/MySQL",
+    "source SQL",
+    "RabbitMQ queue operations",
+    "KVM guest boot",
+    "expanded native Stack",
+    "Terraform provider"
+  ],
+  "files": {
+    "iac-548-database-events-desktop-2026-11-02.png": "3eaefc0fabb4bd44941f705d1eea24df6048943f8d39e42a0e073c965f869197",
+    "iac-548-database-events-mobile-2026-11-02.png": "2e0fecd3a4965678add435875a597d736307774dd3975c14420cbbb1200b20cc",
+    "iac-548-database-events-recovery-mobile-2026-11-02.png": "ce15ec4f0674519d0cef4b47178e2c000d90738e4db9360e012494f2b90999e2",
+    "iac-548-database-events-recovery-desktop-2026-11-02.png": "c668ccf3683489a9ff30bb67d1aa8ce2b2a974980ff95eea34ad18bc33b8a477"
+  }
+}
