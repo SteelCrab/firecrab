@@ -229,6 +229,14 @@ GET  /api/iac/native-operations/resources/KIND/RESOURCE_ID
 POST /api/iac/native-operations/OPERATION_UUID/recover
 ```
 
+Unfinished recovery requires `x-firecrab-endpoint-id` and the observed
+`x-firecrab-execution-generation`. The API compares the generation again inside
+typed SQLite recovery admission. A delayed request cannot advance a newer
+uncertain attempt. The CLI observes the original operation before sending these
+preconditions. The dashboard sends the generation displayed in its current card.
+Terminal receipts remain readable without dispatching more work. Project cleanup
+also binds its final metadata and failure callbacks to the original attempt.
+
 The active list returns `operations` and `nextBefore`. Its limit is 1–100.
 UUID ordering remains stable across database maintenance. Completed receipts are
 available through the exact operation and resource routes.

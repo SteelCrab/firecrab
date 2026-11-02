@@ -408,9 +408,14 @@ async fn retry_checkpoints_existing_vm_before_boot_and_never_replaces_it_if_miss
         original.state,
         firecrab_stack::NativeOperationState::NeedsRecovery
     );
-    recover_operation(state.clone(), Uuid::new_v4(), original.operation_id)
-        .await
-        .unwrap();
+    recover_operation(
+        state.clone(),
+        Uuid::new_v4(),
+        original.operation_id,
+        original.execution_generation,
+    )
+    .await
+    .unwrap();
     let saved = wait_for_engine_failure(&state).await;
     assert!(saved.error.unwrap().contains("retained VM and disk"));
     assert!(state.vms.lock().unwrap().is_empty());

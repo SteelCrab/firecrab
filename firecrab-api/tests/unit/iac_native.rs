@@ -312,8 +312,34 @@ async fn iac_native_failed_cleanup_is_discoverable_and_recovers_without_touching
     std::fs::remove_file(&owned).unwrap();
     std::fs::create_dir(&owned).unwrap();
     std::fs::write(owned.join("private.txt"), "remove only this file").unwrap();
-    let (status, completed) = call(&app, "POST", &recover_url, json!({})).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&recover_url)
+                .header(
+                    "x-firecrab-endpoint-id",
+                    operation.ownership.endpoint_id.to_string(),
+                )
+                .header(
+                    "x-firecrab-execution-generation",
+                    operation.execution_generation.to_string(),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let completed: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(status, StatusCode::OK, "{completed}");
+    assert_eq!(completed["executionGeneration"], 1);
     assert_eq!(completed["operationId"], operation.operation_id.to_string());
     assert_eq!(completed["ownership"], operations[0]["ownership"]);
     assert_eq!(completed["state"], "succeeded");
@@ -443,4 +469,46 @@ async fn iac_native_recovery_rejects_changed_authority_before_filesystem_dispatc
         NativeOperationState::NeedsRecovery
     );
     assert!(state.store.sandbox_project(project.id).unwrap().is_some());
+}
+
+#[tokio::test]
+async fn iac_native_project_old_cleanup_callbacks_cannot_complete_a_newer_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, _, _) = fixture(root.path()).await;
+    let project = project(&state);
+    let original = state
+        .store
+        .begin_sandbox_project_delete(project.id, Uuid::new_v4())
+        .unwrap();
+    state
+        .store
+        .fail_native_project_delete_at(&original)
+        .unwrap();
+    let second = crate::persistence::Store::open(&root.path().join("state.db")).unwrap();
+    let current = second
+        .recover_native_project_delete_at(original.operation_id, 0)
+        .unwrap();
+    assert_eq!(current.execution_generation, 1);
+    assert!(matches!(
+        state.store.finish_native_project_delete_at(&original),
+        Err(PersistenceError::StaleIacOwner)
+    ));
+    assert!(matches!(
+        state.store.fail_native_project_delete_at(&original),
+        Err(PersistenceError::StaleIacOwner)
+    ));
+    assert!(state.store.sandbox_project(project.id).unwrap().is_some());
+    second.fail_native_project_delete_at(&current).unwrap();
+    assert!(matches!(
+        state
+            .store
+            .recover_native_project_delete_at(original.operation_id, 0),
+        Err(PersistenceError::StaleIacExecution)
+    ));
+    let recovered = second
+        .recover_native_project_delete_at(original.operation_id, 1)
+        .unwrap();
+    let done = second.finish_native_project_delete_at(&recovered).unwrap();
+    assert_eq!(done.execution_generation, 2);
+    assert_eq!(done.state, NativeOperationState::Succeeded);
 }

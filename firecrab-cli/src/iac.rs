@@ -123,10 +123,22 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
                 .push(&resource.id);
             print_json(&client.get::<Vec<NativeOperation>>(url.path())?)
         }
-        Command::RecoverNativeOperation { id } => print_json(&client.post::<_, NativeOperation>(
-            &format!("/api/iac/native-operations/{id}/recover"),
-            &serde_json::json!({}),
-        )?),
+        Command::RecoverNativeOperation { id } => {
+            let observed =
+                client.get::<NativeOperation>(&format!("/api/iac/native-operations/{id}"))?;
+            if observed.operation_id != id {
+                return Err(Error::Input("native operation identity changed"));
+            }
+            if matches!(
+                observed.state,
+                firecrab_stack::NativeOperationState::Succeeded
+                    | firecrab_stack::NativeOperationState::Failed
+            ) {
+                print_json(&observed);
+            } else {
+                print_json(&client.recover_native_operation(&observed)?);
+            }
+        }
     };
     Ok(())
 }

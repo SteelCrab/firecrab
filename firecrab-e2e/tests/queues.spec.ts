@@ -81,7 +81,7 @@ test.describe("Queue @dashboard", () => {
   test("recovers the original failed engine operation instead of submitting a new start", async ({ page }) => {
     const { operations, writes } = await open(page, true, false, { phase: "failed", empty: true, error: "Recover the existing broker" });
     const operationId = "00000000-0000-0000-0000-000000000504";
-    operations.push({ operationId: "completed-earlier-stop", state: "succeeded" }, { operationId, state: "needs_recovery" });
+    operations.push({ operationId: "completed-earlier-stop", state: "succeeded" }, { operationId, state: "needs_recovery", executionGeneration: 0, ownership: {endpointId: "queue-endpoint"} });
     await page.getByRole("button", { name: "Recover engine", exact: true }).click();
     await expect(page.getByRole("region", { name: "Queue engine", exact: true })).toContainText("Starting");
     expect(writes).toEqual([{ path: `/api/iac/native-operations/${operationId}/recover`, body: null }]);

@@ -152,6 +152,9 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .allow_headers([
             header::CONTENT_TYPE,
             HeaderName::from_static("idempotency-key"),
+            HeaderName::from_static("x-firecrab-operation-id"),
+            HeaderName::from_static("x-firecrab-endpoint-id"),
+            HeaderName::from_static("x-firecrab-execution-generation"),
         ]);
     if !config.allowed_origins.is_empty() {
         cors = cors.allow_origin(AllowOrigin::list(config.allowed_origins.clone()));

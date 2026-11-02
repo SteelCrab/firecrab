@@ -152,12 +152,38 @@ pub async fn recover_native_operation(
     ) {
         return Ok(Json(operation));
     }
+    let expected_generation = headers
+        .get("x-firecrab-execution-generation")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .ok_or_else(|| {
+            AppError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "iac_recovery_attempt_required",
+                "unfinished recovery requires the observed x-firecrab-execution-generation",
+                request.0,
+            )
+        })?;
+    if !headers.contains_key("x-firecrab-endpoint-id") {
+        return Err(AppError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            "iac_endpoint_required",
+            "unfinished recovery requires the observed x-firecrab-endpoint-id",
+            request.0,
+        ));
+    }
+    if expected_generation != operation.execution_generation {
+        return Err(super::stacks::persistence_error(
+            crate::persistence::PersistenceError::StaleIacExecution,
+            request.0,
+        ));
+    }
     if matches!(
         operation.action,
         firecrab_stack::NativeAction::CreateDatabaseConnection
             | firecrab_stack::NativeAction::UpdateDatabaseConnection
     ) {
-        return super::pipe_database_mutations::recover(state, request, id)
+        return super::pipe_database_mutations::recover(state, request, id, expected_generation)
             .await
             .map(Json);
     }
@@ -166,9 +192,14 @@ pub async fn recover_native_operation(
         firecrab_stack::NativeAction::CreateDatabaseBinding
             | firecrab_stack::NativeAction::DeleteDatabaseBinding
     ) {
-        return super::pipe_database_binding_mutations::recover(state, request, id)
-            .await
-            .map(Json);
+        return super::pipe_database_binding_mutations::recover(
+            state,
+            request,
+            id,
+            expected_generation,
+        )
+        .await
+        .map(Json);
     }
     if matches!(
         operation.action,
@@ -177,9 +208,14 @@ pub async fn recover_native_operation(
             | firecrab_stack::NativeAction::DetachDatabaseEvents
             | firecrab_stack::NativeAction::DeleteDatabaseEvents
     ) {
-        return super::pipe_database_event_mutations::recover(state, request, id)
-            .await
-            .map(Json);
+        return super::pipe_database_event_mutations::recover(
+            state,
+            request,
+            id,
+            expected_generation,
+        )
+        .await
+        .map(Json);
     }
     if operation.action == firecrab_stack::NativeAction::DeleteVm {
         return super::vm_deletion::recover(state, request, operation)
@@ -187,9 +223,14 @@ pub async fn recover_native_operation(
             .map(Json);
     }
     if operation.action == firecrab_stack::NativeAction::ConfigureDatabaseBroker {
-        return super::pipe_database_broker_mutations::recover(state, request, id)
-            .await
-            .map(Json);
+        return super::pipe_database_broker_mutations::recover(
+            state,
+            request,
+            id,
+            expected_generation,
+        )
+        .await
+        .map(Json);
     }
     if matches!(
         operation.action,
@@ -197,14 +238,24 @@ pub async fn recover_native_operation(
             | firecrab_stack::NativeAction::RepairDatabaseBroker
             | firecrab_stack::NativeAction::DisconnectDatabaseBroker
     ) {
-        return super::pipe_database_managed_broker_mutations::recover(state, request, id)
-            .await
-            .map(Json);
+        return super::pipe_database_managed_broker_mutations::recover(
+            state,
+            request,
+            id,
+            expected_generation,
+        )
+        .await
+        .map(Json);
     }
     if crate::persistence::queue_engine_operations::is_engine_action(operation.action) {
-        return crate::queues::recover_operation(state, request.0, operation.operation_id)
-            .await
-            .map(Json);
+        return crate::queues::recover_operation(
+            state,
+            request.0,
+            operation.operation_id,
+            expected_generation,
+        )
+        .await
+        .map(Json);
     }
     super::ai_sandbox::recover_project_delete(state, request, caller, operation)
         .await

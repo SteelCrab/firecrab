@@ -221,9 +221,22 @@ impl Store {
         Ok(())
     }
     /// Advance the original uncertain attempt without replacing its resource or account.
+    #[cfg(test)]
     pub(crate) fn recover_database_events(
         &self,
         id: Uuid,
+    ) -> Result<(EventIntent, bool), PersistenceError> {
+        let generation = self
+            .iac_native_operation(id)?
+            .ok_or(PersistenceError::IacOperationIdentity)?
+            .execution_generation;
+        self.recover_database_events_at(id, generation)
+    }
+    /// Compare the observed attempt inside the transaction before resuming its original work.
+    pub(crate) fn recover_database_events_at(
+        &self,
+        id: Uuid,
+        expected_generation: u64,
     ) -> Result<(EventIntent, bool), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -234,6 +247,10 @@ impl Store {
         ) {
             return Ok((intent, false));
         }
+        crate::persistence::iac_native::check_recovery_attempt(
+            &intent.operation,
+            expected_generation,
+        )?;
         if intent.operation.state != NativeOperationState::NeedsRecovery {
             return Err(PersistenceError::IacResourceBusy);
         }

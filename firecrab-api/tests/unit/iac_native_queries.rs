@@ -136,6 +136,7 @@ async fn iac_native_vm_recovery_requires_operator_and_pins_expected_endpoint() {
                     "x-firecrab-endpoint-id",
                     state.store.iac_endpoint_id().unwrap().to_string(),
                 )
+                .header("x-firecrab-execution-generation", "0")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -155,4 +156,76 @@ async fn iac_native_vm_recovery_requires_operator_and_pins_expected_endpoint() {
     assert_eq!(repeated.0, StatusCode::OK, "{}", repeated.1);
     assert_eq!(repeated.1, serde_json::to_value(completed).unwrap());
     assert_eq!(state.store.lease_revision().unwrap(), revision);
+}
+
+#[tokio::test]
+async fn iac_native_recovery_rejects_missing_and_stale_execution_preconditions() {
+    let root = crate::firecracker::test_support::short_tempdir();
+    let state = test_state(root.path()).await;
+    let vm = record("recovery-attempt", Uuid::new_v4());
+    seed_vm(&state, &vm);
+    let id = Uuid::new_v4();
+    let first = state.store.begin_native_vm_delete(&vm, id, true).unwrap();
+    state.store.fail_native_vm_delete(&first).unwrap();
+    let current = state.store.recover_native_vm_delete_at(id, 0).unwrap();
+    state.store.fail_native_vm_delete(&current).unwrap();
+    assert!(matches!(
+        state.store.recover_native_vm_delete_at(id, 0),
+        Err(crate::persistence::PersistenceError::StaleIacExecution)
+    ));
+    let app =
+        router(state.clone()).layer(axum::Extension(crate::ai_sandbox::access::LocalOperator));
+    let path = format!("/api/iac/native-operations/{id}/recover");
+    for (attempt, status) in [
+        (None, StatusCode::BAD_REQUEST),
+        (Some("invalid"), StatusCode::BAD_REQUEST),
+        (Some("0"), StatusCode::CONFLICT),
+    ] {
+        let mut request = Request::builder().method("POST").uri(&path).header(
+            "x-firecrab-endpoint-id",
+            state.store.iac_endpoint_id().unwrap().to_string(),
+        );
+        if let Some(attempt) = attempt {
+            request = request.header("x-firecrab-execution-generation", attempt);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+        let unchanged = state.store.iac_native_operation(id).unwrap().unwrap();
+        assert_eq!(unchanged.execution_generation, 1);
+        assert_eq!(unchanged.state, NativeOperationState::NeedsRecovery);
+    }
+}
+
+#[tokio::test]
+async fn iac_native_browser_preflight_permits_only_explicit_retry_metadata_headers() {
+    let root = crate::firecracker::test_support::short_tempdir();
+    let state = test_state(root.path()).await;
+    let origin = "http://localhost:8080";
+    let app = build_router(
+        state,
+        &HttpConfig {
+            bind_addr: "127.0.0.1:5523".parse().unwrap(),
+            allowed_origins: vec![origin.parse().unwrap()],
+            max_concurrent_requests: 128,
+            request_timeout: std::time::Duration::from_secs(10),
+            static_root: None,
+        },
+    );
+    let response=app.oneshot(Request::builder().method("OPTIONS").uri(format!("/api/iac/native-operations/{}/recover",Uuid::new_v4())).header("origin",origin).header("access-control-request-method","POST").header("access-control-request-headers","x-firecrab-endpoint-id,x-firecrab-execution-generation,x-firecrab-operation-id").body(Body::empty()).unwrap()).await.unwrap();
+    assert!(response.status().is_success());
+    assert_eq!(response.headers()["access-control-allow-origin"], origin);
+    let allowed = response.headers()["access-control-allow-headers"]
+        .to_str()
+        .unwrap();
+    for header in [
+        "x-firecrab-endpoint-id",
+        "x-firecrab-execution-generation",
+        "x-firecrab-operation-id",
+    ] {
+        assert!(allowed.contains(header), "{allowed}");
+    }
 }

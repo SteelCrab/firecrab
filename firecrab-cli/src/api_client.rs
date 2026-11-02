@@ -262,6 +262,31 @@ impl ApiClient {
         Self::ensure_success(response).map(|_| ())
     }
 
+    /// Recover only this observed attempt; a delayed request cannot resume newer uncertain work.
+    pub fn recover_native_operation(
+        &self,
+        operation: &firecrab_stack::NativeOperation,
+    ) -> Result<firecrab_stack::NativeOperation, ApiError> {
+        let response = self
+            .client
+            .post(self.url(&format!(
+                "/api/iac/native-operations/{}/recover",
+                operation.operation_id
+            )))
+            .header(
+                "x-firecrab-endpoint-id",
+                operation.ownership.endpoint_id.to_string(),
+            )
+            .header(
+                "x-firecrab-execution-generation",
+                operation.execution_generation.to_string(),
+            )
+            .json(&serde_json::json!({}))
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::decode_json(response)
+    }
+
     /// Sends a body-less `POST` with an `Idempotency-Key` header when `key`
     /// is set, so a retried request can be recognized by the API.
     pub fn post_empty_idempotent<T: DeserializeOwned>(

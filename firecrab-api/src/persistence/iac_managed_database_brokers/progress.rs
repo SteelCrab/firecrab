@@ -163,9 +163,22 @@ impl Store {
         raw.as_deref().map(decode).transpose()
     }
     /// Recovery advances only the original retained identities and generated TLS configuration.
+    #[cfg(test)]
     pub(crate) fn recover_managed_database_broker(
         &self,
         id: Uuid,
+    ) -> Result<(ManagedBrokerIntent, bool), PersistenceError> {
+        let generation = self
+            .iac_native_operation(id)?
+            .ok_or(PersistenceError::IacOperationIdentity)?
+            .execution_generation;
+        self.recover_managed_database_broker_at(id, generation)
+    }
+    /// Compare the observed attempt inside the transaction before resuming its original work.
+    pub(crate) fn recover_managed_database_broker_at(
+        &self,
+        id: Uuid,
+        expected_generation: u64,
     ) -> Result<(ManagedBrokerIntent, bool), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -176,6 +189,10 @@ impl Store {
         ) {
             return Ok((intent, false));
         }
+        crate::persistence::iac_native::check_recovery_attempt(
+            &intent.operation,
+            expected_generation,
+        )?;
         if intent.operation.state != NativeOperationState::NeedsRecovery {
             return Err(PersistenceError::IacResourceBusy);
         }

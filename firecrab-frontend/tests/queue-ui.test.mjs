@@ -130,13 +130,23 @@ for (const recoveryState of ["needs_recovery", "running", "unavailable"]) {
           });
         send(200, [
           { operationId: "completed-old-action", state: "succeeded" },
-          { operationId: "original-operation", state: recoveryState },
+          {
+            operationId: "original-operation",
+            state: recoveryState,
+            executionGeneration: 3,
+            ownership: { endpointId: "queue-endpoint" },
+          },
         ]);
       },
     );
     fixture.handlers.set(
       "POST /api/iac/native-operations/original-operation/recover",
-      ({ send }) => {
+      ({ req, send }) => {
+        if (
+          req.headers["x-firecrab-endpoint-id"] !== "queue-endpoint" ||
+          req.headers["x-firecrab-execution-generation"] !== "3"
+        )
+          throw new Error("missing original recovery preconditions");
         phase = "starting";
         send(200, { operationId: "original-operation", state: "running" });
       },

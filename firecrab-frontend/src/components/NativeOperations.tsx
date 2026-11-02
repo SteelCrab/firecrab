@@ -159,7 +159,12 @@ export default function NativeOperations() {
       try {
         observed = await fetchJson<Operation>(`${path}/recover`, {
           method: "POST",
-          headers: { "x-firecrab-endpoint-id": operation.ownership.endpointId },
+          headers: {
+            "x-firecrab-endpoint-id": operation.ownership.endpointId,
+            "x-firecrab-execution-generation": String(
+              operation.executionGeneration ?? 0,
+            ),
+          },
         });
       } catch (failure) {
         // A lost response cannot justify dispatching another action.

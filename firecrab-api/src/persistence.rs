@@ -561,6 +561,9 @@ pub enum PersistenceError {
     /// A release/reclaim happened after the caller observed ownership.
     #[error("IaC ownership generation changed")]
     StaleIacOwner,
+    /// The caller observed an older native recovery execution.
+    #[error("native execution generation changed")]
+    StaleIacExecution,
     /// A retry UUID belongs to a different immutable ownership request.
     #[error("IaC operation identity conflicts")]
     IacOperationIdentity,

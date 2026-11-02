@@ -10,6 +10,12 @@ use std::{
 type Request = (String, String, Value);
 
 fn server(responses: Vec<Value>) -> (String, mpsc::Receiver<Request>, thread::JoinHandle<()>) {
+    checked_server(responses, |_, _, _| {})
+}
+fn checked_server(
+    responses: Vec<Value>,
+    check: fn(&str, &str, &str),
+) -> (String, mpsc::Receiver<Request>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (send, receive) = mpsc::channel();
@@ -33,6 +39,7 @@ fn server(responses: Vec<Value>) -> (String, mpsc::Receiver<Request>, thread::Jo
             let mut first = headers.lines().next().unwrap().split_whitespace();
             let method = first.next().unwrap().to_owned();
             let path = first.next().unwrap().to_owned();
+            check(&method, &path, &headers);
             let len = headers
                 .lines()
                 .find_map(|line| {
@@ -128,11 +135,22 @@ fn native_operation_cli_observes_without_replay_and_recovers_only_the_original_i
     let project = "22222222-2222-4222-8222-222222222222";
     let mut ownership = observed();
     ownership["resource"]["kind"] = json!("sandbox_project");
-    let status = json!({"operationId":operation,"ownership":ownership,"action":"delete_sandbox_project","state":"needs_recovery","errorCode":"server_restarted"});
+    let status = json!({"operationId":operation,"ownership":ownership,"action":"delete_sandbox_project","state":"needs_recovery","errorCode":"server_restarted","executionGeneration":3});
     let mut completed = status.clone();
     completed["state"] = json!("succeeded");
     completed["errorCode"] = Value::Null;
-    let (url, receive, task) = server(vec![json!([status]), status.clone(), completed]);
+    let (url, receive, task) = checked_server(
+        vec![json!([status]), status.clone(), status.clone(), completed],
+        |method, _, headers| {
+            if method == "POST" {
+                assert!(
+                    headers
+                        .contains("x-firecrab-endpoint-id: 11111111-1111-4111-8111-111111111111")
+                );
+                assert!(headers.contains("x-firecrab-execution-generation: 3"));
+            }
+        },
+    );
     for args in [
         vec![
             "native-operations",
@@ -172,6 +190,14 @@ fn native_operation_cli_observes_without_replay_and_recovers_only_the_original_i
     );
     assert_eq!(
         requests[2],
+        (
+            "GET".into(),
+            format!("/api/iac/native-operations/{operation}"),
+            Value::Null
+        )
+    );
+    assert_eq!(
+        requests[3],
         (
             "POST".into(),
             format!("/api/iac/native-operations/{operation}/recover"),

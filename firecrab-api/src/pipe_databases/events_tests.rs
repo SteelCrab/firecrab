@@ -531,6 +531,7 @@ async fn durable_events_real_rabbitmq() {
             restored,
             crate::server::RequestId(Uuid::new_v4()),
             detach_id,
+            original.operation.execution_generation,
         )
         .await
         .unwrap();

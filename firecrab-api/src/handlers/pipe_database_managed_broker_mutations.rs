@@ -200,6 +200,7 @@ pub(crate) async fn recover(
     state: AppState,
     request: RequestId,
     id: Uuid,
+    expected_generation: u64,
 ) -> Result<NativeOperation, AppError> {
     tokio::spawn(async move {
         let guard = state
@@ -207,8 +208,10 @@ pub(crate) async fn recover(
             .database_broker_runtime_lock()
             .map_err(|e| persistence_error(e, request.0))?;
         let store = state.store.clone();
-        let (intent, dispatch) =
-            database(request.0, move || store.recover_managed_database_broker(id)).await?;
+        let (intent, dispatch) = database(request.0, move || {
+            store.recover_managed_database_broker_at(id, expected_generation)
+        })
+        .await?;
         if dispatch {
             supervise(state, request, intent, guard).await
         } else {

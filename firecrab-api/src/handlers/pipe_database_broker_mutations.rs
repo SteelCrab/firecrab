@@ -35,7 +35,7 @@ pub async fn save(
         Ok(id) => id,
         Err(error) => return error.into_response(),
     };
-    let result = supervise(state, request, headers, id, Some(input)).await;
+    let result = supervise(state, request, headers, id, Some(input), None).await;
     let mut response = match result {
         Ok(operation) => match operation.state {
             NativeOperationState::Succeeded => {
@@ -70,8 +70,17 @@ pub(crate) async fn recover(
     state: AppState,
     request: RequestId,
     id: Uuid,
+    expected_generation: u64,
 ) -> Result<NativeOperation, AppError> {
-    supervise(state, request, HeaderMap::new(), id, None).await
+    supervise(
+        state,
+        request,
+        HeaderMap::new(),
+        id,
+        None,
+        Some(expected_generation),
+    )
+    .await
 }
 /// Separate worker and supervisor lifetimes from the HTTP response and detect worker panics.
 async fn supervise(
@@ -80,6 +89,7 @@ async fn supervise(
     headers: HeaderMap,
     id: Uuid,
     input: Option<RabbitMQInput>,
+    expected_generation: Option<u64>,
 ) -> Result<NativeOperation, AppError> {
     let admitted: Arc<Mutex<Option<BrokerIntent>>> = Arc::default();
     let observed = admitted.clone();
@@ -105,7 +115,12 @@ async fn supervise(
                 }
             }
         } else {
-            database(request.0, move || store.recover_database_broker(id)).await?
+            let expected_generation =
+                expected_generation.ok_or_else(|| AppError::internal(request.0))?;
+            database(request.0, move || {
+                store.recover_database_broker_at(id, expected_generation)
+            })
+            .await?
         };
         *admitted.lock().unwrap_or_else(|p| p.into_inner()) = Some(intent.clone());
         if dispatch {

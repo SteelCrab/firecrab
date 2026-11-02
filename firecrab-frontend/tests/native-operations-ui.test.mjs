@@ -44,6 +44,8 @@ test("Native recovery uses the original receipt and observes it after losing ack
       posts++;
       if (req.headers["x-firecrab-endpoint-id"] !== "endpoint-one")
         throw new Error("missing endpoint pin");
+      if (req.headers["x-firecrab-execution-generation"] !== "0")
+        throw new Error("missing observed execution generation");
       current = { ...current, state: "succeeded", executionGeneration: 1 };
       send(503, { error: { message: "Acknowledgement lost" } });
     },
@@ -222,13 +224,21 @@ test("Native recovery reports a completed failure without claiming success or ru
     "POST /api/iac/native-operations/known-failure/recover",
     ({ send }) => {
       posts++;
-      current = { ...current, state: "failed", executionGeneration: 1, errorCode: "verification_failed" };
+      current = {
+        ...current,
+        state: "failed",
+        executionGeneration: 1,
+        errorCode: "verification_failed",
+      };
       send(200, current);
     },
   );
   try {
     await page.goto(`${server.url}/#/stacks`);
-    const panel = page.getByRole("region", { name: "Native operations", exact: true });
+    const panel = page.getByRole("region", {
+      name: "Native operations",
+      exact: true,
+    });
     await panel.getByRole("button", { name: "Resume VM deletion" }).click();
     await expect(panel.getByRole("alert")).toContainText(
       "Original operation failed before changes. Submit corrected configuration.",

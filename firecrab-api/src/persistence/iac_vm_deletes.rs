@@ -229,9 +229,22 @@ impl Store {
     }
 
     /// Recovery advances the attempt; an old worker cannot finish a newer attempt.
+    #[cfg(test)]
     pub(crate) fn recover_native_vm_delete(
         &self,
         id: Uuid,
+    ) -> Result<VmDeleteIntent, PersistenceError> {
+        let generation = self
+            .iac_native_operation(id)?
+            .ok_or(PersistenceError::IacOperationIdentity)?
+            .execution_generation;
+        self.recover_native_vm_delete_at(id, generation)
+    }
+    /// Compare the observed attempt inside the transaction before resuming its original work.
+    pub(crate) fn recover_native_vm_delete_at(
+        &self,
+        id: Uuid,
+        expected_generation: u64,
     ) -> Result<VmDeleteIntent, PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -239,6 +252,10 @@ impl Store {
         if intent.operation.state == NativeOperationState::Succeeded {
             return Ok(intent);
         }
+        crate::persistence::iac_native::check_recovery_attempt(
+            &intent.operation,
+            expected_generation,
+        )?;
         if intent.operation.state != NativeOperationState::NeedsRecovery {
             return Err(PersistenceError::IacResourceBusy);
         }
@@ -251,6 +268,7 @@ impl Store {
             .operation
             .execution_generation
             .checked_add(1)
+            .filter(|v| *v <= i64::MAX as u64)
             .ok_or(PersistenceError::IacOperationIdentity)?;
         intent.operation.state = NativeOperationState::Running;
         intent.operation.error_code = None;

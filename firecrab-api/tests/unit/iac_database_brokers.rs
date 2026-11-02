@@ -431,3 +431,39 @@ async fn iac_database_broker_event_read_lease_permits_health_but_fences_runtime_
     let config: RabbitMQInput = state.store.database_rabbitmq().unwrap().unwrap();
     assert_eq!(config.username, "fixture");
 }
+
+#[tokio::test]
+async fn iac_database_broker_delayed_recovery_cannot_advance_a_newer_failed_attempt() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, _, _) = fixture(root.path()).await;
+    let original = external(&state, Uuid::new_v4(), cluster().config.unwrap(), true);
+    state.store.interrupt_native_iac_operations().unwrap();
+    let second = Store::open(&root.path().join("state.db")).unwrap();
+    let (first, dispatch) = second
+        .recover_database_broker_at(original.operation.operation_id, 0)
+        .unwrap();
+    assert!(dispatch);
+    state.store.interrupt_native_iac_operations().unwrap();
+    assert!(matches!(
+        state
+            .store
+            .recover_database_broker_at(original.operation.operation_id, 0),
+        Err(PersistenceError::StaleIacExecution)
+    ));
+    let unchanged = second
+        .iac_native_operation(original.operation.operation_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged.execution_generation, 1);
+    assert_eq!(
+        unchanged.state,
+        firecrab_stack::NativeOperationState::NeedsRecovery
+    );
+    assert!(second.finish_database_broker(&first).is_err());
+    let (current, dispatch) = second
+        .recover_database_broker_at(original.operation.operation_id, 1)
+        .unwrap();
+    assert!(dispatch);
+    assert_eq!(current.operation.execution_generation, 2);
+    second.finish_database_broker(&current).unwrap();
+}

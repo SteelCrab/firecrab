@@ -294,6 +294,11 @@ pub(crate) fn persistence_error(error: PersistenceError, request_id: Uuid) -> Ap
             "resource ownership conflicts; inspect the exact current owner",
             request_id,
         ),
+        PersistenceError::StaleIacExecution => AppError::conflict(
+            "iac_execution_changed",
+            "native execution changed; observe the original operation before recovering again",
+            request_id,
+        ),
         PersistenceError::StaleIacOwner => AppError::conflict(
             "stale_iac_owner",
             "read the current owner and generation before changing ownership",

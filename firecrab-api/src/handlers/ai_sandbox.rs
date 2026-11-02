@@ -502,7 +502,7 @@ async fn delete_project_owned(
     id: RequestId,
     caller: Caller,
     key: Uuid,
-    recovery: Option<Uuid>,
+    recovery: Option<(Uuid, u64)>,
 ) -> Result<firecrab_stack::NativeOperation, AppError> {
     let _claim = state.sandbox.admission.lock().await;
     project(&state, id, key, caller, SandboxPermission::Write).await?;
@@ -540,7 +540,9 @@ async fn delete_project_owned(
     }
     let store = state.store.clone();
     let operation = super::stacks::database(id.0, move || match recovery {
-        Some(operation) => store.recover_native_project_delete(operation),
+        Some((operation, generation)) => {
+            store.recover_native_project_delete_at(operation, generation)
+        }
         None => store.begin_sandbox_project_delete(key, id.0),
     })
     .await?;
@@ -561,19 +563,18 @@ async fn delete_project_owned(
     .await;
     if !matches!(result, Ok(Ok(()))) {
         let store = state.store.clone();
-        let operation_id = operation.operation_id;
-        let _ =
-            super::stacks::database(id.0, move || store.fail_native_project_delete(operation_id))
-                .await;
+        let failed = operation.clone();
+        let _ = super::stacks::database(id.0, move || store.fail_native_project_delete_at(&failed))
+            .await;
         return Err(AppError::unavailable(
             "project cleanup is incomplete; inspect and recover its recorded native operation",
             id.0,
         ));
     }
     let store = state.store.clone();
-    let operation_id = operation.operation_id;
+    let completed = operation.clone();
     match super::stacks::database(id.0, move || {
-        store.finish_native_project_delete(operation_id)
+        store.finish_native_project_delete_at(&completed)
     })
     .await
     {
@@ -581,7 +582,7 @@ async fn delete_project_owned(
         Err(error) => {
             let store = state.store.clone();
             let _ = super::stacks::database(id.0, move || {
-                store.fail_native_project_delete(operation_id)
+                store.fail_native_project_delete_at(&operation)
             })
             .await;
             Err(error)
@@ -616,7 +617,7 @@ pub(crate) async fn recover_project_delete(
         id,
         caller,
         key,
-        Some(operation.operation_id),
+        Some((operation.operation_id, operation.execution_generation)),
     ))
     .await
     .map_err(|_| AppError::internal(id.0))?

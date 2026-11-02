@@ -15,6 +15,17 @@ CREATE TABLE IF NOT EXISTS iac_native_dependencies (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS iac_native_dependency_resource ON iac_native_dependencies(kind,resource_id);";
 
+/// A delayed request cannot advance a newer uncertain attempt after another recovery already failed.
+pub(super) fn check_recovery_attempt(
+    operation: &NativeOperation,
+    expected: u64,
+) -> Result<(), PersistenceError> {
+    if operation.execution_generation != expected {
+        return Err(PersistenceError::StaleIacExecution);
+    }
+    Ok(())
+}
+
 pub(super) fn ensure_idle(
     conn: &Connection,
     resource: &ManagedResource,
@@ -181,10 +192,26 @@ impl Store {
     }
 
     /// Persist an uncertain outcome. A later request must recover this same UUID.
+    #[cfg(test)]
     pub(crate) fn fail_native_project_delete(&self, id: Uuid) -> Result<(), PersistenceError> {
+        let operation = self
+            .iac_native_operation(id)?
+            .ok_or(PersistenceError::IacOperationIdentity)?;
+        self.fail_native_project_delete_at(&operation)
+    }
+    /// Only the exact admitted cleanup attempt can retain an uncertain outcome.
+    pub(crate) fn fail_native_project_delete_at(
+        &self,
+        expected: &NativeOperation,
+    ) -> Result<(), PersistenceError> {
+        let id = expected.operation_id;
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut operation = read(&tx, id)?.ok_or(PersistenceError::IacOperationIdentity)?;
+        if operation.state != NativeOperationState::Succeeded && operation != *expected {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+
         if operation.state != NativeOperationState::Succeeded {
             operation.state = NativeOperationState::NeedsRecovery;
             operation.error_code = Some("project_cleanup_incomplete".into());
@@ -195,9 +222,22 @@ impl Store {
     }
 
     /// Explicit recovery preserves endpoint, identity and ownership generation.
+    #[cfg(test)]
     pub(crate) fn recover_native_project_delete(
         &self,
         id: Uuid,
+    ) -> Result<NativeOperation, PersistenceError> {
+        let generation = self
+            .iac_native_operation(id)?
+            .ok_or(PersistenceError::IacOperationIdentity)?
+            .execution_generation;
+        self.recover_native_project_delete_at(id, generation)
+    }
+    /// Compare the observed attempt inside the transaction before resuming its original work.
+    pub(crate) fn recover_native_project_delete_at(
+        &self,
+        id: Uuid,
+        expected_generation: u64,
     ) -> Result<NativeOperation, PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -205,6 +245,7 @@ impl Store {
         if operation.state == NativeOperationState::Succeeded {
             return Ok(operation);
         }
+        crate::persistence::iac_native::check_recovery_attempt(&operation, expected_generation)?;
         if operation.state != NativeOperationState::NeedsRecovery {
             return Err(PersistenceError::IacResourceBusy);
         }
@@ -216,6 +257,11 @@ impl Store {
             Uuid::parse_str(&operation.ownership.resource.id)
                 .map_err(|_| PersistenceError::IacOperationIdentity)?,
         )?;
+        operation.execution_generation = operation
+            .execution_generation
+            .checked_add(1)
+            .filter(|v| *v <= i64::MAX as u64)
+            .ok_or(PersistenceError::IacOperationIdentity)?;
         operation.state = NativeOperationState::Running;
         operation.error_code = None;
         save(&tx, &operation)?;
@@ -224,13 +270,29 @@ impl Store {
     }
 
     /// Delete project metadata and finish its fence atomically after filesystem confirmation.
+    #[cfg(test)]
     pub(crate) fn finish_native_project_delete(
         &self,
         id: Uuid,
     ) -> Result<NativeOperation, PersistenceError> {
+        let operation = self
+            .iac_native_operation(id)?
+            .ok_or(PersistenceError::IacOperationIdentity)?;
+        self.finish_native_project_delete_at(&operation)
+    }
+    /// Commit project removal only for the original running attempt; keep terminal receipts immutable.
+    pub(crate) fn finish_native_project_delete_at(
+        &self,
+        expected: &NativeOperation,
+    ) -> Result<NativeOperation, PersistenceError> {
+        let id = expected.operation_id;
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut operation = read(&tx, id)?.ok_or(PersistenceError::IacOperationIdentity)?;
+        if operation.state != NativeOperationState::Succeeded && operation != *expected {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+
         if operation.state == NativeOperationState::Succeeded {
             return Ok(operation);
         }

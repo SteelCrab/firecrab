@@ -217,9 +217,22 @@ impl Store {
     }
 
     /// Resume the original action with its original VM, disk and credentials.
+    #[cfg(test)]
     pub(crate) fn recover_queue_engine_operation(
         &self,
         id: Uuid,
+    ) -> Result<(EngineRecord, NativeOperation), PersistenceError> {
+        let generation = self
+            .iac_native_operation(id)?
+            .ok_or(PersistenceError::IacOperationIdentity)?
+            .execution_generation;
+        self.recover_queue_engine_operation_at(id, generation)
+    }
+    /// Compare the observed attempt inside the transaction before resuming its original work.
+    pub(crate) fn recover_queue_engine_operation_at(
+        &self,
+        id: Uuid,
+        expected_generation: u64,
     ) -> Result<(EngineRecord, NativeOperation), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -229,12 +242,14 @@ impl Store {
         if operation.state == NativeOperationState::Succeeded {
             return Ok((record, operation));
         }
+        crate::persistence::iac_native::check_recovery_attempt(&operation, expected_generation)?;
         if operation.state != NativeOperationState::NeedsRecovery {
             return Err(PersistenceError::IacResourceBusy);
         }
         operation.execution_generation = operation
             .execution_generation
             .checked_add(1)
+            .filter(|v| *v <= i64::MAX as u64)
             .ok_or(PersistenceError::IacOperationIdentity)?;
         record.phase = phase(operation.action)?;
         record.error = None;

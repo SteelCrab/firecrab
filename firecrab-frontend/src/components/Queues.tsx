@@ -16,7 +16,12 @@ type Engine = {
   error?: string | null;
   log?: string | null;
 };
-type EngineOperation = { operationId: string; state: string };
+type EngineOperation = {
+  operationId: string;
+  state: string;
+  executionGeneration?: number;
+  ownership: { endpointId: string };
+};
 type Queue = {
   id: string;
   name: string;
@@ -44,12 +49,23 @@ async function mutate<T>(
   path: string,
   method: "POST" | "DELETE",
   body?: object,
+  recovery?: EngineOperation,
 ): Promise<T | null> {
   const response = await fetch(path, {
     method,
+    headers: {
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(recovery
+        ? {
+            "x-firecrab-endpoint-id": recovery.ownership.endpointId,
+            "x-firecrab-execution-generation": String(
+              recovery.executionGeneration ?? 0,
+            ),
+          }
+        : {}),
+    },
     ...(body
       ? {
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         }
       : {}),
@@ -189,12 +205,13 @@ export default function Queues() {
     path: string,
     method: "POST" | "DELETE",
     body?: object,
+    recovery?: EngineOperation,
   ) => {
     if (busy || connectionError) return false;
     setBusy(true);
     setError("");
     try {
-      await mutate(path, method, body);
+      await mutate(path, method, body, recovery);
       await refresh();
       return true;
     } catch (cause) {
@@ -375,6 +392,8 @@ export default function Queues() {
                         ? `/api/iac/native-operations/${encodeURIComponent(snapshot.recovery.operationId)}/recover`
                         : "/api/queue/engine/start",
                       "POST",
+                      undefined,
+                      snapshot.recovery,
                     )
                   }
                 >

@@ -203,7 +203,7 @@ pub(crate) async fn recover(
     let store = state.store.clone();
     tokio::spawn(async move {
         let intent = store
-            .recover_native_vm_delete(id)
+            .recover_native_vm_delete_at(id, operation.execution_generation)
             .map_err(|error| persistence_error(error, request.0))?;
         if intent.operation.state != NativeOperationState::Succeeded {
             let retain_disks = intent.retain_disks;

@@ -33,6 +33,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Require observed endpoint and execution-generation preconditions for unfinished
+  native recovery. Recheck them inside every typed recovery transaction, retain
+  immutable terminal receipts and fence old project cleanup callbacks (#548).
+
 - Preserve immutable migration versions across database aliases and management
   transfers. Expose redacted original job receipts, serialize migration SQL on its
   source session, reject stale executors and permit generation-checked retries

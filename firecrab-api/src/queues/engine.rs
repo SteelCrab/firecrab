@@ -153,12 +153,13 @@ pub(crate) async fn recover_operation(
     state: AppState,
     id: Uuid,
     operation_id: Uuid,
+    expected_generation: u64,
 ) -> Result<firecrab_stack::NativeOperation, AppError> {
     tokio::spawn(async move {
         let guard = lock(&state, id)?;
         let store = state.store.clone();
         let (record, operation) = crate::handlers::stacks::database(id, move || {
-            store.recover_queue_engine_operation(operation_id)
+            store.recover_queue_engine_operation_at(operation_id, expected_generation)
         })
         .await?;
         let result = operation.clone();

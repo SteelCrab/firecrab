@@ -455,12 +455,15 @@ pub(crate) async fn recover(
     state: AppState,
     request: RequestId,
     id: Uuid,
+    expected_generation: u64,
 ) -> Result<NativeOperation, AppError> {
     tokio::spawn(async move {
         let _guard = state.service_mutations.clone().lock_owned().await;
         let store = state.store.clone();
-        let (intent, dispatch) =
-            database(request.0, move || store.recover_database_events(id)).await?;
+        let (intent, dispatch) = database(request.0, move || {
+            store.recover_database_events_at(id, expected_generation)
+        })
+        .await?;
         if dispatch {
             let result = tokio::spawn({
                 let state = state.clone();
