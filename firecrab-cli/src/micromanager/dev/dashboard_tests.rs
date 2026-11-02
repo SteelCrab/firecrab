@@ -2,6 +2,9 @@ use super::*;
 use socket2::{Domain, Socket, Type};
 use std::net::TcpListener;
 
+// A closed ephemeral port is otherwise reusable by another parallel fixture.
+static FIXTURE_PORTS: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+
 const VITE: &str = r#"
 import http from 'node:http';
 import {readFileSync} from 'node:fs';
@@ -32,6 +35,7 @@ struct Fixture {
     source: tempfile::TempDir,
     home: tempfile::TempDir,
     port: u16,
+    reserved_port: u16,
 }
 
 impl Fixture {
@@ -57,15 +61,22 @@ impl Fixture {
             dependency_revision(&frontend).unwrap(),
         )
         .unwrap();
-        let port = TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let port = {
+            let mut ports = FIXTURE_PORTS.lock().unwrap();
+            loop {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let port = listener.local_addr().unwrap().port();
+                if !ports.contains(&port) {
+                    ports.push(port);
+                    break port;
+                }
+            }
+        };
         Self {
             source,
             home: tempfile::tempdir().unwrap(),
             port,
+            reserved_port: port,
         }
     }
 
@@ -76,7 +87,12 @@ impl Fixture {
         format!("http://127.0.0.1:{}", self.port)
     }
     fn start(&self) -> Result<(), Error> {
-        start(&self.source(), self.home.path(), self.port)
+        start(&self.source(), self.home.path(), self.port).inspect_err(|_| {
+            if let Ok(log) = fs::read_to_string(self.home.path().join("runtime/dev-dashboard.log"))
+            {
+                eprintln!("dashboard startup log:\n{log}");
+            }
+        })
     }
     fn start_private(&self, instance: &super::super::instance::Instance) -> Result<(), Error> {
         start(&self.source(), &instance.managed_home, self.port).inspect_err(|_| {
@@ -111,6 +127,10 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = stop(self.home.path());
+        FIXTURE_PORTS
+            .lock()
+            .unwrap()
+            .retain(|port| *port != self.reserved_port);
     }
 }
 
