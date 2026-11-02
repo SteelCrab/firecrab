@@ -1,6 +1,7 @@
 use super::*;
 use crate::persistence::Store;
 
+mod iac;
 mod management;
 mod services;
 

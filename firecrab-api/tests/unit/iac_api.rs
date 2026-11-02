@@ -100,7 +100,10 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "sandbox_project",
             "stack_source",
             "sandbox_access",
-            "queue_engine"
+            "queue_engine",
+            "cluster_host",
+            "cluster_placement",
+            "cluster_service"
         ])
     );
     assert_eq!(

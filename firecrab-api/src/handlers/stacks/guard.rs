@@ -32,6 +32,14 @@ pub(crate) async fn protect_resources(
         return next.run(request).await;
     }
     let configuration = match path.as_str() {
+        "/api/cluster/hosts/{id}" => Some("cluster_host"),
+        "/api/cluster/placements/{id}"
+        | "/api/cluster/placements/{id}/start"
+        | "/api/cluster/placements/{id}/stop"
+        | "/api/cluster/placements/{id}/delete" => Some("cluster_placement"),
+        "/api/cluster/services/{id}"
+        | "/api/cluster/services/{id}/update"
+        | "/api/cluster/services/{id}/stop" => Some("cluster_service"),
         "/api/pools/{id}" => Some("pool"),
         "/api/queues/{id}" | "/api/queues/{id}/retry" => Some("queue"),
         "/api/pipe/databases/{id}" | "/api/pipe/databases/{id}/access" => {

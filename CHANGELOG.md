@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Protect cluster host drain settings, VM placement intents and cluster service
+  updates with exact IaC ownership. Preserve authenticated heartbeats, existing
+  intent reconciliation, host-qualified workload identities and operation history.
+  Block transfers while controller work remains pending or claimed (#548).
+
 - Reserve Queue engine ownership by exact broker VM UUID. Journal installation,
   start and stop before dispatch, retain the original VM/disk/credentials during
   recovery, and fence older execution attempts. Recover interrupted work through

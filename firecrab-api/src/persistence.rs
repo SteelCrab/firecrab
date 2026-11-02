@@ -49,6 +49,7 @@ pub(crate) mod service_observation;
 mod stack_applies;
 mod stack_sources;
 pub(crate) use stack_sources::SourceTrigger;
+mod iac_cluster;
 pub(crate) mod iac_native;
 mod iac_owners;
 mod iac_resources;

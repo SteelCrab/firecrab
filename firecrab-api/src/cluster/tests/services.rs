@@ -3,7 +3,7 @@ use super::super::services::reconcile_one as reconcile_service;
 use super::*;
 mod contract;
 
-fn service_spec(hosts: &[HostReport]) -> ClusterServiceSpec {
+pub(super) fn service_spec(hosts: &[HostReport]) -> ClusterServiceSpec {
     ClusterServiceSpec {
         state: ClusterServiceState::default(),
         credentials: Default::default(),
@@ -12,7 +12,7 @@ fn service_spec(hosts: &[HostReport]) -> ClusterServiceSpec {
         targets: hosts.iter().map(|h| ClusterServiceTarget { host_id:h.id,replicas:1,request:DeployMicroServiceRequest { micro_network_id:Some(h.networks[0].id),host_port:30100 } }).collect(),
     }
 }
-fn create(store: &Store, spec: ClusterServiceSpec) -> ClusterService {
+pub(super) fn create(store: &Store, spec: ClusterServiceSpec) -> ClusterService {
     store
         .cluster_service_admit(
             "create",

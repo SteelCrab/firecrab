@@ -250,3 +250,20 @@ Only confirmed runtime stop or RabbitMQ readiness completes the operation.
 
 These ownership and native-operation prerequisites are not complete Stack or Terraform lifecycle support.
 The complete #548 merge hold remains in force.
+
+## Controller resources
+
+`cluster_host`, `cluster_placement` and `cluster_service` use their exact controller-side UUIDs.
+IaC ownership is separate from the authenticated workload owner recorded by the controller.
+Transfer preserves host-qualified networks/storage, reserved VM identities, credentials and operation history.
+Pending or uncertain operations, active claims and unfinished service-host generations block transfer.
+
+Host ownership gates operator drain changes. Authenticated worker registration and heartbeat remain observations.
+Their inventory can change without granting permission to alter the separately owned drain configuration.
+Placement lifecycle intents and service update/stop commits check IaC authority in the same SQLite transaction.
+The public routes also reject managed writes before transport or credential preparation.
+Read-only status and reconciliation of already accepted intents stay available.
+Worker-owned VMs and local service receipts retain their original controller's authority.
+
+These adapters do not yet supply all desired fields, lifecycle operations or both declarative workflows.
+The full stage 2 contract and the #548 merge hold remain open.

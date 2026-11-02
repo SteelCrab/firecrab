@@ -30,6 +30,9 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "stack_source",
     "sandbox_access",
     "queue_engine",
+    "cluster_host",
+    "cluster_placement",
+    "cluster_service",
 ];
 
 /// Reservations and tombstones keep generated identities with their parent.
@@ -104,6 +107,9 @@ pub(super) fn validate(
             "SELECT EXISTS(SELECT 1 FROM stack_git_sources WHERE stack_id=?1 AND json_extract(status,'$.stackId')=?1)"
         }
         "sandbox_access" => return super::sandbox_access::validate(conn, resource, adopting),
+        "cluster_host" | "cluster_placement" | "cluster_service" => {
+            return super::iac_cluster::validate(conn, resource, adopting);
+        }
         _ => return Err(PersistenceError::UnsupportedIacResource),
     };
     if adopting && !conn.query_row(exists, [&resource.id], |row| row.get::<_, bool>(0))? {
