@@ -1,5 +1,6 @@
 use super::*;
 use crate::templates::TemplateRegistry;
+use firecrab_api_types::MicroNetworkResponse;
 
 async fn fixture() -> (tempfile::TempDir, AppState) {
     let temp = tempfile::tempdir().unwrap();
@@ -30,6 +31,156 @@ async fn create_without_worker(
     )
     .await
     .map(|(_, Json(job))| job)
+}
+
+fn stored_network(
+    state: &AppState,
+    id: Uuid,
+    name: &str,
+    cidr: &str,
+    internet_enabled: bool,
+) -> MicroNetworkResponse {
+    let network = MicroNetworkResponse {
+        id,
+        name: name.into(),
+        subnet_cidr: cidr.into(),
+        gateway: crate::ipam::SubnetSpec::parse(id, cidr)
+            .unwrap()
+            .gateway()
+            .to_string(),
+        internet_enabled,
+        dns_mode: Default::default(),
+        uplink: None,
+        ipv6_cidr: None,
+        ipv6_gateway: None,
+        ipv6_address_mode: None,
+        ipv6_egress: None,
+    };
+    state.store.insert_micro_network(&network).unwrap();
+    network
+}
+
+#[tokio::test]
+async fn automatic_selection_prefers_the_default_internet_network_and_persists_it() {
+    let (_temp, state) = fixture().await;
+    stored_network(&state, Uuid::from_u128(1), "custom", "10.31.0.0/24", true);
+    let default = stored_network(&state, Uuid::from_u128(2), "default", "10.32.0.0/24", true);
+    stored_network(&state, Uuid::from_u128(3), "offline", "10.33.0.0/24", false);
+    let input = input();
+    create_without_worker(&state, input.clone()).await.unwrap();
+    let mut job = read(&state, input.id).await.unwrap();
+
+    assert_eq!(
+        network(&state, &mut job, RequestId(input.id))
+            .await
+            .unwrap(),
+        default.id
+    );
+    assert_eq!(
+        read(&state, input.id)
+            .await
+            .unwrap()
+            .progress
+            .micro_network_id,
+        Some(default.id)
+    );
+    assert_eq!(state.store.list_micro_networks().unwrap().len(), 3);
+    assert!(state.vms.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn recovery_reuses_the_reserved_network_and_does_not_switch_when_it_loses_internet() {
+    let (temp, state) = fixture().await;
+    let input = input();
+    let first = create_without_worker(&state, input.clone()).await.unwrap();
+    let mut job = read(&state, input.id).await.unwrap();
+    let reserved = stored_network(
+        &state,
+        job.reserved_network,
+        "workspace-reserved",
+        "10.34.0.0/24",
+        true,
+    );
+    stored_network(&state, Uuid::new_v4(), "default", "10.35.0.0/24", true);
+
+    assert_eq!(
+        network(&state, &mut job, RequestId(input.id))
+            .await
+            .unwrap(),
+        reserved.id
+    );
+    let reopened = AppState::with_db_file(
+        TemplateRegistry::from_specs(temp.path(), []).unwrap(),
+        temp.path().join("workspaces.sqlite"),
+    )
+    .await
+    .unwrap();
+    let mut restored = read(&reopened, input.id).await.unwrap();
+    assert_eq!(
+        network(&reopened, &mut restored, RequestId(input.id))
+            .await
+            .unwrap(),
+        reserved.id
+    );
+    assert_eq!(restored.progress.vm_id, first.vm_id);
+
+    reopened
+        .store
+        .set_micro_network_internet(reserved.id, false)
+        .unwrap();
+    assert_eq!(
+        network(&reopened, &mut restored, RequestId(input.id))
+            .await
+            .unwrap_err()
+            .code(),
+        "workspace_network_unavailable"
+    );
+    assert_eq!(
+        read(&reopened, input.id)
+            .await
+            .unwrap()
+            .progress
+            .micro_network_id,
+        Some(reserved.id)
+    );
+    assert_eq!(reopened.store.list_micro_networks().unwrap().len(), 2);
+    assert!(reopened.vms.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn automatic_creation_skips_an_occupied_subnet_and_keeps_the_reserved_identity() {
+    let (temp, state) = fixture().await;
+    let socket = temp.path().join("network.sock");
+    let _helper = crate::network::test_support::spawn_always_ok_helper(&socket);
+    let state = state.with_test_network(crate::network::NetworkClient::with_socket_path(socket));
+    let occupied = stored_network(&state, Uuid::new_v4(), "offline", "172.30.240.0/24", false);
+    let input = input();
+    create_without_worker(&state, input.clone()).await.unwrap();
+    let mut job = read(&state, input.id).await.unwrap();
+
+    let id = network(&state, &mut job, RequestId(input.id))
+        .await
+        .unwrap();
+    let created = state.store.micro_network(id).unwrap().unwrap();
+    assert_eq!(id, job.reserved_network);
+    assert_ne!(created.subnet_cidr, occupied.subnet_cidr);
+    assert!(created.internet_enabled);
+    assert_eq!(
+        read(&state, input.id)
+            .await
+            .unwrap()
+            .progress
+            .micro_network_id,
+        Some(id)
+    );
+    assert_eq!(
+        network(&state, &mut job, RequestId(input.id))
+            .await
+            .unwrap(),
+        id
+    );
+    assert_eq!(state.store.list_micro_networks().unwrap().len(), 2);
+    assert!(state.vms.lock().unwrap().is_empty());
 }
 #[tokio::test]
 async fn retries_and_restart_keep_the_same_reserved_vm_and_network() {
