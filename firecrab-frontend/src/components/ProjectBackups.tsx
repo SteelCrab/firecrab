@@ -389,8 +389,8 @@ export default function ProjectBackups({ project }: { project: string }) {
               <code>{restore}</code>
               <p>
                 {t(
-                  "Files, database records and saved layouts return to this checkpoint. Current files are preserved privately. All open tabs must reload after restoration. The VM must be stopped first.",
-                  "파일, DB 기록, 저장된 화면을 선택한 시점으로 되돌린다. 현재 파일은 별도로 보존한다. 복구 후에는 모든 탭을 다시 읽어야 한다. 먼저 VM을 정지한다.",
+                  "Files, database records and saved layouts return to this checkpoint. Preserve unsaved text outside this workspace before continuing. Current files are preserved privately. All open tabs must reload after restoration. The VM must be stopped first.",
+                  "파일, DB 기록, 저장된 화면을 선택한 시점으로 되돌린다. 계속하기 전에 미저장 텍스트를 작업 공간 밖에 복사한다. 현재 파일은 별도로 보존한다. 복구 후에는 모든 탭을 다시 읽어야 한다. 먼저 VM을 정지한다.",
                 )}
               </p>
               <button

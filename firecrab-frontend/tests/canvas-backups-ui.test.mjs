@@ -18,7 +18,8 @@ beforeEach(async()=>{
  const inherited=fixture.matchHandler;
  fixture.matchHandler=({method,path:target})=>{
   if(target.startsWith(path+'/operations/'))return({body,send})=>{
-   const id=target.split('/').at(-1);let row=rows.find(r=>r.id===id);
+   const id=target.split('/').at(target.endsWith('/retry')?-2:-1);let row=rows.find(r=>r.id===id);
+   if(method==='POST'&&row){row.pendingReconciliation=false;delete row.error;return send(200,row);}
    if(method==='PUT'){
     admissions.push({id,body:structuredClone(body)});
     if(!row){row={id,request:structuredClone(body),phase:'complete',createdAt:1770000000,manifest:{checkpoint:{id:body.restoreCheckpoint||id,revision:7,createdAt:1770000000},volumeBytes:1024**3}};if(body.restoreCheckpoint){generation++;row.restoredGeneration=generation;}rows.unshift(row);}
@@ -63,4 +64,14 @@ test('Korean recovery controls are available after reopening a damaged project',
  await expect(dialog.getByRole('button',{name:'지금 백업',exact:true})).toBeEnabled();
  await expect(dialog.getByRole('checkbox',{name:'정기 백업 사용',exact:true})).toBeVisible();
  await page.screenshot({path:fileURLToPath(new URL('../../test-results/canvas-backups/korean-recovery.jpg',import.meta.url)),fullPage:true});
+});
+
+test('a committed receipt with pending cleanup stays resumable and blocks new operations',async()=>{
+ rows.push({id:canvas.project,phase:'complete',pendingReconciliation:true,createdAt:1770000000,request:{expectedGeneration:1,restoreCheckpoint:null},error:'Fixture cleanup needs retry'});
+ await page.getByRole('button',{name:'Backups & recovery',exact:true}).click();
+ const dialog=page.getByRole('dialog');await expect(dialog).toContainText('Reconciliation pending');
+ await expect(dialog.getByRole('button',{name:'Back up now',exact:true})).toBeDisabled();
+ await dialog.getByRole('button',{name:'Resume',exact:true}).click();
+ await expect(dialog.getByRole('button',{name:'Back up now',exact:true})).toBeEnabled();
+ assert.equal(rows[0].pendingReconciliation,false);assert.equal(admissions.length,0);
 });
