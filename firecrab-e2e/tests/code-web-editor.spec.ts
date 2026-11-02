@@ -16,29 +16,29 @@ async function open(page:Page,locale='en'){
 }
 for(const locale of ['en','ko'])for(const width of [1280,390])test(`${locale} prepares the same editor and terminal at ${width}px @dashboard`,async({page},info)=>{
  await page.setViewportSize({width,height:1000});const{state,errors}=await open(page,locale);const ko=locale==='ko';
- const prepare=page.getByRole('button',{name:ko?'편집기와 터미널 준비':'Prepare editor and terminal',exact:true});await expect(prepare).toBeEnabled();await prepare.click();
- await expect(page.locator('.code-editor-tools')).toContainText(ko?'편집기 준비 중':'Preparing editor');
+ const prepare=page.getByRole('button',{name:ko?'편집 도구 준비':'Prepare editor tools',exact:true});await expect(prepare).toBeEnabled();await prepare.click();
+ await expect(page.locator('.code-tools')).toContainText(ko?'편집기 준비 중':'Preparing editor');
  expect(state.writes).toEqual([{path:`/api/code/workspaces/${id}/editor`,body:{expectedRevision:4,vmId:vm,runtimeId:instance,operationId:operation}}]);
  state.editor.phase='ready';await expect(page.getByRole('link',{name:ko?'Web VS Code 열기':'Open Web VS Code',exact:true})).toHaveAttribute('href',`/api/code/workspaces/${id}/editor/open`);
- const terminal=page.getByRole('link',{name:ko?'터미널 열기':'Open terminal',exact:true});await expect(terminal).toHaveAttribute('href',`/api/code/workspaces/${id}/editor/open?terminal=true`);await expect(terminal).toHaveAttribute('rel','noopener noreferrer');
+ const terminal=page.getByRole('link',{name:ko?'터미널 열기':'Open terminal',exact:true});await expect(terminal).toHaveAttribute('href',`/api/code/workspaces/${id}/terminal/open`);await expect(terminal).toHaveAttribute('rel','noreferrer');
  await expect(page.getByRole('button',{name:ko?'에이전트 실행':'Run agent',exact:true})).toBeDisabled();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
  if(!ko)await page.screenshot({path:info.outputPath(`code-web-editor-en-${width}.png`),fullPage:true});expect(errors).toEqual([]);
 });
-test('lost preparation responses observe the existing job without replay @dashboard',async({page})=>{const{state,errors}=await open(page);state.failure=true;await page.getByRole('button',{name:'Prepare editor and terminal',exact:true}).click();await expect(page.locator('.code-editor-tools')).toContainText('Preparing editor');expect(state.writes).toHaveLength(1);expect(errors).toEqual([]);});
-test('stale receipts and stopped runtimes cannot open browser tools @dashboard',async({page})=>{const{state,errors}=await open(page);await expect(page.getByRole('button',{name:'Prepare editor and terminal',exact:true})).toBeEnabled();state.editor={workspaceId:id,revision:3,vmId:vm,runtimeId:instance,operationId:operation,phase:'ready',version:'4.144.0'};await page.reload();await expect(page.getByRole('link',{name:'Open Web VS Code',exact:true})).toHaveCount(0);state.phase='stopped';await page.reload();await expect(page.getByRole('button',{name:'Prepare editor and terminal',exact:true})).toBeDisabled();expect(state.writes).toHaveLength(0);expect(errors).toEqual([]);});
-test('metadata outages remove previously enabled editor links @dashboard',async({page})=>{const{state,errors}=await open(page);await page.getByRole('button',{name:'Prepare editor and terminal',exact:true}).click();state.editor.phase='ready';await expect(page.getByRole('link',{name:'Open terminal',exact:true})).toBeVisible();state.outage=true;await expect(page.getByRole('link',{name:'Open terminal',exact:true})).toHaveCount(0);expect(errors).toEqual([]);});
+test('lost preparation responses observe the existing job without replay @dashboard',async({page})=>{const{state,errors}=await open(page);state.failure=true;await page.getByRole('button',{name:'Prepare editor tools',exact:true}).click();await expect(page.locator('.code-tools')).toContainText('Preparing editor');expect(state.writes).toHaveLength(1);expect(errors).toEqual([]);});
+test('stale receipts and stopped runtimes cannot open browser tools @dashboard',async({page})=>{const{state,errors}=await open(page);await expect(page.getByRole('button',{name:'Prepare editor tools',exact:true})).toBeEnabled();state.editor={workspaceId:id,revision:3,vmId:vm,runtimeId:instance,operationId:operation,phase:'ready',version:'4.144.0'};await page.reload();await expect(page.getByRole('link',{name:'Open Web VS Code',exact:true})).toHaveCount(0);state.phase='stopped';await page.reload();await expect(page.getByRole('button',{name:'Prepare editor tools',exact:true})).toHaveCount(0);expect(state.writes).toHaveLength(0);expect(errors).toEqual([]);});
+test('metadata outages remove previously enabled editor links @dashboard',async({page})=>{const{state,errors}=await open(page);await page.getByRole('button',{name:'Prepare editor tools',exact:true}).click();state.editor.phase='ready';await expect(page.getByRole('link',{name:'Open terminal',exact:true})).toBeVisible();state.outage=true;await expect(page.getByRole('link',{name:'Open terminal',exact:true})).toHaveCount(0);expect(errors).toEqual([]);});
 for(const width of [1280,390])test(`standalone terminal streams input and resize at ${width}px @dashboard`,async({page},info)=>{
  await page.setViewportSize({width,height:900});const frames:(string|Buffer)[]=[];
  await page.routeWebSocket('**/_fc/terminal/socket',ws=>{ws.onMessage(data=>frames.push(data));ws.send(Buffer.from('fc-code /home/fc-code/project\r\n$ '));});
- await page.goto('/code-terminal.html');await expect(page.getByRole('log',{name:'Terminal output'})).toContainText('/home/fc-code/project');
- await page.locator('.terminal-emulator textarea').focus();await page.keyboard.type('pwd');await page.keyboard.press('Enter');
+ await page.goto('/code-terminal.html');await expect(page.locator('#terminal')).toContainText('/home/fc-code/project');
+ await page.locator('.xterm-helper-textarea').focus();await page.keyboard.type('pwd');await page.keyboard.press('Enter');
  await expect.poll(()=>frames.filter(Buffer.isBuffer).map(b=>b.toString()).join('')).toContain('pwd');expect(frames.some(v=>typeof v==='string'&&JSON.parse(v).cols>1)).toBe(true);
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await page.screenshot({path:info.outputPath(`code-terminal-en-${width}.png`),fullPage:true});
- await page.getByRole('button',{name:'Disconnect',exact:true}).click();await expect(page.getByRole('status')).toContainText('Disconnected');
+ await page.getByRole('button',{name:'Disconnect',exact:true}).click();await expect(page.locator('#terminal-status')).toContainText('Disconnected');
 });
 test('standalone terminal splits large UTF-8 paste into bounded binary input @dashboard',async({page})=>{
  const frames:Buffer[]=[];await page.routeWebSocket('**/_fc/terminal/socket',ws=>{ws.onMessage(data=>{if(Buffer.isBuffer(data))frames.push(data);});ws.send(Buffer.from('$ '));});
- await page.goto('/code-terminal.html');await expect(page.getByRole('log',{name:'Terminal output'})).toContainText('$');
- await page.locator('.terminal-emulator textarea').focus();const text='한'.repeat(12000);await page.keyboard.insertText(text);
+ await page.goto('/code-terminal.html');await expect(page.locator('#terminal')).toContainText('$');
+ await page.locator('.xterm-helper-textarea').focus();const text='한'.repeat(12000);await page.locator('.xterm-helper-textarea').evaluate((el,text)=>{const data=new DataTransfer();data.setData('text/plain',text);el.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));},text);
  await expect.poll(()=>Buffer.concat(frames).toString('utf8').length).toBe(text.length);expect(Buffer.concat(frames).toString('utf8')).toBe(text);expect(frames.every(f=>f.length<=16384)).toBe(true);
 });

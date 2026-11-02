@@ -1141,10 +1141,10 @@ test.describe("MicroService configuration @dashboard", () => {
       .getByRole("combobox", { name: "Language", exact: true })
       .selectOption("ko");
     await expect(empty.locator(".empty-state-title")).toHaveText(
-      "아직 MicroService가 없다",
+      "아직 MicroService가 없습니다",
     );
     await expect(empty.locator("p")).toHaveText(
-      "컨테이너 이미지를 MicroVM에서 실행하고 무중단으로 배포한다.",
+      "컨테이너 이미지를 MicroVM에서 실행하고 무중단으로 배포합니다.",
     );
     await expect(
       empty.getByRole("link", { name: "새 MicroService", exact: true }),

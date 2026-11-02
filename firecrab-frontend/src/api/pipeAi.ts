@@ -48,3 +48,8 @@ export const getAiLogin = (id: string, signal?: AbortSignal) =>
     `${base}/logins/${encodeURIComponent(id)}`,
     { signal },
   );
+export const cancelAiLogin = (id: string) =>
+  fetchJson<{ status: string; message: string | null }>(
+    `${base}/logins/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );

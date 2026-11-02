@@ -56,6 +56,7 @@ export default function CodeSetup({
   const [explicit, setExplicit] = useState(!!initial),
     [retry, setRetry] = useState(false);
   const manual = useRef({ name: !!initial, runtime: !!initial }),
+    observedLogin = useRef(initial?.spec.github.account ?? ""),
     lock = useRef(false),
     alive = useRef(true),
     committed = useRef(false);
@@ -85,6 +86,27 @@ export default function CodeSetup({
           { signal: controller.signal },
         );
         const github = rows.find((a) => a.provider === "github")?.account ?? "";
+        if (controller.signal.aborted) return;
+        if (github !== observedLogin.current) {
+          if (observedLogin.current && !pending) {
+            set((old) => ({
+              ...old,
+              github: {
+                account: github,
+                owner: "",
+                repository: "",
+                branch: "",
+              },
+            }));
+            setBranches([]);
+            branchMore(1);
+          }
+          observedLogin.current = github;
+          if (repoPage !== 1) {
+            repoMore(1);
+            return;
+          }
+        }
         if (!github) {
           if (!controller.signal.aborted) {
             setLogin("");
@@ -119,7 +141,7 @@ export default function CodeSetup({
       }
     })();
     return () => controller.abort();
-  }, [repoPage, metadataEpoch]);
+  }, [repoPage, metadataEpoch, pending]);
   useEffect(() => {
     if (!spec.github.repository || !login) return;
     const controller = new AbortController();

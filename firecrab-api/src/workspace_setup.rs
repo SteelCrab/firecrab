@@ -291,10 +291,11 @@ async fn image_job(state: &AppState, request: RequestId, package: bool) -> Resul
             .await
             .map(|_| ())
         };
-        if let Err(error) = result {
-            if !tracker.is_running(IMAGE) && state.templates.resolve_alias(IMAGE).is_none() {
-                return Err(error);
-            }
+        if let Err(error) = result
+            && !tracker.is_running(IMAGE)
+            && state.templates.resolve_alias(IMAGE).is_none()
+        {
+            return Err(error);
         }
     }
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1800);
@@ -416,13 +417,13 @@ async fn run(state: &AppState, id: Uuid) -> Result<(), AppError> {
     job.progress.error = None;
     phase(state, &mut job, Phase::Image).await?;
     if state.templates.resolve_alias(IMAGE).is_none() {
-        if !state.image_installs.is_running(IMAGE) {
-            if !crate::image_install::staged_package_exists(
+        if !state.image_installs.is_running(IMAGE)
+            && !crate::image_install::staged_package_exists(
                 state.templates.image_root_path(),
                 IMAGE,
-            ) {
-                image_job(state, request, true).await?;
-            }
+            )
+        {
+            image_job(state, request, true).await?;
         }
         image_job(state, request, false).await?;
     }

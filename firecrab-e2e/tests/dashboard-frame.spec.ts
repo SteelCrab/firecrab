@@ -566,7 +566,7 @@ test.describe("dashboard frame", () => {
     });
     await expect(page.locator(".screen-title")).toHaveText("새 MicroVM");
     await expect(page.locator(".form-page > header p")).toHaveText(
-      "이미지와 사양을 고르면 몇 초 안에 시작합니다.",
+      "이미지와 사양을 선택하면 몇 초 안에 시작할 수 있습니다.",
     );
     await expect(page.locator(".form-section h3")).toHaveText([
       "기본 정보",
@@ -729,7 +729,7 @@ test.describe("dashboard frame", () => {
   }) => {
     await openDashboard(page, { vms: VMS, routes: { "/api/host": HOST } });
     const items = nav(page).locator(".sidebar-item");
-    await expect(items).toHaveCount(18); // one per VIEWS entry in src/navigation.ts
+    await expect(items).toHaveCount(19); // one per VIEWS entry in src/navigation.ts
     await expect(
       nav(page).getByRole("link", { name: "Stack", exact: true }),
     ).toHaveAttribute("href", "#/stacks");
@@ -997,10 +997,10 @@ test.describe("dashboard frame", () => {
     });
     const empty = page.locator("#vm-empty");
     await expect(empty.locator(".empty-state-title")).toHaveText(
-      "첫 MicroVM을 만든다",
+      "첫 MicroVM 만들기",
     );
     await expect(empty).toContainText(
-      "이미지와 사양을 고르면 몇 초 안에 시작한다.",
+      "이미지와 사양을 선택하면 몇 초 안에 시작할 수 있습니다.",
     );
     await expect(
       empty.getByRole("link", { name: "새 MicroVM" }),
@@ -1017,7 +1017,7 @@ test.describe("dashboard frame", () => {
     await expect(empty.locator(".empty-state-title")).toHaveText(
       "검색 결과 없음",
     );
-    await expect(empty).toContainText("조건에 맞는 MicroVM이 없다.");
+    await expect(empty).toContainText("조건에 맞는 MicroVM이 없습니다.");
     await expect(
       empty.getByRole("button", { name: "필터 초기화" }),
     ).toBeVisible();

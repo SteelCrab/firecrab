@@ -335,7 +335,7 @@ test.describe("list screens with a detail panel", () => {
     await expect(detail).not.toContainText("0 / 0 GiB");
     await expect(
       detail.getByRole("region", { name: "이 위치를 사용하는 MicroVM" }),
-    ).toContainText("이 위치를 사용하는 MicroVM이 아직 없다.");
+    ).toContainText("이 위치를 사용하는 MicroVM이 아직 없습니다.");
     await page.screenshot({
       path: "test-results/storage-role-ko.png",
       fullPage: true,
@@ -387,8 +387,8 @@ test.describe("list screens with a detail panel", () => {
       name: "저장 위치 등록",
       exact: true,
     });
-    await expect(form).toContainText("관리용 Linux VM 안의 경로를 입력한다.");
-    await expect(form).toContainText("폴더가 없으면 등록할 때 만든다.");
+    await expect(form).toContainText("관리용 Linux VM 안의 경로를 입력하세요.");
+    await expect(form).toContainText("폴더가 없으면 등록할 때 자동으로 만듭니다.");
     await form.getByLabel("이름", { exact: true }).fill("fast-ssd");
     const directory = form.getByLabel("호스트 폴더 경로", { exact: true });
     await expect(directory).toHaveAttribute("placeholder", "/mnt/ssd/firecrab");
