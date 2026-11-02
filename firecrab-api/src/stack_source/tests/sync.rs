@@ -144,14 +144,20 @@ async fn git_vm_checks_require_an_explicit_pin_and_never_follow_a_repointed_alia
         unchanged.latest.as_ref().unwrap().plan.as_ref().unwrap(),
         first_plan
     );
-    state
-        .templates
-        .register_spec(crate::templates::TemplateSpec {
-            boot_args: "changed".into(),
-            ..spec
-        })
-        .unwrap();
-    let replaced = run(&state, &github, SourceTrigger::Poll).await;
+    let changed_spec = crate::templates::TemplateSpec {
+        boot_args: "changed".into(),
+        ..spec
+    };
+    assert!(matches!(
+        state.templates.register_spec(changed_spec.clone()),
+        Err(crate::templates::TemplateError::ImmutableVersion(..))
+    ));
+    // An untrusted registry snapshot must also fail Git's independent pin check.
+    let mut changed_state = state.clone();
+    changed_state.templates = Arc::new(
+        crate::templates::TemplateRegistry::from_specs(root.path(), [changed_spec]).unwrap(),
+    );
+    let replaced = run(&changed_state, &github, SourceTrigger::Poll).await;
     assert_eq!(
         replaced.latest.as_ref().unwrap().state,
         GitCheckState::Blocked
