@@ -143,6 +143,41 @@ async fn iac_owner_browser_fixture() {
         .finish_stack_check(source_stack.id, &check, 2)
         .unwrap();
     let vm_proof = seed_vm_cleanup(&state, root.path());
+    // Deliberately nonresponsive TCP fixture: no PostgreSQL/MySQL server or SQL runs.
+    let database_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let database_input: crate::pipe_databases::DatabaseInput = serde_json::from_value(json!({
+        "name":"Native database recovery fixture", "provider":"local", "tlsMode":"disable", "writeEnabled":true,
+        "uri":format!("postgresql://fixture:private-fixture-credential@{}/iac_fixture",database_listener.local_addr().unwrap())
+    })).unwrap();
+    let database_id = Uuid::new_v4();
+    state
+        .store
+        .save_pipe_database(database_id, &database_input)
+        .unwrap();
+    let database_operation_id = Uuid::new_v4();
+    let crate::persistence::iac_database_operations::Admission::Ready(database_intent, true) =
+        state
+            .store
+            .begin_database_change(
+                database_operation_id,
+                crate::persistence::iac_database_operations::DatabaseChange::Update(
+                    database_id,
+                    database_input,
+                ),
+            )
+            .unwrap()
+    else {
+        panic!("database fixture must admit its own native operation")
+    };
+    // Inject the uncertain-after-checkpoint state. Never label it as live SQL evidence.
+    state
+        .store
+        .begin_database_connection_effects(&database_intent)
+        .unwrap();
+    state
+        .store
+        .fail_database_connection(&database_intent)
+        .unwrap();
     let router = build_router(
         state.clone(),
         &HttpConfig {
@@ -166,7 +201,7 @@ async fn iac_owner_browser_fixture() {
     });
     std::fs::write(&info,serde_json::to_vec_pretty(&json!({"url":url,"ownership":ownership,"ownerships":ownerships,"operationId":change.operation_id,"fixture":true,
         "nativeRecoveryProjectId":recovery_id,"nativeRecoveryWorkspace":recovery_workspace,"nativeRecoveryBorrowedFile":borrowed.join("keep.txt"),
-        "nativeSourceStackId":source_stack.id,"nativeSourceStackName":source_stack.name,"nativeSourceNetworkId":source_network,"volumeProof":volume_proof,"vmProof":vm_proof})).unwrap()).unwrap();
+        "nativeSourceStackId":source_stack.id,"nativeSourceStackName":source_stack.name,"nativeSourceNetworkId":source_network,"volumeProof":volume_proof,"vmProof":vm_proof,"databaseOperationId":database_operation_id,"databaseId":database_id,"databaseFixtureAddress":database_listener.local_addr().unwrap().to_string(),"databaseFixture":"nonresponsive local TCP endpoint; uncertain SQL checkpoint injected; no PostgreSQL/MySQL server or SQL execution"})).unwrap()).unwrap();
     let stop = info.with_extension("stop");
     let started = std::time::Instant::now();
     while !stop.exists() {
