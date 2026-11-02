@@ -173,8 +173,10 @@ export class FolderAgents {
     s.busy = true;
     s.error = "";
     this.host.changed();
+    let fresh = false;
     try {
       let d = this.document(t, n);
+      fresh = !d.skillInstall;
       if (
         d.skillInstall &&
         input &&
@@ -221,6 +223,7 @@ export class FolderAgents {
     } catch (error) {
       // A completed rejection plus an absent server record proves there was no install admission.
       if (
+        fresh &&
         error instanceof WorkspaceError &&
         error.status !== undefined &&
         error.status >= 400 &&
@@ -252,6 +255,17 @@ export class FolderAgents {
       s.busy = false;
       this.host.changed();
     }
+  }
+  discardSkillInstallDraft(t: Tab, n: Node) {
+    const s = this.get(t, n);
+    if (
+      s.busy ||
+      s.refreshing ||
+      !agentDocument(n, t.project) ||
+      !this.host.owned(t, n)
+    )
+      return;
+    this.store(t, n, { ...this.document(t, n), skillInstall: undefined });
   }
   async verify(t: Tab, n: Node) {
     const d = this.document(t, n),
@@ -380,6 +394,7 @@ export class FolderAgents {
     const s = this.get(t, n);
     if (s.busy || s.refreshing) return;
     let d = this.document(t, n);
+    const fresh = !d.pending;
     if (!d.pending) {
       if (
         !s.loaded ||
@@ -454,6 +469,26 @@ export class FolderAgents {
       this.accept(t, n, s, task, pending);
       await this.host.persist(t);
     } catch (error) {
+      // A fresh rejected admission may be edited; an earlier ambiguous request keeps its identity.
+      if (
+        fresh &&
+        error instanceof WorkspaceError &&
+        error.status !== undefined &&
+        [400, 404, 409, 422].includes(error.status) &&
+        this.valid(t, n, s)
+      ) {
+        try {
+          await this.api("GET", taskPath(pending.id));
+        } catch (lookup) {
+          if (
+            lookup instanceof WorkspaceError &&
+            lookup.status === 404 &&
+            this.valid(t, n, s) &&
+            this.document(t, n).pending?.id === pending.id
+          )
+            this.store(t, n, { ...this.document(t, n), pending: undefined });
+        }
+      }
       if (this.valid(t, n, s)) s.error = message(error);
     } finally {
       s.busy = false;

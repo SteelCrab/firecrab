@@ -72,6 +72,8 @@ pub struct Runtime {
     editor_launches: std::sync::Arc<tokio::sync::Semaphore>,
     /// Bound workbench HTTP/upgrade connections separately from project mutation workers.
     editor_connections: std::sync::Arc<tokio::sync::Semaphore>,
+    /// Bound official-source discovery and package downloads separately from native file workers.
+    skill_downloads: std::sync::Arc<tokio::sync::Semaphore>,
     /// One OS lock per project remains held for this service lifetime.
     services: std::sync::Mutex<std::collections::BTreeMap<Uuid, std::sync::Arc<db::OwnerLock>>>,
 }
@@ -82,6 +84,7 @@ impl Runtime {
             root,
             owner: Uuid::new_v4(),
             file_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
+            skill_downloads: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             terminal_projects: std::sync::Mutex::default(),
             terminal_wake: tokio::sync::Notify::new(),
             services: std::sync::Mutex::default(),

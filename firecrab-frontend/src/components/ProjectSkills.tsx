@@ -187,6 +187,23 @@ export default function ProjectSkills({
               {t("Retry saved installation", "저장된 설치 재시도")}
             </button>
           )}
+          {d.skillInstall && (
+            <div>
+              <button
+                type="button"
+                disabled={locked}
+                onClick={() => c.agents.discardSkillInstallDraft(tab, node)}
+              >
+                {t("Discard saved installation draft", "저장된 설치 초안 해제")}
+              </button>
+              <small>
+                {t(
+                  "This stops local retries. Project installations and any in-flight work remain retained.",
+                  "이 화면의 재시도만 해제한다. 프로젝트 설치 기록과 진행 중인 작업은 유지한다.",
+                )}
+              </small>
+            </div>
+          )}
           <h4>{t("Installed in project", "프로젝트 설치 목록")}</h4>
           {!rows.length && (
             <p>

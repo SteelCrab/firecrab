@@ -137,3 +137,24 @@ test('a definitive pre-admission installation rejection releases its saved draft
  const manager=new FolderAgents(f.host,api);await manager.installSkill(f.tab,f.node,{source:'openai',kind:'skill',path:'plugins/example/skills/review',revision:'a'.repeat(40)});
  assert.deepEqual(calls.map(c=>c.method),['PUT','GET']);assert.equal(calls[0].path,calls[1].path);assert.equal(agentDocument(f.node,f.project).skillInstall,undefined);
 });
+
+test('an installation retry after an earlier unknown outcome cannot forget its UUID on a later rejection',async()=>{
+ const f=fixture();await f.ready();let attempt=0;
+ const api=async(method)=>{if(method==='PUT')throw new WorkspaceError(++attempt===1?'Unknown result':'Rejected',attempt===1?503:400);throw new WorkspaceError('Missing',404);};
+ const manager=new FolderAgents(f.host,api);await manager.installSkill(f.tab,f.node,{source:'openai',kind:'skill',path:'plugins/example/skills/review',revision:'a'.repeat(40)});
+ const id=agentDocument(f.node,f.project).skillInstall.id;await manager.installSkill(f.tab,f.node);assert.equal(agentDocument(f.node,f.project).skillInstall.id,id);
+ manager.discardSkillInstallDraft(f.tab,f.node);assert.equal(agentDocument(f.node,f.project).skillInstall,undefined);assert.equal(attempt,2);
+});
+test('fresh rejected task admissions can change skills while ambiguous task retries keep their original IDs',async()=>{
+ for(const ambiguous of [false,true]){
+  const f=fixture();await f.ready();let attempt=0;const attempts=[];
+  const api=async(method,path,body)=>{
+   if(method==='PUT'&&path.includes('/tasks/')){attempts.push({path,body:structuredClone(body)});throw new WorkspaceError(ambiguous&&++attempt===1?'Unknown result':'Unavailable selected skill',ambiguous&&attempt===1?503:409);}
+   return f.api(method,path,body);
+  };
+  const manager=new FolderAgents(f.host,api);await manager.models(f.tab,f.node);await manager.refresh(f.tab,f.node);
+  await manager.submit(f.tab,f.node);
+  if(!ambiguous){assert.equal(agentDocument(f.node,f.project).pending,undefined);assert.equal(agentDocument(f.node,f.project).draft,'Update saved files');}
+  else{const pending=agentDocument(f.node,f.project).pending;await manager.submit(f.tab,f.node);assert.equal(agentDocument(f.node,f.project).pending.id,pending.id);assert.deepEqual(attempts[1],attempts[0]);}
+ }
+});

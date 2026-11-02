@@ -14,6 +14,10 @@ export function installCanvasSkillsFixture(fixture) {
  for(const source of ['openai','anthropic'])fixture.handlers.set('POST '+path+'/catalog/'+source,({send})=>{const catalog=catalogs.find(c=>c.source===source);catalog.entries=entries.filter(e=>e.source===source);catalog.revision=catalog.entries[0].revision;return send(200,catalog);});
  const inherited=fixture.matchHandler;
  fixture.matchHandler=({method,path:target})=>{
+  if(method==='PUT'&&target.startsWith(`/api/ai-sandbox/projects/${canvas.project}/tasks/`))return input=>{
+   if(input.body.selectedSkillIds?.some(id=>installations.get(id)?.status!=='installed'))return input.send(409,{error:{code:'workspace_conflict',message:'Fixture selected skill is unavailable'}});
+   return inherited({method,path:target})(input);
+  };
   if(target.startsWith(path+'/installations/'))return ({send,body})=>{
    const id=target.split('/').at(-1);let row=installations.get(id);
    if(method==='PUT'){

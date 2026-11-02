@@ -33,4 +33,8 @@ test('lost installation acknowledgements reuse the saved operation; removal reta
  await expect.poll(()=>canvas.installationAdmissions.length).toBe(2);assert.deepEqual(canvas.installationAdmissions[0],canvas.installationAdmissions[1]);assert.equal(canvas.installations.size,1);
  await page.getByRole('checkbox',{name:'Select skill Fixture review',exact:true}).check();await page.getByLabel('Agent request',{exact:true}).fill('Use fixture skill');await page.getByRole('button',{name:'Start file task',exact:true}).click();await expect(page.getByText('Fixture result. No model or VM executed.',{exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Remove skill Fixture review',exact:true}).click();await expect(page.locator('.cw-skill-selections')).toContainText('Inactive');assert.equal(canvas.tasks.size,1);assert.equal([...canvas.installations.values()][0].status,'removed');
+ await page.getByLabel('Agent request',{exact:true}).fill('Rejected removed skill request');await page.getByRole('button',{name:'Start file task',exact:true}).click();await expect(page.getByRole('alert')).toContainText('Fixture selected skill is unavailable');
+ await expect(page.getByRole('button',{name:'Deselect Fixture review',exact:true})).toBeEnabled();await page.getByRole('button',{name:'Deselect Fixture review',exact:true}).click();
+ await page.getByRole('button',{name:'Start file task',exact:true}).click();await expect.poll(()=>canvas.tasks.size).toBe(2);assert.equal(canvas.admissions[1].body.selectedSkillIds,undefined);
+
 });

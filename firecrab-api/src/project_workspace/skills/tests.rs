@@ -306,3 +306,61 @@ async fn retention_limits_preserve_existing_receipts_and_owner_fencing() {
         .unwrap();
     assert!(db.save_skill_record(&saved).is_err());
 }
+
+#[tokio::test]
+async fn source_capacity_blocks_new_downloads_without_blocking_retained_installation_retries() {
+    let (_dir, state, seed) = fixture().await;
+    bind(&state, &seed).await;
+    let b = binding(&state, seed.project_id).unwrap();
+    let db = open(&state, &b).unwrap();
+    let (entry, blobs) = package();
+    let saved = complete(
+        &db,
+        record(Uuid::new_v4(), Caller::default(), entry, blobs).unwrap(),
+    );
+    drop(db);
+    let permit = state
+        .workspaces
+        .skill_downloads
+        .clone()
+        .acquire_many_owned(2)
+        .await
+        .unwrap();
+    let busy = refresh(
+        State(state.clone()),
+        Extension(RequestId(Uuid::new_v4())),
+        Caller::default(),
+        Path((b.project_id, ProjectSkillSource::Openai)),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(busy.code(), "workspace_busy");
+    let entry = saved.public.entry;
+    let response = install(
+        State(state.clone()),
+        Extension(RequestId(Uuid::new_v4())),
+        Caller::default(),
+        Path((b.project_id, saved.public.id)),
+        ValidatedJson(InstallProjectSkill {
+            source: entry.source,
+            path: entry.path,
+            revision: entry.revision,
+            kind: entry.kind,
+        }),
+    )
+    .await
+    .unwrap()
+    .0;
+    assert_eq!(response.status, ProjectSkillStatus::Installed);
+    assert_eq!(response.id, saved.public.id);
+    drop(permit);
+    assert!(
+        state
+            .workspaces
+            .skill_downloads
+            .clone()
+            .try_acquire_many_owned(2)
+            .is_ok()
+    );
+}

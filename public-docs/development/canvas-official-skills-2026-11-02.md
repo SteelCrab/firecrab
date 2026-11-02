@@ -20,7 +20,11 @@ it is not counted as a passing reproduction.
 
 The external [Codecov patch check](https://app.codecov.io/gh/SteelCrab/firecrab/pull/562)
 is separate. Its threshold was not changed. Earlier head results do not qualify the
-new skill implementation until its own CI finishes.
+new skill implementation until its own CI finishes. The first skill delivery
+`ab6e85e963ae1f90b974fd70001459b5b47952b3` subsequently passed both
+[CI](https://github.com/SteelCrab/firecrab/actions/runs/41415570815) and
+[Release Build](https://github.com/SteelCrab/firecrab/actions/runs/41415570835).
+Its external Codecov patch check still failed. Follow-up changes require their own checks.
 
 ## Implemented behavior
 
@@ -43,8 +47,16 @@ new skill implementation until its own CI finishes.
   execution permissions are still checked before each model turn.
 - Removal disables future admissions while retaining accepted tasks, historical
   package files and immutable resource versions. It does not claim physical purge.
-- Private installation-request checkpoints survive ambiguous responses. Definite
-  pre-admission rejections release the draft only after an absent-record proof.
+- Private installation-request checkpoints survive ambiguous responses. A fresh,
+  definite pre-admission rejection releases the draft only after an absent-record
+  proof. Later retries after an unknown result retain the original UUID. Explicit
+  local draft discard leaves project installations and in-flight work retained.
+- Fresh task admission rejections can release their private pending selection only
+  after the exact task is proven absent. Earlier unknown requests retain their
+  original task/snapshot IDs and payload on later rejections.
+- Two source-download slots and total catalog/package deadlines bound public-source
+  requests. Cached completed retries and frozen-package recovery bypass these slots.
+  Installation document quotas count stored bytes, including multibyte metadata.
 
 The [operator/API/recovery guide](../guides/project-official-skills.md) describes
 bounds and semantics. Plugin apps, MCP servers, connectors, hooks and dependency
@@ -54,10 +66,10 @@ application. Script execution still requires explicit project shell capability.
 
 ## Local and source verification
 
-- Selected API/API-types regressions: **135 passed, 0 failed**. One explicit network
+- Selected API/API-types regressions: **136 passed, 0 failed**. One explicit network
   QA test is ignored in the offline selection and was run separately below.
 - API/API-types all-target Clippy with warnings denied: passed.
-- Agent request/reconnect/installation Node regressions: **16 passed, 0 failed**.
+- Agent request/reconnect/installation Node regressions: **18 passed, 0 failed**.
 - Frontend type/production build and lint passed. Existing unrelated warnings remain.
 - Documentation links, product versions, formatting and diff whitespace passed.
 - Actual official-source network QA: **1 passed, 0 failed**. OpenAI
@@ -71,13 +83,17 @@ application. Script execution still requires explicit project shell capability.
   immutable accepted resource reads, cross-project/reader denial and quota/owner fences.
 - Two hosted browser regressions cover explicit discovery, bundle filters,
   installation/selection, reload/model change, lost acknowledgements and removal.
-  CI retains their screenshots as an artifact for inspection.
+  The follow-up also checks recovery from a fresh task rejected for a removed skill.
+  CI retains their screenshots as an artifact for inspection. The first skill head
+  passed **145 frontend tests**; these results do not validate a later head.
 
 The local terminal returned `Unsupported terminal: this terminal cannot display graphics`
 when a dedicated verification browser was requested. The in-app browser control
 skill file is also absent from the installed bundle. No standalone local headless
 browser or unrelated user tab was used. Hosted UI verification and screenshots are
-required on the pushed head; their result must be checked separately.
+required on each pushed head; their result must be checked separately. The first
+skill head produced [hosted screenshots](https://github.com/SteelCrab/firecrab/actions/runs/41415570815/artifacts/13127906180).
+They display a synthetic controller and do not prove real workload/provider use.
 
 ## Remaining acceptance
 

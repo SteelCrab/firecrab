@@ -146,7 +146,7 @@ impl super::super::db::ProjectDb {
         record.validate()?;
         let json = serde_json::to_string(record)?;
         let (count, size): (i64, i64) = self.conn.query_row(
-            "SELECT count(*),COALESCE(sum(length(document)),0) FROM skill_installations",
+            "SELECT count(*),COALESCE(sum(length(CAST(document AS BLOB))),0) FROM skill_installations",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
@@ -156,7 +156,7 @@ impl super::super::db::ProjectDb {
             |r| r.get(0),
         )?;
         let previous: i64 = self.conn.query_row(
-            "SELECT COALESCE((SELECT length(document) FROM skill_installations WHERE id=?1),0)",
+            "SELECT COALESCE((SELECT length(CAST(document AS BLOB)) FROM skill_installations WHERE id=?1),0)",
             [record.public.id.to_string()],
             |r| r.get(0),
         )?;

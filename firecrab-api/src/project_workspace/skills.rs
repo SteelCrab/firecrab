@@ -68,9 +68,20 @@ async fn refresh(
 ) -> Result<Json<ProjectSkillCatalog>, AppError> {
     authorize(&state, caller, project, SandboxPermission::Read, r.0)?;
     authorize(&state, caller, project, SandboxPermission::Write, r.0)?;
-    let result = source::discover(source)
+    let download = state
+        .workspaces
+        .skill_downloads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| Error::Busy.response(r.0))?;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(60), source::discover(source))
         .await
+        .map_err(|_| {
+            Error::Conflict("Official catalog refresh timed out; previous catalog retained")
+                .response(r.0)
+        })?
         .map_err(|e| e.response(r.0))?;
+    drop(download);
     blocking(r.0, move || {
         let db = owned_db(&state, caller, project, true, r.0)?;
         db.save_skill_catalog(&result)?;
@@ -232,7 +243,22 @@ async fn install(
     let admitted = match cached {
         Some(saved) => saved,
         None => {
-            let (entry, blobs) = source::package(&input).await.map_err(|e| e.response(r.0))?;
+            let _download = state
+                .workspaces
+                .skill_downloads
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| Error::Busy.response(r.0))?;
+            let (entry, blobs) =
+                tokio::time::timeout(std::time::Duration::from_secs(120), source::package(&input))
+                    .await
+                    .map_err(|_| {
+                        Error::Conflict(
+                            "Official package download timed out before installation admission",
+                        )
+                        .response(r.0)
+                    })?
+                    .map_err(|e| e.response(r.0))?;
             record(id, caller, entry, blobs).map_err(|e| e.response(r.0))?
         }
     };

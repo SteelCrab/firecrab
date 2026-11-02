@@ -100,11 +100,21 @@ changes the record to `installed`. Interrupted packages stay `pending` and canno
 be selected. Resume uses frozen bytes and the original versioned write receipts.
 After VM restart, verify/reconcile the retained mount before resuming writes.
 
+A fresh installation or task request that is definitively rejected can release its
+private checkpoint after the server confirms the matching record is absent. A retry
+after an earlier unknown outcome retains its original request identity. The explicit
+installation draft discard clears only that private retry checkpoint. It does not
+cancel project work or remove shared installations.
+
 Remove disables future admissions atomically, including while the VM is stopped.
 It does not cancel already accepted tasks. Accepted tasks retain their exact rules
 and immutable resource-history versions. Installed/partial files, package bytes and
 write history stay retained for recovery and matched backups. Removal is not a disk
 purge. Retention/deletion maintenance remains an integrated #550 acceptance gate.
+
+At most two source downloads run concurrently. Catalog refresh is bounded to 60
+seconds; package download is bounded to 120 seconds before admission. Completed
+retries and frozen-package recovery do not consume source-download capacity.
 
 Downloads use fixed HTTPS hosts, reject redirects and partial Git trees, validate
 regular Git blob identities and reject selected symlinks/submodules. Packages are
