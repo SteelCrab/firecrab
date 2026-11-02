@@ -3,8 +3,11 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import time
 import urllib.request
 
@@ -15,11 +18,43 @@ def request(api, path, method="GET"):
         return json.load(response)
 
 
-def prepare(api, images, timeout):
+def stable_kernel(api):
     catalog = request(api, "/api/kernels")
     if not catalog or not re.fullmatch(r"[1-9][0-9]*\.[0-9]+(?:\.[0-9]+)?", catalog[0]["version"]):
         raise RuntimeError("kernel catalog did not return an upstream stable release")
-    version = catalog[0]["version"]
+    entry = catalog[0]
+    prefix = {"x86_64": "vmlinux", "aarch64": "Image"}.get(entry["architecture"])
+    if prefix is None or entry["image"] != f"{prefix}-{entry['version']}-{entry['architecture']}":
+        raise RuntimeError("unexpected kernel architecture or filename")
+    return entry
+
+
+def cache_key(api):
+    entry = stable_kernel(api)
+    root = Path(__file__).resolve().parent.parent
+    digest = hashlib.sha256()
+    for path in ("scripts/build-host-kernel.sh", "firecrab-api/src/oci/kernel.rs"):
+        digest.update((root / path).read_bytes())
+    for tool in ("cc", "ld"):
+        digest.update(subprocess.check_output([tool, "--version"]))
+    return f"guest-kernel-v1-{entry['architecture']}-{entry['version']}-{digest.hexdigest()}"
+
+
+def prepare(api, images, timeout, cache_directory=None):
+    selected = stable_kernel(api)
+    version = selected["version"]
+    directory = images.resolve() / ".oci/kernel" / selected["architecture"]
+    kernel = directory / selected["image"]
+    suffixes = ("", ".json", ".config")
+    if cache_directory is not None:
+        cached = [cache_directory / (kernel.name + suffix) for suffix in suffixes]
+        if all(path.is_file() and not path.is_symlink() for path in cached):
+            directory.mkdir(parents=True, exist_ok=True)
+            # The API runs as the image-root owner and must be able to rebuild a rejected cache.
+            owner = images.stat()
+            os.chown(directory, owner.st_uid, owner.st_gid)
+            for path, suffix in zip(cached, suffixes):
+                shutil.copyfile(path, Path(str(kernel) + suffix))
     install = "/api/kernels/stable/install"
     request(api, install, "POST")
     deadline = time.monotonic() + timeout
@@ -40,11 +75,9 @@ def prepare(api, images, timeout):
     entry = next((entry for entry in request(api, "/api/kernels") if entry["version"] == version), None)
     if not entry or not entry["installed"]:
         raise RuntimeError("completed stable kernel is not installed in the catalog")
-    architecture = entry["architecture"]
-    if architecture not in ("x86_64", "aarch64") or Path(entry["image"]).name != entry["image"]:
-        raise RuntimeError("unexpected kernel architecture or filename")
-    directory = images.resolve() / ".oci/kernel" / architecture
-    kernel = directory / entry["image"]
+    architecture = selected["architecture"]
+    if entry["architecture"] != architecture or entry["image"] != selected["image"]:
+        raise RuntimeError("completed kernel does not match the selected architecture and image")
     if not kernel.resolve().is_relative_to(directory):
         raise RuntimeError("kernel image escapes its architecture cache")
     receipt = json.loads(Path(str(kernel) + ".json").read_text())
@@ -56,6 +89,12 @@ def prepare(api, images, timeout):
             digest.update(chunk)
     if digest.hexdigest() != entry["imageSha256"] or digest.hexdigest() != receipt["image_sha256"]:
         raise RuntimeError("kernel image digest does not match its catalog and receipt")
+    if cache_directory is not None:
+        cache_directory.mkdir(parents=True, exist_ok=True)
+        for suffix in suffixes:
+            destination = cache_directory / (kernel.name + suffix)
+            destination.unlink(missing_ok=True)
+            shutil.copyfile(Path(str(kernel) + suffix), destination)
     return {
         "version": version,
         "architecture": architecture,
@@ -70,12 +109,18 @@ def main():
     parser.add_argument("--api", default="http://127.0.0.1:5523")
     parser.add_argument("--images", type=Path, default=Path("/var/lib/firecrab/images"))
     parser.add_argument("--timeout", type=float, default=1800)
-    parser.add_argument("--output", type=Path, required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--output", type=Path)
+    mode.add_argument("--cache-key", action="store_true")
+    parser.add_argument("--cache-directory", type=Path)
     parser.add_argument("--github-env", type=Path)
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
-    result = prepare(args.api, args.images, args.timeout)
+    if args.cache_key:
+        print(cache_key(args.api))
+        return
+    result = prepare(args.api, args.images, args.timeout, args.cache_directory)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     if args.github_env:
