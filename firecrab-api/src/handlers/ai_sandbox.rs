@@ -514,6 +514,32 @@ pub async fn delete_project(
     Ok(Json(json!({"deleted":true})))
 }
 
+/// List only connection metadata that this verified caller can use for Sandbox tasks.
+pub async fn connections(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    caller: Caller,
+) -> Result<Json<Vec<AiConnection>>, AppError> {
+    let store = state.store.clone();
+    let saved = db(id, move || store.ai_connections()).await?;
+    let mut visible = Vec::new();
+    for saved in saved {
+        let resource = SandboxResource::Connection {
+            id: saved.connection.id,
+        };
+        if caller
+            .allowed(&state, &resource, SandboxPermission::Read)
+            .map_err(|_| AppError::internal(id.0))?
+            && caller
+                .allowed(&state, &resource, SandboxPermission::Execute)
+                .map_err(|_| AppError::internal(id.0))?
+        {
+            visible.push(saved.connection);
+        }
+    }
+    Ok(Json(visible))
+}
+
 /// Discover available models without treating catalogue membership as inference proof.
 #[derive(serde::Deserialize, Default)]
 pub struct Discovery {

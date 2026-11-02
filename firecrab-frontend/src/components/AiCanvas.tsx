@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
+  Bot,
   ArrowLeft,
   ArrowUpLeft,
   CopyPlus,
@@ -31,9 +32,12 @@ import { canvasPanes } from "../canvas-panes.js";
 import { terminalSessions } from "../canvas/terminals";
 import type { Tab, Node as CanvasNode } from "../canvas/types";
 import "../styles/ai-canvas.css";
+import CanvasAgent from "./CanvasAgent";
+import { agentDocument } from "../canvas/agent-types";
 
 type Props = { onUnsavedChange: (dirty: boolean) => void };
 const panelIcons = {
+  agent: Bot,
   folder: Folder,
   terminal: SquareTerminal,
   note: StickyNote,
@@ -279,6 +283,12 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
               "AGENTS.md",
               false,
               FileText,
+            )}
+            {button(
+              () => c.createAgent(tab),
+              t("Folder agent", "폴더 에이전트"),
+              false,
+              Bot,
             )}
             <h3>{t("Workspace", "작업 공간")}</h3>
             {button(
@@ -576,6 +586,12 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
                     false,
                     StickyNote,
                   )}
+                  {button(
+                    () => c.createAgent(tab),
+                    t("Agent", "에이전트"),
+                    false,
+                    Bot,
+                  )}
                   <span>{Math.round(tab.layout.zoom * 100)}%</span>
                   {button(
                     () => {
@@ -610,7 +626,10 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
                     )}
                   </strong>
                 </div>
-                <div id="cw-editor-slot" />
+                <div className="cw-editor-content">
+                  <div id="cw-editor-slot" />
+                  {tab.editor && <EditorAgents key={tab.id} tab={tab} />}
+                </div>
               </section>
             </>
           )}
@@ -619,12 +638,62 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
     </div>
   );
 }
+function EditorAgents({ tab }: { tab: Tab }) {
+  "use no memo";
+  const { t } = useI18n();
+  const [selected, setSelected] = useState("");
+  const nodes = tab.layout.nodes.filter((n) => n.kind === "agent");
+  const node = nodes.find((n) => n.id === selected) || nodes.at(-1);
+  return (
+    <aside
+      className="cw-editor-agents"
+      aria-label={t("Editor folder agents", "에디터 폴더 에이전트")}
+    >
+      <div className="cw-editor-agent-picker">
+        <Bot size={16} aria-hidden="true" />
+        <select
+          aria-label={t("Folder agent sessions", "폴더 에이전트 세션 목록")}
+          value={node?.id || ""}
+          onChange={(e) => setSelected(e.target.value)}
+        >
+          {!nodes.length && (
+            <option value="">{t("No sessions", "세션 없음")}</option>
+          )}
+          {nodes.map((n, i) => (
+            <option key={n.id} value={n.id}>
+              {t("Session", "세션")} {i + 1} · /
+              {agentDocument(n, tab.project)?.directory || ""}
+            </option>
+          ))}
+        </select>
+        {button(
+          () => c.createAgent(tab),
+          t("New folder agent", "새 폴더 에이전트"),
+          false,
+          Plus,
+        )}
+      </div>
+      {node ? (
+        <CanvasAgent key={node.id} tab={tab} node={node} />
+      ) : (
+        <p className="cw-agent-empty">
+          {t(
+            "Add a session to work on this folder with ChatGPT or Claude.",
+            "세션을 추가하면 ChatGPT 또는 Claude로 이 폴더에서 작업할 수 있다.",
+          )}
+        </p>
+      )}
+    </aside>
+  );
+}
+
 function CanvasCard({ tab, node }: { tab: Tab; node: CanvasNode }) {
   "use no memo";
   const { t } = useI18n();
   const session = terminalSessions.get(tab.project, node.id, tab.id);
   const Icon = panelIcons[node.kind];
   const names = {
+    agent: t("Folder agent", "폴더 에이전트"),
     folder: t("Shared folder", "공용 작업 폴더"),
     terminal: t("Terminal", "터미널"),
     note: t("Private note", "개인 메모"),
@@ -650,7 +719,14 @@ function CanvasCard({ tab, node }: { tab: Tab; node: CanvasNode }) {
         </div>
         <button
           type="button"
-          aria-label={t("Remove panel", "패널 제거")}
+          aria-label={
+            node.kind === "agent"
+              ? t(
+                  "Close agent panel, keep task",
+                  "에이전트 패널만 닫기, 작업 유지",
+                )
+              : t("Remove panel", "패널 제거")
+          }
           onClick={() => c.remove(tab, node.id)}
         >
           <X size={14} aria-hidden="true" />
@@ -725,6 +801,9 @@ function CanvasCard({ tab, node }: { tab: Tab; node: CanvasNode }) {
               <span>{session?.error}</span>
             </footer>
           </>
+        )}
+        {node.kind === "agent" && !tab.editor && (
+          <CanvasAgent tab={tab} node={node} />
         )}
         {node.kind === "history" && <HistoryCard tab={tab} />}
       </div>

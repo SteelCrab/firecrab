@@ -1,7 +1,7 @@
 export type Identity = { id: string; project: string };
 export type Node = {
   id: string;
-  kind: "folder" | "note" | "history" | "terminal";
+  kind: "folder" | "note" | "history" | "terminal" | "agent";
   x: number;
   y: number;
   width: number;
@@ -156,7 +156,7 @@ export function validLayout(value: Layout): boolean {
     typeof value.directory === "string" &&
     value.nodes.every(
       (n) =>
-        ["folder", "note", "history", "terminal"].includes(n.kind) &&
+        ["folder", "note", "history", "terminal", "agent"].includes(n.kind) &&
         Number.isFinite(n.x) &&
         Number.isFinite(n.y) &&
         n.width >= 240 &&

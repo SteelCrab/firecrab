@@ -15,6 +15,8 @@ import {
 import { request, message, WorkspaceError } from "./request";
 import { openEditor, detachEditor, keepEditor } from "./editor";
 import { history, operations, compare, restore, reconcile } from "./history";
+import { FolderAgents } from "./agents";
+import { pause } from "./request";
 import { terminalSessions } from "./terminals";
 
 export class CanvasController {
@@ -36,6 +38,42 @@ export class CanvasController {
     this.version++;
     for (const fn of this.listeners) fn();
   };
+  agents = new FolderAgents({
+    edit: (t) => this.edit(t),
+    changed: () => this.changed(),
+    persist: (t) => this.flush(t),
+    owned: (t, n) => this.tabs.includes(t) && t.layout.nodes.includes(n),
+  });
+  async flush(t: Tab) {
+    const target = t.changed,
+      deadline = Date.now() + 30000;
+    while (t.saved < target || t.pending) {
+      if (!this.tabs.includes(t) || Date.now() > deadline)
+        throw new Error(
+          "Confirm the private canvas save before dispatching this request",
+        );
+      if (t.saving) {
+        await pause(50);
+        continue;
+      }
+      await this.save(t);
+      if (t.error) throw new Error(t.error);
+    }
+  }
+  createAgent(t: Tab) {
+    const id = crypto.randomUUID();
+    this.add(
+      t,
+      "agent",
+      id,
+      JSON.stringify({
+        schema: 1,
+        project: t.project,
+        directory: t.layout.directory,
+        draft: "",
+      }),
+    );
+  }
   current = () => this.tabs.find((t) => t.id === this.active);
   dirty = () => this.tabs.some((t) => t.changed !== t.saved || !!t.pending);
   remember() {
@@ -291,6 +329,7 @@ export class CanvasController {
     if (t.error) return;
     t.closing = undefined;
     if (kind === "tab") {
+      this.agents.forget(t);
       this.tabs = this.tabs.filter((item) => item !== t);
       if (this.active === t.id) this.active = this.tabs[0]?.id || "";
       if (!this.tabs.length) this.newCanvas();
@@ -378,13 +417,14 @@ export class CanvasController {
       content,
       x: 40 + (n % 2) * 640,
       y: 40 + Math.floor(n / 2) * 420,
-      width: kind === "terminal" ? 600 : 380,
-      height: kind === "terminal" ? 380 : 330,
+      width: kind === "agent" ? 540 : kind === "terminal" ? 600 : 380,
+      height: kind === "agent" ? 620 : kind === "terminal" ? 380 : 330,
     });
     this.edit(t);
     if (kind === "history") void this.history(t);
   }
   remove(t: Tab, id: string) {
+    this.agents.forget(t, id);
     t.layout.nodes = t.layout.nodes.filter((n) => n.id !== id);
     this.edit(t);
   }

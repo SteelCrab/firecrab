@@ -284,3 +284,55 @@ async fn folder_session_endpoint_uses_transport_identity_and_needs_no_host_sourc
             .is_err()
     );
 }
+#[tokio::test]
+async fn folder_model_connections_expose_only_executable_metadata_without_credentials() {
+    use crate::{handlers::ai_sandbox::connections, server::RequestId};
+    use axum::{Extension, extract::State};
+    let (_dir, state, _saved) = super::super::recovery_tests::fixture().await;
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    for id in [first, second] {
+        let account:SavedConnection=serde_json::from_value(json!({"api_key":"fake-private-account-key","connection":{"id":id,"name":"fixture","provider":"openai","endpoint":"https://example.invalid","models":[],"streaming":false,"toolCalls":true}})).unwrap();
+        state.store.save_ai_connection(&account).unwrap();
+    }
+    let host = Uuid::new_v4();
+    let caller: access::Caller =
+        serde_json::from_value(json!({"principal":SandboxPrincipal::Host(host),"operator":false}))
+            .unwrap();
+    let mut policy = SandboxAccessPolicy {
+        grants: vec![
+            SandboxResourceGrant {
+                resource: SandboxResource::Connection { id: first },
+                permissions: vec![SandboxPermission::Read, SandboxPermission::Execute],
+            },
+            SandboxResourceGrant {
+                resource: SandboxResource::Connection { id: second },
+                permissions: vec![SandboxPermission::Read],
+            },
+        ],
+    };
+    state.store.save_sandbox_access(host, &policy).unwrap();
+    let response = connections(
+        State(state.clone()),
+        Extension(RequestId(Uuid::new_v4())),
+        caller,
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.0.len(), 1);
+    assert_eq!(response.0[0].id, first);
+    assert!(
+        !serde_json::to_string(&response.0)
+            .unwrap()
+            .contains("fake-private-account-key")
+    );
+    policy.grants[0].permissions.pop();
+    state.store.save_sandbox_access(host, &policy).unwrap();
+    assert!(
+        connections(State(state), Extension(RequestId(Uuid::new_v4())), caller)
+            .await
+            .unwrap()
+            .0
+            .is_empty()
+    );
+}

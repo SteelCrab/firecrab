@@ -104,3 +104,36 @@ retention, boot/generation fencing, grants, caller-scoped context, path restrict
 credential redaction and unsupported command dispatch. These tests do not establish a
 live ChatGPT/Claude execution or Linux/KVM folder-agent acceptance. Those checks require
 a configured provider and runtime environment and remain open.
+
+## Canvas and Personal Page sessions
+
+Open a project in AI Canvas and select **Folder agent** in the navigator. The new
+session binds to the folder currently selected in that canvas. Changing the
+navigator folder does not retarget an existing session. The Personal Page shows
+the same sessions beside Web VS Code, with a session selector and an explicit
+new-session action. Switching views keeps the private request draft.
+
+Choose a connected ChatGPT/OpenAI or Claude model explicitly. The selector reads
+caller-authorized account metadata and existing model proofs. Loading the page
+does not probe providers. Refreshing the catalog and verifying tool support are
+explicit actions. An unavailable or unverified saved selection never falls back
+to another connection or model. Configure accounts in **Pipe → AI**.
+
+Before dispatch, the private canvas saves the exact task UUID, snapshot UUID,
+model and request. A failed save cannot capture rules or start a task. After a
+lost response, reopening probes the original task UUID. An explicit retry uses
+the same IDs and body. It does not create a replacement task. Task records remain
+authoritative in the existing Sandbox store, including after project-DB migration.
+
+Requests use saved `AGENTS.md` snapshots, not private editor buffers. Inspect a
+task to see the captured rule-file versions and confirmed file mutations. Version
+links open the existing append-only file history. Earlier tasks retain their
+original model, rules and result after the session's model changes.
+
+Closing a panel removes its private visual attachment. It does not cancel server
+work. Use **Cancel task** to cancel active work. **Check saved receipts** reconciles
+an interrupted file task without replaying writes. Reopen the retained private
+canvas to retrieve its session. A new blank canvas has no inherited sessions.
+
+This profile currently supports bounded file operations. Shell commands, official
+skill installation and real provider/native-runtime acceptance remain pending.

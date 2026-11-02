@@ -73,8 +73,8 @@ in #414 and #496. Complete each phase's exit criterion before its dependent work
 
 Saved instruction selection is implemented for the existing Sandbox engine.
 An explicit [retained-folder file profile](../guides/sandbox-folder-file-agents.md)
-adds versioned reads and writes in the project volume. Shell execution, the full
-folder-agent session UI and live model acceptance remain pending. This partial
+adds versioned reads and writes in the project volume. The Canvas and Personal Page session UI is implemented. Shell execution and
+live model acceptance remain pending. This partial
 integration does not satisfy Phase 5's full exit criterion.
 
 ### 6. Official-source skill catalog and installation
@@ -210,5 +210,5 @@ host context. Per-write before/after provenance is retained in `folderMutations`
 Uncertain effects reuse the canonical Sandbox pending fence; reconciliation observes
 receipts without reapplying writes. Provider history is scoped to caller, directory
 and assigned agent. See the [API contract and validation limits](../guides/sandbox-folder-file-agents.md).
-Full folder shell execution, the agent session UI and live provider/runtime acceptance
-remain pending. This does not complete the folder-agent stage.
+The Canvas and Personal Page session UI is implemented. Full folder shell
+execution and live provider/runtime acceptance remain pending. This does not complete the folder-agent stage.

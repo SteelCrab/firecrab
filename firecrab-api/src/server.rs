@@ -854,6 +854,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
                 .delete(handlers::ai_sandbox::delete_project),
         )
         .route(
+            "/api/ai-sandbox/connections",
+            get(handlers::ai_sandbox::connections),
+        )
+        .route(
             "/api/ai-sandbox/connections/{id}/models",
             get(handlers::ai_sandbox::models),
         )
