@@ -537,7 +537,19 @@ async fn wait_for_phase(state: &AppState, id: Uuid, want: ServicePhase) -> Micro
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("deployment never reached {want:?}"))
+    .unwrap_or_else(|_| {
+        let latest=state.store.service_deployment(id).unwrap();
+        let diagnostic=latest.as_ref().map(|record|{
+            let replicas=record.instances.iter().map(|instance|{
+                let resource=firecrab_stack::ManagedResource{kind:"vm".into(),id:instance.vm_id.to_string()};
+                let operations=state.store.iac_native_operations(&resource).unwrap();
+                let current=state.vms.lock().unwrap().get(&instance.vm_id).map(|vm|vm.state);
+                (instance.vm_id,current,operations)
+            }).collect::<Vec<_>>();
+            (record.phase,record.error.as_deref(),replicas)
+        });
+        panic!("deployment never reached {want:?}; latest phase, redacted error and replica/native states: {diagnostic:?}")
+    })
 }
 
 /// Serve one single-platform manifest at `/v2/app/manifests/v1` and return the
