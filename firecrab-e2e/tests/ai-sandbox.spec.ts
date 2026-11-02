@@ -80,7 +80,7 @@ for (const locale of ["en", "ko"] as const)
       ).toBeVisible();
       await expect(
         page.getByRole("combobox", { name: "MicroVM", exact: true }),
-      ).toBeVisible();
+      ).toHaveValue("");
       await expect(
         page.getByRole("heading", {
           name:
@@ -90,6 +90,12 @@ for (const locale of ["en", "ko"] as const)
           exact: true,
         }),
       ).toBeVisible();
+      await expect(
+        page.getByRole("button", {
+          name: locale === "ko" ? "작업 공간 만들기" : "Create workspace",
+          exact: true,
+        }),
+      ).toBeEnabled();
       await expect(
         page.getByRole("button", {
           name: locale === "ko" ? "새 MicroVM" : "New MicroVM",

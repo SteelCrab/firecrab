@@ -60,4 +60,5 @@ test("CODE fixtures run with dashboard tests and stay out of real guest boot", (
   }
   for (const spec of ["microregistry-register", "network-ipv6", "oci-dhcp-boot", "oci-image-import", "pipe-registries-live", "pools"])
     assert.ok(guest.includes(`${spec}.spec.ts:`), `${spec} must keep its guest coverage`);
+  assert.match(guest, /moves the stopped guest to another network and boots with its new DHCP address/);
 });

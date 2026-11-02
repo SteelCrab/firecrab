@@ -66,7 +66,7 @@ Success returns `201` and the VM UUID.
 | `cpu` | 1–32 vCPUs |
 | `ram` | Power of two, 128–32768 MiB |
 | `diskGb` | Image minimum through 500 GiB; grow only |
-| `microNetworkId` | Existing network UUID, required |
+| `microNetworkId` | Existing network UUID; required on create, optional on PUT; PUT omission preserves it and null is rejected |
 | `securityGroupId` | Optional group UUID from the same IPv4-only network; PUT omission preserves it, null detaches it |
 | `egressPolicy` | `internet` or `isolated` |
 | `storageRoot` | Optional registered storage ID |
@@ -79,6 +79,21 @@ Values are stored in plaintext in the guest.
 Updating `env` while running restarts the app service; images without one ignore runtime environment changes.
 See [Guest runtime](guest-runtime.md#environment).
 CPU, RAM, disk, and egress edits require `created`, `stopped`, or `error`.
+
+### Change a VM's MicroNetwork
+
+Send `microNetworkId` in `PUT /api/vms/{id}` with the current CPU, RAM, disk, and egress values.
+A different UUID requires an inactive VM with no surviving runtime; otherwise the response is `409`.
+Service-owned replicas and pool-managed VMs also return `409` for direct network changes.
+An unchanged UUID does not rotate the lease and can accompany an otherwise valid running environment update.
+Unknown networks and exhausted destination subnets return `400` with a `microNetworkId` field error.
+An incompatible retained security group returns a `securityGroupId` field error; choose a destination group or explicitly send `securityGroupId: null`.
+
+The VM record and replacement lease commit together; allocation or storage failure preserves both previous values.
+The next start uses the destination bridge and address; PUT does not attach a live TAP.
+If DHCP synchronization fails after commit, `503` explicitly reports that the change was saved.
+Read the VM to confirm its network; starting it retries synchronization.
+See [network changes](../guides/networking.md#change-a-vms-network) for a request example.
 
 ### VM states and console
 
