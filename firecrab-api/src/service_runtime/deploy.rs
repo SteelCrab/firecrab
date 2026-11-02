@@ -453,10 +453,11 @@ async fn accept(
             Some(crate::persistence::iac_auto_deploy::DeploymentAuthority::Automatic(watch.clone()))
         }
         Writer::Ci(_) => None,
-        Writer::Stack(_) => Some(
-            crate::persistence::iac_auto_deploy::DeploymentAuthority::Manual(Box::new(
-                policy_authority,
-            )),
+        Writer::Stack(operation) => Some(
+            crate::persistence::iac_auto_deploy::DeploymentAuthority::Manual(
+                Box::new(policy_authority),
+                *operation,
+            ),
         ),
     };
     let admission = match writer {

@@ -14,7 +14,7 @@ pub(crate) struct Authority {
 }
 
 pub(crate) enum DeploymentAuthority {
-    Manual(Box<Authority>),
+    Manual(Box<Authority>, Option<Uuid>),
     Automatic(Box<auto_deploy::Watch>),
 }
 

@@ -224,6 +224,9 @@ impl Store {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         super::iac_auto_deploy::compare(&tx, service.id, expected)?;
+        if !super::stacks::service_mutation_allowed(&tx, service.id, None)? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
         if read(&tx, service.id)?.map(|w| w.generation) != expected_watch {
             return Err(PersistenceError::StaleIacOwner);
         }

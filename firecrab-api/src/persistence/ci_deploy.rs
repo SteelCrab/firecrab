@@ -64,6 +64,13 @@ pub(super) fn admit(
     deployment: &MicroServiceDeployment,
     admission: &Admission,
 ) -> Result<(), PersistenceError> {
+    super::iac_native::ensure_idle(
+        conn,
+        &firecrab_stack::ManagedResource {
+            kind: "service".into(),
+            id: deployment.service_id.to_string(),
+        },
+    )?;
     let token = token(conn, admission.token_id)?
         .ok_or(PersistenceError::CiDeployUnauthorized)?
         .metadata;

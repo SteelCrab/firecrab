@@ -33,6 +33,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Recheck saved database connection authority before committing credential changes.
+  Validate service configuration/delete writers inside SQLite, retain private
+  Stack step identity and reject late callbacks after their operation finishes (#548).
+
 - Separate automatic deployment policy ownership from service configuration.
   Preserve watcher state during transfer, reject stale registry observations and
   recheck private image-writer authority when committing deployment admission.

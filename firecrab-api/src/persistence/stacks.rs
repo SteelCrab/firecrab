@@ -25,6 +25,60 @@ CREATE TABLE IF NOT EXISTS stack_bindings (
     UNIQUE (kind, resource_id)
 ) STRICT;";
 
+/// The same writer fence is checked in HTTP preflight and the actual SQLite commit.
+pub(super) fn service_mutation_allowed(
+    conn: &Connection,
+    service: Uuid,
+    operation: Option<Uuid>,
+) -> Result<bool, PersistenceError> {
+    super::iac_native::ensure_idle(
+        conn,
+        &firecrab_stack::ManagedResource {
+            kind: "service".into(),
+            id: service.to_string(),
+        },
+    )?;
+    if super::iac_owners::terraform_owned(conn, "service", service)? {
+        return Ok(false);
+    }
+    let owner: Option<String> = conn
+        .query_row(
+            "SELECT stack_id FROM stack_bindings WHERE kind='service' AND resource_id=?1",
+            [service.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(owner) = owner else {
+        return Ok(operation.is_none());
+    };
+    let git: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM stack_git_sources WHERE stack_id=?1)",
+        [&owner],
+        |r| r.get(0),
+    )?;
+    let active: Option<String> = conn
+        .query_row(
+            "SELECT status FROM stack_applies WHERE stack_id=?1 AND state IN ('queued','running')",
+            [&owner],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if !git && active.is_none() {
+        return Ok(operation.is_none());
+    }
+    let Some(active) = active else {
+        return Ok(false);
+    };
+    let status: firecrab_stack::ApplyStatus =
+        serde_json::from_str(&active).map_err(|_| PersistenceError::StackApplyIdentity)?;
+    Ok(operation == Some(status.operation_id)
+        && status.changes.iter().any(|step| {
+            step.change.kind == ResourceKind::Service
+                && step.change.resource_id == Some(service)
+                && step.state == firecrab_stack::StepState::Running
+        }))
+}
+
 impl Store {
     /// Active applies protect existing bindings and prospective replacement IDs.
     /// Terminal reservations stay inspectable but must not block later edits.
@@ -83,43 +137,7 @@ impl Store {
         service: Uuid,
         operation: Option<Uuid>,
     ) -> Result<bool, PersistenceError> {
-        let conn = self.lock();
-        if super::iac_owners::terraform_owned(&conn, "service", service)? {
-            return Ok(false);
-        }
-        let owner: Option<String> = conn
-            .query_row(
-                "SELECT stack_id FROM stack_bindings WHERE kind='service' AND resource_id=?1",
-                [service.to_string()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let Some(owner) = owner else {
-            return Ok(true);
-        };
-        let git: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM stack_git_sources WHERE stack_id=?1)",
-            [&owner],
-            |r| r.get(0),
-        )?;
-        let active: Option<String> = conn.query_row(
-            "SELECT status FROM stack_applies WHERE stack_id=?1 AND state IN ('queued','running')",
-            [&owner], |r| r.get(0),
-        ).optional()?;
-        if !git && active.is_none() {
-            return Ok(true);
-        }
-        let Some(active) = active else {
-            return Ok(false);
-        };
-        let status: firecrab_stack::ApplyStatus =
-            serde_json::from_str(&active).map_err(|_| PersistenceError::StackApplyIdentity)?;
-        Ok(operation == Some(status.operation_id)
-            && status.changes.iter().any(|step| {
-                step.change.kind == ResourceKind::Service
-                    && step.change.resource_id == Some(service)
-                    && step.state == firecrab_stack::StepState::Running
-            }))
+        service_mutation_allowed(&self.lock(), service, operation)
     }
 
     /// Delete empty metadata atomically. Never release bindings or delete host resources.

@@ -737,3 +737,47 @@ async fn resubmission_uses_original_inputs_and_ownership_changes_fence_atomic_ad
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn iac_ci_deploy_cannot_admit_new_replicas_during_original_vm_cleanup() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, mut previous, operator, _) = fixture(root.path()).await;
+    let created = issue(&operator, previous.service_id).await;
+    let network =
+        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
+    let mut vm = crate::handlers::vms::test_support::record("cleanup", Uuid::new_v4());
+    vm.micro_network_id = network;
+    state.store.insert(&vm).unwrap();
+    previous.instances.push(serde_json::from_value(json!({"vmId":vm.id,"ipv4":"172.30.0.2","hostPort":0,"state":"stopped","healthy":false})).unwrap());
+    state.store.save_service_deployment(&previous).unwrap();
+    let intent = state
+        .store
+        .begin_native_vm_delete(&vm, Uuid::new_v4(), true)
+        .unwrap();
+    let body = request(&previous);
+    let record = queued(&previous, &body);
+    let admission = Admission {
+        token_id: created.credential.id,
+        request: body,
+    };
+    assert!(matches!(
+        state.store.save_ci_deployment(&record, &admission),
+        Err(crate::persistence::PersistenceError::IacResourceBusy)
+    ));
+    assert!(state.store.service_attempt(record.id).unwrap().is_none());
+    assert!(
+        state
+            .store
+            .ci_request(previous.service_id, admission.token_id, record.id)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        state
+            .store
+            .iac_native_operation(intent.operation.operation_id)
+            .unwrap()
+            .unwrap(),
+        intent.operation
+    );
+}

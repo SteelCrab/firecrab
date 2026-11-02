@@ -163,7 +163,7 @@ async fn iac_auto_deploy_late_observation_and_policy_save_cannot_cross_release_r
     assert!(matches!(
         state
             .store
-            .update_micro_service_checked(&record, &authority),
+            .update_micro_service_checked(&record, &authority, None),
         Err(PersistenceError::StaleIacOwner)
     ));
     assert_eq!(

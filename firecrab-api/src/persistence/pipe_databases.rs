@@ -12,19 +12,64 @@ pub(super) const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS pipe_datab
 ) STRICT";
 
 impl Store {
+    /// Capture authority before remote connection verification or namespace setup.
+    pub(crate) fn pipe_database_write_authority(
+        &self,
+        id: Uuid,
+    ) -> Result<firecrab_stack::ResourceOwnership, PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let resource = firecrab_stack::ManagedResource {
+            kind: "database_connection".into(),
+            id: id.to_string(),
+        };
+        if !super::iac_owners::public_write_allowed(&tx, &resource)? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        let snapshot = super::iac_owners::read(&tx, &resource)?;
+        tx.commit()?;
+        Ok(snapshot)
+    }
+
+    #[cfg(test)]
     pub fn update_pipe_database(
         &self,
         id: Uuid,
         input: &DatabaseInput,
     ) -> Result<bool, PersistenceError> {
+        let authority = self.pipe_database_write_authority(id)?;
+        self.update_pipe_database_checked(id, input, &authority)
+    }
+
+    /// Late validation cannot replace credentials after an ownership release/reclaim.
+    pub(crate) fn update_pipe_database_checked(
+        &self,
+        id: Uuid,
+        input: &DatabaseInput,
+        expected: &firecrab_stack::ResourceOwnership,
+    ) -> Result<bool, PersistenceError> {
         let spec = serde_json::to_string(input).map_err(|_| PersistenceError::CorruptRecord {
             id: id.to_string(),
             reason: "invalid database configuration".into(),
         })?;
-        Ok(self.lock().execute(
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let resource = firecrab_stack::ManagedResource {
+            kind: "database_connection".into(),
+            id: id.to_string(),
+        };
+        if super::iac_owners::read(&tx, &resource)? != *expected {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+        if !super::iac_owners::public_write_allowed(&tx, &resource)? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        let changed = tx.execute(
             "UPDATE pipe_databases SET spec=?2 WHERE id=?1",
             params![id.to_string(), spec],
-        )? != 0)
+        )?;
+        tx.commit()?;
+        Ok(changed != 0)
     }
     /// Return all saved connection inputs in insertion order.
     pub fn list_pipe_databases(&self) -> Result<Vec<DatabaseRecord>, PersistenceError> {

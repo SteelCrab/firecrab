@@ -121,7 +121,7 @@ pub(crate) async fn update_from_stack(
     let changed = database(request_id.0, move || {
         state
             .store
-            .update_micro_service_checked(&record, &policy_authority)
+            .update_micro_service_checked(&record, &policy_authority, operation)
     })
     .await?;
     if !changed {
@@ -169,7 +169,11 @@ pub(crate) async fn delete_from_stack(
             request_id.0,
         ));
     }
-    if !database(request_id.0, move || state.store.delete_micro_service(id)).await? {
+    if !database(request_id.0, move || {
+        state.store.delete_micro_service_checked(id, operation)
+    })
+    .await?
+    {
         return Err(AppError::not_found(request_id.0));
     }
     Ok(StatusCode::NO_CONTENT)

@@ -190,27 +190,32 @@ impl Store {
         &self,
         service: &MicroServiceResponse,
     ) -> Result<bool, PersistenceError> {
-        self.update_micro_service_authority(service, None)
+        self.update_micro_service_authority(service, None, None)
     }
 
     pub(crate) fn update_micro_service_checked(
         &self,
         service: &MicroServiceResponse,
         authority: &super::iac_auto_deploy::Authority,
+        operation: Option<Uuid>,
     ) -> Result<bool, PersistenceError> {
-        self.update_micro_service_authority(service, Some(authority))
+        self.update_micro_service_authority(service, Some(authority), operation)
     }
 
     fn update_micro_service_authority(
         &self,
         service: &MicroServiceResponse,
         authority: Option<&super::iac_auto_deploy::Authority>,
+        operation: Option<Uuid>,
     ) -> Result<bool, PersistenceError> {
         let spec = encode(service)?;
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if let Some(authority) = authority {
             super::iac_auto_deploy::compare(&tx, service.id, authority)?;
+        }
+        if !super::stacks::service_mutation_allowed(&tx, service.id, operation)? {
+            return Err(PersistenceError::IacOwnershipConflict);
         }
         super::iac_auto_deploy::policy_change(&tx, service)?;
         let changed = tx
@@ -228,7 +233,16 @@ impl Store {
 
     /// Delete a configuration and its deployment record in one transaction.
     /// Return whether the service existed; the caller must clean up its VMs first.
+    #[cfg(test)]
     pub fn delete_micro_service(&self, id: Uuid) -> Result<bool, PersistenceError> {
+        self.delete_micro_service_checked(id, None)
+    }
+
+    pub(crate) fn delete_micro_service_checked(
+        &self,
+        id: Uuid,
+        operation: Option<Uuid>,
+    ) -> Result<bool, PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         super::iac_native::ensure_idle(
@@ -238,6 +252,9 @@ impl Store {
                 id: id.to_string(),
             },
         )?;
+        if !super::stacks::service_mutation_allowed(&tx, id, operation)? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
         ensure_children_released(&tx, id)?;
         tx.execute(
             "DELETE FROM service_deploy_queue WHERE service_id = ?1",
@@ -370,8 +387,15 @@ impl Store {
                 super::iac_auto_deploy::DeploymentAuthority::Automatic(watch) => {
                     super::iac_auto_deploy::admit(&tx, deployment, watch)?
                 }
-                super::iac_auto_deploy::DeploymentAuthority::Manual(authority) => {
-                    super::iac_auto_deploy::compare(&tx, deployment.service_id, authority)?
+                super::iac_auto_deploy::DeploymentAuthority::Manual(authority, operation) => {
+                    super::iac_auto_deploy::compare(&tx, deployment.service_id, authority)?;
+                    if !super::stacks::service_mutation_allowed(
+                        &tx,
+                        deployment.service_id,
+                        *operation,
+                    )? {
+                        return Err(PersistenceError::IacOwnershipConflict);
+                    }
                 }
             }
         }

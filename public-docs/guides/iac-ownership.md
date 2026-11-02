@@ -292,3 +292,5 @@ See [volume attachments and native operation recovery](iac-native-operations.md)
 scoped mount ownership, VM cleanup fences and the active-work dashboard.
 
 See [automatic deployment policy ownership](iac-auto-deploy.md) for independent slots and private image-writer fencing.
+
+Database connection edits compare captured authority during credential commits. Service edits and deletion recheck their exact writer in SQLite; an old Stack operation never becomes an idle native writer.

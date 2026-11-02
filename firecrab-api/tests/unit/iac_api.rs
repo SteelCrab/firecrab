@@ -1081,3 +1081,9 @@ mod vm_delete_races;
 
 #[path = "iac_auto_deploy.rs"]
 mod auto_deploy_tests;
+
+#[path = "iac_database_connections.rs"]
+mod database_connection_tests;
+
+#[path = "iac_service_writers.rs"]
+mod service_writer_tests;

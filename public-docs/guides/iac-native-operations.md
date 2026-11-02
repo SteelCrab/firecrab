@@ -91,3 +91,5 @@ running or uncertain, including facets absent from its next plan.
 See [ownership transitions](iac-ownership.md),
 [Queue engine recovery](iac-ownership.md#queue-engine-admission-and-recovery),
 and the [complete target contract](../reference/iac.md).
+
+CI deployment admission also checks the service dependency fence. An unfinished VM cleanup cannot admit replacement replicas through a valid CI token.

@@ -115,6 +115,12 @@ pub async fn update(
 ) -> Result<Json<DatabaseSummary>, AppError> {
     let _claim = state.service_mutations.lock().await;
     let record = load(state.clone(), rid.0, id).await?;
+    let store = state.store.clone();
+    let connection_id = record.id;
+    let authority = database(rid.0, move || {
+        store.pipe_database_write_authority(connection_id)
+    })
+    .await?;
     if input
         .ca_certificate
         .as_ref()
@@ -201,10 +207,15 @@ pub async fn update(
         })
         .await?;
     }
-    database(rid.0, move || {
-        state.store.update_pipe_database(record.id, &input)
+    let changed = database(rid.0, move || {
+        state
+            .store
+            .update_pipe_database_checked(record.id, &input, &authority)
     })
     .await?;
+    if !changed {
+        return Err(AppError::not_found(rid.0));
+    }
     Ok(Json(settings.summary))
 }
 
