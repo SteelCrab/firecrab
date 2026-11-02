@@ -17,6 +17,8 @@ import {
   DHCP_SSH_HOST_PORT,
   DHCP_NETWORK_CIDR,
   DHCP_NETWORK_NAME,
+  DHCP_MOVE_NETWORK_NAME,
+  DHCP_MOVE_NETWORK_CIDR,
   DHCP_REGISTRY_PORT,
   DHCP_VM_NAME,
   NETWORK_FAILED,
@@ -79,7 +81,7 @@ async function cleanupOwned(): Promise<void> {
   const imported = registry?.announcement.alias ?? DHCP_FIXED_ALIAS;
   await api.deleteOwnedVms(imported, DHCP_VM_NAME);
   await api.deleteImportedImage(imported);
-  await api.deleteNetworksByName([DHCP_NETWORK_NAME]);
+  await api.deleteNetworksByName([DHCP_NETWORK_NAME, DHCP_MOVE_NETWORK_NAME]);
   createdNetworkId = null;
 }
 
@@ -423,4 +425,106 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   expect(afterRemove?.portForwards?.some((pf) => pf.guestPort === 80)).toBe(
     true,
   );
+});
+
+test("moves the stopped guest to another network and boots with its new DHCP address", async ({
+  page,
+  request,
+}) => {
+  test.skip(
+    SKIP_GUEST_BOOT,
+    "Network reassignment requires the real DHCP guest and helper.",
+  );
+  const vm = (await api.listVms()).find((row) => row.name === DHCP_VM_NAME)!;
+  expect(
+    vm,
+    "the preceding DHCP test must create this suite's guest",
+  ).toBeTruthy();
+  const stopped = await request.post(`${apiUrl()}/api/vms/${vm.id}/stop`);
+  expect(stopped.ok(), await stopped.text()).toBe(true);
+  await expect
+    .poll(async () => (await api.getVm(vm.id))?.state, {
+      timeout: 60_000,
+    })
+    .toBe("stopped");
+
+  await openEnglish(page, "/#/networks");
+  await createNetwork(
+    page,
+    DHCP_MOVE_NETWORK_NAME,
+    DHCP_MOVE_NETWORK_CIDR,
+    true,
+  );
+  const target = (await api.listNetworks()).find(
+    (network) => network.name === DHCP_MOVE_NETWORK_NAME,
+  )!;
+  expect(target).toBeTruthy();
+  await openEnglish(page, "/#/vms");
+  const row = page.locator("table.vm-list tbody tr", { hasText: DHCP_VM_NAME });
+  await openVmTab(page, row, "Network");
+  const panel = vmPanel(page);
+  await panel
+    .getByRole("button", { name: "Edit MicroNetwork", exact: true })
+    .click();
+  await panel
+    .getByLabel("MicroNetwork", { exact: true })
+    .selectOption(target.id);
+  const saving = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PUT" &&
+      new URL(response.url()).pathname === `/api/vms/${vm.id}`,
+  );
+  await panel.getByRole("button", { name: "Save", exact: true }).click();
+  const response = await saving;
+  expect(response.status(), await response.text()).toBe(200);
+  const moved = await response.json();
+  expect(moved.microNetworkId).toBe(target.id);
+  expect(moved.ipv4).toMatch(/^172\.30\.95\./);
+  expect(moved.portForwards).toEqual(vm.portForwards);
+
+  const oldNetwork = await request.get(
+    `${apiUrl()}/api/micro-networks/${createdNetworkId}`,
+  );
+  expect(oldNetwork.ok(), await oldNetwork.text()).toBe(true);
+  expect((await oldNetwork.json()).vms).not.toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: vm.id })]),
+  );
+  const removed = await request.delete(
+    `${apiUrl()}/api/micro-networks/${createdNetworkId}`,
+  );
+  expect(removed.status(), await removed.text()).toBe(204);
+  const protectedTarget = await request.delete(
+    `${apiUrl()}/api/micro-networks/${target.id}`,
+  );
+  expect(protectedTarget.status(), await protectedTarget.text()).toBe(409);
+
+  await panel.getByRole("button", { name: "Start", exact: true }).click();
+  await expect
+    .poll(async () => (await api.getVm(vm.id))?.state, {
+      timeout: 240_000,
+    })
+    .toBe("running");
+  await expect
+    .poll(
+      async () => {
+        const log = await request.get(`${apiUrl()}/api/vms/${vm.id}/log`);
+        expect(log.ok(), await log.text()).toBe(true);
+        return (await log.json()).consoleLog;
+      },
+      { timeout: 60_000 },
+    )
+    .toContain(`${NETWORK_READY} ${moved.ipv4}`);
+  // Scanning the injected key at the destination lease proves that the guest
+  // is reachable there, rather than merely trusting the desired-state row.
+  await expect
+    .poll(
+      async () => {
+        const scan = await request.get(
+          `${apiUrl()}/api/vms/${vm.id}/ssh-host-key/check`,
+        );
+        return scan.ok() ? (await scan.json()).status : `HTTP ${scan.status()}`;
+      },
+      { timeout: 180_000, intervals: [1_000] },
+    )
+    .toBe("match");
 });

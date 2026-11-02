@@ -44,7 +44,7 @@ export default function StorageConnectionForm({
       <p className="s3-hint">
         {t(
           "Connect an existing bucket in your AWS account.",
-          "AWS 계정에 있는 버킷을 연결한다.",
+          "AWS 계정의 버킷을 연결하세요.",
         )}
       </p>
       <label className="field">
@@ -86,7 +86,7 @@ export default function StorageConnectionForm({
       <p className="s3-hint">
         {t(
           "Leave the folder empty to access the whole bucket.",
-          "폴더를 비워 두면 버킷 전체에 접근한다.",
+          "폴더를 비워 두면 버킷 전체에 접근할 수 있습니다.",
         )}
       </p>
       <label className="field">
@@ -170,7 +170,7 @@ export default function StorageConnectionForm({
           <p className="s3-hint">
             {t(
               "Use keys with access limited to this bucket and folder.",
-              "이 버킷과 폴더로 접근 권한을 제한한 키를 사용한다.",
+              "이 버킷과 폴더에만 접근할 수 있는 키를 사용하세요.",
             )}
           </p>
         </>

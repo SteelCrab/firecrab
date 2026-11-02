@@ -127,7 +127,7 @@ test.describe("command palette", () => {
   test("uses Korean labels", async ({ page }) => {
     await open(page, "ko");
     await page
-      .getByRole("button", { name: "검색 및 이동", exact: true })
+      .getByRole("button", { name: "검색하여 이동", exact: true })
       .click();
     const dialog = page.getByRole("dialog", {
       name: "명령 팔레트",

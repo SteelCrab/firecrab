@@ -110,7 +110,7 @@ export default function AgentAutomation({
         throw Error(
           t(
             "Workspace identity changed. Reload this page.",
-            "작업 공간이 변경되었다. 화면을 새로고침한다.",
+            "작업 공간이 변경되었습니다. 페이지를 새로고침하세요.",
           ),
         );
       if (!alive.current || mutating.current) return;
@@ -156,7 +156,7 @@ export default function AgentAutomation({
       !window.confirm(
         t(
           "Leave the edited automation settings?",
-          "변경한 자동화 설정을 두고 닫을까?",
+          "자동화 설정을 저장하지 않고 닫을까요?",
         ),
       )
     )
@@ -188,7 +188,7 @@ export default function AgentAutomation({
           setMessage(
             t(
               "Created .github/workflows/firecrab-checks.yml in this VM. Inspect the changes before committing and pushing.",
-              "VM에 .github/workflows/firecrab-checks.yml을 생성했다. 변경 내용을 확인한 뒤 커밋·푸시한다.",
+              "VM에 .github/workflows/firecrab-checks.yml 파일을 만들었습니다. 변경 내용을 확인한 뒤 커밋하고 푸시하세요.",
             ),
           );
       }
@@ -266,7 +266,7 @@ export default function AgentAutomation({
         <p className="aa-intro">
           {t(
             "Test → security scan → build → test app. Every command runs in this task’s MicroVM workspace.",
-            "테스트 → 보안 점검 → 빌드 → 테스트 앱 순서로 실행한다. 모든 명령은 이 작업의 MicroVM 안에서 실행한다.",
+            "테스트 → 보안 점검 → 빌드 → 테스트 앱 순서로 실행합니다. 모든 명령은 이 작업의 MicroVM 안에서 실행됩니다.",
           )}
         </p>
         {(error || loadError) && (
@@ -335,7 +335,7 @@ export default function AgentAutomation({
                   <p>
                     {t(
                       "Verification becomes available after the coding task and CLI setup finish.",
-                      "코딩 작업과 CLI 초기 설정이 끝나면 검증을 실행할 수 있다.",
+                      "코딩 작업과 CLI 초기 설정을 마치면 검증을 실행할 수 있습니다.",
                     )}
                   </p>
                 )}
@@ -417,13 +417,13 @@ export default function AgentAutomation({
                       />
                       {t(
                         "Scan high and critical vulnerabilities, secrets and configuration with Trivy",
-                        "Trivy로 높음·심각 수준의 취약점, 비밀키, 설정을 점검한다",
+                        "Trivy로 높음·심각 등급의 취약점, 비밀키 노출, 설정 오류를 점검합니다",
                       )}
                     </label>
                     <small>
                       {t(
                         "Missing project tools must be installed in the VM. Trivy is downloaded and checksum-verified on the first security scan. Run the test app in the foreground on the selected port.",
-                        "프로젝트 실행 도구는 VM에 설치되어 있어야 한다. 첫 보안 점검에서 Trivy를 내려받고 체크섬을 확인한다. 테스트 앱은 선택한 포트에서 전경 실행한다.",
+                        "프로젝트 실행에 필요한 도구를 VM에 미리 설치하세요. 첫 보안 점검 시 Trivy를 내려받고 체크섬을 확인합니다. 테스트 앱은 선택한 포트에서 포그라운드로 실행됩니다.",
                       )}
                     </small>
                   </div>
@@ -478,11 +478,11 @@ export default function AgentAutomation({
                   {status.workflowConfigured
                     ? t(
                         "Workflow file is present. Push the reviewed changes to run it on GitHub.",
-                        "워크플로우 파일이 있다. 변경 내용을 확인하고 푸시하면 GitHub에서 실행한다.",
+                        "워크플로우 파일이 있습니다. 변경 내용을 확인한 뒤 푸시하면 GitHub에서 실행됩니다.",
                       )
                     : t(
                         "Create a workflow that tests, scans and builds on pushes and pull requests.",
-                        "커밋 푸시와 PR에서 테스트·보안 점검·빌드를 실행하는 파일을 생성한다.",
+                        "커밋을 푸시하거나 PR을 만들 때 테스트·보안 점검·빌드를 실행할 워크플로우 파일을 만듭니다.",
                       )}
                 </p>
                 <div className="aa-actions">
@@ -521,7 +521,9 @@ export default function AgentAutomation({
                         </li>
                       ))
                     ) : (
-                      <li>{t("No workflow runs yet.", "실행 내역이 없다.")}</li>
+                      <li>
+                        {t("No workflow runs yet.", "실행 내역이 없습니다.")}
+                      </li>
                     )}
                   </ul>
                 )}
@@ -534,7 +536,7 @@ export default function AgentAutomation({
                 <p>
                   {t(
                     "Create a temporary public HTTPS address from inside this MicroVM. Stopping the VM ends the connection.",
-                    "이 VM 안에서 임시 공개 HTTPS 주소를 연결한다. VM을 끄면 연결도 끝난다.",
+                    "이 VM의 테스트 앱을 임시 HTTPS 주소로 공개합니다. VM을 끄면 연결도 종료됩니다.",
                   )}
                 </p>
                 <div className="aa-actions">
@@ -596,7 +598,7 @@ export default function AgentAutomation({
                   <small>
                     {t(
                       "Enter a test app command and pass verification before publishing.",
-                      "테스트 앱 실행 명령을 입력하고 검증을 통과하면 URL을 만들 수 있다.",
+                      "테스트 앱 실행 명령을 입력하고 검증을 통과하면 공개 주소를 만들 수 있습니다.",
                     )}
                   </small>
                 )}

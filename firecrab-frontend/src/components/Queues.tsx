@@ -189,7 +189,7 @@ export default function Queues() {
       setError(
         t(
           "Memory must be a power of two between 128 and 32768 MiB.",
-          "메모리는 128~32768 MiB 사이의 2의 거듭제곱이어야 한다.",
+          "메모리는 128~32768 MiB 범위에서 2의 거듭제곱 값으로 지정하세요. 예: 128, 256, 512.",
         ),
       );
       return;
@@ -256,7 +256,7 @@ export default function Queues() {
             <p>
               {t(
                 "RabbitMQ runs in a dedicated MicroVM.",
-                "RabbitMQ는 전용 MicroVM에서 실행된다.",
+                "RabbitMQ는 전용 MicroVM에서 실행됩니다.",
               )}
             </p>
             <form id="queue-engine-form" onSubmit={install}>
@@ -327,7 +327,7 @@ export default function Queues() {
               <p>{phaseLabel(snapshot.engine.phase)}</p>
               {snapshot.engine.phase === "failed" && (
                 <p>
-                  {t("The engine needs attention", "엔진 상태를 확인해야 한다")}
+                  {t("The engine needs attention", "엔진 상태를 확인하세요")}
                 </p>
               )}
               {snapshot.engine.error && (
@@ -419,7 +419,7 @@ export default function Queues() {
             <section className="panel">
               <h2>{t("Queues", "큐")}</h2>
               {snapshot.queues.length === 0 ? (
-                <p>{t("No queues yet.", "아직 큐가 없다.")}</p>
+                <p>{t("No queues yet.", "아직 큐가 없습니다.")}</p>
               ) : (
                 <table className="queue-table">
                   <thead>
@@ -472,7 +472,7 @@ export default function Queues() {
                                 window.confirm(
                                   t(
                                     `Delete queue ${item.name}?`,
-                                    `큐 ${item.name}을 삭제할까?`,
+                                    `"${item.name}" 큐를 삭제할까요?`,
                                   ),
                                 )
                               )

@@ -91,7 +91,7 @@ export default function MicroStorages({
     if (
       dirty &&
       !window.confirm(
-        t("Discard unsaved changes?", "저장하지 않은 변경을 버릴까요?"),
+        t("Discard unsaved changes?", "저장하지 않은 변경 사항을 취소할까요?"),
       )
     )
       return false;
@@ -130,7 +130,7 @@ export default function MicroStorages({
       !window.confirm(
         t(
           `Unregister storage location "${pool.name}"?`,
-          `저장 위치 "${pool.name}" 등록을 해제할까요?`,
+          `"${pool.name}" 저장 위치의 등록을 해제할까요?`,
         ),
       )
     )
@@ -174,13 +174,13 @@ export default function MicroStorages({
       <p>
         {t(
           "Enter an absolute folder on the Firecrab host. On macOS and Windows, use the path inside the management Linux VM.",
-          "macOS·Windows에서는 관리용 Linux VM 안의 경로를 입력한다.",
+          "macOS·Windows에서는 관리용 Linux VM 안의 경로를 입력하세요.",
         )}
       </p>
       <p>
         {t(
           "Missing folders are created when registered. This does not partition or format a disk.",
-          "폴더가 없으면 등록할 때 만든다. 디스크를 파티션으로 나누거나 포맷하지 않는다.",
+          "폴더가 없으면 등록할 때 자동으로 만듭니다. 디스크의 파티션이나 포맷은 변경하지 않습니다.",
         )}
       </p>
       <form id="editor" className="storage-location-form" onSubmit={save}>
@@ -285,7 +285,7 @@ export default function MicroStorages({
       <p>
         {t(
           "Stores MicroVM operating-system disks and MicroBlockStorage data disk files.",
-          "MicroVM 운영체제 디스크와 MicroBlockStorage 데이터 디스크 파일을 저장한다.",
+          "MicroVM의 운영체제 디스크와 MicroBlockStorage의 데이터 디스크 파일을 저장합니다.",
         )}
       </p>
       {detailError && (
@@ -334,7 +334,7 @@ export default function MicroStorages({
             <p>
               {t(
                 "No MicroVMs use this location yet.",
-                "이 위치를 사용하는 MicroVM이 아직 없다.",
+                "이 위치를 사용하는 MicroVM이 아직 없습니다.",
               )}
             </p>
           )
@@ -382,7 +382,7 @@ export default function MicroStorages({
         <p>
           {t(
             "Choose where Firecrab stores MicroVM operating-system disks and MicroBlockStorage data disk files. Select this location when creating a VM or data disk.",
-            "MicroVM의 운영체제 디스크와 MicroBlockStorage의 데이터 디스크 파일을 저장할 위치를 관리한다. VM이나 데이터 디스크를 만들 때 이 저장 위치를 선택한다.",
+            "MicroVM의 운영체제 디스크와 MicroBlockStorage의 데이터 디스크 파일을 저장할 위치를 관리합니다. VM이나 데이터 디스크를 만들 때 등록한 저장 위치를 선택할 수 있습니다.",
           )}
         </p>
         <a href="#/volumes">
@@ -437,12 +437,15 @@ export default function MicroStorages({
         <div className="empty-state">
           <HardDrive aria-hidden="true" />
           <h3>
-            {t("No storage locations registered", "등록한 저장 위치가 없다")}
+            {t(
+              "No storage locations registered",
+              "등록된 저장 위치가 없습니다",
+            )}
           </h3>
           <p>
             {t(
               "Register a host folder to select it for VM and data disks.",
-              "호스트 폴더를 등록하면 VM과 데이터 디스크의 저장 위치로 선택할 수 있다.",
+              "호스트 폴더를 등록하면 VM과 데이터 디스크의 저장 위치로 사용할 수 있습니다.",
             )}
           </p>
         </div>

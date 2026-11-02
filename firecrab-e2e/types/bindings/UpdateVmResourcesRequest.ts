@@ -2,6 +2,8 @@
 import type { EgressPolicy } from "./EgressPolicy";
 
 export type UpdateVmResourcesRequest = {
+  /** Omitted preserves the network; a present UUID moves an inactive VM. */
+  microNetworkId?: string,
   ram: number,
   cpu: number,
   diskGb: number,

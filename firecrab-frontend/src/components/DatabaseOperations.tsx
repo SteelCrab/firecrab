@@ -210,7 +210,7 @@ export default function DatabaseOperations({
       const pair = JSON.parse(table);
       if (!Array.isArray(pair) || pair.length !== 2 || !service)
         throw Error(
-          t("Select a table and service.", "테이블과 서비스를 선택한다."),
+          t("Select a table and service.", "테이블과 서비스를 선택하세요."),
         );
       void act(
         "POST",
@@ -227,7 +227,7 @@ export default function DatabaseOperations({
       setError(
         t(
           "Type the database name and confirm external writers are stopped.",
-          "DB 이름을 입력하고 외부 쓰기 중지를 확인한다.",
+          "DB 이름을 입력하고 외부에서 DB에 쓰는 작업을 모두 중지했는지 확인하세요.",
         ),
       );
       return;
@@ -275,7 +275,7 @@ export default function DatabaseOperations({
           <p>
             {t(
               "Generated service credentials use DATABASE_URL.",
-              "생성한 서비스 인증 정보는 DATABASE_URL로 전달한다.",
+              "생성된 서비스 인증 정보는 DATABASE_URL 환경 변수로 전달됩니다.",
             )}
           </p>
           {bindings.map((item) => (
@@ -292,7 +292,7 @@ export default function DatabaseOperations({
                     window.confirm(
                       t(
                         "Revoke this service account? Stop its service first.",
-                        "서비스 계정을 회수할까? 먼저 서비스를 중지한다.",
+                        "서비스 계정의 접근 권한을 해제할까요? 먼저 서비스를 중지하세요.",
                       ),
                     )
                   )
@@ -468,11 +468,11 @@ export default function DatabaseOperations({
                       item.detached
                         ? t(
                             "Remove this drained trigger?",
-                            "전달을 마친 트리거를 제거할까?",
+                            "전달이 끝난 트리거를 삭제할까요?",
                           )
                         : t(
                             "Stop capturing new changes?",
-                            "새 변경 캡처를 중지할까?",
+                            "새로운 변경 사항의 캡처를 중지할까요?",
                           ),
                     )
                   )
@@ -524,7 +524,7 @@ export default function DatabaseOperations({
                         window.confirm(
                           t(
                             "Skip this failed event? Its business effect will not run.",
-                            "실패 이벤트를 건너뛸까? 해당 업무 처리를 실행하지 않는다.",
+                            "실패한 이벤트를 건너뛸까요? 해당 이벤트의 작업은 실행되지 않습니다.",
                           ),
                         )
                       )
@@ -595,20 +595,23 @@ export default function DatabaseOperations({
           <p>
             {tools
               ? tools[database.engine]
-                ? t("Backup tools are available.", "백업 도구가 준비되었다.")
+                ? t(
+                    "Backup tools are available.",
+                    "백업 도구를 사용할 수 있습니다.",
+                  )
                 : t(
                     "Backup tools are missing on the API host.",
-                    "API 호스트에 백업 도구가 없다.",
+                    "API 호스트에 백업 도구가 없습니다.",
                   )
               : t(
                   "Backup tool status is unavailable.",
-                  "백업 도구 상태를 확인하지 못했다.",
+                  "백업 도구의 상태를 확인하지 못했습니다.",
                 )}
           </p>
           <p>
             {t(
               "Schema changes and restores use a safety backup. Review the result before resuming writers.",
-              "스키마 변경과 복구 전에 안전 백업을 만든다. 쓰기를 재개하기 전에 결과를 확인한다.",
+              "스키마를 변경하거나 DB를 복구하기 전에 백업을 만드세요. 쓰기 작업을 재개하기 전에 결과를 확인하세요.",
             )}
           </p>
           <button
@@ -637,7 +640,7 @@ export default function DatabaseOperations({
                     onClick={() => {
                       if (
                         window.confirm(
-                          t("Remove this backup?", "백업을 제거할까?"),
+                          t("Remove this backup?", "이 백업을 삭제할까요?"),
                         )
                       )
                         void act(
@@ -693,7 +696,7 @@ export default function DatabaseOperations({
             />
             {t(
               "All external writers are stopped.",
-              "외부 DB 쓰기를 모두 중지했다.",
+              "외부에서 DB에 쓰는 작업을 모두 중지했습니다.",
             )}
           </label>
           <button

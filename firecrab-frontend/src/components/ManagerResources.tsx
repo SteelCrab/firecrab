@@ -47,7 +47,7 @@ export default function ManagerResources({
       setError(
         t(
           "Apply could not be verified. Inspect firecrab service debug --logs before retrying.",
-          "적용 결과를 확인하지 못했다. 다시 적용하기 전에 firecrab service debug --logs로 상태를 확인한다.",
+          "적용 결과를 확인하지 못했습니다. 다시 적용하기 전에 firecrab service debug --logs로 상태를 확인하세요.",
         ),
       );
       return true;
@@ -62,7 +62,7 @@ export default function ManagerResources({
           setConnectionError(
             t(
               "This controller belongs to a different host, or the guest API needs an update. Update the native service and guest API, then open this host's localhost dashboard.",
-              "제어 서버의 호스트가 다르거나 게스트 API가 이전 버전이다. 호스트 서비스와 게스트 API를 업데이트한 뒤 해당 호스트의 localhost 화면을 연다.",
+              "제어 서버가 다른 호스트에 있거나 게스트 API가 이전 버전입니다. 호스트 서비스와 게스트 API를 업데이트한 뒤 해당 호스트의 localhost에서 이 화면을 여세요.",
             ),
           );
           setStatus(null);
@@ -180,7 +180,7 @@ export default function ManagerResources({
         <p className="manager-resource-note">
           {t(
             "Open this dashboard on the host's localhost to change its management VM resources.",
-            "관리 VM 자원을 변경하려면 해당 호스트의 localhost에서 이 화면을 연다.",
+            "관리 VM의 리소스를 변경하려면 해당 호스트의 localhost에서 이 화면을 여세요.",
           )}
         </p>
       ) : status && draft ? (
@@ -340,21 +340,21 @@ export default function ManagerResources({
               <p className="manager-resource-note">
                 {t(
                   "Bridged mode requires a helper with Apple-approved networking permission. This helper supports NAT.",
-                  "브리지 모드는 Apple이 승인한 네트워크 권한이 필요하다. 현재 헬퍼는 NAT를 지원한다.",
+                  "브리지 모드에는 Apple이 승인한 네트워크 권한이 필요합니다. 현재 헬퍼는 NAT 모드를 지원합니다.",
                 )}
               </p>
             )}
           <p className="manager-resource-note">
             {t(
               "Disk growth only. Applying restarts the management VM and stops its running MicroVMs.",
-              "디스크는 확장만 가능하다. 적용하면 관리 VM을 재시작하고 실행 중인 MicroVM을 중지한다.",
+              "디스크 용량은 늘릴 수만 있습니다. 변경 사항을 적용하면 관리 VM이 재시작되고 실행 중인 MicroVM이 중지됩니다.",
             )}
           </p>
           {status.sharedWsl && (
             <p className="manager-resource-note manager-resource-scope">
               {t(
                 "CPU, RAM, and networking affect every WSL2 distribution. Stop other WSL distributions before applying.",
-                "CPU·RAM·네트워크는 WSL2 전체에 적용된다. 적용 전에 다른 WSL 배포판을 중지한다.",
+                "CPU·RAM·네트워크 설정은 WSL2 전체에 적용됩니다. 적용하기 전에 다른 WSL 배포판을 중지하세요.",
               )}
             </p>
           )}
@@ -378,7 +378,7 @@ export default function ManagerResources({
           <p>
             {t(
               "Start the native controller with firecrab service start.",
-              "firecrab service start로 호스트 제어 서버를 시작한다.",
+              "firecrab service start 명령으로 호스트 제어 서버를 시작하세요.",
             )}
           </p>
         </div>
@@ -387,7 +387,7 @@ export default function ManagerResources({
         <p className="manager-resource-note" role="status">
           {t(
             "Waiting for the management VM to restart. The dashboard reconnects automatically.",
-            "관리 VM 재시작을 기다린다. 대시보드는 자동으로 다시 연결한다.",
+            "관리 VM이 재시작될 때까지 기다려 주세요. 대시보드가 자동으로 다시 연결됩니다.",
           )}
         </p>
       )}

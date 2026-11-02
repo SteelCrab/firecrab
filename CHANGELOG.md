@@ -8,6 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
+| [0.4.3](#043---2026-11-02) | 2026-11-02 | AI Sandbox, CODE workspaces, registry kernels and inactive VM network changes |
 | [0.4.2](#042---2026-11-01) | 2026-11-01 | React dashboard and MicroVM agent workspaces |
 | [0.4.1](#041---2026-10-30) | 2026-10-30 | Latest managed installations and cross-platform updates |
 | [0.4.0](#040---2026-10-30) | 2026-10-30 | [Changes since v0.3.1](https://github.com/SteelCrab/firecrab/compare/v0.3.1...v0.4.0) |
@@ -23,6 +24,57 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 ## [Unreleased]
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
+
+## [0.4.3] - 2026-11-02
+
+AI Sandbox quick start and release validation updates for the React dashboard and guest workflows.
+See [#572](https://github.com/SteelCrab/firecrab/pull/572),
+[#573](https://github.com/SteelCrab/firecrab/pull/573) and
+[#577](https://github.com/SteelCrab/firecrab/pull/577).
+
+### Added
+
+- Change an inactive MicroVM's MicroNetwork from its Overview or Network tab.
+  Save the VM settings and replacement IP lease together, then use the selected
+  network on the next start. See [#137](https://github.com/SteelCrab/firecrab/issues/137).
+- AI Sandbox quick start prepares Ubuntu 26.04 LTS with 2 vCPU, 4 GiB RAM,
+  a 32 GiB disk and the selected coding tools. The right-side navigation connects
+  workspace preparation, accounts, AI tasks, app verification and preview.
+- Connect a fixed Firecrab app address to the guest-owned preview tunnel and
+  explicitly verify its public HTTPS response before opening the app preview.
+- CODE workspaces connect GitHub checkouts, retained MicroVMs, Web VS Code,
+  terminals and assigned AI AUTH agents through the React dashboard.
+- Repository defaults and existing AI AUTH accounts keep setup short.
+  Interrupted operations and agent requests recover without automatic replay.
+
+### Changed
+
+- Align Rust, dashboard and E2E package versions and lockfiles on 0.4.3.
+- Install prebuilt kernels from registry.firecrab.dev after checking package
+  checksums, architecture and required VM drivers, including Vsock.
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- Match live OCI image inspection, image deletion and SSH browser checks to
+  the current React dashboard controls. Allow guest actions up to 30 seconds.
+- Prevent dashboard isolation test fixtures from selecting the same free port
+  by starting each server before allocating the next fixture's port.
+- Use clearer Korean prompts, status messages and action descriptions throughout
+  the dashboard.
+
+### Improved
+
+- Show kernel installation stages, publication dates and the actual download
+  source in a responsive detail panel. Resume progress after reload and support
+  cancellation with safe cleanup. See [#586](https://github.com/SteelCrab/firecrab/pull/586).
+- Resume journaled workspace preparation after browser or controller restarts.
+  Idempotent retries preserve the reserved VM and avoid duplicate creation.
+- Verify that creating and removing an SSH port forward preserves existing
+  forwards in the console's SSH tab.
 
 ## [0.4.2] - 2026-11-01
 
@@ -1080,7 +1132,9 @@ network helper.
 - Changelog validation is part of the documentation CI job so a release
   cannot drop a required section.
 
-[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.4.1...main
+[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.4.3...main
+[0.4.3]: https://github.com/SteelCrab/firecrab/releases/tag/v0.4.3
+[0.4.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.4.2
 [0.4.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.4.1
 [0.4.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.4.0
 [0.3.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.3.1

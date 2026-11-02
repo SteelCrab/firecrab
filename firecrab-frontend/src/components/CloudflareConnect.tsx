@@ -179,7 +179,7 @@ export default function CloudflareConnect({
         </button>
       </h2>
       <p className="pipe-description">
-        {t("Restarting changes the URL.", "재시작하면 주소가 바뀐다.")}
+        {t("Restarting changes the URL.", "재시작하면 주소가 바뀝니다.")}
       </p>
       {error && (
         <div className="banner error" role="alert">
@@ -284,7 +284,7 @@ export default function CloudflareConnect({
                 <span className="field-error">
                   {t(
                     "Save a route before selecting Nginx routes.",
-                    "Nginx 라우트를 선택하려면 먼저 라우트를 저장한다.",
+                    "Nginx 라우트를 선택하려면 먼저 라우트를 저장하세요.",
                   )}
                 </span>
               )}
@@ -292,7 +292,7 @@ export default function CloudflareConnect({
           )}
           {migrating && (
             <p className="poll-note quick-tunnel-submit">
-              {t("Saving changes the URL.", "저장하면 주소가 바뀐다.")}
+              {t("Saving changes the URL.", "저장하면 주소가 바뀝니다.")}
             </p>
           )}
           <div className="pipe-controls quick-tunnel-submit">
@@ -325,7 +325,7 @@ export default function CloudflareConnect({
         <p className="poll-note">{t("Loading tunnels…", "터널 조회 중…")}</p>
       ) : tunnels.length === 0 ? (
         <div className="empty">
-          {t("No Quick Tunnels.", "등록한 Quick Tunnel이 없다.")}
+          {t("No Quick Tunnels.", "등록된 Quick Tunnel이 없습니다.")}
         </div>
       ) : (
         <div className="table-scroll">
@@ -488,7 +488,7 @@ export default function CloudflareConnect({
         <p className="field-error">
           {t(
             "Reinstall the Firecrab host bundle to restore the ingress engine.",
-            "Ingress 엔진을 복구하려면 Firecrab 호스트 번들을 다시 설치한다.",
+            "Ingress 엔진을 복구하려면 Firecrab 호스트 번들을 다시 설치하세요.",
           )}
         </p>
       )}

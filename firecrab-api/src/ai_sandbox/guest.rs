@@ -86,6 +86,16 @@ pub fn binding(state: &AppState, id: Uuid) -> io::Result<Binding> {
 }
 
 fn ssh(state: &AppState, binding: &Binding, attempt: &Path) -> io::Result<Command> {
+    code_transport(state, binding, attempt, Some("/bin/sh -s"))
+}
+
+/// Fixed CODE transports share the existing private key and pinned guest host key checks.
+pub(crate) fn code_transport(
+    state: &AppState,
+    binding: &Binding,
+    attempt: &Path,
+    remote: Option<&str>,
+) -> io::Result<Command> {
     let current = self::binding(state, binding.vm_id)?;
     if current.runtime_id != binding.runtime_id {
         return Err(io::Error::other(
@@ -137,6 +147,9 @@ fn ssh(state: &AppState, binding: &Binding, attempt: &Path) -> io::Result<Comman
     std::fs::set_permissions(&known, std::fs::Permissions::from_mode(0o600))?;
     let mut cmd = Command::new("/usr/bin/ssh");
     cmd.env_clear().env("PATH", "/usr/bin:/bin");
+    if remote.is_none() {
+        cmd.args(["-W", "127.0.0.1:17777"]);
+    }
     cmd.args([
         "-F",
         "/dev/null",
@@ -168,13 +181,31 @@ fn ssh(state: &AppState, binding: &Binding, attempt: &Path) -> io::Result<Comman
     .arg(format!("UserKnownHostsFile={}", known.display()))
     .arg("-i")
     .arg(&keys.operator_private)
-    .arg(format!("root@{}", lease.ipv4))
-    .arg("/bin/sh -s");
+    .arg(format!("root@{}", lease.ipv4));
+    if let Some(remote) = remote {
+        cmd.arg(remote);
+    }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     Ok(cmd)
+}
+
+/// CODE sends only a server-authored bootstrap over the existing pinned SSH transport.
+pub(crate) async fn code_bootstrap(
+    state: &AppState,
+    binding: &Binding,
+    directory: &Path,
+    input: Vec<u8>,
+) -> io::Result<Output> {
+    capture(
+        ssh(state, binding, directory)?,
+        input,
+        8192,
+        Duration::from_secs(900),
+    )
+    .await
 }
 
 async fn read_limited(mut reader: impl AsyncRead + Unpin, limit: usize) -> io::Result<Vec<u8>> {

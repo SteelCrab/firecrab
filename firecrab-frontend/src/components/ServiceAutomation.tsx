@@ -159,7 +159,7 @@ export default function ServiceAutomation({
           <p>
             {t(
               "Fixed tags and stable version patterns are supported. Rollback pauses the observed digest.",
-              "고정 태그와 안정 버전 규칙을 지원한다. 롤백한 digest는 자동 배포를 중지한다.",
+              "고정 태그와 안정 버전 규칙을 사용할 수 있습니다. 롤백한 이미지의 다이제스트는 자동 배포에서 제외됩니다.",
             )}
           </p>
           <button className="btn primary" disabled={busy || disabled}>
@@ -244,7 +244,7 @@ export default function ServiceAutomation({
               <p>
                 {t(
                   "Copy this token now. It is removed when this panel closes.",
-                  "지금 토큰을 복사한다. 이 화면을 닫으면 값이 사라진다.",
+                  "지금 토큰을 복사하세요. 이 화면을 닫으면 토큰 값을 다시 확인할 수 없습니다.",
                 )}
               </p>
               <label>
@@ -289,7 +289,7 @@ export default function ServiceAutomation({
                 onClick={() => {
                   if (
                     window.confirm(
-                      t("Revoke this token?", "이 토큰을 폐기할까?"),
+                      t("Revoke this token?", "이 토큰을 폐기할까요?"),
                     )
                   )
                     void run(async () => {

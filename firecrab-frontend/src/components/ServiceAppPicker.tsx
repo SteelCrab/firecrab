@@ -219,13 +219,13 @@ export default function ServiceAppPicker({
       <p>
         {t(
           "Choose an app from an account connected in Pipe Auth.",
-          "Pipe Auth에 연결한 계정에서 앱을 선택한다.",
+          "Pipe Auth에 연결된 계정에서 앱을 선택하세요.",
         )}{" "}
         <a href="#/pipe/auth">{t("Manage AUTH", "AUTH 관리")}</a>
       </p>
       {error && <p role="alert">{error}</p>}
       {accounts?.length === 0 && (
-        <p>{t("Connect an account first", "먼저 계정을 연결한다")}</p>
+        <p>{t("Connect an account first", "먼저 계정을 연결하세요")}</p>
       )}
       {accounts && accounts.length > 0 && (
         <div className="service-picker-fields">
@@ -296,7 +296,7 @@ export default function ServiceAppPicker({
             <p>
               {t(
                 "Repository discovery is unavailable. Enter the complete OCI reference below.",
-                "저장소 자동 조회를 지원하지 않는다. 아래에 OCI 참조를 입력한다.",
+                "저장소 목록을 자동으로 불러올 수 없습니다. 아래에 OCI 이미지 주소를 입력하세요.",
               )}
             </p>
           )}

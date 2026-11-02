@@ -19,8 +19,39 @@ Pass the returned UUID as VM `microNetworkId`.
 
 A VM keeps its IPv4/MAC lease across stop, crash, and API restart.
 Its runtime TAP and firewall policy are removed when inactive.
-Later starts reuse the reserved lease unless an orphaned host VM still holds it.
+Later starts reuse the reserved lease unless an orphaned host VM still holds it or the operator changes the VM's MicroNetwork.
 Deleting the VM frees the lease; the next allocation uses the lowest free address.
+
+## Change a VM's network
+
+Stop the VM and open its Overview or Network tab in the dashboard.
+Edit MicroNetwork, choose the destination by name and CIDR, and save.
+The picker uses the same network catalog as VM creation.
+If the current security group belongs to another network, explicitly choose a compatible group or None.
+Firecrab does not remove that group automatically.
+
+The API accepts `microNetworkId` in `PUT /api/vms/{id}` alongside the current resource values.
+
+```sh
+curl -fsS -X PUT http://127.0.0.1:5523/api/vms/VM_ID \
+  -H 'Content-Type: application/json' \
+  -d '{"cpu":1,"ram":512,"diskGb":2,"egressPolicy":"internet","microNetworkId":"DESTINATION_NETWORK_ID"}'
+```
+
+Omitting `microNetworkId` preserves the current network.
+Sending the same UUID preserves the lease; null cannot detach a network.
+A different UUID requires `created`, `stopped`, or `error` with no remaining VM process.
+Service-owned replicas and pool-managed VMs must use their owning configuration instead.
+
+Firecrab saves the VM settings and destination lease in one SQLite transaction.
+An unknown network or exhausted destination returns `400`; allocation or storage failure preserves the previous settings and lease.
+The old network loses the member and lease, and the destination gains both.
+The next start attaches the TAP to the destination bridge and uses the new address.
+Do not rely on retaining the previous IP or MAC address.
+
+DHCP synchronization follows the commit.
+If it fails, `503` states that the change was saved; read the VM to confirm its network.
+Starting the VM retries synchronization.
 
 ## Internet policy
 

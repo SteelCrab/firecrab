@@ -131,7 +131,7 @@ export default function DetailPanel({
           tabIndex={0}
           title={t(
             "Drag to resize · double-click to reset",
-            "끌어서 폭 조절 · 두 번 클릭하면 기본 폭",
+            "드래그하여 너비 조절 · 두 번 클릭하면 기본 너비로 복원",
           )}
           data-dragging={dragWidth !== null ? "" : undefined}
           onPointerDown={onPointerDown}

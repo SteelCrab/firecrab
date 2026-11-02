@@ -123,7 +123,7 @@ export function SecretEditor({
               <p className="poll-note">
                 {t(
                   "An empty value is allowed. Existing values are never loaded into this form.",
-                  "빈 값을 저장할 수 있다. 기존 값은 이 입력란에 불러오지 않는다.",
+                  "빈 값도 저장할 수 있습니다. 기존 값은 이 입력란에 표시되지 않습니다.",
                 )}
               </p>
             </>
@@ -229,7 +229,7 @@ export function SecretConnectionEditor({
               connection
                 ? t(
                     "Leave blank to keep saved credential",
-                    "비워 두면 저장한 인증 정보를 유지한다",
+                    "비워 두면 저장된 인증 정보를 유지합니다",
                   )
                 : ""
             }
@@ -358,7 +358,7 @@ export function SecretConnectionEditor({
           <p className="poll-note">
             {t(
               "Credentials are encrypted on the server. Import preview checks access to the external store.",
-              "인증 정보는 서버에 암호화해 저장한다. 가져오기 미리보기에서 외부 저장소 접근을 확인한다.",
+              "인증 정보는 서버에 암호화해 저장합니다. 가져오기 미리보기에서 외부 저장소에 접근할 수 있는지 확인하세요.",
             )}
           </p>
           {error && (

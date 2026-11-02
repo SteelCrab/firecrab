@@ -4,6 +4,11 @@ mod block_storage;
 mod bootstrap;
 mod ci_deploy;
 mod cluster;
+mod code_agent_auth;
+mod code_agent_run;
+mod code_editor;
+mod code_runtime;
+mod code_verification;
 mod console;
 mod console_replay;
 mod console_resize;
@@ -53,6 +58,7 @@ mod templates;
 mod tls;
 mod vm_execution;
 mod vm_shim;
+mod workspace_setup;
 
 use std::error::Error;
 use std::io;
@@ -175,9 +181,11 @@ async fn run() -> Result<(), StartupError> {
         .map_err(|error| StartupError::VolumeRecovery(error.to_string()))?
         .map_err(StartupError::VolumeRecovery)?;
     reconcile::reconcile(&state).await;
+    workspace_setup::recover(&state).await;
     service_runtime::recover(&state).await;
     queues::recover(&state).await;
     ai_sandbox::environment::start_maintenance(state.clone());
+    code_runtime::start_maintenance(state.clone());
     service_observation::start(state.clone());
     service_runtime::recovery::start(state.clone());
     service_runtime::deploy::rotation::start(state.clone());

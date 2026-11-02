@@ -5,6 +5,7 @@ import { DetailProp, DetailSection } from "../../ui/DetailSection";
 import { EditActions, EditButton, FieldError } from "./parts";
 import type { SectionEdit } from "./useSectionEdit";
 import type { VmDetailData } from "./useVmDetail";
+import MicroNetworkProp from "./MicroNetworkProp";
 
 interface NetworkTabProps {
   vm: VmResponse;
@@ -15,9 +16,6 @@ interface NetworkTabProps {
 export default function NetworkTab({ vm, detail, edit }: NetworkTabProps) {
   const { t } = useI18n();
   const draft = edit.draft;
-  const network = detail.networks.find(
-    (entry) => entry.id === vm.microNetworkId,
-  );
   const forwards = vm.portForwards ?? [];
   const egressLabel = (policy: EgressPolicy) =>
     policy === "internet"
@@ -43,13 +41,7 @@ export default function NetworkTab({ vm, detail, edit }: NetworkTabProps) {
           <DetailProp label="MAC">
             <span className="mono">{vm.mac ?? "—"}</span>
           </DetailProp>
-          <DetailProp label="MicroNetwork">
-            {!vm.microNetworkId
-              ? t("Default network", "기본 네트워크")
-              : network
-                ? `${network.name} (${network.subnetCidr})`
-                : vm.microNetworkId}
-          </DetailProp>
+          <MicroNetworkProp vm={vm} detail={detail} edit={edit} />
         </dl>
       </DetailSection>
 
@@ -113,7 +105,7 @@ export default function NetworkTab({ vm, detail, edit }: NetworkTabProps) {
           <p>
             {t(
               "Security groups could not be loaded.",
-              "보안그룹을 불러오지 못했다.",
+              "보안그룹을 불러오지 못했습니다.",
             )}{" "}
             <button className="btn sm" onClick={detail.reloadSecurityGroups}>
               {t("Retry", "다시 시도")}
@@ -309,7 +301,7 @@ export default function NetworkTab({ vm, detail, edit }: NetworkTabProps) {
           <p className="detail-note">
             {t(
               "Saving applies host NAT immediately.",
-              "저장하면 호스트 NAT가 바로 적용됩니다.",
+              "저장하면 호스트의 NAT 설정에 바로 반영됩니다.",
             )}
           </p>
         )}

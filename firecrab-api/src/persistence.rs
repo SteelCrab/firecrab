@@ -20,6 +20,10 @@ use crate::model::{Lease, VmRecord, VmState};
 mod block_storage;
 mod cluster;
 mod cluster_services;
+pub(crate) mod code_agent_runs;
+pub(crate) mod code_runtime;
+pub(crate) mod code_verification;
+pub(crate) mod code_workspaces;
 mod database_services;
 mod pools;
 mod queues;
@@ -45,6 +49,7 @@ pub(crate) mod service_logs;
 pub(crate) mod service_observation;
 mod stack_applies;
 mod stack_sources;
+mod workspace_setups;
 pub(crate) use stack_sources::SourceTrigger;
 mod stacks;
 pub use registries::RegistryLogin;
@@ -806,8 +811,12 @@ impl Store {
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
         conn.execute_batch(ai_sandbox::SCHEMA)?;
+        conn.execute_batch(code_workspaces::SCHEMA)?;
+        conn.execute_batch(code_runtime::SCHEMA)?;
+        conn.execute_batch(code_agent_runs::SCHEMA)?;
         conn.execute_batch(sandbox_tunnels::SCHEMA)?;
         conn.execute_batch(sandbox_environments::SCHEMA)?;
+        conn.execute_batch(workspace_setups::SCHEMA)?;
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute_batch(service_observation::SCHEMA)?;
@@ -1792,6 +1801,25 @@ impl Store {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let lease = ipam::rotate(&tx, vm_id, subnet, unavailable_ipv4s)?;
+        tx.commit()?;
+        Ok(lease)
+    }
+
+    /// Move an inactive VM and its complete resource record in the same transaction
+    /// as IPAM rotation. Allocation or persistence failure restores both old rows.
+    pub fn update_vm_network(&self, vm: &VmRecord, subnet: SubnetSpec) -> Result<Lease, IpamError> {
+        if vm.micro_network_id != subnet.micro_network_id {
+            return Err(IpamError::CorruptLease {
+                vm_id: vm.id,
+                reason: "VM and destination subnet do not match".into(),
+            });
+        }
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if execute_record(&tx, UPDATE_SQL, vm)? == 0 {
+            return Err(IpamError::Database(rusqlite::Error::QueryReturnedNoRows));
+        }
+        let lease = ipam::rotate(&tx, vm.id, subnet, &HashSet::new())?;
         tx.commit()?;
         Ok(lease)
     }

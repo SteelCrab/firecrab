@@ -8,6 +8,11 @@ import type { Locale } from "./i18n";
  * mixing constants and hooks in there breaks Vite's fast refresh.
  */
 export const VIEWS = [
+  {
+    id: "code",
+    group: "code",
+    labels: { en: "Workspaces", ko: "워크스페이스" },
+  },
   { id: "vms", group: "compute", labels: { en: "MicroVM", ko: "MicroVM" } },
   { id: "pools", group: "compute", labels: { en: "Pools", ko: "풀" } },
   {
@@ -72,6 +77,7 @@ export function viewLabel(
 
 /** Section a destination belongs to; the command palette shows it as a hint. */
 const VIEW_GROUP_LABELS: Record<ViewGroup, Record<Locale, string>> = {
+  code: { en: "CODE", ko: "CODE" },
   compute: { en: "Compute", ko: "컴퓨팅" },
   ai: { en: "AI", ko: "AI" },
   network: { en: "Network", ko: "네트워크" },
@@ -199,6 +205,7 @@ export type AppRoute =
   | {
       kind: "shell";
       view: ViewId;
+      codePath?: string;
       vmId?: string;
       createService?: boolean;
       createSchedule?: boolean;
@@ -218,6 +225,8 @@ export function parseAppRoute(hash: string = window.location.hash): AppRoute {
       return { kind: "console", vmId: consoleMatch[1] };
     }
   }
+  if (/^code(?:\/(?:new|[0-9a-f-]{36})(?:\/editor)?)?$/.test(path))
+    return { kind: "shell", view: "code", codePath: path };
   if (path === NEW_VM_PATH) return { kind: "vm-new" };
   if (path === "services/new")
     return { kind: "shell", view: "services", createService: true };
@@ -314,7 +323,8 @@ export function useAppRoute(confirmLeave?: () => boolean): {
   // (not only replaceState) so the URL bar and any hash-dependent code see
   // the same route immediately on first paint after `npm run dev`.
   useEffect(() => {
-    if (route.kind !== "shell") return;
+    if (route.kind !== "shell" || (route.view === "code" && route.codePath))
+      return;
     const path = stripHash(window.location.hash).split("?", 1)[0];
     // `#/vms/new` is not a ViewId; do not rewrite it to the list.
     if (path === NEW_VM_PATH || path === "services/new") return;

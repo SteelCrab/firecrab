@@ -46,7 +46,7 @@ export default function MicroServices({
     if (
       formDirty &&
       !window.confirm(
-        t("Discard unsaved changes?", "저장하지 않은 변경을 버릴까요?"),
+        t("Discard unsaved changes?", "저장하지 않은 변경 사항을 취소할까요?"),
       )
     )
       return false;
@@ -232,7 +232,7 @@ export default function MicroServices({
             <p className="poll-note">
               {t(
                 "Save a configuration, then deploy its image to MicroVMs and check app health.",
-                "설정을 저장한 뒤 이미지를 MicroVM에 배포한다. 앱의 상태 검사 결과를 확인한다.",
+                "설정을 저장한 뒤 이미지를 MicroVM에 배포합니다. 배포 후 앱의 상태 검사 결과를 확인하세요.",
               )}
             </p>
             <div className="service-actions">
@@ -261,12 +261,12 @@ export default function MicroServices({
                   <Boxes aria-hidden="true" />
                 </div>
                 <div className="empty-state-title">
-                  {t("No MicroServices yet", "아직 MicroService가 없다")}
+                  {t("No MicroServices yet", "아직 MicroService가 없습니다")}
                 </div>
                 <p>
                   {t(
                     "Run a container image on MicroVMs and deploy without downtime.",
-                    "컨테이너 이미지를 MicroVM에서 실행하고 무중단으로 배포한다.",
+                    "컨테이너 이미지를 MicroVM에서 실행하고 서비스 중단 없이 배포합니다.",
                   )}
                 </p>
                 <a className="btn primary" href="#/services/new">

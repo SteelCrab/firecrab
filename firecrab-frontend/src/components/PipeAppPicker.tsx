@@ -43,9 +43,9 @@ export default function PipeAppPicker({
       });
   }
   const reason = {
-    notRunning: t("VM is not running", "VM이 실행 중이 아니다"),
-    noAddress: t("Waiting for an IPv4 address", "IPv4 주소를 확인할 수 없다"),
-    noPorts: t("No TCP ports registered", "등록된 TCP 포트가 없다"),
+    notRunning: t("VM is not running", "VM이 실행 중이 아닙니다"),
+    noAddress: t("Waiting for an IPv4 address", "IPv4 주소 할당 대기 중"),
+    noPorts: t("No TCP ports registered", "등록된 TCP 포트가 없습니다"),
   };
   function toggle(address: string) {
     onChange(
@@ -71,7 +71,7 @@ export default function PipeAppPicker({
           {t("VMs are unavailable.", "VM 조회 실패")}
         </p>
       ) : !apps.length ? (
-        <p className="poll-note">{t("No VMs.", "VM이 없다.")}</p>
+        <p className="poll-note">{t("No VMs.", "VM이 없습니다.")}</p>
       ) : null}
       {choices.length > 0 && (
         <div className="pipe-app-list">
@@ -116,7 +116,7 @@ export default function PipeAppPicker({
       </span>
       {selected.length > 0 && !canUsePipeApps(apps, selected, preserved) && (
         <span className="field-error">
-          {t("Select a running app again.", "실행 중인 앱을 다시 선택한다.")}
+          {t("Select a running app again.", "실행 중인 앱을 다시 선택하세요.")}
         </span>
       )}
     </fieldset>

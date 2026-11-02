@@ -1,8 +1,9 @@
-import { Bot, createLucideIcon, type LucideIcon } from "lucide-react";
+import { Code2, Bot, createLucideIcon, type LucideIcon } from "lucide-react";
 import type { ViewId } from "./navigation";
 
 /** Keep the established navigation symbols during the React migration. */
 export const VIEW_ICONS: Record<ViewId, LucideIcon> = {
+  code: Code2,
   vms: createLucideIcon("dashboard-vms", [
     [
       "path",

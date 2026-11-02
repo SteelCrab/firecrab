@@ -33,24 +33,24 @@ interface VmListProps {
 const DESCRIPTIONS: Record<VmState, [string, string]> = {
   created: [
     "The VM is created and has not been started yet.",
-    "VM이 생성되었으며 아직 시작되지 않았습니다.",
+    "VM을 생성했습니다. 아직 시작하지 않았습니다.",
   ],
   starting: [
     "The VM is starting. Open its details to follow startup progress.",
-    "VM이 시작 중입니다. 상세보기에서 시작 진행 상황을 확인할 수 있습니다.",
+    "VM을 시작하는 중입니다. 상세 정보에서 진행 상황을 확인할 수 있습니다.",
   ],
   running: ["The VM is running.", "VM이 실행 중입니다."],
-  pausing: ["The VM is pausing.", "VM이 일시정지 중이다."],
+  pausing: ["The VM is pausing.", "VM을 일시정지하는 중입니다."],
   paused: [
     "Guest execution is paused. Memory remains allocated.",
-    "VM 실행이 일시정지되었다. 메모리는 계속 할당된다.",
+    "VM 실행이 일시정지되었습니다. 메모리는 계속 사용합니다.",
   ],
-  resuming: ["The VM is resuming.", "VM이 실행을 재개 중이다."],
+  resuming: ["The VM is resuming.", "VM 실행을 재개하는 중입니다."],
   stopping: ["The VM is stopping.", "VM이 종료 중입니다."],
   stopped: ["The VM is stopped.", "VM이 중지되어 있습니다."],
   error: [
     "The VM is in an error state. Open its details to inspect the logs.",
-    "VM이 오류 상태입니다. 상세보기에서 로그를 확인할 수 있습니다.",
+    "VM에 오류가 발생했습니다. 상세 정보에서 로그를 확인하세요.",
   ],
 };
 

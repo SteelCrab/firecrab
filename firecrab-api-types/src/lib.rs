@@ -8,8 +8,25 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod workspace_setup;
+pub use workspace_setup::*;
+
 mod queues;
 pub use queues::*;
+mod code_workspaces;
+pub use code_workspaces::*;
+mod code_catalog;
+pub use code_catalog::*;
+mod code_verification;
+pub use code_verification::*;
+mod code_runtime;
+pub use code_runtime::*;
+mod code_agent_run;
+pub use code_agent_run::*;
+mod code_editor;
+pub use code_editor::*;
+mod code_agent_auth;
+pub use code_agent_auth::*;
 mod pool;
 pub use pool::*;
 mod cluster;
@@ -383,6 +400,14 @@ pub struct ShellRevisionResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct UpdateVmResourcesRequest {
+    /// Omitted keeps the current network. A present UUID moves an inactive VM.
+    /// Explicit null is rejected; detaching the network is not supported.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_network_update",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub micro_network_id: Option<Uuid>,
     /// New RAM in MiB.
     pub ram: u32,
     /// New vCPU count.
@@ -403,6 +428,12 @@ pub struct UpdateVmResourcesRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub security_group_id: Option<Option<Uuid>>,
+}
+
+fn deserialize_network_update<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Uuid>, D::Error> {
+    Uuid::deserialize(deserializer).map(Some)
 }
 
 fn deserialize_security_group_update<'de, D: serde::Deserializer<'de>>(
@@ -1946,6 +1977,7 @@ mod tests {
         assert_eq!(
             request,
             UpdateVmResourcesRequest {
+                micro_network_id: None,
                 security_group_id: None,
                 ram: 1024,
                 cpu: 2,
@@ -1996,6 +2028,25 @@ mod tests {
             let expected = matches!(state, Created | Stopped | Error);
             assert_eq!(state.can_edit_resources(), expected, "{state:?}");
         }
+    }
+
+    #[test]
+    fn network_update_preserves_omission_and_requires_a_non_null_uuid_when_present() {
+        let mut body = serde_json::json!({"cpu":1,"ram":128,"diskGb":1});
+        let omitted: UpdateVmResourcesRequest = serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(omitted.micro_network_id, None);
+        assert!(
+            serde_json::to_value(omitted)
+                .unwrap()
+                .get("microNetworkId")
+                .is_none()
+        );
+        let id = Uuid::from_u128(42);
+        body["microNetworkId"] = serde_json::json!(id);
+        let selected: UpdateVmResourcesRequest = serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(selected.micro_network_id, Some(id));
+        body["microNetworkId"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<UpdateVmResourcesRequest>(body).is_err());
     }
 
     #[test]

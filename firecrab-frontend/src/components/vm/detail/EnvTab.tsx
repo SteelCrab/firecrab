@@ -136,7 +136,7 @@ export default function EnvTab({ vm, detail, edit }: EnvTabProps) {
         <p className="detail-note">
           {t(
             "Runtime env is ignored: this image has no guest service.",
-            "게스트 서비스가 없는 이미지라 런타임 환경 변수는 적용되지 않습니다.",
+            "이 이미지에는 게스트 서비스가 없어 런타임 환경 변수가 적용되지 않습니다.",
           )}
         </p>
       )}

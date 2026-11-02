@@ -252,11 +252,11 @@ export default function Kernels() {
         running
           ? t(
               `Stop installation and delete local files for kernel ${kernel.version}?`,
-              `설치를 중단하고 커널 ${kernel.version}의 로컬 파일을 삭제할까?`,
+              `설치를 중단하고 커널 ${kernel.version} 버전의 로컬 파일을 삭제할까요?`,
             )
           : t(
               `Delete kernel ${kernel.version}?`,
-              `커널 ${kernel.version}을 삭제할까?`,
+              `커널 ${kernel.version} 버전을 삭제할까요?`,
             ),
       )
     )

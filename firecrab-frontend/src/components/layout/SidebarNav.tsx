@@ -16,7 +16,14 @@ interface SidebarNavProps {
   vmErrorCount: number;
 }
 
-const GROUPS: ViewGroup[] = ["compute", "network", "data", "system", "ai"];
+const GROUPS: ViewGroup[] = [
+  "code",
+  "compute",
+  "network",
+  "data",
+  "system",
+  "ai",
+];
 
 /** Left column: brand, palette entry, grouped destinations, host card, update and language (spec §6.1). */
 export default function SidebarNav({
@@ -28,7 +35,7 @@ export default function SidebarNav({
 }: SidebarNavProps) {
   const { locale, setLocale, t } = useI18n();
   const host = useHostStatus();
-  const searchLabel = t("Search and go", "검색 및 이동");
+  const searchLabel = t("Search and go", "검색하여 이동");
 
   return (
     <nav className="sidebar" aria-label={t("Main navigation", "주요 메뉴")}>

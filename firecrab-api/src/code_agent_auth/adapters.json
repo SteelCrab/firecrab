@@ -1,0 +1,7 @@
+[
+  {"id":"codex-openai-key-v1","agent":"codex","provider":"openai","authentication":"api_key","cliVersion":"0.166.0","binary":"codex","supported":true},
+  {"id":"codex-chatgpt-v1","agent":"codex","provider":"openai","authentication":"chatgpt","cliVersion":"0.166.0","binary":"codex","supported":false},
+  {"id":"claude-anthropic-key-v1","agent":"claude_code","provider":"anthropic","authentication":"api_key","cliVersion":"2.1.316","binary":"claude","supported":true},
+  {"id":"opencode-openai-key-v1","agent":"opencode","provider":"openai","authentication":"api_key","cliVersion":"1.19.5","binary":"opencode","supported":true},
+  {"id":"opencode-anthropic-key-v1","agent":"opencode","provider":"anthropic","authentication":"api_key","cliVersion":"1.19.5","binary":"opencode","supported":true}
+]

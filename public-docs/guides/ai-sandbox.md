@@ -1,13 +1,25 @@
 # AI Sandbox
 
 AI Sandbox opens the native multi-agent workspace at `/#/ai-sandbox`.
-Select a MicroVM, connect a coding CLI, and submit a task. No separate Sandbox project setup or model-task workspace is required.
+Use the right-side **Quick start** menu to prepare a workspace, connect accounts, give AI a task, run the app, and connect its public address. The dashboard's main navigation stays on the left.
+
+## Quick start
+
+1. Select **New MicroVM**. The defaults are Ubuntu 26.04 LTS, 2 vCPU, 4 GiB RAM and a 32 GiB disk. Choose Codex or Claude Code, then **Create workspace**. **Settings** lets you change resources, choose an internet-enabled MicroNetwork, or select a storage root before creation.
+2. Firecrab downloads and installs the image when needed, reuses or creates an internet-enabled MicroNetwork, creates the reserved VM, starts it, and installs the selected coding tools. Progress comes from the real jobs. Image/network/VM preparation is journaled in SQLite and resumes after a controller restart. Browser reloads follow the saved request ID; retries reuse the same VM reservation. A failed operation requires an explicit retry. An image can require a disk larger than the requested minimum.
+3. **Connect accounts** opens GitHub AUTH, repository selection and the selected AI account. Tool installation and sign-in do not submit a model task. Existing regular VMs can also be selected and started from this page.
+4. Use **AI tasks** to describe the app. Ask the agent to include tests and an app start command. Leave server startup to Firecrab. Tasks and terminals use the existing native VM runtime.
+5. After coding finishes, open **Run app**. Review the detected commands, then choose **Verify and run**. Firecrab runs tests, the selected security scan, the build and the app in order. It stops on failure. All coding tasks must finish before verification starts. Stop an already running owned app before another run.
+6. **App address** can create a temporary public Quick Tunnel, or connect a fixed Firecrab address using a dashboard connection token. The fixed address points to the guest-owned Quick Tunnel rather than a reusable VM IP. The token stays in the privileged host store and is not saved in browser storage. Existing workspace addresses can be reconnected without re-entering their token.
+7. Firecrab explicitly checks the app's HTTPS response. Only a successful response enables the embedded **Preview**. **Ask AI for another change** returns to the real task workspace. **Stop public access** stops the guest's recorded preview connector. The address remains saved for later reconnection. Stopping/deleting the VM ends the guest tunnel; another VM cannot inherit the address through an IP reuse.
+
+New workspace preparation requires image downloads and VM networking supported by the controller. Coding tools, terminals, verification and previews require the native management connection and a running VM. Unsupported or disconnected environments show their actual errors. No model output or app result is simulated. These controls create development previews; they do not commit, push, or publish a production release.
 
 ## Manage CLI agents in a MicroVM
 
 The workspace runs coding CLIs inside the selected MicroVM. Project folders and login credentials stay in that VM. It does not accept a host project path or copy a host CLI account into the VM.
 
-1. Select a regular MicroVM or use **New MicroVM** to create one without leaving the workspace. Start or resume it before connecting. Internal service VMs cannot be selected.
+1. Select a regular MicroVM or create one with **Quick start**. New workspaces start automatically. Start or resume an existing stopped VM from **Connect accounts**. Internal service VMs cannot be selected.
 2. Select **GitHub AUTH**. **Prepare GitHub AUTH** installs only the GitHub tools when needed; selecting or installing a coding CLI is not required. Copy the one-time code, open **Authorize on GitHub**, and approve **GitHub CLI** in the browser. The screen detects completion automatically. Pending requests survive browser/native-service restarts. An expired or denied request can be started again without an HTTP 409.
 3. Choose a repository from the authenticated account, including private repositories, or enter `owner/repository`. Connect it once to this MicroVM. All new tasks and Web VS Code use `/workspace/firecrab/project`; new tasks do not clone again, reset local edits or switch branches. Use a different VM for another repository. An empty VM folder can also be initialized explicitly. Existing sessions keep their original folders.
 4. Choose **Codex** or **Claude Code** explicitly. **Prepare CLI environment** installs Herdr and the selected coding CLI inside that VM. Automatic installation supports Debian, Ubuntu and Alpine. Select **Connect CLI account** and finish its login terminal. Then enter the task and select **Start task**. GitHub AUTH and coding-provider authentication are separate. No model task runs during authentication.

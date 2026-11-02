@@ -134,7 +134,7 @@ function ImageTags({
         </p>
       )}
       {page && !page.tags.length && (
-        <div className="empty">{t("No tags.", "태그가 없다.")}</div>
+        <div className="empty">{t("No tags.", "태그가 없습니다.")}</div>
       )}
       {(!!page?.tags.length || !!error) && (
         <form className="pipe-controls registry-pull-form" onSubmit={submit}>
@@ -338,7 +338,7 @@ export default function RegistryBrowser({
         <p className="field-error" role="alert">
           {t(
             "Local image status unavailable. Refresh to retry.",
-            "로컬 이미지 상태를 확인하지 못했다. 새로고침으로 다시 확인한다.",
+            "로컬 이미지 상태를 확인하지 못했습니다. 새로고침해 다시 확인하세요.",
           )}
         </p>
       )}
@@ -351,12 +351,14 @@ export default function RegistryBrowser({
         <p className="poll-note">
           {t(
             "ECR login passwords cannot list all repositories. Showing previously pulled repositories; tags are fetched from ECR.",
-            "ECR 로그인 비밀번호로는 전체 저장소를 조회할 수 없다. 가져온 저장소만 표시하고, 태그는 ECR에서 조회한다.",
+            "ECR 로그인 비밀번호로는 전체 저장소를 조회할 수 없습니다. 이미지를 가져온 저장소만 표시합니다. 태그는 ECR에서 조회합니다.",
           )}
         </p>
       )}
       {catalog?.listingSupported && !repositories.length && (
-        <div className="empty">{t("No repositories.", "저장소가 없다.")}</div>
+        <div className="empty">
+          {t("No repositories.", "저장소가 없습니다.")}
+        </div>
       )}
       {catalog &&
         !catalog.listingSupported &&
@@ -366,7 +368,7 @@ export default function RegistryBrowser({
           <div className="empty">
             {t(
               "No previously pulled repositories.",
-              "아직 가져온 저장소가 없다.",
+              "아직 이미지를 가져온 저장소가 없습니다.",
             )}
           </div>
         )}

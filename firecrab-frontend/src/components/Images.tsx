@@ -343,7 +343,7 @@ function PulledImageRow({
           setError(
             lastLogLine(
               next.log,
-              t("Image build failed.", "이미지 빌드에 실패했다."),
+              t("Image build failed.", "이미지를 빌드하지 못했습니다."),
             ),
           );
         }
@@ -513,7 +513,7 @@ function OciImportPanel({
             setInfo(
               t(
                 `Imported as ${latest.alias}. It now appears in M2Image.`,
-                `${latest.alias}(으)로 가져왔습니다. M2Image 목록에 나타납니다.`,
+                `이미지를 가져왔습니다. M2Image 목록에서 ${latest.alias} 항목을 확인하세요.`,
               ),
             );
             await onImported(latest.alias);
@@ -550,7 +550,7 @@ function OciImportPanel({
           setInfo(
             t(
               `Imported as ${latest.alias}. It now appears in M2Image.`,
-              `${latest.alias}(으)로 가져왔습니다. M2Image 목록에 나타납니다.`,
+              `이미지를 가져왔습니다. M2Image 목록에서 ${latest.alias} 항목을 확인하세요.`,
             ),
           );
           await onImported(latest.alias);
@@ -581,7 +581,9 @@ function OciImportPanel({
       setInspect(null);
       setInspectedReference(null);
       setInfo(null);
-      setError(t("Enter an image reference.", "이미지 참조를 입력하세요."));
+      setError(
+        t("Enter an image reference.", "이미지 주소나 이름을 입력하세요."),
+      );
       return;
     }
     setInspecting(true);
@@ -665,7 +667,7 @@ function OciImportPanel({
       <p className="panel-intro">
         {t(
           "Inspect a container image, then import it as a bootable template on this host. The registered alias appears in M2Image.",
-          "컨테이너 이미지를 검사한 뒤 이 호스트의 부팅 가능한 템플릿으로 가져옵니다. 등록된 별칭은 M2Image에 나타납니다.",
+          "컨테이너 이미지를 검사한 뒤 이 호스트에서 부팅할 수 있는 템플릿으로 가져옵니다. 등록한 이미지는 M2Image 목록에서 확인할 수 있습니다.",
         )}
       </p>
       {(error || info) && (
@@ -740,7 +742,7 @@ function OciImportPanel({
                   )
                 : t(
                     `This host selected the ${inspect.architecture} platform from a multi-arch index.`,
-                    `이 호스트가 다중 아키텍처 인덱스에서 ${inspect.architecture} 플랫폼을 선택했습니다.`,
+                    `이 호스트에 맞는 ${inspect.architecture} 이미지를 다중 아키텍처 목록에서 선택했습니다.`,
                   )}
             </dd>
             <dt>{t("Digest", "다이제스트")}</dt>
@@ -890,7 +892,7 @@ export default function Images() {
         setActionError(
           t(
             `'${alias}' has ${count} VM(s) still using it, so its kernel cannot change: ${vms}. Delete those VMs first.`,
-            `'${alias}' 이미지를 쓰는 VM ${count}개가 있어 커널을 바꿀 수 없습니다: ${vms}. 먼저 해당 VM을 삭제하세요.`,
+            `이 이미지를 사용하는 VM이 있어 커널을 변경할 수 없습니다. 이미지: ${alias}, VM ${count}개: ${vms}. 먼저 해당 VM을 삭제하세요.`,
           ),
         );
       } else {
@@ -904,7 +906,7 @@ export default function Images() {
   const handleDelete = async (alias: string) => {
     if (
       !window.confirm(
-        t(`Delete image ${alias}?`, `이미지 ${alias}을 삭제할까?`),
+        t(`Delete image ${alias}?`, `"${alias}" 이미지를 삭제할까요?`),
       )
     )
       return;
@@ -1006,7 +1008,7 @@ export default function Images() {
         <p className="panel-intro">
           {t(
             "Manage bootable microVM images and build images pulled from Pipe Registry. Build required images become available for VM creation after building.",
-            "부팅 가능한 microVM 이미지와 Pipe Registry에서 가져온 이미지를 관리한다. 빌드가 필요한 이미지는 빌드 완료 후 VM 생성에 사용할 수 있다.",
+            "부팅 가능한 MicroVM 이미지와 Pipe Registry에서 가져온 이미지를 관리합니다. 빌드가 필요한 이미지는 빌드를 마친 뒤 VM 생성에 사용할 수 있습니다.",
           )}
         </p>
         {listError && <div className="field-error">{listError}</div>}
@@ -1014,7 +1016,7 @@ export default function Images() {
           <p className="field-error" role="alert">
             {t(
               "Could not load pulled images: ",
-              "가져온 이미지 목록을 조회하지 못했다: ",
+              "가져온 이미지 목록을 불러오지 못했습니다: ",
             )}
             {pulledImagesError}
           </p>
