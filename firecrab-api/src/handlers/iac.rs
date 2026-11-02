@@ -180,6 +180,17 @@ pub async fn recover_native_operation(
     }
     if matches!(
         operation.action,
+        firecrab_stack::NativeAction::InstallImage
+            | firecrab_stack::NativeAction::ImportImage
+            | firecrab_stack::NativeAction::UpdateImageKernel
+            | firecrab_stack::NativeAction::DeleteImage
+    ) {
+        return super::image_mutations::recover(state, request, id, expected_generation)
+            .await
+            .map(Json);
+    }
+    if matches!(
+        operation.action,
         firecrab_stack::NativeAction::InstallKernel | firecrab_stack::NativeAction::DeleteKernel
     ) {
         return super::kernel_mutations::recover(state, request, id, expected_generation)
@@ -350,6 +361,19 @@ pub async fn change_owner(
             "finish the pending AI login or wait for its expiry before transferring ownership",
             request.0,
         ));
+    }
+    if change.resource.kind == "image" {
+        let presence = crate::image_lifecycle::prepare_transfer(
+            &state.templates,
+            &change.resource,
+            change.owner.is_some(),
+        )
+        .map_err(|error| super::stacks::persistence_error(error, request.0))?;
+        return database(request.0, move || {
+            state.store.change_iac_image_owner(&change, &presence)
+        })
+        .await
+        .map(Json);
     }
     if change.resource.kind == "kernel" && change.owner.is_some() {
         let presence =

@@ -4,21 +4,23 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use firecrab_api_types::{
-    ImageInstallResponse, ImageInstallStatus, ImageResponse, PackageOrigin,
-    UpdateImageKernelRequest,
-};
+use firecrab_api_types::{ImageInstallResponse, ImageInstallStatus, ImageResponse, PackageOrigin};
 
 use crate::error::AppError;
+#[cfg(test)]
 use crate::extract::ValidatedJson;
 use crate::image_install;
 use crate::image_install::Architecture;
+#[cfg(test)]
 use crate::kernel_manager;
+#[cfg(test)]
 use crate::oci::kernel as kernel_cache;
 use crate::persistence::LocalCatalogEntry;
 use crate::server::RequestId;
 use crate::state::AppState;
 use crate::templates::{TemplateRegistry, TemplateSpec, TemplateVersion};
+#[cfg(test)]
+use firecrab_api_types::UpdateImageKernelRequest;
 
 /// Smallest disk (GiB) that can hold `rootfs_bytes`, matching create validation.
 fn min_disk_gb_for(rootfs_bytes: u64) -> u16 {
@@ -59,7 +61,10 @@ pub(crate) fn installed_response(
     }
 }
 
-fn installed_response_for_state(state: &AppState, template: &TemplateVersion) -> ImageResponse {
+pub(crate) fn installed_response_for_state(
+    state: &AppState,
+    template: &TemplateVersion,
+) -> ImageResponse {
     installed_response(
         &state.templates,
         template,
@@ -206,6 +211,7 @@ pub async fn list_image_detail(
 /// `PUT /api/images/{alias}/kernel` — pair an installed image with an
 /// installed managed kernel. The rootfs remains unchanged and existing VM
 /// records are protected by refusing updates while the alias is in use.
+#[cfg(test)]
 pub async fn update_image_kernel(
     State(state): State<AppState>,
     Path(alias): Path<String>,
@@ -450,6 +456,13 @@ pub async fn get_image_install(
     Path(alias): Path<String>,
     Extension(request_id): Extension<RequestId>,
 ) -> Result<Json<ImageInstallResponse>, AppError> {
+    if let Some(intent) = state
+        .store
+        .latest_image(&alias, firecrab_stack::NativeAction::InstallImage)
+        .map_err(|_| AppError::internal(request_id.0))?
+    {
+        return Ok(Json(super::image_mutations::snapshot(&state, &intent)));
+    }
     if TemplateRegistry::known_spec(&alias).is_none()
         && state.templates.resolve_alias(&alias).is_none()
         && local_catalog_entry(&state, &alias, request_id.0)
@@ -476,6 +489,7 @@ async fn local_catalog_entry(
     .map_err(|_| AppError::internal(request_id))
 }
 
+#[cfg(test)]
 enum ImageInstallSource {
     Known(TemplateSpec),
     Local(LocalCatalogEntry),
@@ -483,6 +497,7 @@ enum ImageInstallSource {
 
 /// `POST /api/images/{alias}/install` — extract/register an image from its
 /// already prepared local package.  It performs no network download.
+#[cfg(test)]
 pub async fn start_image_install(
     State(state): State<AppState>,
     Path(alias): Path<String>,
@@ -568,6 +583,7 @@ pub async fn start_image_install(
 /// `DELETE /api/images/{alias}` — unregister the template and remove its
 /// orphan artifact files. Refuses when VMs still use the alias or an install
 /// is running.
+#[cfg(test)]
 pub async fn delete_image(
     State(state): State<AppState>,
     Path(alias): Path<String>,

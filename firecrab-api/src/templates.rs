@@ -53,6 +53,9 @@ pub enum TemplateError {
     /// An artifact path was absolute, empty, or escaped the image root.
     #[error("template artifact path must be a non-empty relative path")]
     InvalidPath,
+    /// The original image writer, operation or physical namespace is unavailable.
+    #[error("image mutation authority is unavailable or changed")]
+    ImageMutationDenied,
     /// The resolved path exists but isn't a regular file.
     #[error("template artifact is not a regular file: {0}")]
     NotRegularFile(PathBuf),
@@ -104,6 +107,11 @@ struct RegisteredTemplate {
     spec: TemplateSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pin: Option<firecrab_stack::TemplatePin>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    retired: bool,
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// One template to register: an alias, its pinned version tag, and the
@@ -262,6 +270,7 @@ fn requires_pci_transport_for_arch(name: &str, architecture: &str) -> bool {
 /// `(name, version)` -> the resolved, verified template it names.
 type VersionMap = HashMap<(String, String), Arc<TemplateVersion>>;
 /// Removed selection and the exact artifact paths no remaining version references.
+#[cfg(test)]
 pub(crate) type RemovedAlias = (Arc<TemplateVersion>, Vec<PathBuf>);
 
 /// Registry of verified template versions, resolved by alias or by exact
@@ -291,6 +300,8 @@ pub struct TemplateRegistry {
     mutations: Arc<Mutex<()>>,
     /// Private endpoint context for artifact jobs; clones retain the same authority boundary.
     iac_store: Option<crate::persistence::Store>,
+    /// Private artifact producer authority, separate from the API's ordinary state.
+    image_authority: Option<crate::image_lifecycle::ImageAuthority>,
 }
 
 impl Clone for TemplateRegistry {
@@ -304,6 +315,7 @@ impl Clone for TemplateRegistry {
             manifest_lock: self.manifest_lock.clone(),
             mutations: self.mutations.clone(),
             iac_store: self.iac_store.clone(),
+            image_authority: self.image_authority.clone(),
         }
     }
 }
@@ -323,11 +335,34 @@ impl TemplateRegistry {
     /// Bind one API state's private execution context; older worker clones keep their original store.
     pub(crate) fn with_iac_store(mut self, store: &crate::persistence::Store) -> Self {
         self.iac_store = Some(store.clone());
+        self.image_authority = None;
         self
     }
     /// Native image pipelines borrow the endpoint context, never an owner supplied by a header.
     pub(crate) fn iac_store(&self) -> Option<&crate::persistence::Store> {
         self.iac_store.as_ref()
+    }
+
+    pub(crate) fn image_authority(&self) -> Option<&crate::image_lifecycle::ImageAuthority> {
+        self.image_authority.as_ref()
+    }
+    /// Only a sealed producer capability for this endpoint can enter its worker clone.
+    pub(crate) fn with_image_authority(
+        mut self,
+        authority: crate::image_lifecycle::ImageAuthority,
+    ) -> Result<Self, TemplateError> {
+        if self
+            .iac_store
+            .as_ref()
+            .ok_or(TemplateError::ImageMutationDenied)?
+            .iac_endpoint_id()
+            .map_err(|_| TemplateError::ImageMutationDenied)?
+            != authority.endpoint()
+        {
+            return Err(TemplateError::ImageMutationDenied);
+        }
+        self.image_authority = Some(authority);
+        Ok(self)
     }
 
     /// Loads the host architecture's built-in template set from `images/`
@@ -394,6 +429,9 @@ impl TemplateRegistry {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .remove(&(spec.alias.clone(), spec.version.clone()));
+            if registration.retired {
+                continue;
+            }
             if !artifacts_present(&self.image_root_path, &spec) {
                 tracing::warn!(
                     template = spec.alias,
@@ -464,6 +502,7 @@ impl TemplateRegistry {
             manifest_lock: Arc::new(Mutex::new(())),
             mutations: Arc::new(Mutex::new(())),
             iac_store: None,
+            image_authority: None,
         })
     }
 
@@ -481,6 +520,170 @@ impl TemplateRegistry {
     /// Pinned image-root directory fd for `openat2` checks.
     pub(crate) fn image_root(&self) -> &File {
         self.image_root.as_ref()
+    }
+
+    /// The mapped root must still be the directory this registry originally opened.
+    pub(crate) fn physical_root(
+        &self,
+    ) -> Result<crate::persistence::iac_kernels::KernelRootPin, TemplateError> {
+        crate::persistence::iac_kernels::KernelRootPin::from_directory(
+            &self.image_root_path,
+            &self.image_root,
+        )
+        .map_err(|_| TemplateError::ImageMutationDenied)
+    }
+
+    /// Include unready catalog versions; a missing artifact is not a missing registration.
+    pub(crate) fn observed_images(
+        &self,
+        alias: &str,
+    ) -> Result<Vec<crate::persistence::iac_images::ObservedImageVersion>, TemplateError> {
+        use crate::persistence::iac_images::ObservedImageVersion;
+        self.physical_root()?;
+        let saved = self.read_registrations_checked()?;
+        if saved
+            .iter()
+            .any(|entry| entry.spec.alias == alias && entry.retired)
+        {
+            return Ok(Vec::new());
+        }
+        let mut result: Vec<_> = saved
+            .into_iter()
+            .filter(|entry| entry.spec.alias == alias)
+            .map(|entry| ObservedImageVersion {
+                spec: entry.spec,
+                pin: entry.pin,
+            })
+            .collect();
+        for version in self
+            .versions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+        {
+            if version.name == alias
+                && !result
+                    .iter()
+                    .any(|entry| entry.spec.version == version.version)
+            {
+                result.push(ObservedImageVersion {
+                    spec: TemplateSpec {
+                        alias: version.name.clone(),
+                        version: version.version.clone(),
+                        kernel: version.kernel.relative_path().to_owned(),
+                        rootfs: version.rootfs.relative_path().to_owned(),
+                        initrd: version
+                            .initrd
+                            .as_ref()
+                            .map(|value| value.relative_path().to_owned()),
+                        boot_args: version.boot_args.clone(),
+                    },
+                    pin: Some(version.stack_pin()),
+                });
+            }
+        }
+        Ok(result)
+    }
+
+    /// Verify the exact proposed files before retaining their immutable preparation.
+    pub(crate) fn preview_image(
+        &self,
+        spec: &TemplateSpec,
+    ) -> Result<Arc<TemplateVersion>, TemplateError> {
+        self.physical_root()?;
+        self.build_version(spec)
+    }
+
+    pub(crate) fn artifact_referenced(&self, relative: &Path) -> Result<bool, TemplateError> {
+        let uses = |spec: &TemplateSpec| {
+            spec.kernel == relative
+                || spec.rootfs == relative
+                || spec.initrd.as_deref() == Some(relative)
+        };
+        if self
+            .read_registrations_checked()?
+            .iter()
+            .any(|entry| !entry.retired && uses(&entry.spec))
+        {
+            return Ok(true);
+        }
+        Ok(self
+            .versions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .any(|version| {
+                version.kernel.relative_path() == relative
+                    || version.rootfs.relative_path() == relative
+                    || version
+                        .initrd
+                        .as_ref()
+                        .is_some_and(|value| value.relative_path() == relative)
+            }))
+    }
+    pub(crate) fn image_artifact_digest(
+        &self,
+        relative: &Path,
+    ) -> Result<Option<String>, TemplateError> {
+        self.physical_root()?;
+        match verify_artifact(&self.image_root, relative) {
+            Ok(artifact) => Ok(Some(artifact.sha256().into())),
+            Err(TemplateError::Io(error)) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Unlink only an original, unchanged artifact through its retained parent directory.
+    pub(crate) fn remove_image_artifact(
+        &self,
+        relative: &Path,
+        sha256: &str,
+    ) -> Result<(), TemplateError> {
+        self.physical_root()?;
+        let alias = match self.image_authority() {
+            Some(crate::image_lifecycle::ImageAuthority::Operation(work)) => {
+                &work.intent().definition().alias
+            }
+            _ => return Err(TemplateError::ImageMutationDenied),
+        };
+        if matches!(catalog_owner_of(relative),Some(owner) if owner != *alias) {
+            return Ok(());
+        }
+        if relative.starts_with(".oci/kernel") || self.artifact_referenced(relative)? {
+            return Ok(());
+        }
+        let artifact = match verify_artifact(&self.image_root, relative) {
+            Ok(artifact) => artifact,
+            Err(TemplateError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        if artifact.sha256() != sha256 {
+            return Err(TemplateError::ImageMutationDenied);
+        }
+        let parent = relative.parent().ok_or(TemplateError::InvalidPath)?;
+        let directory = if parent.as_os_str().is_empty() {
+            self.image_root.try_clone()?
+        } else {
+            open_beneath(&self.image_root, parent)?
+        };
+        let name = std::ffi::CString::new(
+            relative
+                .file_name()
+                .ok_or(TemplateError::InvalidPath)?
+                .as_encoded_bytes(),
+        )
+        .map_err(|_| TemplateError::InvalidPath)?;
+        self.physical_root()?;
+        // SAFETY: unlink one validated filename through the original parent descriptor.
+        if unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) } < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::NotFound {
+                return Err(error.into());
+            }
+        }
+        Ok(())
     }
 
     /// Built-in template specs the project knows about (installed or not).
@@ -553,7 +756,7 @@ impl TemplateRegistry {
         Ok(self
             .read_registrations_checked()?
             .iter()
-            .any(|entry| entry.spec.kernel == relative))
+            .any(|entry| !entry.retired && entry.spec.kernel == relative))
     }
 
     /// Read both maps under the same lock order as alias resolution.
@@ -581,10 +784,12 @@ impl TemplateRegistry {
         self.unregister_alias_checked(alias).ok().flatten()
     }
     /// Delete an unused alias only after its durable catalog mutation succeeds.
+    #[cfg(test)]
     pub(crate) fn unregister_alias_checked(
         &self,
         alias: &str,
     ) -> Result<Option<RemovedAlias>, TemplateError> {
+        let _publication = crate::image_lifecycle::publication_lock(self, alias)?;
         let _mutation = self.mutations.lock().unwrap_or_else(|p| p.into_inner());
         let mut aliases = self
             .aliases
@@ -598,11 +803,13 @@ impl TemplateRegistry {
         let Some(key) = aliases.get(alias).cloned() else {
             return Ok(None);
         };
-        self.forget_registration(alias)?;
-        aliases.remove(alias);
-        let Some(removed) = versions.remove(&key) else {
+        let Some(removed) = versions.get(&key).cloned() else {
             return Ok(None);
         };
+        crate::image_lifecycle::before_removal(self, alias)?;
+        crate::image_lifecycle::write(self, alias, || self.forget_registration(&removed))?;
+        aliases.remove(alias);
+        versions.remove(&key);
         let historical: Vec<_> = versions
             .keys()
             .filter(|key| key.0 == alias)
@@ -636,8 +843,75 @@ impl TemplateRegistry {
         self.register_spec_inner(spec, true, None)
     }
 
+    /// An unready catalog version still retains its immutable content identity.
+    pub(crate) fn check_image_version(
+        &self,
+        spec: &TemplateSpec,
+        pin: &firecrab_stack::TemplatePin,
+    ) -> Result<(), TemplateError> {
+        if self.read_registrations_checked()?.iter().any(|entry| {
+            !entry.retired
+                && entry.spec.alias == spec.alias
+                && entry.spec.version == spec.version
+                && entry.pin.as_ref().is_some_and(|saved| saved != pin)
+        }) {
+            return Err(TemplateError::ImmutableVersion(
+                spec.alias.clone(),
+                spec.version.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Retire even an unready registration without reconstructing missing boot artifacts.
+    pub(crate) fn retire_image(&self, alias: &str) -> Result<(), TemplateError> {
+        let _publication = crate::image_lifecycle::publication_lock(self, alias)?;
+        let _mutation = self.mutations.lock().unwrap_or_else(|p| p.into_inner());
+        crate::image_lifecycle::before_removal(self, alias)?;
+        crate::image_lifecycle::write(self, alias, || {
+            let _manifest = self.manifest_lock.lock().unwrap_or_else(|p| p.into_inner());
+            let mut entries = self.read_registrations_checked()?;
+            if !entries.iter().any(|entry| entry.spec.alias == alias)
+                && let Some(version) = self.resolve_alias(alias)
+            {
+                entries.push(RegisteredTemplate {
+                    spec: TemplateSpec {
+                        alias: alias.into(),
+                        version: version.version.clone(),
+                        kernel: version.kernel.relative_path().to_owned(),
+                        rootfs: version.rootfs.relative_path().to_owned(),
+                        initrd: version
+                            .initrd
+                            .as_ref()
+                            .map(|value| value.relative_path().to_owned()),
+                        boot_args: version.boot_args.clone(),
+                    },
+                    pin: Some(version.stack_pin()),
+                    retired: true,
+                });
+            }
+            for entry in &mut entries {
+                if entry.spec.alias == alias {
+                    entry.retired = true;
+                }
+            }
+            self.write_registrations(&entries)
+        })?;
+        if let Some(store) = self.iac_store() {
+            store
+                .record_image_availability(alias, true)
+                .map_err(|_| TemplateError::ImageMutationDenied)?;
+        }
+        let mut aliases = self.aliases.lock().unwrap_or_else(|p| p.into_inner());
+        let mut versions = self.versions.lock().unwrap_or_else(|p| p.into_inner());
+        aliases.remove(alias);
+        versions.retain(|(name, _), _| name != alias);
+        Ok(())
+    }
+
     /// Select a new immutable version while retaining earlier boot pins and their files.
     /// Historical artifacts are considered for removal only during explicit unused-image deletion.
+    #[cfg(test)]
     pub fn replace_alias(
         &self,
         spec: TemplateSpec,
@@ -654,6 +928,11 @@ impl TemplateRegistry {
         persist: bool,
         expected_pin: Option<firecrab_stack::TemplatePin>,
     ) -> Result<Arc<TemplateVersion>, TemplateError> {
+        let _publication = if persist {
+            crate::image_lifecycle::publication_lock(self, &spec.alias)?
+        } else {
+            None
+        };
         let _mutation = self.mutations.lock().unwrap_or_else(|p| p.into_inner());
         let version = self.build_version(&spec)?;
         if expected_pin.is_some_and(|pin| pin != version.stack_pin()) {
@@ -674,7 +953,16 @@ impl TemplateRegistry {
         // can't be written fails the registration outright, rather than
         // handing back a template that silently evaporates on restart.
         if persist {
-            self.persist_registration(&spec, version.stack_pin())?;
+            self.check_image_version(&spec, &version.stack_pin())?;
+            crate::image_lifecycle::before_publication(self, &spec, &version)?;
+            crate::image_lifecycle::write(self, &spec.alias, || {
+                self.persist_registration(&spec, version.stack_pin())
+            })?;
+            if let Some(store) = self.iac_store() {
+                store
+                    .record_image_availability(&spec.alias, false)
+                    .map_err(|_| TemplateError::ImageMutationDenied)?;
+            }
         }
 
         let mut aliases = self
@@ -712,6 +1000,7 @@ impl TemplateRegistry {
 
     /// Absolute paths of `removed`'s artifacts that no version in
     /// `remaining` still references — i.e. safe for the caller to delete.
+    #[cfg(test)]
     fn orphan_paths(
         &self,
         removed: &TemplateVersion,
@@ -761,11 +1050,6 @@ impl TemplateRegistry {
             .collect()
     }
 
-    /// Absolute path of the runtime registration manifest.
-    fn registrations_path(&self) -> PathBuf {
-        self.image_root_path.join(REGISTRATIONS_FILE)
-    }
-
     /// Startup keeps the rest of the host available if the catalog is corrupt.
     /// Writers always use the checked read and cannot replace corruption with an empty catalog.
     fn read_registrations(&self) -> Vec<RegisteredTemplate> {
@@ -775,12 +1059,36 @@ impl TemplateRegistry {
         })
     }
     fn read_registrations_checked(&self) -> Result<Vec<RegisteredTemplate>, TemplateError> {
-        match fs::read(self.registrations_path()) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|error| TemplateError::Io(io::Error::other(error))),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(error) => Err(error.into()),
+        use std::os::fd::FromRawFd;
+        let catalog =
+            std::ffi::CString::new(REGISTRATIONS_FILE).map_err(|_| TemplateError::InvalidPath)?;
+        // SAFETY: this registry retains the directory descriptor; the C string is fixed.
+        let fd = unsafe {
+            libc::openat(
+                self.image_root.as_raw_fd(),
+                catalog.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if fd < 0 {
+            let error = io::Error::last_os_error();
+            return if error.kind() == io::ErrorKind::NotFound {
+                Ok(Vec::new())
+            } else {
+                Err(error.into())
+            };
         }
+        // SAFETY: openat returned a new owned descriptor.
+        let file = unsafe { File::from_raw_fd(fd) };
+        if !file.metadata()?.is_file() {
+            return Err(TemplateError::ImageMutationDenied);
+        }
+        serde_json::from_reader(file).map_err(|_| {
+            TemplateError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid image registration catalog",
+            ))
+        })
     }
 
     /// Retain each immutable version; the last entry for an alias selects its head.
@@ -801,47 +1109,80 @@ impl TemplateRegistry {
             .filter(|version| version.name == spec.alias)
         {
             if !entries.iter().any(|entry| {
-                entry.spec.alias == version.name && entry.spec.version == version.version
+                !entry.retired
+                    && entry.spec.alias == version.name
+                    && entry.spec.version == version.version
             }) {
                 entries.push(RegisteredTemplate {
                     spec: version.spec(),
                     pin: Some(version.stack_pin()),
+                    retired: false,
                 });
             }
         }
-        entries
-            .retain(|entry| entry.spec.alias != spec.alias || entry.spec.version != spec.version);
+        entries.retain(|entry| {
+            entry.spec.alias != spec.alias || (!entry.retired && entry.spec.version != spec.version)
+        });
         entries.push(RegisteredTemplate {
             spec: spec.clone(),
             pin: Some(pin),
+            retired: false,
         });
         self.write_registrations(&entries)
     }
 
-    /// Remove the durable selection before changing memory or deleting artifact files.
-    fn forget_registration(&self, alias: &str) -> Result<(), TemplateError> {
+    /// A tombstone prevents retained/shared files from resurrecting a deleted built-in alias.
+    #[cfg(test)]
+    fn forget_registration(&self, removed: &TemplateVersion) -> Result<(), TemplateError> {
         let _guard = self.manifest_lock.lock().unwrap_or_else(|p| p.into_inner());
         let mut entries = self.read_registrations_checked()?;
-        let before = entries.len();
-        entries.retain(|entry| entry.spec.alias != alias);
-        if entries.len() == before {
-            return Ok(());
-        }
+        entries.retain(|entry| entry.spec.alias != removed.name);
+        entries.push(RegisteredTemplate {
+            spec: removed.spec(),
+            pin: Some(removed.stack_pin()),
+            retired: true,
+        });
         self.write_registrations(&entries)
     }
 
     /// A unique synced temporary file cannot collide with another catalog publisher.
     fn write_registrations(&self, entries: &[RegisteredTemplate]) -> Result<(), TemplateError> {
-        let mut temporary = tempfile::Builder::new()
-            .prefix(".templates-write-")
-            .tempfile_in(&self.image_root_path)?;
-        serde_json::to_writer_pretty(temporary.as_file_mut(), entries)
-            .map_err(|error| TemplateError::Io(io::Error::other(error)))?;
-        temporary.as_file().sync_all()?;
-        temporary
-            .persist(self.registrations_path())
-            .map_err(|error| TemplateError::Io(error.error))?;
-        Ok(())
+        use std::os::fd::FromRawFd;
+        let name = std::ffi::CString::new(format!(".templates-write-{}.tmp", uuid::Uuid::new_v4()))
+            .map_err(|_| TemplateError::InvalidPath)?;
+        let root = self.image_root.as_raw_fd();
+        // SAFETY: the directory descriptor is retained by self; the unique name is NUL-terminated.
+        let fd = unsafe {
+            libc::openat(
+                root,
+                name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        // SAFETY: openat returned a new owned descriptor.
+        let mut file = unsafe { File::from_raw_fd(fd) };
+        let result = (|| {
+            serde_json::to_writer_pretty(&mut file, entries)
+                .map_err(|error| TemplateError::Io(io::Error::other(error)))?;
+            file.sync_all()?;
+            // SAFETY: both names are relative to the same retained physical directory.
+            let catalog = std::ffi::CString::new(REGISTRATIONS_FILE)
+                .map_err(|_| TemplateError::InvalidPath)?;
+            if unsafe { libc::renameat(root, name.as_ptr(), root, catalog.as_ptr()) } < 0 {
+                return Err(TemplateError::Io(io::Error::last_os_error()));
+            }
+            self.image_root.sync_all()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            // SAFETY: unlink only this attempt's unique temporary name in the original directory.
+            let _ = unsafe { libc::unlinkat(root, name.as_ptr(), 0) };
+        }
+        result
     }
 
     /// Re-verifies `artifact`'s identity (device/inode/length) and content
@@ -1005,7 +1346,7 @@ fn open_beneath(root: &File, path: &Path) -> Result<File, TemplateError> {
         let bytes = path.as_os_str().as_encoded_bytes();
         let c_path = CString::new(bytes).map_err(|_| TemplateError::InvalidPath)?;
         let how = OpenHow {
-            flags: (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW) as u64,
+            flags: (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK) as u64,
             mode: 0,
             resolve: RESOLVE_BENEATH
                 | RESOLVE_NO_SYMLINKS
@@ -1044,7 +1385,7 @@ fn open_beneath(root: &File, path: &Path) -> Result<File, TemplateError> {
         let root_path = root_path.to_str().map_err(|_| TemplateError::InvalidPath)?;
         OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(Path::new(root_path).join(path))
             .map_err(TemplateError::Io)
     }
@@ -1454,7 +1795,7 @@ mod tests {
     /// Deleting a template must not leave it in the manifest, or every
     /// later startup would re-report it as a template with missing files.
     #[test]
-    fn unregistering_a_template_drops_it_from_the_restart_manifest() {
+    fn unregistering_a_template_retires_its_restart_selection() {
         let directory = tempdir().unwrap();
         let root = directory.path();
         fs::write(root.join("kernel"), b"kernel").unwrap();
@@ -1475,7 +1816,12 @@ mod tests {
 
         registry.unregister_alias("derived").unwrap();
 
-        assert!(registry.read_registrations().is_empty());
+        assert!(
+            registry
+                .read_registrations()
+                .iter()
+                .all(|entry| entry.retired)
+        );
         assert!(
             TemplateRegistry::load_from(root)
                 .unwrap()
@@ -1870,6 +2216,41 @@ mod tests {
                 .is_none()
         );
         assert!(restarted.references_kernel(&spec.kernel).unwrap());
+    }
+
+    #[test]
+    fn deleted_builtin_alias_stays_retired_when_another_image_keeps_its_files() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let spec = TemplateRegistry::known_specs().remove(0);
+        for relative in [&spec.kernel, &spec.rootfs]
+            .into_iter()
+            .chain(spec.initrd.as_ref())
+        {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"shared-catalog-artifact").unwrap();
+        }
+        let registry = TemplateRegistry::load_from(root).unwrap();
+        let mut borrowed = spec.clone();
+        borrowed.alias = "borrowed-source".into();
+        registry.register_spec(borrowed.clone()).unwrap();
+        let (_, orphans) = registry
+            .unregister_alias_checked(&spec.alias)
+            .unwrap()
+            .unwrap();
+        assert!(orphans.is_empty());
+        let restarted = TemplateRegistry::load_from(root).unwrap();
+        assert!(restarted.resolve_alias(&spec.alias).is_none());
+        assert!(restarted.resolve_alias(&borrowed.alias).is_some());
+        assert!(root.join(&spec.rootfs).is_file());
+        restarted.register_spec(spec.clone()).unwrap();
+        assert!(
+            TemplateRegistry::load_from(root)
+                .unwrap()
+                .resolve_alias(&spec.alias)
+                .is_some()
+        );
     }
 
     #[test]

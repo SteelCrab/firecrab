@@ -199,7 +199,7 @@ impl Store {
         &self,
         request: &ChangeResourceOwner,
     ) -> Result<ResourceOwnership, PersistenceError> {
-        self.change_iac_owner_checked(request, None, None)
+        self.change_iac_owner_checked(request, None, None, None)
     }
 
     /// Hold the encrypted vault's file lock through the SQLite ownership commit.
@@ -235,7 +235,7 @@ impl Store {
                         .iter()
                         .any(|record| record.summary.id == id)
                 };
-                Ok(self.change_iac_owner_checked(request, Some(exists), None))
+                Ok(self.change_iac_owner_checked(request, Some(exists), None, None))
             })
             .map_err(|_| PersistenceError::IacVaultUnavailable)?
     }
@@ -249,7 +249,18 @@ impl Store {
         if request.resource.kind != "kernel" {
             return Err(PersistenceError::UnsupportedIacResource);
         }
-        self.change_iac_owner_checked(request, None, Some(presence))
+        self.change_iac_owner_checked(request, None, Some(presence), None)
+    }
+
+    pub(crate) fn change_iac_image_owner(
+        &self,
+        request: &ChangeResourceOwner,
+        presence: &crate::image_lifecycle::ImagePresence,
+    ) -> Result<ResourceOwnership, PersistenceError> {
+        if request.resource.kind != "image" {
+            return Err(PersistenceError::UnsupportedIacResource);
+        }
+        self.change_iac_owner_checked(request, None, None, Some(presence))
     }
 
     fn change_iac_owner_checked(
@@ -257,6 +268,7 @@ impl Store {
         request: &ChangeResourceOwner,
         vault_presence: Option<bool>,
         kernel_presence: Option<&crate::kernel_lifecycle::KernelPresence>,
+        image_presence: Option<&crate::image_lifecycle::ImagePresence>,
     ) -> Result<ResourceOwnership, PersistenceError> {
         let mut request = request.clone();
         request
@@ -323,6 +335,10 @@ impl Store {
             if request.owner.is_some() && !exists {
                 return Err(PersistenceError::InvalidStackResource);
             }
+        } else if request.resource.kind == "image" {
+            image_presence
+                .ok_or(PersistenceError::UnsupportedIacResource)?
+                .check(&request.resource, endpoint(&tx)?, request.owner.is_some())?;
         } else if request.resource.kind == "kernel" {
             super::iac_kernels::validate_identity(&request.resource)?;
             if request.owner.is_some() {
@@ -431,6 +447,11 @@ impl Store {
         )?;
         if request.resource.kind == "kernel" && request.owner.is_some() {
             kernel_presence
+                .ok_or(PersistenceError::UnsupportedIacResource)?
+                .claim()?;
+        }
+        if request.resource.kind == "image" {
+            image_presence
                 .ok_or(PersistenceError::UnsupportedIacResource)?
                 .claim()?;
         }

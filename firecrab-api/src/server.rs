@@ -577,7 +577,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
                 .put(handlers::microregistry::put_docker_hub_credential)
                 .delete(handlers::microregistry::delete_docker_hub_credential),
         )
-        .route("/api/oci/import", post(handlers::oci::start_oci_import))
+        .route("/api/oci/import", post(handlers::image_mutations::import))
         .route(
             "/api/oci/import/{alias}",
             get(handlers::oci::get_oci_import),
@@ -585,11 +585,11 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/images", get(handlers::images::list_images))
         .route(
             "/api/images/{alias}",
-            get(handlers::images::list_image_detail).delete(handlers::images::delete_image),
+            get(handlers::images::list_image_detail).delete(handlers::image_mutations::delete),
         )
         .route(
             "/api/images/{alias}/kernel",
-            axum::routing::put(handlers::images::update_image_kernel),
+            axum::routing::put(handlers::image_mutations::kernel),
         )
         .route("/api/kernels", get(handlers::kernels::list_kernels))
         .route(
@@ -602,7 +602,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/images/{alias}/install",
-            get(handlers::images::get_image_install).post(handlers::images::start_image_install),
+            get(handlers::images::get_image_install).post(handlers::image_mutations::install),
         )
         .route(
             "/api/images/{alias}/package",

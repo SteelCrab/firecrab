@@ -136,12 +136,22 @@ test("image packages omit default suggestions but register and install actual pa
         .body,
       { alias: "custom-image", version: "v2" },
     );
-    assert.ok(
-      fixture.requests.some(
-        (r) =>
-          r.method === "POST" && r.path === "/api/images/custom-image/install",
-      ),
+    await expect
+      .poll(
+        () =>
+          fixture.requests.filter(
+            (r) =>
+              r.method === "POST" &&
+              r.path === "/api/images/custom-image/install",
+          ).length,
+      )
+      .toBe(1);
+    const install = fixture.requests.find(
+      (r) =>
+        r.method === "POST" && r.path === "/api/images/custom-image/install",
     );
+    assert.match(install.headers["x-firecrab-operation-id"], /^[a-f0-9-]{36}$/);
+    assert.equal(install.headers["x-firecrab-endpoint-id"], fixture.endpointId);
   } finally {
     await page.close();
     await browser.close();

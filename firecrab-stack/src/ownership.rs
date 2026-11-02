@@ -28,7 +28,9 @@ impl ManagedResource {
         {
             return Err("provide an inventory kind and an exact resource identity");
         }
-        if let Ok(id) = Uuid::parse_str(&self.id) {
+        if self.kind != "image"
+            && let Ok(id) = Uuid::parse_str(&self.id)
+        {
             if id.is_nil() {
                 return Err("resource UUID must be non-nil");
             }
@@ -227,4 +229,25 @@ pub fn resource_kinds() -> &'static [String] {
             .map(|entry| entry.id)
             .collect()
     })
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    #[test]
+    fn image_aliases_keep_exact_case_even_when_the_alias_looks_like_a_uuid() {
+        let alias = "F57A1B53-F11B-4B3D-9C3A-F58060D2D7BF";
+        let mut image = ManagedResource {
+            kind: "image".into(),
+            id: alias.into(),
+        };
+        image.normalize().unwrap();
+        assert_eq!(image.id, alias);
+        let mut vm = ManagedResource {
+            kind: "vm".into(),
+            id: alias.into(),
+        };
+        vm.normalize().unwrap();
+        assert_eq!(vm.id, alias.to_ascii_lowercase());
+    }
 }

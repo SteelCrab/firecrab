@@ -165,6 +165,13 @@ pub async fn create_pool(
         .map_err(|_| AppError::internal(request_id.0))?
     {
         Ok(()) => {}
+        Err(PoolStoreError::ImageBusy) => {
+            return Err(AppError::conflict(
+                "iac_resource_busy",
+                "Recover the original image operation first",
+                request_id.0,
+            ));
+        }
         Err(PoolStoreError::DuplicateName(_)) => {
             return Err(AppError::validation(
                 BTreeMap::from([(

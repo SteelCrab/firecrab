@@ -17,6 +17,7 @@ mod guest_ssh;
 mod handlers;
 mod host_platform;
 mod image_install;
+mod image_lifecycle;
 mod ipam;
 mod kernel_lifecycle;
 mod kernel_manager;

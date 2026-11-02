@@ -7,6 +7,7 @@ pub mod console;
 pub mod console_sentinel;
 pub mod iac;
 pub(crate) mod iac_queries;
+pub(crate) mod image_mutations;
 pub mod images;
 #[cfg(test)]
 #[allow(clippy::err_expect)]

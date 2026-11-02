@@ -13,6 +13,41 @@ export type NativeMutationResult<T> = {
   acknowledge: () => void;
 };
 export class NativeMutationPending extends Error {}
+/** A terminal poll clears only its own retained operation after checking the durable receipt. */
+export async function acknowledgeNativePoll(
+  method: string,
+  url: string,
+  action: string,
+  kind: string,
+  resource: string,
+) {
+  const key = `firecrab.native-mutation:${method}:${url}`;
+  const raw = sessionStorage.getItem(key);
+  if (raw === null) return;
+  try {
+    const pending = JSON.parse(raw) as Pending;
+    if (
+      typeof pending.operationId !== "string" ||
+      typeof pending.endpointId !== "string"
+    )
+      return;
+    const operation = await fetchJson<Operation>(
+      `/api/iac/native-operations/${encodeURIComponent(pending.operationId)}`,
+    );
+    if (
+      operation.operationId === pending.operationId &&
+      operation.ownership.endpointId === pending.endpointId &&
+      operation.action === action &&
+      operation.ownership.resource.kind === kind &&
+      operation.ownership.resource.id === resource &&
+      ["succeeded", "failed"].includes(operation.state) &&
+      sessionStorage.getItem(key) === raw
+    )
+      sessionStorage.removeItem(key);
+  } catch {
+    /* Keep the original identity when its receipt is unavailable. */
+  }
+}
 type ResourceIdentity = string | ((operationId: string) => string);
 type MutationTarget =
   | ResourceIdentity
@@ -158,8 +193,8 @@ export async function nativeMutation<T>(
     if (operation.state === "running" || operation.state === "needs_recovery")
       throw new NativeMutationPending(
         operation.state === "running"
-          ? "The original database request is still running. Review it in Stack operations."
-          : "The original database request needs recovery. Review it in Stack operations.",
+          ? "The original request is still running. Review it in Stack operations."
+          : "The original request needs recovery. Review it in Stack operations.",
       );
     throw new NativeMutationPending(
       "Original operation state is unavailable; review Stack operations.",

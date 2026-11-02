@@ -28,6 +28,9 @@ impl TemplateRegistry {
         if !owned_rootfs(&spec.rootfs) {
             return Err(io::Error::other("invalid Deploy cache rootfs"));
         }
+        let scoped = crate::image_lifecycle::publication_scope(self, &spec.alias)
+            .map_err(io::Error::other)?;
+        let registry = &scoped;
         let _mutation = self.mutations.lock().unwrap_or_else(|p| p.into_inner());
         let mut aliases = self.aliases.lock().unwrap_or_else(|p| p.into_inner());
         let mut versions = self.versions.lock().unwrap_or_else(|p| p.into_inner());
@@ -60,18 +63,18 @@ impl TemplateRegistry {
             // Unlike an explicit best-effort image delete, GC must not forget
             // other registrations or proceed after an unreadable manifest.
             let _manifest = self.manifest_lock.lock().unwrap_or_else(|p| p.into_inner());
-            let mut entries: Vec<RegisteredTemplate> = match fs::read(self.registrations_path()) {
-                Ok(bytes) => serde_json::from_slice(&bytes).map_err(io::Error::other)?,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => vec![],
-                Err(error) => return Err(error),
-            };
+            let mut entries = self
+                .read_registrations_checked()
+                .map_err(io::Error::other)?;
             entries.retain(|entry| {
                 entry.spec.alias != spec.alias
                     || entry.spec.version != spec.version
                     || entry.spec.rootfs != spec.rootfs
             });
-            self.write_registrations(&entries)
-                .map_err(io::Error::other)?;
+            crate::image_lifecycle::write(registry, &spec.alias, || {
+                self.write_registrations(&entries)
+            })
+            .map_err(io::Error::other)?;
             if aliases.get(&spec.alias) == Some(&key) {
                 aliases.remove(&spec.alias);
             }

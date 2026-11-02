@@ -18,6 +18,10 @@ type Operation = {
 };
 type Page = { operations: Operation[]; nextBefore: string | null };
 const ACTIONS: Record<string, [string, string]> = {
+  install_image: ["Install image", "이미지 설치"],
+  update_image_kernel: ["Update image kernel", "이미지 커널 변경"],
+  delete_image: ["Delete image", "이미지 삭제"],
+  import_image: ["Import OCI image", "OCI 이미지 가져오기"],
   install_kernel: ["Install kernel", "커널 설치"],
   delete_kernel: ["Delete kernel", "커널 삭제"],
   prepare_database_broker: ["Prepare database broker", "DB 브로커 준비"],
@@ -61,6 +65,10 @@ function validOperation(value: Operation): boolean {
   );
 }
 const RECOVERABLE = new Set([
+  "install_image",
+  "update_image_kernel",
+  "delete_image",
+  "import_image",
   "install_kernel",
   "delete_kernel",
   "prepare_database_broker",

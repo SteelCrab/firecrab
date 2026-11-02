@@ -53,6 +53,52 @@ pub(super) async fn host_kernel_pair_managed(
     templates: &TemplateRegistry,
 ) -> Result<KernelBootPair, ResolveError> {
     let root = templates.image_root_path();
+    if let Some(crate::image_lifecycle::ImageAuthority::Operation(work)) =
+        templates.image_authority()
+    {
+        work.check()
+            .map_err(|_| ResolveError::Malformed("Original image authority changed".into()))?;
+        if let crate::persistence::iac_images::ImageSource::Oci {
+            kernel_version,
+            kernel_override,
+            ..
+        } = &work.intent().definition().source
+        {
+            if let Some((relative, expected)) = kernel_override {
+                let actual =
+                    kernel::inspect_kernel(&root.join(relative), Architecture::HOST).await?;
+                if actual.encoded() != expected {
+                    return Err(ResolveError::Malformed(
+                        "Original image kernel changed".into(),
+                    ));
+                }
+                let mut pair =
+                    kernel::boot_pair(Architecture::HOST, relative.clone(), kernel_version);
+                pair.boot_args = work
+                    .kernel(relative, actual.encoded(), &pair.boot_args)
+                    .map_err(|_| ResolveError::Malformed("Original image kernel changed".into()))?;
+                return Ok(pair);
+            }
+            let lease = crate::kernel_lifecycle::ensure(
+                templates,
+                kernel_version,
+                kernel::configured_releases_url().as_deref(),
+            )
+            .await?;
+            let mut pair = kernel::boot_pair(
+                Architecture::HOST,
+                lease.relative().to_owned(),
+                kernel_version,
+            );
+            pair.kernel_lease = Some(lease);
+            let actual =
+                kernel::inspect_kernel(&root.join(&pair.kernel), Architecture::HOST).await?;
+            pair.boot_args = work
+                .kernel(&pair.kernel, actual.encoded(), &pair.boot_args)
+                .map_err(|_| ResolveError::Malformed("Original image kernel changed".into()))?;
+            return Ok(pair);
+        }
+    }
     if templates.iac_store().is_none() {
         #[cfg(test)]
         {

@@ -42,6 +42,20 @@ impl KernelRootPin {
             inode: metadata.ino(),
         })
     }
+    /// Bind the identity to an already-open physical directory, then check its mapping.
+    pub(crate) fn from_directory(path: &Path, directory: &std::fs::File) -> std::io::Result<Self> {
+        let metadata = directory.metadata()?;
+        if !metadata.is_dir() {
+            return Err(std::io::Error::other("image root is not a directory"));
+        }
+        let pin = Self {
+            path: path.to_owned(),
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        };
+        pin.check(path)?;
+        Ok(pin)
+    }
     /// The current configured path must still name the original physical directory.
     pub(crate) fn check(&self, current: &Path) -> std::io::Result<()> {
         if Self::capture(current)? != *self {
@@ -206,7 +220,13 @@ impl Store {
         &self,
         target: &ManagedResource,
     ) -> Result<(), PersistenceError> {
-        iac_native::ensure_idle(&self.lock(), target)
+        let busy: bool = self.lock().query_row(
+            "SELECT EXISTS(SELECT 1 FROM iac_native_operations WHERE kind=?1 AND resource_id=?2 AND state IN ('running','needs_recovery'))",
+            params![target.kind,target.id],|row|row.get(0))?;
+        if busy {
+            return Err(PersistenceError::IacResourceBusy);
+        }
+        Ok(())
     }
     /// Resolve original retries before reading a mutable alias, root mapping or download catalog.
     pub(crate) fn kernel_retry(

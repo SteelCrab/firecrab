@@ -457,7 +457,7 @@ fn normalize_base_url(raw: &str) -> Option<String> {
 }
 
 /// Download and verify a package, leaving it in the persistent local package
-/// cache for a later [`run_image_install`] call.
+/// cache for a later [`install_staged_package_once`] call.
 pub async fn run_package_install(
     tracker: ImageInstallTracker,
     templates: TemplateRegistry,
@@ -474,6 +474,7 @@ pub async fn run_package_install(
 
 /// Extract and register an image from a package prepared by
 /// [`run_package_install`].  This deliberately performs no network download.
+#[cfg(test)]
 pub async fn run_image_install(
     tracker: ImageInstallTracker,
     templates: TemplateRegistry,
@@ -611,11 +612,13 @@ async fn verify_package_members(
     Ok(())
 }
 
-async fn install_staged_package_once(
+pub(crate) async fn install_staged_package_once(
     tracker: &ImageInstallTracker,
     templates: &TemplateRegistry,
     spec: &TemplateSpec,
 ) -> Result<(), String> {
+    use sha2::Digest;
+    use std::os::unix::fs::OpenOptionsExt;
     let root = templates.image_root_path().to_path_buf();
     let archive = staged_package_path(&root, &spec.alias);
 
@@ -636,11 +639,54 @@ async fn install_staged_package_once(
     let templates = templates.clone();
     let spec = spec.clone();
     tokio::task::spawn_blocking(move || {
+        let pinned = match templates.image_authority() {
+            Some(crate::image_lifecycle::ImageAuthority::Operation(work)) => {
+                work.check()
+                    .map_err(|_| "Original image operation is unavailable".to_owned())?;
+                match &work.intent().definition().source {
+                    crate::persistence::iac_images::ImageSource::Package {
+                        archive_sha256, ..
+                    } => Some(archive_sha256.clone()),
+                    _ => return Err("Original image source does not match".into()),
+                }
+            }
+            _ => None,
+        };
         let staging = tempfile::Builder::new()
             .prefix(".image-install-")
             .tempdir_in(&root)
             .map_err(|error| format!("create package staging: {error}"))?;
-        extract_archive_blocking(&archive, staging.path())?;
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&archive)
+            .map_err(|_| "Cannot open original image package".to_owned())?;
+        if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+            return Err("Original image package is not a regular file".into());
+        }
+        if let Some(expected) = pinned {
+            use std::io::{Read, Seek};
+            let mut hash = sha2::Sha256::new();
+            let mut buffer = [0; 65536];
+            loop {
+                let count = file
+                    .read(&mut buffer)
+                    .map_err(|_| "Cannot verify original image package".to_owned())?;
+                if count == 0 {
+                    break;
+                }
+                hash.update(&buffer[..count]);
+            }
+            if format!("{:x}", hash.finalize()) != expected {
+                return Err("Original image package changed".into());
+            }
+            file.rewind()
+                .map_err(|_| "Cannot rewind original image package".to_owned())?;
+        }
+        extract_archive_file(file, staging.path())?;
+        templates
+            .physical_root()
+            .map_err(|_| "Original image root changed".to_owned())?;
         let spec = publish_package_artifacts(&root, staging.path(), spec)?;
         templates
             .register_spec(spec)
@@ -883,8 +929,13 @@ async fn extract_archive(archive: &Path, dest: &Path) -> Result<(), String> {
         .map_err(|error| format!("extract task panicked: {error}"))?
 }
 
+#[cfg(test)]
 fn extract_archive_blocking(archive: &Path, dest: &Path) -> Result<(), String> {
     let file = std::fs::File::open(archive).map_err(|error| format!("open archive: {error}"))?;
+    extract_archive_file(file, dest)
+}
+
+fn extract_archive_file(file: std::fs::File, dest: &Path) -> Result<(), String> {
     let decoder = zstd::Decoder::new(file).map_err(|error| format!("decode archive: {error}"))?;
     let mut archive = tar::Archive::new(decoder);
     std::fs::create_dir_all(dest)

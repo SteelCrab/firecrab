@@ -24,6 +24,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "database_rabbitmq",
     "database_migration",
     "kernel",
+    "image",
     "storage_connection",
     "secret",
     "secret_connection",

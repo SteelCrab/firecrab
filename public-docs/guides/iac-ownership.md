@@ -7,7 +7,7 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 ## Current support
 
 Network, standalone VM, MicroService, registered storage root, volume/VM attachment, security group,
-shell, schedule, pool, Queue, database connection/binding/events/broker/migration, S3 connection, Secret, Secret connection,
+shell, schedule, pool, Queue, database connection/binding/events/broker/migration, image, kernel, S3 connection, Secret, Secret connection,
 Auth, registry, AI connection, project model-default, Sandbox environment/project, Git source,
 Sandbox access policy, Queue engine, cluster host/placement/service, service automatic deployment, OTLP settings and Deploy tokens
 can move between native Stack and a Terraform state owner.
@@ -295,6 +295,6 @@ operator revocation, retired credentials and parent-removal protection.
 See [volume attachments and native operation recovery](iac-native-operations.md) for
 scoped mount ownership, VM cleanup fences and the active-work dashboard.
 
-See [automatic deployment policy ownership](iac-auto-deploy.md) for independent slots and private image-writer fencing. See [kernel ownership and recovery](iac-kernels.md) for immutable artifact leases.
+See [automatic deployment policy ownership](iac-auto-deploy.md) for independent slots and private image-writer fencing. See [kernel ownership and recovery](iac-kernels.md) for immutable artifact leases. See [image ownership and recovery](iac-images.md) for alias ownership, retained boot versions and original OCI preparation.
 
 Database connection edits compare captured authority during credential commits. Service edits and deletion recheck their exact writer in SQLite; an old Stack operation never becomes an idle native writer.

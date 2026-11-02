@@ -250,7 +250,8 @@ pub(crate) async fn definition(
     Ok(KernelDefinition {
         version,
         architecture: Architecture::HOST.as_str().into(),
-        root: KernelRootPin::capture(root)
+        root: templates
+            .physical_root()
             .map_err(|_| failure("Cannot identify kernel installation root"))?,
         releases_enabled,
         expected_image_sha256,

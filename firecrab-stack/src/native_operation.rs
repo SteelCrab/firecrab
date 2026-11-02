@@ -8,6 +8,14 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeAction {
+    /// Install one original package into its immutable image alias version.
+    InstallImage,
+    /// Select a new immutable image version using the original verified kernel.
+    UpdateImageKernel,
+    /// Remove the original unused image selection under its retained artifact policy.
+    DeleteImage,
+    /// Import the original immutable OCI digest without retargeting its alias.
+    ImportImage,
     /// Install the original immutable guest kernel and retain its verified source.
     InstallKernel,
     /// Remove only an unused original guest kernel artifact.

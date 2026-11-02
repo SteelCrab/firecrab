@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Retain image install, OCI import, kernel update and deletion intents with exact
+  source, credential and boot pins. Reuse completed OCI files during recovery,
+  fence late writers and SQL creation, support image ownership transfer and
+  explicit artifact retention, and preserve browser retry identities (#548).
+
 - Preserve immutable image versions, their verified boot hashes and pre-seeded
   locators across alias changes and API restart. Refuse changed version reuse,
   corrupt catalog overwrites and implicit rollback after missing artifacts.

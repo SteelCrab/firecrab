@@ -858,14 +858,46 @@ async fn run_build(
         .await
         .map_err(|error| unavailable(architecture, format!("wait for kernel builder: {error}")))?;
     if !status.success() {
+        let stdout = stdout?;
+        let stderr = stderr?;
+        if let Some((tracker, job)) = progress {
+            tracker.append_log(
+                job,
+                format!(
+                    "[kernel:build] failed; exit={}; reason={}",
+                    status
+                        .code()
+                        .map_or_else(|| "signal".into(), |code| code.to_string()),
+                    build_failure_reason(&stdout, &stderr)
+                ),
+            );
+        }
         return Err(unavailable(
             architecture,
-            format!("kernel build failed ({status}):\n{}\n{}", stdout?, stderr?),
+            format!("kernel build failed ({status}):\n{stdout}\n{stderr}"),
         ));
     }
     stdout?;
     stderr?;
     Ok(())
+}
+
+/// Only fixed diagnostic categories reach public progress; compiler paths and text remain private.
+fn build_failure_reason(stdout: &str, stderr: &str) -> &'static str {
+    for (pattern, reason) in [
+        ("No space left on device", "storage_full"),
+        ("Killed signal", "compiler_killed"),
+        ("out of memory", "memory_exhausted"),
+        ("No rule to make target", "missing_build_target"),
+        ("command not found", "missing_build_tool"),
+        ("No such file or directory", "missing_build_input"),
+        ("Permission denied", "permission_denied"),
+    ] {
+        if stdout.contains(pattern) || stderr.contains(pattern) {
+            return reason;
+        }
+    }
+    "compiler_failed"
 }
 
 /// Forward compiler output to the install job and retain a bounded error tail.
@@ -1121,6 +1153,23 @@ fn kernel_io(operation: &'static str, path: PathBuf, source: io::Error) -> Resol
 #[cfg(test)]
 mod log_tests {
     use super::*;
+    #[test]
+    fn compiler_failure_categories_never_copy_private_diagnostics() {
+        for (input, expected) in [
+            ("/private/key: No space left on device", "storage_full"),
+            (
+                "cc1: Killed signal in /private/provider-response",
+                "compiler_killed",
+            ),
+            (
+                "/private/build: fatal error: /private/token.h: No such file or directory",
+                "missing_build_input",
+            ),
+            ("private-provider-response", "compiler_failed"),
+        ] {
+            assert_eq!(build_failure_reason("", input), expected);
+        }
+    }
     #[tokio::test]
     async fn compiler_progress_publishes_fixed_phases_without_private_paths() {
         let tracker = ImageInstallTracker::disabled();

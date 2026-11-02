@@ -62,6 +62,7 @@ pub(crate) mod iac_database_operations;
 mod iac_database_targets;
 mod iac_dependencies;
 mod iac_deploy_tokens;
+pub(crate) mod iac_images;
 pub(crate) mod iac_kernels;
 pub(crate) mod iac_managed_database_brokers;
 pub(crate) mod iac_native;
@@ -915,6 +916,7 @@ impl Store {
         conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_UNIQUE_HOST_PORT_SQL, [])?;
         pools::create_tables(&conn)?;
+        conn.execute_batch(iac_images::SCHEMA)?;
         conn.execute_batch(cluster::SCHEMA)?;
         conn.execute_batch(cluster_services::SCHEMA)?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
@@ -983,6 +985,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         database_broker_mutations::ensure_vm_unreserved(&tx, vm.id)?;
         iac_vm_deletes::ensure_available(&tx, vm.id)?;
+        iac_native::ensure_idle(&tx, &iac_images::resource(&vm.template))?;
         execute_record(&tx, INSERT_SQL, vm)?;
         tx.commit()?;
         Ok(())
