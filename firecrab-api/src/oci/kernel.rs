@@ -280,8 +280,7 @@ pub(crate) fn parse_published_releases(bytes: &[u8]) -> Vec<PublishedRelease> {
         .collect()
 }
 
-/// Reuse the same catalog snapshot that resolved the active stable release.
-
+/// Normalize missing patch components for numeric release ordering.
 fn version_key(version: &str) -> Vec<u32> {
     let mut parts: Vec<u32> = version
         .split('.')
@@ -290,8 +289,6 @@ fn version_key(version: &str) -> Vec<u32> {
     parts.resize(3, 0);
     parts
 }
-
-/// A newly published release can precede an update to the cached checksum index.
 
 /// A bounded cache avoids reaching upstream on every dashboard poll.
 /// Stale metadata remains useful when a host temporarily loses its network.
