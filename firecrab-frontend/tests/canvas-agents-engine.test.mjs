@@ -86,3 +86,10 @@ test('closing an agent panel clears its cache without cancelling its project tas
  assert.notEqual(f.manager.get(f.tab,f.node),old);assert.equal(f.records.size,1);
  assert.equal(f.calls.filter(c=>c.path.includes('/cancel')).length,0);
 });
+
+test('surrounding request whitespace matches server normalization without an ambiguous accepted task',async()=>{
+ const f=fixture();await f.ready();f.manager.change(f.tab,f.node,{draft:'  Update saved files\n'});
+ await f.manager.submit(f.tab,f.node);
+ assert.equal(f.records.size,1);assert.equal([...f.records.values()][0].request.input,'Update saved files');
+ assert.equal(agentDocument(f.node,f.project).pending,undefined);assert.equal(agentDocument(f.node,f.project).draft,'');
+});

@@ -242,7 +242,7 @@ export class FolderAgents {
   ) {
     if (
       task.request.instructionSnapshotId !== pending.snapshot ||
-      task.request.input !== pending.request.input ||
+      task.request.input !== pending.request.input.trim() ||
       selectionKey(task.selection) !== selectionKey(pending.request.selection)
     )
       throw new Error("The accepted task differs from the saved request");
@@ -254,7 +254,7 @@ export class FolderAgents {
       ...d,
       pending: undefined,
       taskId: task.id,
-      draft: d.draft === pending.request.input ? "" : d.draft,
+      draft: d.draft.trim() === pending.request.input.trim() ? "" : d.draft,
     });
   }
   async submit(t: Tab, n: Node) {
@@ -284,7 +284,7 @@ export class FolderAgents {
           snapshot,
           request: {
             kind: "code",
-            input: d.draft,
+            input: d.draft.trim(),
             projectDirectory: d.directory,
             instructionSnapshotId: snapshot,
             selection: { ...d.selection! },

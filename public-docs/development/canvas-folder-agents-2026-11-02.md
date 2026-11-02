@@ -31,11 +31,14 @@ routing and task-catalog cleanup. It does not restore the reverted IaC implement
   folder runtime/receipt fencing, saved instructions, project DB migration, editor
   lifecycle, retained-data delete rejection and legacy task-catalog cleanup.
 - API and API-types Clippy, all targets with warnings denied: passed.
-- Agent request/reconnect Node tests: **10 passed**.
+- Agent request/reconnect Node tests: **11 passed**, including server-compatible
+  surrounding-whitespace normalization so an accepted request can be confirmed.
 - Frontend type check, production build and lint: passed. Existing warnings remain
   outside the changed Canvas files.
 - Documentation links, language checks, product versions and diff whitespace: passed.
 - Five hosted browser regressions are authored for the existing Frontend CI job.
+  The first run exposed an ambiguous test locator matching both the model selector
+  and its refresh button; the selector now uses an exact accessible-label match.
   A standalone local Playwright browser was not launched.
 
 An initial broader Rust selection on macOS passed 155 tests, failed 16 and skipped

@@ -23,8 +23,8 @@ async function openAgent() {
   await page.getByLabel('Project', { exact: true }).selectOption(canvas.project);
   await page.getByRole('button', { name: 'Open project', exact: true }).click();
   await page.getByRole('button', { name: 'Folder agent', exact: true }).click();
-  await expect(page.getByLabel('Agent model')).toContainText('qa-chatgpt');
-  await page.getByLabel('Agent model').selectOption({ label: 'ChatGPT · UI fixture · no model execution · qa-chatgpt' });
+  await expect(page.getByLabel('Agent model', { exact: true })).toContainText('qa-chatgpt');
+  await page.getByLabel('Agent model', { exact: true }).selectOption({ label: 'ChatGPT · UI fixture · no model execution · qa-chatgpt' });
   await page.getByLabel('Agent request', { exact: true }).fill('Inspect saved project files');
   await expect(page.getByRole('button', { name: 'Start file task', exact: true })).toBeEnabled();
 }
@@ -80,8 +80,8 @@ test('ChatGPT and Claude require explicit selection and new tabs begin without a
   await page.getByLabel('Project', { exact: true }).selectOption(canvas.project);
   await page.getByRole('button', { name: 'Open project', exact: true }).click();
   await page.getByRole('button', { name: 'Folder agent', exact: true }).click();
-  await expect(page.getByLabel('Agent model')).toContainText('qa-claude');
-  await page.getByLabel('Agent model').selectOption({ index: 2 });
+  await expect(page.getByLabel('Agent model', { exact: true })).toContainText('qa-claude');
+  await page.getByLabel('Agent model', { exact: true }).selectOption({ index: 2 });
   await page.getByLabel('Agent request', { exact: true }).fill('Claude file task');
   await expect(page.getByRole('button', { name: 'Start file task', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Verify file tools · sends a model probe', exact: true }).click();
