@@ -155,6 +155,24 @@ deletes its owned broker queues and local capture record. Application rows and
 source outbox evidence remain. Migration jobs may record derived detachment only
 under their original running execution generation.
 
+## Managed database broker safeguards
+
+Managed database RabbitMQ supervision retains a captured owner, configuration
+generation and checkpoint. Explicit configuration changes invalidate old workers
+even if the values later change back. A dedicated OS file lock excludes another
+API supervisor without using the scheduler's database-file lock.
+
+The complete broker UUID set is saved before any broker VM insertion. A retry
+uses those same UUIDs. Insertion rechecks its private parent grant inside SQLite.
+Generated broker VMs cannot be independently adopted or edited through the VM
+API. Missing recorded VMs, disks or addresses require restoration of their
+original resources; they do not permit an empty replacement. Rejecting a
+duplicate VM creation preserves its existing record and address.
+
+These controller safeguards are prerequisites. Complete native broker operation
+journals, broker ownership transfer and expanded Stack/Terraform execution remain
+pending in stage 2 and later stages.
+
 ## Dashboard retries
 
 The database dashboard retains the operation UUID and endpoint UUID before sending

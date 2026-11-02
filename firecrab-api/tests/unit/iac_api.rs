@@ -1124,5 +1124,7 @@ mod database_operation_tests;
 #[path = "iac_database_bindings.rs"]
 mod database_binding_tests;
 
+#[path = "iac_database_brokers.rs"]
+mod database_broker_tests;
 #[path = "iac_database_events.rs"]
 mod database_event_tests;

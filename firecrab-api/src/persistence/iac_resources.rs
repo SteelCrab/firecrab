@@ -58,7 +58,11 @@ pub(super) fn ensure_independent(
             [&resource.id],
             |row| row.get::<_, bool>(0),
         )?;
-    if generated || queue_child {
+    let database_broker = resource.kind == "vm" && conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM database_managed_rabbitmq c,json_each(c.spec,'$.brokers') b WHERE json_extract(b.value,'$.id')=?1)",
+        [&resource.id], |row| row.get::<_, bool>(0),
+    )?;
+    if generated || queue_child || database_broker {
         return Err(PersistenceError::IacParentManaged);
     }
     Ok(())

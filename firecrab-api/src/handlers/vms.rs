@@ -310,6 +310,30 @@ pub(crate) async fn create_vm_from_template(
     id: Uuid,
     template: Option<std::sync::Arc<crate::templates::TemplateVersion>>,
 ) -> Result<(StatusCode, Json<VmResponse>), AppError> {
+    create_vm_from_template_checked(state, request_id, req, id, template, None).await
+}
+
+/// Create only the broker UUID granted by the original parent controller.
+pub(crate) async fn create_database_broker_vm(
+    state: AppState,
+    request_id: RequestId,
+    req: CreateVmRequest,
+    id: Uuid,
+    authority: crate::persistence::BrokerVmGrant,
+) -> Result<(StatusCode, Json<VmResponse>), AppError> {
+    let template = state.templates.resolve_alias(&req.template);
+    create_vm_from_template_checked(state, request_id, req, id, template, Some(authority)).await
+}
+
+/// Keep ordinary validation while carrying a private parent grant to insertion.
+async fn create_vm_from_template_checked(
+    state: AppState,
+    request_id: RequestId,
+    req: CreateVmRequest,
+    id: Uuid,
+    template: Option<std::sync::Arc<crate::templates::TemplateVersion>>,
+    authority: Option<crate::persistence::BrokerVmGrant>,
+) -> Result<(StatusCode, Json<VmResponse>), AppError> {
     let fields = validate_create_for(&req, template.as_deref(), &state);
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
@@ -326,13 +350,14 @@ pub(crate) async fn create_vm_from_template(
     // actually used, which is the point that matters for catching a
     // tampered/corrupted artifact.
     let template = template.ok_or_else(|| AppError::internal(request_id.0))?;
-    let response = insert_vm(
+    let response = insert_vm_checked(
         &state,
         request_id,
         id,
         req,
         &template,
         crate::model::VmPurpose::Instance,
+        authority,
     )
     .await?;
     Ok((StatusCode::CREATED, Json(response)))
@@ -349,6 +374,19 @@ pub(crate) async fn insert_vm(
     req: CreateVmRequest,
     template: &crate::templates::TemplateVersion,
     purpose: crate::model::VmPurpose,
+) -> Result<VmResponse, AppError> {
+    insert_vm_checked(state, request_id, id, req, template, purpose, None).await
+}
+
+/// Insert parent-owned VMs only after an atomic final authority check.
+async fn insert_vm_checked(
+    state: &AppState,
+    request_id: RequestId,
+    id: Uuid,
+    req: CreateVmRequest,
+    template: &crate::templates::TemplateVersion,
+    purpose: crate::model::VmPurpose,
+    authority: Option<crate::persistence::BrokerVmGrant>,
 ) -> Result<VmResponse, AppError> {
     let _cluster_admission = if state.cluster.worker.is_some() {
         Some(state.cluster.admission.lock().await)
@@ -394,37 +432,49 @@ pub(crate) async fn insert_vm(
     let shell_ids = req.shell_ids.clone();
     let port_forwards = req.port_forwards.clone();
     let insert_result = tokio::task::spawn_blocking(move || {
-        store.insert(&record)?;
-        if !req.block_storages.is_empty() {
-            store.attach_block_storages(record.id, &req.block_storages)?;
-        }
-        if !shell_ids.is_empty() {
-            let pins = store.resolve_latest_shell_revisions(&shell_ids)?;
-            store.set_vm_shells(record.id, &pins)?;
-        }
-        if !port_forwards.is_empty() {
-            store.set_vm_port_forwards(record.id, &port_forwards)?;
-        }
-        Ok::<_, crate::persistence::PersistenceError>(())
+        let inserted = if let Some(authority) = authority {
+            store.insert_database_broker_vm(&record, &authority)
+        } else {
+            store.insert(&record)
+        };
+        inserted.map_err(|error| (error, false))?;
+        let prepare = || {
+            if !req.block_storages.is_empty() {
+                store.attach_block_storages(record.id, &req.block_storages)?;
+            }
+            if !shell_ids.is_empty() {
+                let pins = store.resolve_latest_shell_revisions(&shell_ids)?;
+                store.set_vm_shells(record.id, &pins)?;
+            }
+            if !port_forwards.is_empty() {
+                store.set_vm_port_forwards(record.id, &port_forwards)?;
+            }
+            Ok::<_, crate::persistence::PersistenceError>(())
+        };
+        prepare().map_err(|error| (error, true))
     })
     .await
     .map_err(|_| AppError::internal(request_id.0))?;
 
-    if let Err(error) = insert_result {
+    if let Err((error, inserted)) = insert_result {
         // `store.insert` above already committed on its own — it isn't in
         // the same transaction as the shells/port-forwards writes that
         // follow it — so a failure there has to be undone explicitly or a
         // validation-error response would still leave an orphaned VM row
         // behind. Same compensating pattern as the subnet-resolution
         // failure below.
-        let store = state.store.clone();
-        let vm_id = vm.id;
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = store.clear_vm_shells(vm_id);
-            let _ = store.clear_vm_port_forwards(vm_id);
-            store.delete(vm_id)
-        })
-        .await;
+        // A rejected authority or duplicate UUID inserted nothing. Its existing
+        // record and pinned resources must never enter this compensation path.
+        if inserted {
+            let store = state.store.clone();
+            let vm_id = vm.id;
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = store.clear_vm_shells(vm_id);
+                let _ = store.clear_vm_port_forwards(vm_id);
+                store.delete(vm_id)
+            })
+            .await;
+        }
         return Err(match error {
             crate::persistence::PersistenceError::BlockStorageConflict { message } => {
                 AppError::conflict("volume_conflict", message, request_id.0)
@@ -5452,6 +5502,47 @@ while True:
             firecrab_helper_protocol::network::guest_hostname(created.id)
         );
         assert_eq!(created.egress_policy, EgressPolicy::Internet);
+    }
+
+    #[tokio::test]
+    async fn iac_vm_rejected_duplicate_create_preserves_original_record_address_and_runtime_inputs()
+    {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let network = seed_network(&state).await;
+        let (_, Json(original)) = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(create_request_on("original", network)),
+        )
+        .await
+        .unwrap();
+        let saved = state
+            .store
+            .load_all()
+            .unwrap()
+            .remove(&original.id)
+            .unwrap();
+        let lease = state.store.active_lease(original.id).unwrap().unwrap();
+        assert!(
+            create_vm_with_id(
+                state.clone(),
+                RequestId(Uuid::new_v4()),
+                create_request_on("duplicate", network),
+                original.id
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            state.store.load_all().unwrap().get(&original.id),
+            Some(&saved)
+        );
+        assert_eq!(
+            state.store.active_lease(original.id).unwrap().unwrap().ipv4,
+            lease.ipv4
+        );
+        assert_eq!(state.vms.lock().unwrap().get(&original.id), Some(&saved));
     }
 
     #[tokio::test]

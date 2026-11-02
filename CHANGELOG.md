@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Reserve managed database broker VM identities before creation. Fence controller
+  checkpoints and VM insertion with the original configuration generation. Exclude
+  competing API supervisors, protect generated broker VMs from independent edits,
+  and retain existing VM records when a duplicate creation is rejected (#548).
+
 - Retain native database event setup, pause, detach and removal intents. Recover
   original captures and inbox credentials after interruption. Guard qualified
   capture ownership, broker settings and parent reservations. Keep retained-event

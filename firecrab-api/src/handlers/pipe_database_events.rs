@@ -137,6 +137,10 @@ pub async fn managed_create(
 ) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
     use crate::pipe_databases::managed_rabbitmq::{self, Cluster};
     let _claim = state.service_mutations.lock().await;
+    let runtime = state
+        .store
+        .database_broker_runtime_lock()
+        .map_err(|e| super::stacks::persistence_error(e, rid.0))?;
     let authority = state
         .store
         .database_broker_authority()
@@ -190,7 +194,8 @@ pub async fn managed_create(
         .configure_managed_database_broker(&cluster, &authority)
         .map_err(|_| AppError::internal(rid.0))?;
     let summary = cluster.summary();
-    managed_rabbitmq::queue(state.clone(), cluster);
+    managed_rabbitmq::queue(state.clone(), cluster, runtime)
+        .map_err(|_| AppError::internal(rid.0))?;
     Ok((axum::http::StatusCode::ACCEPTED, Json(summary)))
 }
 pub use super::pipe_database_event_mutations::{create, delete, detach, pause};

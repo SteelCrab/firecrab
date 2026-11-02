@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS database_bindings (id TEXT PRIMARY KEY, service_id TE
 CREATE TABLE IF NOT EXISTS database_vm_services (id TEXT PRIMARY KEY, service_id TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS database_trigger_health (id TEXT PRIMARY KEY, error TEXT) STRICT;
 CREATE TABLE IF NOT EXISTS database_managed_rabbitmq (id INTEGER PRIMARY KEY CHECK(id=1), spec TEXT NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS database_broker_epoch (id INTEGER PRIMARY KEY CHECK(id=1), generation INTEGER NOT NULL CHECK(generation>=0)) STRICT;
+INSERT INTO database_broker_epoch VALUES(1,0) ON CONFLICT(id) DO NOTHING;
 CREATE TABLE IF NOT EXISTS database_jobs (id TEXT PRIMARY KEY, database_id TEXT NOT NULL, spec TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS database_setup_claims (id TEXT NOT NULL, target_hash TEXT NOT NULL, PRIMARY KEY(id,target_hash)) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS database_binding_environment ON database_bindings(service_id,json_extract(spec,'$.input.envName'));
@@ -181,6 +183,7 @@ impl Store {
         spec.as_deref().map(decode).transpose()
     }
     /// Persist broker ownership before VM preparation or activation.
+    #[cfg(test)]
     pub fn save_managed_database_rabbitmq(
         &self,
         cluster: &crate::pipe_databases::managed_rabbitmq::Cluster,
@@ -290,6 +293,7 @@ impl Store {
         spec.as_deref().map(decode).transpose()
     }
     /// Replace private RabbitMQ settings after the caller checks retained triggers.
+    #[cfg(test)]
     pub fn save_database_rabbitmq(&self, input: &RabbitMQInput) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;

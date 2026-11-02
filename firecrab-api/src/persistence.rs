@@ -21,6 +21,7 @@ mod block_storage;
 mod cluster;
 mod cluster_services;
 mod database_broker_mutations;
+pub(crate) use database_broker_mutations::{BrokerVmGrant, BrokerWatch};
 mod database_job_claims;
 mod database_services;
 mod pools;
@@ -970,6 +971,7 @@ impl Store {
     pub fn insert(&self, vm: &VmRecord) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        database_broker_mutations::ensure_vm_unreserved(&tx, vm.id)?;
         iac_vm_deletes::ensure_available(&tx, vm.id)?;
         execute_record(&tx, INSERT_SQL, vm)?;
         tx.commit()?;
