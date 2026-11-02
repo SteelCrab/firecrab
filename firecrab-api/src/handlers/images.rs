@@ -851,7 +851,7 @@ mod tests {
         assert_eq!(image.boot_args, "console=ttyS0 root=/dev/vda rw custom=1");
         assert!(image.initrd.is_some());
         assert_eq!(
-            fs::read(root.join("rootfs/custom.ext4")).unwrap(),
+            fs::read(root.join(image.rootfs.relative_path())).unwrap(),
             b"custom-rootfs"
         );
     }

@@ -731,15 +731,13 @@ mod tests {
             .expect("round-trip must register the alias");
         assert_eq!(installed.boot_args, spec.boot_args);
         assert_eq!(installed.version, "1");
-        assert_eq!(
-            installed.kernel.relative_path(),
-            Path::new("kernel/vmlinux-ubuntu-26.04-x86_64")
-        );
+        let original = templates.resolve_alias(&spec.alias).unwrap();
+        assert_eq!(installed.stack_pin(), original.stack_pin());
         assert!(installed.initrd.is_none());
-        assert_eq!(
-            installed.rootfs.relative_path(),
-            Path::new("rootfs/nginx-1.27.ext4")
-        );
+        for artifact in [&installed.kernel, &installed.rootfs] {
+            dest_templates.open_verified(artifact).unwrap();
+            assert!(artifact.relative_path().starts_with(".image-artifacts"));
+        }
     }
 
     #[tokio::test]
