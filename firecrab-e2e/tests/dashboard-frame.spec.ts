@@ -729,7 +729,10 @@ test.describe("dashboard frame", () => {
   }) => {
     await openDashboard(page, { vms: VMS, routes: { "/api/host": HOST } });
     const items = nav(page).locator(".sidebar-item");
-    await expect(items).toHaveCount(18); // one per VIEWS entry in src/navigation.ts
+    await expect(items).toHaveCount(19); // one per VIEWS entry in src/navigation.ts
+    await expect(
+      nav(page).getByRole("link", { name: "Observability", exact: true }),
+    ).toHaveAttribute("href", "#/observability");
     await expect(
       nav(page).getByRole("link", { name: "Stack", exact: true }),
     ).toHaveAttribute("href", "#/stacks");

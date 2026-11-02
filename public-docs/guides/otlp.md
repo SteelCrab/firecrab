@@ -1,5 +1,8 @@
 # Service OTLP export
 
+For a shared SigNoz connection with source selection, testing, pause/resume, and
+delivery history, use the [SigNoz integration](signoz.md) in Firecrab 0.6.0.
+
 Service OTLP export is disabled until an operator configures a collector.
 Choose a collector reachable from the Firecrab host and from service guests.
 The endpoint is an OTLP base URL, for example

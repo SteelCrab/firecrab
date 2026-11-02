@@ -31,6 +31,7 @@ pub(crate) mod ci_deploy;
 mod deploy_images;
 pub(crate) mod deploy_queue;
 mod micro_services;
+pub(crate) mod observability;
 pub(crate) mod otlp_config;
 mod pipe_ai;
 mod pipe_auth;
@@ -814,6 +815,7 @@ impl Store {
         conn.execute_batch(service_logs::SCHEMA)?;
         conn.execute(otlp_config::SCHEMA, [])?;
         otlp_config::migrate(&conn)?;
+        conn.execute_batch(observability::SCHEMA)?;
         conn.execute_batch(micro_services::HISTORY_SQL)?;
         conn.execute(auto_deploy::SCHEMA, [])?;
         conn.execute_batch(ci_deploy::SCHEMA)?;

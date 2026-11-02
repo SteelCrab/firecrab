@@ -23,6 +23,7 @@ import deploy_auto_qa as automatic
 import deploy_fleet_qa as fleet
 import deploy_recovery_qa as recovery
 import deploy_observation_qa as observation
+import deploy_signoz_qa as signoz
 
 module = importlib.util.spec_from_file_location("deploy_qa", Path(__file__).with_name("ci-qa-deploy.py"))
 qa = importlib.util.module_from_spec(module)
@@ -35,6 +36,42 @@ class DeployQaTests(unittest.TestCase):
                                  "--disposable-host", "--observability"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertIn("extended acceptance requires --report", result.stderr)
+
+    def test_signoz_rejects_non_isolated_endpoints_before_runtime_access(self):
+        for endpoint in ["https://127.0.0.1:25878", "http://localhost:25878",
+                         "http://example.test:4318", "http://127.0.0.1:80",
+                         "http://u:p@127.0.0.1:25878", "http://127.0.0.1:25878/v1/logs",
+                         "http://127.0.0.1:25878?token=secret", "http://127.0.0.1:25878#fragment"]:
+            with self.subTest(endpoint=endpoint), self.assertRaises((AssertionError, ValueError)):
+                signoz.local_endpoint(endpoint)
+        self.assertEqual(signoz.local_endpoint("http://127.0.0.1:25878").port, 25878)
+        for flags in [
+            ["--signoz-endpoint", "http://127.0.0.1:25878"],
+            ["--observability", "--signoz-endpoint", "http://127.0.0.1:25878"],
+            ["--observability", "--signoz-endpoint", "http://example.test:4318",
+             "--signoz-query-endpoint", "http://127.0.0.1:25876"],
+        ]:
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("ci-qa-deploy.py")),
+                                     "--disposable-host", "--report", "/tmp/unused-signoz-guard.json", *flags],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertTrue("isolated" in result.stderr or "loopback" in result.stderr)
+
+    def test_signoz_fault_proxy_forwards_success_and_isolates_injected_failures(self):
+        collector = observation.Collector()
+        self.addCleanup(collector.close)
+        proxy = signoz.FaultProxy(collector.endpoint)
+        self.addCleanup(proxy.close)
+        payload = json.dumps({"resourceLogs": []}).encode()
+        self.assertEqual(signoz.post(proxy.endpoint, "/v1/logs", payload), (200, b"{}"))
+        proxy.set_failure(True)
+        self.assertEqual(signoz.post(proxy.endpoint, "/v1/logs", payload), (503, b"{}"))
+        proxy.set_failure(False)
+        self.assertEqual(signoz.post(proxy.endpoint, "/v1/logs", payload), (200, b"{}"))
+        self.assertEqual(len(collector.records), 2)
+        self.assertEqual(proxy.request_count(), 3)
+        self.assertEqual(signoz.post(proxy.endpoint, "/wrong-path", payload)[0], 400)
+        self.assertEqual(len(collector.records), 2)
 
     def test_local_collector_validates_and_records_otlp_and_failure_response(self):
         collector = observation.Collector()
@@ -208,6 +245,9 @@ class DeployQaTests(unittest.TestCase):
                 result = subprocess.run(["/bin/sh", "-c", cgi], env={"OBS_ID": "alpha"}, capture_output=True, check=True)
                 self.assertEqual(result.stderr, b"fixture-cgi-alpha\n")
                 self.assertTrue(result.stdout.endswith(b"observed\n"))
+                tagged = subprocess.run(["/bin/sh", "-c", cgi], env={"OBS_ID": "alpha", "QUERY_STRING": "qa-marker"},
+                                        capture_output=True, check=True)
+                self.assertEqual(tagged.stderr, b"fixture-cgi-alphaqa-marker\n")
                 env_cgi = archive.extractfile("www/cgi-bin/otel-environment").read().decode()
                 otel = {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318", "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf", "OTEL_SERVICE_NAME": "alpha"}
                 output = subprocess.check_output(["/bin/sh", "-c", env_cgi], env=otel)

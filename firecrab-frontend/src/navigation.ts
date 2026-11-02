@@ -54,6 +54,11 @@ export const VIEWS = [
   { id: "shells", group: "system", labels: { en: "Shells", ko: "Shell" } },
   { id: "host", group: "system", labels: { en: "Host", ko: "호스트" } },
   {
+    id: "observability",
+    group: "system",
+    labels: { en: "Observability", ko: "옵저버빌리티" },
+  },
+  {
     id: "ai-sandbox",
     group: "ai",
     labels: { en: "AI Sandbox", ko: "AI Sandbox" },

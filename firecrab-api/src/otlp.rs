@@ -4,22 +4,35 @@
 //! and in-flight records; local observation history is the durable source.
 //! Credentials in collector URLs and collector authentication are unsupported.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc, oneshot};
 use uuid::Uuid;
 
-const QUEUE_LIMIT: usize = 128;
+pub(crate) const QUEUE_LIMIT: usize = 128;
 const BATCH_LIMIT: usize = 16;
 // Local app history retains up to 4096 bytes plus a UTF-8 truncation marker.
 const RECORD_LIMIT: usize = 8 * 1024;
 const RESPONSE_LIMIT: usize = 16 * 1024;
 const MAX_ATTEMPTS: usize = 3;
+pub(crate) const HISTORY_LIMIT: usize = 128;
+
+/// One completed batch. Collector response bodies and log contents are omitted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DeliveryBatch {
+    pub timestamp_ms: i64,
+    pub records: u64,
+    pub delivered: u64,
+    pub rejected: u64,
+    pub status: DeliveryState,
+    pub http_status: Option<u16>,
+}
 
 /// Invalid collector settings never include the supplied URL in errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,6 +251,8 @@ pub(crate) enum DeliveryState {
     Failed,
     /// The exporter was disabled.
     Disabled,
+    /// New records remain in the bounded queue until the operator resumes.
+    Paused,
 }
 
 /// Redacted, in-memory counters. Restarting the API resets these counters and
@@ -265,6 +280,9 @@ pub(crate) struct ExportStatus {
     pub rejected: u64,
     /// Batches that failed permanently or exhausted retries.
     pub failed_batches: u64,
+    pub paused: bool,
+    pub last_delivered_at_ms: Option<i64>,
+    pub history: VecDeque<DeliveryBatch>,
 }
 
 impl Default for ExportStatus {
@@ -280,6 +298,9 @@ impl Default for ExportStatus {
             dropped: 0,
             rejected: 0,
             failed_batches: 0,
+            paused: false,
+            last_delivered_at_ms: None,
+            history: VecDeque::new(),
         }
     }
 }
@@ -297,11 +318,17 @@ pub(crate) enum SubmitError {
 
 struct Inner {
     /// Bounded per-service submission queue.
-    sender: mpsc::Sender<ExportRecord>,
+    sender: mpsc::Sender<Submission>,
     /// Redacted worker state shared with the operator view.
     status: Arc<Mutex<ExportStatus>>,
     /// Cancels an old worker on disable or replacement.
     worker: tokio::task::AbortHandle,
+    resumed: Arc<Notify>,
+}
+
+struct Submission {
+    record: ExportRecord,
+    receipt: Option<oneshot::Sender<DeliveryBatch>>,
 }
 
 impl Drop for Inner {
@@ -323,6 +350,16 @@ impl Exporter {
         service_id: Uuid,
         service_name: &str,
     ) -> Result<Self, ConfigError> {
+        Self::new_paused(endpoint, service_id, service_name, false)
+    }
+
+    /// Install paused state before the worker can send its first record.
+    pub(crate) fn new_paused(
+        endpoint: &str,
+        service_id: Uuid,
+        service_name: &str,
+        paused: bool,
+    ) -> Result<Self, ConfigError> {
         let destination = logs_url(endpoint)?;
         if service_name.is_empty()
             || service_name.len() > 64
@@ -338,7 +375,16 @@ impl Exporter {
             .build()
             .map_err(|_| ConfigError)?;
         let (sender, receiver) = mpsc::channel(QUEUE_LIMIT);
-        let status = Arc::new(Mutex::new(ExportStatus::default()));
+        let status = Arc::new(Mutex::new(ExportStatus {
+            paused,
+            state: if paused {
+                DeliveryState::Paused
+            } else {
+                DeliveryState::Pending
+            },
+            ..ExportStatus::default()
+        }));
+        let resumed = Arc::new(Notify::new());
         let worker = tokio::spawn(run(
             receiver,
             client,
@@ -346,6 +392,7 @@ impl Exporter {
             service_id,
             service_name.to_owned(),
             Arc::clone(&status),
+            Arc::clone(&resumed),
         ))
         .abort_handle();
         Ok(Self {
@@ -353,22 +400,30 @@ impl Exporter {
                 sender,
                 status,
                 worker,
+                resumed,
             }),
         })
     }
 
     /// Submit without blocking service operation. Full queues drop the new item.
     pub(crate) fn try_send(&self, record: ExportRecord) -> Result<(), SubmitError> {
+        self.submit(Submission {
+            record,
+            receipt: None,
+        })
+    }
+
+    fn submit(&self, submission: Submission) -> Result<(), SubmitError> {
         let mut status = self.inner.status.lock().unwrap_or_else(|p| p.into_inner());
         if !status.enabled {
             return Err(SubmitError::Disabled);
         }
-        if record.body.len() > RECORD_LIMIT {
+        if submission.record.body.len() > RECORD_LIMIT {
             status.dropped = status.dropped.saturating_add(1);
             status.state = DeliveryState::Failed;
             return Err(SubmitError::TooLarge);
         }
-        match self.inner.sender.try_send(record) {
+        match self.inner.sender.try_send(submission) {
             Ok(()) => {
                 status.accepted = status.accepted.saturating_add(1);
                 status.queued = status.queued.saturating_add(1);
@@ -384,6 +439,36 @@ impl Exporter {
                 status.state = DeliveryState::Failed;
                 Err(SubmitError::Disabled)
             }
+        }
+    }
+
+    /// Return the real collector outcome for a test submitted to this worker.
+    pub(crate) fn submit_test(
+        &self,
+        record: ExportRecord,
+    ) -> Result<oneshot::Receiver<DeliveryBatch>, SubmitError> {
+        let (send, receive) = oneshot::channel();
+        self.submit(Submission {
+            record,
+            receipt: Some(send),
+        })?;
+        Ok(receive)
+    }
+
+    /// An already transmitted request can finish; subsequent requests wait.
+    pub(crate) fn set_paused(&self, paused: bool) {
+        let mut status = self.inner.status.lock().unwrap_or_else(|p| p.into_inner());
+        if status.paused == paused {
+            return;
+        }
+        status.paused = paused;
+        status.state = if paused {
+            DeliveryState::Paused
+        } else {
+            DeliveryState::Pending
+        };
+        if !paused {
+            self.inner.resumed.notify_one();
         }
     }
 
@@ -476,7 +561,7 @@ async fn attempt(
     destination: &Url,
     body: &[u8],
     count: usize,
-) -> (Attempt, Option<Duration>) {
+) -> (Attempt, Option<Duration>, Option<u16>) {
     let response = client
         .post(destination.clone())
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -484,9 +569,10 @@ async fn attempt(
         .send()
         .await;
     let Ok(mut response) = response else {
-        return (Attempt::Retry, None);
+        return (Attempt::Retry, None, None);
     };
     let status = response.status();
+    let code = Some(status.as_u16());
     let retry_after = response
         .headers()
         .get(reqwest::header::RETRY_AFTER)
@@ -500,10 +586,10 @@ async fn attempt(
             | StatusCode::SERVICE_UNAVAILABLE
             | StatusCode::GATEWAY_TIMEOUT
     ) {
-        return (Attempt::Retry, retry_after);
+        return (Attempt::Retry, retry_after, code);
     }
     if status != StatusCode::OK {
-        return (Attempt::Failed, None);
+        return (Attempt::Failed, None, code);
     }
     let mut bytes = Vec::new();
     loop {
@@ -511,15 +597,15 @@ async fn attempt(
             Ok(Some(chunk)) if bytes.len().saturating_add(chunk.len()) <= RESPONSE_LIMIT => {
                 bytes.extend_from_slice(&chunk)
             }
-            Ok(Some(_)) | Err(_) => return (Attempt::Failed, None),
+            Ok(Some(_)) | Err(_) => return (Attempt::Failed, None, code),
             Ok(None) => break,
         }
     }
     let Ok(response) = serde_json::from_slice::<Value>(&bytes) else {
-        return (Attempt::Failed, None);
+        return (Attempt::Failed, None, code);
     };
     if !response.is_object() {
-        return (Attempt::Failed, None);
+        return (Attempt::Failed, None, code);
     }
     let partial = response
         .get("partialSuccess")
@@ -531,6 +617,7 @@ async fn attempt(
                 warning: false,
             },
             None,
+            code,
         );
     };
     // Protobuf JSON accepts null as the default value for any field.
@@ -541,10 +628,11 @@ async fn attempt(
                 warning: false,
             },
             None,
+            code,
         );
     }
     if !partial.is_object() {
-        return (Attempt::Failed, None);
+        return (Attempt::Failed, None, code);
     }
     let rejected = partial
         .get("rejectedLogRecords")
@@ -553,16 +641,16 @@ async fn attempt(
         None | Some(Value::Null) => 0,
         Some(Value::String(value)) => match value.parse::<usize>() {
             Ok(value) => value,
-            Err(_) => return (Attempt::Failed, None),
+            Err(_) => return (Attempt::Failed, None, code),
         },
         Some(Value::Number(value)) => match value.as_u64().and_then(|n| usize::try_from(n).ok()) {
             Some(value) => value,
-            None => return (Attempt::Failed, None),
+            None => return (Attempt::Failed, None, code),
         },
-        Some(_) => return (Attempt::Failed, None),
+        Some(_) => return (Attempt::Failed, None, code),
     };
     if rejected > count {
-        return (Attempt::Failed, None);
+        return (Attempt::Failed, None, code);
     }
     let warning = match partial
         .get("errorMessage")
@@ -570,9 +658,35 @@ async fn attempt(
     {
         None | Some(Value::Null) => false,
         Some(Value::String(message)) => !message.is_empty(),
-        Some(_) => return (Attempt::Failed, None),
+        Some(_) => return (Attempt::Failed, None, code),
     };
-    (Attempt::Accepted { rejected, warning }, None)
+    (Attempt::Accepted { rejected, warning }, None, code)
+}
+
+/// Validate the OTLP endpoint with an empty batch, without exporting service data.
+pub(crate) async fn probe(endpoint: &str) -> Result<DeliveryBatch, ConfigError> {
+    let destination = logs_url(endpoint)?;
+    let client = Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|_| ConfigError)?;
+    let (outcome, _, http_status) =
+        attempt(&client, &destination, br#"{"resourceLogs":[]}"#, 0).await;
+    let status = match outcome {
+        Attempt::Accepted { warning: false, .. } => DeliveryState::Delivered,
+        Attempt::Accepted { .. } => DeliveryState::Partial,
+        _ => DeliveryState::Failed,
+    };
+    Ok(DeliveryBatch {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        records: 0,
+        delivered: 0,
+        rejected: 0,
+        status,
+        http_status,
+    })
 }
 
 #[cfg(test)]
@@ -580,21 +694,49 @@ mod tests;
 
 /// Drain bounded batches; local observation persistence never waits for export.
 async fn run(
-    mut receiver: mpsc::Receiver<ExportRecord>,
+    mut receiver: mpsc::Receiver<Submission>,
     client: Client,
     destination: Url,
     service_id: Uuid,
     service_name: String,
     status: Arc<Mutex<ExportStatus>>,
+    resumed: Arc<Notify>,
 ) {
-    while let Some(first) = receiver.recv().await {
+    loop {
+        loop {
+            let notified = resumed.notified();
+            if !status.lock().unwrap_or_else(|p| p.into_inner()).paused {
+                break;
+            }
+            notified.await;
+        }
+        let Some(first) = receiver.recv().await else {
+            break;
+        };
         let mut records = Vec::with_capacity(BATCH_LIMIT);
-        records.push(first);
+        let mut receipts = Vec::new();
+        records.push(first.record);
+        if let Some(receipt) = first.receipt {
+            receipts.push(receipt);
+        }
         while records.len() < BATCH_LIMIT {
             match receiver.try_recv() {
-                Ok(record) => records.push(record),
+                Ok(submission) => {
+                    records.push(submission.record);
+                    if let Some(receipt) = submission.receipt {
+                        receipts.push(receipt);
+                    }
+                }
                 Err(_) => break,
             }
+        }
+        // Pause can race with an idle receiver. Hold its bounded batch until resume.
+        loop {
+            let notified = resumed.notified();
+            if !status.lock().unwrap_or_else(|p| p.into_inner()).paused {
+                break;
+            }
+            notified.await;
         }
         let count = records.len() as u64;
         {
@@ -620,8 +762,18 @@ async fn run(
             }
         };
         let mut outcome = Attempt::Failed;
+        let mut http_status = None;
         for attempt_index in 0..MAX_ATTEMPTS {
-            let (result, retry_after) = attempt(&client, &destination, &body, records.len()).await;
+            loop {
+                let notified = resumed.notified();
+                if !status.lock().unwrap_or_else(|p| p.into_inner()).paused {
+                    break;
+                }
+                notified.await;
+            }
+            let (result, retry_after, code) =
+                attempt(&client, &destination, &body, records.len()).await;
+            http_status = code;
             if result != Attempt::Retry {
                 outcome = result;
                 break;
@@ -661,6 +813,34 @@ async fn run(
                 s.failed_batches = s.failed_batches.saturating_add(1);
                 s.state = DeliveryState::Failed;
             }
+        }
+        let batch = DeliveryBatch {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            records: count,
+            delivered: match outcome {
+                Attempt::Accepted { rejected, .. } => count - rejected as u64,
+                _ => 0,
+            },
+            rejected: match outcome {
+                Attempt::Accepted { rejected, .. } => rejected as u64,
+                _ => 0,
+            },
+            status: s.state,
+            http_status,
+        };
+        if batch.delivered > 0 {
+            s.last_delivered_at_ms = Some(batch.timestamp_ms);
+        }
+        s.history.push_back(batch.clone());
+        if s.history.len() > HISTORY_LIMIT {
+            s.history.pop_front();
+        }
+        if s.paused {
+            s.state = DeliveryState::Paused;
+        }
+        drop(s);
+        for receipt in receipts {
+            let _ = receipt.send(batch.clone());
         }
     }
 }

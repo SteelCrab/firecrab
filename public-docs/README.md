@@ -24,6 +24,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Register hosts and place VMs through one controller | [Multi-host placement](guides/multihost.md) |
 | Update or roll back a running app through Nginx | [Deploy](guides/deploy.md) |
 | Configure service telemetry export | [OTLP export](guides/otlp.md) |
+| Connect selected services to a self-hosted observability platform | [SigNoz integration](guides/signoz.md) |
 | Connect apps with internal RabbitMQ message queues | [Queue](guides/queues.md) |
 | Validate a declarative YAML stack offline | [Stack validation](guides/stacks.md) |
 | Register stack ownership and preview configuration changes | [Stack planning](guides/stack-planning.md) |
@@ -73,6 +74,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Build image packages | [Image builds](development/image-builds.md) |
 | Publish the image catalog | [Cloudflare R2 publishing](development/publishing.md) |
 | Run checks and runtime E2E | [CI](development/ci.md) |
+| Validate external log export with a disposable SigNoz stack | [SigNoz QA](development/signoz-qa.md) |
 | Choose QA scripts and report results | [QA](development/qa.md) |
 | Run the complete checklist | [English](development/testing.md) · [Korean](development/testing.ko.md) |
 | Validate AI models, isolated tasks, guest execution, and recovery | [AI Sandbox QA](development/ai-sandbox-qa.md) |

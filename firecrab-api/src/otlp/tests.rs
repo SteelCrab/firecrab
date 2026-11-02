@@ -560,3 +560,68 @@ async fn protobuf_json_null_fields_have_their_default_values() {
     assert_eq!(collector.requests.lock().unwrap().len(), 2);
     server.abort();
 }
+
+#[tokio::test]
+async fn paused_exporter_retains_bounded_records_and_resumes_with_real_receipts() {
+    let (collector, url, server) = start_collector(vec![]).await;
+    let exporter = Exporter::new_paused(&url, Uuid::new_v4(), "paused-service", true).unwrap();
+    let receipt = exporter
+        .submit_test(record(RecordKind::Event, "explicit test"))
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(collector.requests.lock().unwrap().is_empty());
+    assert_eq!(exporter.status().queued, 1);
+    exporter.set_paused(false);
+    let delivered = tokio::time::timeout(Duration::from_secs(3), receipt)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(delivered.http_status, Some(200));
+    assert_eq!(delivered.delivered, 1);
+    assert_eq!(
+        exporter.status().last_delivered_at_ms,
+        Some(delivered.timestamp_ms)
+    );
+    assert_eq!(exporter.status().history.front(), Some(&delivered));
+    exporter.set_paused(true);
+    for n in 0..QUEUE_LIMIT + BATCH_LIMIT + 10 {
+        let _ = exporter.try_send(record(RecordKind::Log, &format!("queued {n}")));
+    }
+    assert!(exporter.status().dropped > 0);
+    exporter.shutdown();
+    assert_eq!(exporter.status().queued, 0);
+    assert_eq!(exporter.status().state, DeliveryState::Disabled);
+    server.abort();
+}
+
+#[tokio::test]
+async fn connection_probe_is_empty_and_failure_receipts_are_redacted() {
+    let (collector, url, server) =
+        start_collector(vec![(StatusCode::FORBIDDEN, "sensitive collector detail")]).await;
+    let result = probe(&url).await.unwrap();
+    assert_eq!(result.status, DeliveryState::Failed);
+    assert_eq!(result.http_status, Some(403));
+    assert_eq!(
+        collector.requests.lock().unwrap()[0].2,
+        json!({"resourceLogs":[]})
+    );
+    assert!(
+        !serde_json::to_string(&result)
+            .unwrap()
+            .contains("sensitive")
+    );
+    let exporter = Exporter::new(&url, Uuid::new_v4(), "history-service").unwrap();
+    for _ in 0..HISTORY_LIMIT + 2 {
+        let receipt = exporter
+            .submit_test(record(RecordKind::Log, "history"))
+            .unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(3), receipt)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert_eq!(exporter.status().history.len(), HISTORY_LIMIT);
+    assert_eq!(exporter.status().delivered, (HISTORY_LIMIT + 2) as u64);
+    exporter.shutdown();
+    server.abort();
+}

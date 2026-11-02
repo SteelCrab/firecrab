@@ -35,6 +35,7 @@ from deploy_recovery_qa import run_recovery
 from deploy_queue_qa import run_queue
 from deploy_ci_qa import run_ci
 from deploy_observation_qa import run_observation
+from deploy_signoz_qa import local_endpoint
 from public_tunnel_credentials import load_credentials, verify_registration
 from public_tunnel_fixture import image_fixture as public_image_fixture, static_elf_arch
 from public_tunnel_setup import run_fixture_services
@@ -96,7 +97,7 @@ esac
             "recovery-health": "#!/bin/sh\nif [ -f /unhealthy ]; then printf 'Status: 503 Service Unavailable\\r\\n'; fi\nprintf 'Content-Type: text/plain\\r\\n\\r\\nhealth\\n'\n",
             "fail-health": "#!/bin/sh\n/bin/busybox touch /unhealthy\nprintf 'Content-Type: text/plain\\r\\n\\r\\ninjected\\n'\n",
             "observation": """#!/bin/sh
-printf 'fixture-cgi-%s\\n' "$OBS_ID" >&2
+printf 'fixture-cgi-%s%s\\n' "$OBS_ID" "$QUERY_STRING" >&2
 printf 'Content-Type: text/plain\\r\\n\\r\\nobserved\\n'
 """,
             "otel-environment": """#!/bin/sh
@@ -453,7 +454,7 @@ def run(args, evidence):
             if args.ci_deploy:
                 run_ci(api, wait_for, traffic, network, spec_a, fixtures, ingress_port, evidence)
             if args.observability:
-                run_observation(api, wait_for, traffic, network, spec_a, ingress_port, evidence)
+                run_observation(api, wait_for, traffic, network, spec_a, ingress_port, evidence, args.signoz_endpoint, args.signoz_query_endpoint)
             if args.public_tunnel:
                 run_fixture_services(api, wait_for, network, spec_a, public_fixtures, credentials, evidence, run_public)
     finally:
@@ -515,6 +516,8 @@ if __name__ == "__main__":
     parser.add_argument("--queue-controls", action="store_true", help="run live queued cancellation, rollback priority and API restart acceptance")
     parser.add_argument("--ci-deploy", action="store_true", help="run scoped CLI/Action acceptance through private verified TLS and Nginx")
     parser.add_argument("--observability", action="store_true", help="run isolated app logs, API restart, events and OTLP acceptance")
+    parser.add_argument("--signoz-endpoint", help="disposable loopback SigNoz collector for real guest acceptance")
+    parser.add_argument("--signoz-query-endpoint", help="disposable loopback ClickHouse query endpoint")
     parser.add_argument("--public-tunnel", action="store_true", help="run explicitly approved public Tunnel acceptance")
     parser.add_argument("--public-target-approved", action="store_true", help="confirm separate approval for the host and public test addresses")
     parser.add_argument("--public-token", nargs=2, action="append", metavar=("LABEL", "PRIVATE_FILE"), help="owned qa- label and private token file; repeat twice")
@@ -523,6 +526,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if (args.fifteen_services or args.secret_rotation or args.replica_recovery or args.queue_controls or args.automatic_deploy or args.ci_deploy or args.observability or args.public_tunnel) and not args.report:
         parser.error("extended acceptance requires --report")
+    if args.signoz_endpoint or args.signoz_query_endpoint:
+        if not args.observability or not args.signoz_endpoint or not args.signoz_query_endpoint:
+            parser.error("SigNoz acceptance requires --observability and both isolated endpoints")
+        try:
+            local_endpoint(args.signoz_endpoint)
+            local_endpoint(args.signoz_query_endpoint)
+        except (AssertionError, ValueError) as error:
+            parser.error(str(error))
     if args.public_tunnel:
         if not args.public_target_approved or not args.public_fixture_binary or not args.public_token or len(args.public_token) != 2:
             parser.error("public Tunnel acceptance requires explicit target approval, a fixture binary, and exactly two token files")
