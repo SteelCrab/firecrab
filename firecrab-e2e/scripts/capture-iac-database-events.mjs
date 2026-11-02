@@ -91,10 +91,11 @@ try {
   await card
     .getByRole("button", { name: "Recover original operation", exact: true })
     .click();
-  await expect(work.getByRole("alert")).toContainText(
-    "Original operation still needs recovery.",
-    { timeout: 20000 },
-  );
+  // The HTTP deadline can return while the server-owned attempt is still running.
+  await expect
+    .poll(async () => (await observe()).state, { timeout: 120000 })
+    .toBe("needs_recovery");
+  await expect(card.getByText("Needs recovery", { exact: true })).toBeVisible();
   const after = await observe();
   assert.equal(after.state, "needs_recovery");
   assert.equal(after.executionGeneration, 1);
