@@ -1,0 +1,76 @@
+{
+  "sourceCommit": "d18fa649ae12e11f27a34e7ba56fa585a1d4320c",
+  "sourceDirty": false,
+  "capturedOn": "2026-11-02",
+  "fixture": true,
+  "scope": "nonresponsive local TCP endpoint; uncertain SQL checkpoint injected; no PostgreSQL/MySQL server or SQL execution",
+  "before": {
+    "operationId": "ecfa071d-5611-4a39-a0db-98b3715b39c5",
+    "ownership": {
+      "endpointId": "aa5326d1-1168-45b2-80d8-fa7c761ebc8a",
+      "resource": {
+        "kind": "database_connection",
+        "id": "ddf8ebb9-15fa-4c1b-b509-dfb31c50b106"
+      },
+      "generation": 0,
+      "owner": null
+    },
+    "action": "update_database_connection",
+    "state": "needs_recovery",
+    "errorCode": "database_update_incomplete"
+  },
+  "after": {
+    "operationId": "ecfa071d-5611-4a39-a0db-98b3715b39c5",
+    "ownership": {
+      "endpointId": "aa5326d1-1168-45b2-80d8-fa7c761ebc8a",
+      "resource": {
+        "kind": "database_connection",
+        "id": "ddf8ebb9-15fa-4c1b-b509-dfb31c50b106"
+      },
+      "generation": 0,
+      "owner": null
+    },
+    "action": "update_database_connection",
+    "state": "needs_recovery",
+    "errorCode": "database_update_incomplete",
+    "executionGeneration": 1
+  },
+  "failedOperation": {
+    "operationId": "04fb8ef0-9999-4dec-a837-3bfea81c99ce",
+    "ownership": {
+      "endpointId": "aa5326d1-1168-45b2-80d8-fa7c761ebc8a",
+      "resource": {
+        "kind": "database_connection",
+        "id": "c3ab11f1-c3ca-4717-bad0-7d9523ad20b7"
+      },
+      "generation": 0,
+      "owner": null
+    },
+    "action": "create_database_connection",
+    "state": "failed",
+    "errorCode": "database_connection_unverified"
+  },
+  "savedConnectionCount": 2,
+  "checks": [
+    "actual Axum/SQLite HTTP API and compiled React dashboard",
+    "same operation/resource UUID and ownership after recovery",
+    "recovery attempt advanced to 1",
+    "unavailable database remains uncertain, never falsely succeeded",
+    "known failed create and exact retry add no saved connection",
+    "public responses redact fixture credentials",
+    "mobile layout does not overflow"
+  ],
+  "notRun": [
+    "live PostgreSQL/MySQL or TLS verification",
+    "SQL execution",
+    "KVM guest boot",
+    "Terraform provider",
+    "expanded native Stack"
+  ],
+  "files": {
+    "iac-548-database-desktop-2026-11-02.png": "16d4978a350d4ad9e30fcb69e4d2a2aed1e49e21a77ada8ed6e7177d33432b8e",
+    "iac-548-database-mobile-2026-11-02.png": "39f4c6d7fd3d92a86062a038f13a544958573937ed0b46f5141d56da9cd1e999",
+    "iac-548-database-recovery-mobile-2026-11-02.png": "ef812c7bcf83cff77c72ad96c4bd7b023536c547c9c108fae4276d99d5a451a7",
+    "iac-548-database-recovery-desktop-2026-11-02.png": "f762a99ddfcac93f20552f60aa2074961ed87157d16e3c1f8e46c78f919f33a2"
+  }
+}
