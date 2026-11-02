@@ -385,6 +385,65 @@ test("legacy pending binding setup retries its existing account instead of alloc
   assert.deepEqual(await pending(page), []);
 });
 
+test("broker configuration keeps its original operation across reload without storing its private credentials", async (t) => {
+  const { fixture, page } = await setup(t);
+  const ids = [];
+  let complete = false;
+  const base = `/api/pipe/databases/${database.id}`;
+  fixture.handlers.set(`GET ${base}/bindings`, ({ send }) => send(200, []));
+  fixture.handlers.set("PUT /api/pipe/database-rabbitmq", ({ req, send }) => {
+    const id = req.headers["x-firecrab-operation-id"];
+    ids.push(id);
+    assert.equal(req.headers["x-firecrab-endpoint-id"], endpointId);
+    fixture.handlers.set(`GET /api/iac/native-operations/${id}`, ({ send }) =>
+      send(200, {
+        operationId: id,
+        action: "configure_database_broker",
+        state: complete ? "succeeded" : "needs_recovery",
+        ownership: {
+          endpointId,
+          resource: { kind: "database_rabbitmq", id: "default" },
+        },
+      }),
+    );
+    send(503, { error: { message: "Broker acknowledgement unavailable" } });
+  });
+  async function fillBroker() {
+    await accessPanel(fixture, page);
+    await page.getByText("Use existing RabbitMQ", { exact: true }).click();
+    await page
+      .getByRole("textbox", { name: "RabbitMQ endpoints", exact: true })
+      .fill("127.0.0.1:5672");
+    await page
+      .getByRole("textbox", { name: "Username", exact: true })
+      .fill("fixture-broker");
+    await page
+      .getByLabel("Password", { exact: true })
+      .fill("private-broker-browser-credential");
+  }
+  await fillBroker();
+  await page
+    .getByRole("button", { name: "Save RabbitMQ", exact: true })
+    .click();
+  await expect(
+    page.getByRole("link", { name: "Review original operation" }),
+  ).toBeVisible();
+  const saved = await pending(page);
+  assert.equal(saved.length, 1);
+  assert(!JSON.stringify(saved).includes("private-broker"));
+  await fillBroker();
+  complete = true;
+  await page
+    .getByRole("button", { name: "Save RabbitMQ", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toContainText(
+    "Review broker configuration",
+  );
+  assert.equal(ids.length, 2);
+  assert.equal(new Set(ids).size, 1);
+  assert.deepEqual(await pending(page), []);
+});
+
 async function eventPanel(fixture, page, triggers) {
   fixture.handlers.set(
     `GET /api/pipe/databases/${database.id}/bindings`,

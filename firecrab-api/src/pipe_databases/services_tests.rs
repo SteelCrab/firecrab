@@ -990,6 +990,8 @@ async fn database_event_and_maintenance_api_real_engines() {
         );
         let path = format!("/api/pipe/database-triggers/{tid}");
         api_call(&app, "PUT", &path, json!({"paused":true}), 200).await;
+        // A completed creation retry returns its original receipt and must not
+        // overwrite the newer pause operation's current metadata.
         assert_eq!(
             api_call(
                 &app,
@@ -999,8 +1001,9 @@ async fn database_event_and_maintenance_api_real_engines() {
                 200
             )
             .await["paused"],
-            true
+            false
         );
+        assert!(state.store.database_trigger(tid).unwrap().unwrap().paused);
         let mut changed = trigger_input.clone();
         changed["path"] = json!("/different");
         api_call(&app, "POST", &format!("{base}/triggers"), changed, 409).await;
@@ -1112,24 +1115,54 @@ async fn database_event_and_maintenance_api_real_engines() {
                 .is_empty()
         );
 
-        // Failed setup retains ownership, is visible, cannot resume, and can be cleaned.
+        // A missing source is verified before broker/grant changes. Its known
+        // failure removes only local staging and retains the original receipt.
         let partial = Uuid::new_v4();
         let partial_path = format!("/api/pipe/database-triggers/{partial}");
-        api_call(&app,"POST",&format!("{base}/triggers"),json!({"requestId":partial,"schema":table.schema,"table":format!("missing_{}",partial.simple()),"serviceId":service_id}),404).await;
+        let missing_input = json!({"requestId":partial,"schema":table.schema,"table":format!("missing_{}",partial.simple()),"serviceId":service_id});
+        api_call(
+            &app,
+            "POST",
+            &format!("{base}/triggers"),
+            missing_input.clone(),
+            502,
+        )
+        .await;
+        api_call(
+            &app,
+            "POST",
+            &format!("{base}/triggers"),
+            missing_input,
+            502,
+        )
+        .await;
+        assert!(state.store.database_trigger(partial).unwrap().is_none());
         assert_eq!(
-            api_call(&app, "GET", &format!("{base}/triggers"), Value::Null, 200).await[0]["lastError"],
-            "setup_incomplete"
+            state
+                .store
+                .iac_native_operation(partial)
+                .unwrap()
+                .unwrap()
+                .state,
+            firecrab_stack::NativeOperationState::Failed
         );
-        api_call(&app, "PUT", &partial_path, json!({"paused":false}), 400).await;
+        assert!(
+            api_call(&app, "GET", &format!("{base}/triggers"), Value::Null, 200)
+                .await
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        api_call(&app, "PUT", &partial_path, json!({"paused":false}), 404).await;
         api_call(
             &app,
             "POST",
             &format!("{partial_path}/detach"),
             Value::Null,
-            200,
+            404,
         )
         .await;
-        api_call(&app, "DELETE", &partial_path, Value::Null, 200).await;
+        api_call(&app, "DELETE", &partial_path, Value::Null, 404).await;
 
         // Backups must finish before download/removal; retries reuse their receipt.
         let capabilities = api_call(

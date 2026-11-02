@@ -33,6 +33,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Retain external database broker verification requests before connection attempts.
+  Commit selection and its immutable receipt together. Keep original credentials
+  and endpoint identities across API restart, HTTP disconnect and dashboard reload (#548).
+
 - Reserve managed database broker VM identities before creation. Fence controller
   checkpoints and VM insertion with the original configuration generation. Exclude
   competing API supervisors, protect generated broker VMs from independent edits,

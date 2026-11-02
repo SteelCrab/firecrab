@@ -288,10 +288,12 @@ export default function DatabaseOperations({
     if (busy) return;
     setBusy(true);
     setError("");
+    setNotice("");
     try {
-      await fetchJson(
+      const result = await nativeMutation<{ configured: boolean }>(
+        "PUT",
         "/api/pipe/database-rabbitmq",
-        write("PUT", {
+        {
           brokers: brokers
             .split(/[,\n]/)
             .map((v) => v.trim())
@@ -304,8 +306,22 @@ export default function DatabaseOperations({
           ...(ca.trim() ? { caCertificate: ca.trim() } : {}),
           ...(cert.trim() ? { clientCertificate: cert.trim() } : {}),
           ...(clientKey.trim() ? { clientKey: clientKey.trim() } : {}),
-        }),
+        },
+        "configure_database_broker",
+        "database_rabbitmq",
+        async () => ({ configured: true }),
+        "default",
       );
+      if (!mounted.current) return;
+      if (result.recovered)
+        setNotice(
+          t(
+            "The original request completed. Review broker configuration before making further changes.",
+            "원래 요청을 완료했다. 다음 변경 전에 브로커 설정을 확인한다.",
+          ),
+        );
+      setPendingWork(false);
+      result.acknowledge();
       setPassword("");
       setClientKey("");
       setExternal(false);
@@ -315,6 +331,7 @@ export default function DatabaseOperations({
         setPollError(String(e));
       }
     } catch (e) {
+      setPendingWork(e instanceof NativeMutationPending);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);

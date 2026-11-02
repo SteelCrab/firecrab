@@ -8,6 +8,8 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeAction {
+    /// Verify and select a delivery broker without declaring or deleting queues.
+    ConfigureDatabaseBroker,
     /// Set up owned event capture, delivery queues and a private inbox.
     CreateDatabaseEvents,
     /// Change the saved delivery pause state without replaying application data.

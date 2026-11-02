@@ -169,14 +169,22 @@ API. Missing recorded VMs, disks or addresses require restoration of their
 original resources; they do not permit an empty replacement. Rejecting a
 duplicate VM creation preserves its existing record and address.
 
-These controller safeguards are prerequisites. Complete native broker operation
+External broker selection retains a private immutable request before its
+read-only handshake. It accepts `x-firecrab-operation-id` and the endpoint header.
+HTTP disconnect does not cancel verification. Selection, disabling managed
+supervision and the original success receipt commit together. Known verification
+failure preserves the saved configuration. Restart recovery reuses the original
+credentials; older attempts cannot commit. A completed retry acknowledges its
+original selection without overwriting any newer configuration.
+
+These controller safeguards are prerequisites. Complete managed broker operation
 journals, broker ownership transfer and expanded Stack/Terraform execution remain
 pending in stage 2 and later stages.
 
 ## Dashboard retries
 
 The database dashboard retains the operation UUID and endpoint UUID before sending
-connection, binding or event changes. It stores no URI, password, certificate or request
+connection, binding, event or external broker changes. It stores no URI, password, certificate or request
 body in browser storage. Reloading the page reuses the original identity.
 A failed receipt lookup does not allocate a new create operation.
 

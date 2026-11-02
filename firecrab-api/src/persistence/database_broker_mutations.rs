@@ -17,11 +17,11 @@ pub(super) fn resource() -> ManagedResource {
     }
 }
 /// Compare private settings without exposing their values in errors.
-fn fingerprint<T: serde::Serialize>(value: &T) -> Result<String, PersistenceError> {
+pub(super) fn fingerprint<T: serde::Serialize>(value: &T) -> Result<String, PersistenceError> {
     Ok(format!("{:x}", Sha256::digest(encode(value)?)))
 }
 /// Read private client settings in the caller's transaction.
-fn configuration(conn: &Connection) -> Result<Option<RabbitMQInput>, PersistenceError> {
+pub(super) fn configuration(conn: &Connection) -> Result<Option<RabbitMQInput>, PersistenceError> {
     let raw: Option<String> = conn
         .query_row("SELECT spec FROM database_rabbitmq WHERE id=1", [], |r| {
             r.get(0)
@@ -30,7 +30,7 @@ fn configuration(conn: &Connection) -> Result<Option<RabbitMQInput>, Persistence
     raw.as_deref().map(decode).transpose()
 }
 /// Read the retained owned cluster and broker identities.
-fn managed(conn: &Connection) -> Result<Option<Cluster>, PersistenceError> {
+pub(super) fn managed(conn: &Connection) -> Result<Option<Cluster>, PersistenceError> {
     let raw: Option<String> = conn
         .query_row(
             "SELECT spec FROM database_managed_rabbitmq WHERE id=1",
@@ -41,7 +41,7 @@ fn managed(conn: &Connection) -> Result<Option<Cluster>, PersistenceError> {
     raw.as_deref().map(decode).transpose()
 }
 /// Separate desired configuration from health phase/error observations.
-fn managed_configuration(value: Option<&Cluster>) -> Result<String, PersistenceError> {
+pub(super) fn managed_configuration(value: Option<&Cluster>) -> Result<String, PersistenceError> {
     let value = value.map(|c| {
         let mut c = c.clone();
         c.phase.clear();
@@ -63,7 +63,7 @@ pub(crate) struct BrokerAuthority {
     epoch: i64,
 }
 /// Read the monotonic explicit configuration generation.
-fn epoch(conn: &Connection) -> Result<i64, PersistenceError> {
+pub(super) fn epoch(conn: &Connection) -> Result<i64, PersistenceError> {
     Ok(conn.query_row(
         "SELECT generation FROM database_broker_epoch WHERE id=1",
         [],
@@ -71,7 +71,7 @@ fn epoch(conn: &Connection) -> Result<i64, PersistenceError> {
     )?)
 }
 /// Invalidate old writers even when settings change back to their original values.
-fn advance(conn: &Connection) -> Result<(), PersistenceError> {
+pub(super) fn advance(conn: &Connection) -> Result<(), PersistenceError> {
     if conn.execute("UPDATE database_broker_epoch SET generation=generation+1 WHERE id=1 AND generation<9223372036854775807", [])? != 1 {
         return Err(PersistenceError::StaleIacOwner);
     }
@@ -184,6 +184,7 @@ impl Store {
         Ok(authority)
     }
     /// External selection and stopping managed supervision commit together.
+    #[cfg(test)]
     pub(crate) fn configure_external_database_broker(
         &self,
         input: &RabbitMQInput,

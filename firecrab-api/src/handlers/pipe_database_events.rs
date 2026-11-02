@@ -8,7 +8,7 @@ use crate::{
     extract::ValidatedJson,
     pipe_databases::{
         DatabaseConnection,
-        events::{self, RabbitMQInput, TriggerStatus},
+        events::{self, TriggerStatus},
         write::Error,
     },
     server::RequestId,
@@ -32,37 +32,7 @@ pub async fn rabbitmq_get(
         None => serde_json::json!({"configured":false}),
     }))
 }
-/// Validate external RabbitMQ and prohibit cluster replacement with retained triggers.
-pub async fn rabbitmq_save(
-    State(state): State<AppState>,
-    Extension(rid): Extension<RequestId>,
-    ValidatedJson(input): ValidatedJson<RabbitMQInput>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let _claim = state.service_mutations.lock().await;
-    let authority = state
-        .store
-        .database_broker_authority()
-        .map_err(|e| super::stacks::persistence_error(e, rid.0))?;
-    if !state
-        .store
-        .database_triggers()
-        .map_err(|_| AppError::internal(rid.0))?
-        .is_empty()
-    {
-        return Err(crate::pipe_databases::validation(
-            "Finish retained triggers before changing the RabbitMQ cluster",
-            rid.0,
-        ));
-    }
-    bounded_write(rid.0, async { input.connect().await.map(|_| ()) }).await?;
-    database(rid.0, move || {
-        state
-            .store
-            .configure_external_database_broker(&input, &authority)
-    })
-    .await?;
-    Ok(Json(serde_json::json!({"configured":true})))
-}
+pub use super::pipe_database_broker_mutations::save as rabbitmq_save;
 /// Return capture lifecycle, delivery counts and redacted worker health.
 pub async fn list(
     State(state): State<AppState>,

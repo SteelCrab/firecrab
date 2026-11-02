@@ -186,6 +186,11 @@ pub async fn recover_native_operation(
             .await
             .map(Json);
     }
+    if operation.action == firecrab_stack::NativeAction::ConfigureDatabaseBroker {
+        return super::pipe_database_broker_mutations::recover(state, request, id)
+            .await
+            .map(Json);
+    }
     if crate::persistence::queue_engine_operations::is_engine_action(operation.action) {
         return crate::queues::recover_operation(state, request.0, operation.operation_id)
             .await

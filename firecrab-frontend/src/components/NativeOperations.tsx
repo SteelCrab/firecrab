@@ -18,6 +18,7 @@ type Operation = {
 };
 type Page = { operations: Operation[]; nextBefore: string | null };
 const ACTIONS: Record<string, [string, string]> = {
+  configure_database_broker: ["Configure database broker", "DB 브로커 설정"],
   create_database_events: ["Create database events", "DB 이벤트 생성"],
   pause_database_events: ["Change event delivery", "이벤트 전달 변경"],
   detach_database_events: ["Detach database events", "DB 이벤트 분리"],
@@ -52,6 +53,7 @@ function validOperation(value: Operation): boolean {
   );
 }
 const RECOVERABLE = new Set([
+  "configure_database_broker",
   "create_database_events",
   "pause_database_events",
   "detach_database_events",
