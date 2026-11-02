@@ -23,6 +23,7 @@ fn named_image(image_root: &std::path::Path, alias: &str, ext4_bytes: &[u8]) -> 
     write_file(&ext4, ext4_bytes);
     NamedOciImage {
         image: OciBootableImage {
+            kernel_lease: None,
             rootfs: OciExt4Image {
                 path: ext4,
                 size_bytes: ext4_bytes.len() as u64,

@@ -18,6 +18,8 @@ type Operation = {
 };
 type Page = { operations: Operation[]; nextBefore: string | null };
 const ACTIONS: Record<string, [string, string]> = {
+  install_kernel: ["Install kernel", "커널 설치"],
+  delete_kernel: ["Delete kernel", "커널 삭제"],
   prepare_database_broker: ["Prepare database broker", "DB 브로커 준비"],
   repair_database_broker: ["Repair database broker", "DB 브로커 복구"],
   disconnect_database_broker: [
@@ -59,6 +61,8 @@ function validOperation(value: Operation): boolean {
   );
 }
 const RECOVERABLE = new Set([
+  "install_kernel",
+  "delete_kernel",
   "prepare_database_broker",
   "repair_database_broker",
   "disconnect_database_broker",

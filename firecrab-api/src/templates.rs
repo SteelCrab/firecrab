@@ -260,6 +260,8 @@ pub struct TemplateRegistry {
     manifest_lock: Arc<Mutex<()>>,
     /// Serializes registration and cache collection through file deletion.
     mutations: Arc<Mutex<()>>,
+    /// Private endpoint context for artifact jobs; clones retain the same authority boundary.
+    iac_store: Option<crate::persistence::Store>,
 }
 
 impl Clone for TemplateRegistry {
@@ -272,6 +274,7 @@ impl Clone for TemplateRegistry {
             verify_cache: self.verify_cache.clone(),
             manifest_lock: self.manifest_lock.clone(),
             mutations: self.mutations.clone(),
+            iac_store: self.iac_store.clone(),
         }
     }
 }
@@ -288,6 +291,16 @@ struct CachedHash {
 }
 
 impl TemplateRegistry {
+    /// Bind one API state's private execution context; older worker clones keep their original store.
+    pub(crate) fn with_iac_store(mut self, store: &crate::persistence::Store) -> Self {
+        self.iac_store = Some(store.clone());
+        self
+    }
+    /// Native image pipelines borrow the endpoint context, never an owner supplied by a header.
+    pub(crate) fn iac_store(&self) -> Option<&crate::persistence::Store> {
+        self.iac_store.as_ref()
+    }
+
     /// Loads the host architecture's built-in template set from `images/`
     /// (or `FIRECRAB_IMAGE_ROOT` if set).
     pub fn load_default() -> Result<Self, TemplateError> {
@@ -410,6 +423,7 @@ impl TemplateRegistry {
             verify_cache: Arc::new(Mutex::new(HashMap::new())),
             manifest_lock: Arc::new(Mutex::new(())),
             mutations: Arc::new(Mutex::new(())),
+            iac_store: None,
         })
     }
 

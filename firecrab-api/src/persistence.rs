@@ -62,6 +62,7 @@ pub(crate) mod iac_database_operations;
 mod iac_database_targets;
 mod iac_dependencies;
 mod iac_deploy_tokens;
+pub(crate) mod iac_kernels;
 pub(crate) mod iac_managed_database_brokers;
 pub(crate) mod iac_native;
 mod iac_native_schema;
@@ -895,6 +896,7 @@ impl Store {
         conn.execute_batch(iac_database_events::SCHEMA)?;
         conn.execute_batch(iac_database_brokers::SCHEMA)?;
         conn.execute_batch(iac_managed_database_brokers::SCHEMA)?;
+        conn.execute_batch(iac_kernels::SCHEMA)?;
         conn.execute_batch(iac_vm_deletes::SCHEMA)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;

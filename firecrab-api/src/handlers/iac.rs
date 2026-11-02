@@ -180,6 +180,14 @@ pub async fn recover_native_operation(
     }
     if matches!(
         operation.action,
+        firecrab_stack::NativeAction::InstallKernel | firecrab_stack::NativeAction::DeleteKernel
+    ) {
+        return super::kernel_mutations::recover(state, request, id, expected_generation)
+            .await
+            .map(Json);
+    }
+    if matches!(
+        operation.action,
         firecrab_stack::NativeAction::CreateDatabaseConnection
             | firecrab_stack::NativeAction::UpdateDatabaseConnection
     ) {
@@ -342,6 +350,17 @@ pub async fn change_owner(
             "finish the pending AI login or wait for its expiry before transferring ownership",
             request.0,
         ));
+    }
+    if change.resource.kind == "kernel" && change.owner.is_some() {
+        let presence =
+            crate::kernel_lifecycle::prepare_transfer(&state.templates, &change.resource)
+                .await
+                .map_err(|e| super::stacks::persistence_error(e, request.0))?;
+        return database(request.0, move || {
+            state.store.change_iac_kernel_owner(&change, &presence)
+        })
+        .await
+        .map(Json);
     }
     database(request.0, move || {
         if matches!(

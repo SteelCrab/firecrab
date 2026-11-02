@@ -594,12 +594,11 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/kernels", get(handlers::kernels::list_kernels))
         .route(
             "/api/kernels/{version}",
-            delete(handlers::kernels::delete_kernel),
+            delete(handlers::kernel_mutations::delete),
         )
         .route(
             "/api/kernels/{version}/install",
-            get(handlers::kernels::get_kernel_install)
-                .post(handlers::kernels::start_kernel_install),
+            get(handlers::kernel_mutations::get).post(handlers::kernel_mutations::install),
         )
         .route(
             "/api/images/{alias}/install",

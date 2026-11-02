@@ -94,6 +94,7 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "database_events",
             "database_rabbitmq",
             "database_migration",
+            "kernel",
             "storage_connection",
             "secret",
             "secret_connection",
@@ -1132,3 +1133,6 @@ mod database_broker_tests;
 mod database_event_tests;
 #[path = "iac_managed_database_brokers.rs"]
 mod managed_database_broker_tests;
+
+#[path = "iac_kernels.rs"]
+mod kernel_tests;

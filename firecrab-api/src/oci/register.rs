@@ -30,6 +30,9 @@ pub(super) fn register_named_image(
     cache_owner: Option<&crate::persistence::Store>,
 ) -> Result<RegisteredOciImage, ResolveError> {
     let image_root = templates.image_root_path();
+    if let Some(lease) = &named.image.kernel_lease {
+        lease.check(image_root)?;
+    }
     let relative = if cache_owner.is_some() {
         Path::new("rootfs/deploy").join(format!("{}.ext4", Uuid::new_v4()))
     } else {

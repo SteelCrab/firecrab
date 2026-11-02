@@ -18,6 +18,7 @@ mod handlers;
 mod host_platform;
 mod image_install;
 mod ipam;
+mod kernel_lifecycle;
 mod kernel_manager;
 mod m2image_manifest;
 mod microboot;

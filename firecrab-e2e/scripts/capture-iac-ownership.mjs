@@ -37,7 +37,8 @@ try {
   assert.equal(capabilities.endpointId, ownership.endpointId);
   assert.equal(capabilities.inventoryKinds.length, 43);
   assert.deepEqual(capabilities.transferKinds, ["network", "vm", "service", "storage_root", "volume", "volume_attachment", "security_group", "shell", "schedule", "pool", "queue", "database_connection", "database_binding", "database_events", "database_rabbitmq",
-    "database_migration", "storage_connection", "secret", "secret_connection", "auth", "registry", "ai_connection", "ai_model", "sandbox_environment", "sandbox_project", "stack_source", "sandbox_access", "queue_engine", "cluster_host", "cluster_placement", "cluster_service", "service_auto_deploy", "service_otlp", "service_deploy_token"]);
+    "database_migration",
+    "kernel", "storage_connection", "secret", "secret_connection", "auth", "registry", "ai_connection", "ai_model", "sandbox_environment", "sandbox_project", "stack_source", "sandbox_access", "queue_engine", "cluster_host", "cluster_placement", "cluster_service", "service_auto_deploy", "service_otlp", "service_deploy_token"]);
   const observed = await context.request.get(`${origin}api/iac/owners`);
   assert.equal(observed.status(), 200);
   assert.deepEqual((await observed.json()).filter(item=>item.owner.manager==="terraform"), fixture.ownerships);

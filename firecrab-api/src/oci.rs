@@ -2639,6 +2639,7 @@ impl OciExt4Image {
 /// supplies neither field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OciBootableImage {
+    kernel_lease: Option<crate::kernel_lifecycle::KernelArtifactLease>,
     rootfs: OciExt4Image,
     kernel: PathBuf,
     initrd: Option<PathBuf>,
@@ -3206,12 +3207,27 @@ pub async fn write_provisioned_ext4(
 /// built from kernel.org's current stable source and cached under `image_root`.
 /// A host that cannot fetch or build it reuses a verified installed kernel or
 /// an installed catalog kernel. The ext4 stays in place; nothing is registered.
+#[cfg(test)]
 pub async fn pair_ext4_with_host_kernel(
     image: OciExt4Image,
     image_root: &Path,
 ) -> Result<OciBootableImage, ResolveError> {
     let pair = boot::host_kernel_pair(image_root).await?;
     boot::pair_ext4_with_kernel(image, image_root, &pair)
+}
+
+/// Retain a managed kernel borrow until the image finishes registration.
+async fn pair_ext4_with_managed_kernel(
+    image: OciExt4Image,
+    templates: &TemplateRegistry,
+) -> Result<OciBootableImage, ResolveError> {
+    #[cfg(test)]
+    if templates.iac_store().is_none() {
+        return pair_ext4_with_host_kernel(image, templates.image_root_path()).await;
+    }
+
+    let pair = boot::host_kernel_pair_managed(templates).await?;
+    boot::pair_ext4_with_kernel(image, templates.image_root_path(), &pair)
 }
 
 /// Derives a unique alias and version from the reference and attaches them
@@ -3501,7 +3517,7 @@ async fn import_oci_image_in_scratch(
     let ext4 = write_provisioned_ext4(&provisioned, &scratch.join("rootfs.ext4")).await?;
 
     tracker.append_log(alias, "pairing host kernel");
-    let bootable = pair_ext4_with_host_kernel(ext4, image_root).await?;
+    let bootable = pair_ext4_with_managed_kernel(ext4, templates).await?;
 
     tracker.append_log(alias, "naming template");
     let named = name_oci_image(bootable, reference, templates)?;

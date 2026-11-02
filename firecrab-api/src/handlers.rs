@@ -12,6 +12,7 @@ pub mod images;
 #[allow(clippy::err_expect)]
 mod images_local_tests;
 pub mod info;
+pub(crate) mod kernel_mutations;
 pub mod kernels;
 pub mod micro_networks;
 pub mod micro_services;

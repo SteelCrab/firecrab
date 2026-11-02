@@ -8,6 +8,10 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeAction {
+    /// Install the original immutable guest kernel and retain its verified source.
+    InstallKernel,
+    /// Remove only an unused original guest kernel artifact.
+    DeleteKernel,
     /// Prepare managed delivery using the original broker UUIDs and retained disks.
     PrepareDatabaseBroker,
     /// Reconcile or repair the original owned delivery cluster.

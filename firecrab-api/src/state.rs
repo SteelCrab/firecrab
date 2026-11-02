@@ -210,6 +210,7 @@ impl AppState {
         .await
         .expect("persistence startup task panicked")?;
 
+        let templates = templates.with_iac_store(&store);
         let storage = StorageRegistry::from_env();
         let network = NetworkClient::from_env();
         let runtime = RuntimeConfig::from_defaults(&storage, &network);

@@ -199,7 +199,7 @@ impl Store {
         &self,
         request: &ChangeResourceOwner,
     ) -> Result<ResourceOwnership, PersistenceError> {
-        self.change_iac_owner_checked(request, None)
+        self.change_iac_owner_checked(request, None, None)
     }
 
     /// Hold the encrypted vault's file lock through the SQLite ownership commit.
@@ -235,15 +235,28 @@ impl Store {
                         .iter()
                         .any(|record| record.summary.id == id)
                 };
-                Ok(self.change_iac_owner_checked(request, Some(exists)))
+                Ok(self.change_iac_owner_checked(request, Some(exists), None))
             })
             .map_err(|_| PersistenceError::IacVaultUnavailable)?
+    }
+
+    /// The caller retains verified physical presence and its exclusive lock through this commit.
+    pub(crate) fn change_iac_kernel_owner(
+        &self,
+        request: &ChangeResourceOwner,
+        presence: &crate::kernel_lifecycle::KernelPresence,
+    ) -> Result<ResourceOwnership, PersistenceError> {
+        if request.resource.kind != "kernel" {
+            return Err(PersistenceError::UnsupportedIacResource);
+        }
+        self.change_iac_owner_checked(request, None, Some(presence))
     }
 
     fn change_iac_owner_checked(
         &self,
         request: &ChangeResourceOwner,
         vault_presence: Option<bool>,
+        kernel_presence: Option<&crate::kernel_lifecycle::KernelPresence>,
     ) -> Result<ResourceOwnership, PersistenceError> {
         let mut request = request.clone();
         request
@@ -309,6 +322,13 @@ impl Store {
             }
             if request.owner.is_some() && !exists {
                 return Err(PersistenceError::InvalidStackResource);
+            }
+        } else if request.resource.kind == "kernel" {
+            super::iac_kernels::validate_identity(&request.resource)?;
+            if request.owner.is_some() {
+                kernel_presence
+                    .ok_or(PersistenceError::UnsupportedIacResource)?
+                    .check(&request.resource, endpoint(&tx)?)?;
             }
         } else {
             super::iac_resources::validate(&tx, &request.resource, request.owner.is_some())?;
@@ -409,6 +429,11 @@ impl Store {
                     .map_err(|_| PersistenceError::IacOperationIdentity)?
             ],
         )?;
+        if request.resource.kind == "kernel" && request.owner.is_some() {
+            kernel_presence
+                .ok_or(PersistenceError::UnsupportedIacResource)?
+                .claim()?;
+        }
         tx.commit()?;
         Ok(result)
     }

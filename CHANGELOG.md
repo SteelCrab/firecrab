@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Retain kernel installation and removal intents, original source checksums,
+  physical root identities and immutable receipts. Fence recovery and ownership
+  transfer, hold image borrow leases and publish package artifacts without
+  overwriting shared kernels or previously admitted image files (#548).
+
 - Require observed endpoint and execution-generation preconditions for unfinished
   native recovery. Recheck them inside every typed recovery transaction, retain
   immutable terminal receipts and fence old project cleanup callbacks (#548).

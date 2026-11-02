@@ -319,6 +319,15 @@ pub async fn update_image_kernel(
         }
     }
 
+    let _kernel_lease = crate::kernel_lifecycle::borrow_existing(&state.templates, &version)
+        .await
+        .map_err(|_| {
+            AppError::conflict(
+                "kernel_in_use",
+                "The selected kernel is unverified or reserved by its original operation",
+                request_id.0,
+            )
+        })?;
     let templates = state.templates.clone();
     let (updated, orphan_paths) = tokio::task::spawn_blocking(move || {
         templates.replace_alias(next_spec)

@@ -150,6 +150,7 @@ fn claiming_accepts_a_free_alias_and_does_not_register_it() {
 fn naming_a_bootable_image_records_the_alias_and_leaves_the_pair_in_place() {
     let (_keep, templates) = empty_registry();
     let image = OciBootableImage {
+        kernel_lease: None,
         rootfs: OciExt4Image {
             path: std::path::PathBuf::from("/tmp/oci.ext4"),
             size_bytes: 8 * 1024 * 1024,
