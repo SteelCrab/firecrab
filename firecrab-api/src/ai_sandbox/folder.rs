@@ -1,4 +1,5 @@
-//! Bounded file agents on the retained volume, using the existing task engine.
+//! Bounded folder agents on the retained volume, using the existing task engine.
+mod shell;
 use super::*;
 use crate::project_workspace::folder as native;
 use serde_json::Value;
@@ -12,6 +13,9 @@ pub fn validate_request(
     input: &SandboxTaskInput,
 ) -> Result<(), String> {
     let Some(directory) = &input.project_directory else {
+        if input.project_shell {
+            return Err("Project shell requires an explicit retained folder".into());
+        }
         return Ok(());
     };
     native::path(directory, "", true)?;
@@ -72,6 +76,10 @@ pub fn reject_credentials(call: &mut model::Call, accounts: &[SavedConnection]) 
 }
 /// Retain the server-generated operation id in the existing pre-effect event checkpoint.
 pub fn prepare(saved: &mut SavedTask, call: &mut model::Call) {
+    if enabled(saved) && call.name == "run_argv" {
+        shell::prepare(saved, call);
+        return;
+    }
     if !enabled(saved) || call.name != "write_file" {
         return;
     }
@@ -102,6 +110,7 @@ pub fn prepare(saved: &mut SavedTask, call: &mut model::Call) {
         return;
     }
     // Reuse the canonical pending-effect fence. Its event already contains the receipt id.
+    saved.guest_command = None;
     saved.guest_pending = true;
 }
 #[derive(Deserialize)]
@@ -128,9 +137,25 @@ pub fn tools() -> Vec<Value> {
         json!({"name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
     }).collect()
 }
+pub fn task_tools(shell: bool) -> Vec<Value> {
+    let mut definitions = tools();
+    if shell {
+        let mut command = model::tools()
+            .into_iter()
+            .find(|tool| tool["name"] == "run_argv")
+            .expect("fixed command tool");
+        command["description"] = json!(
+            "Run bounded literal argv in the selected project VM, with cwd relative to the admitted folder. A shell requires explicit argv such as /bin/sh -c. Commands edit shared files immediately. No host execution or isolated-copy staging occurs. Retained command IDs cannot execute twice."
+        );
+        command["parameters"]["properties"]["cwd"]["description"] =
+            json!("Relative to the admitted folder; use an empty string for that folder.");
+        definitions.push(command);
+    }
+    definitions
+}
 fn failure(error: crate::error::AppError) -> String {
     format!(
-        "Project file operation failed ({}); inspect its retained receipt before retrying",
+        "Project operation failed ({}); inspect its retained receipt before retrying",
         error.code()
     )
 }
@@ -166,6 +191,9 @@ pub async fn tool(
     saved: &mut SavedTask,
     call: &model::Call,
 ) -> Result<(String, String, Option<i32>, bool), String> {
+    if call.name == "run_argv" {
+        return shell::tool(state, saved, call).await;
+    }
     let target = target(saved)?;
     let id = Uuid::new_v4();
     let output=match call.name.as_str() {
@@ -228,6 +256,7 @@ pub async fn settle(
     if !enabled(saved) {
         return Ok(());
     }
+    shell::settle(state, saved, actor).await?;
     let target = target(saved)?;
     let writes = saved
         .task

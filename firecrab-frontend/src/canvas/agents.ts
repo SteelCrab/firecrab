@@ -71,9 +71,13 @@ export class FolderAgents {
     n.content = JSON.stringify(d);
     this.host.edit(t);
   }
-  change(t: Tab, n: Node, patch: { draft?: string; selection?: Selection }) {
+  change(
+    t: Tab,
+    n: Node,
+    patch: { draft?: string; selection?: Selection; shell?: boolean },
+  ) {
     const d = this.document(t, n);
-    if (patch.selection && d.pending) return;
+    if ((patch.selection || patch.shell !== undefined) && d.pending) return;
     this.store(t, n, { ...d, ...patch });
   }
   async models(t: Tab, n: Node, discover = false) {
@@ -241,6 +245,7 @@ export class FolderAgents {
     pending: NonNullable<AgentDocument["pending"]>,
   ) {
     if (
+      !!task.request.projectShell !== !!pending.request.projectShell ||
       task.request.instructionSnapshotId !== pending.snapshot ||
       task.request.input !== pending.request.input.trim() ||
       selectionKey(task.selection) !== selectionKey(pending.request.selection)
@@ -284,6 +289,7 @@ export class FolderAgents {
           snapshot,
           request: {
             kind: "code",
+            ...(d.shell ? { projectShell: true as const } : {}),
             input: d.draft.trim(),
             projectDirectory: d.directory,
             instructionSnapshotId: snapshot,

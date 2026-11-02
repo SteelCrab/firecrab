@@ -66,7 +66,11 @@ export default function CanvasAgent({ tab, node }: { tab: Tab; node: Node }) {
     >
       <div className="cw-agent-context">
         <code>/workspace/shared/{d.directory}</code>
-        <span>{t("File edits", "파일 작업")}</span>
+        <span>
+          {d.shell
+            ? t("Files + shell", "파일 + 셸")
+            : t("File edits", "파일 작업")}
+        </span>
       </div>
       <div className="cw-agent-model">
         <label>
@@ -132,6 +136,17 @@ export default function CanvasAgent({ tab, node }: { tab: Tab; node: Node }) {
           <a href="#/pipe/ai">Pipe → AI</a>
         </p>
       )}
+      <label className="cw-agent-shell">
+        <input
+          type="checkbox"
+          checked={!!d.shell}
+          disabled={disabled || !!d.pending}
+          onChange={(e) =>
+            manager.change(tab, node, { shell: e.target.checked })
+          }
+        />
+        {t("Enable shell for new requests", "새 요청에 셸 실행 사용")}
+      </label>
       <div className="cw-agent-rules">
         <FileText size={13} />
         <button
@@ -261,10 +276,15 @@ export default function CanvasAgent({ tab, node }: { tab: Tab; node: Node }) {
         />
         <div>
           <small>
-            {t(
-              "Changes are saved to the shared folder immediately. Shell commands are unavailable.",
-              "변경사항은 공용 폴더에 즉시 저장한다. 셸 명령은 지원하지 않는다.",
-            )}
+            {d.shell
+              ? t(
+                  "Commands run in this project's VM. Changes are shared immediately.",
+                  "명령은 이 프로젝트의 VM에서 실행한다. 변경사항은 즉시 공유한다.",
+                )
+              : t(
+                  "Changes are saved to the shared folder immediately. Shell commands are unavailable.",
+                  "변경사항은 공용 폴더에 즉시 저장한다. 셸 명령은 지원하지 않는다.",
+                )}
           </small>
           <button type="submit" disabled={sendDisabled}>
             <Play size={13} />
@@ -272,7 +292,9 @@ export default function CanvasAgent({ tab, node }: { tab: Tab; node: Node }) {
               ? t("Retry saved request", "저장된 요청 재시도")
               : s.busy
                 ? t("Confirming…", "확인 중…")
-                : t("Start file task", "파일 작업 시작")}
+                : d.shell
+                  ? t("Start shell task", "셸 작업 시작")
+                  : t("Start file task", "파일 작업 시작")}
           </button>
         </div>
       </form>

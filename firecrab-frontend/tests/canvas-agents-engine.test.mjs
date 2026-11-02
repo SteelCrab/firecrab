@@ -93,3 +93,15 @@ test('surrounding request whitespace matches server normalization without an amb
  assert.equal(f.records.size,1);assert.equal([...f.records.values()][0].request.input,'Update saved files');
  assert.equal(agentDocument(f.node,f.project).pending,undefined);assert.equal(agentDocument(f.node,f.project).draft,'');
 });
+
+test('shell execution is opt-in, retained before dispatch, and immutable while confirmation is pending',async()=>{
+ const f=fixture();await f.ready();f.manager.change(f.tab,f.node,{shell:true});f.offline=true;
+ await f.manager.submit(f.tab,f.node);const pending=agentDocument(f.node,f.project).pending;
+ assert.equal(pending.request.projectShell,true);
+ f.manager.change(f.tab,f.node,{shell:false});assert.equal(agentDocument(f.node,f.project).shell,true);
+ f.offline=false;await f.manager.submit(f.tab,f.node);
+ assert.equal([...f.records.values()][0].request.projectShell,true);
+ assert.equal(JSON.parse(f.stored[0]).pending.request.projectShell,true);
+ const files=fixture();await files.ready();await files.manager.submit(files.tab,files.node);
+ assert.equal(Object.hasOwn([...files.records.values()][0].request,'projectShell'),false);
+});

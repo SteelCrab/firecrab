@@ -336,3 +336,92 @@ async fn folder_model_connections_expose_only_executable_metadata_without_creden
             .is_empty()
     );
 }
+
+fn shell_call() -> model::Call {
+    model::Call {
+        id: "command-call".into(),
+        name: "run_argv".into(),
+        arguments: json!({
+        "version":1,"argv":["/bin/sh","-c","printf literal"],"cwd":"", "env":[],"stdin":"",
+        "limits":{"wallSeconds":5,"cpuSeconds":3,"memoryMib":64,"outputBytes":8192}}),
+    }
+}
+#[test]
+fn shell_tools_require_opt_in_and_legacy_requests_keep_their_original_bytes() {
+    let mut input = request();
+    assert!(!input.project_shell);
+    assert!(
+        serde_json::to_value(&input)
+            .unwrap()
+            .get("projectShell")
+            .is_none()
+    );
+    input.project_shell = true;
+    let enabled = serde_json::to_value(&input).unwrap();
+    assert_eq!(enabled["projectShell"], true);
+    assert_eq!(task_tools(false).len(), 3);
+    assert_eq!(task_tools(true).len(), 4);
+    let tool = task_tools(true).pop().unwrap();
+    assert_eq!(tool["name"], "run_argv");
+    assert!(
+        tool["parameters"]["properties"]
+            .get("operationId")
+            .is_none()
+    );
+    assert!(model::folder_boundary(true).contains("not a filesystem jail"));
+    input.project_directory = None;
+    let project: SandboxProjectSpec = serde_json::from_value(json!({"name":"p"})).unwrap();
+    assert!(validate_request(&project, &input).is_err());
+}
+#[tokio::test]
+async fn shell_identity_and_pending_fence_are_saved_before_any_native_dispatch() {
+    let (_dir, state, mut saved) = super::super::recovery_tests::fixture().await;
+    saved.task.request.project_directory = Some("api".into());
+    saved.guest_pending = false;
+    let mut call = shell_call();
+    let supplied = Uuid::new_v4();
+    call.arguments["operationId"] = json!(supplied);
+    prepare(&mut saved, &mut call);
+    assert!(!saved.guest_pending);
+    assert!(
+        shell::tool(&state, &mut saved, &call)
+            .await
+            .unwrap_err()
+            .contains("not enabled")
+    );
+    saved.task.request.project_shell = true;
+    prepare(&mut saved, &mut call);
+    let (operation, command) = shell::arguments(&call.arguments).unwrap();
+    assert_ne!(operation, supplied);
+    assert_eq!(saved.guest_command, Some(operation));
+    assert!(saved.guest_pending);
+    assert_eq!(command.argv[2], "printf literal");
+    let before = operation;
+    prepare(&mut saved, &mut call);
+    assert_eq!(saved.guest_command, Some(before));
+    let reloaded: SavedTask = serde_json::from_slice(&serde_json::to_vec(&saved).unwrap()).unwrap();
+    assert_eq!(reloaded.guest_command, Some(before));
+}
+#[tokio::test]
+async fn invalid_commands_never_receive_an_admitted_pending_effect() {
+    let (_dir, _state, mut saved) = super::super::recovery_tests::fixture().await;
+    saved.task.request.project_directory = Some("api".into());
+    saved.task.request.project_shell = true;
+    for patch in [
+        json!({"cwd":"../other"}),
+        json!({"limits":{"wallSeconds":121,"cpuSeconds":3,"memoryMib":64,"outputBytes":8192}}),
+        json!({"env":[{"name":"SAME","value":"a"},{"name":"SAME","value":"b"}]}),
+        json!({"argv":["bad\0binary"]}),
+    ] {
+        saved.guest_pending = false;
+        saved.guest_command = None;
+        let mut call = shell_call();
+        for (key, value) in patch.as_object().unwrap() {
+            call.arguments[key] = value.clone();
+        }
+        prepare(&mut saved, &mut call);
+        assert!(!saved.guest_pending, "{patch}");
+        assert_eq!(saved.guest_command, None);
+        assert!(call.arguments.get("operationId").is_none());
+    }
+}

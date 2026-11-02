@@ -72,6 +72,7 @@ pub(super) async fn fixture() -> (tempfile::TempDir, AppState, SavedTask) {
             attempt_id: Uuid::new_v4(),
             runtime: Some(runtime),
             request: SandboxTaskInput {
+                project_shell: false,
                 project_directory: None,
                 instruction_snapshot_id: None,
                 coordination: Default::default(),

@@ -1121,7 +1121,10 @@ pub async fn create_task(
     if ai_sandbox::folder::enabled(&saved) {
         let target =
             ai_sandbox::folder::target(&saved).map_err(|e| invalid(id, "projectDirectory", e))?;
-        crate::project_workspace::folder::admit(state.clone(), target, id.0).await?;
+        crate::project_workspace::folder::admit(state.clone(), target.clone(), id.0).await?;
+        if saved.task.request.project_shell {
+            crate::project_workspace::folder::command::probe(state.clone(), target, id.0).await?;
+        }
     }
     let state = state.clone();
     let response = tokio::spawn(async move { ai_sandbox::admit(state, saved, claim).await })

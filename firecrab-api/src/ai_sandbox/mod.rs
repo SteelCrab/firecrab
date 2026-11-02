@@ -239,7 +239,7 @@ async fn run(state: AppState, mut saved: SavedTask, mut cancel: watch::Receiver<
         if folder::settle(&state, &mut saved, actor).await.is_err() {
             saved.task.state = SandboxTaskState::Interrupted;
             saved.task.error_code = Some("sandbox_folder_reconciliation_required".into());
-            saved.task.error = Some("A retained-folder write needs receipt reconciliation; its original operation id was retained".into());
+            saved.task.error = Some("A retained-folder operation needs receipt reconciliation; its original operation id was retained".into());
         }
     }
     if !folder::enabled(&saved)
@@ -625,9 +625,10 @@ async fn execute(
         };
     history.push(json!({"role":"user","content":saved.task.request.input}));
     let folder_profile = folder::enabled(saved);
+    let project_shell = saved.task.request.project_shell;
     let task_tools = || {
         if folder_profile {
-            folder::tools()
+            folder::task_tools(project_shell)
         } else if code {
             model::tools()
         } else {
@@ -691,7 +692,7 @@ async fn execute(
                     &history,
                     &tools,
                     false,
-                    folder_profile,
+                    folder_profile.then_some(saved.task.request.project_shell),
                 )
                 .await
                 .map_err(provider_error)

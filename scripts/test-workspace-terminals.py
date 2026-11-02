@@ -25,7 +25,7 @@ class Terminals(unittest.TestCase):
         source = REPO / "packaging/guest-console"
         subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
             "-DFIRECRAB_WORKSPACE_TEST", "-I", str(source), str(source / "workspace.c"),
-            str(source / "terminal.c"), str(driver), "-o", str(cls.binary)], check=True)
+            str(source / "terminal.c"), str(source / "workspace_process.c"), str(driver), "-o", str(cls.binary)], check=True)
 
     @classmethod
     def tearDownClass(cls):

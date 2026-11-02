@@ -2,6 +2,7 @@ import type { Node } from "./types.ts";
 export type Selection = { connectionId: string; model: string };
 export type AgentRequest = {
   kind: "code";
+  projectShell?: true;
   input: string;
   projectDirectory: string;
   instructionSnapshotId: string;
@@ -14,6 +15,7 @@ export type AgentDocument = {
   directory: string;
   draft: string;
   selection?: Selection;
+  shell?: boolean;
   pending?: { id: string; snapshot: string; request: AgentRequest };
   taskId?: string;
 };
@@ -80,6 +82,7 @@ export function agentDocument(
       typeof d.directory !== "string" ||
       typeof d.draft !== "string" ||
       d.draft.length > 4096 ||
+      (d.shell !== undefined && typeof d.shell !== "boolean") ||
       (d.selection && !selection(d.selection)) ||
       (d.taskId && !uuid(d.taskId))
     )
@@ -92,6 +95,8 @@ export function agentDocument(
         !uuid(p.snapshot) ||
         !r ||
         r.kind !== "code" ||
+        (r.projectShell !== undefined && r.projectShell !== true) ||
+        (r.projectShell === true && d.shell !== true) ||
         r.projectDirectory !== d.directory ||
         r.instructionSnapshotId !== p.snapshot ||
         !selection(r.selection) ||

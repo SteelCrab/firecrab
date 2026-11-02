@@ -1,4 +1,5 @@
 //! File-agent transport over existing retained-volume APIs; no host filesystem execution.
+pub(crate) mod command;
 use super::*;
 use crate::ai_sandbox::files as model_files;
 use files_db::Operation;

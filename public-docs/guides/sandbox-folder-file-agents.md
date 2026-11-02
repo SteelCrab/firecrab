@@ -4,10 +4,11 @@ An explicit Sandbox code-task profile can read and edit files in a selected dire
 of the project's retained volume. It uses the existing task admission, cancellation,
 retry and reconciliation lifecycle. It does not stage a host source copy.
 
-This is a **file-only profile**. Its model tools are `list_files`, `read_file` and
-`write_file`. Shell commands, terminal input, deletion, dependency inheritance,
-artifact collection and test execution are unavailable. A model response cannot
-add those capabilities. Full folder shell agents and their session UI remain #550 work.
+The default is a **file-only profile**. Its tools are `list_files`, `read_file` and
+`write_file`. An explicit `projectShell: true` request adds bounded `run_argv` through
+the [project shell adapter](sandbox-project-shell.md). Existing requests remain
+file-only. A model response cannot enable shell access. Interactive terminal input,
+dependency inheritance and isolated-copy artifact collection remain unavailable.
 
 ## Admission
 
@@ -135,5 +136,6 @@ work. Use **Cancel task** to cancel active work. **Check saved receipts** reconc
 an interrupted file task without replaying writes. Reopen the retained private
 canvas to retrieve its session. A new blank canvas has no inherited sessions.
 
-This profile currently supports bounded file operations. Shell commands, official
-skill installation and real provider/native-runtime acceptance remain pending.
+The session can explicitly enable [bounded project shell commands](sandbox-project-shell.md)
+for new requests. Official skill installation and real provider/native-runtime
+acceptance remain pending.

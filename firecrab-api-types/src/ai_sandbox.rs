@@ -213,9 +213,15 @@ pub struct SandboxTaskInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instruction_snapshot_id: Option<Uuid>,
     /// File-agent target in the retained volume. Some("") selects its root.
-    /// This profile exposes versioned file tools, not shell commands or host copies.
+    /// This profile defaults to versioned file tools and never stages host copies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_directory: Option<String>,
+    /// Explicit opt-in to bounded commands in the retained project VM; old requests remain file-only.
+    #[serde(default, skip_serializing_if = "shell_disabled")]
+    pub project_shell: bool,
+}
+fn shell_disabled(value: &bool) -> bool {
+    !*value
 }
 
 /// A declared test is backed by one retained guest-command event, never a model assertion.

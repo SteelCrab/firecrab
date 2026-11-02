@@ -113,3 +113,17 @@ test('the editor opens the same retained agent session and switching views canno
   await expect(page.getByLabel('Agent request', { exact: true })).toHaveValue('Private next request');
   assert.equal(canvas.admissions.length, 1);
 });
+
+test('shell capability is explicit and survives the exact saved request across reload', async () => {
+  await openAgent();
+  await page.getByRole('checkbox', { name: 'Enable shell for new requests', exact: true }).check();
+  await expect(page.getByRole('button', { name: 'Start shell task', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Start shell task', exact: true }).click();
+  await expect(page.getByText('Fixture result. No model or VM executed.', { exact: true })).toBeVisible();
+  assert.equal(canvas.admissions[0].body.projectShell, true);
+  await page.getByRole('button', { name: 'Save layout', exact: true }).click();
+  await expect(page.locator('#cw-save-state')).toContainText('Saved privately');
+  await page.reload();
+  await expect(page.getByRole('checkbox', { name: 'Enable shell for new requests', exact: true })).toBeChecked();
+  assert.equal(canvas.admissions.length, 1);
+});

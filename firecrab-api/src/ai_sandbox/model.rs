@@ -127,6 +127,13 @@ pub(super) fn boundary(project_files: bool) -> &'static str {
     }
 }
 
+pub(super) fn folder_boundary(shell: bool) -> &'static str {
+    if !shell {
+        return boundary(true);
+    }
+    "You are a Firecrab project-folder agent. The user explicitly enabled bounded shell execution in the selected project VM. Versioned file tools and run_argv are available. run_argv uses literal arguments, explicit env entries and enforced time, CPU, memory and per-stream output limits. Its cwd is relative to the admitted folder. Select /bin/sh -c explicitly when a shell is needed. Commands use an unprivileged UID in the project VM, not the controller host. The working directory is not a filesystem jail; VM execution permission is required. Project edits are immediate and shared. Private controller databases and account credentials are never mounted or inherited. Do not claim per-file version receipts for shell changes; read changed files through the versioned API to observe their current versions. After interruption, inspect retained output and file state instead of replaying a command. Never claim a command or test succeeded without a confirmed zero exit status. Follow saved project instructions and the current user task."
+}
+
 /// Run one native model turn without retries, redirects, provider-side storage or host tools.
 pub async fn turn(
     state: &AppState,
@@ -146,7 +153,7 @@ pub async fn turn_with_folder(
     history: &[Value],
     tools: &[Value],
     force_tool: bool,
-    project_files: bool,
+    project_files: Option<bool>,
 ) -> Result<Turn, Failure> {
     turn_with_instructions(
         state,
@@ -155,7 +162,7 @@ pub async fn turn_with_folder(
         history,
         tools,
         force_tool,
-        Some(boundary(project_files)),
+        Some(project_files.map_or_else(|| boundary(false), folder_boundary)),
     )
     .await
 }

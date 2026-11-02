@@ -35,6 +35,7 @@ pub(super) fn saved(project: Uuid, index: u64) -> SavedTask {
             attempt_id: Uuid::new_v4(),
             runtime: None,
             request: SandboxTaskInput {
+                project_shell: false,
                 project_directory: None,
                 instruction_snapshot_id: None,
                 coordination: Default::default(),
