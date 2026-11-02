@@ -132,8 +132,7 @@ pub struct AppState {
     pub(crate) security_ingress_seen: Arc<std::sync::atomic::AtomicU64>,
     /// Most recent known ingress collector loss, in Unix seconds.
     pub(crate) security_ingress_loss: Arc<std::sync::atomic::AtomicU64>,
-    /// Serializes apply admission/retry lookup with direct VM/network edit requests.
-    /// Detached Stack workers do not hold this lock.
+    /// Serializes durable apply admission and identical retry lookup, never worker execution.
     pub(crate) stack_apply_admission: Arc<AsyncMutex<()>>,
     /// Serializes RabbitMQ engine lifecycle and queue declarations.
     pub(crate) queue_mutations: Arc<AsyncMutex<()>>,

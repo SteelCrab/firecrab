@@ -38,7 +38,10 @@ async fn stored<T: Send + 'static>(
     id: RequestId,
     work: impl FnOnce() -> Result<T, crate::persistence::PersistenceError> + Send + 'static,
 ) -> Result<T, AppError> {
-    super::stacks::database(id.0, work).await
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|_| AppError::internal(id.0))?
+        .map_err(|_| AppError::internal(id.0))
 }
 
 async fn connection(
@@ -58,7 +61,6 @@ async fn refreshed(
     id: RequestId,
 ) -> Result<SavedConnection, AppError> {
     let mut saved = connection(state, key, id).await?;
-    let previous = saved.clone();
     if saved.connection.provider == AiProvider::Anthropic {
         return Err(AppError::new(
             StatusCode::CONFLICT,
@@ -75,7 +77,7 @@ async fn refreshed(
     {
         let copy = saved.clone();
         let store = state.store.clone();
-        stored(id, move || store.refresh_ai_connection(&previous, &copy)).await?;
+        stored(id, move || store.save_ai_connection(&copy)).await?;
     }
     Ok(saved)
 }

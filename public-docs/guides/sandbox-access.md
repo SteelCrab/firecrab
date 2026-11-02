@@ -40,12 +40,6 @@ Only project-authorized results are listed. Credentials are never returned.
 These endpoints require the controller operator.
 Missing transport identity returns `401`; denied permissions return `403`.
 
-A [managed policy](iac-ownership.md) rejects ordinary direct replacements while Terraform owns it.
-Operator revocation remains available. `DELETE` and an empty `PUT` atomically retain a deny policy,
-release management ownership and invalidate the previous authority generation.
-The response header `x-firecrab-operation-id` identifies its durable acknowledgement.
-An old save or completed-operation retry cannot restore permissions or revoke a newer policy.
-
 ```json
 {
   "grants": [
