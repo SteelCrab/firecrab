@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Separate automatic deployment policy ownership from service configuration.
+  Preserve watcher state during transfer, reject stale registry observations and
+  recheck private image-writer authority when committing deployment admission.
+  Expose management suspension and protect managed policies from parent deletion (#548).
+
 - Scope volume attachment ownership to exact volume/VM pairs. Check parent and
   attachment authority at commit, retain disk contents during handover and block
   implicit detachment through parent deletion. Persist native VM cleanup and its

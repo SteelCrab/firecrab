@@ -49,6 +49,7 @@ pub(crate) mod service_observation;
 mod stack_applies;
 mod stack_sources;
 pub(crate) use stack_sources::SourceTrigger;
+pub(crate) mod iac_auto_deploy;
 mod iac_cluster;
 mod iac_dependencies;
 mod iac_deploy_tokens;

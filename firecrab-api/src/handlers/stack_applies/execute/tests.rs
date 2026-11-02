@@ -220,3 +220,96 @@ async fn domain_updates_use_deploy_only_when_the_endpoint_and_network_are_stable
         deploy_operation_id(Uuid::new_v4(), deployment.service_id)
     );
 }
+
+#[tokio::test]
+async fn iac_service_child_ownership_blocks_stack_delete_before_stop_and_inside_admission() {
+    use crate::persistence::PersistenceError;
+    use firecrab_stack::{Binding, ChangeResourceOwner, ManagedResource, Manager, ResourceOwner};
+    let (_root, state, mut deployment) = fixture().await;
+    deployment.phase = ServicePhase::Running;
+    deployment.domain_route_owned = true;
+    state.store.save_service_deployment(&deployment).unwrap();
+    let stack = state.store.register_stack("retained").unwrap();
+    state
+        .store
+        .bind_stack_resource(
+            "retained",
+            &Binding {
+                kind: ResourceKind::Service,
+                key: "web".into(),
+                resource_id: deployment.service_id,
+            },
+        )
+        .unwrap();
+    let current = state.store.stack("retained").unwrap().unwrap();
+    let desired: Stack = serde_json::from_value(
+        serde_json::json!({"apiVersion":"firecrab.dev/v1alpha1","kind":"Stack","name":"retained"}),
+    )
+    .unwrap();
+    let status:ApplyStatus=serde_json::from_value(serde_json::json!({"operationId":Uuid::new_v4(),"stackId":stack.id,"name":"retained","state":"queued","lifecycle":{"prune":true},"changes":[{"kind":"service","key":"web","resourceId":deployment.service_id,"action":"delete","fields":[],"reason":null,"state":"pending"}],"error":null})).unwrap();
+    for kind in ["service_auto_deploy", "service_otlp"] {
+        let target = ManagedResource {
+            kind: kind.into(),
+            id: deployment.service_id.to_string(),
+        };
+        let before = state.store.iac_resource_owner(&target).unwrap();
+        let owned = state
+            .store
+            .change_iac_resource_owner(&ChangeResourceOwner {
+                operation_id: Uuid::new_v4(),
+                expected_endpoint_id: before.endpoint_id,
+                resource: target,
+                expected_generation: before.generation,
+                expected_owner: before.owner,
+                owner: Some(ResourceOwner {
+                    manager: Manager::Terraform,
+                    id: Uuid::new_v4(),
+                    key: "firecrab_service_settings.web".into(),
+                }),
+            })
+            .unwrap();
+        assert!(
+            super::super::lifecycle::preflight(
+                &state,
+                &desired,
+                &status.changes,
+                true,
+                status.operation_id
+            )
+            .await
+            .is_err()
+        );
+        assert!(matches!(
+            state
+                .store
+                .begin_stack_apply(&current, "test", true, &status, None),
+            Err(PersistenceError::IacManagedDependent)
+        ));
+        assert!(
+            state
+                .store
+                .stored_stack_apply(status.operation_id)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            state
+                .store
+                .service_deployment(deployment.service_id)
+                .unwrap()
+                .unwrap(),
+            deployment
+        );
+        state
+            .store
+            .change_iac_resource_owner(&ChangeResourceOwner {
+                operation_id: Uuid::new_v4(),
+                expected_endpoint_id: owned.endpoint_id,
+                resource: owned.resource,
+                expected_generation: owned.generation,
+                expected_owner: owned.owner,
+                owner: None,
+            })
+            .unwrap();
+    }
+}

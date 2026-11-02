@@ -75,7 +75,25 @@ pub(super) fn migrate_history(conn: &rusqlite::Connection) -> Result<(), Persist
     Ok(())
 }
 
+pub(super) fn ensure_children_released(
+    conn: &rusqlite::Connection,
+    id: Uuid,
+) -> Result<(), PersistenceError> {
+    let managed: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM iac_resource_owners WHERE manager IS NOT NULL AND ((kind IN ('service_otlp','service_auto_deploy') AND resource_id=?1) OR (kind='service_deploy_token' AND resource_id LIKE ?1||':%')))", [id.to_string()], |row| row.get(0))?;
+    if managed {
+        return Err(PersistenceError::IacManagedDependent);
+    }
+    Ok(())
+}
+
 impl Store {
+    pub(crate) fn ensure_service_children_released(
+        &self,
+        id: Uuid,
+    ) -> Result<(), PersistenceError> {
+        ensure_children_released(&self.lock(), id)
+    }
+
     /// Pausing a replica independently would make service health/replica control replace it.
     pub fn vm_has_service_owner(&self, id: Uuid) -> Result<bool, PersistenceError> {
         Ok(self.service_deployment_for_vm(id)?.is_some())
@@ -167,13 +185,34 @@ impl Store {
     }
 
     /// Commit configuration and policy together; a failed edit leaves both unchanged.
+    #[cfg(test)]
     pub fn update_micro_service(
         &self,
         service: &MicroServiceResponse,
     ) -> Result<bool, PersistenceError> {
+        self.update_micro_service_authority(service, None)
+    }
+
+    pub(crate) fn update_micro_service_checked(
+        &self,
+        service: &MicroServiceResponse,
+        authority: &super::iac_auto_deploy::Authority,
+    ) -> Result<bool, PersistenceError> {
+        self.update_micro_service_authority(service, Some(authority))
+    }
+
+    fn update_micro_service_authority(
+        &self,
+        service: &MicroServiceResponse,
+        authority: Option<&super::iac_auto_deploy::Authority>,
+    ) -> Result<bool, PersistenceError> {
         let spec = encode(service)?;
         let mut conn = self.lock();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if let Some(authority) = authority {
+            super::iac_auto_deploy::compare(&tx, service.id, authority)?;
+        }
+        super::iac_auto_deploy::policy_change(&tx, service)?;
         let changed = tx
             .execute(
                 "UPDATE micro_services SET name = ?2, spec = ?3 WHERE id = ?1",
@@ -192,10 +231,14 @@ impl Store {
     pub fn delete_micro_service(&self, id: Uuid) -> Result<bool, PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let managed_export: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM iac_resource_owners WHERE manager IS NOT NULL AND ((kind='service_otlp' AND resource_id=?1) OR (kind='service_deploy_token' AND resource_id LIKE ?1||':%')))", [id.to_string()], |row| row.get(0))?;
-        if managed_export {
-            return Err(PersistenceError::IacManagedDependent);
-        }
+        super::iac_native::ensure_idle(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "service".into(),
+                id: id.to_string(),
+            },
+        )?;
+        ensure_children_released(&tx, id)?;
         tx.execute(
             "DELETE FROM service_deploy_queue WHERE service_id = ?1",
             [id.to_string()],
@@ -293,7 +336,7 @@ impl Store {
         &self,
         deployment: &MicroServiceDeployment,
     ) -> Result<(), PersistenceError> {
-        self.save_deployment_with_ci(deployment, None)
+        self.save_deployment_with_ci(deployment, None, None)
     }
 
     /// Commit CI authorization/identity and queue intent as one transaction.
@@ -302,7 +345,15 @@ impl Store {
         deployment: &MicroServiceDeployment,
         admission: &super::ci_deploy::Admission,
     ) -> Result<(), PersistenceError> {
-        self.save_deployment_with_ci(deployment, Some(admission))
+        self.save_deployment_with_ci(deployment, Some(admission), None)
+    }
+
+    pub(crate) fn save_authorized_deployment(
+        &self,
+        deployment: &MicroServiceDeployment,
+        claim: &super::iac_auto_deploy::DeploymentAuthority,
+    ) -> Result<(), PersistenceError> {
+        self.save_deployment_with_ci(deployment, None, Some(claim))
     }
 
     /// Ordinary worker snapshots do not re-authorize an already accepted CI credential.
@@ -310,18 +361,45 @@ impl Store {
         &self,
         deployment: &MicroServiceDeployment,
         admission: Option<&super::ci_deploy::Admission>,
+        automatic: Option<&super::iac_auto_deploy::DeploymentAuthority>,
     ) -> Result<(), PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if let Some(claim) = automatic {
+            match claim {
+                super::iac_auto_deploy::DeploymentAuthority::Automatic(watch) => {
+                    super::iac_auto_deploy::admit(&tx, deployment, watch)?
+                }
+                super::iac_auto_deploy::DeploymentAuthority::Manual(authority) => {
+                    super::iac_auto_deploy::compare(&tx, deployment.service_id, authority)?
+                }
+            }
+        }
+        if let Some(admission) = admission {
+            super::ci_deploy::admit(&tx, deployment, admission)?;
+        }
+        let previous = super::service_observation::previous(&tx, deployment.service_id)?;
+        let mut observation = deployment.clone();
+        if admission.is_none()
+            && automatic.is_none()
+            && let Some(previous) = previous.as_ref().filter(|p| p.id == observation.id)
+        {
+            // Runtime health/progress cannot revert an independently edited policy.
+            observation.spec.auto_deploy = previous.spec.auto_deploy.clone();
+        }
+        let deployment = &observation;
+        super::iac_auto_deploy::policy_change(
+            &tx,
+            &MicroServiceResponse {
+                id: deployment.service_id,
+                spec: deployment.spec.clone(),
+            },
+        )?;
         let text =
             serde_json::to_string(deployment).map_err(|error| PersistenceError::CorruptRecord {
                 id: deployment.id.to_string(),
                 reason: error.to_string(),
             })?;
-        let mut conn = self.lock();
-        let tx = conn.transaction()?;
-        if let Some(admission) = admission {
-            super::ci_deploy::admit(&tx, deployment, admission)?;
-        }
-        let previous = super::service_observation::previous(&tx, deployment.service_id)?;
         super::service_observation::observe(&tx, previous.as_ref(), deployment)?;
         tx.execute(
             "INSERT INTO micro_service_deployments (service_id, deployment) VALUES (?1, ?2)
@@ -395,10 +473,19 @@ impl Store {
                 reason: error.to_string(),
             })
         };
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let mut current: MicroServiceSpec = serde_json::from_str(&tx.query_row(
+            "SELECT spec FROM micro_services WHERE id=?1",
+            [restored.service_id.to_string()],
+            |row| row.get::<_, String>(0),
+        )?)
+        .map_err(|_| PersistenceError::IacOperationIdentity)?;
+        let mut observation = restored.clone();
+        observation.spec.auto_deploy = current.auto_deploy.take();
+        let restored = &observation;
         let failed_text = serialize(failed)?;
         let restored_text = serialize(restored)?;
-        let mut conn = self.lock();
-        let tx = conn.transaction()?;
         let previous = super::service_observation::previous(&tx, failed.service_id)?;
         super::service_observation::observe(&tx, previous.as_ref(), failed)?;
         super::service_observation::observe(&tx, Some(failed), restored)?;

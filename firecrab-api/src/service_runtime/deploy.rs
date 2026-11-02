@@ -172,7 +172,7 @@ pub async fn retry(
         return Ok((StatusCode::ACCEPTED, Json(deployment)));
     }
     deployment.phase = ServicePhase::Queued;
-    let deployment = submit(state.clone(), deployment, claim, request.0, None).await?;
+    let deployment = submit(state.clone(), deployment, claim, request.0, None, None).await?;
     Ok((StatusCode::ACCEPTED, Json(deployment)))
 }
 
@@ -295,6 +295,13 @@ async fn accept(
         super::auto_deploy::authorize(&state, &previous, &body.spec, watch, body.operation_id)
             .await?;
     }
+    let store = state.store.clone();
+    let proposed = firecrab_api_types::MicroServiceResponse {
+        id,
+        spec: body.spec.clone(),
+    };
+    let policy_authority =
+        database(request.0, move || store.service_policy_authority(&proposed)).await?;
     if body.spec.auto_deploy != previous.spec.auto_deploy
         && let Some(policy) = &body.spec.auto_deploy
     {
@@ -441,11 +448,30 @@ async fn accept(
         internal_route_owned: false,
         error: None,
     };
+    let automatic = match &writer {
+        Writer::Tag(watch) => {
+            Some(crate::persistence::iac_auto_deploy::DeploymentAuthority::Automatic(watch.clone()))
+        }
+        Writer::Ci(_) => None,
+        Writer::Stack(_) => Some(
+            crate::persistence::iac_auto_deploy::DeploymentAuthority::Manual(Box::new(
+                policy_authority,
+            )),
+        ),
+    };
     let admission = match writer {
         Writer::Ci(admission) => Some(admission),
         _ => None,
     };
-    let deployment = submit(state.clone(), deployment, claim, request.0, admission).await?;
+    let deployment = submit(
+        state.clone(),
+        deployment,
+        claim,
+        request.0,
+        admission,
+        automatic,
+    )
+    .await?;
     Ok((StatusCode::ACCEPTED, Json(deployment)))
 }
 
@@ -633,14 +659,17 @@ pub(super) async fn submit(
     claim: tokio::sync::OwnedMutexGuard<()>,
     request: Uuid,
     ci: Option<crate::persistence::ci_deploy::Admission>,
+    automatic: Option<crate::persistence::iac_auto_deploy::DeploymentAuthority>,
 ) -> Result<MicroServiceDeployment, AppError> {
     tokio::spawn(async move {
         let _claim = claim;
         let store = state.store.clone();
         let record = deployment.clone();
-        database(request, move || match ci {
-            Some(admission) => store.save_ci_deployment(&record, &admission),
-            None => store.save_service_deployment(&record),
+        database(request, move || match (ci, automatic) {
+            (Some(admission), None) => store.save_ci_deployment(&record, &admission),
+            (None, Some(watch)) => store.save_authorized_deployment(&record, &watch),
+            (None, None) => store.save_service_deployment(&record),
+            (Some(_), Some(_)) => Err(crate::persistence::PersistenceError::IacOperationIdentity),
         })
         .await?;
         state.service_deploy_changed.notify_waiters();

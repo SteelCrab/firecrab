@@ -347,7 +347,7 @@ pub(crate) async fn stop_from_stack(
         deployment.phase = ServicePhase::Stopping;
         deployment.finished_at = None;
         let deployment =
-            deploy::submit(state.clone(), deployment, claim, request_id.0, None).await?;
+            deploy::submit(state.clone(), deployment, claim, request_id.0, None, None).await?;
         return Ok((StatusCode::ACCEPTED, Json(deployment)));
     }
     deployment.phase = ServicePhase::Stopping;

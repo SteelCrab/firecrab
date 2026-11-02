@@ -462,6 +462,9 @@ pub(super) fn ensure_resource_idle(
                     return Err(PersistenceError::IacResourceBusy);
                 }
             }
+            if super::auto_deploy::read(conn, id)?.is_some_and(|w| w.pending.is_some()) {
+                return Err(PersistenceError::IacResourceBusy);
+            }
             Ok(())
         }
     }

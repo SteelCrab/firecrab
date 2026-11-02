@@ -105,6 +105,7 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "cluster_host",
             "cluster_placement",
             "cluster_service",
+            "service_auto_deploy",
             "service_otlp",
             "service_deploy_token"
         ])
@@ -1077,3 +1078,6 @@ mod browser_fixture;
 
 #[path = "iac_vm_delete_races.rs"]
 mod vm_delete_races;
+
+#[path = "iac_auto_deploy.rs"]
+mod auto_deploy_tests;

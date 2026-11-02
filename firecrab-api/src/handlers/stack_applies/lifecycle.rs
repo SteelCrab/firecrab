@@ -135,6 +135,10 @@ pub(super) async fn preflight(
             .change
             .resource_id
             .ok_or_else(|| conflict("stack_resource_identity_missing", id))?;
+        if step.change.kind == ResourceKind::Service {
+            let store = state.store.clone();
+            database(id, move || store.ensure_service_children_released(resource)).await?;
+        }
         if step.change.kind == ResourceKind::Service
             && let Some(deployment) = services.iter().find(|d| d.service_id == resource)
         {

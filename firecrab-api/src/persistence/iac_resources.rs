@@ -34,6 +34,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "cluster_host",
     "cluster_placement",
     "cluster_service",
+    "service_auto_deploy",
     "service_otlp",
     "service_deploy_token",
 ];
@@ -115,6 +116,9 @@ pub(super) fn validate(
         }
         "volume_attachment" => {
             return super::iac_volume_attachments::validate(conn, resource, adopting);
+        }
+        "service_auto_deploy" => {
+            return super::iac_auto_deploy::validate_owner(conn, resource, adopting);
         }
         "service_otlp" => return super::otlp_config::validate_owner(conn, resource, adopting),
         "cluster_host" | "cluster_placement" | "cluster_service" => {

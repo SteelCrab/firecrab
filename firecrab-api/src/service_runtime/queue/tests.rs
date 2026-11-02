@@ -592,9 +592,16 @@ async fn a_manual_operation_cannot_reuse_another_services_live_repair_identity()
     let previous = (*manual.update.as_ref().unwrap().previous).clone();
     insert(&state, &previous);
     let claim = state.service_mutations.clone().lock_owned().await;
-    let error = deploy::submit(state.clone(), manual.clone(), claim, Uuid::new_v4(), None)
-        .await
-        .unwrap_err();
+    let error = deploy::submit(
+        state.clone(),
+        manual.clone(),
+        claim,
+        Uuid::new_v4(),
+        None,
+        None,
+    )
+    .await
+    .unwrap_err();
     assert_eq!(error.code(), "operation_conflict");
     assert_eq!(
         state

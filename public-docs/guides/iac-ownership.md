@@ -6,10 +6,10 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 
 ## Current support
 
-Network, standalone VM, MicroService, registered storage root, volume, security group,
+Network, standalone VM, MicroService, registered storage root, volume/VM attachment, security group,
 shell, schedule, pool, Queue, database connection, S3 connection, Secret, Secret connection,
 Auth, registry, AI connection, project model-default, Sandbox environment/project, Git source,
-Sandbox access policy, Queue engine, cluster host/placement/service, service OTLP settings and service Deploy tokens
+Sandbox access policy, Queue engine, cluster host/placement/service, service automatic deployment, OTLP settings and Deploy tokens
 can move between native Stack and a Terraform state owner.
 Protected controller/pool/builder VMs and resources with active operations cannot be adopted.
 Generated Sandbox environment networks, security groups and VMs retain their parent's authority.
@@ -290,3 +290,5 @@ operator revocation, retired credentials and parent-removal protection.
 
 See [volume attachments and native operation recovery](iac-native-operations.md) for
 scoped mount ownership, VM cleanup fences and the active-work dashboard.
+
+See [automatic deployment policy ownership](iac-auto-deploy.md) for independent slots and private image-writer fencing.

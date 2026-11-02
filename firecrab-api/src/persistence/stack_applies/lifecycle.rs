@@ -30,6 +30,9 @@ pub(super) fn validate(
         let Some(resource) = change.resource_id else {
             return Err(PersistenceError::StackApplyIdentity);
         };
+        if change.kind == ResourceKind::Service && change.action == Action::Delete {
+            crate::persistence::micro_services::ensure_children_released(conn, resource)?;
+        }
         crate::persistence::iac_resources::ensure_independent(
             conn,
             &firecrab_stack::ManagedResource {

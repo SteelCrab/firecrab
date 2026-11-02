@@ -99,6 +99,15 @@ pub(crate) async fn update_from_stack(
     ensure_stack_writer(&state, id, operation, request_id.0).await?;
     crate::service_runtime::ensure_editable(&state, id, request_id.0).await?;
     crate::otlp::preflight_service(&state, id, &spec, request_id.0).await?;
+    let store = state.store.clone();
+    let proposed = MicroServiceResponse {
+        id,
+        spec: spec.clone(),
+    };
+    let policy_authority = database(request_id.0, move || {
+        store.service_policy_authority(&proposed)
+    })
+    .await?;
     require_image_auth(&state, &spec.image, request_id.0).await?;
     if let Some(policy) = &spec.auto_deploy {
         crate::service_runtime::auto_deploy::validate_auth(&state, policy, request_id.0).await?;
@@ -110,7 +119,9 @@ pub(crate) async fn update_from_stack(
     let service = MicroServiceResponse { id, spec };
     let record = service.clone();
     let changed = database(request_id.0, move || {
-        state.store.update_micro_service(&record)
+        state
+            .store
+            .update_micro_service_checked(&record, &policy_authority)
     })
     .await?;
     if !changed {
