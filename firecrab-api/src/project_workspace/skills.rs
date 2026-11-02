@@ -4,6 +4,8 @@ mod source;
 pub(crate) mod tasks;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transport_tests;
 use super::*;
 use files_db::Operation;
 /// Register project-scoped catalog, installation and removal operations.

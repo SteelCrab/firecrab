@@ -4,7 +4,7 @@ use super::*;
 use crate::ai_sandbox::{SavedInstructions, SavedTask};
 use axum::response::IntoResponse;
 /// A small package is source data, never an instruction to execute this test host.
-fn package() -> (ProjectSkillEntry, Vec<source::Blob>) {
+pub(super) fn package() -> (ProjectSkillEntry, Vec<source::Blob>) {
     (ProjectSkillEntry{source:ProjectSkillSource::Openai,kind:ProjectSkillKind::Skill,path:"plugins/example/skills/review".into(),name:"review".into(),revision:"a".repeat(40),instructions:vec!["SKILL.md".into()]},vec![source::Blob{path:"SKILL.md".into(),base64:STANDARD.encode("---\nname: review\ndescription: Review project files\n---\nFollow the saved task and inspect evidence.\n")},source::Blob{path:"references/context.md".into(),base64:STANDARD.encode("Original reference\n")}])
 }
 /// Complete synthetic versions exercise the real project DB without claiming a workload VM run.
@@ -22,7 +22,7 @@ fn complete(db: &super::super::db::ProjectDb, mut record: db::Record) -> db::Rec
     record
 }
 /// Match the existing saved-rule fixture shape and canonical task storage.
-fn task(b: &Binding, record: &db::Record) -> SavedTask {
+pub(super) fn task(b: &Binding, record: &db::Record) -> SavedTask {
     let runtime = SandboxRuntimeRef {
         vm_id: b.vm_id,
         runtime_id: Uuid::new_v4(),
