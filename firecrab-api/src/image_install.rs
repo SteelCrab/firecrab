@@ -901,7 +901,7 @@ fn extract_archive_blocking(archive: &Path, dest: &Path) -> Result<(), String> {
             return Err("package member is outside kernel/ or rootfs/".into());
         }
         let kind = entry.header().entry_type();
-        if !kind.is_file() && !kind.is_dir() {
+        if !kind.is_file() && !kind.is_gnu_sparse() && !kind.is_dir() {
             return Err("package members must be regular files or directories".into());
         }
         if !entry
@@ -1331,6 +1331,50 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(fs::metadata(path).unwrap().ino(), inode);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sparse_package_artifacts_keep_their_logical_bytes_without_allowing_links() {
+        use std::io::{Read, Seek, SeekFrom, Write};
+        let source = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        let path = source.path().join("sparse.ext4");
+        let mut file = fs::File::create(&path).unwrap();
+        let length = 2 * 1024 * 1024;
+        file.set_len(length).unwrap();
+        file.write_all(b"first").unwrap();
+        file.seek(SeekFrom::Start(length - 4)).unwrap();
+        file.write_all(b"last").unwrap();
+        file.sync_all().unwrap();
+        let archive = source.path().join("sparse.tar.zst");
+        let encoder = zstd::Encoder::new(fs::File::create(&archive).unwrap(), 1).unwrap();
+        let mut builder = tar::Builder::new(encoder);
+        builder
+            .append_path_with_name(&path, "rootfs/sparse.ext4")
+            .unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+        let decoder = zstd::Decoder::new(fs::File::open(&archive).unwrap()).unwrap();
+        let mut inspected = tar::Archive::new(decoder);
+        assert!(
+            inspected
+                .entries()
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .header()
+                .entry_type()
+                .is_gnu_sparse()
+        );
+        extract_archive_blocking(&archive, dest.path()).unwrap();
+        let mut restored = fs::File::open(dest.path().join("rootfs/sparse.ext4")).unwrap();
+        assert_eq!(restored.metadata().unwrap().len(), length);
+        let mut bytes = vec![];
+        restored.read_to_end(&mut bytes).unwrap();
+        assert_eq!(&bytes[..5], b"first");
+        assert!(bytes[5..bytes.len() - 4].iter().all(|byte| *byte == 0));
+        assert_eq!(&bytes[bytes.len() - 4..], b"last");
     }
 
     #[tokio::test]

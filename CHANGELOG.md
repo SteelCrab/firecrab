@@ -33,6 +33,12 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Preserve immutable image versions, their verified boot hashes and pre-seeded
+  locators across alias changes and API restart. Refuse changed version reuse,
+  corrupt catalog overwrites and implicit rollback after missing artifacts.
+  Protect historical kernel dependencies and retain integrity metadata through
+  Deploy cache collection (#548).
+
 - Retain kernel installation and removal intents, original source checksums,
   physical root identities and immutable receipts. Fence recovery and ownership
   transfer, hold image borrow leases and publish package artifacts without

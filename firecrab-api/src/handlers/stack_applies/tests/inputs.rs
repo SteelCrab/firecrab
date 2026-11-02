@@ -54,10 +54,21 @@ async fn stack_apply_rejects_alias_repoint_same_version_content_change_and_tampe
     assert_eq!(code, StatusCode::CONFLICT);
     assert_eq!(error["error"]["code"], "stale_stack_plan");
 
-    let same_version = planned(&router, &stack, Uuid::new_v4()).await;
-    install(&state, root.path(), "v2", "console=ttyS0 quiet");
-    let (_, error) = request(&router, "POST", "/api/stacks/demo/apply", same_version).await;
-    assert_eq!(error["error"]["code"], "stale_stack_plan");
+    let current = state.templates.resolve_alias("test-template").unwrap();
+    let rejected = state
+        .templates
+        .register_spec(crate::templates::TemplateSpec {
+            alias: current.name.clone(),
+            version: current.version.clone(),
+            kernel: current.kernel.relative_path().to_owned(),
+            rootfs: current.rootfs.relative_path().to_owned(),
+            initrd: None,
+            boot_args: "console=ttyS0 quiet".into(),
+        });
+    assert!(matches!(
+        rejected,
+        Err(crate::templates::TemplateError::ImmutableVersion(..))
+    ));
 
     let tamper = planned(&router, &stack, Uuid::new_v4()).await;
     std::fs::write(root.path().join("rootfs-v2"), "DO-NOT-PRINT-tampered").unwrap();
@@ -127,25 +138,34 @@ async fn stack_apply_uses_the_approved_version_after_alias_repoint_and_retains_i
         StatusCode::ACCEPTED
     );
     assert_eq!(state.store.load_all().unwrap().len(), 1);
-    // A later start must enforce the old approval even after the registry has
-    // accepted a same-version reinstall with an added initrd.
+    // Normal registration refuses same-version changes. Also inject an untrusted
+    // registry to retain the independent VM-start approval check as defense in depth.
     std::fs::write(root.path().join("initrd"), "new-initrd").unwrap();
-    let changed = state
+    let changed_spec = TemplateSpec {
+        alias: "test-template".into(),
+        version: "v1".into(),
+        kernel: "kernel-v1".into(),
+        rootfs: "rootfs-v1".into(),
+        initrd: Some("initrd".into()),
+        boot_args: "console=ttyS0".into(),
+    };
+    assert!(matches!(
+        state.templates.register_spec(changed_spec.clone()),
+        Err(crate::templates::TemplateError::ImmutableVersion(..))
+    ));
+    let mut changed_state = state.clone();
+    changed_state.templates =
+        Arc::new(TemplateRegistry::from_specs(root.path(), [changed_spec]).unwrap());
+    let changed = changed_state
         .templates
-        .register_spec(TemplateSpec {
-            alias: "test-template".into(),
-            version: "v1".into(),
-            kernel: "kernel-v1".into(),
-            rootfs: "rootfs-v1".into(),
-            initrd: Some("initrd".into()),
-            boot_args: "console=ttyS0".into(),
-        })
+        .resolve_alias("test-template")
         .unwrap();
+    let changed_router = super::router(&changed_state);
     stack["microVMs"]["worker"]["templatePin"] = serde_json::to_value(changed.stack_pin()).unwrap();
-    let (_, plan) = request(&router, "POST", "/api/stacks/demo/plan", stack).await;
+    let (_, plan) = request(&changed_router, "POST", "/api/stacks/demo/plan", stack).await;
     assert_eq!(plan["changes"][1]["action"], "replace");
     let error = crate::handlers::vms::start_vm(
-        State(state.clone()),
+        State(changed_state),
         Extension(RequestId(Uuid::new_v4())),
         axum::extract::Path(vm.id.to_string()),
     )

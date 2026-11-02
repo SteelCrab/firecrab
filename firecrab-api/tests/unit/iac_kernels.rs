@@ -380,3 +380,60 @@ async fn iac_kernel_browser_fixture() {
     std::fs::remove_file(info).unwrap();
     std::fs::remove_file(stop).unwrap();
 }
+
+#[tokio::test]
+async fn iac_kernel_removal_preserves_historical_image_dependencies_after_alias_replacement() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, app, _) = fixture(root.path()).await;
+    let retained = installed(&state, "7.2.12");
+    installed(&state, "7.2.13");
+    std::fs::write(root.path().join("rootfs"), b"retained fixture rootfs").unwrap();
+    let first = crate::templates::TemplateSpec {
+        alias: "retained-versions".into(),
+        version: "v1".into(),
+        kernel: kernel::cache_relative(Architecture::HOST, "7.2.12").unwrap(),
+        rootfs: "rootfs".into(),
+        initrd: None,
+        boot_args: String::new(),
+    };
+    state.templates.register_spec(first.clone()).unwrap();
+    let mut second = first;
+    second.version = "v2".into();
+    second.kernel = kernel::cache_relative(Architecture::HOST, "7.2.13").unwrap();
+    state.templates.replace_alias(second).unwrap();
+    assert_eq!(
+        state
+            .templates
+            .resolve_alias("retained-versions")
+            .unwrap()
+            .version,
+        "v2"
+    );
+    assert_eq!(
+        request(&app, "DELETE", "7.2.12", Uuid::new_v4()).await,
+        StatusCode::CONFLICT
+    );
+    assert!(retained.exists());
+    let previous = state
+        .templates
+        .resolve_version("retained-versions", "v1")
+        .unwrap();
+    state.templates.open_verified(&previous.kernel).unwrap();
+}
+
+#[tokio::test]
+async fn iac_kernel_removal_does_not_treat_a_corrupt_image_catalog_as_unreferenced() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, app, _) = fixture(root.path()).await;
+    let path = installed(&state, "7.2.12");
+    std::fs::write(
+        root.path().join(".templates.json"),
+        b"corrupt image catalog",
+    )
+    .unwrap();
+    assert_eq!(
+        request(&app, "DELETE", "7.2.12", Uuid::new_v4()).await,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert!(path.exists());
+}

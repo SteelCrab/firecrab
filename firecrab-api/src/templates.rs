@@ -63,6 +63,9 @@ pub enum TemplateError {
     /// Two [`TemplateSpec`]s declared the same `(alias, version)` pair.
     #[error("template registry contains a duplicate version: {0}/{1}")]
     DuplicateVersion(String, String),
+    /// An existing alias/version cannot silently select different boot bytes or arguments.
+    #[error("template version is immutable: {0}/{1}")]
+    ImmutableVersion(String, String),
     /// Two [`TemplateSpec`]s declared the same alias.
     #[error("template registry contains a duplicate alias: {0}")]
     DuplicateAlias(String),
@@ -91,6 +94,16 @@ pub enum TemplateError {
     /// A filesystem operation failed while building the registry.
     #[error("template registry I/O failed: {0}")]
     Io(#[from] io::Error),
+}
+
+/// Runtime catalog records retain exact boot hashes as well as their physical locators.
+/// Legacy records without a pin remain readable until explicitly registered again.
+#[derive(Deserialize, Serialize)]
+struct RegisteredTemplate {
+    #[serde(flatten)]
+    spec: TemplateSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pin: Option<firecrab_stack::TemplatePin>,
 }
 
 /// One template to register: an alias, its pinned version tag, and the
@@ -170,6 +183,20 @@ pub struct TemplateVersion {
 }
 
 impl TemplateVersion {
+    /// Physical locators for the already verified immutable version.
+    pub(crate) fn spec(&self) -> TemplateSpec {
+        TemplateSpec {
+            alias: self.name.clone(),
+            version: self.version.clone(),
+            kernel: self.kernel.relative_path().to_owned(),
+            rootfs: self.rootfs.relative_path().to_owned(),
+            initrd: self
+                .initrd
+                .as_ref()
+                .map(|artifact| artifact.relative_path().to_owned()),
+            boot_args: self.boot_args.clone(),
+        }
+    }
     /// Redacted content identity for stack plan approval and execution.
     pub(crate) fn stack_pin(&self) -> firecrab_stack::TemplatePin {
         firecrab_stack::TemplatePin {
@@ -234,6 +261,8 @@ fn requires_pci_transport_for_arch(name: &str, architecture: &str) -> bool {
 
 /// `(name, version)` -> the resolved, verified template it names.
 type VersionMap = HashMap<(String, String), Arc<TemplateVersion>>;
+/// Removed selection and the exact artifact paths no remaining version references.
+pub(crate) type RemovedAlias = (Arc<TemplateVersion>, Vec<PathBuf>);
 
 /// Registry of verified template versions, resolved by alias or by exact
 /// `(name, version)`. Alias maps are behind locks so a successful image
@@ -353,7 +382,18 @@ impl TemplateRegistry {
     /// deleted must not take the whole API down at startup, for the same
     /// reason [`load_from`](Self::load_from) skips unbuilt built-ins.
     fn restore_registrations(&self) {
-        for spec in self.read_registrations() {
+        for registration in self.read_registrations() {
+            let spec = registration.spec;
+            // The last persisted selection remains authoritative even when its files are gone.
+            // Keep earlier versions addressable without silently rolling the alias back.
+            self.aliases
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&spec.alias);
+            self.versions
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&(spec.alias.clone(), spec.version.clone()));
             if !artifacts_present(&self.image_root_path, &spec) {
                 tracing::warn!(
                     template = spec.alias,
@@ -362,7 +402,7 @@ impl TemplateRegistry {
                 continue;
             }
             let alias = spec.alias.clone();
-            if let Err(error) = self.register_spec_inner(spec, false) {
+            if let Err(error) = self.register_spec_inner(spec, false, registration.pin) {
                 tracing::warn!(
                     template = alias,
                     error = %error,
@@ -497,6 +537,25 @@ impl TemplateRegistry {
         entries
     }
 
+    /// Historical installed versions retain kernel dependencies even after alias selection changes.
+    pub(crate) fn references_kernel(&self, relative: &Path) -> Result<bool, TemplateError> {
+        if self
+            .versions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .any(|version| version.kernel.relative_path() == relative)
+        {
+            return Ok(true);
+        }
+        // Unready registered images retain dependencies. Corruption is not permission
+        // to delete a kernel whose saved references cannot be inspected.
+        Ok(self
+            .read_registrations_checked()?
+            .iter()
+            .any(|entry| entry.spec.kernel == relative))
+    }
+
     /// Read both maps under the same lock order as alias resolution.
     pub(crate) fn stack_snapshot(&self) -> Vec<firecrab_stack::TemplateSnapshot> {
         let aliases = self.aliases.lock().unwrap_or_else(|p| p.into_inner());
@@ -517,7 +576,15 @@ impl TemplateRegistry {
     ///
     /// Returns `None` when the alias was not installed. Does not touch the
     /// filesystem itself — the caller deletes the returned paths.
-    pub fn unregister_alias(&self, alias: &str) -> Option<(Arc<TemplateVersion>, Vec<PathBuf>)> {
+    #[cfg(test)]
+    pub fn unregister_alias(&self, alias: &str) -> Option<RemovedAlias> {
+        self.unregister_alias_checked(alias).ok().flatten()
+    }
+    /// Delete an unused alias only after its durable catalog mutation succeeds.
+    pub(crate) fn unregister_alias_checked(
+        &self,
+        alias: &str,
+    ) -> Result<Option<RemovedAlias>, TemplateError> {
         let _mutation = self.mutations.lock().unwrap_or_else(|p| p.into_inner());
         let mut aliases = self
             .aliases
@@ -528,17 +595,37 @@ impl TemplateRegistry {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        let key = aliases.remove(alias)?;
-        let removed = versions.remove(&key)?;
-
-        // Paths still held by other versions must not be deleted.
-        let orphan_paths = self.orphan_paths(&removed, &versions);
+        let Some(key) = aliases.get(alias).cloned() else {
+            return Ok(None);
+        };
+        self.forget_registration(alias)?;
+        aliases.remove(alias);
+        let Some(removed) = versions.remove(&key) else {
+            return Ok(None);
+        };
+        let historical: Vec<_> = versions
+            .keys()
+            .filter(|key| key.0 == alias)
+            .cloned()
+            .collect();
+        let mut retired = vec![removed.clone()];
+        for key in historical {
+            if let Some(version) = versions.remove(&key) {
+                retired.push(version);
+            }
+        }
+        // An explicit unused-image deletion includes its retained versions, but keeps
+        // artifacts still borrowed by another alias and independently managed kernels.
+        let mut orphan_paths: Vec<_> = retired
+            .iter()
+            .flat_map(|version| self.orphan_paths(version, &versions))
+            .collect();
+        orphan_paths.sort();
+        orphan_paths.dedup();
 
         drop(versions);
         drop(aliases);
-        self.forget_registration(alias);
-
-        Some((removed, orphan_paths))
+        Ok(Some((removed, orphan_paths)))
     }
 
     /// Verify artifacts already under the image root and pin them as a live
@@ -546,47 +633,17 @@ impl TemplateRegistry {
     /// build's finalize) so create can use the template without restarting
     /// the API — and recorded in [`REGISTRATIONS_FILE`] so it survives one.
     pub fn register_spec(&self, spec: TemplateSpec) -> Result<Arc<TemplateVersion>, TemplateError> {
-        self.register_spec_inner(spec, true)
+        self.register_spec_inner(spec, true, None)
     }
 
-    /// Replaces the current alias pin while retaining shared artifacts that
-    /// the new version still references. The returned paths are safe to
-    /// delete after the caller has observed a successful replacement.
-    ///
-    /// Image kernel updates use this instead of unregistering first: a
-    /// failed verification or manifest write must not leave an installed
-    /// image without a usable alias.
+    /// Select a new immutable version while retaining earlier boot pins and their files.
+    /// Historical artifacts are considered for removal only during explicit unused-image deletion.
     pub fn replace_alias(
         &self,
         spec: TemplateSpec,
     ) -> Result<(Arc<TemplateVersion>, Vec<PathBuf>), TemplateError> {
-        let _mutation = self.mutations.lock().unwrap_or_else(|p| p.into_inner());
-        let version = self.build_version(&spec)?;
-        let version_key = (spec.alias.clone(), version.version.clone());
-
-        // Persist before changing the live maps, matching register_spec's
-        // restart-safety guarantee.
-        self.persist_registration(&spec)?;
-
-        let mut aliases = self
-            .aliases
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut versions = self
-            .versions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let old_key = aliases.insert(spec.alias, version_key.clone());
-        versions.insert(version_key.clone(), version.clone());
-
-        let removed = old_key
-            .filter(|key| key != &version_key)
-            .and_then(|key| versions.remove(&key));
-        let orphan_paths = removed
-            .as_deref()
-            .map(|template| self.orphan_paths(template, &versions))
-            .unwrap_or_default();
-        Ok((version, orphan_paths))
+        self.register_spec_inner(spec, true, None)
+            .map(|version| (version, Vec::new()))
     }
 
     /// `persist` is false only while replaying the manifest at startup —
@@ -595,16 +652,29 @@ impl TemplateRegistry {
         &self,
         spec: TemplateSpec,
         persist: bool,
+        expected_pin: Option<firecrab_stack::TemplatePin>,
     ) -> Result<Arc<TemplateVersion>, TemplateError> {
         let _mutation = self.mutations.lock().unwrap_or_else(|p| p.into_inner());
         let version = self.build_version(&spec)?;
+        if expected_pin.is_some_and(|pin| pin != version.stack_pin()) {
+            return Err(TemplateError::ImmutableVersion(spec.alias, spec.version));
+        }
         let version_key = (spec.alias.clone(), version.version.clone());
+        if self
+            .versions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&version_key)
+            .is_some_and(|existing| existing.stack_pin() != version.stack_pin())
+        {
+            return Err(TemplateError::ImmutableVersion(spec.alias, spec.version));
+        }
 
         // Persisted before the in-memory maps change so a manifest that
         // can't be written fails the registration outright, rather than
         // handing back a template that silently evaporates on restart.
         if persist {
-            self.persist_registration(&spec)?;
+            self.persist_registration(&spec, version.stack_pin())?;
         }
 
         let mut aliases = self
@@ -616,8 +686,8 @@ impl TemplateRegistry {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-        // Replacing an existing pin is allowed (reinstall); only the maps
-        // update — on-disk files were overwritten atomically by the installer.
+        // Reinstallation may restore identical bytes at a verified physical path.
+        // A changed boot identity requires a distinct immutable version.
         versions.insert(version_key.clone(), version.clone());
         aliases.insert(spec.alias, version_key);
         Ok(version)
@@ -696,83 +766,81 @@ impl TemplateRegistry {
         self.image_root_path.join(REGISTRATIONS_FILE)
     }
 
-    /// Every runtime registration recorded so far, newest write wins. A
-    /// missing or unreadable manifest reads as empty: it only ever augments
-    /// the built-in set, so losing it degrades to pre-persistence behavior
-    /// instead of failing startup.
-    fn read_registrations(&self) -> Vec<TemplateSpec> {
-        let path = self.registrations_path();
-        match fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %error,
-                    "template registration manifest is unreadable; ignoring it"
-                );
-                Vec::new()
-            }),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
-            Err(error) => {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %error,
-                    "template registration manifest could not be read; ignoring it"
-                );
-                Vec::new()
-            }
+    /// Startup keeps the rest of the host available if the catalog is corrupt.
+    /// Writers always use the checked read and cannot replace corruption with an empty catalog.
+    fn read_registrations(&self) -> Vec<RegisteredTemplate> {
+        self.read_registrations_checked().unwrap_or_else(|error| {
+            tracing::warn!(%error, "template registration catalog could not be restored");
+            Vec::new()
+        })
+    }
+    fn read_registrations_checked(&self) -> Result<Vec<RegisteredTemplate>, TemplateError> {
+        match fs::read(self.registrations_path()) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|error| TemplateError::Io(io::Error::other(error))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(error.into()),
         }
     }
 
-    /// Records `spec` as `alias`'s current registration, replacing any
-    /// earlier entry for the same alias — the registry itself only ever
-    /// resolves one version per alias, so a second entry could only ever
-    /// disagree with the live pin.
-    fn persist_registration(&self, spec: &TemplateSpec) -> Result<(), TemplateError> {
-        let _guard = self
-            .manifest_lock
+    /// Retain each immutable version; the last entry for an alias selects its head.
+    /// Re-selecting an older version moves only that entry, preserving all other pins.
+    fn persist_registration(
+        &self,
+        spec: &TemplateSpec,
+        pin: firecrab_stack::TemplatePin,
+    ) -> Result<(), TemplateError> {
+        let _guard = self.manifest_lock.lock().unwrap_or_else(|p| p.into_inner());
+        let mut entries = self.read_registrations_checked()?;
+        // Retain pre-seeded versions before a later software catalog can stop naming them.
+        for version in self
+            .versions
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut entries = self.read_registrations();
-        entries.retain(|entry| entry.alias != spec.alias);
-        entries.push(spec.clone());
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .filter(|version| version.name == spec.alias)
+        {
+            if !entries.iter().any(|entry| {
+                entry.spec.alias == version.name && entry.spec.version == version.version
+            }) {
+                entries.push(RegisteredTemplate {
+                    spec: version.spec(),
+                    pin: Some(version.stack_pin()),
+                });
+            }
+        }
+        entries
+            .retain(|entry| entry.spec.alias != spec.alias || entry.spec.version != spec.version);
+        entries.push(RegisteredTemplate {
+            spec: spec.clone(),
+            pin: Some(pin),
+        });
         self.write_registrations(&entries)
     }
 
-    /// Drops `alias` from the manifest so a deleted template doesn't come
-    /// back (as a warning about missing artifacts) on the next startup.
-    fn forget_registration(&self, alias: &str) {
-        let _guard = self
-            .manifest_lock
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut entries = self.read_registrations();
+    /// Remove the durable selection before changing memory or deleting artifact files.
+    fn forget_registration(&self, alias: &str) -> Result<(), TemplateError> {
+        let _guard = self.manifest_lock.lock().unwrap_or_else(|p| p.into_inner());
+        let mut entries = self.read_registrations_checked()?;
         let before = entries.len();
-        entries.retain(|entry| entry.alias != alias);
+        entries.retain(|entry| entry.spec.alias != alias);
         if entries.len() == before {
-            return;
+            return Ok(());
         }
-        if let Err(error) = self.write_registrations(&entries) {
-            // The alias is already gone from the live registry and its files
-            // are about to be deleted, so a stale entry is only startup
-            // noise (it is skipped as "artifacts are missing") — not worth
-            // failing an otherwise-complete delete over.
-            tracing::warn!(
-                alias,
-                error = %error,
-                "could not update the template registration manifest after delete"
-            );
-        }
+        self.write_registrations(&entries)
     }
 
-    /// Writes the manifest through a temporary file so an interrupted write
-    /// can never leave a half-serialized manifest that reads as empty.
-    fn write_registrations(&self, entries: &[TemplateSpec]) -> Result<(), TemplateError> {
-        let path = self.registrations_path();
-        let temporary = path.with_extension("json.tmp");
-        let bytes = serde_json::to_vec_pretty(entries)
+    /// A unique synced temporary file cannot collide with another catalog publisher.
+    fn write_registrations(&self, entries: &[RegisteredTemplate]) -> Result<(), TemplateError> {
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".templates-write-")
+            .tempfile_in(&self.image_root_path)?;
+        serde_json::to_writer_pretty(temporary.as_file_mut(), entries)
             .map_err(|error| TemplateError::Io(io::Error::other(error)))?;
-        fs::write(&temporary, &bytes)?;
-        fs::rename(&temporary, &path)?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist(self.registrations_path())
+            .map_err(|error| TemplateError::Io(error.error))?;
         Ok(())
     }
 
@@ -1655,12 +1723,153 @@ mod tests {
             })
             .unwrap();
         assert_eq!(registry.resolve_alias("demo").unwrap().version, "v2");
-        assert!(registry.resolve_version("demo", "v1").is_none());
-        assert!(orphans.iter().any(|path| path.ends_with("kernel-old")));
+        assert!(registry.resolve_version("demo", "v1").is_some());
+        assert!(orphans.is_empty());
         assert!(!orphans.iter().any(|path| path.ends_with("rootfs")));
 
         let restarted = TemplateRegistry::load_from(root).unwrap();
         assert_eq!(restarted.resolve_alias("demo").unwrap().version, "v2");
+        let original = restarted.resolve_version("demo", "v1").unwrap();
+        restarted.open_verified(&original.kernel).unwrap();
+        // Missing current artifacts must not turn observation into an implicit rollback.
+        fs::remove_file(root.join("kernel-new")).unwrap();
+        let missing = TemplateRegistry::load_from(root).unwrap();
+        assert!(missing.resolve_alias("demo").is_none());
+        assert!(missing.resolve_version("demo", "v1").is_some());
+    }
+
+    #[test]
+    fn immutable_version_rejects_changed_boot_arguments_without_changing_restart_selection() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("kernel"), b"kernel").unwrap();
+        fs::write(root.join("rootfs"), b"rootfs").unwrap();
+        let registry = TemplateRegistry::load_from(root).unwrap();
+        let spec = TemplateSpec {
+            alias: "immutable".into(),
+            version: "v1".into(),
+            kernel: "kernel".into(),
+            rootfs: "rootfs".into(),
+            initrd: None,
+            boot_args: "console=ttyS0".into(),
+        };
+        let original = registry.register_spec(spec.clone()).unwrap();
+        let mut changed = spec;
+        changed.boot_args.push_str(" quiet");
+        assert!(matches!(
+            registry.replace_alias(changed),
+            Err(TemplateError::ImmutableVersion(..))
+        ));
+        assert_eq!(
+            registry.resolve_alias("immutable").unwrap().stack_pin(),
+            original.stack_pin()
+        );
+        let restarted = TemplateRegistry::load_from(root).unwrap();
+        assert_eq!(
+            restarted.resolve_alias("immutable").unwrap().stack_pin(),
+            original.stack_pin()
+        );
+    }
+
+    #[test]
+    fn restart_rejects_artifacts_that_no_longer_match_the_recorded_boot_pin() {
+        let directory = tempdir().unwrap();
+        let registry = create_registry(directory.path());
+        registry
+            .register_spec(TemplateSpec {
+                alias: "tamper".into(),
+                version: "v1".into(),
+                kernel: "kernel".into(),
+                rootfs: "rootfs".into(),
+                initrd: None,
+                boot_args: "console=ttyS0".into(),
+            })
+            .unwrap();
+        fs::write(
+            directory.path().join("rootfs"),
+            b"changed after registration",
+        )
+        .unwrap();
+        let restarted = TemplateRegistry::load_from(directory.path()).unwrap();
+        assert!(restarted.resolve_alias("tamper").is_none());
+        assert!(restarted.resolve_version("tamper", "v1").is_none());
+    }
+
+    #[test]
+    fn corrupt_catalog_blocks_registration_and_deletion_without_forgetting_live_images() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let registry = create_registry(root);
+        let spec = TemplateSpec {
+            alias: "retained".into(),
+            version: "v1".into(),
+            kernel: "kernel".into(),
+            rootfs: "rootfs".into(),
+            initrd: None,
+            boot_args: String::new(),
+        };
+        let original = registry.register_spec(spec.clone()).unwrap().stack_pin();
+        let invalid = b"invalid-catalog-contents";
+        fs::write(root.join(REGISTRATIONS_FILE), invalid).unwrap();
+        let mut newer = spec;
+        newer.version = "v2".into();
+        assert!(registry.register_spec(newer).is_err());
+        assert!(registry.unregister_alias_checked("retained").is_err());
+        assert_eq!(fs::read(root.join(REGISTRATIONS_FILE)).unwrap(), invalid);
+        assert_eq!(
+            registry.resolve_alias("retained").unwrap().stack_pin(),
+            original
+        );
+        assert_eq!(fs::read(root.join("rootfs")).unwrap(), b"rootfs");
+    }
+
+    #[test]
+    fn alias_replacement_persists_a_preseeded_version_before_the_catalog_can_change() {
+        let directory = tempdir().unwrap();
+        let registry = create_registry(directory.path());
+        let original = registry.resolve_alias("ubuntu-rootfs-26.04").unwrap();
+        assert!(registry.read_registrations().is_empty());
+        let mut next = original.spec();
+        next.version = "v2".into();
+        registry.replace_alias(next).unwrap();
+        let restarted = TemplateRegistry::load_from(directory.path()).unwrap();
+        assert_eq!(
+            restarted.resolve_alias(&original.name).unwrap().version,
+            "v2"
+        );
+        assert_eq!(
+            restarted
+                .resolve_version(&original.name, &original.version)
+                .unwrap()
+                .stack_pin(),
+            original.stack_pin()
+        );
+    }
+
+    #[test]
+    fn recorded_builtin_pin_rejects_changed_bytes_from_alias_and_exact_version_lookup() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let spec = TemplateRegistry::known_specs().remove(0);
+        for relative in [&spec.kernel, &spec.rootfs]
+            .into_iter()
+            .chain(spec.initrd.as_ref())
+        {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"original-built-in-artifact").unwrap();
+        }
+        let registry = TemplateRegistry::load_from(root).unwrap();
+        registry.register_spec(spec.clone()).unwrap();
+        fs::write(root.join(&spec.rootfs), b"changed-built-in-artifact").unwrap();
+        let restarted = TemplateRegistry::load_from(root).unwrap();
+        assert!(restarted.resolve_alias(&spec.alias).is_none());
+        assert!(
+            restarted
+                .resolve_version(&spec.alias, &spec.version)
+                .is_none()
+        );
+        assert!(restarted.references_kernel(&spec.kernel).unwrap());
     }
 
     #[test]

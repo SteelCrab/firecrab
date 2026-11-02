@@ -60,15 +60,15 @@ impl TemplateRegistry {
             // Unlike an explicit best-effort image delete, GC must not forget
             // other registrations or proceed after an unreadable manifest.
             let _manifest = self.manifest_lock.lock().unwrap_or_else(|p| p.into_inner());
-            let mut entries: Vec<TemplateSpec> = match fs::read(self.registrations_path()) {
+            let mut entries: Vec<RegisteredTemplate> = match fs::read(self.registrations_path()) {
                 Ok(bytes) => serde_json::from_slice(&bytes).map_err(io::Error::other)?,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => vec![],
                 Err(error) => return Err(error),
             };
             entries.retain(|entry| {
-                entry.alias != spec.alias
-                    || entry.version != spec.version
-                    || entry.rootfs != spec.rootfs
+                entry.spec.alias != spec.alias
+                    || entry.spec.version != spec.version
+                    || entry.spec.rootfs != spec.rootfs
             });
             self.write_registrations(&entries)
                 .map_err(io::Error::other)?;

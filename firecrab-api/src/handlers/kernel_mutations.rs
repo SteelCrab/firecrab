@@ -215,11 +215,13 @@ pub async fn get(
 fn unused(state: &AppState, version: &str, sha: Option<&str>, rid: Uuid) -> Result<(), AppError> {
     let relative =
         crate::kernel_manager::cache_path(version).ok_or_else(|| AppError::not_found(rid))?;
-    if state
-        .templates
-        .list_aliases()
-        .iter()
-        .any(|t| t.kernel.relative_path() == relative)
+    let referenced = state.templates.references_kernel(&relative).map_err(|_| {
+        AppError::unavailable(
+            "Image dependencies are unavailable; original kernel was retained",
+            rid,
+        )
+    })?;
+    if referenced
         || state
             .store
             .kernel_in_use(sha.unwrap_or(""))

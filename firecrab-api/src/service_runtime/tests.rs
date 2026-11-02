@@ -656,7 +656,8 @@ async fn s3_and_service_secrets_reach_the_guest_together_after_vm_restart() {
         .unwrap();
 
     // The fake VMM still uses the real boot path and a real ext4 service launcher.
-    let image = directory.path().join("rootfs");
+    let image = directory.path().join("rootfs-with-launcher");
+    std::fs::copy(directory.path().join("rootfs"), &image).unwrap();
     for command in ["mkdir /etc/firecrab", "mkdir /etc/firecrab/services.d"] {
         let output = std::process::Command::new("debugfs")
             .args(["-w", "-R", command])
@@ -676,10 +677,10 @@ async fn s3_and_service_secrets_reach_the_guest_together_after_vm_restart() {
         .templates
         .register_spec(crate::templates::TemplateSpec {
             alias: alias.clone(),
-            version: template.version.clone(),
+            version: format!("{}-service-launcher", template.version),
             kernel: "kernel".into(),
             initrd: None,
-            rootfs: "rootfs".into(),
+            rootfs: "rootfs-with-launcher".into(),
             boot_args: "console=ttyS0".into(),
         })
         .unwrap();

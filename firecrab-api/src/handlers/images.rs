@@ -637,9 +637,16 @@ pub async fn delete_image(
 
     let templates = state.templates.clone();
     let alias_for_task = alias.clone();
-    let removed = tokio::task::spawn_blocking(move || templates.unregister_alias(&alias_for_task))
-        .await
-        .map_err(|_| AppError::internal(request_id.0))?;
+    let removed =
+        tokio::task::spawn_blocking(move || templates.unregister_alias_checked(&alias_for_task))
+            .await
+            .map_err(|_| AppError::internal(request_id.0))?
+            .map_err(|_| {
+                AppError::unavailable(
+                    "Image catalog could not be updated; original artifacts were retained",
+                    request_id.0,
+                )
+            })?;
 
     let Some((_version, orphan_paths)) = removed else {
         return Err(AppError::conflict(
@@ -2060,7 +2067,8 @@ mod tests {
         assert_eq!(image.kernel_version.as_deref(), Some("7.2.2"));
         assert_eq!(image.kernel_image, "vmlinux-7.2.2-x86_64");
         assert_eq!(image.version, "demo-v1-kernel-7.2.2");
-        assert!(!old_kernel.exists());
+        assert!(old_kernel.exists());
+        assert!(state.templates.resolve_version("demo", "demo-v1").is_some());
         assert!(rootfs.exists());
         assert!(managed_kernel.exists());
         assert_eq!(

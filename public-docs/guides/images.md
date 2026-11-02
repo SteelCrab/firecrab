@@ -22,6 +22,10 @@ Deleting an installed image retains its staged package.
 For container references, follow [OCI import](oci.md).
 For kernel inspection and pairing, use [Kernels](kernels.md).
 
+Alias replacement retains earlier immutable boot versions. Different contents
+require a new version. See [image version retention](iac-image-versions.md) for
+restart integrity checks, source artifacts and explicit deletion.
+
 ## Build a pulled image
 
 Images downloaded through [Pipe Registry](pipe-registry.md) appear in **M2Image**
