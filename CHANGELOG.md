@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Retain native database connection create, update and write-access intents before
+  external SQL. Preserve exact retry receipts, fence matching database aliases and
+  recover interrupted setup using its original identity. Serialize maintenance
+  executors across API processes and reject results from older attempts (#548).
+
 - Recheck saved database connection authority before committing credential changes.
   Validate service configuration/delete writers inside SQLite, retain private
   Stack step identity and reject late callbacks after their operation finishes (#548).

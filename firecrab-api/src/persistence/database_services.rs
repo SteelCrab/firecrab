@@ -20,14 +20,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS database_binding_environment ON database_bindi
 ";
 
 /// Serialize private state without including raw data in persistence errors.
-fn encode<T: serde::Serialize>(value: &T) -> Result<String, PersistenceError> {
+pub(super) fn encode<T: serde::Serialize>(value: &T) -> Result<String, PersistenceError> {
     serde_json::to_string(value).map_err(|_| PersistenceError::CorruptRecord {
         id: "database_services".into(),
         reason: "invalid configuration".into(),
     })
 }
 /// Decode private state with redacted corruption diagnostics.
-fn decode<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, PersistenceError> {
+pub(super) fn decode<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, PersistenceError> {
     serde_json::from_str(value).map_err(|_| PersistenceError::CorruptRecord {
         id: "database_services".into(),
         reason: "invalid stored configuration".into(),
@@ -96,11 +96,33 @@ impl Store {
         &self,
         job: &crate::pipe_databases::maintenance::Job,
     ) -> Result<(), PersistenceError> {
-        self.lock().execute("INSERT INTO database_jobs VALUES (?1,?2,?3) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",params![job.id.to_string(),job.database_id.to_string(),encode(job)?])?;
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let before: Option<String> = tx
+            .query_row(
+                "SELECT spec FROM database_jobs WHERE id=?1",
+                [job.id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let before: Option<crate::pipe_databases::maintenance::Job> =
+            before.as_deref().map(decode).transpose()?;
+        super::iac_database_targets::accept_job(&tx, before.as_ref(), job)?;
+        tx.execute("INSERT INTO database_jobs VALUES (?1,?2,?3) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",params![job.id.to_string(),job.database_id.to_string(),encode(job)?])?;
+        tx.commit()?;
         Ok(())
     }
     /// Detect queued or incomplete destructive work across matching saved endpoints.
     pub fn database_maintenance_active(&self, id: Uuid) -> Result<bool, PersistenceError> {
+        if let Some(record) = self.pipe_database(id)? {
+            let target = crate::pipe_databases::maintenance::target_hash(&record)
+                .map_err(|_| PersistenceError::IacOperationIdentity)?;
+            match super::iac_database_targets::native_idle(&self.lock(), &target) {
+                Ok(()) => {}
+                Err(PersistenceError::IacResourceBusy) => return Ok(true),
+                Err(error) => return Err(error),
+            }
+        }
         Ok(self.database_target_jobs(id)?.iter().any(|j| {
             j.kind != crate::pipe_databases::maintenance::Kind::Backup
                 && matches!(j.status.as_str(), "queued" | "running" | "needs_recovery")

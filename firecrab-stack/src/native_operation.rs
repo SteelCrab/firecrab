@@ -8,6 +8,10 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeAction {
+    /// Verify and save one connection using its reserved UUID.
+    CreateDatabaseConnection,
+    /// Verify and replace connection settings without changing its UUID.
+    UpdateDatabaseConnection,
     /// Remove one inactive VM after recording its immutable disk-retention policy.
     DeleteVm,
     /// Revoke one scoped credential and invalidate its previous management authority.
@@ -36,6 +40,8 @@ pub enum NativeOperationState {
     NeedsRecovery,
     /// The recorded action completed; this acknowledgement never changes.
     Succeeded,
+    /// Verification failed before any managed side effect; corrected input may use a new operation.
+    Failed,
 }
 
 /// Public operation metadata contains no desired values, credentials or filesystem paths.

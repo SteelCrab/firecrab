@@ -59,6 +59,44 @@ completion or recovery. Parent configuration and ownership writers wait for thes
 leases; existing runtime observations remain available. An older worker cannot
 restore a VM cache entry after a newer recovery removed the durable row.
 
+## Saved database connection operations
+
+Connection creation (`POST /api/pipe/databases`), replacement of saved settings
+(`PUT /api/pipe/databases/UUID`) and write-access policy changes
+(`PUT /api/pipe/databases/UUID/access`) retain their immutable request before
+connection verification or namespace setup. Supply `x-firecrab-operation-id` and,
+for a pinned remote host, `x-firecrab-endpoint-id`. Existing mTLS authentication
+still applies. These headers select an operation and endpoint; they grant no
+management authority.
+
+A completed retry returns its original public connection summary even after
+later edits or an ownership transfer. Private URIs, passwords and CA material
+remain in the host's existing owner-only database. Public operation metadata
+contains only identities, state and static failure categories.
+
+A verification failure before the first possible managed SQL effect records
+`failed`. Corrected input needs a new operation UUID. An uncertain setup records
+`needs_recovery` and keeps its original resource UUID, saved configuration and
+database-target reservation. Recover that exact operation through the endpoint
+below. Recovery advances the execution generation and rejects older callbacks.
+Connection metadata, the succeeded receipt and reservation release commit in
+one SQLite transaction. HTTP disconnection does not cancel admitted work.
+Disabling writes needs no database connection, after retained bindings and
+triggers are checked.
+
+Connections configured with the same engine, host, port and database share the
+reservation, including maintenance job admission and ownership changes. This
+matches configured endpoint identities; DNS aliases and different proxy addresses
+are not proof of one physical database. The existing external migration ledger
+and database locks remain necessary for SQL execution.
+
+Maintenance claims move atomically from queued to running. A second API process
+cannot execute the same attempt. Recovery invalidates older progress writes.
+The internal safety snapshot must carry its exact running parent attempt.
+These are shared lifecycle prerequisites. Database bindings, event capture,
+managed RabbitMQ and declarative migrations are still under implementation in
+stage 2; this connection work does not establish full IaC coverage.
+
 ## Observe and recover
 
 The Stack dashboard lists running and uncertain native work, including resources
@@ -78,6 +116,11 @@ POST /api/iac/native-operations/OPERATION_UUID/recover
 The active list returns `operations` and `nextBefore`. Its limit is 1–100.
 UUID ordering remains stable across database maintenance. Completed receipts are
 available through the exact operation and resource routes.
+A `failed` receipt means verification ended before any managed change.
+It releases the active fence so corrected configuration can use a new operation.
+It never means the requested configuration was applied. Unknown outcomes keep
+`needs_recovery` and retain their original identity and fence instead.
+Database mutation adapters that use this distinction are still in development.
 The dashboard can load more active operations and refreshes loaded pages.
 
 Recovery requires an authenticated operator. The dashboard sends

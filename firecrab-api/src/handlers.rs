@@ -45,6 +45,7 @@ pub mod pipe_auth;
 pub mod pipe_database_bindings;
 pub mod pipe_database_events;
 pub mod pipe_database_maintenance;
+pub(crate) mod pipe_database_mutations;
 pub mod pipe_databases;
 pub mod pipe_storage;
 #[cfg(test)]

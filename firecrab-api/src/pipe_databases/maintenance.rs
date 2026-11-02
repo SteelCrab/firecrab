@@ -35,6 +35,13 @@ pub enum Kind {
     Restore,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParentJob {
+    pub id: Uuid,
+    pub execution_generation: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 /// Private durable job state and verified backup metadata.
@@ -47,6 +54,12 @@ pub struct Job {
     pub kind: Kind,
     /// Durable queue, completion or recovery state.
     pub status: String,
+    /// Monotonic claim fence, independent of the caller's retry UUID.
+    #[serde(default)]
+    pub execution_generation: u64,
+    /// Server-created safety snapshots retain their original parent attempt.
+    #[serde(default)]
+    pub parent: Option<ParentJob>,
     /// Creation time as UTC Unix seconds.
     pub created_at: i64,
     /// Successful snapshot selected for a restore.
@@ -91,6 +104,8 @@ impl Job {
             database_id: record.id,
             kind,
             status: "queued".into(),
+            execution_generation: 0,
+            parent: None,
             created_at: chrono::Utc::now().timestamp(),
             backup_id: None,
             version: None,
@@ -126,6 +141,13 @@ pub(crate) fn target_hash(record: &DatabaseRecord) -> Result<String, Error> {
         )
     ))
 }
+fn redacted_error(error: &Error) -> String {
+    match error {
+        Error::Invalid(message) => (*message).into(),
+        _ => "Database maintenance failed; check privileges, field types and connectivity".into(),
+    }
+}
+
 /// Save private job progress and recovery state.
 fn persist(state: &AppState, job: &Job) -> Result<(), Error> {
     state
@@ -1054,12 +1076,18 @@ async fn run(state: &AppState, record: &DatabaseRecord, job: &mut Job) -> Result
     require_maintenance(state, record).await?;
     let mut safety = Job::new(record, Uuid::new_v4(), Kind::Backup)?;
     safety.status = "running".into();
+    safety.parent = Some(ParentJob {
+        id: job.id,
+        execution_generation: job.execution_generation,
+    });
+    job.safety_backup_id = Some(safety.id);
+    persist(state, job)?;
     persist(state, &safety)?;
     match backup(state, record, &mut safety).await {
         Ok(()) => safety.status = "succeeded".into(),
         Err(e) => {
             safety.status = "failed".into();
-            safety.error = Some(e.to_string());
+            safety.error = Some(redacted_error(&e));
             persist(state, &safety)?;
             return Err(e);
         }
@@ -1155,15 +1183,10 @@ pub fn spawn(state: AppState) {
         if let Ok(records) = state.store.list_pipe_databases() {
             for record in records {
                 if let Ok(jobs) = state.store.database_jobs(record.id) {
-                    for mut job in jobs.into_iter().filter(|j| j.status == "running") {
-                        job.status = if job.maintenance_started {
-                            "needs_recovery"
-                        } else {
-                            "failed"
-                        }
-                        .into();
-                        job.error=Some("The API restarted during this job; inspect its safety backup before retrying".into());
-                        let _ = persist(&state, &job);
+                    for job in jobs.into_iter().filter(|j| j.status == "running") {
+                        let _ = state
+                            .store
+                            .interrupt_database_job(job.id, job.execution_generation);
                     }
                 }
             }
@@ -1172,11 +1195,13 @@ pub fn spawn(state: AppState) {
             let records = state.store.list_pipe_databases().unwrap_or_default();
             for record in records {
                 let jobs = state.store.database_jobs(record.id).unwrap_or_default();
-                if let Some(mut job) = jobs.iter().rev().find(|j| j.status == "queued").cloned() {
-                    job.status = "running".into();
-                    if persist(&state, &job).is_err() {
+                if let Some(queued) = jobs.iter().rev().find(|j| j.status == "queued") {
+                    let Ok(Some(mut job)) = state
+                        .store
+                        .claim_database_job(queued.id, queued.execution_generation)
+                    else {
                         continue;
-                    }
+                    };
                     let outcome = tokio::time::timeout(
                         Duration::from_secs(1800),
                         run(&state, &record, &mut job),
@@ -1194,10 +1219,12 @@ pub fn spawn(state: AppState) {
                                 "failed"
                             }
                             .into();
-                            job.error=Some(match error{Error::Invalid(message)=>message.to_owned(),_=>"Database maintenance failed; check privileges, field types and connectivity".into()});
+                            job.error = Some(redacted_error(&error));
                         }
                     }
-                    let _ = persist(&state, &job);
+                    if persist(&state, &job).is_err() {
+                        continue;
+                    }
                     if (job.kind == Kind::Backup && job.status == "failed"
                         || job.kind == Kind::Restore)
                         && let Ok(path) = backup_path(&state, job.id)

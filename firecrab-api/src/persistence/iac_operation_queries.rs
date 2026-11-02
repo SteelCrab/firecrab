@@ -27,7 +27,10 @@ impl Store {
             let operation: NativeOperation =
                 serde_json::from_str(&raw).map_err(|_| PersistenceError::IacOperationIdentity)?;
             if id != operation.operation_id.to_string()
-                || operation.state == NativeOperationState::Succeeded
+                || matches!(
+                    operation.state,
+                    NativeOperationState::Succeeded | NativeOperationState::Failed
+                )
             {
                 return Err(PersistenceError::IacOperationIdentity);
             }

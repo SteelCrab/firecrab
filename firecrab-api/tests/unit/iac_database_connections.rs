@@ -21,7 +21,7 @@ async fn iac_database_connection_update_rejects_managed_credentials_before_remot
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{error}");
-    assert_eq!(error["error"]["code"], "iac_resource_managed");
+    assert_eq!(error["error"]["code"], "iac_ownership_conflict");
     assert!(matches!(
         state.store.update_pipe_database(id, &input),
         Err(PersistenceError::IacOwnershipConflict)

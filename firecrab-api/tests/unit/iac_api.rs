@@ -471,15 +471,40 @@ async fn iac_configuration_ownership_transfers_and_guards_each_public_write_rout
         assert!(!owned.to_string().contains("fixture-credential-never-echo"));
         let encoded = resource.id.replace('-', "%2D");
         for (method, suffix) in edits {
+            let database_mutation = kind == "database_connection" && method == "PUT";
+            let input = if database_mutation {
+                if suffix == "/access" {
+                    json!({"writeEnabled":false})
+                } else {
+                    serde_json::to_value(
+                        state
+                            .store
+                            .pipe_database(Uuid::parse_str(&resource.id).unwrap())
+                            .unwrap()
+                            .unwrap()
+                            .input,
+                    )
+                    .unwrap()
+                }
+            } else {
+                json!({})
+            };
             let (code, error) = call(
                 &app,
                 method,
                 &format!("/api/{namespace}/{encoded}{suffix}"),
-                json!({}),
+                input,
             )
             .await;
             assert_eq!(code, StatusCode::CONFLICT, "{kind} {suffix}: {error}");
-            assert_eq!(error["error"]["code"], "iac_resource_managed");
+            assert_eq!(
+                error["error"]["code"],
+                if database_mutation {
+                    "iac_ownership_conflict"
+                } else {
+                    "iac_resource_managed"
+                }
+            );
         }
         let (code, released) = call(&app, "POST", "/api/iac/owners/transition", json!({
             "operationId":Uuid::new_v4(),"expectedEndpointId":free.endpoint_id,"resource":resource,
@@ -1087,3 +1112,9 @@ mod database_connection_tests;
 
 #[path = "iac_service_writers.rs"]
 mod service_writer_tests;
+
+#[path = "iac_database_jobs.rs"]
+mod database_job_tests;
+
+#[path = "iac_database_operations.rs"]
+mod database_operation_tests;

@@ -6,11 +6,6 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
 pub(super) const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS iac_native_operations (
- operation_id TEXT PRIMARY KEY, kind TEXT NOT NULL, resource_id TEXT NOT NULL,
- state TEXT NOT NULL CHECK(state IN ('running','needs_recovery','succeeded')),
- status TEXT NOT NULL
-) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS iac_native_active_resource
  ON iac_native_operations(kind,resource_id) WHERE state IN ('running','needs_recovery');
 CREATE TABLE IF NOT EXISTS iac_native_dependencies (
@@ -87,6 +82,7 @@ pub(super) fn save(conn: &Connection, operation: &NativeOperation) -> Result<(),
         NativeOperationState::Running => "running",
         NativeOperationState::NeedsRecovery => "needs_recovery",
         NativeOperationState::Succeeded => "succeeded",
+        NativeOperationState::Failed => "failed",
     };
     let status =
         serde_json::to_string(operation).map_err(|_| PersistenceError::IacOperationIdentity)?;

@@ -205,3 +205,39 @@ test("Native recovery reports an uncertain backend result without claiming it is
     await server.close();
   }
 });
+
+test("Native recovery reports a completed failure without claiming success or running", async () => {
+  const server = await fixture();
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  let current = operation("known-failure");
+  let posts = 0;
+  server.handlers.set("GET /api/iac/native-operations", ({ send }) =>
+    send(200, {
+      operations: current.state === "failed" ? [] : [current],
+      nextBefore: null,
+    }),
+  );
+  server.handlers.set(
+    "POST /api/iac/native-operations/known-failure/recover",
+    ({ send }) => {
+      posts++;
+      current = { ...current, state: "failed", executionGeneration: 1, errorCode: "verification_failed" };
+      send(200, current);
+    },
+  );
+  try {
+    await page.goto(`${server.url}/#/stacks`);
+    const panel = page.getByRole("region", { name: "Native operations", exact: true });
+    await panel.getByRole("button", { name: "Resume VM deletion" }).click();
+    await expect(panel.getByRole("alert")).toContainText(
+      "Original operation failed before changes. Submit corrected configuration.",
+    );
+    await expect(panel.getByRole("status")).toHaveCount(0);
+    expect(posts).toBe(1);
+  } finally {
+    await page.close();
+    await browser.close();
+    await server.close();
+  }
+});

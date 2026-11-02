@@ -145,8 +145,21 @@ pub async fn recover_native_operation(
             ));
         }
     }
-    if operation.state == firecrab_stack::NativeOperationState::Succeeded {
+    if matches!(
+        operation.state,
+        firecrab_stack::NativeOperationState::Succeeded
+            | firecrab_stack::NativeOperationState::Failed
+    ) {
         return Ok(Json(operation));
+    }
+    if matches!(
+        operation.action,
+        firecrab_stack::NativeAction::CreateDatabaseConnection
+            | firecrab_stack::NativeAction::UpdateDatabaseConnection
+    ) {
+        return super::pipe_database_mutations::recover(state, request, id)
+            .await
+            .map(Json);
     }
     if operation.action == firecrab_stack::NativeAction::DeleteVm {
         return super::vm_deletion::recover(state, request, operation)

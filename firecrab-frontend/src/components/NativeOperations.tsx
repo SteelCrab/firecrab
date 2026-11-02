@@ -7,7 +7,7 @@ import { resourceKind } from "./StackResources";
 type Operation = {
   operationId: string;
   action: string;
-  state: "running" | "needs_recovery" | "succeeded";
+  state: "running" | "needs_recovery" | "succeeded" | "failed";
   executionGeneration?: number;
   retainDisks?: boolean;
   errorCode?: string | null;
@@ -18,6 +18,8 @@ type Operation = {
 };
 type Page = { operations: Operation[]; nextBefore: string | null };
 const ACTIONS: Record<string, [string, string]> = {
+  create_database_connection: ["Create database connection", "DB 연결 생성"],
+  update_database_connection: ["Update database connection", "DB 연결 수정"],
   delete_vm: ["Delete VM", "VM 삭제"],
   delete_sandbox_project: [
     "Delete project workspace",
@@ -35,13 +37,15 @@ function validOperation(value: Operation): boolean {
     !!value &&
     typeof value.operationId === "string" &&
     typeof value.action === "string" &&
-    ["running", "needs_recovery", "succeeded"].includes(value.state) &&
+    ["running", "needs_recovery", "succeeded", "failed"].includes(value.state) &&
     typeof value.ownership?.endpointId === "string" &&
     typeof value.ownership?.resource?.kind === "string" &&
     typeof value.ownership?.resource?.id === "string"
   );
 }
 const RECOVERABLE = new Set([
+  "create_database_connection",
+  "update_database_connection",
   "delete_vm",
   "delete_sandbox_project",
   "install_queue_engine",
@@ -85,7 +89,7 @@ export default function NativeOperations() {
           if (
             !page.operations.every(
               (operation) =>
-                validOperation(operation) && operation.state !== "succeeded",
+                validOperation(operation) && ["running", "needs_recovery"].includes(operation.state),
             )
           )
             throw new Error("Invalid active operation");
@@ -149,6 +153,18 @@ export default function NativeOperations() {
         observed.ownership.resource.id !== operation.ownership.resource.id
       ) {
         throw new Error("Native operation identity changed");
+      }
+      if (observed.state === "failed") {
+        if (mounted.current)
+          setOperations((current) =>
+            current.filter((item) => item.operationId !== observed.operationId),
+          );
+        throw new Error(
+          t(
+            "Original operation failed before changes. Submit corrected configuration.",
+            "변경 전에 원래 작업이 실패했다. 수정한 설정을 제출한다.",
+          ),
+        );
       }
       if (observed.state === "needs_recovery")
         throw new Error(

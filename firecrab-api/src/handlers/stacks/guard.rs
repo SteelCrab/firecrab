@@ -28,7 +28,14 @@ pub(crate) async fn protect_resources(
     let Some(path) = request.extensions().get::<MatchedPath>() else {
         return next.run(request).await;
     };
-    if path.as_str() == "/api/vms/{id}/ssh-host-key/check" {
+    // Connection mutations reserve durable target/owner fences inside their own transaction.
+    // Completed retries must reach that reader even after ownership or settings change.
+    if (matches!(
+        path.as_str(),
+        "/api/pipe/databases/{id}" | "/api/pipe/databases/{id}/access"
+    ) && request.method() == Method::PUT)
+        || path.as_str() == "/api/vms/{id}/ssh-host-key/check"
+    {
         return next.run(request).await;
     }
     let configuration = match path.as_str() {

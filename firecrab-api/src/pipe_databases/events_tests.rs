@@ -655,7 +655,6 @@ async fn event_mutations_retain_protections_without_the_short_rest_deadline() {
 
 #[tokio::test]
 async fn connection_updates_validate_the_target_saved_while_waiting() {
-    use axum::response::IntoResponse;
     let dir = tempfile::tempdir().unwrap();
     let state = AppState::with_db_file(
         crate::templates::TemplateRegistry::from_specs(dir.path(), std::iter::empty()).unwrap(),
@@ -673,6 +672,7 @@ async fn connection_updates_validate_the_target_saved_while_waiting() {
             axum::extract::State(task_state),
             axum::Extension(crate::server::RequestId(Uuid::new_v4())),
             axum::extract::Path(id.to_string()),
+            axum::http::HeaderMap::new(),
             crate::extract::ValidatedJson(input),
         )
         .await
@@ -699,7 +699,8 @@ async fn connection_updates_validate_the_target_saved_while_waiting() {
         })
         .unwrap();
     drop(guard);
-    let response = update.await.unwrap().err().unwrap().into_response();
+    let response = update.await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = axum::body::to_bytes(response.into_body(), 65536)
         .await
         .unwrap();

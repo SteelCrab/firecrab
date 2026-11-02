@@ -211,7 +211,10 @@ pub(super) fn ensure_registry_direct(
 }
 
 /// Maintenance may be attached to another saved alias for the same database.
-fn database_idle(conn: &Connection, resource: &ManagedResource) -> Result<(), PersistenceError> {
+pub(super) fn database_idle(
+    conn: &Connection,
+    resource: &ManagedResource,
+) -> Result<(), PersistenceError> {
     let raw: Option<String> = conn
         .query_row(
             "SELECT spec FROM pipe_databases WHERE id=?1",
@@ -232,6 +235,9 @@ fn database_idle(conn: &Connection, resource: &ManagedResource) -> Result<(), Pe
                 .map_err(|_| PersistenceError::IacOwnershipConflict)
         })
         .transpose()?;
+    if let Some(target) = &target {
+        super::iac_database_targets::native_idle(conn, target)?;
+    }
     let mut statement=conn.prepare(
         "SELECT spec FROM database_jobs WHERE database_id=?1 OR json_extract(spec,'$.targetHash')=?2",
     )?;
