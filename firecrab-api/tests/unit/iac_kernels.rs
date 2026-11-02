@@ -353,7 +353,8 @@ async fn iac_kernel_browser_fixture() {
             request_timeout: std::time::Duration::from_secs(10),
             static_root: Some(assets),
         },
-    );
+    )
+    .layer(axum::Extension(crate::ai_sandbox::access::LocalOperator));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let finished = std::sync::Arc::new(tokio::sync::Notify::new());

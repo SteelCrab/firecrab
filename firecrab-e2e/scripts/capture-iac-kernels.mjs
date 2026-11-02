@@ -45,7 +45,9 @@ try {
  await page.setViewportSize({width:390,height:844});
  await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
  await capture("mobile",card);
+ const recoveryResponse=page.waitForResponse(response=>response.url().endsWith(`/api/iac/native-operations/${fixture.operationId}/recover`)&&response.request().method()==="POST");
  await card.getByRole("button",{name:"Recover original operation",exact:true}).click();
+ assert.equal((await recoveryResponse).status(),200);
  await expect(work.getByText("Original operation completed.",{exact:true})).toBeVisible();
  const after=await observe();
  assert.equal(after.state,"succeeded");assert.equal(after.executionGeneration,1);
