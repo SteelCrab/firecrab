@@ -1,0 +1,457 @@
+{
+  "capturedAt": "2026-11-02T02:18:46.300Z",
+  "captureDate": "2026-11-02",
+  "sourceCommit": "929a169af3d94749e92cecb4083e9315a82a9eb9",
+  "sourceDirty": false,
+  "focusResource": {
+    "id": "34a74366-28f6-4773-b3cd-2430e2227e2f",
+    "kind": "queue_engine"
+  },
+  "versions": {
+    "browser": "151.0.7922.34",
+    "node": "v26.12.1"
+  },
+  "fixture": true,
+  "transport": "actual local Axum HTTP; no mocked API responses",
+  "runtime": "compiled React dashboard with disposable SQLite resource records; no Linux/KVM boot",
+  "ownership": {
+    "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+    "generation": 1,
+    "owner": {
+      "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+      "key": "firecrab_network.application",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "7b0db0d7-82b2-4199-8e70-4492e7c4f6cf",
+      "kind": "network"
+    }
+  },
+  "ownerships": [
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+        "key": "firecrab_database_connection.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "07827ef3-1722-4881-becc-0541282779f2",
+        "kind": "database_connection"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+        "key": "firecrab_network.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "7b0db0d7-82b2-4199-8e70-4492e7c4f6cf",
+        "kind": "network"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "0943547c-af24-4eec-9a68-cbb275672861",
+        "key": "firecrab_pool.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "75af55ef-0903-4101-8596-a17e2a6fd4e9",
+        "kind": "pool"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+        "key": "firecrab_queue.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "e40ea722-8062-49c6-bef6-e51f9d5bd12a",
+        "kind": "queue"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+        "key": "firecrab_queue_engine.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "34a74366-28f6-4773-b3cd-2430e2227e2f",
+        "kind": "queue_engine"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+        "key": "firecrab_sandbox_access.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "b340fe02-230c-4eef-b48b-084d359b2579",
+        "kind": "sandbox_access"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+        "key": "firecrab_sandbox_project.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "dafb2ea8-b902-4c22-a0cd-287fb82e2aed",
+        "kind": "sandbox_project"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "0943547c-af24-4eec-9a68-cbb275672861",
+        "key": "firecrab_schedule.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "79c26cd0-a842-4369-a7ab-a19e44e5eb49",
+        "kind": "schedule"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+        "key": "firecrab_secret.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "805b4b72-34f5-45f9-96e0-9ff6a8cc9fbf",
+        "kind": "secret"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+        "key": "firecrab_secret_connection.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "d547dbb9-1d31-474f-8db9-02d3fa40e28c",
+        "kind": "secret_connection"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+        "key": "firecrab_security_group.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "6e97fe92-68d1-4137-807d-8246de647d4b",
+        "kind": "security_group"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "0943547c-af24-4eec-9a68-cbb275672861",
+        "key": "firecrab_shell.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "35a891ef-5123-4d8b-9b4a-15a756b7d8a6",
+        "kind": "shell"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+        "key": "firecrab_storage_connection.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "c85812f1-1a99-425c-b74b-579b179dd371",
+        "kind": "storage_connection"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+        "key": "firecrab_storage_root.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "0f075609-7abe-466e-ad07-77356207592e",
+        "kind": "storage_root"
+      }
+    },
+    {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+        "key": "firecrab_volume.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "58659fa6-fcad-49b6-b730-67cc5fc13cb3",
+        "kind": "volume"
+      }
+    }
+  ],
+  "nativeRecovery": {
+    "before": {
+      "operationId": "d5d882ab-4625-4804-98c4-9ab6dd19bea1",
+      "ownership": {
+        "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+        "resource": {
+          "kind": "sandbox_project",
+          "id": "df562578-cc48-4d4b-b72d-961394c0abbf"
+        },
+        "generation": 0,
+        "owner": null
+      },
+      "action": "delete_sandbox_project",
+      "state": "needs_recovery",
+      "errorCode": "project_cleanup_incomplete"
+    },
+    "after": {
+      "operationId": "d5d882ab-4625-4804-98c4-9ab6dd19bea1",
+      "ownership": {
+        "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+        "resource": {
+          "kind": "sandbox_project",
+          "id": "df562578-cc48-4d4b-b72d-961394c0abbf"
+        },
+        "generation": 0,
+        "owner": null
+      },
+      "action": "delete_sandbox_project",
+      "state": "succeeded",
+      "errorCode": null
+    },
+    "checks": [
+      "real filesystem failure",
+      "CLI status discovery",
+      "same operation and project UUID after recovery",
+      "immutable completed retry",
+      "borrowed source retained"
+    ],
+    "cliSha256": "d02b7cc681f2a8b7727856b1a142d1aed46d6bd7676bf2070838698709932ee7"
+  },
+  "sourceRemoval": {
+    "operation": {
+      "operationId": "a6694cfd-5d96-4ec4-902f-95f167e5d176",
+      "ownership": {
+        "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+        "resource": {
+          "kind": "stack_source",
+          "id": "b424d928-334a-4d21-affa-185645e22430"
+        },
+        "generation": 0,
+        "owner": null
+      },
+      "action": "delete_stack_source",
+      "state": "succeeded",
+      "errorCode": null,
+      "configurationGeneration": 1
+    },
+    "recreatedGeneration": 3,
+    "retainedNetworkId": "d8c62fb8-c5b8-482a-afb6-b5033e7c05d7",
+    "checks": [
+      "actual CLI source removal",
+      "generation retained at 2",
+      "history retained",
+      "recreated source generation 3",
+      "old delete retry preserves recreated source",
+      "bound network retained"
+    ],
+    "fixtureObservation": "initial Git check metadata was created locally; no GitHub repository fetch"
+  },
+  "accessRevocation": {
+    "operation": {
+      "operationId": "ad646b2a-4c98-4c38-a218-8cfce0e71475",
+      "ownership": {
+        "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+        "resource": {
+          "kind": "sandbox_access",
+          "id": "b340fe02-230c-4eef-b48b-084d359b2579"
+        },
+        "generation": 1,
+        "owner": {
+          "manager": "terraform",
+          "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+          "key": "firecrab_sandbox_access.application"
+        }
+      },
+      "action": "revoke_sandbox_access",
+      "state": "succeeded",
+      "errorCode": null
+    },
+    "released": {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "resource": {
+        "kind": "sandbox_access",
+        "id": "b340fe02-230c-4eef-b48b-084d359b2579"
+      },
+      "generation": 2,
+      "owner": null
+    },
+    "checks": [
+      "actual CLI policy observation and revocation",
+      "managed grant replacement rejected",
+      "atomic deny and authority release",
+      "immutable completed recovery",
+      "React poll removes revoked ownership"
+    ]
+  },
+  "queueEngine": {
+    "owned": {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "generation": 1,
+      "owner": {
+        "id": "dc037f42-2c22-4b2e-8398-ba7e36cb6e8e",
+        "key": "firecrab_queue_engine.application",
+        "manager": "terraform"
+      },
+      "resource": {
+        "id": "34a74366-28f6-4773-b3cd-2430e2227e2f",
+        "kind": "queue_engine"
+      }
+    },
+    "released": {
+      "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+      "resource": {
+        "kind": "queue_engine",
+        "id": "34a74366-28f6-4773-b3cd-2430e2227e2f"
+      },
+      "generation": 2,
+      "owner": null
+    },
+    "failedStop": {
+      "operationId": "9d020351-d972-4ff3-832a-fdfb2ef7a6f6",
+      "ownership": {
+        "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+        "resource": {
+          "kind": "queue_engine",
+          "id": "34a74366-28f6-4773-b3cd-2430e2227e2f"
+        },
+        "generation": 2,
+        "owner": null
+      },
+      "action": "stop_queue_engine",
+      "state": "needs_recovery",
+      "errorCode": "queue_engine_incomplete"
+    },
+    "resumed": {
+      "operationId": "9d020351-d972-4ff3-832a-fdfb2ef7a6f6",
+      "ownership": {
+        "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+        "resource": {
+          "kind": "queue_engine",
+          "id": "34a74366-28f6-4773-b3cd-2430e2227e2f"
+        },
+        "generation": 2,
+        "owner": null
+      },
+      "action": "stop_queue_engine",
+      "state": "running",
+      "errorCode": null,
+      "executionGeneration": 1
+    },
+    "failedRecovery": {
+      "operationId": "9d020351-d972-4ff3-832a-fdfb2ef7a6f6",
+      "ownership": {
+        "endpointId": "a63bd7ab-3018-4665-a22e-a2135181b254",
+        "resource": {
+          "kind": "queue_engine",
+          "id": "34a74366-28f6-4773-b3cd-2430e2227e2f"
+        },
+        "generation": 2,
+        "owner": null
+      },
+      "action": "stop_queue_engine",
+      "state": "needs_recovery",
+      "errorCode": "queue_engine_incomplete",
+      "executionGeneration": 1
+    },
+    "fixtureObservation": "the broker VM is intentionally absent; its checkpoint says previously created, so native stop/recovery must fail without creating a replacement. No Linux/KVM boot or RabbitMQ connection occurred",
+    "checks": [
+      "Terraform-owned start/stop rejected",
+      "actual CLI explicit release",
+      "caller-retained stop operation UUID",
+      "native missing-VM failure retains fence",
+      "actual CLI original-operation recovery increments execution generation",
+      "same reserved VM identity",
+      "HTTP retry does not redispatch",
+      "actual React recovery button",
+      "375px without horizontal overflow"
+    ]
+  },
+  "checks": [
+    "endpoint identity",
+    "43 inventory kinds; 23 transfer adapters",
+    "actual ownership read",
+    "direct PATCH rejected with 409",
+    "12 configuration kinds reject direct DELETE with 409",
+    "immutable operation acknowledgement",
+    "15 Terraform ownership records and one retained native binding in the actual dashboard before operator revocation",
+    "2 Terraform states remain separate; each resource kind has its own icon section and count",
+    "native bindings are displayed once",
+    "desktop dashboard",
+    "375px mobile without horizontal overflow",
+    "no browser page errors"
+  ],
+  "apiBinarySha256": "71506a3175d3d01eb575f6229485471bd8aa21f605476ffe11d169c7d41a9ebf",
+  "frontendAssets": {
+    "index-BPi114hj.css": "574a845554965cdca394dedf4a5017c77cbb15f6ef239261d451bcdddfc3d8a9",
+    "index-BvQ8zb22.js": "44d69f9c744e3795209bd803954272a5ea932f8ce11215e1226a6c3ff34cf3a4"
+  },
+  "verification": {
+    "iacTests": {
+      "passed": 62,
+      "ignored": 1
+    },
+    "queueRegressionTests": {
+      "passed": 14,
+      "ignored": 1
+    },
+    "actualCliExecutableTests": 5,
+    "stackModelTests": 45,
+    "reactQueueTests": 4,
+    "clippy": "API/CLI/Stack all-targets -D warnings passed",
+    "documentationInventoryChangelogFormatting": "passed",
+    "limitations": [
+      "Manual API fixture was separately executed for these screenshots",
+      "The separate real RabbitMQ broker test remains unexecuted in this local run",
+      "Queue broker VM intentionally absent; no Linux/KVM boot, RabbitMQ readiness, Terraform provider or external Git fetch ran",
+      "This is stage 2 progress. Full common lifecycle, expanded Stack, Terraform provider and every-row acceptance remain incomplete"
+    ]
+  },
+  "screenshotsVisuallyInspected": true
+}
