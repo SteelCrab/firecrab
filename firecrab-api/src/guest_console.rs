@@ -145,6 +145,49 @@ mod tests {
         assert!(instrument_app_script("#!/bin/sh\n# >>> firecrab application log\n").is_none());
     }
 
+    // Another test's forked child can briefly inherit the freshly written
+    // fixture's write descriptor. Keep the real exec and retry only ETXTBSY.
+    fn wrapper_output(path: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
+        let mut attempt = 0;
+        loop {
+            match std::process::Command::new(path).args(args).output() {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 8 =>
+                {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(10 * attempt));
+                }
+                result => return result,
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wrapper_exec_waits_for_an_inherited_writer_to_close() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let app = root.path().join("app");
+        std::fs::write(&app, "#!/bin/sh\nprintf '<%s>\\n' \"$@\"\n").unwrap();
+        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let writer = std::fs::OpenOptions::new().write(true).open(&app).unwrap();
+        assert_eq!(
+            std::process::Command::new(&app)
+                .output()
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::ExecutableFileBusy
+        );
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            drop(writer);
+        });
+        let output = wrapper_output(&app, &["two words", ""]).unwrap();
+        release.join().unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"<two words>\n<>\n");
+    }
+
     #[test]
     fn app_wrapper_preserves_arguments_and_upgrades_old_wrapper() {
         use std::os::unix::fs::PermissionsExt;
@@ -169,10 +212,7 @@ mod tests {
             .replace(GUEST_PATH, helper.to_str().unwrap());
         std::fs::write(&app, legacy_runner).unwrap();
         std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let before = std::process::Command::new(&app)
-            .args(["one", "two words", ""])
-            .output()
-            .unwrap();
+        let before = wrapper_output(&app, &["one", "two words", ""]).unwrap();
         assert_eq!(before.stdout, b"<>\n");
         let upgraded = instrument_app_script(&legacy).unwrap();
         assert_eq!(upgraded, script);
@@ -181,10 +221,7 @@ mod tests {
             .replace(GUEST_PATH, helper.to_str().unwrap());
         std::fs::write(&app, script).unwrap();
         std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let output = std::process::Command::new(&app)
-            .args(["one", "two words", ""])
-            .output()
-            .unwrap();
+        let output = wrapper_output(&app, &["one", "two words", ""]).unwrap();
         assert!(output.status.success());
         assert_eq!(output.stdout, b"<one>\n<two words>\n<>\n");
     }
