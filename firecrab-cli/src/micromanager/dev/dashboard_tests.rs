@@ -257,7 +257,14 @@ fn copied_sessions_cannot_control_primary_or_other_private_dashboards() {
             &first_bytes,
         ),
     ];
-    let client = client().unwrap();
+    // All three Node fixtures may share a loaded Windows runner. Keep the exact
+    // identity check, but allow the test verifier enough time to receive it.
+    let client = Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
     for (home, source, selected_port, original, foreign) in cases {
         let record = home.join("runtime/dev-dashboard.json");
         assert!(check_port(home, selected_port).is_ok());
@@ -269,7 +276,11 @@ fn copied_sessions_cannot_control_primary_or_other_private_dashboards() {
         assert!(port(home).is_err());
         assert_eq!(fs::read(&record).unwrap(), *foreign);
         for server in [&primary_server, &first_server, &second_server] {
-            assert!(running(&client, &server.0, &server.0.url()));
+            assert!(
+                running(&client, &server.0, &server.0.url()),
+                "original dashboard identity unavailable at {}",
+                server.0.url()
+            );
         }
         fs::write(record, original).unwrap();
     }

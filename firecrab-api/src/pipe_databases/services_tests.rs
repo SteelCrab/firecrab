@@ -786,13 +786,17 @@ async fn api_call(
         )
         .await
         .unwrap();
-    assert_eq!(response.status().as_u16(), status, "{method} {path}");
-    serde_json::from_slice(
-        &to_bytes(response.into_body(), 2 * 1024 * 1024)
-            .await
-            .unwrap(),
-    )
-    .unwrap()
+    let actual = response.status().as_u16();
+    let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(
+        actual,
+        status,
+        "{method} {path}: {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    serde_json::from_slice(&bytes).unwrap()
 }
 async fn api_job(app: &axum::Router, base: &str, id: &Value) -> Value {
     for _ in 0..300 {

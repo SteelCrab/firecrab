@@ -37,6 +37,13 @@ pub async fn create(
     headers: HeaderMap,
     ValidatedJson(input): ValidatedJson<events::TriggerInput>,
 ) -> Response {
+    if input.request_id.is_nil() || input.service_id.is_nil() {
+        return crate::pipe_databases::validation(
+            "Choose a handler and a non-nil event UUID",
+            request.0,
+        )
+        .into_response();
+    }
     let database = match super::vms::parse_id(&database, request.0) {
         Ok(id) => id,
         Err(error) => return error.into_response(),

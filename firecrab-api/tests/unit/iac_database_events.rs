@@ -574,6 +574,23 @@ async fn iac_database_events_invalid_input_is_rejected_before_any_native_or_brok
     let root = tempfile::tempdir().unwrap();
     let (state, app, network) = fixture(root.path()).await;
     let (record, mut value, _) = setup(&state, root.path(), network);
+    let mut invalid = value.input.clone();
+    invalid.request_id = Uuid::nil();
+    let (status, error) = call(
+        &app,
+        "POST",
+        &format!("/api/pipe/databases/{}/triggers", record.id),
+        json!(invalid),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(
+        state
+            .store
+            .iac_native_operation(Uuid::nil())
+            .unwrap()
+            .is_none()
+    );
     value.input.path = "//untrusted.example/events".into();
     let (status, error) = call(
         &app,
