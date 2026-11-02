@@ -2,6 +2,7 @@
 use super::*;
 use native::command as wire;
 
+/// Decode the canonical event identity and strict, bounded command arguments.
 pub(super) fn arguments(value: &Value) -> Result<(Uuid, SandboxGuestCommand), String> {
     let mut object = value
         .as_object()
@@ -23,6 +24,7 @@ pub(super) fn arguments(value: &Value) -> Result<(Uuid, SandboxGuestCommand), St
     }
     Ok((operation, command))
 }
+/// Reserve the server-owned operation ID before the task engine checkpoints dispatch.
 pub(super) fn prepare(saved: &mut SavedTask, call: &mut model::Call) {
     if !saved.task.request.project_shell || saved.guest_pending {
         return;
@@ -48,6 +50,7 @@ pub(super) fn prepare(saved: &mut SavedTask, call: &mut model::Call) {
             .remove("operationId");
     }
 }
+/// Redact public output and distinguish retained interruption/truncation from success.
 fn output(
     reply: &wire::Reply,
     accounts: &[SavedConnection],
@@ -67,6 +70,7 @@ fn output(
         reply.exit != Some(0) || reply.state != 2,
     )
 }
+/// Launch once and observe the same receipt until completion or a bounded deadline.
 pub(super) async fn tool(
     state: &AppState,
     saved: &mut SavedTask,
@@ -113,6 +117,7 @@ pub(super) async fn tool(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
+/// Cancel only the recorded command and retain its evidence before clearing the fence.
 pub(super) async fn settle(
     state: &AppState,
     saved: &mut SavedTask,

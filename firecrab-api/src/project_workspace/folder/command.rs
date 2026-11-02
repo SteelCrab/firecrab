@@ -2,17 +2,27 @@
 use super::*;
 use firecrab_api_types::SandboxGuestCommand;
 
+/// Validated native command receipt; raw output is redacted before entering task events.
 pub(crate) struct Reply {
+    /// Native phase: prepared (0), running (1), exited (2), or interrupted (3).
     pub state: u32,
+    /// Confirmed exit status, absent when completion could not be established.
     pub exit: Option<i32>,
+    /// Keep the Sandbox pending-effect fence until native descendant cleanup is confirmed.
     pub cleanup_required: bool,
+    /// At least one stream exceeded the command's admitted retention limit.
     pub truncated: bool,
+    /// Retained stdout prefix, bounded by the exact command request.
     pub stdout: Vec<u8>,
+    /// Retained stderr prefix, kept separate from stdout and the transport status.
     pub stderr: Vec<u8>,
 }
+/// Read a network-order integer after the caller has checked the frame size.
 fn number(bytes: &[u8], at: usize) -> u32 {
     u32::from_be_bytes(bytes[at..at + 4].try_into().expect("validated frame"))
 }
+/// Encode literal argv, explicit environment and limits without shell interpolation.
+/// Actions are launch (1), observe (2), cancel (3), and capability probe (4).
 pub(crate) fn frame(
     operation: Uuid,
     action: u32,
@@ -61,6 +71,7 @@ pub(crate) fn frame(
     frame.extend(body);
     Ok(frame)
 }
+/// Validate native reply bounds and process evidence; reject ambiguous final states.
 pub(crate) fn decode(bytes: &[u8]) -> Result<Reply, Error> {
     if bytes.len() == 8 && &bytes[..4] == b"FCXE" {
         return Err(match number(bytes, 4) {
@@ -118,6 +129,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Reply, Error> {
         stderr: bytes[80 + out..].to_vec(),
     })
 }
+/// Perform one bounded authenticated RPC while the caller owns the VM/database lease.
 async fn exchange(ctx: &mut files::Files, frame: Vec<u8>) -> Result<Vec<u8>, Error> {
     ctx.permission()?;
     if ctx.digest.len() != 64 || !ctx.digest.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -155,6 +167,7 @@ async fn exchange(ctx: &mut files::Files, frame: Vec<u8>) -> Result<Vec<u8>, Err
     }
     Ok(response.stdout)
 }
+/// Require project-command protocol 1 before admitting a shell-capable folder task.
 pub(crate) async fn probe(state: AppState, target: Target, id: Uuid) -> Result<(), AppError> {
     target.permission(&state, target.caller, id)?;
     files::run(state.workspaces.file_slots.clone(), id, async move {

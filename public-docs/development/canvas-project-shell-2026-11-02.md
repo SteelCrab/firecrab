@@ -63,6 +63,18 @@ Interactive and long-running work continues to use project PTY terminals.
 - A sixth hosted browser regression is added to the existing Frontend CI job.
   Its latest-head result must be checked separately after push.
 
+## First latest-head CI and documentation fix
+
+The initial shell implementation `4eb25d45` passed the hosted Frontend job with
+**139 tests, 0 failures**, including the new shell capability/reload regression.
+Its rustdoc job failed the unchanged 75% completeness floor at **74.9899%**.
+The new command receipt fields, wire functions and shell lifecycle adapter now
+have substantive documentation. Both new Rust modules report **100%** item
+documentation coverage locally; API/API-types documentation builds with warnings
+denied. A complete workspace documentation build on macOS is unsupported because
+its Linux-only `netlink-sys` dependency does not compile there. Linux CI must verify
+the complete workspace floor on the final head. No threshold was lowered.
+
 ## Browser evidence
 
 The compiled React dashboard was exercised in a dedicated Chrome task tab against
