@@ -33,6 +33,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Manage service OTLP configuration ownership independently from release snapshots,
+  including disabled slots. Preserve opt-in boundaries, reject late saves after
+  ownership changes and prevent parent deletion from erasing managed settings (#548).
+
 - Protect cluster host drain settings, VM placement intents and cluster service
   updates with exact IaC ownership. Preserve authenticated heartbeats, existing
   intent reconciliation, host-qualified workload identities and operation history.

@@ -8,7 +8,8 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 
 Network, standalone VM, MicroService, registered storage root, volume, security group,
 shell, schedule, pool, Queue, database connection, S3 connection, Secret, Secret connection,
-Auth, registry, AI connection, project model-default, Sandbox environment/project, Git source and Sandbox access-policy ownership
+Auth, registry, AI connection, project model-default, Sandbox environment/project, Git source,
+Sandbox access policy, Queue engine, cluster host/placement/service and service OTLP settings
 can move between native Stack and a Terraform state owner.
 Protected controller/pool/builder VMs and resources with active operations cannot be adopted.
 Generated Sandbox environment networks, security groups and VMs retain their parent's authority.
@@ -267,3 +268,19 @@ Worker-owned VMs and local service receipts retain their original controller's a
 
 These adapters do not yet supply all desired fields, lifecycle operations or both declarative workflows.
 The full stage 2 contract and the #548 merge hold remain open.
+
+## Service OTLP settings
+
+`service_otlp` identifies one export configuration slot by its local service UUID.
+The slot remains manageable while export is disabled. Ownership transfer does not enable export,
+change the endpoint or reset its durable opt-in boundary.
+The endpoint is independent of release snapshots and the service's other configuration.
+Controller-owned service receipts cannot be adopted as local export settings.
+
+Direct writes, including identical settings and disabling export, respect the exact slot owner.
+A save compares the authority captured before validation inside the SQLite commit.
+A release/reclaim invalidates older saves, including after restart or through another database connection.
+An independently managed export slot blocks deletion of its parent service until explicitly released or removed.
+Observation reads and existing export delivery remain available.
+
+This ownership prerequisite does not complete either declarative workflow or the full lifecycle contract.

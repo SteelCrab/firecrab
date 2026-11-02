@@ -103,7 +103,8 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "queue_engine",
             "cluster_host",
             "cluster_placement",
-            "cluster_service"
+            "cluster_service",
+            "service_otlp"
         ])
     );
     assert_eq!(
@@ -1215,3 +1216,6 @@ mod access;
 
 #[path = "iac_queue_engine.rs"]
 mod queue_engine_tests;
+
+#[path = "iac_otlp.rs"]
+mod otlp_tests;

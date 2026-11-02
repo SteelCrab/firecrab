@@ -244,6 +244,15 @@ pub(crate) async fn database<T: Send + 'static>(
         .await
         .map_err(|_| AppError::internal(request_id))?
         .map_err(|error| match error {
+            error @ (PersistenceError::IacOwnershipConflict
+            | PersistenceError::IacParentManaged
+            | PersistenceError::IacManagedDependent
+            | PersistenceError::IacResourceBusy
+            | PersistenceError::StaleIacOwner
+            | PersistenceError::StackApplyBusy
+            | PersistenceError::StackSourceBusy) => {
+                crate::handlers::stacks::persistence_error(error, request_id)
+            }
             PersistenceError::CiDeployUnauthorized => AppError::new(
                 StatusCode::UNAUTHORIZED,
                 "deploy_token_required",

@@ -1,6 +1,6 @@
 //! Per-service, credential-free OTLP endpoint settings.
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
 use super::{PersistenceError, Store};
@@ -44,6 +44,28 @@ pub(super) fn delete(conn: &Connection, service_id: Uuid) -> Result<(), Persiste
     Ok(())
 }
 
+/// The independently managed exporter slot belongs to one exact local service UUID.
+pub(super) fn validate_owner(
+    conn: &Connection,
+    resource: &firecrab_stack::ManagedResource,
+    adopting: bool,
+) -> Result<(), PersistenceError> {
+    let id = Uuid::parse_str(&resource.id).map_err(|_| PersistenceError::InvalidIacOwner)?;
+    if adopting
+        && !conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM micro_services WHERE id=?1)",
+            [id.to_string()],
+            |row| row.get::<_, bool>(0),
+        )?
+    {
+        return Err(PersistenceError::InvalidStackResource);
+    }
+    if super::stacks::resource_apply_busy(conn, firecrab_stack::ResourceKind::Service, id)? {
+        return Err(PersistenceError::StackApplyBusy);
+    }
+    super::iac_owners::ensure_resource_idle(conn, firecrab_stack::ResourceKind::Service, id)
+}
+
 impl Store {
     /// Return the current endpoint, or `None` when export is disabled.
     pub(crate) fn otlp_endpoint(&self, service: Uuid) -> Result<Option<String>, PersistenceError> {
@@ -69,10 +91,25 @@ impl Store {
 
     /// Store a validated endpoint, or disable export by clearing the setting.
     /// The owner check and update use the same connection lock as service deletion.
+    #[cfg(test)]
     pub(crate) fn set_otlp_endpoint(
         &self,
         service: Uuid,
         endpoint: Option<&str>,
+    ) -> Result<i64, PersistenceError> {
+        let authority = self.iac_resource_owner(&firecrab_stack::ManagedResource {
+            kind: "service_otlp".into(),
+            id: service.to_string(),
+        })?;
+        self.set_otlp_endpoint_checked(service, endpoint, &authority)
+    }
+
+    /// Compare the authority captured before validation inside the configuration commit.
+    pub(crate) fn set_otlp_endpoint_checked(
+        &self,
+        service: Uuid,
+        endpoint: Option<&str>,
+        expected: &firecrab_stack::ResourceOwnership,
     ) -> Result<i64, PersistenceError> {
         let endpoint = endpoint
             .map(|value| {
@@ -84,8 +121,9 @@ impl Store {
                     })
             })
             .transpose()?;
-        let conn = self.lock();
-        let exists: bool = conn.query_row(
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM micro_services WHERE id=?1)",
             [service.to_string()],
             |row| row.get(0),
@@ -93,16 +131,28 @@ impl Store {
         if !exists {
             return Err(rusqlite::Error::QueryReturnedNoRows.into());
         }
+        let resource = firecrab_stack::ManagedResource {
+            kind: "service_otlp".into(),
+            id: service.to_string(),
+        };
+        if super::iac_owners::read(&tx, &resource)? != *expected {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+        validate_owner(&tx, &resource, false)?;
+        if !super::iac_owners::public_write_allowed(&tx, &resource)? {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
         let enabled_at_ms = chrono::Utc::now().timestamp_millis().saturating_add(1);
         if let Some(endpoint) = endpoint {
-            conn.execute(
+            tx.execute(
                 "INSERT INTO service_otlp_config(service_id, endpoint, enabled_at_ms) VALUES (?1, ?2, ?3)
                  ON CONFLICT(service_id) DO UPDATE SET endpoint=excluded.endpoint, enabled_at_ms=excluded.enabled_at_ms",
                 params![service.to_string(), endpoint, enabled_at_ms],
             )?;
         } else {
-            delete(&conn, service)?;
+            delete(&tx, service)?;
         }
+        tx.commit()?;
         Ok(enabled_at_ms)
     }
 }

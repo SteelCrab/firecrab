@@ -525,6 +525,9 @@ pub enum PersistenceError {
     /// Generated children retain their parent controller's immutable authority.
     #[error("resource belongs to a parent controller")]
     IacParentManaged,
+    /// A parent cannot silently delete configuration managed by a separate resource.
+    #[error("resource has separately managed configuration")]
+    IacManagedDependent,
     /// A failed encrypted-vault lookup cannot be treated as an absent resource.
     #[error("IaC credential store is unavailable")]
     IacVaultUnavailable,

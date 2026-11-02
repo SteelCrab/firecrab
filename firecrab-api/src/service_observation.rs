@@ -314,6 +314,21 @@ pub(crate) async fn configure(
     let claim = state.service_mutations.clone().lock_owned().await;
     ensure_local_service(&state, service, request.0).await?;
     let store = state.store.clone();
+    let authority = crate::handlers::stacks::database(request.0, move || {
+        store.iac_resource_owner(&firecrab_stack::ManagedResource {
+            kind: "service_otlp".into(),
+            id: service.to_string(),
+        })
+    })
+    .await?;
+    if authority
+        .owner
+        .as_ref()
+        .is_some_and(|owner| owner.manager == firecrab_stack::Manager::Terraform)
+    {
+        return Err(crate::handlers::iac::managed(request.0));
+    }
+    let store = state.store.clone();
     let (saved, active, current_endpoint) = database(request.0, move || {
         Ok((
             store.micro_service(service)?,
@@ -361,8 +376,8 @@ pub(crate) async fn configure(
             .transpose()
             .map_err(|_| AppError::internal(request.0))?;
         let value = new_endpoint.clone();
-        let enabled_at_ms = database(request.0, move || {
-            store.set_otlp_endpoint(service, value.as_deref())
+        let enabled_at_ms = crate::handlers::stacks::database(request.0, move || {
+            store.set_otlp_endpoint_checked(service, value.as_deref(), &authority)
         })
         .await?;
         if let (Some(endpoint), Some(exporter)) = (&new_endpoint, exporter) {

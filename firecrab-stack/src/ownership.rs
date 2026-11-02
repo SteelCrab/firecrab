@@ -68,6 +68,7 @@ impl ManagedResource {
                 | "cluster_host"
                 | "cluster_placement"
                 | "cluster_service"
+                | "service_otlp"
                 | "database_connection"
                 | "storage_connection"
                 | "secret"

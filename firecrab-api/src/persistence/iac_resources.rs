@@ -33,6 +33,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "cluster_host",
     "cluster_placement",
     "cluster_service",
+    "service_otlp",
 ];
 
 /// Reservations and tombstones keep generated identities with their parent.
@@ -107,6 +108,7 @@ pub(super) fn validate(
             "SELECT EXISTS(SELECT 1 FROM stack_git_sources WHERE stack_id=?1 AND json_extract(status,'$.stackId')=?1)"
         }
         "sandbox_access" => return super::sandbox_access::validate(conn, resource, adopting),
+        "service_otlp" => return super::otlp_config::validate_owner(conn, resource, adopting),
         "cluster_host" | "cluster_placement" | "cluster_service" => {
             return super::iac_cluster::validate(conn, resource, adopting);
         }
