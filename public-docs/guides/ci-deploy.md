@@ -19,6 +19,8 @@ Its hash persists on the host. Metadata includes the exact service UUID,
 repository, creation time and expiry. The default lifetime is 30 days; the API
 accepts 60 seconds to 90 days. Each service permits twenty credentials.
 Use **Revocation** to revoke one immediately, including an expired credential.
+Verified operator revocation remains available for IaC-owned credentials and records a durable acknowledgement.
+See [IaC token ownership](iac-deploy-tokens.md) for scoped identity, retry and authority rules.
 
 Operator CLI equivalents:
 

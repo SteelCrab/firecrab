@@ -104,7 +104,8 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "cluster_host",
             "cluster_placement",
             "cluster_service",
-            "service_otlp"
+            "service_otlp",
+            "service_deploy_token"
         ])
     );
     assert_eq!(
@@ -1219,3 +1220,6 @@ mod queue_engine_tests;
 
 #[path = "iac_otlp.rs"]
 mod otlp_tests;
+
+#[path = "iac_deploy_tokens.rs"]
+mod deploy_token_tests;

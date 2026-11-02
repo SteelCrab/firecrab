@@ -424,19 +424,18 @@ async fn expired_credentials_and_changed_scope_cannot_commit_or_poll() {
     let root = tempfile::tempdir().unwrap();
     let (state, previous, operator, ci) = fixture(root.path()).await;
     let created = issue(&operator, previous.service_id).await;
-    let hash = state
-        .store
-        .deploy_token(created.credential.id)
-        .unwrap()
-        .unwrap()
-        .hash;
-    state
-        .store
-        .revoke_deploy_token(previous.service_id, created.credential.id)
-        .unwrap();
     let mut expired = created.credential;
     expired.expires_at = 0;
-    state.store.insert_deploy_token(&expired, &hash).unwrap();
+    // Advance the persisted expiry without resurrecting a revoked credential UUID.
+    let conn = rusqlite::Connection::open(root.path().join("state.db")).unwrap();
+    conn.execute(
+        "UPDATE service_deploy_tokens SET metadata=?1 WHERE id=?2",
+        rusqlite::params![
+            serde_json::to_string(&expired).unwrap(),
+            expired.id.to_string()
+        ],
+    )
+    .unwrap();
     assert_eq!(
         call(
             &ci,

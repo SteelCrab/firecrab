@@ -52,6 +52,21 @@ impl ManagedResource {
                 return Err("use the exact registry hostname and optional port");
             }
         }
+        if self.kind == "service_deploy_token" {
+            let (service, token) = self
+                .id
+                .split_once(':')
+                .ok_or("use service-uuid:token-uuid")?;
+            let service = Uuid::parse_str(service)
+                .ok()
+                .filter(|id| !id.is_nil())
+                .ok_or("provide a non-nil service UUID")?;
+            let token = Uuid::parse_str(token)
+                .ok()
+                .filter(|id| !id.is_nil())
+                .ok_or("provide a non-nil token UUID")?;
+            self.id = format!("{service}:{token}");
+        }
         if matches!(
             self.kind.as_str(),
             "network"

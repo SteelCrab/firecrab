@@ -15,7 +15,7 @@ use crate::{
 use axum::{
     Extension, Json,
     extract::{FromRequestParts, Path, State},
-    http::{StatusCode, header, request::Parts},
+    http::{HeaderMap, StatusCode, header, request::Parts},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use firecrab_api_types::*;
@@ -173,6 +173,14 @@ pub async fn create_token(
     }
     let claim = state.service_mutations.clone().lock_owned().await;
     ensure_stack_writer(&state, service, None, request.0).await?;
+    let store = state.store.clone();
+    let authority = database(request.0, move || {
+        store.iac_resource_owner(&firecrab_stack::ManagedResource {
+            kind: "service".into(),
+            id: service.to_string(),
+        })
+    })
+    .await?;
     ensure_local(&state, service, request.0).await?;
     let store = state.store.clone();
     let active = database(request.0, move || store.service_deployment(service))
@@ -214,7 +222,9 @@ pub async fn create_token(
     tokio::spawn(async move {
         let _claim = claim;
         database(request.0, move || {
-            state.store.insert_deploy_token(&saved, &hash)
+            state
+                .store
+                .insert_deploy_token_checked(&saved, &hash, &authority)
         })
         .await
     })
@@ -232,21 +242,28 @@ pub async fn revoke_token(
     Extension(request): Extension<RequestId>,
     caller: Caller,
     Path((service, token)): Path<(String, String)>,
-) -> Result<StatusCode, AppError> {
+    headers: HeaderMap,
+) -> Result<(StatusCode, [(&'static str, String); 1]), AppError> {
     operator(caller, request.0)?;
     let service = parse_id(&service, request.0)?;
     let token = parse_id(&token, request.0)?;
+    let operation = crate::handlers::iac::operation_id(&headers, request.0)?;
     let claim = state.service_mutations.clone().lock_owned().await;
     tokio::spawn(async move {
         let _claim = claim;
-        database(request.0, move || {
-            state.store.revoke_deploy_token(service, token)
+        crate::handlers::stacks::database(request.0, move || {
+            state
+                .store
+                .revoke_deploy_token_with_receipt(service, token, operation)
         })
         .await
     })
     .await
     .map_err(|_| AppError::internal(request.0))??;
-    Ok(StatusCode::NO_CONTENT)
+    Ok((
+        StatusCode::NO_CONTENT,
+        [("x-firecrab-operation-id", operation.to_string())],
+    ))
 }
 
 /// A local CI credential cannot bypass controller-owned service lifecycle operations.

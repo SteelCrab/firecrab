@@ -9,7 +9,7 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 Network, standalone VM, MicroService, registered storage root, volume, security group,
 shell, schedule, pool, Queue, database connection, S3 connection, Secret, Secret connection,
 Auth, registry, AI connection, project model-default, Sandbox environment/project, Git source,
-Sandbox access policy, Queue engine, cluster host/placement/service and service OTLP settings
+Sandbox access policy, Queue engine, cluster host/placement/service, service OTLP settings and service Deploy tokens
 can move between native Stack and a Terraform state owner.
 Protected controller/pool/builder VMs and resources with active operations cannot be adopted.
 Generated Sandbox environment networks, security groups and VMs retain their parent's authority.
@@ -284,3 +284,6 @@ An independently managed export slot blocks deletion of its parent service until
 Observation reads and existing export delivery remain available.
 
 This ownership prerequisite does not complete either declarative workflow or the full lifecycle contract.
+
+See [service Deploy token ownership](iac-deploy-tokens.md) for exact composite identities,
+operator revocation, retired credentials and parent-removal protection.

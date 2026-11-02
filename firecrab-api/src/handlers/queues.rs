@@ -23,25 +23,7 @@ pub async fn engine(
 ) -> Result<Json<Option<QueueEngineResponse>>, AppError> {
     queues::engine_status(&state, id.0).await.map(Json)
 }
-/// A retry key selects an immutable operation; it never provides write authority.
-fn operation_id(headers: &HeaderMap, request_id: Uuid) -> Result<Uuid, AppError> {
-    let Some(value) = headers.get("x-firecrab-operation-id") else {
-        return Ok(request_id);
-    };
-    value
-        .to_str()
-        .ok()
-        .and_then(|value| Uuid::parse_str(value).ok())
-        .filter(|id| !id.is_nil())
-        .ok_or_else(|| {
-            AppError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid_operation_id",
-                "provide a non-nil operation UUID",
-                request_id,
-            )
-        })
-}
+use super::iac::operation_id;
 
 type EngineAccepted = (
     StatusCode,

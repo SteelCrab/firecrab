@@ -50,6 +50,7 @@ mod stack_applies;
 mod stack_sources;
 pub(crate) use stack_sources::SourceTrigger;
 mod iac_cluster;
+mod iac_deploy_tokens;
 pub(crate) mod iac_native;
 mod iac_owners;
 mod iac_resources;

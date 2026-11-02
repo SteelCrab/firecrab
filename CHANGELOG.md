@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Transfer service Deploy token ownership without changing its verifier or expiry.
+  Keep operator revocation available, including during Stack work. Atomically retire
+  the credential and authority with a durable receipt; block late issuance and
+  parent removal from bypassing managed credentials (#548).
+
 - Manage service OTLP configuration ownership independently from release snapshots,
   including disabled slots. Preserve opt-in boundaries, reject late saves after
   ownership changes and prevent parent deletion from erasing managed settings (#548).

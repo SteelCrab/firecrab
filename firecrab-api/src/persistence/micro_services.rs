@@ -192,7 +192,7 @@ impl Store {
     pub fn delete_micro_service(&self, id: Uuid) -> Result<bool, PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let managed_export: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM iac_resource_owners WHERE kind='service_otlp' AND resource_id=?1 AND manager IS NOT NULL)", [id.to_string()], |row| row.get(0))?;
+        let managed_export: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM iac_resource_owners WHERE manager IS NOT NULL AND ((kind='service_otlp' AND resource_id=?1) OR (kind='service_deploy_token' AND resource_id LIKE ?1||':%')))", [id.to_string()], |row| row.get(0))?;
         if managed_export {
             return Err(PersistenceError::IacManagedDependent);
         }

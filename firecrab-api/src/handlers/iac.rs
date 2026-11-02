@@ -10,6 +10,29 @@ use crate::handlers::stacks::database;
 use crate::server::RequestId;
 use crate::state::AppState;
 
+/// A retry key selects an immutable operation; it never provides write authority.
+pub(crate) fn operation_id(
+    headers: &axum::http::HeaderMap,
+    request_id: uuid::Uuid,
+) -> Result<uuid::Uuid, AppError> {
+    let Some(value) = headers.get("x-firecrab-operation-id") else {
+        return Ok(request_id);
+    };
+    value
+        .to_str()
+        .ok()
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .filter(|id| !id.is_nil())
+        .ok_or_else(|| {
+            AppError::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "invalid_operation_id",
+                "provide a non-nil operation UUID",
+                request_id,
+            )
+        })
+}
+
 /// Advertise the actual transfer adapters separately from the full target inventory.
 pub async fn identity(
     State(state): State<AppState>,

@@ -8,6 +8,8 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeAction {
+    /// Revoke one scoped credential and invalidate its previous management authority.
+    RevokeDeployToken,
     /// Install the broker using its one reserved VM and disk identity.
     InstallQueueEngine,
     /// Start or repair the same broker; never replace an existing disk.
