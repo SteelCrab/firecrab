@@ -1,0 +1,32 @@
+{
+  "sourceCommit": "587d95402e050fd33d3cf71207e3851c04ec24c5",
+  "sourceDirty": false,
+  "verifiedOn": "2026-11-03",
+  "scope": "Complete Linux API Release suite for the image lifecycle/ownership prerequisites, including actual filesystem, process, sparse archive and mTLS fixtures. No real guest, remote registry, expanded Stack or Terraform provider acceptance is established.",
+  "toolchain": "rustc 1.97.1",
+  "profile": "release --locked; CARGO_INCREMENTAL=0",
+  "containerImage": "rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f",
+  "execution": "Unprivileged nobody user; temporary writable CWD and image root; read-only detached source. Compiler-emitted artifact paths match executed binaries.",
+  "results": {
+    "apiUnit": {
+      "passed": 1849,
+      "failed": 0,
+      "ignored": 26
+    },
+    "tlsStartup": {
+      "passed": 2,
+      "failed": 0
+    },
+    "vmShim": {
+      "passed": 6,
+      "failed": 0
+    }
+  },
+  "artifactSha256": {
+    "apiUnit": "901b1450331e04159319e96d63259ba16911fc0ca26ba2fd3185c0c717e5fd30",
+    "tlsStartup": "5539e1fbc850cb8b17dfae8746f31a7d1319dd61e48fa43e6d3a21a81d4f8966",
+    "vmShim": "99944449aee37c02b1da34d5dfc146348aa8b7a165ed7a0468b6c9a7ee4add0a"
+  },
+  "remaining": "Seven ownership adapters and complete common planning/lifecycle/credential/delegation contracts remain. Native Stack expansion, dedicated Terraform provider and every-row Linux/KVM/controller acceptance remain incomplete. No merge is permitted.",
+  "cleanup": "Disposable verification container exited and was automatically removed. Detached verification worktree is removed after hashing. No production resources or backups were created."
+}
