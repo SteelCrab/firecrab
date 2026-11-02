@@ -580,3 +580,6 @@ async fn iac_managed_database_broker_recovery_rejects_changed_disk_identity_befo
     );
     assert!(state.store.insert_database_broker_vm(&vm, &grant).is_err());
 }
+
+#[path = "iac_managed_database_broker_browser.rs"]
+mod browser;
