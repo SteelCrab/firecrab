@@ -31,6 +31,7 @@ class StableKernelQaTests(unittest.TestCase):
                         "build_revision": "firecrab-host9"}
         self.receipt_path = Path(str(self.image) + ".json")
         self.receipt_path.write_text(json.dumps(self.receipt))
+        Path(str(self.image) + ".config").write_text("CONFIG_VIRTIO_VSOCKETS=y\n")
         self.api = "http://127.0.0.1:5523"
 
     def responses(self, *jobs):
@@ -58,10 +59,12 @@ class StableKernelQaTests(unittest.TestCase):
         self.assertEqual(log.getvalue().count("building"), 1)
 
     def test_failed_build_reports_the_actual_build_log(self):
+        cache = self.root / "ci-cache"
         failed = {"status": "failed", "log": "Missing kernel build headers: libelf\n"}
         with patch.object(qa, "request", side_effect=self.responses(failed)), contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(RuntimeError, "Missing kernel build headers: libelf"):
-                qa.prepare(self.api, self.images, 60)
+                qa.prepare(self.api, self.images, 60, cache)
+        self.assertFalse(cache.exists())
 
     def test_running_build_obeys_the_configured_deadline(self):
         clock = [0]
@@ -90,6 +93,99 @@ class StableKernelQaTests(unittest.TestCase):
         with patch.object(qa, "request", side_effect=self.responses({"status": "succeeded"})), contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(RuntimeError, "receipt does not match"):
                 qa.prepare(self.api, self.images, 60)
+
+    def test_cache_key_changes_with_release_architecture_recipe_and_compiler(self):
+        script = self.root / "scripts/build-host-kernel.sh"
+        script.parent.mkdir()
+        script.write_text("native build recipe")
+        kernel = self.root / "firecrab-api/src/oci/kernel.rs"
+        kernel.parent.mkdir(parents=True)
+        kernel.write_text("receipt validation")
+        with patch.object(qa, "__file__", str(script)), \
+             patch.object(qa, "request", return_value=[self.entry]), \
+             patch.object(qa.subprocess, "check_output", return_value=b"compiler 1") as compiler:
+            original = qa.cache_key(self.api)
+            self.assertEqual(original, qa.cache_key(self.api))
+            self.entry["version"] = "8.1.5"
+            self.entry["image"] = "vmlinux-8.1.5-x86_64"
+            self.assertNotEqual(original, qa.cache_key(self.api))
+            self.entry.update(version=self.version, architecture="aarch64", image=f"Image-{self.version}-aarch64")
+            self.assertNotEqual(original, qa.cache_key(self.api))
+            self.entry.update(architecture="x86_64", image=self.image.name)
+            script.write_text("changed build configuration")
+            changed_recipe = qa.cache_key(self.api)
+            self.assertNotEqual(original, changed_recipe)
+            compiler.return_value = b"compiler 2"
+            self.assertNotEqual(changed_recipe, qa.cache_key(self.api))
+
+    def test_cache_miss_exports_only_the_verified_kernel_and_receipts(self):
+        cache = self.root / "ci-cache"
+        with patch.object(qa, "request", side_effect=self.responses({"status": "succeeded"})), \
+             contextlib.redirect_stdout(io.StringIO()):
+            result = qa.prepare(self.api, self.images, 60, cache)
+        self.assertEqual(result["kernel"], str(self.image))
+        self.assertEqual({path.name for path in cache.iterdir()},
+                         {self.image.name + suffix for suffix in ("", ".json", ".config")})
+        self.assertEqual((cache / self.image.name).read_bytes(), self.image.read_bytes())
+
+    def test_restored_cache_still_runs_the_api_install_and_digest_validation(self):
+        cache = self.root / "ci-cache"
+        cache.mkdir()
+        for suffix in ("", ".json", ".config"):
+            original = Path(str(self.image) + suffix)
+            (cache / original.name).write_bytes(original.read_bytes())
+            original.unlink()
+        responses = iter(self.responses({"status": "succeeded"}))
+        def request(api, path, method="GET"):
+            if method == "POST":
+                self.assertEqual(self.image.read_bytes(), b"verified native kernel fixture")
+                self.assertTrue(self.receipt_path.is_file())
+            return next(responses)
+        with patch.object(qa, "request", side_effect=request), contextlib.redirect_stdout(io.StringIO()):
+            result = qa.prepare(self.api, self.images, 60, cache)
+        self.assertEqual(result["imageSha256"], self.entry["imageSha256"])
+
+    def test_incomplete_cache_does_not_replace_the_installed_kernel(self):
+        cache = self.root / "ci-cache"
+        cache.mkdir()
+        (cache / self.image.name).write_bytes(b"partial cache")
+        with patch.object(qa, "request", side_effect=self.responses({"status": "succeeded"})), \
+             contextlib.redirect_stdout(io.StringIO()):
+            qa.prepare(self.api, self.images, 60, cache)
+        self.assertEqual((cache / self.image.name).read_bytes(), b"verified native kernel fixture")
+
+    def test_symlinked_cache_entry_does_not_overwrite_its_target(self):
+        cache = self.root / "ci-cache"
+        cache.mkdir()
+        outside = self.root / "unrelated-file"
+        outside.write_bytes(b"keep this file")
+        cached_image = cache / self.image.name
+        cached_image.symlink_to(outside)
+        for suffix in (".json", ".config"):
+            (cache / (self.image.name + suffix)).write_bytes(Path(str(self.image) + suffix).read_bytes())
+        with patch.object(qa, "request", side_effect=self.responses({"status": "succeeded"})), \
+             contextlib.redirect_stdout(io.StringIO()):
+            qa.prepare(self.api, self.images, 60, cache)
+        self.assertEqual(outside.read_bytes(), b"keep this file")
+        self.assertFalse(cached_image.is_symlink())
+        self.assertEqual(cached_image.read_bytes(), b"verified native kernel fixture")
+
+    def test_rejected_cache_is_rebuilt_by_the_api_before_export(self):
+        cache = self.root / "ci-cache"
+        cache.mkdir()
+        for suffix in ("", ".json", ".config"):
+            original = Path(str(self.image) + suffix)
+            (cache / original.name).write_bytes(original.read_bytes())
+        (cache / self.image.name).write_bytes(b"corrupt cached kernel")
+        responses = iter(self.responses({"status": "succeeded"}))
+        def request(api, path, method="GET"):
+            if method == "POST":
+                self.assertEqual(self.image.read_bytes(), b"corrupt cached kernel")
+                self.image.write_bytes(b"verified native kernel fixture")
+            return next(responses)
+        with patch.object(qa, "request", side_effect=request), contextlib.redirect_stdout(io.StringIO()):
+            qa.prepare(self.api, self.images, 60, cache)
+        self.assertEqual((cache / self.image.name).read_bytes(), b"verified native kernel fixture")
 
 
 if __name__ == "__main__":

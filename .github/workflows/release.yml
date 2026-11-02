@@ -28,6 +28,11 @@ jobs:
       - name: Install pinned toolchain
         run: rustup show
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
+
       - name: Install dnsmasq
         # firecrab-helper's dhcp.rs tests shell out to the real
         # `dnsmasq --test` to validate generated configs — not preinstalled
@@ -84,6 +89,12 @@ jobs:
 
       - name: Add target
         run: rustup target add ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
+          key: ${{ matrix.target }}
 
       - name: Install musl linker
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -174,6 +185,12 @@ jobs:
 
       - name: Add target
         run: rustup target add ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
+          key: ${{ matrix.target }}
 
       - name: Install musl linker
         if: matrix.musl
@@ -279,6 +296,11 @@ jobs:
 
       - name: Install pinned toolchain
         run: rustup show
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
 
       - uses: actions/setup-node@v7
         with:

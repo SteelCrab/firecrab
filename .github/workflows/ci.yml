@@ -19,20 +19,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
       - name: Install pinned toolchain
         # rust-toolchain.toml pins Rust 1.97.1 and clippy/rustfmt/llvm-tools.
         run: rustup show
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
 
       - name: Install test and ingress build tools
         # firecrab-helper's dhcp.rs tests shell out to the real
@@ -191,13 +185,13 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/cache@v6
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: socket-failover-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          cache-bin: false
       - name: Build helper tests and private ingress
         run: |
           sudo apt-get update
@@ -231,19 +225,13 @@ jobs:
       - name: Private release bootstrap contracts
         run: python3 scripts/test-dev-container-bootstrap.py
 
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
       - name: Install pinned Rust toolchain
         run: rustup show
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
 
       - name: Require local Docker and KVM devices
         run: |
@@ -272,19 +260,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
       - name: Install pinned Rust toolchain
         run: rustup show
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
 
       - name: Require local Docker and KVM devices
         run: |
@@ -310,6 +292,11 @@ jobs:
 
       - name: Install pinned Rust toolchain
         run: rustup show
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
 
       - name: Swift unit tests
         run: >-
@@ -355,6 +342,11 @@ jobs:
 
       - name: Install pinned Rust toolchain
         run: rustup show
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
 
       - name: Windows CLI clippy
         run: cargo clippy -p firecrab-cli --all-targets -- -D warnings
@@ -443,19 +435,13 @@ jobs:
       - name: PR and issue contributor assignees
         run: node --test scripts/test-assign-contributor.mjs
 
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
       - name: Install pinned toolchain
         run: rustup show
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
 
       - name: cargo doc
         # Denies warnings so broken intra-doc links / invalid rustdoc syntax
@@ -497,10 +483,39 @@ jobs:
               sys.exit(1)
           PY
 
-  e2e-dashboard:
-    name: Browser E2E (dashboard and Secrets, no guest boot)
-    # Playwright specs tagged @dashboard fake the API or console they need, so
-    # they run without KVM or the net helper. Guest-boot halves stay manual.
+  dashboard-regressions:
+    name: Dashboard regressions (shard ${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            firecrab-frontend/package-lock.json
+            firecrab-e2e/package-lock.json
+      - name: Install dashboard dependencies and Chromium
+        run: |
+          npm ci --prefix firecrab-frontend
+          npm ci --prefix firecrab-e2e
+          npx --prefix firecrab-e2e playwright install --with-deps chromium
+      - name: Framework-independent dashboard regression specs
+        run: npm --prefix firecrab-e2e run test:dashboard -- --shard=${{ matrix.shard }}/3
+      - name: Retain dashboard regression evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dashboard-regressions-${{ matrix.shard }}
+          path: firecrab-e2e/test-results
+          retention-days: 14
+
+  secrets-qa:
+    name: PipeSecrets QA (unit, UI, API and encrypted vault)
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: "0"
@@ -513,26 +528,13 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
           df -h /
 
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
-      - name: Remove unused incremental artifacts
-        run: |
-          if [ -d target ]; then
-            find target -type d -name incremental -prune -exec rm -rf {} +
-          fi
-          df -h /
-
       - name: Install pinned toolchain
         run: rustup show
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
 
       - uses: actions/setup-node@v7
         with:
@@ -548,9 +550,6 @@ jobs:
           npm ci --prefix firecrab-frontend
           npm ci --prefix firecrab-e2e
           npx --prefix firecrab-e2e playwright install --with-deps chromium
-
-      - name: Framework-independent dashboard regression specs
-        run: npm --prefix firecrab-e2e run test:dashboard
 
       - name: PIPE database E2E types
         run: npm run typecheck:pipe --prefix firecrab-e2e
@@ -572,6 +571,18 @@ jobs:
             firecrab-e2e/test-results
             target/qa/secrets
           retention-days: 14
+
+  e2e-dashboard:
+    name: Browser E2E (dashboard and Secrets, no guest boot)
+    needs: [dashboard-regressions, secrets-qa]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all dashboard shards and Secrets QA
+        env:
+          DASHBOARD_RESULT: ${{ needs.dashboard-regressions.result }}
+          SECRETS_RESULT: ${{ needs.secrets-qa.result }}
+        run: test "$DASHBOARD_RESULT" = success && test "$SECRETS_RESULT" = success
 
   react-terminal:
     name: React terminal (${{ matrix.browser }}, production)
@@ -613,20 +624,16 @@ jobs:
       RUSTFLAGS: "-C llvm-args=-runtime-counter-relocation"
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
       - name: Install Rust and database clients
         run: |
           rustup show
           sudo apt-get update
           sudo apt-get install -y postgresql-client default-mysql-client openssl
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - uses: actions/setup-node@v7
@@ -690,19 +697,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
       - name: Install pinned toolchain
         run: rustup show
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
 
       - name: shellcheck
         run: |
@@ -883,13 +884,36 @@ jobs:
           done
           curl -fsS http://127.0.0.1:5523/api/host >/dev/null
 
+      - name: Resolve guest kernel cache key
+        id: guest-kernel-cache-key
+        if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
+        run: |
+          key=$(python3 scripts/ci-prepare-stable-kernel.py --cache-key)
+          printf 'key=%s\n' "$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore verified guest kernel
+        id: guest-kernel-cache
+        if: ${{ !cancelled() && steps.guest-kernel-cache-key.outcome == 'success' }}
+        uses: actions/cache/restore@v6
+        with:
+          path: target/qa/guest-kernel-cache
+          key: ${{ runner.os }}-${{ steps.guest-kernel-cache-key.outputs.key }}
+
       - name: Build current stable guest kernel
         id: guest-kernel
-        if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.guest-kernel-cache-key.outcome == 'success' }}
         timeout-minutes: 35
         run: |
           sudo python3 scripts/ci-prepare-stable-kernel.py \
-            --timeout 1800 --output target/qa/guest-kernel.json --github-env "$GITHUB_ENV"
+            --timeout 1800 --output target/qa/guest-kernel.json --github-env "$GITHUB_ENV" \
+            --cache-directory target/qa/guest-kernel-cache
+
+      - name: Save verified guest kernel
+        if: ${{ !cancelled() && steps.guest-kernel.outcome == 'success' && steps.guest-kernel-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: target/qa/guest-kernel-cache
+          key: ${{ runner.os }}-${{ steps.guest-kernel-cache-key.outputs.key }}
 
       - name: Guest console vsock and foreground resize
         if: ${{ !cancelled() && steps.guest-kernel.outcome == 'success' }}
@@ -927,7 +951,7 @@ jobs:
           FIRECRAB_E2E_REQUIRE_GUEST_RESIZE: "1"
           FIRECRAB_E2E_PRODUCTION: "1"
         run: |
-          # Fixture suites run in e2e-dashboard with private API ports.
+          # Fixture suites run in dashboard-regressions with private API ports.
           npm run test:console --prefix firecrab-e2e 2>&1 | tee target/qa/console-browser.log
           npm run test:guest --prefix firecrab-e2e 2>&1 | tee target/qa/browser.log
 
