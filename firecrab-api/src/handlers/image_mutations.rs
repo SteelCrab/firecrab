@@ -24,9 +24,11 @@ use sha2::{Digest, Sha256};
 use std::{fs::File, io::Read, os::unix::fs::OpenOptionsExt};
 use uuid::Uuid;
 
+/// Return actionable original-operation recovery guidance without private failure details.
 fn unavailable(id: Uuid) -> AppError {
     AppError::unavailable("Inspect and recover the original image operation", id)
 }
+/// Admit an install from the original staged package and acknowledge its durable identity.
 pub async fn install(
     State(state): State<AppState>,
     Path(alias): Path<String>,
@@ -35,6 +37,7 @@ pub async fn install(
 ) -> Response {
     route(state, rid, headers, ImageRequest::Install { alias }).await
 }
+/// Resolve and freeze an OCI source before dispatching its retained native operation.
 pub async fn import(
     State(state): State<AppState>,
     Extension(rid): Extension<RequestId>,
@@ -53,10 +56,13 @@ pub async fn import(
 }
 #[derive(Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Artifact retention belongs to the immutable delete request, independently of catalog retirement.
 pub(crate) struct DeleteImageQuery {
     #[serde(default)]
+    /// Retire registration while retaining bytes when explicitly requested.
     pub retain_artifacts: bool,
 }
+/// Remove only an unused native alias and acknowledge the original immutable delete receipt.
 pub async fn delete(
     State(state): State<AppState>,
     Path(alias): Path<String>,
@@ -75,6 +81,7 @@ pub async fn delete(
     )
     .await
 }
+/// Pair the original rootfs with a selected managed kernel while preserving historical versions.
 pub async fn kernel(
     State(state): State<AppState>,
     Path(alias): Path<String>,
@@ -93,6 +100,7 @@ pub async fn kernel(
     )
     .await
 }
+/// Project durable operation state; an older in-memory tracker cannot change its outcome.
 pub(crate) fn snapshot(state: &AppState, intent: &ImageIntent) -> ImageInstallResponse {
     let mut value = state.image_installs.snapshot(&intent.definition().alias);
     value.status = match intent.operation.state {
@@ -110,6 +118,7 @@ pub(crate) fn snapshot(state: &AppState, intent: &ImageIntent) -> ImageInstallRe
     .into();
     value
 }
+/// Keep original operation IDs on responses and preserve terminal receipts across later changes.
 async fn route(
     state: AppState,
     rid: RequestId,
@@ -143,6 +152,7 @@ async fn route(
     );
     response
 }
+/// Resolve retries before mutable input reads, then reserve source, alias and parent authority.
 async fn admit(
     state: AppState,
     rid: RequestId,
@@ -480,6 +490,7 @@ async fn admit(
     }
     Ok(intent)
 }
+/// Hash one opened regular archive without following a link or blocking on a FIFO.
 fn checksum(path: &std::path::Path) -> std::io::Result<String> {
     let mut file = std::fs::OpenOptions::new()
         .read(true)
@@ -499,6 +510,7 @@ fn checksum(path: &std::path::Path) -> std::io::Result<String> {
     }
     Ok(format!("{:x}", hash.finalize()))
 }
+/// Freeze the exact original private login and its ownership/configuration fingerprint.
 async fn import_auth(
     state: &AppState,
     registry: &str,
@@ -592,6 +604,7 @@ async fn import_auth(
         _ => Err(unavailable(rid.0)),
     }
 }
+/// Retain admitted work after HTTP disconnect and fence failures through its original execution.
 fn dispatch_work(state: AppState, intent: ImageIntent, guard: File) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let original = intent.clone();
@@ -611,6 +624,7 @@ fn dispatch_work(state: AppState, intent: ImageIntent, guard: File) -> tokio::ta
         }
     })
 }
+/// Run only the frozen action; uncertain output remains reserved for original-operation recovery.
 async fn execute(state: &AppState, intent: ImageIntent, guard: File) -> Result<(), ()> {
     let work = ImageWork::new(&state.templates, intent.clone(), guard).map_err(|_| ())?;
     let templates = (*state.templates)
@@ -727,6 +741,7 @@ async fn execute(state: &AppState, intent: ImageIntent, guard: File) -> Result<(
         )
         .map_err(|_| ())
 }
+/// Hold the original verified kernel borrow through prepared-image registration.
 async fn retain_original_kernel(
     templates: &TemplateRegistry,
     work: &ImageWork,
@@ -759,6 +774,7 @@ async fn retain_original_kernel(
         .map_err(|_| ())?;
     Ok(lease)
 }
+/// Advance the observed uncertain generation and reuse its original source and prepared output.
 pub(crate) async fn recover(
     state: AppState,
     rid: RequestId,

@@ -15,6 +15,7 @@ use std::{
     sync::Arc,
 };
 use uuid::Uuid;
+/// Hide private namespace and credential details behind one public authority error.
 fn denied() -> TemplateError {
     TemplateError::ImageMutationDenied
 }
@@ -43,6 +44,7 @@ pub(crate) fn lock(templates: &TemplateRegistry) -> Result<File, TemplateError> 
     templates.physical_root()?;
     Ok(file)
 }
+/// Bind the retained physical publication lock to exactly one API database endpoint.
 fn claim(file: &File, endpoint: Uuid) -> Result<(), TemplateError> {
     let mut handle = file;
     handle.seek(SeekFrom::Start(0))?;
@@ -65,15 +67,23 @@ fn claim(file: &File, endpoint: Uuid) -> Result<(), TemplateError> {
 
 /// Exact physical catalog observation retained through a logical ownership commit.
 pub(crate) struct ImagePresence {
+    /// Retained directory descriptor and catalog maps used for physical revalidation.
     templates: TemplateRegistry,
+    /// Exact alias slot whose ownership may change.
     target: firecrab_stack::ManagedResource,
+    /// Database endpoint that observed this physical presence.
     endpoint: Uuid,
+    /// Original directory identity, rechecked inside the ownership commit.
     root: KernelRootPin,
+    /// Canonical original catalog snapshot, including unready historical entries.
     observed: String,
+    /// Distinguish adoption of an existing registration from metadata-only release.
     present: bool,
+    /// Exclusive publication/transfer lock held through the logical commit.
     guard: File,
 }
 impl ImagePresence {
+    /// Revalidate the exact physical observation without reacquiring the SQLite mutex.
     pub(crate) fn check(
         &self,
         target: &firecrab_stack::ManagedResource,
@@ -112,11 +122,13 @@ impl ImagePresence {
         }
         Ok(())
     }
+    /// Persist the endpoint stamp while the exclusive transfer lock is still held.
     pub(crate) fn claim(&self) -> Result<(), crate::persistence::PersistenceError> {
         claim(&self.guard, self.endpoint)
             .map_err(|_| crate::persistence::PersistenceError::IacOwnershipConflict)
     }
 }
+/// Observe exact image files while excluding writers; parent-owned Deploy files cannot be adopted.
 pub(crate) fn prepare_transfer(
     templates: &TemplateRegistry,
     target: &firecrab_stack::ManagedResource,
@@ -158,13 +170,19 @@ pub(crate) fn prepare_transfer(
 /// A caller cannot create an observed authority by supplying owner metadata in HTTP headers.
 #[derive(Clone)]
 pub(crate) struct CapturedImage {
+    /// Original API database; rebinding another AppState cannot replace it.
     store: Store,
+    /// Exact owner and generation captured before asynchronous source work.
     ownership: ResourceOwnership,
+    /// Original catalog epoch, including native changes without owner transfer.
     revision: u64,
+    /// Physical directory identity captured with this producer.
     root: KernelRootPin,
+    /// Optional shared lock retained across copying and catalog registration.
     publication: Option<Arc<File>>,
 }
 impl CapturedImage {
+    /// Reject stale owners, catalog epochs, physical roots and active mutation reservations.
     fn check(&self, root: &Path, alias: &str) -> Result<(), TemplateError> {
         self.root.check(root).map_err(|_| denied())?;
         let target = crate::persistence::iac_images::resource(alias);
@@ -188,12 +206,17 @@ impl CapturedImage {
 /// Only admitted native work constructs this physical publication capability.
 #[derive(Clone)]
 pub(crate) struct ImageWork {
+    /// Original API database used to validate every worker callback.
     store: Store,
+    /// Admitted source, ownership and execution-generation snapshot.
     intent: ImageIntent,
+    /// Original mapped root path, checked against its physical identity.
     current_root: PathBuf,
+    /// Physical publication lock retained across the entire supervised operation.
     _lock: Arc<File>,
 }
 impl ImageWork {
+    /// Mint a worker only from its admitted intent and already-held physical publication lock.
     pub(crate) fn new(
         templates: &TemplateRegistry,
         intent: ImageIntent,
@@ -213,6 +236,7 @@ impl ImageWork {
         claim(&work._lock, work.intent.operation.ownership.endpoint_id)?;
         Ok(work)
     }
+    /// Reject callbacks after recovery, source-authority change or root replacement.
     pub(crate) fn check(&self) -> Result<(), TemplateError> {
         self.intent
             .definition()
@@ -221,13 +245,16 @@ impl ImageWork {
             .map_err(|_| denied())?;
         self.store.check_image(&self.intent).map_err(|_| denied())
     }
+    /// Borrow the sealed original intent; public headers cannot construct this capability.
     pub(crate) fn intent(&self) -> &ImageIntent {
         &self.intent
     }
+    /// Persist possible managed effects before publication or removal begins.
     pub(crate) fn effects(&self) -> Result<(), TemplateError> {
         self.check()?;
         self.store.image_effects(&self.intent).map_err(|_| denied())
     }
+    /// Freeze original kernel bytes and reuse original boot arguments across compatible recovery.
     pub(crate) fn kernel(
         &self,
         relative: &Path,
@@ -253,6 +280,7 @@ impl ImageWork {
             .map_err(|_| denied())?;
         Ok(boot_args.into())
     }
+    /// Read a prior kernel preparation only through the current execution capability.
     pub(crate) fn original_kernel(
         &self,
     ) -> Result<Option<crate::persistence::iac_images::ImageKernelPin>, TemplateError> {
@@ -261,6 +289,7 @@ impl ImageWork {
             .prepared_image_kernel(&self.intent)
             .map_err(|_| denied())
     }
+    /// Freeze the complete original output paths and boot hashes before catalog publication.
     pub(crate) fn prepare(
         &self,
         spec: &TemplateSpec,
@@ -277,6 +306,7 @@ impl ImageWork {
             )
             .map_err(|_| denied())
     }
+    /// Allow publication only for the original alias, action, physical root and prepared bytes.
     fn publication(
         &self,
         root: &Path,
@@ -293,6 +323,7 @@ impl ImageWork {
         self.prepare(spec, version.stack_pin())?;
         self.effects()
     }
+    /// Authorize retirement only for the original delete operation and root.
     fn removal(&self, root: &Path, alias: &str) -> Result<(), TemplateError> {
         self.check()?;
         if root != self.current_root
@@ -305,8 +336,11 @@ impl ImageWork {
     }
 }
 #[derive(Clone)]
+/// Sealed execution grants and observed producer snapshots have distinct write rules.
 pub(crate) enum ImageAuthority {
+    /// An admitted operation retains its physical lock and execution generation.
     Operation(Arc<ImageWork>),
+    /// An asynchronous producer must still match its original owner and catalog epoch.
     Observed(CapturedImage),
 }
 /// Capture before asynchronous source work; a later release/reclaim cannot authorize its callback.
@@ -405,6 +439,7 @@ pub(crate) fn publication_scope(
         .clone()
         .with_image_authority(ImageAuthority::Observed(authority))
 }
+/// Prepare native output and mark effects without granting raw producers a native role.
 pub(crate) fn before_publication(
     templates: &TemplateRegistry,
     spec: &TemplateSpec,
@@ -415,6 +450,7 @@ pub(crate) fn before_publication(
     }
     Ok(())
 }
+/// Require an original delete grant before native catalog retirement.
 pub(crate) fn before_removal(
     templates: &TemplateRegistry,
     alias: &str,
@@ -471,6 +507,7 @@ pub(crate) fn write<T>(
         })
 }
 impl ImageAuthority {
+    /// Expose only the endpoint needed to bind a worker clone; no source secrets escape.
     pub(crate) fn endpoint(&self) -> Uuid {
         match self {
             Self::Operation(work) => work.intent.operation.ownership.endpoint_id,
