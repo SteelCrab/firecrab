@@ -77,6 +77,7 @@ jobs:
         run: |
           python3 scripts/test-ci-qa-guest.py
           python3 scripts/test-ci-qa-ssh.py
+          python3 scripts/test-ci-prepare-stable-kernel.py
 
       - name: Deploy QA guards and OCI fixture contract
         run: python3 scripts/test-ci-qa-deploy.py
@@ -883,7 +884,7 @@ jobs:
           done
           curl -fsS http://127.0.0.1:5523/api/host >/dev/null
 
-      - name: Build current stable guest kernel
+      - name: Install current stable guest kernel
         id: guest-kernel
         if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
         timeout-minutes: 35
