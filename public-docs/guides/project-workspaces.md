@@ -122,26 +122,22 @@ an incomplete checkpoint rather than reporting success. The newer [managed backu
 adds opt-in scheduling, independently retained archives and restart reconciliation.
 Remote transfer, pruning/deletion and genuine cross-host acceptance remain Phase 7 work.
 
-### Operator recovery procedure
+### Restoration
 
-1. Preserve the current database/disk and record the project's registered identities.
-2. Stop workload VMs and the API so neither the project DB nor disk has an active writer.
-3. Select one completed checkpoint. Verify both file hashes, project/database/volume
-   identities and schema version against its manifest. Also verify the disk's ext4 UUID.
-4. Restore its `project.db` and `data.ext4` together using staged copies and atomic
-   replacement on each destination filesystem. Keep owner-only modes and sync files
-   and parent directories. Quarantine the old closed database's WAL/SHM sidecars so
-   they cannot be paired with the restored database.
-5. Keep or restore the matching control registry from its separate backup. This phase
-   restores an already registered project; automatic re-registration on a new host
-   is not implemented. Never substitute a different volume/database identity.
-6. Start the API, inspect the project while its VM is stopped, then start the VM and
-   reconcile its mount. Confirm the metadata revision and representative file hashes.
+Use the [managed backup and restore API](project-workspace-backups.md) for new
+backups and explicit restoration. It preserves original files, validates the pair,
+resumes interrupted installation and advances the write generation before other
+clients can save. Stop the workload VM first; the API itself can remain running.
 
-SQLite/disk restore does not restore process memory. Durable session/terminal history
-and task reconciliation do not replay old commands. Use the
-[managed backup guide](project-workspace-backups.md) for the implemented restore API,
-post-restore generation acknowledgement and remaining acceptance gates.
+Legacy `/checkpoints` remain available for their original read and Sandbox migration
+workflow. They are not automatically imported into the managed backup catalog.
+Retain legacy and partial artifacts for operator inspection. Do not substitute a
+project DB or volume independently: its matching control registration, task authority,
+sidecars and stale-browser fencing must also remain consistent. Genuine legacy
+checkpoint disaster recovery and different-host recovery require separate acceptance.
+
+SQLite/disk restoration does not restore process memory or replay old commands.
+Preserve unsaved text, reload other pages and reopen editors after restoration.
 
 ## File access and history
 

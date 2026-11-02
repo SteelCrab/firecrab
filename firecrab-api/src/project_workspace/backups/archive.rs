@@ -45,7 +45,7 @@ fn connection(path: &FsPath) -> Result<Connection, Error> {
     )?)
 }
 /// Read-only validation must not change the archived DB owner/epoch or its integrity hash.
-fn database(state: &AppState, path: &FsPath, b: &Binding) -> Result<(u32, u64), Error> {
+pub(super) fn database(state: &AppState, path: &FsPath, b: &Binding) -> Result<(u32, u64), Error> {
     let c = connection(path)?;
     let application: i64 = c.pragma_query_value(None, "application_id", |r| r.get(0))?;
     let schema: u32 = c.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -137,6 +137,7 @@ fn copy(source: &FsPath, target: &FsPath) -> Result<String, Error> {
     output.set_len(0)?;
     let mut digest = Sha256::new();
     let mut bytes = vec![0; 1024 * 1024];
+    let zeros = vec![0; bytes.len()];
     loop {
         let n = input.read(&mut bytes)?;
         if n == 0 {
@@ -144,7 +145,7 @@ fn copy(source: &FsPath, target: &FsPath) -> Result<String, Error> {
         }
         digest.update(&bytes[..n]);
         // Keep sparse data disks sparse. Length is committed before the file is published.
-        if bytes[..n].iter().all(|b| *b == 0) {
+        if bytes[..n] == zeros[..n] {
             output.seek(SeekFrom::Current(n as i64))?;
         } else {
             output.write_all(&bytes[..n])?;

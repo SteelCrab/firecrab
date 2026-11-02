@@ -395,22 +395,43 @@ async fn backup_rejects_unreconciled_native_file_operations() {
             .await
             .is_err()
     );
-    let r = state
+    assert!(
+        state
+            .store
+            .backup_records(Some(b.project_id))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!fenced(&state.workspaces, b.project_id).unwrap());
+    state
         .store
-        .backup_records(Some(b.project_id))
-        .unwrap()
-        .remove(0);
-    assert_eq!(
-        call(
-            &state,
-            "DELETE",
-            &format!("{}/backups/operations/{}", base(&b), r.public.id),
-            json!({}),
-            None
+        .save_backup_policy(
+            b.project_id,
+            &ProjectBackupPolicy {
+                enabled: true,
+                interval_seconds: 3600,
+                next_run_at: 0,
+                last_checkpoint: None,
+                error: None,
+            },
         )
-        .await
-        .0,
-        StatusCode::OK
+        .unwrap();
+    tick(state.clone()).await.unwrap();
+    assert!(
+        state
+            .store
+            .backup_policy(b.project_id)
+            .unwrap()
+            .error
+            .is_some()
+    );
+    assert!(!state.store.workspace_vm_backup_pending(b.vm_id).unwrap());
+    assert!(
+        state
+            .store
+            .backup_records(Some(b.project_id))
+            .unwrap()
+            .is_empty()
     );
 }
 

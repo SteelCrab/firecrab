@@ -25,6 +25,9 @@ Recovery controls remain available when project DB connection fails.
   the DB replacement, missing DB directory/disk, corrupted archive refusal,
   pre-installation abort, scheduler deferral, permissions/input validation, canonical
   Sandbox DB loss, permanent service-owner exclusion and concurrent schedule edits.
+  Source health and pending native writes are checked before scheduling can fence VM
+  startup. Six recovery browser regressions distinguish fresh definitive rejection
+  from earlier uncertain outcomes and verify committed cleanup remains resumable.
 - Full frontend suite: **154 passed, 0 failed**. Compiled browser tests cover schedule editing, backup creation, explicit restoration
   with a damaged DB, and identical request retry after a browser reload. Screenshots
   use an explicit synthetic controller and do not establish live VM or provider use.

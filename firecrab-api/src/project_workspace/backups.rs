@@ -265,6 +265,14 @@ fn execute_locked(
         let live = db::project_directory(&state.workspaces.root, &current, false)?;
         let owner = db::OwnerLock::acquire(db::private_file(&live.join("owner.lock"), true)?)?;
         if state.store.backup_record(r.public.id)?.is_none() {
+            if r.public.request.restore_checkpoint.is_none() {
+                // Unhealthy/unreconciled sources defer scheduling without fencing VM startup.
+                archive::database(state, &live.join("project.db"), &current)?;
+                let volume = state.store.block_storage(current.volume_id)?;
+                block_storage::verify_disk(state, &volume).map_err(|_| {
+                    Error::Conflict("Retained volume is unavailable; backup was not admitted")
+                })?;
+            }
             state.store.save_backup_record(&r)?;
         }
         install_fence(&fence, r.public.id)?;

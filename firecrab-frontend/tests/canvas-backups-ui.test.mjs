@@ -6,11 +6,11 @@ import {chromium} from '../../firecrab-e2e/node_modules/playwright-core/index.mj
 import {expect} from '../../firecrab-e2e/node_modules/@playwright/test/index.mjs';
 import {createFixtureServer} from './fixture-server.mjs';
 import {installCanvasHistoryFixture} from './canvas-fixture.mjs';
-let fixture,browser,context,page,canvas,rows,admissions,policy,lose,broken,generation,hidden;
+let fixture,browser,context,page,canvas,rows,admissions,policy,lose,broken,generation,hidden,reject;
 before(async()=>{fixture=await createFixtureServer(fileURLToPath(new URL('../dist',import.meta.url)),0);browser=await chromium.launch({headless:true});});
 after(async()=>{await browser?.close();await fixture?.close();});
 beforeEach(async()=>{
- fixture.reset(0);canvas=installCanvasHistoryFixture(fixture);rows=[];admissions=[];policy={enabled:false,intervalSeconds:3600,nextRunAt:0};lose=false;broken=false;generation=1;hidden=false;
+ fixture.reset(0);canvas=installCanvasHistoryFixture(fixture);rows=[];admissions=[];policy={enabled:false,intervalSeconds:3600,nextRunAt:0};lose=false;broken=false;generation=1;hidden=false;reject=false;
  const path=canvas.base+'/backups';
  fixture.handlers.set('GET '+canvas.base,({send})=>send(broken?409:200,broken?{error:{message:'Fixture database is damaged'}}:{projectId:canvas.project,status:'stopped',generation,writeGenerationRequired:generation>1}));
  fixture.handlers.set('GET '+path,({send})=>send(200,hidden?[]:rows));fixture.handlers.set('GET '+path+'/binding',({send})=>send(200,{generation}));
@@ -22,6 +22,7 @@ beforeEach(async()=>{
    if(method==='POST'&&row){row.pendingReconciliation=false;delete row.error;return send(200,row);}
    if(method==='PUT'){
     admissions.push({id,body:structuredClone(body)});
+    if(reject){reject=false;return send(409,{error:{code:'workspace_conflict',message:'Fixture VM must be stopped'}});}
     if(!row){row={id,request:structuredClone(body),phase:'complete',createdAt:1770000000,manifest:{checkpoint:{id:body.restoreCheckpoint||id,revision:7,createdAt:1770000000},volumeBytes:1024**3}};if(body.restoreCheckpoint){generation++;row.restoredGeneration=generation;}rows.unshift(row);}
     if(lose){lose=false;hidden=true;return send(503,{error:{message:'Fixture acknowledgement lost'}});}
     hidden=false;if(!rows.some(r=>r.id===id))rows.unshift(row);
@@ -74,4 +75,21 @@ test('a committed receipt with pending cleanup stays resumable and blocks new op
  await dialog.getByRole('button',{name:'Resume',exact:true}).click();
  await expect(dialog.getByRole('button',{name:'Back up now',exact:true})).toBeEnabled();
  assert.equal(rows[0].pendingReconciliation,false);assert.equal(admissions.length,0);
+});
+
+test('a fresh definitive rejection with a missing receipt releases only that unadmitted request',async()=>{
+ await page.getByRole('button',{name:'Backups & recovery',exact:true}).click();reject=true;
+ const dialog=page.getByRole('dialog');await dialog.getByRole('button',{name:'Back up now',exact:true}).click();
+ await expect(dialog.getByRole('alert')).toContainText('Fixture VM must be stopped');
+ await expect(dialog.getByRole('button',{name:'Retry same request',exact:true})).toHaveCount(0);
+ await expect(dialog.getByRole('button',{name:'Back up now',exact:true})).toBeEnabled();
+});
+test('an earlier uncertain backup keeps its UUID after a rejected retry and absent receipt',async()=>{
+ await page.getByRole('button',{name:'Backups & recovery',exact:true}).click();lose=true;
+ const dialog=page.getByRole('dialog');await dialog.getByRole('button',{name:'Back up now',exact:true}).click();
+ await expect(dialog.getByRole('button',{name:'Retry same request',exact:true})).toBeVisible();
+ rows=[];reject=true;await dialog.getByRole('button',{name:'Retry same request',exact:true}).click();
+ await expect(dialog.getByRole('alert')).toContainText('Fixture VM must be stopped');
+ await expect(dialog.getByRole('button',{name:'Retry same request',exact:true})).toBeVisible();
+ assert.equal(admissions[0].id,admissions[1].id);
 });

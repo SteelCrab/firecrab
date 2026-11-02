@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { DatabaseBackup, RefreshCw, X } from "lucide-react";
 import { useI18n } from "../i18n";
 import { base } from "../canvas/types";
-import { request, message } from "../canvas/request";
+import { request, message, WorkspaceError } from "../canvas/request";
 import {
   backupKey,
   readBackupIntent,
@@ -107,6 +107,34 @@ export default function ProjectBackups({ project }: { project: string }) {
     setRestore("");
     try {
       await send(intent);
+    } catch (error) {
+      // Only this fresh request's definitive rejection and an absent receipt release its ID.
+      // Earlier uncertain requests retain their identity even when a later retry is rejected.
+      if (
+        error instanceof WorkspaceError &&
+        error.status &&
+        error.status >= 400 &&
+        error.status < 500
+      ) {
+        try {
+          await request(
+            "GET",
+            `${path}/operations/${intent.id}`,
+            undefined,
+            false,
+          );
+        } catch (proof) {
+          if (
+            proof instanceof WorkspaceError &&
+            proof.status === 404 &&
+            readBackupIntent(localStorage, project)?.id === intent.id
+          ) {
+            localStorage.removeItem(backupKey(project));
+            setPending(undefined);
+          }
+        }
+      }
+      throw error;
     } finally {
       await load();
     }

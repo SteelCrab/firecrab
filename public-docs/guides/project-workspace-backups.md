@@ -21,7 +21,11 @@ For a manual backup, finish/reconcile project tasks and pending file writes, the
 stop the workload VM. Select **Back up now**. A failed or uncertain response retains
 its immutable operation ID in the browser. **Retry same request** reuses that ID
 and request after a reload. The durable server operation catalog is authoritative.
-Closing a tab or dialog does not cancel an admitted operation.
+Closing a tab or dialog does not cancel an admitted operation. A fresh request that
+receives a definitive rejection is released only after an exact receipt lookup
+confirms absence. An earlier uncertain request retains its ID after a rejected retry.
+Unreconciled file writes or an unhealthy source defer scheduling before its durable
+fence is installed, so the VM can still start for repair/reconciliation.
 
 Select a completed backup, review **Restore the entire project?**, then explicitly
 confirm. The operator must stop the workload VM first. The operation replaces the
