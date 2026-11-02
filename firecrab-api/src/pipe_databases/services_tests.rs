@@ -299,11 +299,12 @@ async fn database_services_real_engines() {
             }
         };
         assert!(denied, "read-only sessions must reject writes");
+        let trigger_id = Uuid::new_v4();
         let trigger = Trigger {
-            id: Uuid::new_v4(),
+            id: trigger_id,
             database_id: record.id,
             input: TriggerInput {
-                request_id: Uuid::new_v4(),
+                request_id: trigger_id,
                 schema: schema.clone(),
                 table: table.table.clone(),
                 service_id: Uuid::new_v4(),

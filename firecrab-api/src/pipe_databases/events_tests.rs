@@ -700,11 +700,12 @@ async fn event_mutations_retain_protections_without_the_short_rest_deadline() {
     let id = Uuid::new_v4();
     let input: DatabaseInput = serde_json::from_value(serde_json::json!({"name":"QA","provider":"local","uri":format!("postgresql://qa:{}@127.0.0.1:9/db",Uuid::new_v4()),"tlsMode":"disable"})).unwrap();
     state.store.save_pipe_database(id, &input).unwrap();
+    let trigger_id = Uuid::new_v4();
     let trigger = Trigger {
-        id: Uuid::new_v4(),
+        id: trigger_id,
         database_id: id,
         input: TriggerInput {
-            request_id: Uuid::new_v4(),
+            request_id: trigger_id,
             schema: "public".into(),
             table: "orders".into(),
             service_id: Uuid::new_v4(),
@@ -804,13 +805,14 @@ async fn connection_updates_validate_the_target_saved_while_waiting() {
     let mut current = state.store.pipe_database(id).unwrap().unwrap().input;
     current.uri = current.uri.replace("127.0.0.1", "127.0.0.2");
     state.store.update_pipe_database(id, &current).unwrap();
+    let trigger_id = Uuid::new_v4();
     state
         .store
         .save_database_trigger(&Trigger {
-            id: Uuid::new_v4(),
+            id: trigger_id,
             database_id: id,
             input: TriggerInput {
-                request_id: Uuid::new_v4(),
+                request_id: trigger_id,
                 schema: "public".into(),
                 table: "orders".into(),
                 service_id: Uuid::new_v4(),

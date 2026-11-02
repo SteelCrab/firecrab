@@ -29,6 +29,7 @@ use std::{
 };
 use uuid::Uuid;
 
+/// Admit event setup using stable caller request and operation UUIDs.
 pub async fn create(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -55,9 +56,12 @@ pub async fn create(
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+/// A delivery switch; source and handler configuration remain immutable.
 pub struct PauseInput {
+    /// Whether the relay should leave retained events queued.
     paused: bool,
 }
+/// Change saved delivery state without replaying application rows.
 pub async fn pause(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -71,6 +75,7 @@ pub async fn pause(
     })
     .await
 }
+/// Stop capture while retaining existing outbox delivery.
 pub async fn detach(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -79,6 +84,7 @@ pub async fn detach(
 ) -> Response {
     control(state, request, headers, id, |id| EventChange::Detach { id }).await
 }
+/// Remove drained owned queues and configuration while retaining source evidence.
 pub async fn delete(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -87,6 +93,7 @@ pub async fn delete(
 ) -> Response {
     control(state, request, headers, id, |id| EventChange::Delete { id }).await
 }
+/// Validate selectors before constructing typed control work.
 async fn control(
     state: AppState,
     request: RequestId,
@@ -104,6 +111,7 @@ async fn control(
     };
     route(state, request, headers, operation, change(resource)).await
 }
+/// Translate durable status into a redacted response with the original operation header.
 async fn route(
     state: AppState,
     request: RequestId,
@@ -158,6 +166,7 @@ async fn route(
     );
     response
 }
+/// Keep admission and failure recording alive after HTTP disconnect.
 async fn supervise(
     state: AppState,
     request: RequestId,
@@ -225,12 +234,14 @@ async fn supervise(
     .await
     .map_err(|_| AppError::internal(request.0))?
 }
+/// Recheck the private attempt immediately before remote effects.
 fn check(state: &AppState, intent: &EventIntent) -> Result<(), Error> {
     state
         .store
         .checkpoint_database_events(intent)
         .map_err(|_| Error::Invalid("Event execution changed; recover the original operation"))
 }
+/// Hold the source SQL-session claim through remote work and the local receipt.
 async fn run(state: &AppState, request: RequestId, intent: &EventIntent) -> Result<(), AppError> {
     let work = async {
         let mut outcome = intent.trigger().clone();
@@ -417,6 +428,7 @@ async fn run(state: &AppState, request: RequestId, intent: &EventIntent) -> Resu
         .await
         .map_err(|_| AppError::internal(request.0))?
 }
+/// Commit only the outcome belonging to this execution attempt.
 async fn complete(
     state: &AppState,
     request: RequestId,
@@ -431,6 +443,7 @@ async fn complete(
     .await?;
     Ok(())
 }
+/// Run original uncertain work under its new private generation.
 pub(crate) async fn recover(
     state: AppState,
     request: RequestId,

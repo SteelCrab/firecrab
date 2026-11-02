@@ -1,6 +1,8 @@
+//! Attempt-fenced event progress and original-outcome receipts.
 use super::*;
 
 impl Store {
+    /// Fence the attempt and record uncertainty before remote mutation.
     pub(crate) fn checkpoint_database_events(
         &self,
         intent: &EventIntent,
@@ -33,6 +35,7 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+    /// Read the current attempt's retained private account.
     pub(crate) fn event_binding(
         &self,
         intent: &EventIntent,
@@ -41,6 +44,7 @@ impl Store {
         current(&conn, intent)?;
         staged_binding(&conn, intent)
     }
+    /// Persist credentials once; later writes change only inbox/readiness observations.
     pub(crate) fn prepare_event_binding(
         &self,
         intent: &EventIntent,
@@ -79,6 +83,7 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+    /// Commit capture outcome and success receipt with target-lease release.
     pub(crate) fn finish_database_events(
         &self,
         intent: &EventIntent,
@@ -141,18 +146,21 @@ impl Store {
         tx.commit()?;
         Ok(operation)
     }
+    /// Restore no-effect preparation or retain uncertainty for original recovery.
     pub(crate) fn fail_database_events(
         &self,
         intent: &EventIntent,
     ) -> Result<(), PersistenceError> {
         self.fail_database_events_checked(intent, false)
     }
+    /// Restore delivery when retained events prevent removal before broker changes.
     pub(crate) fn database_events_not_drained(
         &self,
         intent: &EventIntent,
     ) -> Result<(), PersistenceError> {
         self.fail_database_events_checked(intent, true)
     }
+    /// Classify failure and restore local staging in one fenced transaction.
     fn fail_database_events_checked(
         &self,
         intent: &EventIntent,
@@ -212,6 +220,7 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+    /// Advance the original uncertain attempt without replacing its resource or account.
     pub(crate) fn recover_database_events(
         &self,
         id: Uuid,
@@ -241,6 +250,7 @@ impl Store {
         tx.commit()?;
         Ok((intent, true))
     }
+    /// Return the original saved outcome after later changes or removal.
     pub(crate) fn database_events_receipt(
         &self,
         intent: &EventIntent,

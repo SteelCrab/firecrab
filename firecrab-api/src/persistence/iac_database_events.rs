@@ -19,34 +19,52 @@ mod admission;
 pub(super) use admission::validate_owner;
 mod progress;
 
+/// Private event definitions, once-prepared accounts and effect checkpoints.
 pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS iac_database_event_mutations (
  operation_id TEXT PRIMARY KEY REFERENCES iac_native_operations(operation_id),
  request_hash TEXT NOT NULL, definition TEXT NOT NULL, prepared_trigger TEXT, prepared_binding TEXT,
  effects_started INTEGER NOT NULL DEFAULT 0 CHECK(effects_started IN (0,1)), outcome TEXT
 ) STRICT;";
 #[derive(Serialize)]
+/// Raw caller intent, hashed before mutable parent settings are loaded.
 pub(crate) enum EventChange {
+    /// Install the exact request-ID capture and its delivery dependencies.
     Create { database: Uuid, input: TriggerInput },
+    /// Change local delivery without modifying source capture.
     Pause { id: Uuid, paused: bool },
+    /// Remove source capture while retaining outbox delivery.
     Detach { id: Uuid },
+    /// Remove only detached, drained configuration and its owned queues.
     Delete { id: Uuid },
 }
 #[derive(Clone, Serialize, Deserialize)]
+/// Setup dependencies frozen before broker or account changes.
 struct Setup {
+    /// Original private delivery transport, including credentials.
     broker: RabbitMQInput,
+    /// Exact handler configuration expected throughout setup.
     service_hash: String,
+    /// Existing account or preassigned UUID for a new inbox.
     binding_id: Uuid,
+    /// Account metadata to preserve across preparation and recovery.
     binding_before: Option<BindingRecord>,
+    /// Whether this operation owns an inbox grant/readiness change.
     change_binding: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
+/// Validated execution mode; callers cannot replace it during recovery.
 enum Work {
+    /// Setup with its captured account, service and broker inputs.
     Create(Box<Setup>),
+    /// Metadata-only delivery state.
     Pause(bool),
+    /// Capture detachment on the original source.
     Detach,
+    /// Owned queue removal using the original broker transport.
     Delete(Box<RabbitMQInput>),
 }
 impl Work {
+    /// Map the immutable private work to its public action.
     fn action(&self) -> NativeAction {
         match self {
             Self::Create(_) => NativeAction::CreateDatabaseEvents,
@@ -57,29 +75,40 @@ impl Work {
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
+/// Immutable private execution payload retained beyond HTTP or API lifetime.
 struct Definition {
+    /// Original connection and source write-access settings.
     database: DatabaseInput,
+    /// Exact capture identity and requested table/handler association.
     trigger: Trigger,
+    /// Pre-operation metadata restored after a known no-effect failure.
     before: Option<Trigger>,
+    /// Validated work and its additional private dependencies.
     work: Work,
 }
 /// Only this module can construct or change the execution witness.
 #[derive(Clone)]
 pub(crate) struct EventIntent {
+    /// Redacted public status and exact admitted ownership generation.
     pub operation: NativeOperation,
+    /// Immutable raw-request identity used for completed retries.
     request_hash: String,
+    /// Payload constructible only by validated persistence admission.
     definition: Definition,
 }
 impl EventIntent {
+    /// Read capture metadata from the admitted witness or the caller's transaction.
     pub(crate) fn trigger(&self) -> &Trigger {
         &self.definition.trigger
     }
+    /// Rebuild the original private connection without reading newer credentials.
     pub(crate) fn database(&self) -> DatabaseRecord {
         DatabaseRecord {
             id: self.trigger().database_id,
             input: self.definition.database.clone(),
         }
     }
+    /// Return broker settings pinned before setup or owned queue removal.
     pub(crate) fn broker(&self) -> Option<&RabbitMQInput> {
         match &self.definition.work {
             Work::Create(setup) => Some(&setup.broker),
@@ -87,18 +116,22 @@ impl EventIntent {
             _ => None,
         }
     }
+    /// Distinguish owned grant changes from a borrowed unchanged inbox.
     pub(crate) fn changes_binding(&self) -> bool {
         matches!(&self.definition.work,Work::Create(setup) if setup.change_binding)
     }
+    /// Read the account UUID reserved before setup.
     pub(crate) fn binding_id(&self) -> Option<Uuid> {
         match &self.definition.work {
             Work::Create(setup) => Some(setup.binding_id),
             _ => None,
         }
     }
+    /// Recognize installed capture without replaying remote setup.
     pub(crate) fn creation_noop(&self) -> bool {
         matches!(self.definition.work, Work::Create(_)) && self.trigger().installed
     }
+    /// Return a local delivery change that needs no remote execution.
     pub(crate) fn paused(&self) -> Option<bool> {
         match self.definition.work {
             Work::Pause(paused) => Some(paused),
@@ -106,20 +139,27 @@ impl EventIntent {
         }
     }
 }
+/// Separate exact retry admission from missing resources or invalid configuration.
 pub(crate) enum Admission {
+    /// Validated intent; the bool grants dispatch only on first admission.
     Ready(Box<EventIntent>, bool),
+    /// A referenced capture, database or handler does not exist.
     Missing,
+    /// Static validation failure before reserving or changing resources.
     Invalid(&'static str),
 }
+/// Qualify capture identity by both database UUID and trigger UUID.
 pub(super) fn resource(database: Uuid, id: Uuid) -> ManagedResource {
     ManagedResource {
         kind: "database_events".into(),
         id: format!("{database}:{id}"),
     }
 }
+/// Compare private definitions without including their values in receipts.
 fn hash<T: Serialize>(value: &T) -> Result<String, PersistenceError> {
     Ok(format!("{:x}", Sha256::digest(encode(value)?)))
 }
+/// Read capture metadata from the admitted witness or the caller's transaction.
 fn trigger(conn: &Connection, id: Uuid) -> Result<Option<Trigger>, PersistenceError> {
     let raw: Option<String> = conn
         .query_row(
@@ -130,6 +170,7 @@ fn trigger(conn: &Connection, id: Uuid) -> Result<Option<Trigger>, PersistenceEr
         .optional()?;
     raw.as_deref().map(decode).transpose()
 }
+/// Read an account in the caller's SQLite snapshot.
 fn binding(conn: &Connection, id: Uuid) -> Result<Option<BindingRecord>, PersistenceError> {
     let raw: Option<String> = conn
         .query_row(
@@ -140,6 +181,7 @@ fn binding(conn: &Connection, id: Uuid) -> Result<Option<BindingRecord>, Persist
         .optional()?;
     raw.as_deref().map(decode).transpose()
 }
+/// Use the last prepared capture or its original pre-operation record.
 fn staged_trigger(
     conn: &Connection,
     intent: &EventIntent,
@@ -155,6 +197,7 @@ fn staged_trigger(
         .transpose()?
         .or_else(|| intent.definition.before.clone()))
 }
+/// Use retained prepared credentials or the original borrowed account.
 fn staged_binding(
     conn: &Connection,
     intent: &EventIntent,
@@ -173,6 +216,7 @@ fn staged_binding(
             _ => None,
         }))
 }
+/// Load the original immutable request with its current attempt metadata.
 fn read(conn: &Connection, id: Uuid) -> Result<Option<EventIntent>, PersistenceError> {
     let Some(operation) = iac_native::read(conn, id)? else {
         return Ok(None);
@@ -209,6 +253,7 @@ fn read(conn: &Connection, id: Uuid) -> Result<Option<EventIntent>, PersistenceE
         definition,
     }))
 }
+/// Reject changed owners, parents, staged metadata and execution generations.
 fn current(conn: &Connection, intent: &EventIntent) -> Result<(), PersistenceError> {
     if intent.operation.state != NativeOperationState::Running
         || iac_native::read(conn, intent.operation.operation_id)?.as_ref()
@@ -281,6 +326,7 @@ fn current(conn: &Connection, intent: &EventIntent) -> Result<(), PersistenceErr
     }
     Ok(())
 }
+/// Write capture metadata inside an already authorized transaction.
 fn write_trigger(conn: &Connection, value: &Trigger) -> Result<(), PersistenceError> {
     conn.execute("INSERT INTO database_triggers VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",params![value.id.to_string(),encode(value)?])?;
     Ok(())

@@ -1,6 +1,8 @@
+//! Immutable capture admission and dependency reservations.
 use super::*;
 
 impl Store {
+    /// Resolve exact retries before mutable reads; reserve capture and parents atomically.
     pub(crate) fn begin_database_events(
         &self,
         id: Uuid,
