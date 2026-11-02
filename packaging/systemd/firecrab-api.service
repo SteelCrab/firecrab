@@ -8,6 +8,8 @@ Wants=firecrab-helper.service
 Type=simple
 User=@FIRECRAB_USER@
 Group=@FIRECRAB_GROUP@
+RuntimeDirectory=firecrab-security
+RuntimeDirectoryMode=0711
 # Not cosmetic: the DB (data/firecrab.db) and VM artifacts (data/vms/<id>/) are
 # resolved relative to the working directory. Start this anywhere else and it
 # silently opens a different, empty database.

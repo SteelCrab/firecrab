@@ -102,6 +102,12 @@ pub(crate) async fn no_store(request: Request, next: Next) -> Response {
 fn api_error(error: SecretError, id: Uuid) -> AppError {
     match error {
         SecretError::NotFound => AppError::not_found(id),
+        SecretError::IacManaged => crate::handlers::iac::managed(id),
+        SecretError::IacBusy => AppError::conflict(
+            "iac_resource_busy",
+            "wait for the current infrastructure operation",
+            id,
+        ),
         SecretError::Duplicate => AppError::validation(
             BTreeMap::from([("name".into(), "is already registered".into())]),
             id,
@@ -127,6 +133,29 @@ fn api_error(error: SecretError, id: Uuid) -> AppError {
             "PipeSecrets storage or its encryption key is unavailable.",
             id,
         ),
+    }
+}
+
+/// Check inside the vault file lock, immediately before changing a saved value.
+/// This also fences blocking work that outlives its HTTP waiter.
+fn require_iac_writer(
+    store: &crate::persistence::Store,
+    kind: &str,
+    id: Uuid,
+) -> Result<(), SecretError> {
+    use crate::persistence::PersistenceError;
+    match store.iac_public_write_allowed(&firecrab_stack::ManagedResource {
+        kind: kind.into(),
+        id: id.to_string(),
+    }) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(SecretError::IacManaged),
+        Err(
+            PersistenceError::IacResourceBusy
+            | PersistenceError::StackApplyBusy
+            | PersistenceError::StackSourceBusy,
+        ) => Err(SecretError::IacBusy),
+        Err(_) => Err(SecretError::Storage),
     }
 }
 
@@ -230,8 +259,10 @@ pub(crate) async fn update(
 ) -> Result<Json<SecretSummary>, AppError> {
     let id = parse_id(&id, request.0)?;
     validate_secret(&input).map_err(|error| api_error(error, request.0))?;
+    let ownership = state.store.clone();
     vault(&state, request.0, move |store| {
         store.write(|contents| {
+            require_iac_writer(&ownership, "secret", id)?;
             if contents
                 .secrets
                 .iter()
@@ -303,8 +334,10 @@ pub(crate) async fn delete(
             request.0,
         ));
     }
+    let ownership = state.store.clone();
     vault(&state, request.0, move |store| {
         store.write(|contents| {
+            require_iac_writer(&ownership, "secret", id)?;
             let index = contents
                 .secrets
                 .iter()
@@ -387,8 +420,10 @@ pub(crate) async fn update_connection(
     ValidatedJson(input): ValidatedJson<ConnectionInput>,
 ) -> Result<Json<ConnectionSummary>, AppError> {
     let id = parse_id(&id, request.0)?;
+    let ownership = state.store.clone();
     vault(&state, request.0, move |store| {
         store.write(|contents| {
+            require_iac_writer(&ownership, "secret_connection", id)?;
             if contents
                 .connections
                 .iter()
@@ -429,8 +464,10 @@ pub(crate) async fn delete_connection(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let id = parse_id(&id, request.0)?;
+    let ownership = state.store.clone();
     vault(&state, request.0, move |store| {
         store.write(|contents| {
+            require_iac_writer(&ownership, "secret_connection", id)?;
             let index = contents
                 .connections
                 .iter()
@@ -673,9 +710,20 @@ async fn apply_with_account_endpoint(
             .map_err(|error| api_error(error, request.0))?;
     }
     if plan.direction == Direction::Import {
+        let ownership = state.store.clone();
         let result = vault(&state, request.0, move |store| {
             store.write(|contents| {
                 let (plan, connection) = selected_plan(contents, id, &names)?;
+                // Check the entire selection before replacing any local value.
+                for value in &plan.values {
+                    if let Some(secret) = contents
+                        .secrets
+                        .iter()
+                        .find(|secret| secret.summary.name == value.summary.name)
+                    {
+                        require_iac_writer(&ownership, "secret", secret.summary.id)?;
+                    }
+                }
                 let additions = plan
                     .values
                     .iter()

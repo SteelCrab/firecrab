@@ -35,6 +35,7 @@ import Stacks from "./components/Stacks";
 import Volumes from "./components/Volumes";
 import MicroNetworks from "./components/MicroNetworks";
 import SecurityGroups from "./components/SecurityGroups";
+import ServiceSecurity from "./components/ServiceSecurity";
 import MicroStorages from "./components/MicroStorages";
 import MicroServices from "./components/MicroServices";
 import Shell from "./components/Shell";
@@ -462,6 +463,7 @@ export default function App() {
           {view === "ai-sandbox" && (
             <AiSandbox vms={instances} onUnsavedChange={setHasUnsavedChanges} />
           )}
+          {view === "security" && <ServiceSecurity />}
           {view === "cluster" && <Cluster />}
           {view === "stacks" && <Stacks />}
           {view === "secrets" && (

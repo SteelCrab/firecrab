@@ -136,9 +136,8 @@ pub async fn turn(
     tools: &[Value],
     force_tool: bool,
 ) -> Result<Turn, Failure> {
-    turn_with_folder(state, saved, model, history, tools, force_tool, false).await
+    turn_with_instructions(state, saved, model, history, tools, force_tool, None).await
 }
-
 /// The retained-folder profile advertises its actual file-only capabilities.
 pub async fn turn_with_folder(
     state: &AppState,
@@ -148,6 +147,27 @@ pub async fn turn_with_folder(
     tools: &[Value],
     force_tool: bool,
     project_files: bool,
+) -> Result<Turn, Failure> {
+    turn_with_instructions(
+        state,
+        saved,
+        model,
+        history,
+        tools,
+        force_tool,
+        Some(boundary(project_files)),
+    )
+    .await
+}
+/// Security analysis and other bounded callers retain their task-specific system instruction.
+pub(crate) async fn turn_with_instructions(
+    state: &AppState,
+    saved: &SavedConnection,
+    model: &str,
+    history: &[Value],
+    tools: &[Value],
+    force_tool: bool,
+    task_instructions: Option<&str>,
 ) -> Result<Turn, Failure> {
     pipe_ai::validate_model(model)?;
     if history.is_empty()
@@ -160,7 +180,7 @@ pub async fn turn_with_folder(
     }
     let anthropic = saved.connection.provider == AiProvider::Anthropic;
     let chatgpt = saved.connection.authentication == AiAuthentication::Chatgpt;
-    let instructions = boundary(project_files);
+    let instructions = task_instructions.unwrap_or_else(|| boundary(false));
     let (client, endpoint, mut body) = if anthropic {
         let endpoint = state
             .pipe_ai_anthropic

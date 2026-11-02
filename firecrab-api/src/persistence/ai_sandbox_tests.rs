@@ -497,3 +497,36 @@ fn folder_session_pages_filter_before_limits_and_retain_pending_failed_and_root_
             .is_empty()
     );
 }
+#[test]
+fn native_delete_fences_task_catalog_creation_and_removes_legacy_routes_atomically() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("state.db")).unwrap();
+    let task = saved(Uuid::new_v4(), 1);
+    store
+        .save_sandbox_project(&SandboxProject {
+            id: task.task.project_id,
+            owner: SandboxPrincipal::Local,
+            spec: task.project.clone(),
+            created_at: 1,
+        })
+        .unwrap();
+    store.save_sandbox_task(&task).unwrap();
+    let operation = store
+        .begin_sandbox_project_delete(task.task.project_id, Uuid::new_v4())
+        .unwrap();
+    let mut new = task.clone();
+    new.task.id = Uuid::new_v4();
+    new.task.attempt_id = Uuid::new_v4();
+    assert!(matches!(
+        store.save_sandbox_task(&new),
+        Err(PersistenceError::IacResourceBusy)
+    ));
+    assert!(store.task_project(new.task.id).unwrap().is_none());
+    store.save_sandbox_task(&task).unwrap();
+    store
+        .finish_native_project_delete(operation.operation_id)
+        .unwrap();
+    assert!(store.sandbox_task(task.task.id).unwrap().is_none());
+    assert!(store.task_project(task.task.id).unwrap().is_none());
+    assert!(store.save_sandbox_task(&new).is_err());
+}

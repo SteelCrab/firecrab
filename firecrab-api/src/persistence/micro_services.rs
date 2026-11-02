@@ -197,6 +197,26 @@ impl Store {
             [id.to_string()],
         )?;
         tx.execute(
+            "DELETE FROM service_security_database_links WHERE service_id = ?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM service_security_database_activity WHERE service_id = ?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM service_security_activity WHERE service_id = ?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM service_security_ingress WHERE service_id = ?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM service_security_scans WHERE service_id = ?1",
+            [id.to_string()],
+        )?;
+        tx.execute(
             "DELETE FROM micro_service_attempts WHERE service_id = ?1",
             [id.to_string()],
         )?;

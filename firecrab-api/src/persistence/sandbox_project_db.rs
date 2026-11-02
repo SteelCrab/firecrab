@@ -96,6 +96,16 @@ impl Store {
         let c = self.lock();
         let _durable = Durable::new(&c)?;
         let tx = c.unchecked_transaction()?;
+        let ready: Option<bool> = tx
+            .query_row(
+                "SELECT ready FROM sandbox_task_catalog WHERE id=?1",
+                [t.task.id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if ready != Some(true) || t.task.state.active() || t.guest_pending || t.guest_staged {
+            super::iac_native::ensure_project_available(&tx, t.task.project_id)?;
+        }
         tx.execute("INSERT INTO sandbox_task_catalog(id,project_id,attempt_id) SELECT ?1,?2,?3 WHERE NOT EXISTS(SELECT 1 FROM sandbox_task_catalog WHERE id=?1) ON CONFLICT(id) DO NOTHING",params![t.task.id.to_string(),t.task.project_id.to_string(),t.task.attempt_id.to_string()])?;
         let (ordinal, project, attempt): (i64, String, String) = tx.query_row(
             "SELECT ordinal,project_id,attempt_id FROM sandbox_task_catalog WHERE id=?1",

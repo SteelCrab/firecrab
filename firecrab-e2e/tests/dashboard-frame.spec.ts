@@ -735,7 +735,7 @@ test.describe("dashboard frame", () => {
     ).toHaveAttribute("href", "#/stacks");
     await expect(
       nav(page).getByRole("link", { name: "Security", exact: true }),
-    ).toHaveCount(0);
+    ).toHaveCount(1);
     for (const item of await items.all())
       await expect(item.locator("svg")).toHaveCount(1);
     await expect(nav(page).locator(".sidebar-item.active")).toHaveCSS(

@@ -130,7 +130,12 @@ pub struct AppState {
     pub(crate) service_mutations: Arc<AsyncMutex<()>>,
     /// Per-service bounded observation exporters.
     pub(crate) observations: Arc<crate::service_observation::Runtime>,
-    /// Serializes durable apply admission and identical retry lookup, never worker execution.
+    /// Last authenticated ingress security probe, in Unix seconds.
+    pub(crate) security_ingress_seen: Arc<std::sync::atomic::AtomicU64>,
+    /// Most recent known ingress collector loss, in Unix seconds.
+    pub(crate) security_ingress_loss: Arc<std::sync::atomic::AtomicU64>,
+    /// Serializes apply admission/retry lookup with direct VM/network edit requests.
+    /// Detached Stack workers do not hold this lock.
     pub(crate) stack_apply_admission: Arc<AsyncMutex<()>>,
     /// Serializes RabbitMQ engine lifecycle and queue declarations.
     pub(crate) queue_mutations: Arc<AsyncMutex<()>>,
@@ -234,6 +239,8 @@ impl AppState {
             secrets,
             service_mutations: Arc::new(AsyncMutex::new(())),
             observations: Arc::new(crate::service_observation::Runtime::default()),
+            security_ingress_seen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            security_ingress_loss: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             queue_mutations: Arc::new(AsyncMutex::new(())),
             service_deploy_permits: Arc::new(Semaphore::new(1)),
             service_deploy_changed: Arc::new(Notify::new()),

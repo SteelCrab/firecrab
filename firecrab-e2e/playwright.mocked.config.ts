@@ -12,7 +12,7 @@ const address = new URL(baseURL);
 export default defineConfig({
   ...baseConfig,
   testMatch:
-    /(stacks|cluster-services|block-storage|command-palette|dashboard-frame|vm-list|vm-detail|screen-details|ssh-console|console-session|host-firecrab|manager-resources|update-dialog|vm-reconciliation|pipe-storage|micro-services|queues|pools-dashboard|schedules|security-groups|security-group-connections)\.spec\.ts/,
+    /(stacks|cluster-services|block-storage|command-palette|dashboard-frame|vm-list|vm-detail|screen-details|ssh-console|console-session|host-firecrab|manager-resources|update-dialog|vm-reconciliation|pipe-storage|micro-services|queues|pools-dashboard|schedules|security-groups|security-group-connections|service-security)\.spec\.ts/,
   projects:
     process.env.FIRECRAB_MOCKED_E2E_CHANNEL === "chrome"
       ? [

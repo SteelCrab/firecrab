@@ -59,10 +59,7 @@ pub async fn save(
         super::pipe_storage::validate_aws_replacement(&state, credentials, id.0).await?;
     }
     let store = state.store.clone();
-    tokio::task::spawn_blocking(move || store.put_pipe_auth(&auth))
-        .await
-        .map_err(|_| AppError::internal(id.0))?
-        .map_err(|_| AppError::internal(id.0))?;
+    super::stacks::database(id.0, move || store.put_pipe_auth(&auth)).await?;
     Ok(Json(connection))
 }
 
@@ -88,10 +85,7 @@ pub async fn delete(
         }
     }
     let store = state.store.clone();
-    tokio::task::spawn_blocking(move || store.delete_pipe_auth(provider))
-        .await
-        .map_err(|_| AppError::internal(id.0))?
-        .map_err(|_| AppError::internal(id.0))?;
+    super::stacks::database(id.0, move || store.delete_pipe_auth(provider)).await?;
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
 

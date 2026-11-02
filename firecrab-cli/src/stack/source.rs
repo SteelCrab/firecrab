@@ -1,7 +1,8 @@
 //! Git source configuration, observation and explicit synchronization commands.
 
 use firecrab_stack::{
-    ConfigureGitSource, GitCheck, GitSource, GitSourceGeneration, GitSourceStatus, SyncGitSource,
+    ConfigureGitSource, DeleteGitSource, GitCheck, GitSource, GitSourceGeneration, GitSourceStatus,
+    SyncGitSource,
 };
 use std::path::PathBuf;
 
@@ -24,6 +25,14 @@ pub enum Command {
     },
     /// Read source configuration, next poll time and latest redacted observation.
     Status { name: String },
+    /// Read current or removed-source generation before configuring it again.
+    Generation { name: String },
+    /// Disconnect exact Git configuration without deleting bound infrastructure.
+    Remove {
+        name: String,
+        #[arg(long)]
+        file: PathBuf,
+    },
     /// Accept a read-only check. Poll source status for its result.
     Check {
         name: String,
@@ -80,6 +89,21 @@ pub(super) fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
             name_valid(&name)?;
             let status: GitSourceStatus = client.get(&format!("/api/stacks/{name}/source"))?;
             print_json(&status);
+        }
+        Command::Generation { name } => {
+            name_valid(&name)?;
+            print_json(
+                &client
+                    .get::<GitSourceGeneration>(&format!("/api/stacks/{name}/source/generation"))?,
+            );
+        }
+        Command::Remove { name, file } => {
+            name_valid(&name)?;
+            let raw = read_manifest(&file).map_err(super::diagnostics)?;
+            let request:DeleteGitSource=serde_json::from_str(&raw).map_err(|_|Error::Validation("source removal file must contain one versioned JSON request without unknown fields".into()))?;
+            let result: firecrab_stack::NativeOperation =
+                client.delete_with_body(&format!("/api/stacks/{name}/source"), &request)?;
+            print_json(&result);
         }
         Command::Check { name, generation } => {
             name_valid(&name)?;

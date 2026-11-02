@@ -63,6 +63,7 @@ export const VIEWS = [
     group: "ai",
     labels: { en: "AI Sandbox", ko: "AI Sandbox" },
   },
+  { id: "security", group: "ai", labels: { en: "Security", ko: "보안" } },
 ] as const;
 
 export type ViewId = (typeof VIEWS)[number]["id"];

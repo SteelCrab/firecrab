@@ -46,6 +46,7 @@ mod service_log_collection;
 mod service_log_retention;
 mod service_observation;
 mod service_runtime;
+mod service_security;
 mod shells;
 mod stack_source;
 mod state;
@@ -156,6 +157,7 @@ async fn run() -> Result<(), StartupError> {
     tokio::task::spawn_blocking(move || {
         store.interrupt_sandbox_tasks()?;
         store.interrupt_stack_applies()?;
+        store.interrupt_native_iac_operations()?;
         store.interrupt_stack_checks(stack_source::now())
     })
     .await
@@ -181,6 +183,7 @@ async fn run() -> Result<(), StartupError> {
     project_workspace::start_terminals(state.clone());
     ai_sandbox::environment::start_maintenance(state.clone());
     service_observation::start(state.clone());
+    service_security::start(state.clone());
     service_runtime::recovery::start(state.clone());
     service_runtime::deploy::rotation::start(state.clone());
     service_runtime::auto_deploy::start(state.clone());

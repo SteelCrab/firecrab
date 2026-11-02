@@ -8,6 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
+| [0.5.0](#050---2026-11-02) | 2026-11-02 | Dashboard and guest release validation |
 | [0.4.2](#042---2026-11-01) | 2026-11-01 | React dashboard and MicroVM agent workspaces |
 | [0.4.1](#041---2026-10-30) | 2026-10-30 | Latest managed installations and cross-platform updates |
 | [0.4.0](#040---2026-10-30) | 2026-10-30 | [Changes since v0.3.1](https://github.com/SteelCrab/firecrab/compare/v0.3.1...v0.4.0) |
@@ -23,6 +24,72 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 ## [Unreleased]
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
+
+## [0.5.0] - 2026-11-02
+
+Release validation updates for the React dashboard and guest workflows.
+See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
+[#573](https://github.com/SteelCrab/firecrab/pull/573).
+
+### Added
+
+- Protect Sandbox access-policy ownership by exact delegated host UUID.
+  Keep operator revocation available with atomic permission denial, authority invalidation
+  and a durable acknowledgement. Reject late saves after revocation and preserve newer
+  grants when retrying an old completed operation (#548).
+- Group Stack resources into icon sections with resource counts.
+  Keep native Stack registrations and Terraform state owners in separate cards,
+  and show each state owner once instead of repeating it for every resource (#548).
+- Add generation-checked Stack/Terraform ownership transfer for networks,
+  standalone VMs, services, registered storage roots, volumes, security groups,
+  shells, schedules, pools, queues, database and S3 connections, Secrets and Secret
+  connections, Auth provider slots, direct registry logins, AI connections and project
+  model defaults, Sandbox environments/projects and Git sources, with persistent endpoint identity, durable retry
+  acknowledgements, mTLS CLI commands and dashboard visibility. Other service adapters and the
+  Terraform provider remain tracked in #548.
+- Persist Sandbox project deletion before removing its private workspace.
+  Keep the worker alive after HTTP disconnects, retain uncertain-operation fences
+  across restart, and recover the original typed action through API and CLI commands.
+  Preserve borrowed sources and block late work against retired project identities (#548).
+- Disconnect exact Git source generations with immutable operation acknowledgements.
+  Retain infrastructure, bindings and check history. Preserve removal generations across
+  restart and recreation so an old delete retry cannot remove a new source (#548).
+- Keep generated Sandbox environment networks, security groups and VMs under
+  their parent controller. Reject independent adoption and public mutation,
+  while allowing old child bindings to be released without deleting resources.
+- Define the IaC coverage contract for all services shipped through v0.4.0,
+  including controller, Pipe and Sandbox configuration. A frozen API inventory
+  and CI check track missing Stack and Terraform coverage without claiming it
+  is implemented (#548).
+
+### Changed
+
+- Align Rust, dashboard and E2E package versions and lockfiles on 0.5.0.
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- Wait for the initial pool list before showing New pool, so an empty-list
+  response cannot remove the button while the creation flow is opening (#559).
+- Match live OCI image inspection, image deletion and SSH browser checks to
+  the current React dashboard controls. Allow guest actions up to 30 seconds.
+- Prevent dashboard isolation test fixtures from selecting the same free port
+  by starting each server before allocating the next fixture's port.
+
+- Keep HTTP GET failover available when an upstream exits after a long response
+  wait. Bound retry attempts by the route's peer count and retain the existing
+  protection against replaying sent POST/PATCH requests (#548).
+- Reject direct VM and network mutations while their owning Stack apply is
+  queued or running. Existing bindings and reserved create/replacement IDs
+  are protected; reads and terminal-operation recovery remain available (#548).
+
+### Improved
+
+- Verify that creating and removing an SSH port forward preserves existing
+  forwards in the console's SSH tab.
 
 ## [0.4.2] - 2026-11-01
 
@@ -1080,7 +1147,9 @@ network helper.
 - Changelog validation is part of the documentation CI job so a release
   cannot drop a required section.
 
-[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.4.1...main
+[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.5.0...main
+[0.5.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.5.0
+[0.4.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.4.2
 [0.4.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.4.1
 [0.4.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.4.0
 [0.3.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.3.1
