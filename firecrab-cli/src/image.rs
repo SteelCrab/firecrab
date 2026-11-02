@@ -192,6 +192,7 @@ fn install_status(status: ImageInstallStatus) -> &'static str {
         ImageInstallStatus::Running => "running",
         ImageInstallStatus::Succeeded => "succeeded",
         ImageInstallStatus::Failed => "failed",
+        ImageInstallStatus::Cancelled => "cancelled",
     }
 }
 

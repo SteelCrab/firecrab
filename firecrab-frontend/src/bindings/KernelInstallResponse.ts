@@ -5,6 +5,7 @@ import type { ImageInstallStatus } from "./ImageInstallStatus";
 export type KernelInstallResponse = {
   version: string;
   status: ImageInstallStatus;
+  cancelling?: boolean;
   log: string;
   startedAtMs?: number;
   endedAtMs?: number;

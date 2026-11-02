@@ -1,1 +1,6 @@
-export type ImageInstallStatus = "idle" | "running" | "succeeded" | "failed";
+export type ImageInstallStatus =
+  | "idle"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";

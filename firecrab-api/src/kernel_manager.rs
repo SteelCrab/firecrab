@@ -1,4 +1,4 @@
-//! Catalog and installation jobs for host-built stable Linux guest kernels.
+//! Catalog and installation jobs for prebuilt registry kernels.
 
 use crate::image_install::{Architecture, ImageInstallTracker};
 use crate::oci::{kernel, kernel_legacy};
@@ -14,27 +14,24 @@ pub async fn list(
 ) -> Result<Vec<KernelResponse>, crate::oci::ResolveError> {
     let architecture = Architecture::HOST;
     let mut versions = kernel::installed_versions(image_root, architecture).await;
-    match kernel::latest_stable(image_root, downloads.base_url()).await {
-        Ok(release) => {
-            let recent = if downloads.base_url().is_none() {
-                vec![release.version]
-            } else {
-                match kernel::recent_stable_versions(image_root, &release).await {
-                    Ok(recent) => recent,
-                    Err(error) => {
-                        tracing::debug!(%error, "kernel checksum index unavailable; listing stable and local kernels");
-                        vec![release.version]
-                    }
-                }
-            };
-            versions.retain(|version| !recent.contains(version));
-            versions.splice(0..0, recent);
-        }
+    let packages = match kernel::registry::catalog(image_root, downloads.base_url()).await {
+        Ok(packages) => packages
+            .into_iter()
+            .filter(|package| package.architecture == architecture)
+            .take(3)
+            .collect::<Vec<_>>(),
         Err(error) if versions.is_empty() && downloads.base_url().is_some() => return Err(error),
         Err(error) => {
-            tracing::debug!(%error, "kernel stable catalog is unavailable; listing local kernels")
+            tracing::debug!(%error, "kernel registry unavailable; listing local kernels");
+            Vec::new()
         }
-    }
+    };
+    let recent = packages
+        .iter()
+        .map(|package| package.version.clone())
+        .collect::<Vec<_>>();
+    versions.retain(|version| !recent.contains(version));
+    versions.splice(0..0, recent);
     let mut result = Vec::new();
     for version in versions {
         let installed = kernel::cached_kernel_is_valid(image_root, architecture, &version).await;
@@ -47,12 +44,18 @@ pub async fn list(
             .map(|receipt| receipt.image_sha256.clone())
             .or_else(|| legacy.as_ref().map(|pin| digest_body(pin)))
             .unwrap_or_default();
+        let package = packages.iter().find(|package| package.version == version);
         let package_sha256 = receipt
             .as_ref()
-            .map(|receipt| receipt.source_sha256.clone())
+            .and_then(|receipt| receipt.package_sha256.clone())
+            .or_else(|| package.map(|package| package.sha256.encoded().to_owned()))
             .unwrap_or_default();
         result.push(KernelResponse {
             version: version.clone(),
+            released_at: None,
+            published_at: package.and_then(|package| package.published_at.clone()),
+            install_source: Some("registry".to_owned()),
+            end_of_life: package.and_then(|package| package.end_of_life),
             architecture: architecture.as_str().to_owned(),
             image: kernel::image_name(architecture, &version).expect("validated image name"),
             image_sha256,
@@ -70,9 +73,14 @@ pub async fn list(
                 .list_aliases()
                 .into_iter()
                 .any(|template| template.kernel.relative_path() == relative),
-            package_url: downloads
-                .base_url()
-                .and_then(|_| kernel::source_url(&version)),
+            package_url: receipt
+                .as_ref()
+                .and_then(|receipt| receipt.package_url.clone())
+                .or_else(|| {
+                    package
+                        .filter(|_| downloads.base_url().is_some())
+                        .map(|package| package.url.clone())
+                }),
         });
     }
     Ok(result)
@@ -88,7 +96,7 @@ pub fn version_for_path(path: &Path) -> Option<String> {
     kernel::version_for_path(Architecture::HOST, path)
 }
 
-/// Build or reuse a kernel and record the install job's final result.
+/// Download or reuse a kernel and record the install job's final result.
 pub async fn run_install(
     tracker: ImageInstallTracker,
     templates: TemplateRegistry,
@@ -97,7 +105,7 @@ pub async fn run_install(
 ) {
     tracker.append_log(
         &version,
-        format!("resolving Linux {version} from kernel.org source"),
+        format!("kernel package installation started for {version}"),
     );
     match kernel::ensure_managed_kernel(
         templates.image_root_path(),
@@ -110,18 +118,23 @@ pub async fn run_install(
     {
         Ok(path) => {
             tracker.append_log(&version, format!("verified and cached {}", path.display()));
-            tracker.finish_ok_with(&version, "kernel ready — source and image verified");
+            tracker.finish_ok_with(
+                &version,
+                "kernel ready — registry package and image verified",
+            );
         }
+        Err(crate::oci::ResolveError::Cancelled) => tracker.finish_cancelled(&version),
         Err(error) => tracker.finish_err_with(&version, format!("kernel install failed: {error}")),
     }
 }
 
-/// Expose the current install status, log, timing, and source download progress.
+/// Expose the current install status, log, timing, and package download progress.
 pub fn snapshot(tracker: &ImageInstallTracker, version: &str) -> KernelInstallResponse {
     let snapshot = tracker.snapshot(version);
     KernelInstallResponse {
         version: version.to_owned(),
         status: snapshot.status,
+        cancelling: Some(tracker.is_cancelling(version)),
         log: snapshot.log,
         started_at_ms: snapshot.started_at_ms,
         ended_at_ms: snapshot.ended_at_ms,
@@ -175,7 +188,11 @@ mod tests {
             result.status,
             firecrab_api_types::ImageInstallStatus::Failed
         );
-        assert!(result.log.contains("kernel source downloads are disabled"));
+        assert!(
+            result
+                .log
+                .contains("kernel registry downloads are disabled")
+        );
     }
 
     #[tokio::test]

@@ -29,9 +29,9 @@ pub async fn list_kernels(
     .await
     .map(Json)
     .map_err(|error| {
-        tracing::warn!(%error, "cannot query kernel.org stable releases");
+        tracing::warn!(%error, "cannot query the kernel registry");
         AppError::unavailable(
-            "cannot query kernel.org stable releases; check host network access",
+            "cannot query the kernel registry; check host network access",
             request_id.0,
         )
     })
@@ -52,8 +52,8 @@ pub async fn get_kernel_install(
     )))
 }
 
-/// `POST /api/kernels/{version}/install` — build and verify a source release
-/// into the shared cache. `stable` resolves the current upstream stable.
+/// `POST /api/kernels/{version}/install` — download and verify a registry package
+/// into the shared cache. `stable` resolves the newest active published kernel.
 pub async fn start_kernel_install(
     State(state): State<AppState>,
     Path(version): Path<String>,
@@ -62,6 +62,8 @@ pub async fn start_kernel_install(
     if version != "stable" && kernel_manager::cache_path(&version).is_none() {
         return Err(AppError::not_found(request_id.0));
     }
+    let operation = state.kernel_installs.operation_lock(&version);
+    let _operation = operation.lock().await;
     if state.kernel_installs.is_running(&version) {
         return Ok((
             StatusCode::ACCEPTED,
@@ -86,7 +88,7 @@ pub async fn start_kernel_install(
 
     let _started = match state
         .kernel_installs
-        .begin_with(&version, "kernel source build started")
+        .begin_with(&version, "kernel package installation started")
     {
         Ok(snapshot) => snapshot,
         Err("running") => {
@@ -111,7 +113,55 @@ pub async fn start_kernel_install(
     ))
 }
 
-/// `DELETE /api/kernels/{version}` — remove an unused local kernel cache.
+/// `DELETE /api/kernels/{version}/install` — request cancellation, then poll for cleanup.
+pub async fn cancel_kernel_install(
+    State(state): State<AppState>,
+    Path(version): Path<String>,
+    axum::Extension(request_id): axum::Extension<RequestId>,
+) -> Result<impl IntoResponse, AppError> {
+    if version != "stable" && kernel_manager::cache_path(&version).is_none() {
+        return Err(AppError::not_found(request_id.0));
+    }
+    let operation = state.kernel_installs.operation_lock(&version);
+    let _operation = operation.lock().await;
+    state.kernel_installs.request_cancel(&version);
+    let status = if state.kernel_installs.is_running(&version) {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        Json(kernel_manager::snapshot(&state.kernel_installs, &version)),
+    ))
+}
+
+fn ensure_unused(
+    state: &AppState,
+    relative: &std::path::Path,
+    request_id: uuid::Uuid,
+) -> Result<(), AppError> {
+    let users: Vec<String> = state
+        .templates
+        .list_aliases()
+        .into_iter()
+        .filter(|template| template.kernel.relative_path() == relative)
+        .map(|template| template.name.clone())
+        .collect();
+    if users.is_empty() {
+        return Ok(());
+    }
+    let mut fields = BTreeMap::new();
+    fields.insert("images".to_owned(), users.join(", "));
+    fields.insert("count".to_owned(), users.len().to_string());
+    Err(AppError::in_use_with_fields(
+        "kernel is still referenced by one or more images; update those images first",
+        fields,
+        request_id,
+    ))
+}
+
+/// `DELETE /api/kernels/{version}` — stop installation and remove unused local files.
 pub async fn delete_kernel(
     State(state): State<AppState>,
     Path(version): Path<String>,
@@ -120,13 +170,10 @@ pub async fn delete_kernel(
     let Some(relative) = kernel_manager::cache_path(&version) else {
         return Err(AppError::not_found(request_id.0));
     };
-    if state.kernel_installs.is_running(&version) {
-        return Err(AppError::conflict(
-            "kernel_install_in_progress",
-            "cannot delete a kernel while its install is running",
-            request_id.0,
-        ));
-    }
+    let operation = state.kernel_installs.operation_lock(&version);
+    let _operation = operation.lock().await;
+    ensure_unused(&state, &relative, request_id.0)?;
+    state.kernel_installs.cancel_and_wait(&version).await;
     let lock = kernel_cache::cache_lock(
         state.templates.image_root_path(),
         Architecture::HOST,
@@ -142,50 +189,48 @@ pub async fn delete_kernel(
         )
     })?;
 
-    let users: Vec<String> = state
-        .templates
-        .list_aliases()
-        .into_iter()
-        .filter(|template| template.kernel.relative_path() == relative)
-        .map(|template| template.name.clone())
-        .collect();
-    if !users.is_empty() {
-        let mut fields = BTreeMap::new();
-        fields.insert("images".to_owned(), users.join(", "));
-        fields.insert("count".to_owned(), users.len().to_string());
-        return Err(AppError::in_use_with_fields(
-            "kernel is still referenced by one or more images; update those images first",
-            fields,
+    ensure_unused(&state, &relative, request_id.0)?;
+    let path = state.templates.image_root_path().join(relative);
+    let mut removed = false;
+    for file in [
+        &path,
+        &path.with_added_extension("json"),
+        &path.with_added_extension("config"),
+    ] {
+        match tokio::fs::remove_file(file).await {
+            Ok(()) => removed = true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::error!(
+                    request_id = %request_id.0,
+                    version,
+                    path = %file.display(),
+                    %error,
+                    "failed to remove kernel cache"
+                );
+                return Err(AppError::internal(request_id.0));
+            }
+        }
+    }
+    removed |= kernel_cache::remove_source_and_builds(
+        state.templates.image_root_path(),
+        Architecture::HOST,
+        &version,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, version, "failed to remove kernel source cache");
+        AppError::internal(request_id.0)
+    })?;
+    if !removed
+        && state.kernel_installs.snapshot(&version).status
+            == firecrab_api_types::ImageInstallStatus::Idle
+    {
+        return Err(AppError::conflict(
+            "not_installed",
+            "kernel has no local installation or files",
             request_id.0,
         ));
-    }
-
-    let path = state.templates.image_root_path().join(relative);
-    match tokio::fs::remove_file(&path).await {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(AppError::conflict(
-                "not_installed",
-                "kernel is not installed on this host",
-                request_id.0,
-            ));
-        }
-        Err(error) => {
-            tracing::error!(
-                request_id = %request_id.0,
-                version,
-                path = %path.display(),
-                %error,
-                "failed to remove kernel cache"
-            );
-            return Err(AppError::internal(request_id.0));
-        }
-    }
-    for metadata in [
-        path.with_added_extension("json"),
-        path.with_added_extension("config"),
-    ] {
-        let _ = tokio::fs::remove_file(metadata).await;
     }
     state.kernel_installs.clear(&version);
     Ok(StatusCode::NO_CONTENT)
@@ -274,6 +319,16 @@ mod tests {
             StatusCode::NOT_FOUND
         );
 
+        let cancel_result = cancel_kernel_install(
+            State(state.clone()),
+            Path("9.9.9-rc1".to_owned()),
+            request_id(),
+        )
+        .await;
+        assert_eq!(
+            cancel_result.err().unwrap().into_response().status(),
+            StatusCode::NOT_FOUND
+        );
         let delete_result =
             delete_kernel(State(state), Path("9.9.9-rc1".to_owned()), request_id()).await;
         assert_eq!(
@@ -323,6 +378,123 @@ mod tests {
         assert_eq!(snapshot.downloaded_bytes, Some(1234));
         assert_eq!(snapshot.total_bytes, Some(5678));
         assert!(state.kernel_installs.is_running("7.2.2"));
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_worker_start_is_retained_and_retry_gets_a_new_signal() {
+        let directory = tempdir().unwrap();
+        let mut state = empty_state(directory.path()).await;
+        state.kernel_installs = ImageInstallTracker::disabled();
+        state.kernel_installs.begin("7.2.15").unwrap();
+        for _ in 0..2 {
+            let response =
+                cancel_kernel_install(State(state.clone()), Path("7.2.15".into()), request_id())
+                    .await
+                    .unwrap()
+                    .into_response();
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+        }
+        let pending = kernel_manager::snapshot(&state.kernel_installs, "7.2.15");
+        assert_eq!(pending.cancelling, Some(true));
+        assert_eq!(pending.log.matches("cancellation requested").count(), 1);
+        assert!(state.kernel_installs.begin("7.2.15").is_err());
+        kernel_manager::run_install(
+            state.kernel_installs.clone(),
+            (*state.templates).clone(),
+            "7.2.15".into(),
+            None,
+        )
+        .await;
+        let finished = kernel_manager::snapshot(&state.kernel_installs, "7.2.15");
+        assert_eq!(
+            finished.status,
+            firecrab_api_types::ImageInstallStatus::Cancelled
+        );
+        assert_eq!(finished.cancelling, Some(false));
+        assert!(finished.ended_at_ms.is_some());
+        let response =
+            cancel_kernel_install(State(state.clone()), Path("7.2.15".into()), request_id())
+                .await
+                .unwrap()
+                .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        state.kernel_installs.begin("7.2.15").unwrap();
+        assert!(!state.kernel_installs.is_cancelling("7.2.15"));
+    }
+
+    #[tokio::test]
+    async fn deletion_waits_for_worker_cleanup_and_preserves_other_kernel_files() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let mut state = empty_state(root).await;
+        state.kernel_installs = ImageInstallTracker::disabled();
+        state.kernel_installs.begin("7.2.15").unwrap();
+        let source = root.join(".oci/kernel/sources/linux-7.2.15.tar.xz");
+        let other = root.join(".oci/kernel/sources/linux-7.3.tar.xz");
+        let manual = root.join(".oci/kernel/sources/linux-7.2.15.tar.manual-partial");
+        let partial = root.join(format!(
+            ".oci/kernel/sources/linux-7.2.15.tar.{}-partial",
+            uuid::Uuid::new_v4()
+        ));
+        let work = root.join(format!(
+            ".oci/kernel/{}/.build-7.2.15-{}",
+            Architecture::HOST,
+            uuid::Uuid::new_v4()
+        ));
+        for path in [&source, &other, &manual, &partial, &work.join("object.o")] {
+            write_file(path, b"data");
+        }
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let worker_release = release.clone();
+        let worker_tracker = state.kernel_installs.clone();
+        let mut cancellation = worker_tracker.cancellation("7.2.15").unwrap();
+        let worker = tokio::spawn(async move {
+            while !*cancellation.borrow_and_update() {
+                cancellation.changed().await.unwrap();
+            }
+            worker_release.notified().await;
+            worker_tracker.finish_cancelled("7.2.15");
+        });
+        let delete_state = state.clone();
+        let deletion = tokio::spawn(async move {
+            delete_kernel(State(delete_state), Path("7.2.15".into()), request_id()).await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !state.kernel_installs.is_cancelling("7.2.15") {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!deletion.is_finished());
+        assert!(source.exists());
+        let start_state = state.clone();
+        let restart = tokio::spawn(async move {
+            start_kernel_install(State(start_state), Path("7.2.15".into()), request_id())
+                .await
+                .map(|response| response.into_response().status())
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !restart.is_finished(),
+            "a new start must wait until deletion finishes"
+        );
+        release.notify_one();
+        worker.await.unwrap();
+        assert_eq!(deletion.await.unwrap().unwrap(), StatusCode::NO_CONTENT);
+        assert!(
+            restart.await.unwrap().is_err(),
+            "disabled sources cannot start a replacement after deletion"
+        );
+        assert!(!source.exists());
+        assert!(!partial.exists());
+        assert!(!work.exists());
+        assert!(other.exists());
+        assert!(manual.exists());
+        assert_eq!(
+            state.kernel_installs.snapshot("7.2.15").status,
+            firecrab_api_types::ImageInstallStatus::Idle
+        );
     }
 
     #[tokio::test]
@@ -400,8 +572,9 @@ mod tests {
         let state = AppState::with_db_file(templates, root.join("state.db"))
             .await
             .unwrap();
-
-        let result = delete_kernel(State(state), Path("7.2.2".to_owned()), request_id()).await;
+        state.kernel_installs.begin("7.2.2").unwrap();
+        let result =
+            delete_kernel(State(state.clone()), Path("7.2.2".to_owned()), request_id()).await;
         let response = result.err().unwrap().into_response();
         assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -410,5 +583,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"]["code"], "in_use");
         assert_eq!(json["error"]["fields"]["images"], "demo");
+        assert!(state.kernel_installs.is_running("7.2.2"));
+        assert!(!state.kernel_installs.is_cancelling("7.2.2"));
     }
 }

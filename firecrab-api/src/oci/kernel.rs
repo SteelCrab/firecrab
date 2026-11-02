@@ -1,4 +1,4 @@
-//! Native guest kernels built from kernel.org's stable source releases.
+//! Verified registry kernels and compatible receipts for existing native builds.
 //! Receipts bind each cached image to its source digest and host architecture.
 
 use super::boot::{KernelBootPair, verify_kernel_architecture};
@@ -6,14 +6,17 @@ use super::kernel_legacy;
 use super::*;
 use std::fs::OpenOptions;
 use std::os::unix::fs::OpenOptionsExt as _;
+#[cfg(test)]
 use std::os::unix::process::CommandExt as _;
+#[cfg(test)]
 use std::process::Stdio;
+#[cfg(test)]
 use std::time::SystemTime;
+#[cfg(test)]
 use tokio::io::AsyncBufReadExt as _;
 
-/// Official release catalog used unless the host supplies an override.
-pub(crate) const DEFAULT_RELEASES_URL: &str = "https://www.kernel.org/releases.json";
 /// Shared native build recipe embedded so installed hosts need no checkout.
+#[cfg(test)]
 const BUILD_SCRIPT: &str = include_str!("../../../scripts/build-host-kernel.sh");
 /// Receipt revision that invalidates cached images when the build recipe changes.
 const BUILD_REVISION: &str = "firecrab-host1";
@@ -24,20 +27,30 @@ const SOURCE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 /// Maximum release catalog or checksum response size.
 const METADATA_MAX_BYTES: u64 = 4 * 1024 * 1024;
 /// Time before a cached stable release needs an upstream refresh.
-const RELEASE_CACHE_TTL: Duration = Duration::from_secs(3600);
+const RELEASE_CACHE_TTL: Duration = Duration::from_secs(300);
 /// x86_64 console and virtio root disk settings for Firecracker guests.
 pub(super) const X86_64_BOOT_ARGS: &str = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw";
 /// aarch64 console and root disk settings, retaining the early boot console.
 pub(super) const AARCH64_BOOT_ARGS: &str =
     "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw";
 
-/// Active stable release with a validated official source archive URL.
+/// Resolved stable release with a validated official source archive URL.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct StableRelease {
     /// Final numeric release, excluding release candidates and local suffixes.
     pub version: String,
     /// Official kernel.org archive URL derived from the version.
     pub source_url: String,
+}
+
+/// Publication metadata, including final releases whose series has reached EOL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
+pub(crate) struct PublishedRelease {
+    pub version: String,
+    pub released_at: Option<String>,
+    pub end_of_life: Option<bool>,
 }
 
 /// Cache receipt linking the output image to its source and build recipe.
@@ -55,6 +68,10 @@ pub(crate) struct BuiltKernel {
     pub image_sha256: String,
     /// Build recipe revision required by the current runtime.
     pub build_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_sha256: Option<String>,
 }
 
 /// Read the optional operator-supplied kernel path, ignoring empty values.
@@ -67,11 +84,32 @@ pub(super) fn configured_kernel_override() -> Option<PathBuf> {
 }
 
 /// Read the catalog URL; an empty value, `none`, or `-` disables source downloads.
-pub(crate) fn configured_releases_url() -> Option<String> {
-    let value = std::env::var("FIRECRAB_KERNEL_RELEASES_URL")
-        .unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_owned());
-    let value = value.trim();
+pub(crate) fn configured_registry_url() -> Option<String> {
+    let legacy_disabled = std::env::var("FIRECRAB_KERNEL_RELEASES_URL")
+        .ok()
+        .is_some_and(|value| matches!(value.trim(), "" | "none" | "-"));
+    let value = std::env::var("FIRECRAB_KERNEL_BASE_URL").unwrap_or_else(|_| {
+        if legacy_disabled {
+            "none".to_owned()
+        } else {
+            registry::DEFAULT_BASE_URL.to_owned()
+        }
+    });
+    let value = value.trim().trim_end_matches('/');
     (!matches!(value, "" | "none" | "-")).then(|| value.to_owned())
+}
+
+#[path = "kernel_registry.rs"]
+pub(crate) mod registry;
+
+pub(crate) async fn ensure_managed_kernel(
+    image_root: &Path,
+    architecture: Architecture,
+    requested: &str,
+    base: Option<&str>,
+    tracker: Option<&ImageInstallTracker>,
+) -> Result<PathBuf, ResolveError> {
+    registry::install(image_root, architecture, requested, base, tracker).await
 }
 
 /// Only final numeric releases can become source URLs or filesystem names.
@@ -157,27 +195,47 @@ pub(crate) async fn built_kernel(
         || Some(&receipt.source_url) != source_url(version).as_ref()
         || Sha256Digest::parse(&format!("sha256:{}", receipt.source_sha256)).is_err()
         || Sha256Digest::parse(&format!("sha256:{}", receipt.image_sha256)).is_err()
+        || receipt.package_url.is_some() != receipt.package_sha256.is_some()
+        || receipt
+            .package_sha256
+            .as_ref()
+            .is_some_and(|digest| Sha256Digest::parse(&format!("sha256:{digest}")).is_err())
+        || receipt.package_url.as_ref().is_some_and(|url| {
+            reqwest::Url::parse(url).map_or(true, |url| !matches!(url.scheme(), "https" | "http"))
+        })
     {
         return None;
     }
     Some(receipt)
 }
 
-/// Select the active stable entry and reject unexpected source locations.
+/// Resolve the published stable release without excluding an EOL source archive.
+#[cfg(test)]
 pub(crate) fn parse_stable_release(bytes: &[u8]) -> Result<StableRelease, ResolveError> {
     let document: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
         ResolveError::Malformed(format!("kernel.org release metadata: {error}"))
     })?;
-    let release = document["releases"]
+    let releases = document["releases"]
         .as_array()
-        .and_then(|releases| {
+        .ok_or_else(|| ResolveError::Malformed("kernel.org has no release list".to_owned()))?;
+    let release = document["latest_stable"]["version"]
+        .as_str()
+        .and_then(|version| {
+            releases
+                .iter()
+                .find(|release| release["version"] == version)
+        })
+        .or_else(|| {
             releases
                 .iter()
                 .find(|release| release["moniker"] == "stable" && release["iseol"] != true)
         })
-        .ok_or_else(|| {
-            ResolveError::Malformed("kernel.org has no active stable release".to_owned())
-        })?;
+        .or_else(|| {
+            releases
+                .iter()
+                .find(|release| release["moniker"] == "stable")
+        })
+        .ok_or_else(|| ResolveError::Malformed("kernel.org has no stable release".to_owned()))?;
     let version = release["version"].as_str().unwrap_or_default();
     let expected = source_url(version)
         .ok_or_else(|| ResolveError::Malformed("invalid kernel.org stable version".to_owned()))?;
@@ -192,8 +250,52 @@ pub(crate) fn parse_stable_release(bytes: &[u8]) -> Result<StableRelease, Resolv
     })
 }
 
+/// EOL is publication metadata, not a reason to hide an available source archive.
+#[cfg(test)]
+pub(crate) fn parse_published_releases(bytes: &[u8]) -> Vec<PublishedRelease> {
+    let Ok(document) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return Vec::new();
+    };
+    let Some(releases) = document["releases"].as_array() else {
+        return Vec::new();
+    };
+    releases
+        .iter()
+        .filter_map(|release| {
+            let version = release["version"].as_str()?;
+            let expected = source_url(version)?;
+            if release["source"].as_str() != Some(expected.as_str()) {
+                return None;
+            }
+            let released_at = release["released"]["isodate"]
+                .as_str()
+                .and_then(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+                .map(|date| date.format("%Y-%m-%d").to_string());
+            Some(PublishedRelease {
+                version: version.to_owned(),
+                released_at,
+                end_of_life: release["iseol"].as_bool(),
+            })
+        })
+        .collect()
+}
+
+/// Reuse the same catalog snapshot that resolved the active stable release.
+
+fn version_key(version: &str) -> Vec<u32> {
+    let mut parts: Vec<u32> = version
+        .split('.')
+        .map(|part| part.parse().expect("validated version"))
+        .collect();
+    parts.resize(3, 0);
+    parts
+}
+
+/// A newly published release can precede an update to the cached checksum index.
+
 /// A bounded cache avoids reaching upstream on every dashboard poll.
 /// Stale metadata remains useful when a host temporarily loses its network.
+#[cfg(test)]
 pub(crate) async fn latest_stable(
     image_root: &Path,
     releases_url: Option<&str>,
@@ -242,6 +344,7 @@ pub(crate) async fn latest_stable(
 
 /// List the current stable release and up to two older published releases.
 /// The checksum index is authoritative, including across minor-version boundaries.
+#[cfg(test)]
 pub(crate) async fn recent_stable_versions(
     image_root: &Path,
     stable: &StableRelease,
@@ -290,21 +393,14 @@ pub(crate) async fn recent_stable_versions(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn parse_recent_versions(
     bytes: &[u8],
     stable: &str,
 ) -> Result<Vec<String>, ResolveError> {
     let text =
         std::str::from_utf8(bytes).map_err(|error| ResolveError::Malformed(error.to_string()))?;
-    let key = |version: &str| -> Vec<u32> {
-        let mut parts: Vec<u32> = version
-            .split('.')
-            .map(|part| part.parse().expect("validated version"))
-            .collect();
-        parts.resize(3, 0);
-        parts
-    };
-    let stable_key = key(stable);
+    let stable_key = version_key(stable);
     let mut versions: Vec<String> = text
         .lines()
         .filter_map(|line| {
@@ -318,10 +414,11 @@ pub(crate) fn parse_recent_versions(
                 .trim_start_matches('*')
                 .strip_prefix("linux-")?
                 .strip_suffix(".tar.xz")?;
-            (is_source_version(version) && key(version) <= stable_key).then(|| version.to_owned())
+            (is_source_version(version) && version_key(version) <= stable_key)
+                .then(|| version.to_owned())
         })
         .collect();
-    versions.sort_by_key(|version| std::cmp::Reverse(key(version)));
+    versions.sort_by_key(|version| std::cmp::Reverse(version_key(version)));
     versions.dedup();
     if !versions.iter().any(|version| version == stable) {
         return Err(ResolveError::Malformed(
@@ -339,13 +436,14 @@ fn http_client() -> Result<reqwest::Client, ResolveError> {
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(30))
         .build()
-        .map_err(|error| download_failed(DEFAULT_RELEASES_URL, error.to_string()))
+        .map_err(|error| download_failed(registry::DEFAULT_BASE_URL, error.to_string()))
 }
 
 /// Fetch metadata with both a total timeout and a streamed byte limit.
 async fn fetch_bytes(url: &str, limit: u64) -> Result<Vec<u8>, ResolveError> {
     let mut response = http_client()?
         .get(url)
+        .header(reqwest::header::CACHE_CONTROL, "no-cache")
         .timeout(Duration::from_secs(30))
         .send()
         .await
@@ -369,6 +467,7 @@ async fn fetch_bytes(url: &str, limit: u64) -> Result<Vec<u8>, ResolveError> {
 }
 
 /// Find the exact source archive in kernel.org's SHA-256 checksum list.
+#[cfg(test)]
 pub(crate) fn source_checksum(bytes: &[u8], version: &str) -> Result<Sha256Digest, ResolveError> {
     let filename = format!("linux-{version}.tar.xz");
     let text =
@@ -458,15 +557,53 @@ pub(crate) async fn cache_lock(
     .await
 }
 
+type Cancellation = Option<tokio::sync::watch::Receiver<bool>>;
+
+fn check_cancelled(signal: &Cancellation) -> Result<(), ResolveError> {
+    if signal.as_ref().is_some_and(|signal| *signal.borrow()) {
+        return Err(ResolveError::Cancelled);
+    }
+    Ok(())
+}
+
+async fn cancelled(signal: &mut Cancellation) {
+    if let Some(signal) = signal {
+        loop {
+            if *signal.borrow_and_update() {
+                return;
+            }
+            if signal.changed().await.is_err() {
+                break;
+            }
+        }
+    }
+    std::future::pending::<()>().await;
+}
+
+/// Only cancellation-safe work belongs here; filesystem publication is committed separately.
+async fn until_cancelled<T>(
+    signal: &mut Cancellation,
+    operation: impl std::future::Future<Output = Result<T, ResolveError>>,
+) -> Result<T, ResolveError> {
+    tokio::select! {
+        biased;
+        () = cancelled(signal) => Err(ResolveError::Cancelled),
+        result = operation => result,
+    }
+}
+
 /// Reuse a verified image or build the requested source release on this host.
 /// `stable` resolves through the catalog; legacy entries require a valid cache.
-pub(crate) async fn ensure_managed_kernel(
+#[cfg(test)]
+pub(crate) async fn ensure_source_kernel(
     image_root: &Path,
     architecture: Architecture,
     requested: &str,
     releases_url: Option<&str>,
     tracker: Option<&ImageInstallTracker>,
 ) -> Result<PathBuf, ResolveError> {
+    let mut cancellation = tracker.and_then(|tracker| tracker.cancellation(requested));
+    check_cancelled(&cancellation)?;
     let version = if requested == "stable" {
         latest_stable(image_root, releases_url).await?.version
     } else {
@@ -477,7 +614,7 @@ pub(crate) async fn ensure_managed_kernel(
     let destination = image_root.join(&relative);
     let directory = destination.parent().expect("cache image has parent");
     let lock = cache_lock(image_root, architecture, &version).await?;
-    let _guard = lock.lock().await;
+    let _guard = until_cancelled(&mut cancellation, async { Ok(lock.lock().await) }).await?;
     if cached_kernel_is_valid(image_root, architecture, &version).await {
         return Ok(relative);
     }
@@ -499,7 +636,7 @@ pub(crate) async fn ensure_managed_kernel(
             "kernel compilation requires a Linux host with a matching CPU architecture",
         ));
     }
-    check_build_dependencies(architecture).await?;
+    check_build_dependencies(architecture, tracker.map(|tracker| (tracker, requested))).await?;
     log(
         tracker,
         requested,
@@ -510,7 +647,11 @@ pub(crate) async fn ensure_managed_kernel(
         url.rsplit_once('/').expect("source directory").0
     );
     let checksum = source_checksum(
-        &fetch_bytes(&checksum_url, METADATA_MAX_BYTES).await?,
+        &until_cancelled(
+            &mut cancellation,
+            fetch_bytes(&checksum_url, METADATA_MAX_BYTES),
+        )
+        .await?,
         &version,
     )?;
     let sources = image_root.join(".oci/kernel/sources");
@@ -524,7 +665,8 @@ pub(crate) async fn ensure_managed_kernel(
     )
     .await?;
     {
-        let _source_guard = source_lock.lock().await;
+        let _source_guard =
+            until_cancelled(&mut cancellation, async { Ok(source_lock.lock().await) }).await?;
         log(
             tracker,
             requested,
@@ -545,13 +687,15 @@ pub(crate) async fn ensure_managed_kernel(
         requested,
         "waiting for the host kernel builder".to_owned(),
     );
-    let _build_guard = build_lock.lock().await;
+    let _build_guard =
+        until_cancelled(&mut cancellation, async { Ok(build_lock.lock().await) }).await?;
     let work = directory.join(format!(".build-{version}-{}", Uuid::new_v4()));
     tokio::fs::create_dir(&work)
         .await
         .map_err(|source| cache_io("create build directory", work.clone(), source))?;
     let staged = work.join("kernel");
     let result = async {
+        check_cancelled(&cancellation)?;
         log(
             tracker,
             requested,
@@ -579,7 +723,12 @@ pub(crate) async fn ensure_managed_kernel(
             source_sha256: checksum.encoded().to_owned(),
             image_sha256: image_digest.encoded().to_owned(),
             build_revision: BUILD_REVISION.to_owned(),
+            package_url: None,
+            package_sha256: None,
         };
+        // A cancellation before this point cannot publish a partial kernel.
+        // Once publication starts, finish the short commit and report success.
+        check_cancelled(&cancellation)?;
         tokio::fs::rename(
             staged.with_added_extension("config"),
             destination.with_added_extension("config"),
@@ -597,7 +746,12 @@ pub(crate) async fn ensure_managed_kernel(
         Ok(relative)
     }
     .await;
-    let _ = tokio::fs::remove_dir_all(&work).await;
+    if let Err(source) = tokio::fs::remove_dir_all(&work).await
+        && matches!(&result, Err(ResolveError::Cancelled))
+        && source.kind() != io::ErrorKind::NotFound
+    {
+        return Err(cache_io("remove cancelled kernel build", work, source));
+    }
     result
 }
 
@@ -609,6 +763,8 @@ pub(crate) async fn download_source(
     expected: &Sha256Digest,
     progress: Option<(&ImageInstallTracker, &str)>,
 ) -> Result<(), ResolveError> {
+    let mut cancellation = progress.and_then(|(tracker, job)| tracker.cancellation(job));
+    check_cancelled(&cancellation)?;
     if let Ok(digest) = source_digest(destination).await
         && digest == *expected
     {
@@ -616,12 +772,15 @@ pub(crate) async fn download_source(
     }
     let partial = destination.with_extension(format!("{}-partial", Uuid::new_v4()));
     let result = async {
-        let mut response = http_client()?
-            .get(url)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|error| download_failed(url, error.to_string()))?;
+        let mut response = until_cancelled(&mut cancellation, async {
+            http_client()?
+                .get(url)
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status)
+                .map_err(|error| download_failed(url, error.to_string()))
+        })
+        .await?;
         let total = response.content_length();
         if total.is_some_and(|length| length > SOURCE_MAX_BYTES) {
             return Err(download_failed(
@@ -634,10 +793,13 @@ pub(crate) async fn download_source(
             .map_err(|source| cache_io("stage kernel source", partial.clone(), source))?;
         let mut hasher = Sha256::new();
         let mut written = 0_u64;
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|error| download_failed(url, error.to_string()))?
+        while let Some(chunk) = until_cancelled(&mut cancellation, async {
+            response
+                .chunk()
+                .await
+                .map_err(|error| download_failed(url, error.to_string()))
+        })
+        .await?
         {
             written += chunk.len() as u64;
             if written > SOURCE_MAX_BYTES {
@@ -666,14 +828,92 @@ pub(crate) async fn download_source(
                 actual,
             });
         }
+        check_cancelled(&cancellation)?;
         tokio::fs::rename(&partial, destination)
             .await
             .map_err(|source| cache_io("publish kernel source", destination.to_owned(), source))?;
         Ok(())
     }
     .await;
-    let _ = tokio::fs::remove_file(&partial).await;
+    if let Err(source) = tokio::fs::remove_file(&partial).await
+        && matches!(&result, Err(ResolveError::Cancelled))
+        && source.kind() != io::ErrorKind::NotFound
+    {
+        return Err(cache_io(
+            "remove cancelled source download",
+            partial,
+            source,
+        ));
+    }
     result
+}
+
+/// Caller holds the version's kernel cache lock. Never remove another version's work.
+pub(crate) async fn remove_source_and_builds(
+    image_root: &Path,
+    architecture: Architecture,
+    version: &str,
+) -> Result<bool, ResolveError> {
+    if !is_source_version(version) {
+        return Ok(false);
+    }
+    let root = image_root.join(".oci/kernel");
+    let archive = format!("linux-{version}.tar.xz");
+    let partial_prefix = format!("linux-{version}.tar.");
+    let build_prefix = format!(".build-{version}-");
+    let package_prefix = format!(".package-{version}-");
+    let mut removed = registry::remove_packages(image_root, architecture, version).await?;
+    for (directory, sources) in [
+        (root.join("sources"), true),
+        (root.join(architecture.as_str()), false),
+    ] {
+        let mut entries = match tokio::fs::read_dir(&directory).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(cache_io("list kernel files", directory, error)),
+        };
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|error| cache_io("list kernel files", directory.clone(), error))?
+        {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let owned = if sources {
+                name == archive
+                    || name
+                        .strip_prefix(&partial_prefix)
+                        .and_then(|name| name.strip_suffix("-partial"))
+                        .is_some_and(|id| Uuid::parse_str(id).is_ok())
+            } else {
+                name.strip_prefix(&build_prefix)
+                    .or_else(|| name.strip_prefix(&package_prefix))
+                    .is_some_and(|id| Uuid::parse_str(id).is_ok())
+            };
+            if !owned {
+                continue;
+            }
+            let path = entry.path();
+            let directory_entry = entry
+                .file_type()
+                .await
+                .map_err(|error| cache_io("inspect kernel file", path.clone(), error))?
+                .is_dir();
+            let result = if directory_entry {
+                tokio::fs::remove_dir_all(&path).await
+            } else {
+                tokio::fs::remove_file(&path).await
+            };
+            match result {
+                Ok(()) => removed = true,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(cache_io("remove kernel file", path, error)),
+            }
+        }
+    }
+    Ok(removed)
 }
 
 /// Hash a bounded regular source archive without following a symlink.
@@ -710,47 +950,47 @@ async fn source_digest(path: &Path) -> Result<Sha256Digest, ResolveError> {
 }
 
 /// Kill the complete compiler process group if the task is cancelled.
+#[cfg(test)]
 struct BuildGroup(u32);
-impl Drop for BuildGroup {
-    fn drop(&mut self) {
+#[cfg(test)]
+impl BuildGroup {
+    fn terminate(&self) {
         unsafe {
             libc::kill(-(self.0 as i32), libc::SIGKILL);
         }
     }
 }
+#[cfg(test)]
+impl Drop for BuildGroup {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
 
 /// Reject an incomplete host before downloading hundreds of MiB of kernel source.
-async fn check_build_dependencies(architecture: Architecture) -> Result<(), ResolveError> {
-    let output = tokio::time::timeout(
+#[cfg(test)]
+async fn check_build_dependencies(
+    architecture: Architecture,
+    progress: Option<(&ImageInstallTracker, &str)>,
+) -> Result<(), ResolveError> {
+    let mut command = std::process::Command::new("bash");
+    command.args([
+        "-c",
+        BUILD_SCRIPT,
+        "firecrab-kernel-builder",
+        "--check",
+        architecture.as_str(),
+    ]);
+    tokio::time::timeout(
         Duration::from_secs(30),
-        tokio::process::Command::new("bash")
-            .args([
-                "-c",
-                BUILD_SCRIPT,
-                "firecrab-kernel-builder",
-                "--check",
-                architecture.as_str(),
-            ])
-            .stdin(Stdio::null())
-            .kill_on_drop(true)
-            .output(),
+        run_build_command(architecture, command, progress),
     )
     .await
     .map_err(|_| unavailable(architecture, "kernel dependency check timed out"))?
-    .map_err(|error| unavailable(architecture, format!("check kernel dependencies: {error}")))?;
-    if !output.status.success() {
-        return Err(unavailable(
-            architecture,
-            format!(
-                "kernel build prerequisites failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-        ));
-    }
-    Ok(())
 }
 
 /// Run the embedded recipe in a process group and stream both output pipes.
+#[cfg(test)]
 async fn run_build(
     architecture: Architecture,
     version: &str,
@@ -764,29 +1004,70 @@ async fn run_build(
         .await
         .map_err(|source| cache_io("write kernel builder", script.clone(), source))?;
     let mut command = std::process::Command::new("bash");
-    command.process_group(0);
-    let mut command = tokio::process::Command::from(command);
-    let mut child = command
+    command
         .arg(&script)
         .arg(architecture.as_str())
         .arg(version)
         .arg(archive)
         .arg(work)
-        .arg(output)
+        .arg(output);
+    run_build_command(architecture, command, progress).await
+}
+
+/// Stop and reap the compiler group before returning a cancelled result.
+#[cfg(test)]
+pub(super) async fn run_build_command(
+    architecture: Architecture,
+    mut command: std::process::Command,
+    progress: Option<(&ImageInstallTracker, &str)>,
+) -> Result<(), ResolveError> {
+    let mut cancellation = progress.and_then(|(tracker, job)| tracker.cancellation(job));
+    check_cancelled(&cancellation)?;
+    command.process_group(0);
+    let mut command = tokio::process::Command::from(command);
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|error| unavailable(architecture, format!("start kernel builder: {error}")))?;
-    let _group = BuildGroup(child.id().expect("new child has pid"));
+    let group = BuildGroup(child.id().expect("new child has pid"));
     let stdout = child.stdout.take().expect("piped builder stdout");
     let stderr = child.stderr.take().expect("piped builder stderr");
-    let (stdout, stderr) = tokio::join!(build_log(stdout, progress), build_log(stderr, progress));
-    let status = child
-        .wait()
-        .await
-        .map_err(|error| unavailable(architecture, format!("wait for kernel builder: {error}")))?;
+    let logs = until_cancelled(&mut cancellation, async {
+        Ok(tokio::join!(
+            build_log(stdout, progress),
+            build_log(stderr, progress)
+        ))
+    })
+    .await;
+    if matches!(&logs, Err(ResolveError::Cancelled)) {
+        group.terminate();
+        child
+            .wait()
+            .await
+            .map_err(|error| unavailable(architecture, format!("stop kernel builder: {error}")))?;
+        return Err(ResolveError::Cancelled);
+    }
+    let (stdout, stderr) = logs?;
+    let status = match until_cancelled(&mut cancellation, async {
+        child
+            .wait()
+            .await
+            .map_err(|error| unavailable(architecture, format!("wait for kernel builder: {error}")))
+    })
+    .await
+    {
+        Err(ResolveError::Cancelled) => {
+            group.terminate();
+            child.wait().await.map_err(|error| {
+                unavailable(architecture, format!("stop kernel builder: {error}"))
+            })?;
+            return Err(ResolveError::Cancelled);
+        }
+        result => result?,
+    };
     if !status.success() {
         return Err(unavailable(
             architecture,
@@ -799,6 +1080,7 @@ async fn run_build(
 }
 
 /// Forward compiler output to the install job and retain a bounded error tail.
+#[cfg(test)]
 async fn build_log(
     reader: impl AsyncRead + Unpin,
     progress: Option<(&ImageInstallTracker, &str)>,
@@ -834,16 +1116,10 @@ pub(super) async fn ensure_host_kernel(
         return operator_kernel(image_root, architecture, path).await;
     }
     let result = async {
-        let release = latest_stable(image_root, releases_url).await?;
-        let relative = ensure_managed_kernel(
-            image_root,
-            architecture,
-            &release.version,
-            releases_url,
-            None,
-        )
-        .await?;
-        Ok(boot_pair(architecture, relative, &release.version))
+        let relative =
+            ensure_managed_kernel(image_root, architecture, "stable", releases_url, None).await?;
+        let version = version_for_path(architecture, &relative).expect("managed kernel path");
+        Ok(boot_pair(architecture, relative, &version))
     }
     .await;
     let error = match result {
