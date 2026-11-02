@@ -26,9 +26,9 @@ try {
  await page.goto(`${origin}#/stacks`);
  await expect(page.locator('[data-kind="ingress"]')).toHaveCount(2);
  const files=[];
- async function capture(name){const filename=`iac-548-ingress-${name}-${date}.png`;await page.getByRole("main").screenshot({path:path.join(output,filename)});files.push(filename);}
+ async function capture(name,target=page.getByRole("main")){const filename=`iac-548-ingress-${name}-${date}.png`;await target.scrollIntoViewIfNeeded();await target.screenshot({path:path.join(output,filename)});files.push(filename);}
  await capture("desktop");await page.setViewportSize({width:390,height:844});
- await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await capture("mobile");
+ await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);await capture("mobile",page.locator(`[data-owner-id="${fixture.transfer.expectedOwner.id}"]`));
  assert.equal((await context.request.post(`${origin}qa/lose-next-owner-ack`)).status(),204);
  const failed=await context.request.post(`${origin}api/iac/owners/transition`,{data:fixture.transfer});assert.equal(failed.status(),503);
  const recovered=await context.request.get(`${origin}api/iac/owner-changes/${fixture.transfer.operationId}`);assert.equal(recovered.status(),200);
@@ -37,7 +37,7 @@ try {
  const retry=await context.request.post(`${origin}api/iac/owners/transition`,{data:fixture.transfer});assert.equal(retry.status(),200);assert.deepEqual(await retry.json(),result.ownership);
  assert.equal(hash(manifest()),beforeHash);
  await page.reload();await expect(page.locator('[data-kind="ingress"]')).toHaveCount(1);await expect(page.getByText("firecrab_ingress.app",{exact:true})).toBeVisible();await expect(page.getByText("firecrab_ingress.peer",{exact:true})).toBeVisible();
- await capture("recovery-mobile");await page.setViewportSize({width:1440,height:1000});await capture("recovery-desktop");
+ await capture("recovery-mobile",page.locator(`[data-owner-id="${fixture.transfer.owner.id}"]`));await page.setViewportSize({width:1440,height:1000});await capture("recovery-desktop");
  const screenshots={};for(const name of files)screenshots[name]=hash(await readFile(path.join(output,name)));
  await writeFile(path.join(output,"iac-548-ingress-evidence.json"),JSON.stringify({sourceCommit,sourceDirty:false,capturedOn:date,fixture:true,scope:fixture.scope,originalRequest:fixture.transfer,recovered:result,peerOwnership:fixture.ownerships[1],manifestSha256Before:beforeHash,manifestSha256After:hash(manifest()),screenshots},null,2)+"\n");
  console.log(JSON.stringify({sourceCommit,files,operationId:result.operationId,generation:result.ownership.generation}));
