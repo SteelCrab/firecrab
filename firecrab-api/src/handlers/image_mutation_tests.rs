@@ -634,6 +634,8 @@ async fn iac_image_browser_fixture() {
     state.store.image_effects(&intent).unwrap();
     state.store.fail_image(&intent).unwrap();
     let retained = state.templates.image_root_path().join("rootfs/demo");
+    let shared_kernel = state.templates.image_root_path().join("kernel/demo");
+    let original_kernel = std::fs::read(&shared_kernel).unwrap();
     let removed = state.templates.image_root_path().join(&removable.rootfs);
     let router = crate::server::build_router(
         state,
@@ -668,6 +670,7 @@ async fn iac_image_browser_fixture() {
     }
     finished.notify_one();
     server.await.unwrap();
+    assert_eq!(std::fs::read(shared_kernel).unwrap(), original_kernel);
     std::fs::remove_file(info).unwrap();
     std::fs::remove_file(stop).unwrap();
 }
