@@ -92,6 +92,7 @@ impl Store {
             error_code: None,
             execution_generation: 0,
             configuration_generation: Some(source.generation),
+            retain_disks: None,
         };
         tx.execute(
             "DELETE FROM stack_git_sources WHERE stack_id=?1",

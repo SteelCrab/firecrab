@@ -33,6 +33,13 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Scope volume attachment ownership to exact volume/VM pairs. Check parent and
+  attachment authority at commit, retain disk contents during handover and block
+  implicit detachment through parent deletion. Persist native VM cleanup and its
+  immutable disk policy before dispatch; confirm host teardown and atomically
+  commit metadata, lease release and receipt. Recover the original operation from
+  the Stack dashboard, including after a lost acknowledgement (#548).
+
 - Transfer service Deploy token ownership without changing its verifier or expiry.
   Keep operator revocation available, including during Stack work. Atomically retire
   the credential and authority with a durable receipt; block late issuance and

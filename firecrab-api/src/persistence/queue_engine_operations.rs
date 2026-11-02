@@ -143,6 +143,7 @@ impl Store {
             error_code: None,
             execution_generation: 0,
             configuration_generation: None,
+            retain_disks: None,
         };
         record.phase = requested_phase;
         record.error = None;

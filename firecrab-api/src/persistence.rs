@@ -50,11 +50,16 @@ mod stack_applies;
 mod stack_sources;
 pub(crate) use stack_sources::SourceTrigger;
 mod iac_cluster;
+mod iac_dependencies;
 mod iac_deploy_tokens;
 pub(crate) mod iac_native;
+mod iac_operation_queries;
 mod iac_owners;
 mod iac_resources;
+pub(crate) mod iac_vm_deletes;
+mod iac_volume_attachments;
 pub(crate) mod queue_engine_operations;
+mod volume_mounts;
 pub(crate) use iac_resources::TRANSFER_KINDS as IAC_TRANSFER_KINDS;
 mod stacks;
 pub use registries::RegistryLogin;
@@ -869,6 +874,7 @@ impl Store {
         conn.execute_batch(stack_sources::SCHEMA_SQL)?;
         iac_owners::initialize(&conn)?;
         conn.execute_batch(iac_native::SCHEMA)?;
+        conn.execute_batch(iac_vm_deletes::SCHEMA)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;
@@ -950,26 +956,37 @@ impl Store {
 
     /// Inserts a new VM record.
     pub fn insert(&self, vm: &VmRecord) -> Result<(), PersistenceError> {
-        execute_record(&self.lock(), INSERT_SQL, vm)?;
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        iac_vm_deletes::ensure_available(&tx, vm.id)?;
+        execute_record(&tx, INSERT_SQL, vm)?;
+        tx.commit()?;
         Ok(())
     }
 
     /// Replaces an existing VM record's columns.
     pub fn update(&self, vm: &VmRecord) -> Result<(), PersistenceError> {
-        if execute_record(&self.lock(), UPDATE_SQL, vm)? == 0 {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        iac_native::ensure_idle(&tx, &iac_vm_deletes::resource(vm.id))?;
+        if execute_record(&tx, UPDATE_SQL, vm)? == 0 {
             return Err(PersistenceError::MissingVm { id: vm.id });
         }
+        tx.commit()?;
         Ok(())
     }
 
     /// Deletes a VM record by id.
     pub fn delete(&self, id: Uuid) -> Result<(), PersistenceError> {
-        let changed = self
-            .lock()
-            .execute("DELETE FROM vms WHERE id = ?1", params![id.to_string()])?;
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        iac_native::ensure_idle(&tx, &iac_vm_deletes::resource(id))?;
+        iac_volume_attachments::ensure_vm_deletable(&tx, id)?;
+        let changed = tx.execute("DELETE FROM vms WHERE id = ?1", params![id.to_string()])?;
         if changed == 0 {
             return Err(PersistenceError::MissingVm { id });
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1842,6 +1859,8 @@ impl Store {
     pub fn allocate_lease(&self, vm_id: Uuid, subnet: SubnetSpec) -> Result<Lease, IpamError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        iac_vm_deletes::ensure_available(&tx, vm_id)
+            .map_err(|_| IpamError::VmUnavailable { vm_id })?;
         let lease = ipam::allocate(&tx, vm_id, subnet)?;
         tx.commit()?;
         Ok(lease)
@@ -1859,6 +1878,8 @@ impl Store {
     ) -> Result<Lease, IpamError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        iac_vm_deletes::ensure_available(&tx, vm_id)
+            .map_err(|_| IpamError::VmUnavailable { vm_id })?;
         let lease = ipam::rotate(&tx, vm_id, subnet, unavailable_ipv4s)?;
         tx.commit()?;
         Ok(lease)

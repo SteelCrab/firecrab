@@ -12,15 +12,37 @@ CREATE TABLE IF NOT EXISTS iac_native_operations (
  status TEXT NOT NULL
 ) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS iac_native_active_resource
- ON iac_native_operations(kind,resource_id) WHERE state IN ('running','needs_recovery');";
+ ON iac_native_operations(kind,resource_id) WHERE state IN ('running','needs_recovery');
+CREATE TABLE IF NOT EXISTS iac_native_dependencies (
+ operation_id TEXT NOT NULL REFERENCES iac_native_operations(operation_id),
+ kind TEXT NOT NULL, resource_id TEXT NOT NULL, ownership TEXT NOT NULL,
+ PRIMARY KEY(operation_id,kind,resource_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS iac_native_dependency_resource ON iac_native_dependencies(kind,resource_id);";
 
 pub(super) fn ensure_idle(
     conn: &Connection,
     resource: &ManagedResource,
 ) -> Result<(), PersistenceError> {
-    let active:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM iac_native_operations WHERE kind=?1 AND resource_id=?2 AND state IN ('running','needs_recovery'))",
+    let active:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM iac_native_operations o WHERE o.state IN ('running','needs_recovery') AND
+        ((o.kind=?1 AND o.resource_id=?2) OR EXISTS(SELECT 1 FROM iac_native_dependencies d
+         WHERE d.operation_id=o.operation_id AND d.kind=?1 AND d.resource_id=?2)))",
         params![resource.kind,resource.id],|row|row.get(0))?;
     if active {
+        return Err(PersistenceError::IacResourceBusy);
+    }
+    Ok(())
+}
+
+/// Stack admission and native admission serialize in SQLite, including unrendered facets.
+pub(super) fn ensure_stack_idle(conn: &Connection, stack: Uuid) -> Result<(), PersistenceError> {
+    let busy: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM iac_native_operations
+        WHERE state IN ('running','needs_recovery') AND json_extract(status,'$.ownership.owner.manager')='stack'
+        AND json_extract(status,'$.ownership.owner.id')=?1)
+        OR EXISTS(SELECT 1 FROM iac_native_dependencies d JOIN iac_native_operations o
+        ON o.operation_id=d.operation_id WHERE o.state IN ('running','needs_recovery')
+        AND json_extract(d.ownership,'$.owner.manager')='stack' AND json_extract(d.ownership,'$.owner.id')=?1)", [stack.to_string()], |row|row.get(0))?;
+    if busy {
         return Err(PersistenceError::IacResourceBusy);
     }
     Ok(())
@@ -155,6 +177,7 @@ impl Store {
             error_code: None,
             execution_generation: 0,
             configuration_generation: None,
+            retain_disks: None,
         };
         save(&tx, &operation)?;
         tx.commit()?;

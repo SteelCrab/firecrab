@@ -69,6 +69,7 @@ impl Store {
             }
             return Ok((previous.status, false));
         }
+        super::iac_native::ensure_stack_idle(&tx, expected.id)?;
         let current = super::stacks::read_stack(&tx, &expected.name)?
             .ok_or(PersistenceError::MissingStack)?;
         if &current != expected {

@@ -23,6 +23,12 @@ pub(crate) fn persistence_error(error: PersistenceError, request: Uuid) -> AppEr
         PersistenceError::BlockStorageConflict { message } => {
             AppError::conflict("volume_conflict", message, request)
         }
+        other @ (PersistenceError::IacOwnershipConflict
+        | PersistenceError::StaleIacOwner
+        | PersistenceError::IacResourceBusy
+        | PersistenceError::IacManagedDependent
+        | PersistenceError::IacParentManaged
+        | PersistenceError::StackApplyBusy) => super::stacks::persistence_error(other, request),
         other => {
             tracing::error!(%other, request_id = %request, "volume persistence failed");
             AppError::internal(request)
@@ -143,6 +149,13 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request.0)?;
+    let authority = state
+        .store
+        .iac_resource_owner(&firecrab_stack::ManagedResource {
+            kind: "volume".into(),
+            id: id.to_string(),
+        })
+        .map_err(|error| persistence_error(error, request.0))?;
     tokio::task::spawn_blocking(move || {
         let volume = state
             .store
@@ -150,7 +163,7 @@ pub async fn delete(
             .map_err(|error| persistence_error(error, request.0))?;
         state
             .store
-            .begin_block_storage_delete(id)
+            .begin_block_storage_delete(id, &authority)
             .map_err(|error| persistence_error(error, request.0))?;
         block_storage::remove_disk(&state, &volume).map_err(|error| {
             tracing::error!(volume_id = %id, %error, "volume deletion needs a retry");
@@ -230,6 +243,10 @@ pub async fn attach(
     }
     let _guard = state.lock_vm(req.vm_id).await;
     require_inactive_user_vm(&state, req.vm_id, request.0)?;
+    let authority = state
+        .store
+        .attachment_authority(id, req.vm_id)
+        .map_err(|error| persistence_error(error, request.0))?;
     let volume = state
         .store
         .block_storage(id)
@@ -244,12 +261,13 @@ pub async fn attach(
     })?;
     state
         .store
-        .attach_block_storages(
+        .attach_block_storage_checked(
             req.vm_id,
-            &[VmBlockStorageMount {
+            VmBlockStorageMount {
                 volume_id: id,
                 mount_path: req.mount_path,
-            }],
+            },
+            &authority,
         )
         .map_err(|error| persistence_error(error, request.0))?;
     state
@@ -274,9 +292,13 @@ pub async fn detach(
     };
     let _guard = state.lock_vm(vm_id).await;
     require_inactive_user_vm(&state, vm_id, request.0)?;
+    let authority = state
+        .store
+        .attachment_authority(id, vm_id)
+        .map_err(|error| persistence_error(error, request.0))?;
     state
         .store
-        .detach_block_storage(id, vm_id)
+        .detach_block_storage(id, vm_id, &authority)
         .map_err(|error| persistence_error(error, request.0))?;
     state
         .store

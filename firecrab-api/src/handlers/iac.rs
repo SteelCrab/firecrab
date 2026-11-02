@@ -119,6 +119,7 @@ pub async fn recover_native_operation(
     Extension(request): Extension<RequestId>,
     caller: crate::ai_sandbox::access::Caller,
     Path(id): Path<uuid::Uuid>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<firecrab_stack::NativeOperation>, AppError> {
     caller.operator().map_err(|_| {
         AppError::new(
@@ -132,8 +133,25 @@ pub async fn recover_native_operation(
     let operation = database(request.0, move || store.iac_native_operation(id))
         .await?
         .ok_or_else(|| AppError::not_found(request.0))?;
+    if let Some(expected) = headers.get("x-firecrab-endpoint-id") {
+        let expected = expected
+            .to_str()
+            .ok()
+            .and_then(|value| uuid::Uuid::parse_str(value).ok());
+        if expected != Some(operation.ownership.endpoint_id) {
+            return Err(super::stacks::persistence_error(
+                crate::persistence::PersistenceError::IacEndpointConflict,
+                request.0,
+            ));
+        }
+    }
     if operation.state == firecrab_stack::NativeOperationState::Succeeded {
         return Ok(Json(operation));
+    }
+    if operation.action == firecrab_stack::NativeAction::DeleteVm {
+        return super::vm_deletion::recover(state, request, operation)
+            .await
+            .map(Json);
     }
     if crate::persistence::queue_engine_operations::is_engine_action(operation.action) {
         return crate::queues::recover_operation(state, request.0, operation.operation_id)

@@ -152,6 +152,7 @@ impl Store {
             error_code: None,
             execution_generation: 0,
             configuration_generation: None,
+            retain_disks: None,
         };
         super::iac_native::save(&tx, &operation)?;
         tx.commit()?;

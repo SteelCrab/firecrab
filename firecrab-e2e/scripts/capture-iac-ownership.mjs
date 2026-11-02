@@ -1,6 +1,7 @@
 /** Actual compiled dashboard + isolated Axum/SQLite fixture; no browser API mocks. */
 import assert from "node:assert/strict";
-import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { mkdir, readFile, writeFile, unlink, access } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -20,6 +21,12 @@ const output = path.resolve(outputPath);
 const captureDate = process.env.FIRECRAB_IAC_QA_DATE || new Intl.DateTimeFormat("en-CA").format(new Date());
 assert.match(captureDate, /^\d{4}-\d{2}-\d{2}$/);
 await mkdir(output, { recursive: true });
+async function digestFile(file) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(file)) hash.update(chunk);
+  return hash.digest("hex");
+}
+async function exists(file) { return access(file).then(() => true, () => false); }
 const browser = await chromium.launch({ channel: process.env.FIRECRAB_IAC_QA_CHANNEL || undefined });
 try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: "en-US" });
@@ -29,7 +36,7 @@ try {
   const capabilities = await identity.json();
   assert.equal(capabilities.endpointId, ownership.endpointId);
   assert.equal(capabilities.inventoryKinds.length, 43);
-  assert.deepEqual(capabilities.transferKinds, ["network", "vm", "service", "storage_root", "volume", "security_group", "shell", "schedule", "pool", "queue", "database_connection", "storage_connection", "secret", "secret_connection", "auth", "registry", "ai_connection", "ai_model", "sandbox_environment", "sandbox_project", "stack_source", "sandbox_access", "queue_engine", "cluster_host", "cluster_placement", "cluster_service", "service_otlp", "service_deploy_token"]);
+  assert.deepEqual(capabilities.transferKinds, ["network", "vm", "service", "storage_root", "volume", "volume_attachment", "security_group", "shell", "schedule", "pool", "queue", "database_connection", "storage_connection", "secret", "secret_connection", "auth", "registry", "ai_connection", "ai_model", "sandbox_environment", "sandbox_project", "stack_source", "sandbox_access", "queue_engine", "cluster_host", "cluster_placement", "cluster_service", "service_otlp", "service_deploy_token"]);
   const observed = await context.request.get(`${origin}api/iac/owners`);
   assert.equal(observed.status(), 200);
   assert.deepEqual((await observed.json()).filter(item=>item.owner.manager==="terraform"), fixture.ownerships);
@@ -94,6 +101,20 @@ try {
   const receipt = await context.request.get(`${origin}api/iac/owner-changes/${fixture.operationId}`);
   assert.equal(receipt.status(), 200);
   assert.deepEqual((await receipt.json()).ownership, ownership);
+  const vmProof = fixture.vmProof;
+  assert.ok(vmProof && fixture.volumeProof, "fixture must include actual VM cleanup and ext4 ownership");
+  const attachedParent = await context.request.delete(`${origin}api/vms/${fixture.volumeProof.vmId}`);
+  assert.equal(attachedParent.status(), 409);
+  assert.equal((await attachedParent.json()).error.code, "iac_dependent_managed");
+  const failedVm = await context.request.delete(`${origin}api/vms/${vmProof.vmId}`, { headers: { "x-firecrab-operation-id": vmProof.operationId } });
+  assert.equal(failedVm.status(), 500);
+  const beforeVmRecovery = await (await context.request.get(`${origin}api/iac/native-operations/${vmProof.operationId}`)).json();
+  assert.equal(beforeVmRecovery.state, "needs_recovery");
+  assert.equal(beforeVmRecovery.retainDisks, false);
+  assert.deepEqual(cli(["native-operation","--id",vmProof.operationId]),beforeVmRecovery);
+  assert.equal(await exists(vmProof.artifacts), false);
+  assert.equal(await digestFile(fixture.volumeProof.diskPath), fixture.volumeProof.sha256);
+  execFileSync("python3", ["-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('DROP TRIGGER reject_qa_vm_receipt'); c.commit()", vmProof.databasePath]);
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -147,6 +168,27 @@ try {
   await focusOwnership();
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(output, `iac-548-ownership-mobile-${captureDate}.png`), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const work = page.getByRole("region", { name: "Native operations", exact: true });
+  await work.getByText(vmProof.operationId, { exact: true }).waitFor();
+  await work.getByRole("button", { name: "Resume VM deletion", exact: true }).waitFor();
+  await work.screenshot({path:path.join(output,`iac-548-vm-recovery-desktop-${captureDate}.png`)});
+  await page.setViewportSize({width:375,height:812});
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "native recovery must fit mobile");
+  await work.screenshot({path:path.join(output,`iac-548-vm-recovery-mobile-${captureDate}.png`)});
+  await page.setViewportSize({width:1440,height:1000});
+  await work.getByRole("button", { name: "Resume VM deletion", exact: true }).click();
+  await work.getByRole("status").filter({hasText:"Original operation completed."}).waitFor();
+  const afterVmRecovery = await (await context.request.get(`${origin}api/iac/native-operations/${vmProof.operationId}`)).json();
+  assert.equal(afterVmRecovery.state,"succeeded");
+  assert.equal(afterVmRecovery.executionGeneration,1);
+  assert.equal(afterVmRecovery.retainDisks,false);
+  assert.equal(afterVmRecovery.ownership.resource.id,vmProof.vmId);
+  assert.equal((await context.request.get(`${origin}api/vms/${vmProof.vmId}`)).status(),404);
+  assert.equal(await exists(vmProof.artifacts),false);
+  assert.equal(await digestFile(fixture.volumeProof.diskPath),fixture.volumeProof.sha256);
+  await work.screenshot({path:path.join(output,`iac-548-vm-recovered-desktop-${captureDate}.png`)});
+  const vmRecovery = {before:beforeVmRecovery,after:afterVmRecovery,checks:["actual HTTP deletion","actual private artifact cleanup","injected SQLite receipt failure retains VM and address","dashboard recovers original operation","execution generation advances once","borrowed ext4 checksum retained"],volume:{volumeId:fixture.volumeProof.volumeId,vmId:fixture.volumeProof.vmId,sha256:fixture.volumeProof.sha256,mountPath:"/data",attachmentOnlyParentRejection:fixture.volumeProof.attachmentOnlyParentRejection},guestBooted:false};
   const access=fixture.ownerships.find(item=>item.resource.kind==="sandbox_access");
   assert.ok(access,"fixture must include an owned access policy");
   const accessPath=`${origin}api/ai-sandbox/access/${access.resource.id}`;
@@ -222,9 +264,9 @@ try {
   await writeFile(path.join(output, "iac-548-ownership-evidence.json"), JSON.stringify({
     capturedAt: new Date().toISOString(), captureDate, sourceCommit, sourceDirty, focusResource:focus.resource, versions:{browser:browser.version(),node:process.version}, fixture: true, transport: "actual local Axum HTTP; no mocked API responses",
     runtime: "compiled React dashboard with disposable SQLite resource records; no Linux/KVM boot",
-    ownership, ownerships:fixture.ownerships,nativeRecovery,sourceRemoval,accessRevocation,queueEngine, checks: ["endpoint identity", `43 inventory kinds; ${capabilities.transferKinds.length} transfer adapters`, "actual ownership read", "direct PATCH rejected with 409", `${blockedConfigurations} configuration kinds reject direct DELETE with 409`, "immutable operation acknowledgement", `${fixture.ownerships.length} Terraform ownership records and one retained native binding in the actual dashboard before operator revocation`, `${states.size} Terraform states remain separate; each resource kind has its own icon section and count`, "native bindings are displayed once", "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
+    ownership, ownerships:fixture.ownerships,nativeRecovery,sourceRemoval,vmRecovery,accessRevocation,queueEngine, checks: ["endpoint identity", `43 inventory kinds; ${capabilities.transferKinds.length} transfer adapters`, "actual ownership read", "direct PATCH rejected with 409", `${blockedConfigurations} configuration kinds reject direct DELETE with 409`, "immutable operation acknowledgement", `${fixture.ownerships.length} Terraform ownership records, a retained native network binding and a VM cleanup binding in the actual dashboard before operator revocation`, `${states.size} Terraform states remain separate; each resource kind has its own icon section and count`, "native bindings are displayed once", "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
   }, null, 2) + "\n");
-  console.log("Actual API ownership, separate state cards, icon sections and six dashboard screenshots verified.");
+  console.log("Actual API ownership, separate state cards, icon sections and nine dashboard screenshots verified.");
 } finally {
   await browser.close();
 }

@@ -12,6 +12,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "service",
     "storage_root",
     "volume",
+    "volume_attachment",
     "security_group",
     "shell",
     "schedule",
@@ -112,6 +113,9 @@ pub(super) fn validate(
         "service_deploy_token" => {
             return super::iac_deploy_tokens::validate(conn, resource, adopting);
         }
+        "volume_attachment" => {
+            return super::iac_volume_attachments::validate(conn, resource, adopting);
+        }
         "service_otlp" => return super::otlp_config::validate_owner(conn, resource, adopting),
         "cluster_host" | "cluster_placement" | "cluster_service" => {
             return super::iac_cluster::validate(conn, resource, adopting);
@@ -120,6 +124,9 @@ pub(super) fn validate(
     };
     if adopting && !conn.query_row(exists, [&resource.id], |row| row.get::<_, bool>(0))? {
         return Err(PersistenceError::InvalidStackResource);
+    }
+    if resource.kind == "volume" {
+        super::iac_volume_attachments::volume_parent_idle(conn, &resource.id)?;
     }
     let busy = match resource.kind.as_str() {
         "storage_root" => Some(

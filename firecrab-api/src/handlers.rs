@@ -6,6 +6,7 @@ pub mod builder_vm;
 pub mod console;
 pub mod console_sentinel;
 pub mod iac;
+pub(crate) mod iac_queries;
 pub mod images;
 #[cfg(test)]
 #[allow(clippy::err_expect)]
@@ -31,6 +32,7 @@ pub mod stack_sources;
 pub mod stacks;
 pub mod storage;
 pub mod update;
+pub(crate) mod vm_deletion;
 pub mod vm_execution;
 pub mod vms;
 

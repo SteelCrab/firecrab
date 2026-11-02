@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ApiClientError, fetchJson } from "../api/client";
 import { useI18n } from "../i18n";
 import Screen from "./layout/Screen";
+import NativeOperations from "./NativeOperations";
 import StackSource, { type Source } from "./StackSource";
 import {
   ResourceGroups,
@@ -86,6 +87,7 @@ export default function Stacks() {
   }, []);
   return (
     <Screen view="stacks" live={false}>
+      <NativeOperations />
       {error && <p role="alert">{error}</p>}
       {rows === null && !error && <p>{t("Loading…", "불러오는 중…")}</p>}
       {rows?.length === 0 &&

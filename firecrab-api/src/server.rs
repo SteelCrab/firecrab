@@ -177,7 +177,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/vms/{id}",
             get(handlers::vms::get_vm)
                 .put(handlers::vms::update_vm)
-                .delete(handlers::vms::delete_vm),
+                .delete(handlers::vm_deletion::route),
         )
         .route("/api/vms/{id}/start", post(handlers::vms::start_vm_request))
         .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
@@ -209,6 +209,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     let rest = Router::new()
         .route("/api/iac/identity", get(handlers::iac::identity))
         .route("/api/iac/owners", get(handlers::iac::owners))
+        .route(
+            "/api/iac/native-operations",
+            get(handlers::iac_queries::native_operations),
+        )
         .route("/api/iac/owner-changes/{id}", get(handlers::iac::operation))
         .route(
             "/api/iac/native-operations/{id}",

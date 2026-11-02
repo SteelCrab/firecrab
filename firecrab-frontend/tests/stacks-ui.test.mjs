@@ -9,6 +9,9 @@ test("Stack setup automatically updates and distinguishes missing and unavailabl
     fileURLToPath(new URL("../dist", import.meta.url)),
     0,
   );
+  fixture.handlers.set("GET /api/iac/native-operations", ({ send }) =>
+    send(200, { operations: [], nextBefore: null }),
+  );
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   let stacks = [];
@@ -44,6 +47,9 @@ test("Stack resource sections preserve state boundaries and follow an ownership 
   const fixture = await createFixtureServer(
     fileURLToPath(new URL("../dist", import.meta.url)),
     0,
+  );
+  fixture.handlers.set("GET /api/iac/native-operations", ({ send }) =>
+    send(200, { operations: [], nextBefore: null }),
   );
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();

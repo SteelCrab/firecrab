@@ -128,6 +128,17 @@ impl Store {
         service: Uuid,
     ) -> Result<bool, PersistenceError> {
         let conn = self.lock();
+        match super::iac_native::ensure_idle(
+            &conn,
+            &firecrab_stack::ManagedResource {
+                kind: "service".into(),
+                id: service.to_string(),
+            },
+        ) {
+            Ok(()) => {}
+            Err(PersistenceError::IacResourceBusy) => return Ok(false),
+            Err(error) => return Err(error),
+        }
         if super::iac_owners::terraform_owned(&conn, "service", service)? {
             return Ok(false);
         }

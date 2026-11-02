@@ -8,6 +8,8 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeAction {
+    /// Remove one inactive VM after recording its immutable disk-retention policy.
+    DeleteVm,
     /// Revoke one scoped credential and invalidate its previous management authority.
     RevokeDeployToken,
     /// Install the broker using its one reserved VM and disk identity.
@@ -56,8 +58,21 @@ pub struct NativeOperation {
     /// Original configuration generation for a versioned metadata removal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub configuration_generation: Option<u64>,
+    /// Immutable VM artifact policy. Other native actions omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retain_disks: Option<bool>,
 }
 
 fn is_zero(value: &u64) -> bool {
     *value == 0
+}
+
+/// A bounded page of active work, including resources without an IaC owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeOperationsPage {
+    /// Running and uncertain operations only; completed receipts remain readable by UUID.
+    pub operations: Vec<NativeOperation>,
+    /// Fetch the next page with `before`; ordering uses canonical operation UUIDs.
+    pub next_before: Option<uuid::Uuid>,
 }

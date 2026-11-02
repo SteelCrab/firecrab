@@ -287,3 +287,6 @@ This ownership prerequisite does not complete either declarative workflow or the
 
 See [service Deploy token ownership](iac-deploy-tokens.md) for exact composite identities,
 operator revocation, retired credentials and parent-removal protection.
+
+See [volume attachments and native operation recovery](iac-native-operations.md) for
+scoped mount ownership, VM cleanup fences and the active-work dashboard.

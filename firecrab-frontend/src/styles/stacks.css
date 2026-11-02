@@ -126,3 +126,17 @@
     margin-bottom: 8px;
   }
 }
+
+.stack-native-work {
+  min-width: 0;
+}
+.stack-native-operation {
+  min-width: 0;
+  padding-block: 1rem;
+  border-top: 1px solid var(--border);
+}
+.stack-native-operation .stack-resource-heading > svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex-shrink: 0;
+}

@@ -30,7 +30,6 @@ use crate::model::{
     UpdateVmResourcesRequest, VmRecord, VmState,
 };
 use crate::network_policy::EgressPolicy;
-use crate::persistence::PersistenceError;
 use crate::rootfs;
 use crate::server::RequestId;
 use crate::state::AppState;
@@ -1374,8 +1373,21 @@ pub(crate) async fn delete_vm_with_disk_policy(
     retain_disks: bool,
     stack_operation: Option<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    let _guard = state.lock_vm(id).await;
-    ensure_no_active_sandbox_previews(&state, id, request_id.0)?;
+    super::vm_deletion::execute(state, request_id, id, retain_disks, stack_operation).await
+}
+
+/// The caller holds the VM lock through admission and cleanup.
+pub(crate) fn prepare_vm_delete(
+    state: &AppState,
+    request_id: RequestId,
+    id: Uuid,
+    stack_operation: Option<Uuid>,
+) -> Result<VmRecord, AppError> {
+    state
+        .store
+        .ensure_vm_attachments_unmanaged(id)
+        .map_err(|error| super::stacks::persistence_error(error, request_id.0))?;
+    ensure_no_active_sandbox_previews(state, id, request_id.0)?;
     if state
         .store
         .managed_database_rabbitmq()
@@ -1412,7 +1424,7 @@ pub(crate) async fn delete_vm_with_disk_policy(
                 )
             })?;
         if has_volumes
-            || crate::network_policy::vm_is_active(&state, &vm)
+            || crate::network_policy::vm_is_active(state, &vm)
                 .map_err(|_| AppError::internal(request_id.0))?
         {
             return Err(AppError::conflict(
@@ -1422,15 +1434,16 @@ pub(crate) async fn delete_vm_with_disk_policy(
             ));
         }
     }
-    if (vm.security_group_id.is_some() || has_volumes)
-        && crate::network_policy::vm_is_active(&state, &vm)
-            .map_err(|_| AppError::internal(request_id.0))?
+    if crate::network_policy::vm_is_active(state, &vm)
+        .map_err(|_| AppError::internal(request_id.0))?
     {
         return Err(AppError::conflict(
             if has_volumes {
                 "volume_vm_active"
-            } else {
+            } else if vm.security_group_id.is_some() {
                 "security_group_in_use"
+            } else {
+                "vm_runtime_active"
             },
             "stop the VM host runtime before deleting it",
             request_id.0,
@@ -1439,6 +1452,18 @@ pub(crate) async fn delete_vm_with_disk_policy(
     if !vm.state.can_delete() {
         return Err(AppError::invalid_state(vm.state, request_id.0));
     }
+    Ok(vm)
+}
+
+/// Admission is durable before any log drain, host teardown or artifact removal.
+pub(crate) async fn delete_vm_admitted(
+    state: AppState,
+    request_id: RequestId,
+    native: crate::persistence::iac_vm_deletes::VmDeleteIntent,
+) -> Result<StatusCode, AppError> {
+    let id = Uuid::parse_str(&native.operation.ownership.resource.id)
+        .map_err(|_| AppError::internal(request_id.0))?;
+    let retain_disks = native.retain_disks;
     // Capture the final buffered application output before removing artifacts.
     // A damaged log buffer must never prevent VM cleanup.
     if !matches!(
@@ -1456,6 +1481,11 @@ pub(crate) async fn delete_vm_with_disk_policy(
         )
         .await;
     }
+    state
+        .store
+        .validate_native_vm_delete(&native)
+        .map_err(|error| super::stacks::persistence_error(error, request_id.0))?;
+    super::vm_deletion::teardown(&state, &native, request_id.0).await?;
     let removed = {
         let mut vms = state
             .vms
@@ -1470,20 +1500,14 @@ pub(crate) async fn delete_vm_with_disk_policy(
         vms.remove(&id).expect("record checked under the same lock")
     };
 
-    // A VM may be stopped because the guest exited or because the API was
-    // recovering from an interrupted lifecycle. In both cases its TAP and
-    // nft policy can still exist even though no process is currently tracked.
-    // Tear them down before releasing the lease, so a later VM cannot be
-    // assigned an address that host firewall state still points at. This is
-    // deliberately best-effort: deletion must still be able to remove a
-    // corrupt/partially-created VM record, and `teardown_vm_network` logs
-    // any helper-side failure for recovery diagnostics.
-    teardown_vm_network(&state, id).await;
-
     let store = state.store.clone();
     let artifact_paths =
         crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&removed.storage_root), id);
+    let expected = native.operation.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        store
+            .validate_native_vm_delete(&native)
+            .map_err(|error| error.to_string())?;
         // Retaining the VM keeps its private artifact tree, including runtime
         // logs and disks. Otherwise remove the whole tree before its record.
         if let Err(error) = if retain_disks {
@@ -1496,20 +1520,9 @@ pub(crate) async fn delete_vm_with_disk_policy(
                 artifact_paths.dir.display()
             ));
         }
-        match store.delete(id) {
-            Ok(()) | Err(PersistenceError::MissingVm { .. }) => {}
-            Err(error) => return Err(error.to_string()),
-        }
-        // Only ever freed here, after everything else about the VM is gone
-        // — see Store::active_lease's doc comment. NotLeased shouldn't
-        // happen (every VM gets one at create_vm), but isn't worth failing
-        // an otherwise-successful delete over.
-        let _ = store.clear_vm_shells(id);
-        let _ = store.clear_vm_port_forwards(id);
-        match store.release_lease(id) {
-            Ok(()) | Err(IpamError::NotLeased { .. }) => Ok(()),
-            Err(error) => Err(error.to_string()),
-        }
+        store
+            .finish_native_vm_delete(&native)
+            .map_err(|error| error.to_string())
     })
     .await
     .map_err(|error| error.to_string())
@@ -1517,11 +1530,7 @@ pub(crate) async fn delete_vm_with_disk_policy(
 
     if let Err(reason) = result {
         tracing::error!(request_id = %request_id.0, vm_id = %id, reason, "vm delete failed");
-        state
-            .vms
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(id, removed);
+        super::vm_deletion::restore_failed_cleanup(&state, removed, &expected);
         return Err(AppError::internal(request_id.0));
     }
     state

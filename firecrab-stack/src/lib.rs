@@ -21,7 +21,9 @@ pub use apply::{
 };
 pub use inputs::{PlanInputs, TemplatePin, TemplateSnapshot};
 pub use lifecycle::{LifecyclePolicy, VmDiskIdentity};
-pub use native_operation::{NativeAction, NativeOperation, NativeOperationState};
+pub use native_operation::{
+    NativeAction, NativeOperation, NativeOperationState, NativeOperationsPage,
+};
 pub use ownership::{
     ChangeResourceOwner, ManagedResource, Manager, OwnershipOperation, ResourceOwner,
     ResourceOwnership, resource_kinds,

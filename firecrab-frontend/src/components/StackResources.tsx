@@ -106,6 +106,10 @@ export function terraformStates(owners: Ownership[]): [string, Ownership[]][] {
   return [...states.entries()].sort(([a], [b]) => a.localeCompare(b));
 }
 
+export function resourceKind(kind: string): [ViewId, string, string] {
+  return KINDS[kind] ?? ["stacks", kind, kind];
+}
+
 export function ResourceGroups({ records }: { records: Ownership[] }) {
   const { t } = useI18n();
   const groups = new Map<string, Ownership[]>();
@@ -120,7 +124,7 @@ export function ResourceGroups({ records }: { records: Ownership[] }) {
       {[...groups.entries()]
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([kind, items]) => {
-          const [view, en, ko] = KINDS[kind] ?? ["stacks", kind, kind];
+          const [view, en, ko] = resourceKind(kind);
           const Icon = VIEW_ICONS[view];
           return (
             <section
