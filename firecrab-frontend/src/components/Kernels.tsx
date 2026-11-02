@@ -9,6 +9,7 @@ import {
   Square,
   Trash2,
   Download,
+  ArrowUpRight,
 } from "lucide-react";
 import type {
   ImageResponse,
@@ -42,6 +43,37 @@ import "../styles/kernels.css";
 
 type Jobs = Record<string, KernelInstallResponse | null>;
 const KernelIcon = VIEW_ICONS.kernels;
+
+function KernelSourceLink({
+  source,
+}: {
+  source: { host: string; origin: string };
+}) {
+  const official = source.origin === "https://registry.firecrab.dev";
+  return (
+    <a
+      className="kernel-source-link"
+      data-official={official || undefined}
+      href={source.origin}
+      aria-label={source.host}
+      target="_blank"
+      rel="noreferrer"
+    >
+      <span className="kernel-source-mark">
+        {official ? (
+          <img src="/firecrab.png" alt="" width={32} height={32} />
+        ) : (
+          <Download aria-hidden="true" />
+        )}
+      </span>
+      <span className="kernel-source-identity">
+        <strong>{official ? "Firecrab Registry" : source.host}</strong>
+        <span>{official ? source.host : source.origin}</span>
+      </span>
+      <ArrowUpRight className="kernel-source-external" aria-hidden="true" />
+    </a>
+  );
+}
 
 export default function Kernels() {
   const { t, locale } = useI18n();
@@ -547,22 +579,30 @@ export default function Kernels() {
                 {kernelBytes(current.sizeBytes)}
               </DetailProp>
             )}
-            {currentSource && (
-              <DetailProp
-                label={
-                  current.installSource === "registry"
-                    ? t("Registry package", "레지스트리 패키지")
-                    : t("Source archive", "소스 파일")
-                }
-                wrap
-              >
-                <a href={currentSource.href} target="_blank" rel="noreferrer">
-                  {currentSource.href}
-                </a>
-              </DetailProp>
-            )}
           </dl>
         </DetailSection>
+        {currentSource && (
+          <section
+            className="kernel-source-package"
+            aria-label={
+              current.installSource === "registry"
+                ? t("Registry package", "레지스트리 패키지")
+                : t("Source archive", "소스 파일")
+            }
+          >
+            <KernelSourceLink source={currentSource} />
+            <div className="kernel-source-file">
+              <span className="kernel-source-caption">
+                {current.installSource === "registry"
+                  ? t("Registry package", "레지스트리 패키지")
+                  : t("Source archive", "소스 파일")}
+              </span>
+              <a href={currentSource.href} target="_blank" rel="noreferrer">
+                {currentSource.href}
+              </a>
+            </div>
+          </section>
+        )}
         {current.installed && current.inUse && (
           <DetailSection
             title={t("Images using this kernel", "사용 중인 이미지")}
@@ -742,19 +782,15 @@ export default function Kernels() {
             className="kernel-source-footer"
             aria-label={t("Kernel download source", "커널 다운로드 출처")}
           >
-            <Download aria-hidden="true" />
-            <span>{t("Download source", "다운로드 출처")}</span>
+            <span className="kernel-source-caption">
+              {t("Download source", "다운로드 출처")}
+            </span>
             {downloadSources.length > 0 ? (
-              downloadSources.map((source) => (
-                <a
-                  key={source.origin}
-                  href={source.origin}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {source.host}
-                </a>
-              ))
+              <div className="kernel-source-list">
+                {downloadSources.map((source) => (
+                  <KernelSourceLink key={source.origin} source={source} />
+                ))}
+              </div>
             ) : (
               <span>
                 {t(

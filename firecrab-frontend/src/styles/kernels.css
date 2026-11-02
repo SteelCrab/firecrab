@@ -2,26 +2,128 @@
   min-width: 0;
 }
 .kernel-source-footer {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: grid;
+  gap: 10px;
   margin-top: 24px;
-  padding-top: 16px;
+  padding-top: 20px;
   border-top: 1px solid var(--border);
   color: var(--text-3);
   font-size: 13px;
 }
-.kernel-source-footer > svg {
+.kernel-source-caption {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.kernel-source-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 10px;
+}
+.kernel-source-link {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease;
+}
+.kernel-source-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  color: var(--text-2);
+}
+.kernel-source-link[data-official] .kernel-source-mark {
+  background: var(--accent-soft);
+}
+.kernel-source-mark img {
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+.kernel-source-mark svg {
+  width: 18px;
+  height: 18px;
+}
+.kernel-source-identity {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 3px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.kernel-source-identity strong {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.kernel-source-identity > span {
+  color: var(--text-3);
+  font-size: 11px;
+}
+.kernel-source-external {
   flex: 0 0 16px;
   width: 16px;
   height: 16px;
+  color: var(--text-3);
 }
-.kernel-source-footer a {
+.kernel-source-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.kernel-source-package {
+  margin: 24px 0;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.kernel-source-package .kernel-source-link {
+  border: 0;
+  border-radius: 0;
+}
+.kernel-source-package .kernel-source-link:focus-visible {
+  outline-offset: -3px;
+}
+.kernel-source-file {
+  display: grid;
+  gap: 7px;
+  padding: 14px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-subtle);
+}
+.kernel-source-file > a {
   min-width: 0;
   color: var(--text-2);
+  font: 11px/1.7 var(--mono);
   overflow-wrap: anywhere;
+  text-decoration-color: var(--border-strong);
   text-underline-offset: 3px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .kernel-source-link:hover {
+    border-color: var(--border-strong);
+    background: var(--bg-subtle);
+  }
+  .kernel-source-file > a:hover {
+    color: var(--accent);
+    text-decoration-color: currentColor;
+  }
 }
 .kernel-catalog-heading {
   display: flex;
@@ -194,7 +296,14 @@
   }
 }
 .kernel-detail .props {
-  grid-template-columns: 124px minmax(0, 1fr);
+  grid-template-columns: minmax(88px, 0.8fr) minmax(0, 1.2fr);
+  column-gap: 16px;
+}
+.kernel-detail .props .prop-value {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
 }
 .kernel-detail .props a {
   overflow-wrap: anywhere;
@@ -476,6 +585,7 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .kernel-source-link,
   .kernel-progress > span,
   .kernel-timeline [data-state="current"] .lucide-loader-circle {
     animation: none;
