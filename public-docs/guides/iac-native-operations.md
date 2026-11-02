@@ -93,9 +93,40 @@ and database locks remain necessary for SQL execution.
 Maintenance claims move atomically from queued to running. A second API process
 cannot execute the same attempt. Recovery invalidates older progress writes.
 The internal safety snapshot must carry its exact running parent attempt.
-These are shared lifecycle prerequisites. Database bindings, event capture,
-managed RabbitMQ and declarative migrations are still under implementation in
+These are shared lifecycle prerequisites. Full database binding/event capture,
+managed RabbitMQ and declarative migration contracts are still under implementation in
 stage 2; this connection work does not establish full IaC coverage.
+
+## Database binding accounts
+
+`database_binding` uses the exact binding UUID and retains its database/service
+association. Adoption requires the existing account record to be ready and its
+configured target to have no pending maintenance. Transfer preserves the generated
+URI, account name, permissions and table list. It does not contact the database.
+
+Native binding creation and revocation retain a private immutable request before
+remote work. Creation defaults its operation ID to the existing `requestId`;
+revocation accepts `x-firecrab-operation-id`. The response reports that header.
+An exact completed retry returns the original summary or revocation receipt,
+including after later account removal. A retired binding UUID cannot be recreated.
+
+The service must be stopped for native account changes. The operation reserves
+its service, connection and configured database target. Generate and persist the
+private account credential once before provisioning. Failed setup, lost receipt
+commits and restart keep that same credential and operation for recovery. Older
+attempts cannot commit. PostgreSQL and MySQL use the same account-specific SQL
+session lock for provisioning and revocation. The server rechecks the attempt
+after acquiring that lock, before changing grants. A delayed older connection
+cannot re-enable an account after a newer recovery or revocation.
+Account revocation preserves application tables and rows;
+PostgreSQL generated roles retain their ownership marker with login disabled.
+
+Event setup cannot implicitly broaden a Terraform-owned account's inbox grants.
+It checks this before declaring broker resources. A maintenance job may refresh
+only derived table grants under its original running execution generation; it
+cannot change account credentials, access policy or association. Active jobs
+also prevent ownership transfer. Full event/broker/declarative-migration lifecycle
+and expanded Stack/Terraform execution remain pending.
 
 ## Observe and recover
 

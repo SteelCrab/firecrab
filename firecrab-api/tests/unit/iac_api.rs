@@ -90,6 +90,7 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "pool",
             "queue",
             "database_connection",
+            "database_binding",
             "storage_connection",
             "secret",
             "secret_connection",
@@ -1118,3 +1119,6 @@ mod database_job_tests;
 
 #[path = "iac_database_operations.rs"]
 mod database_operation_tests;
+
+#[path = "iac_database_bindings.rs"]
+mod database_binding_tests;

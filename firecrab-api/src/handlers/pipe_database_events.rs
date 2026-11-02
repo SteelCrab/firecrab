@@ -228,6 +228,48 @@ pub async fn create(
         .ok_or_else(|| {
             crate::pipe_databases::validation("Set up RabbitMQ before enabling triggers", rid.0)
         })?;
+    let service_resource = firecrab_stack::ManagedResource {
+        kind: "service".into(),
+        id: input.service_id.to_string(),
+    };
+    if !state
+        .store
+        .iac_public_write_allowed(&service_resource)
+        .map_err(|e| super::stacks::persistence_error(e, rid.0))?
+    {
+        return Err(super::iac::managed(rid.0));
+    }
+    if let Some(binding) = state
+        .store
+        .database_bindings()
+        .map_err(|_| AppError::internal(rid.0))?
+        .into_iter()
+        .find(|b| b.input.service_id == input.service_id && b.input.env_name == "DATABASE_URL")
+    {
+        let target = firecrab_stack::ManagedResource {
+            kind: "database_binding".into(),
+            id: binding.id.to_string(),
+        };
+        if !state
+            .store
+            .iac_public_write_allowed(&target)
+            .map_err(|e| super::stacks::persistence_error(e, rid.0))?
+        {
+            return Err(super::iac::managed(rid.0));
+        }
+    }
+    let binding_id = state
+        .store
+        .database_bindings()
+        .map_err(|_| AppError::internal(rid.0))?
+        .iter()
+        .find(|b| b.input.service_id == input.service_id && b.input.env_name == "DATABASE_URL")
+        .map(|b| b.id)
+        .unwrap_or(input.request_id);
+    let mut binding_authority = state
+        .store
+        .database_binding_configuration_authority(binding_id, &record, input.service_id)
+        .map_err(|e| super::stacks::persistence_error(e, rid.0))?;
     let mut trigger = Trigger {
         id: input.request_id,
         database_id: record.id,
@@ -287,10 +329,10 @@ pub async fn create(
         };
         binding.event_inbox = true;
         binding.ready = false;
-        state.store.save_database_binding(&binding).map_err(|_|Error::Invalid("Cannot save handler inbox ownership"))?;
+        binding_authority=state.store.save_database_binding_configuration(&binding,&binding_authority).map_err(|_|Error::Invalid("Cannot save handler inbox ownership"))?;
         bindings::provision(&record,&binding).await?;
         binding.ready = true;
-        state.store.save_database_binding(&binding).map_err(|_|Error::Invalid("Cannot activate handler inbox"))?;
+        state.store.save_database_binding_configuration(&binding,&binding_authority).map_err(|_|Error::Invalid("Cannot activate handler inbox"))?;
         Ok(())
     }).await?;
     state

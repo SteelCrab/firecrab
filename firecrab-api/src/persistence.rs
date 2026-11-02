@@ -52,6 +52,7 @@ mod stack_sources;
 pub(crate) use stack_sources::SourceTrigger;
 pub(crate) mod iac_auto_deploy;
 mod iac_cluster;
+pub(crate) mod iac_database_bindings;
 pub(crate) mod iac_database_operations;
 mod iac_database_targets;
 mod iac_dependencies;
@@ -881,6 +882,7 @@ impl Store {
         iac_native_schema::initialize(&conn)?;
         conn.execute_batch(iac_database_targets::SCHEMA)?;
         conn.execute_batch(iac_database_operations::SCHEMA)?;
+        conn.execute_batch(iac_database_bindings::SCHEMA)?;
         conn.execute_batch(iac_vm_deletes::SCHEMA)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;

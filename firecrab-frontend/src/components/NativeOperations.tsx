@@ -18,6 +18,8 @@ type Operation = {
 };
 type Page = { operations: Operation[]; nextBefore: string | null };
 const ACTIONS: Record<string, [string, string]> = {
+  create_database_binding: ["Create database binding", "DB 바인딩 생성"],
+  delete_database_binding: ["Delete database binding", "DB 바인딩 삭제"],
   create_database_connection: ["Create database connection", "DB 연결 생성"],
   update_database_connection: ["Update database connection", "DB 연결 수정"],
   delete_vm: ["Delete VM", "VM 삭제"],
@@ -44,6 +46,8 @@ function validOperation(value: Operation): boolean {
   );
 }
 const RECOVERABLE = new Set([
+  "create_database_binding",
+  "delete_database_binding",
   "create_database_connection",
   "update_database_connection",
   "delete_vm",

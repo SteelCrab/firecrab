@@ -42,6 +42,7 @@ pub mod pipe;
 pub mod pipe_ai;
 /// Provider authentication endpoints shared by supported Pipe services.
 pub mod pipe_auth;
+pub(crate) mod pipe_database_binding_mutations;
 pub mod pipe_database_bindings;
 pub mod pipe_database_events;
 pub mod pipe_database_maintenance;

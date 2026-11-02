@@ -355,8 +355,71 @@ async fn database_services_real_engines() {
         )
         .await
         .unwrap();
+        // Stale attempts must fail after acquiring their SQL-session lock, before grants.
+        assert!(
+            bindings::provision_checked(&record, &binding, || Err(Error::Invalid(
+                "superseded fixture attempt"
+            )))
+            .await
+            .is_err()
+        );
+        let key = format!("fc-binding:{}", binding.id);
+        match &mut c {
+            DatabaseConnection::Postgres(c) => assert!(
+                sqlx::query_scalar::<_, bool>(
+                    "SELECT pg_try_advisory_lock(hashtextextended($1,0))"
+                )
+                .bind(&key)
+                .fetch_one(c)
+                .await
+                .unwrap()
+            ),
+            DatabaseConnection::Mysql(c) => assert_eq!(
+                sqlx::query_scalar::<_, Option<i64>>("SELECT GET_LOCK(?,0)")
+                    .bind(&key)
+                    .fetch_one(c)
+                    .await
+                    .unwrap(),
+                Some(1)
+            ),
+        }
+        let checked = std::sync::atomic::AtomicBool::new(false);
+        assert!(
+            bindings::provision_checked(&record, &binding, || {
+                checked.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .is_err()
+        );
+        assert!(!checked.load(std::sync::atomic::Ordering::SeqCst));
+        match &mut c {
+            DatabaseConnection::Postgres(c) => assert!(
+                sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock(hashtextextended($1,0))")
+                    .bind(&key)
+                    .fetch_one(c)
+                    .await
+                    .unwrap()
+            ),
+            DatabaseConnection::Mysql(c) => assert_eq!(
+                sqlx::query_scalar::<_, Option<i64>>("SELECT RELEASE_LOCK(?)")
+                    .bind(&key)
+                    .fetch_one(c)
+                    .await
+                    .unwrap(),
+                Some(1)
+            ),
+        }
         bindings::provision(&record, &binding).await.unwrap();
         bindings::provision(&record, &binding).await.unwrap();
+        assert!(
+            bindings::revoke_checked(&record, &binding, || Err(Error::Invalid(
+                "superseded fixture attempt"
+            )))
+            .await
+            .is_err()
+        );
+        native_binding_api(&record).await;
         let private = binding.connection.settings(binding.id).unwrap();
         let mut restricted = DatabaseConnection::connect_write(&binding.connection, &private)
             .await
@@ -1247,4 +1310,111 @@ async fn database_event_and_maintenance_api_real_engines() {
         )
         .await;
     }
+}
+
+/// Run the durable native account API against each real disposable engine.
+async fn native_binding_api(record: &DatabaseRecord) {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    let directory = tempfile::tempdir().unwrap();
+    let state = crate::state::AppState::with_db_file(
+        crate::templates::TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .unwrap(),
+        directory.path().join("state.db"),
+    )
+    .await
+    .unwrap();
+    state
+        .store
+        .save_pipe_database(record.id, &record.input)
+        .unwrap();
+    let service = Uuid::new_v4();
+    state.store.insert_micro_service(&serde_json::from_value(json!({"id":service,"name":format!("native-{}",service.simple()),"image":"ghcr.io/qa/app:1","port":8080,"cpu":1,"ram":512})).unwrap()).unwrap();
+    let app = crate::server::build_router(
+        state.clone(),
+        &crate::server::HttpConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            allowed_origins: vec![],
+            max_concurrent_requests: 16,
+            request_timeout: std::time::Duration::from_secs(15),
+            static_root: None,
+        },
+    );
+    let id = Uuid::new_v4();
+    let input =
+        json!({"requestId":id,"serviceId":service,"access":"read","envName":"DB_NATIVE_URL"});
+    let create = || {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/pipe/databases/{}/bindings", record.id))
+            .header("content-type", "application/json")
+            .body(Body::from(input.to_string()))
+            .unwrap()
+    };
+    let response = app.clone().oneshot(create()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["x-firecrab-operation-id"],
+        id.to_string()
+    );
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let summary: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(summary["ready"], true);
+    let binding = state.store.database_bindings().unwrap().pop().unwrap();
+    let settings = binding.connection.settings(id).unwrap();
+    DatabaseConnection::connect(&binding.connection, &settings)
+        .await
+        .unwrap()
+        .ping()
+        .await
+        .unwrap();
+    let retry = app.clone().oneshot(create()).await.unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(retry.into_body(), 65536)
+            .await
+            .unwrap(),
+        body
+    );
+    assert_eq!(
+        state.store.database_bindings().unwrap()[0].connection.uri,
+        binding.connection.uri
+    );
+    let operation = Uuid::new_v4();
+    let delete = || {
+        Request::builder()
+            .method("DELETE")
+            .uri(format!("/api/pipe/database-bindings/{id}"))
+            .header("x-firecrab-operation-id", operation.to_string())
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        app.clone().oneshot(delete()).await.unwrap().status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.oneshot(delete()).await.unwrap().status(),
+        StatusCode::OK
+    );
+    assert!(state.store.database_bindings().unwrap().is_empty());
+    assert!(
+        DatabaseConnection::connect(&binding.connection, &settings)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        state
+            .store
+            .iac_native_operation(operation)
+            .unwrap()
+            .unwrap()
+            .state,
+        firecrab_stack::NativeOperationState::Succeeded
+    );
 }

@@ -19,6 +19,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "pool",
     "queue",
     "database_connection",
+    "database_binding",
     "storage_connection",
     "secret",
     "secret_connection",
@@ -85,6 +86,9 @@ pub(super) fn validate(
         }
         "queue" => {
             "SELECT EXISTS(SELECT 1 FROM application_queues WHERE id=?1 AND json_extract(record,'$.id')=?1)"
+        }
+        "database_binding" => {
+            return super::iac_database_bindings::validate_owner(conn, resource, adopting);
         }
         "database_connection" => "SELECT EXISTS(SELECT 1 FROM pipe_databases WHERE id=?1)",
         "storage_connection" => {

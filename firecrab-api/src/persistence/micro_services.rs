@@ -80,7 +80,8 @@ pub(super) fn ensure_children_released(
     id: Uuid,
 ) -> Result<(), PersistenceError> {
     let managed: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM iac_resource_owners WHERE manager IS NOT NULL AND ((kind IN ('service_otlp','service_auto_deploy') AND resource_id=?1) OR (kind='service_deploy_token' AND resource_id LIKE ?1||':%')))", [id.to_string()], |row| row.get(0))?;
-    if managed {
+    let database_dependencies: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM database_bindings WHERE service_id=?1) OR EXISTS(SELECT 1 FROM database_triggers WHERE json_extract(spec,'$.serviceId')=?1)", [id.to_string()], |r|r.get(0))?;
+    if managed || database_dependencies {
         return Err(PersistenceError::IacManagedDependent);
     }
     Ok(())

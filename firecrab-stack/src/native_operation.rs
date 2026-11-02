@@ -8,6 +8,10 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeAction {
+    /// Provision one private service account with stable generated credentials.
+    CreateDatabaseBinding,
+    /// Revoke only the exact binding-owned service account.
+    DeleteDatabaseBinding,
     /// Verify and save one connection using its reserved UUID.
     CreateDatabaseConnection,
     /// Verify and replace connection settings without changing its UUID.

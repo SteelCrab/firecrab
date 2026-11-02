@@ -89,6 +89,7 @@ impl ManagedResource {
                 | "service_auto_deploy"
                 | "service_otlp"
                 | "database_connection"
+                | "database_binding"
                 | "storage_connection"
                 | "secret"
                 | "secret_connection"

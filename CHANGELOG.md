@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Retain database binding account intents, generated credentials and parent
+  reservations across interruption. Recover the original account, protect
+  ownership transfers and preserve derived table grants under the original
+  maintenance attempt. Reject implicit inbox changes before broker setup (#548).
+
 - Retain native database connection create, update and write-access intents before
   external SQL. Preserve exact retry receipts, fence matching database aliases and
   recover interrupted setup using its original identity. Serialize maintenance

@@ -19,7 +19,7 @@ pub(super) fn validate(conn: &Connection, operation: Uuid) -> Result<(), Persist
     Ok(())
 }
 
-fn reserve(
+pub(super) fn reserve(
     conn: &Connection,
     operation: &NativeOperation,
     mut parent: ManagedResource,

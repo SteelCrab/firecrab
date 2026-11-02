@@ -205,17 +205,62 @@ impl Store {
             .map(|r| decode(&r?))
             .collect()
     }
-    /// Persist a binding while preserving unique service environment names.
+    /// Test records bypass external provisioning; production writes use checked intents.
+    #[cfg(test)]
     pub fn save_database_binding(&self, binding: &BindingRecord) -> Result<(), PersistenceError> {
-        self.lock().execute("INSERT INTO database_bindings VALUES (?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",params![binding.id.to_string(),binding.input.service_id.to_string(),binding.database_id.to_string(),encode(binding)?])?;
-        Ok(())
+        super::iac_database_bindings::write(&self.lock(), binding)
     }
-    /// Remove private binding metadata after account revocation.
-    pub fn delete_database_binding(&self, id: Uuid) -> Result<(), PersistenceError> {
-        self.lock().execute(
-            "DELETE FROM database_bindings WHERE id=?1",
-            [id.to_string()],
+    /// Only derived grants may be observed under the original maintenance attempt.
+    pub(crate) fn save_database_binding_observation(
+        &self,
+        job: &crate::pipe_databases::maintenance::Job,
+        before: &BindingRecord,
+        after: &BindingRecord,
+    ) -> Result<(), PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current = super::database_job_claims::read(&tx, job.id)?
+            .ok_or(PersistenceError::StaleIacOwner)?;
+        if current.status != "running"
+            || current.execution_generation != job.execution_generation
+            || !super::iac_database_targets::same_request(&current, job)
+        {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+        let raw: String = tx.query_row(
+            "SELECT spec FROM pipe_databases WHERE id=?1",
+            [before.database_id.to_string()],
+            |r| r.get(0),
         )?;
+        let record = crate::pipe_databases::DatabaseRecord {
+            id: before.database_id,
+            input: decode(&raw)?,
+        };
+        if crate::pipe_databases::maintenance::target_hash(&record)
+            .map_err(|_| PersistenceError::IacOperationIdentity)?
+            != job.target_hash
+        {
+            return Err(PersistenceError::IacOperationIdentity);
+        }
+        let actual: String = tx.query_row(
+            "SELECT spec FROM database_bindings WHERE id=?1",
+            [before.id.to_string()],
+            |r| r.get(0),
+        )?;
+        if serde_json::from_str::<serde_json::Value>(&actual)
+            .map_err(|_| PersistenceError::IacOperationIdentity)?
+            != serde_json::to_value(before).map_err(|_| PersistenceError::IacOperationIdentity)?
+        {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+        let mut definition = after.clone();
+        definition.tables = before.tables.clone();
+        if encode(&definition)? != encode(before)? {
+            return Err(PersistenceError::IacOperationIdentity);
+        }
+        super::iac_native::ensure_idle(&tx, &super::iac_database_bindings::resource(before.id))?;
+        super::iac_database_bindings::write(&tx, after)?;
+        tx.commit()?;
         Ok(())
     }
     /// Store a redacted worker health reason for dashboard polling.

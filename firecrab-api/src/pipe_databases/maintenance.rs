@@ -1004,7 +1004,11 @@ pub async fn require_maintenance(state: &AppState, record: &DatabaseRecord) -> R
 }
 
 /// Refresh application grants and reinstall capture after maintenance.
-async fn reconcile_dependencies(state: &AppState, record: &DatabaseRecord) -> Result<(), Error> {
+async fn reconcile_dependencies(
+    state: &AppState,
+    record: &DatabaseRecord,
+    job: &Job,
+) -> Result<(), Error> {
     let settings = record.input.settings(record.id).map_err(Error::Invalid)?;
     let mut c = DatabaseConnection::connect_write(&record.input, &settings).await?;
     write::initialize(&mut c, record.id).await?;
@@ -1021,6 +1025,7 @@ async fn reconcile_dependencies(state: &AppState, record: &DatabaseRecord) -> Re
         .into_iter()
         .filter(|b| b.database_id == record.id)
     {
+        let before = binding.clone();
         binding.tables = tables
             .tables
             .iter()
@@ -1032,7 +1037,7 @@ async fn reconcile_dependencies(state: &AppState, record: &DatabaseRecord) -> Re
         super::bindings::provision(record, &binding).await?;
         state
             .store
-            .save_database_binding(&binding)
+            .save_database_binding_observation(job, &before, &binding)
             .map_err(|_| Error::Invalid("Cannot save refreshed service grants"))?;
     }
     for mut trigger in state
@@ -1129,7 +1134,7 @@ async fn run(state: &AppState, record: &DatabaseRecord, job: &mut Job) -> Result
     for alias in aliases {
         let mut privileged = record.clone();
         privileged.id = alias.id;
-        reconcile_dependencies(state, &privileged).await?;
+        reconcile_dependencies(state, &privileged, job).await?;
     }
     for mut old in state
         .store

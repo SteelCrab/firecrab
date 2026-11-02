@@ -7,7 +7,7 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 ## Current support
 
 Network, standalone VM, MicroService, registered storage root, volume/VM attachment, security group,
-shell, schedule, pool, Queue, database connection, S3 connection, Secret, Secret connection,
+shell, schedule, pool, Queue, database connection/binding, S3 connection, Secret, Secret connection,
 Auth, registry, AI connection, project model-default, Sandbox environment/project, Git source,
 Sandbox access policy, Queue engine, cluster host/placement/service, service automatic deployment, OTLP settings and Deploy tokens
 can move between native Stack and a Terraform state owner.
