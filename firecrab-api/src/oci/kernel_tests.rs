@@ -37,6 +37,8 @@ pub(crate) async fn install_fixture_kernel(root: &Path, architecture: Architectu
         source_sha256: "a".repeat(64),
         image_sha256: Sha256Digest::of_bytes(&bytes).encoded().to_owned(),
         build_revision: "firecrab-host1".to_owned(),
+        package_url: None,
+        package_sha256: None,
     };
     tokio::fs::write(
         path.with_added_extension("json"),
@@ -66,6 +68,10 @@ async fn fixture_server_at(path: &str, bytes: Vec<u8>) -> (String, tokio::task::
             async move { bytes }
         }),
     );
+    fixture_router(router).await
+}
+
+async fn fixture_router(router: Router) -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
@@ -80,6 +86,27 @@ fn checksum_index(versions: &[&str]) -> Vec<u8> {
         .map(|version| format!("{}  linux-{version}.tar.xz\n", "a".repeat(64)))
         .collect::<String>()
         .into_bytes()
+}
+
+#[test]
+fn published_metadata_keeps_eol_and_omits_invalid_dates_and_sources() {
+    let document = serde_json::to_vec(&serde_json::json!({"releases": [
+        {"version": "7.2.15", "iseol": true, "source": kernel::source_url("7.2.15"),
+         "released": {"isodate": "2026-11-01"}},
+        {"version": "7.2.14", "source": kernel::source_url("7.2.14"),
+         "released": {"isodate": "2026-02-30"}},
+        {"version": "7.2.13", "source": "https://example.com/linux-7.2.13.tar.xz"},
+        {"version": "7.4-rc1", "source": "https://cdn.kernel.org/linux-7.4-rc1.tar.xz"}
+    ]}))
+    .unwrap();
+    let releases = kernel::parse_published_releases(&document);
+    assert_eq!(releases.len(), 2);
+    assert_eq!(releases[0].version, "7.2.15");
+    assert_eq!(releases[0].end_of_life, Some(true));
+    assert_eq!(releases[0].released_at.as_deref(), Some("2026-11-01"));
+    assert_eq!(releases[1].released_at, None);
+    assert_eq!(releases[1].end_of_life, None);
+    assert!(kernel::parse_published_releases(b"invalid JSON").is_empty());
 }
 
 #[tokio::test]
@@ -148,6 +175,28 @@ async fn recent_stable_keeps_expired_cache_when_upstream_is_invalid() {
     assert!(!cache.exists());
     server.abort();
     let _ = server.await;
+}
+
+#[test]
+fn stable_resolution_keeps_eol_installable_and_uses_the_published_stable_pointer() {
+    let eol = serde_json::json!({
+        "moniker": "stable", "version": "7.2.15", "iseol": true,
+        "source": kernel::source_url("7.2.15")
+    });
+    let bytes = serde_json::to_vec(&serde_json::json!({"releases": [eol.clone()]})).unwrap();
+    assert_eq!(
+        kernel::parse_stable_release(&bytes).unwrap().version,
+        "7.2.15"
+    );
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "latest_stable": {"version": "7.3"},
+        "releases": [eol, {
+            "moniker": "mainline", "version": "7.3", "iseol": false,
+            "source": kernel::source_url("7.3")
+        }]
+    }))
+    .unwrap();
+    assert_eq!(kernel::parse_stable_release(&bytes).unwrap().version, "7.3");
 }
 
 #[test]
@@ -263,53 +312,6 @@ async fn stable_metadata_is_cached_and_can_be_used_offline() {
 }
 
 #[tokio::test]
-async fn kernel_catalog_reports_current_stable_and_independent_local_versions() {
-    let directory = tempdir().unwrap();
-    let root = directory.path();
-    for version in ["7.2.2", "7.2.12"] {
-        install_fixture_kernel(root, Architecture::HOST, version).await;
-    }
-    let (url, server) = fixture_server(releases("7.2.13")).await;
-    let cache = root.join(".oci/kernel");
-    tokio::fs::create_dir_all(&cache).await.unwrap();
-    let digest = "a".repeat(64);
-    let sums = ["7.2.13", "7.2.12", "7.2.11", "7.2.10"]
-        .iter()
-        .map(|version| format!("{digest}  linux-{version}.tar.xz\n"))
-        .collect::<String>();
-    tokio::fs::write(cache.join("sha256sums-v7.asc"), sums)
-        .await
-        .unwrap();
-    let templates = TemplateRegistry::from_specs(root, std::iter::empty()).unwrap();
-    let downloads = ImageInstallTracker::with_base_url(&url);
-    let catalog = crate::kernel_manager::list(root, &templates, &downloads)
-        .await
-        .unwrap();
-    assert_eq!(
-        catalog
-            .iter()
-            .map(|entry| entry.version.as_str())
-            .collect::<Vec<_>>(),
-        ["7.2.13", "7.2.12", "7.2.11", "7.2.2"]
-    );
-    assert!(!catalog[0].installed);
-    assert!(catalog[0].image_sha256.is_empty());
-    assert!(
-        [1, 3]
-            .into_iter()
-            .all(|index| catalog[index].installed && catalog[index].image_sha256.len() == 64)
-    );
-    assert!(catalog.iter().all(|entry| {
-        entry
-            .package_url
-            .as_ref()
-            .unwrap()
-            .starts_with("https://cdn.kernel.org/")
-    }));
-    server.abort();
-}
-
-#[tokio::test]
 async fn source_download_rejects_corruption_and_removes_partial_files() {
     let directory = tempdir().unwrap();
     let bytes = b"verified upstream source".to_vec();
@@ -354,7 +356,7 @@ async fn cached_builds_verify_digest_and_architecture_before_offline_reuse() {
     for architecture in [Architecture::X86_64, Architecture::Aarch64] {
         install_fixture_kernel(root.path(), architecture, "7.2.12").await;
         assert!(kernel::cached_kernel_is_valid(root.path(), architecture, "7.2.12").await);
-        let path = kernel::ensure_managed_kernel(root.path(), architecture, "7.2.12", None, None)
+        let path = kernel::ensure_source_kernel(root.path(), architecture, "7.2.12", None, None)
             .await
             .unwrap();
         assert_eq!(
@@ -366,7 +368,7 @@ async fn cached_builds_verify_digest_and_architecture_before_offline_reuse() {
             .unwrap();
         assert!(!kernel::cached_kernel_is_valid(root.path(), architecture, "7.2.12").await);
         assert!(
-            kernel::ensure_managed_kernel(root.path(), architecture, "7.2.12", None, None)
+            kernel::ensure_source_kernel(root.path(), architecture, "7.2.12", None, None)
                 .await
                 .is_err()
         );
@@ -462,4 +464,152 @@ async fn cached_kernel_rejects_symlinks() {
     tokio::fs::rename(&path, &target).await.unwrap();
     std::os::unix::fs::symlink(&target, &path).unwrap();
     assert!(!kernel::cached_kernel_is_valid(root.path(), architecture, "7.2.12").await);
+}
+
+#[tokio::test]
+async fn cancelling_a_stalled_kernel_download_closes_it_and_removes_partial_files() {
+    use futures_util::StreamExt as _;
+    let directory = tempdir().unwrap();
+    let router = Router::new().route(
+        "/",
+        get(|| async {
+            axum::body::Body::from_stream(
+                futures_util::stream::once(async { Ok::<_, std::io::Error>(vec![b'x'; 1024]) })
+                    .chain(futures_util::stream::pending()),
+            )
+        }),
+    );
+    let (url, server) = fixture_router(router).await;
+    let tracker = ImageInstallTracker::disabled();
+    tracker.begin("7.2.15").unwrap();
+    let destination = directory.path().join("linux-7.2.15.tar.xz");
+    let worker_tracker = tracker.clone();
+    let worker_destination = destination.clone();
+    let worker = tokio::spawn(async move {
+        let result = kernel::download_source(
+            &url,
+            &worker_destination,
+            &Sha256Digest::of_bytes(b"not the incomplete stream"),
+            Some((&worker_tracker, "7.2.15")),
+        )
+        .await;
+        assert!(matches!(&result, Err(ResolveError::Cancelled)));
+        worker_tracker.finish_cancelled("7.2.15");
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while tracker.snapshot("7.2.15").downloaded_bytes != Some(1024) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), tracker.cancel_and_wait("7.2.15"))
+        .await
+        .unwrap();
+    worker.await.unwrap();
+    assert!(!destination.exists());
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    assert_eq!(
+        tracker.snapshot("7.2.15").status,
+        firecrab_api_types::ImageInstallStatus::Cancelled
+    );
+    assert!(tracker.begin("7.2.15").is_ok());
+    assert!(!*tracker.cancellation("7.2.15").unwrap().borrow());
+    server.abort();
+}
+
+#[tokio::test]
+async fn cancelling_a_kernel_builder_stops_its_compiler_descendants_before_completion() {
+    let directory = tempdir().unwrap();
+    let tracker = ImageInstallTracker::disabled();
+    tracker.begin("7.2.15").unwrap();
+    let mut command = std::process::Command::new("bash");
+    command.args(["-c",
+        "printf '%s' \"$$\" > \"$1/parent\"; bash -c 'while :; do printf x >> \"$1\"; sleep 0.02; done' bash \"$1/heartbeat\" & wait",
+        "kernel-cancel-test"]).arg(directory.path());
+    let worker_tracker = tracker.clone();
+    let worker = tokio::spawn(async move {
+        let result = kernel::run_build_command(
+            Architecture::HOST,
+            command,
+            Some((&worker_tracker, "7.2.15")),
+        )
+        .await;
+        assert!(matches!(result, Err(ResolveError::Cancelled)));
+        worker_tracker.finish_cancelled("7.2.15");
+    });
+    let heartbeat = directory.path().join("heartbeat");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !heartbeat.exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let pid: i32 = std::fs::read_to_string(directory.path().join("parent"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    struct Cleanup(i32);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            unsafe {
+                libc::kill(-self.0, libc::SIGKILL);
+            }
+        }
+    }
+    let _cleanup = Cleanup(pid);
+    tokio::time::timeout(Duration::from_secs(5), tracker.cancel_and_wait("7.2.15"))
+        .await
+        .unwrap();
+    worker.await.unwrap();
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "builder parent must be reaped"
+    );
+    let size = std::fs::metadata(&heartbeat).unwrap().len();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        std::fs::metadata(&heartbeat).unwrap().len(),
+        size,
+        "compiler descendant must stop writing"
+    );
+}
+
+#[tokio::test]
+async fn cancelling_a_kernel_waiter_releases_it_without_cancelling_the_next_attempt() {
+    let directory = tempdir().unwrap();
+    install_fixture_kernel(directory.path(), Architecture::HOST, "7.2.15").await;
+    let lock = kernel::cache_lock(directory.path(), Architecture::HOST, "7.2.15")
+        .await
+        .unwrap();
+    let held = lock.lock().await;
+    let tracker = ImageInstallTracker::disabled();
+    tracker.begin("7.2.15").unwrap();
+    let templates =
+        crate::templates::TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .unwrap();
+    let worker = tokio::spawn(crate::kernel_manager::run_install(
+        tracker.clone(),
+        templates.clone(),
+        "7.2.15".into(),
+        None,
+    ));
+    tokio::task::yield_now().await;
+    tokio::time::timeout(Duration::from_secs(5), tracker.cancel_and_wait("7.2.15"))
+        .await
+        .unwrap();
+    worker.await.unwrap();
+    assert_eq!(
+        tracker.snapshot("7.2.15").status,
+        firecrab_api_types::ImageInstallStatus::Cancelled
+    );
+    drop(held);
+    tracker.begin("7.2.15").unwrap();
+    crate::kernel_manager::run_install(tracker.clone(), templates, "7.2.15".into(), None).await;
+    assert_eq!(
+        tracker.snapshot("7.2.15").status,
+        firecrab_api_types::ImageInstallStatus::Succeeded
+    );
 }

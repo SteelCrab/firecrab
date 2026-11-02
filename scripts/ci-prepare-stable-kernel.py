@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the API's current stable kernel before dependent guest QA starts."""
+"""Install the API's current stable kernel before dependent guest QA starts."""
 import argparse
 import hashlib
 import json
@@ -56,11 +56,15 @@ def prepare(api, images, timeout):
             digest.update(chunk)
     if digest.hexdigest() != entry["imageSha256"] or digest.hexdigest() != receipt["image_sha256"]:
         raise RuntimeError("kernel image digest does not match its catalog and receipt")
+    # Registry build_revision identifies cache compatibility, not uname's suffix.
+    expected_release = version
+    if receipt.get("package_url") is None:
+        expected_release = f"{version}-{receipt['build_revision']}"
     return {
         "version": version,
         "architecture": architecture,
         "kernel": str(kernel),
-        "expectedRelease": f"{version}-{receipt['build_revision']}",
+        "expectedRelease": expected_release,
         "imageSha256": digest.hexdigest(),
     }
 

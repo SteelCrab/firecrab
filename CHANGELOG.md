@@ -8,7 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
-| [0.4.3](#043---2026-11-02) | 2026-11-02 | AI Sandbox, CODE workspaces and inactive VM network changes |
+| [0.4.3](#043---2026-11-02) | 2026-11-02 | AI Sandbox, CODE workspaces, registry kernels and inactive VM network changes |
 | [0.4.2](#042---2026-11-01) | 2026-11-01 | React dashboard and MicroVM agent workspaces |
 | [0.4.1](#041---2026-10-30) | 2026-10-30 | Latest managed installations and cross-platform updates |
 | [0.4.0](#040---2026-10-30) | 2026-10-30 | [Changes since v0.3.1](https://github.com/SteelCrab/firecrab/compare/v0.3.1...v0.4.0) |
@@ -50,6 +50,8 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572),
 ### Changed
 
 - Align Rust, dashboard and E2E package versions and lockfiles on 0.4.3.
+- Install prebuilt kernels from registry.firecrab.dev after checking package
+  checksums, architecture and required VM drivers, including Vsock.
 
 ### Deprecated
 
@@ -66,6 +68,9 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572),
 
 ### Improved
 
+- Show kernel installation stages, publication dates and the actual download
+  source in a responsive detail panel. Resume progress after reload and support
+  cancellation with safe cleanup. See [#586](https://github.com/SteelCrab/firecrab/pull/586).
 - Resume journaled workspace preparation after browser or controller restarts.
   Idempotent retries preserve the reserved VM and avoid duplicate creation.
 - Verify that creating and removing an SSH port forward preserves existing

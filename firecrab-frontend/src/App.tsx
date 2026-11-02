@@ -478,11 +478,7 @@ export default function App() {
             </Screen>
           )}
           {view === "images" && <Images />}
-          {view === "kernels" && (
-            <Screen view="kernels">
-              <Kernels />
-            </Screen>
-          )}
+          {view === "kernels" && <Kernels />}
           {view === "shells" && (
             <Shells onUnsavedChange={setHasUnsavedChanges} />
           )}

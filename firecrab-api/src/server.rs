@@ -569,7 +569,8 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/kernels/{version}/install",
             get(handlers::kernels::get_kernel_install)
-                .post(handlers::kernels::start_kernel_install),
+                .post(handlers::kernels::start_kernel_install)
+                .delete(handlers::kernels::cancel_kernel_install),
         )
         .route(
             "/api/images/{alias}/install",

@@ -2,6 +2,10 @@
 
 export type KernelResponse = {
   version: string;
+  releasedAt?: string;
+  publishedAt?: string;
+  installSource?: string;
+  endOfLife?: boolean;
   architecture: string;
   image: string;
   imageSha256: string;

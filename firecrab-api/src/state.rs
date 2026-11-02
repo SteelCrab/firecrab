@@ -258,7 +258,7 @@ impl AppState {
             image_installs: ImageInstallTracker::from_env(),
             image_packages: ImageInstallTracker::from_env(),
             kernel_installs: ImageInstallTracker::with_base_url(
-                crate::oci::kernel::configured_releases_url().unwrap_or_else(|| "none".to_owned()),
+                crate::oci::kernel::configured_registry_url().unwrap_or_else(|| "none".to_owned()),
             ),
             bootstraps: crate::bootstrap::BootstrapTracker::default(),
             oci_imports: ImageInstallTracker::default(),

@@ -1,0 +1,604 @@
+.kernel-catalog {
+  min-width: 0;
+}
+.kernel-source-footer {
+  display: grid;
+  gap: 10px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 13px;
+}
+.kernel-source-caption {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.kernel-source-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 10px;
+}
+.kernel-source-link {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease;
+}
+.kernel-source-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  color: var(--text-2);
+}
+.kernel-source-link[data-official] .kernel-source-mark {
+  background: var(--accent-soft);
+}
+.kernel-source-mark img {
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+.kernel-source-mark svg {
+  width: 18px;
+  height: 18px;
+}
+.kernel-source-identity {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 3px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.kernel-source-identity strong {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.kernel-source-identity > span {
+  color: var(--text-3);
+  font-size: 11px;
+}
+.kernel-source-external {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: var(--text-3);
+}
+.kernel-source-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.kernel-source-package {
+  margin: 24px 0;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.kernel-source-package .kernel-source-link {
+  border: 0;
+  border-radius: 0;
+}
+.kernel-source-package .kernel-source-link:focus-visible {
+  outline-offset: -3px;
+}
+.kernel-source-file {
+  display: grid;
+  gap: 7px;
+  padding: 14px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-subtle);
+}
+.kernel-source-file > a {
+  min-width: 0;
+  color: var(--text-2);
+  font: 11px/1.7 var(--mono);
+  overflow-wrap: anywhere;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .kernel-source-link:hover {
+    border-color: var(--border-strong);
+    background: var(--bg-subtle);
+  }
+  .kernel-source-file > a:hover {
+    color: var(--accent);
+    text-decoration-color: currentColor;
+  }
+}
+.kernel-catalog-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.kernel-catalog-heading h2 {
+  margin: 0 0 8px;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.kernel-catalog-heading p {
+  max-width: 48ch;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.kernel-active-count {
+  flex-shrink: 0;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.kernel-table {
+  width: 100%;
+  table-layout: fixed;
+}
+.kernel-table th:first-child {
+  width: 24%;
+}
+.kernel-table th:nth-child(3) {
+  width: 28%;
+}
+.kernel-table th:last-child {
+  width: 22%;
+}
+.kernel-table tr {
+  cursor: pointer;
+}
+.kernel-version {
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: 600 14px var(--mono);
+  cursor: pointer;
+}
+.kernel-release {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.kernel-eol {
+  display: inline-flex;
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-2);
+  font: 600 12px/1.3 var(--mono);
+}
+.kernel-date-cell {
+  font: 12px/1.5 var(--mono);
+  white-space: nowrap;
+}
+.kernel-date-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.kernel-date-sort svg {
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+}
+.kernel-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.kernel-status > span {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  background: var(--text-4);
+  border-radius: 50%;
+}
+.kernel-status[data-state="installed"] {
+  color: var(--green-ink);
+}
+.kernel-status[data-state="installed"] > span {
+  background: var(--green);
+}
+.kernel-status[data-state="failed"] {
+  color: var(--red-ink);
+}
+.kernel-status[data-state="failed"] > span {
+  background: var(--red);
+}
+.kernel-status[data-state="running"] > span {
+  background: var(--accent);
+}
+.kernel-status[data-state="waiting"] > span {
+  background: var(--amber);
+}
+.kernel-row-step {
+  display: block;
+  margin: 5px 0 0 13px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.kernel-detail {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.kernel-panel-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.detail-panel-kind .kernel-panel-kind > svg {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.75;
+}
+.kernel-detail .detail-title {
+  font-family: var(--mono);
+  font-size: 23px;
+}
+.kernel-detail .detail-meta {
+  column-gap: 14px;
+}
+.kernel-detail .detail-body {
+  padding-inline: 24px;
+}
+.kernel-detail .detail-head {
+  padding: 4px 24px 20px;
+}
+.kernel-action {
+  width: 36px;
+  height: 36px;
+}
+.kernel-action.danger:not(:disabled) {
+  color: var(--red-ink);
+}
+@media (pointer: coarse) {
+  .kernel-action {
+    width: 44px;
+    height: 44px;
+  }
+}
+.kernel-detail .props {
+  grid-template-columns: minmax(88px, 0.8fr) minmax(0, 1.2fr);
+  column-gap: 16px;
+}
+.kernel-detail .props .prop-value {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+}
+.kernel-detail .props a {
+  overflow-wrap: anywhere;
+}
+.kernel-installation {
+  padding: 24px 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+.kernel-current {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.kernel-current-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+}
+.kernel-current-icon svg {
+  width: 20px;
+  height: 20px;
+  color: var(--text-2);
+}
+.kernel-eyebrow {
+  margin: 0 0 5px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.kernel-current h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.kernel-current > .kernel-elapsed {
+  margin-left: auto;
+  align-self: flex-start;
+  padding-top: 3px;
+  color: var(--text-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.kernel-elapsed {
+  font-variant-numeric: tabular-nums;
+}
+.kernel-stage-description,
+.kernel-detail-intro {
+  margin: 16px 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.kernel-builder-note {
+  margin: -6px 0 16px;
+  color: var(--amber-ink);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.kernel-progress {
+  height: 5px;
+  overflow: hidden;
+  background: var(--bg-active);
+  border-radius: 99px;
+}
+.kernel-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 180ms linear;
+}
+.kernel-progress.indeterminate > span {
+  width: 35%;
+  animation: kernel-working 1.7s linear infinite;
+}
+@keyframes kernel-working {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(385%);
+  }
+}
+.kernel-progress-note {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 9px 0 22px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+.kernel-progress-note strong {
+  color: var(--text-2);
+  font-weight: 500;
+}
+.kernel-timeline {
+  margin: 22px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.kernel-timeline li {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+.kernel-timeline li:not(:last-child)::after {
+  position: absolute;
+  left: 13px;
+  top: 38px;
+  bottom: -10px;
+  width: 1px;
+  background: var(--border);
+  content: "";
+}
+.kernel-step-icon {
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg);
+}
+.kernel-step-icon svg {
+  width: 13px;
+  height: 13px;
+}
+.kernel-step-state {
+  margin-left: auto;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.kernel-timeline [data-state="complete"] .kernel-step-icon {
+  border-color: transparent;
+  background: var(--green-soft);
+  color: var(--green-ink);
+}
+.kernel-timeline [data-state="complete"] .kernel-step-name {
+  color: var(--text-2);
+}
+.kernel-timeline [data-state="complete"] .kernel-step-state {
+  color: var(--green-ink);
+}
+.kernel-timeline [data-state="current"] {
+  color: var(--text);
+}
+.kernel-timeline [data-state="current"] .kernel-step-icon {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.kernel-timeline [data-state="current"] .kernel-step-name {
+  font-weight: 600;
+}
+.kernel-timeline [data-state="current"] .lucide-loader-circle {
+  animation: kernel-spin 1s linear infinite;
+}
+@keyframes kernel-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.kernel-timeline [data-state="failed"] .kernel-step-icon {
+  border-color: var(--red);
+  background: var(--red-soft);
+  color: var(--red-ink);
+}
+.kernel-timeline [data-state="failed"] .kernel-step-state,
+.kernel-current.failed h3 {
+  color: var(--red-ink);
+}
+.kernel-latest {
+  margin-top: 24px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+}
+.kernel-latest > span {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.kernel-latest p {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 7px 0 0;
+  color: var(--text-2);
+  font: 12px/1.7 var(--mono);
+  overflow-wrap: anywhere;
+}
+.kernel-latest.failed {
+  border-color: var(--red-soft);
+  background: var(--red-soft);
+}
+.kernel-latest.failed p {
+  display: block;
+  color: var(--red-ink);
+}
+.kernel-log-disclosure {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.kernel-log-disclosure summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 14px;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.kernel-log-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+.kernel-log-disclosure summary svg {
+  width: 14px;
+  height: 14px;
+}
+.kernel-log-disclosure[open] summary svg {
+  transform: rotate(180deg);
+}
+.kernel-log {
+  max-height: 240px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text-2);
+  font: 12px/1.7 var(--mono);
+  white-space: pre;
+}
+@media (max-width: 767px) {
+  .kernel-catalog-heading {
+    flex-wrap: wrap;
+  }
+  .kernel-table :is(th, td):nth-child(4) {
+    display: none;
+  }
+  .kernel-table th:first-child {
+    width: 26%;
+  }
+  .kernel-table th:nth-child(3) {
+    width: 35%;
+  }
+  .kernel-detail .detail-body {
+    padding-inline: 16px;
+  }
+  .kernel-detail .detail-head {
+    padding-inline: 16px;
+  }
+  .kernel-current {
+    gap: 9px;
+  }
+  .kernel-current h3 {
+    font-size: 16px;
+  }
+  .kernel-step-state {
+    font-size: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kernel-source-link,
+  .kernel-progress > span,
+  .kernel-timeline [data-state="current"] .lucide-loader-circle {
+    animation: none;
+    transition: none;
+  }
+}
+
+.kernel-stale {
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--amber-soft);
+  color: var(--amber-ink);
+  font-size: 12px;
+  line-height: 1.6;
+}

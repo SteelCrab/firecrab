@@ -262,12 +262,14 @@ export default function PipeRegistries({
     running: t("Pulling…", "가져오는 중…"),
     succeeded: t("Pulled", "가져옴"),
     failed: t("Failed", "실패"),
+    cancelled: t("Cancelled", "취소됨"),
   };
   const jobTone = {
     idle: "",
     running: " starting",
     succeeded: " running",
     failed: " error",
+    cancelled: "",
   };
   const alert = error ?? pollError;
   return (
