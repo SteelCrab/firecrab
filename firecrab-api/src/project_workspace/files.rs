@@ -113,7 +113,7 @@ impl Files {
             if binding(&local, project)? != saved {
                 return Err(Error::Conflict("Workspace binding changed"));
             }
-            let db = open(&local, &saved)?;
+            let db = open_as(&local, &saved, caller)?;
             if response(&local, &saved, &db)?.status != ProjectWorkspaceStatus::Ready {
                 return Err(Error::Conflict(
                     "Start the project VM and reconcile its workspace before accessing files",
@@ -356,7 +356,7 @@ pub(super) async fn write_bound(
     let request = input.clone();
     let cached = blocking(id, move || {
         let b = binding(&local, project)?;
-        let db = open(&local, &b)?;
+        let db = open_as(&local, &b, caller)?;
         if let Some(op) = db.file_operation(request.id)? {
             identical(&op, &request)?;
             if let Some(version) = op.version {
@@ -493,7 +493,7 @@ async fn restore(
         let path = query.path.clone();
         let bytes = blocking(id.0, move || {
             let b = binding(&local, project)?;
-            open(&local, &b)?
+            open_as(&local, &b, caller)?
                 .file_version(&path, input.version)
                 .map(|v| v.bytes)
         })
@@ -526,7 +526,7 @@ async fn history(
     wire::path(&query.path, true).map_err(|e| e.response(id.0))?;
     blocking(id.0, move || {
         let b = binding(&state, project)?;
-        open(&state, &b)?.file_history(&query.path, query.before)
+        open_as(&state, &b, caller)?.file_history(&query.path, query.before)
     })
     .await
     .map(Json)
@@ -542,7 +542,7 @@ async fn version(
     wire::path(&query.path, false).map_err(|e| e.response(id.0))?;
     blocking(id.0, move || {
         let b = binding(&state, project)?;
-        open(&state, &b)?
+        open_as(&state, &b, caller)?
             .file_version(&query.path, version)
             .map(Version::response)
     })
@@ -560,7 +560,7 @@ async fn diff(
     wire::path(&query.path, false).map_err(|e| e.response(id.0))?;
     blocking(id.0, move || {
         let b = binding(&state, project)?;
-        let db = open(&state, &b)?;
+        let db = open_as(&state, &b, caller)?;
         Ok(ProjectFileDiff {
             before: db.file_version(&query.path, query.from)?.response(),
             after: db.file_version(&query.path, query.to)?.response(),
@@ -580,7 +580,7 @@ async fn operations(
     wire::path(&query.path, true).map_err(|e| e.response(id.0))?;
     blocking(id.0, move || {
         let b = binding(&state, project)?;
-        open(&state, &b)?.file_operations(&query.path)
+        open_as(&state, &b, caller)?.file_operations(&query.path)
     })
     .await
     .map(Json)
@@ -597,7 +597,7 @@ async fn reconcile(
         let local = state.clone();
         let op = blocking(id.0, move || {
             let b = binding(&local, project)?;
-            open(&local, &b)?
+            open_as(&local, &b, caller)?
                 .file_operation(operation)?
                 .ok_or(Error::Missing)
         })
@@ -611,7 +611,7 @@ async fn reconcile(
         if let Some(version) = op.version {
             return blocking(id.0, move || {
                 let b = binding(&state, project)?;
-                open(&state, &b)?
+                open_as(&state, &b, caller)?
                     .file_version(&op.path, version)
                     .map(Version::response)
             })

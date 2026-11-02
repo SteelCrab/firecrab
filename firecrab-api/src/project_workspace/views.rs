@@ -56,7 +56,7 @@ async fn work<T: Send + 'static>(
             Ok(())
         };
         permission()?;
-        let db = open(&state, &binding(&state, project)?)?;
+        let db = open_as(&state, &binding(&state, project)?, caller)?;
         permission()?;
         let result = operation(&db)?;
         permission()?;

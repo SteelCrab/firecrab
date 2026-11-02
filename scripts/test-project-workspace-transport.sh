@@ -63,7 +63,7 @@ cat > "$context/Dockerfile" <<'DOCKERFILE'
 ARG BASE_IMAGE=ubuntu:26.04
 FROM ${BASE_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential coreutils findutils gawk libgcc-s1 openssh-client openssh-server \
+    build-essential coreutils e2fsprogs findutils gawk libgcc-s1 openssh-client openssh-server \
     passwd procps python3 tar util-linux && rm -rf /var/lib/apt/lists/*
 COPY native /qa/native
 COPY driver.c /qa/driver.c
@@ -77,4 +77,7 @@ docker run --rm --name "$name" --network none --cpus 2 --memory 2g \
   -v "$archive:/qa/editor.tar.gz:ro" \
   -e FIRECRAB_WORKSPACE_TRANSPORT_QA=1 -e FIRECRAB_EDITOR_PACKAGE_ARCHIVE=/qa/editor.tar.gz \
   -e 'LLVM_PROFILE_FILE=/profiles/workspace-%m-%p.profraw' \
-  "$image" /qa/firecrab-api-tests workspace_transport_retains_file_receipts_ptys_skills_and_editor_instances --ignored --nocapture
+  "$image" bash -ec '
+    /qa/firecrab-api-tests workspace_transport_retains_file_receipts_ptys_skills_and_editor_instances --ignored --nocapture
+    /qa/firecrab-api-tests workspace_backup_qa_restores_real_ext4_contents_and_sqlite_without_a_workload_vm --ignored --nocapture
+  '

@@ -1,4 +1,5 @@
 //! Durable project metadata and retained-volume lifecycle. Sandbox keeps task ownership.
+pub(crate) mod backups;
 mod checkpoint;
 pub(crate) mod db;
 pub(crate) mod editors;
@@ -74,6 +75,8 @@ pub struct Runtime {
     editor_connections: std::sync::Arc<tokio::sync::Semaphore>,
     /// Bound official-source discovery and package downloads separately from native file workers.
     skill_downloads: std::sync::Arc<tokio::sync::Semaphore>,
+    /// Bound large offline copies independently of guest file workers.
+    backup_slots: std::sync::Arc<tokio::sync::Semaphore>,
     /// One OS lock per project remains held for this service lifetime.
     services: std::sync::Mutex<std::collections::BTreeMap<Uuid, std::sync::Arc<db::OwnerLock>>>,
 }
@@ -83,6 +86,7 @@ impl Runtime {
         Self {
             root,
             owner: Uuid::new_v4(),
+            backup_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             file_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
             skill_downloads: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             terminal_projects: std::sync::Mutex::default(),
@@ -223,11 +227,15 @@ impl Runtime {
         create: bool,
     ) -> Result<std::sync::Arc<db::OwnerLock>, Error> {
         let mut services = self.services.lock().unwrap_or_else(|p| p.into_inner());
+        let path = backups::root(self, binding.project_id, true)?.join("service.lock");
         if let Some(lease) = services.get(&binding.project_id) {
+            if !lease.current(&path) {
+                return Err(Error::Busy);
+            }
             return Ok(lease.clone());
         }
-        let directory = db::project_directory(&self.root, binding, create)?;
-        let file = db::private_file(&directory.join("service.lock"), true)?;
+        db::project_directory(&self.root, binding, create)?;
+        let file = db::private_file(&path, true)?;
         let lease = std::sync::Arc::new(db::OwnerLock::acquire(file)?);
         services.insert(binding.project_id, lease.clone());
         Ok(lease)
@@ -237,8 +245,14 @@ impl Runtime {
         binding: &Binding,
         create: bool,
     ) -> Result<db::ProjectDb, Error> {
+        if backups::fenced(self, binding.project_id)? {
+            return Err(Error::Busy);
+        }
         let lease = self.service_lease(binding, create)?;
         let mut db = db::ProjectDb::open(&self.root, binding, self.owner, create)?;
+        if backups::fenced(self, binding.project_id)? {
+            return Err(Error::Busy);
+        }
         db.service = Some(lease);
         Ok(db)
     }
@@ -250,6 +264,14 @@ fn open(state: &AppState, binding: &Binding) -> Result<db::ProjectDb, Error> {
     open_owned(state, binding, false)
 }
 
+fn open_as(state: &AppState, binding: &Binding, caller: Caller) -> Result<db::ProjectDb, Error> {
+    let db = open(state, binding)?;
+    caller.workspace_current(state, binding.project_id)?;
+    if state.store.project_workspace(binding.project_id)?.as_ref() != Some(binding) {
+        return Err(Error::Conflict("Workspace binding changed"));
+    }
+    Ok(db)
+}
 fn response(
     state: &AppState,
     binding: &Binding,
@@ -293,6 +315,10 @@ fn response(
         volume_id: binding.volume_id,
         vm_id: binding.vm_id,
         generation: binding.generation,
+        write_generation_required: state
+            .store
+            .workspace_generation(binding.project_id)?
+            .is_some_and(|(_, restored)| restored),
         schema_version: db::SCHEMA_VERSION,
         revision,
         document,
@@ -327,6 +353,7 @@ pub fn routes() -> Router<AppState> {
         .merge(instructions::routes())
         .merge(sandbox_migration::routes())
         .merge(skills::routes())
+        .merge(backups::routes())
 }
 /// Read project metadata even when the workload VM is stopped.
 async fn get_workspace(
@@ -360,7 +387,7 @@ async fn save_state(
                 "Complete workspace provisioning before editing metadata",
             ));
         }
-        let db = open(&state, &b)?;
+        let db = open_as(&state, &b, caller)?;
         db.save_document(input.expected_revision, &input.document)?;
         response(&state, &b, &db)
     })
@@ -667,5 +694,6 @@ async fn reconcile_runtime(
 /// Recover terminal observers without starting replacement shells.
 pub(crate) fn start_terminals(state: AppState) {
     terminals::start(state.clone());
-    editors::start_maintenance(state);
+    editors::start_maintenance(state.clone());
+    backups::start(state);
 }

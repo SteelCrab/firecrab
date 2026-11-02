@@ -156,7 +156,7 @@ fn read_db(
 ) -> Result<(Binding, db::ProjectDb), AppError> {
     authorize(state, caller, project, SandboxPermission::Read, id)?;
     let b = binding(state, project).map_err(|e| e.response(id))?;
-    let db = open(state, &b).map_err(|e| e.response(id))?;
+    let db = open_as(state, &b, caller).map_err(|e| e.response(id))?;
     authorize(state, caller, project, SandboxPermission::Read, id)?;
     Ok((b, db))
 }

@@ -46,12 +46,12 @@ pub(super) fn unavailable() -> PersistenceError {
     }
 }
 // Routing/catalog commits must survive power loss before a project commit can dispatch work.
-struct Durable<'a> {
+pub(super) struct Durable<'a> {
     conn: &'a Connection,
     previous: i64,
 }
 impl<'a> Durable<'a> {
-    fn new(conn: &'a Connection) -> Result<Self, PersistenceError> {
+    pub(super) fn new(conn: &'a Connection) -> Result<Self, PersistenceError> {
         let previous = conn.pragma_query_value(None, "synchronous", |r| r.get(0))?;
         conn.pragma_update(None, "synchronous", "FULL")?;
         Ok(Self { conn, previous })

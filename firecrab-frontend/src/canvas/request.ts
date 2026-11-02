@@ -1,3 +1,6 @@
+// A restored generation must be acknowledged by reopening the page. Polling never adopts it.
+const generations = new Map<string, number>();
+const projectPath = /^\/api\/ai-sandbox\/projects\/([^/]+)(?:[/?]|$)/;
 export class WorkspaceError extends Error {
   status?: number;
   code?: string;
@@ -15,6 +18,7 @@ export async function request<T>(
   body?: unknown,
   retryBusy = true,
 ): Promise<T> {
+  const project = projectPath.exec(path)?.[1];
   for (let attempt = 0; attempt < 8; attempt++) {
     let response: Response;
     try {
@@ -23,6 +27,13 @@ export async function request<T>(
         credentials: "same-origin",
         headers: {
           Accept: "application/json",
+          ...(project && generations.has(project) && method !== "GET"
+            ? {
+                "X-Firecrab-Workspace-Generation": String(
+                  generations.get(project),
+                ),
+              }
+            : {}),
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -37,6 +48,15 @@ export async function request<T>(
     if (response.ok) {
       if (value === null)
         throw new WorkspaceError("Invalid workspace response");
+      if (
+        project &&
+        method === "GET" &&
+        path === `/api/ai-sandbox/projects/${project}/workspace` &&
+        Number.isSafeInteger(value.generation)
+      ) {
+        if (!generations.has(project) || !value.writeGenerationRequired)
+          generations.set(project, value.generation);
+      }
       return value as T;
     }
     const code =

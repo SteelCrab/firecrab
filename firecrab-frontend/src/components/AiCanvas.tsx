@@ -33,6 +33,7 @@ import { terminalSessions } from "../canvas/terminals";
 import type { Tab, Node as CanvasNode } from "../canvas/types";
 import "../styles/ai-canvas.css";
 import CanvasAgent from "./CanvasAgent";
+import ProjectBackups from "./ProjectBackups";
 import { agentDocument } from "../canvas/agent-types";
 
 type Props = { onUnsavedChange: (dirty: boolean) => void };
@@ -218,6 +219,7 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
           <section className="cw-project-nav">
             <h2>{title(tab)}</h2>
             <small>/workspace/shared</small>
+            <ProjectBackups key={tab.project} project={tab.project}/>
             {button(
               () => void c.editor(tab),
               t("Open folder", "폴더 열기"),
@@ -509,6 +511,7 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
             <div className="cw-empty">
               <h1>{t("Opening project", "프로젝트 여는 중")}</h1>
               <p>{tab.error}</p>
+              <ProjectBackups key={tab.project} project={tab.project}/>
               {button(
                 () => void c.open(tab),
                 t("Retry connection", "다시 연결"),

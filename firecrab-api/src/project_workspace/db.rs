@@ -22,6 +22,16 @@ pub const DOCUMENT_LIMIT: usize = 64 * 1024;
 #[derive(Debug)]
 pub(super) struct OwnerLock(File);
 impl OwnerLock {
+    pub(super) fn current(&self, path: &Path) -> bool {
+        self.0
+            .metadata()
+            .ok()
+            .zip(fs::symlink_metadata(path).ok())
+            .is_some_and(|(a, b)| {
+                a.nlink() == 1 && b.is_file() && a.dev() == b.dev() && a.ino() == b.ino()
+            })
+    }
+
     pub(super) fn acquire(file: File) -> Result<Self, Error> {
         file.try_lock().map_err(|_| Error::Busy)?;
         Ok(Self(file))

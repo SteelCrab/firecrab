@@ -129,7 +129,7 @@ async fn access<T: Send + 'static>(
         };
         authorize(&state, caller, project, permission, id)?;
         let b = binding(&state, project).map_err(|e| e.response(id))?;
-        let db = open(&state, &b).map_err(|e| e.response(id))?;
+        let db = open_as(&state, &b, caller).map_err(|e| e.response(id))?;
         let e = db.editor(caller, view, true).map_err(|e| e.response(id))?;
         let result = work(&db, &e).map_err(|e| e.response(id))?;
         authorize(&state, caller, project, permission, id)?;

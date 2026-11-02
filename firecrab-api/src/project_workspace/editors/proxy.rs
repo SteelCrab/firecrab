@@ -138,6 +138,7 @@ fn workbench_configuration(
     bytes: &[u8],
     token: &str,
     browser: Option<(Uuid, Uuid, &str)>,
+    generation: u64,
 ) -> Result<Vec<u8>, Error> {
     if !clients::canonical_sha(token) {
         return Err(Error::Conflict("Invalid retained editor authentication"));
@@ -184,6 +185,15 @@ fn workbench_configuration(
         .as_object_mut()
         .ok_or(Error::Conflict("Invalid editor workbench settings"))?;
     values.insert("connectionToken".into(), serde_json::json!(token));
+    let defaults = values
+        .entry("configurationDefaults")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or(Error::Conflict("Invalid editor configuration defaults"))?;
+    defaults.insert(
+        "firecrab.workspaceGeneration".into(),
+        serde_json::json!(generation),
+    );
     if let Some((client, proof, origin)) = browser {
         let defaults = values
             .entry("configurationDefaults")
@@ -568,6 +578,7 @@ async fn serve(
             browser_client
                 .zip(window_proof)
                 .map(|(c, p)| (c, p, record.parent_origin.as_str())),
+            record.generation,
         )
         .map_err(|e| e.response(id))?;
         if let Some((client, proof)) = browser_client.zip(window_proof) {
@@ -644,9 +655,9 @@ mod tests {
         let a = "a".repeat(64);
         let b = "b".repeat(64);
         let first =
-            String::from_utf8(workbench_configuration(original, &a, None).unwrap()).unwrap();
+            String::from_utf8(workbench_configuration(original, &a, None, 1).unwrap()).unwrap();
         let second =
-            String::from_utf8(workbench_configuration(original, &b, None).unwrap()).unwrap();
+            String::from_utf8(workbench_configuration(original, &b, None, 1).unwrap()).unwrap();
         assert!(first.contains(&a));
         assert!(!first.contains(&b));
         assert!(second.contains(&b));
@@ -655,12 +666,13 @@ mod tests {
             workbench_configuration(
                 &[original.as_slice(), original.as_slice()].concat(),
                 &a,
-                None
+                None,
+                1
             )
             .is_err()
         );
-        assert!(workbench_configuration(b"<html></html>", &a, None).is_err());
-        assert!(workbench_configuration(original, "invalid", None).is_err());
+        assert!(workbench_configuration(b"<html></html>", &a, None, 1).is_err());
+        assert!(workbench_configuration(original, "invalid", None, 1).is_err());
     }
     #[test]
     fn browser_defaults_preserve_other_settings_and_only_accept_canonical_client_routes() {
@@ -671,11 +683,13 @@ mod tests {
                 original,
                 &"a".repeat(64),
                 Some((client, Uuid::new_v4(), "http://localhost")),
+                7,
             )
             .unwrap(),
         )
         .unwrap();
         assert!(html.contains(&client.to_string()));
+        assert!(html.contains("&quot;firecrab.workspaceGeneration&quot;:7"));
         assert!(html.contains("&quot;files.autoSave&quot;:&quot;off&quot;"));
         assert!(!html.contains("afterDelay"));
         assert!(html.contains("&amp;quot;literal&lt;"));

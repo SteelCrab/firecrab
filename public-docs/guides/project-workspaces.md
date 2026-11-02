@@ -118,8 +118,9 @@ same manifest. An incomplete directory is retained and requires a new checkpoint
 
 Checkpoints are under the private project's `checkpoints/<checkpoint-uuid>/` directory.
 This initial full-disk copy needs free space for the database and disk; failures keep
-an incomplete checkpoint rather than reporting success. Remote transfer, scheduling,
-retention automation and cross-host restore remain Phase 7 work.
+an incomplete checkpoint rather than reporting success. The newer [managed backup and restore API](project-workspace-backups.md)
+adds opt-in scheduling, independently retained archives and restart reconciliation.
+Remote transfer, pruning/deletion and genuine cross-host acceptance remain Phase 7 work.
 
 ### Operator recovery procedure
 
@@ -138,8 +139,9 @@ retention automation and cross-host restore remain Phase 7 work.
    reconcile its mount. Confirm the metadata revision and representative file hashes.
 
 SQLite/disk restore does not restore process memory. Durable session/terminal history
-and task reconciliation are separate later integrations; old commands are never
-replayed by this foundation.
+and task reconciliation do not replay old commands. Use the
+[managed backup guide](project-workspace-backups.md) for the implemented restore API,
+post-restore generation acknowledgement and remaining acceptance gates.
 
 ## File access and history
 

@@ -42,7 +42,7 @@ fn owned_db(
             .map_err(|_| Error::Denied)?;
     }
     let b = binding(state, project)?;
-    open(state, &b)
+    open_as(state, &b, caller)
 }
 /// Return retained discovery results without performing an implicit source request.
 async fn catalog(

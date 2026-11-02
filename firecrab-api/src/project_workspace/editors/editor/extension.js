@@ -31,7 +31,13 @@ async function api(endpoint,method='GET',body) {
     const abort=new AbortController();const timer=setTimeout(()=>abort.abort(),20000);
     try {
       const response=await fetch(`${globalThis.location.origin}/_firecrab/${endpoint}`,{
-        method,cache:'no-store',signal:abort.signal,headers:body?{'Content-Type':'application/json'}:{},
+        method,cache:'no-store',signal:abort.signal,headers:{
+          ...(body?{'Content-Type':'application/json'}:{}),
+          ...(() => {
+            const generation=vscode.workspace.getConfiguration('firecrab').inspect('workspaceGeneration')?.defaultValue;
+            return Number.isSafeInteger(generation) ? {'X-Firecrab-Workspace-Generation':String(generation)} : {};
+          })(),
+        },
         body:body?JSON.stringify(body):undefined,
       });
       const result=await response.json();

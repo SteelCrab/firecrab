@@ -133,7 +133,7 @@ async fn read(
     authorize(&state, caller, project, SandboxPermission::Read, id.0)?;
     blocking(id.0, move || {
         let b = binding(&state, project)?;
-        let db = open(&state, &b)?;
+        let db = open_as(&state, &b, caller)?;
         authorize(&state, caller, project, SandboxPermission::Read, id.0)
             .map_err(|_| Error::Denied)?;
         let saved = db.instruction_snapshot(caller, snapshot)?;
@@ -163,7 +163,7 @@ async fn capture(
         let directory = request.directory.clone();
         let retained = blocking(id.0, move || {
             let b = binding(&local, project)?;
-            let db = open(&local, &b)?;
+            let db = open_as(&local, &b, caller)?;
             caller
                 .project(&local, project, SandboxPermission::Read)
                 .map_err(|_| Error::Denied)?;

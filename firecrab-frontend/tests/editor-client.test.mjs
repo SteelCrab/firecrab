@@ -10,7 +10,7 @@ const windowProof='55000000-0000-4000-8000-000000000099';
 function uri(name,scheme='firecrab') {return {scheme,path:`/${name}`,with(change){return {...this,...change};},toString(){return `${this.scheme}://editor${this.path}`;}};}
 async function harness(options={}) {
   const startup=[];let activated=false;
-  const handlers={},commands=new Map(),documents=[],tabs=[],states=[],drafts=new Map(),receipts=new Map(),draftRequests=[],snapshots=[];
+  const requests=[],handlers={},commands=new Map(),documents=[],tabs=[],states=[],drafts=new Map(),receipts=new Map(),draftRequests=[],snapshots=[];
   let readonly=false,interval,timerId=0,current={id:client,revision:0,command:'active',status:'opening'},loseDraft=false,loseAck=false;
   let savedText='shared text',savedVersion=1,changeDuringDraft=null,sharedGate=null;
   const vscode={
@@ -19,7 +19,7 @@ async function harness(options={}) {
     Disposable:class {constructor(fn){this.dispose=fn;}},EventEmitter:class{event=()=>{};fire(){}dispose(){}},
     Uri:{parse:()=>uri('')},Range:class{},WorkspaceEdit:class{replace(resource,range,text){this.resource=resource;this.text=text;}},
     workspace:{textDocuments:documents,
-      getConfiguration:()=>({inspect:name=>({defaultValue:name==='browserClientId'?client:windowProof})}),
+      getConfiguration:()=>({inspect:name=>({defaultValue:name==='workspaceGeneration'?(options.generation??0):name==='browserClientId'?client:windowProof})}),
       registerFileSystemProvider:(scheme,provider,options)=>{vscode.provider=provider;readonly=!!options.isReadonly;return {dispose(){}};},
       onDidChangeTextDocument:fn=>(handlers.change=fn,{dispose(){}}),onDidSaveTextDocument:fn=>(handlers.save=fn,{dispose(){}}),onDidCloseTextDocument:fn=>(handlers.close=fn,{dispose(){}}),
       async openTextDocument(input){
@@ -43,6 +43,7 @@ async function harness(options={}) {
   if(options.currentDraft) drafts.set('note.txt',options.currentDraft);
   const oldSnapshots=options.snapshots??[];
   async function fetch(url,options={}) {
+    requests.push({url,method:options.method,headers:structuredClone(options.headers)});
     const parsed=new URL(url),endpoint=parsed.pathname.replace('/_firecrab/',''),name=parsed.searchParams.get('path');
     const method=options.method||'GET',body=options.body?JSON.parse(options.body):undefined;
     let value,status=200;
@@ -86,7 +87,7 @@ async function harness(options={}) {
     setTimeout:(fn,ms)=>{const id=++timerId;if(ms===0)startup.push(fn);else if(ms<400)queueMicrotask(fn);return id;},clearTimeout:()=>{},setInterval:fn=>(interval=fn,1),clearInterval:()=>{},location:{origin:'http://fixture.editor.localhost'}};
   vm.runInNewContext(source,sandbox,{filename:'extension.js'});
   const context={subscriptions:[]};await sandbox.exports.activate(context);activated=true;for(const work of startup)await work();
-  return {vscode,documents,drafts,draftRequests,snapshots,states,commands,
+  return {requests,vscode,documents,drafts,draftRequests,snapshots,states,commands,
     get readonly(){return readonly;},get current(){return current;},
     tick:()=>interval(),setControl(command,revision){current={...current,command,revision,windowProof,status:command==='close'?'flushing':'resuming',error:null};},
     loseDraftAck(){loseDraft=true;},loseCloseAck(){loseAck=true;},changeDuringDraft(fn){changeDuringDraft=fn;},holdShared(gate){sharedGate=gate;},dispose(){for(const s of context.subscriptions)s.dispose?.();},
@@ -160,4 +161,11 @@ test('a clean window closes without deleting another window private draft',async
   h.setControl('close',1);await h.tick();assert.equal(h.current.status,'ready');
   assert.equal(h.snapshots[0].report.files.length,0);assert.equal(h.snapshots[0].report.openFiles[0],'note.txt');
   assert.equal(h.draftRequests.length,0);assert.equal(Buffer.from(h.drafts.get('note.txt').contentBase64,'base64').toString(),'another window draft');
+});
+
+test('editor file and private-buffer requests carry the workbench default generation',async t=>{
+ const h=await harness({generation:7});t.after(()=>h.dispose());
+ await h.vscode.provider.writeFile(uri('note.txt'),new TextEncoder().encode('after restore'),{create:false,overwrite:true});
+ assert.ok(h.requests.some(r=>r.method==='PUT'));
+ for(const r of h.requests)assert.equal(r.headers['X-Firecrab-Workspace-Generation'],'7');
 });

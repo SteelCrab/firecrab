@@ -27,7 +27,7 @@ pub(crate) async fn task_instructions(
                 "Complete the Sandbox project database migration before admitting saved rules",
             ));
         }
-        let db = open(&state, &binding)?;
+        let db = open_as(&state, &binding, caller)?;
         let snapshot = db.instruction_snapshot(caller, snapshot)?;
         caller
             .project(&state, project, SandboxPermission::Read)

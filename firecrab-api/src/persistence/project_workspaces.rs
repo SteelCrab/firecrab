@@ -59,6 +59,18 @@ impl Store {
         &self,
         project: Uuid,
     ) -> Result<Option<Binding>, PersistenceError> {
+        if self.workspace_backup_active(project)?
+            || crate::project_workspace::backups::fenced(&self.workspaces, project)
+                .map_err(|_| conflict())?
+        {
+            return Err(conflict());
+        }
+        self.project_workspace_unfenced(project)
+    }
+    pub(crate) fn project_workspace_unfenced(
+        &self,
+        project: Uuid,
+    ) -> Result<Option<Binding>, PersistenceError> {
         read(&self.lock(), project)
     }
     /// Find the retained project owner before changing a volume attachment.
@@ -89,6 +101,12 @@ impl Store {
         vm: Uuid,
         expected: Option<u64>,
     ) -> Result<Binding, PersistenceError> {
+        if self.workspace_backup_active(project)?
+            || crate::project_workspace::backups::fenced(&self.workspaces, project)
+                .map_err(|_| conflict())?
+        {
+            return Err(conflict());
+        }
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         let ready: bool = tx.query_row(

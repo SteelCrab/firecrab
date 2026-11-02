@@ -78,3 +78,13 @@ archive for offline reuse and verifies its pinned digest before use.
 The existing live-provider, native VM lifecycle, matched backup/restore, cross-host
 and multi-user issue gates remain open. This coverage change does not authorize
 merging PR #562.
+
+## Hosted result
+
+Codecov reported **86.28%** on commit
+[`c0594e0f`](https://github.com/SteelCrab/firecrab/commit/c0594e0fe8d30d1f19bf247e4b298f2f277fad8d)
+and passed the unchanged **80%** patch target. The Rust/coverage job passed in
+[run 41450081358](https://github.com/SteelCrab/firecrab/actions/runs/41450081358).
+The separate Linux pool UI and Windows CLI regressions in that run/release are
+tracked in the [backup implementation record](canvas-backups-2026-11-02.md).
+This measured result replaces the earlier local estimate for that commit.

@@ -1266,5 +1266,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: canvas-skills-ui-${{ github.sha }}
-          path: test-results/canvas-skills/
+          path: |
+            test-results/canvas-skills/
+            test-results/canvas-backups/
           if-no-files-found: ignore

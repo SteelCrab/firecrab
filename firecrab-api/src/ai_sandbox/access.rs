@@ -67,6 +67,11 @@ pub struct Caller {
     /// Immutable caller UUID/transport origin captured at admission.
     pub principal: SandboxPrincipal,
     operator: bool,
+    /// Concurrency acknowledgement only. It never grants identity or permission.
+    #[serde(skip)]
+    workspace_generation: Option<u64>,
+    #[serde(skip)]
+    workspace_write: bool,
 }
 
 impl Default for Caller {
@@ -74,6 +79,8 @@ impl Default for Caller {
         Self {
             principal: SandboxPrincipal::Local,
             operator: true,
+            workspace_generation: None,
+            workspace_write: false,
         }
     }
 }
@@ -81,9 +88,20 @@ impl Default for Caller {
 impl<S: Send + Sync> FromRequestParts<S> for Caller {
     type Rejection = AppError;
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        let workspace_generation = parts
+            .headers
+            .get("x-firecrab-workspace-generation")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+        let workspace_write = !matches!(
+            parts.method,
+            axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+        );
         if let Some(ConnectInfo(peer)) = parts.extensions.get::<ConnectInfo<AuthenticatedHost>>() {
             return Ok(Self {
                 principal: SandboxPrincipal::Host(peer.host_id),
+                workspace_generation,
+                workspace_write,
                 operator: parts
                     .extensions
                     .get::<ControllerIdentity>()
@@ -91,7 +109,11 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
             });
         }
         if parts.extensions.get::<LocalOperator>().is_some() {
-            return Ok(Self::default());
+            return Ok(Self {
+                workspace_generation,
+                workspace_write,
+                ..Self::default()
+            });
         }
         let id = parts
             .extensions
@@ -107,6 +129,22 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 }
 
 impl Caller {
+    /// Call while holding the project database owner lock, before an HTTP mutation.
+    pub(crate) fn workspace_current(
+        self,
+        state: &AppState,
+        project: Uuid,
+    ) -> Result<(), crate::project_workspace::Error> {
+        if self.workspace_write
+            && let Some((generation, true)) = state.store.workspace_generation(project)?
+            && self.workspace_generation != Some(generation)
+        {
+            return Err(crate::project_workspace::Error::Conflict(
+                "Workspace restored. Reload the page or reopen Web VS Code before saving.",
+            ));
+        }
+        Ok(())
+    }
     /// Only controller identities can administer resource policies.
     pub fn operator(self) -> Result<(), String> {
         if self.operator {

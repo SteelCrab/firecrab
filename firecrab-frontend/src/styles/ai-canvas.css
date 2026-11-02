@@ -806,3 +806,27 @@
   margin-top: 16px;
   background: var(--bg-sidebar);
 }
+.cw-backup-dialog { width:min(760px,calc(100vw - 48px)); max-height:85vh; border:1px solid #dedee5; border-radius:16px; padding:24px; color:#25252c; background:#fff; box-shadow:0 20px 80px #16162230; font:13px/1.6 system-ui,sans-serif; }
+.cw-backup-dialog::backdrop { background:#17172550; }
+.cw-backup-dialog header,.cw-backup-records li>div,.cw-backup-actions { display:flex; align-items:center; gap:12px; }
+.cw-backup-dialog header { justify-content:space-between; }
+.cw-backup-dialog h2 { margin:0; font-size:21px; }
+.cw-backup-dialog h3 { margin:0 0 10px; font-size:14px; }
+.cw-backup-dialog header small { font-size:10px; letter-spacing:.12em; color:#7b7b89; }
+.cw-backup-dialog button,.cw-backup-dialog select { background:#fff; border:1px solid #dcdce3; border-radius:6px; padding:7px 11px; color:inherit; cursor:pointer; }
+.cw-backup-dialog button:disabled { opacity:.5; cursor:default; }
+.cw-backup-dialog label { display:inline-flex; gap:8px; align-items:center; margin:0 12px 12px 0; }
+.cw-backup-dialog section { margin-top:20px; padding-top:16px; border-top:1px solid #ececf0; }
+.cw-backup-dialog code { display:block; overflow-wrap:anywhere; font-size:11px; color:#707080; }
+.cw-backup-dialog small { display:block; }
+.cw-backup-limit { color:#71717e; background:#f7f7fa; padding:12px; border-radius:8px; }
+.cw-backup-error { color:#b33027; }
+.cw-backup-records { margin:0; padding:0; list-style:none; }
+.cw-backup-records li { padding:12px 0; border-top:1px solid #ececf0; }
+.cw-backup-records time { margin-left:auto; color:#7c7c86; font-size:11px; }
+.cw-backup-records button { margin:8px 8px 0 0; }
+.cw-backup-confirm { background:#fff8ed; padding:16px; border:1px solid #f1d4a8; border-radius:8px; }
+.cw-backup-dialog button { display:inline-flex; align-items:center; gap:6px; font:inherit; }
+.cw-backup-dialog header button { flex:none; padding:8px; }
+.cw-backup-confirm button { margin-right:8px; }
+.cw-backup-confirm button:first-of-type { background:#fae8d7; border-color:#e7b989; }

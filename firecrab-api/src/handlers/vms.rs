@@ -1136,6 +1136,7 @@ async fn claim_start(
         .get(&id)
         .cloned()
         .ok_or_else(|| AppError::not_found(request_id.0))?;
+    ensure_no_workspace_backup(&state, id, request_id.0)?;
     let store = state.store.clone();
     let migration_pending =
         tokio::task::spawn_blocking(move || store.sandbox_vm_migration_pending(id))
@@ -1552,11 +1553,27 @@ pub(crate) async fn delete_vm_with_disk_policy(
     Ok(StatusCode::NO_CONTENT)
 }
 
+fn ensure_no_workspace_backup(state: &AppState, vm: Uuid, request: Uuid) -> Result<(), AppError> {
+    if state
+        .store
+        .workspace_vm_backup_pending(vm)
+        .map_err(|_| AppError::internal(request))?
+    {
+        return Err(AppError::conflict(
+            "workspace_backup_pending",
+            "Resume or abort the retained project backup before changing this VM",
+            request,
+        ));
+    }
+    Ok(())
+}
+
 fn ensure_no_active_sandbox_previews(
     state: &AppState,
     vm: Uuid,
     request: Uuid,
 ) -> Result<(), AppError> {
+    ensure_no_workspace_backup(state, vm, request)?;
     if state
         .store
         .sandbox_vm_has_live_tunnels(vm)

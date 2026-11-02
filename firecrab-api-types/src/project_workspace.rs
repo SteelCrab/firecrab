@@ -52,6 +52,8 @@ pub struct ProjectWorkspaceResponse {
     pub vm_id: Uuid,
     /// Monotonic runtime binding generation used to reject obsolete handoffs.
     pub generation: u64,
+    /// Restored projects require the acknowledged generation on HTTP writes.
+    pub write_generation_required: bool,
     /// Private SQLite schema version.
     pub schema_version: u32,
     /// Current optimistic metadata revision.
