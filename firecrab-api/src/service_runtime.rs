@@ -418,7 +418,7 @@ pub(crate) async fn ensure_vm_policy_editable(
     if owned {
         return Err(AppError::conflict(
             "service_in_use",
-            "stop the service before changing a replica's security group",
+            "stop the service before changing a replica's network settings",
             request,
         ));
     }

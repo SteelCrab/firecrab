@@ -30,6 +30,7 @@ import { DetailProp, DetailSection } from "../../ui/DetailSection";
 import { EditActions, EditButton, EditableProp, FieldError } from "./parts";
 import type { SectionEdit } from "./useSectionEdit";
 import type { VmDetailData } from "./useVmDetail";
+import MicroNetworkProp from "./MicroNetworkProp";
 
 interface OverviewTabProps {
   vm: VmResponse;
@@ -47,9 +48,6 @@ export default function OverviewTab({
   const { t } = useI18n();
   const failure = vm.state === "error" ? startupFailure(vm) : null;
   const draft = edit.draft;
-  const network = detail.networks.find(
-    (entry) => entry.id === vm.microNetworkId,
-  );
   const storage = detail.storageRoots.find(
     (root) => root.id === vm.storageRoot,
   );
@@ -151,13 +149,7 @@ export default function OverviewTab({
           >
             {vmSpec(vm)}
           </EditableProp>
-          <DetailProp label="MicroNetwork">
-            {!vm.microNetworkId
-              ? t("Default network", "기본 네트워크")
-              : network
-                ? `${network.name} (${network.subnetCidr})`
-                : vm.microNetworkId}
-          </DetailProp>
+          <MicroNetworkProp vm={vm} detail={detail} edit={edit} />
           <EditableProp
             vm={vm}
             edit={edit}

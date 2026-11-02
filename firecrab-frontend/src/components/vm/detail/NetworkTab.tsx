@@ -5,6 +5,7 @@ import { DetailProp, DetailSection } from "../../ui/DetailSection";
 import { EditActions, EditButton, FieldError } from "./parts";
 import type { SectionEdit } from "./useSectionEdit";
 import type { VmDetailData } from "./useVmDetail";
+import MicroNetworkProp from "./MicroNetworkProp";
 
 interface NetworkTabProps {
   vm: VmResponse;
@@ -15,9 +16,6 @@ interface NetworkTabProps {
 export default function NetworkTab({ vm, detail, edit }: NetworkTabProps) {
   const { t } = useI18n();
   const draft = edit.draft;
-  const network = detail.networks.find(
-    (entry) => entry.id === vm.microNetworkId,
-  );
   const forwards = vm.portForwards ?? [];
   const egressLabel = (policy: EgressPolicy) =>
     policy === "internet"
@@ -43,13 +41,7 @@ export default function NetworkTab({ vm, detail, edit }: NetworkTabProps) {
           <DetailProp label="MAC">
             <span className="mono">{vm.mac ?? "—"}</span>
           </DetailProp>
-          <DetailProp label="MicroNetwork">
-            {!vm.microNetworkId
-              ? t("Default network", "기본 네트워크")
-              : network
-                ? `${network.name} (${network.subnetCidr})`
-                : vm.microNetworkId}
-          </DetailProp>
+          <MicroNetworkProp vm={vm} detail={detail} edit={edit} />
         </dl>
       </DetailSection>
 
