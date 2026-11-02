@@ -1,4 +1,4 @@
-import { Bot, createLucideIcon, type LucideIcon } from "lucide-react";
+import { Bot, Shield, createLucideIcon, type LucideIcon } from "lucide-react";
 import type { ViewId } from "./navigation";
 
 /** Keep the established navigation symbols during the React migration. */
@@ -136,4 +136,5 @@ export const VIEW_ICONS: Record<ViewId, LucideIcon> = {
     ],
   ]),
   "ai-sandbox": Bot,
+  security: Shield,
 };

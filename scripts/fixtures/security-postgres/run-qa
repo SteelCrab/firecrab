@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+# The MicroVM guest may not mount the POSIX shared-memory filesystem itself.
+if ! grep -q ' /dev/shm ' /proc/mounts; then
+    mkdir -p /dev/shm
+    mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /dev/shm
+fi
+mkdir -p /tmp/firecrab-db-logs
+chown postgres:postgres /tmp/firecrab-db-logs
+/usr/local/bin/docker-entrypoint.sh postgres \
+    -c listen_addresses='*' \
+    -c logging_collector=on \
+    -c log_destination=jsonlog \
+    -c log_directory=/tmp/firecrab-db-logs \
+    -c log_filename=postgresql.log \
+    -c log_rotation_age=0 \
+    -c log_rotation_size=0 &
+db=$!
+# The collector writes JSON to a file. Forward it to the service's stderr.
+tail -n +1 -F /tmp/firecrab-db-logs/postgresql.json >&2 &
+/usr/local/bin/busybox httpd -f -p 8080 -h /qa-www &
+trap 'kill "$db" 2>/dev/null || true; wait "$db" || true' TERM INT
+wait "$db"

@@ -444,7 +444,10 @@ mod tests {
         suspended.validate().unwrap();
         let nginx = suspended.nginx();
         assert!(nginx.contains("server_name web.example.com"));
-        assert!(nginx.contains("location / { root /dev/null; try_files /unready =503; }"));
+        assert!(nginx.lines().any(|line| {
+            line.contains("location / {")
+                && line.contains("root /dev/null; try_files /unready =503;")
+        }));
         assert!(!nginx.contains("upstream fc_route_1"));
         let restored = ServiceRouteRequest::Replace {
             expected_owner: owner(),
