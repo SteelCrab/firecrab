@@ -91,7 +91,6 @@ impl Store {
     ) -> Result<Binding, PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
-        super::iac_native::ensure_project_available(&tx, project)?;
         let ready: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM micro_block_storages WHERE id=?1 AND phase='ready')",
             [volume.to_string()],

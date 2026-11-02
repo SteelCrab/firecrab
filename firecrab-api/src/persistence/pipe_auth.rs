@@ -77,53 +77,20 @@ impl Store {
             id: provider.as_str().into(),
             reason: "could not encode Auth credential".into(),
         })?;
-        let mut conn = self.lock();
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if !super::iac_owners::public_write_allowed(
-            &tx,
-            &firecrab_stack::ManagedResource {
-                kind: "auth".into(),
-                id: provider.as_str().into(),
-            },
-        )? {
-            return Err(PersistenceError::IacOwnershipConflict);
-        }
-        if let Some(registry) = auth.connection().registry {
-            super::iac_owners::ensure_unowned(
-                &tx,
-                &firecrab_stack::ManagedResource {
-                    kind: "registry".into(),
-                    id: registry,
-                },
-            )?;
-        }
-        tx.execute(
+        self.lock().execute(
             "INSERT INTO pipe_auth_credentials (provider, credential) VALUES (?1, ?2)
              ON CONFLICT(provider) DO UPDATE SET credential=excluded.credential",
             params![provider.as_str(), raw],
         )?;
-        tx.commit()?;
         Ok(())
     }
 
     /// Remove the selected provider credential; an already absent connection also succeeds.
     pub fn delete_pipe_auth(&self, provider: Provider) -> Result<(), PersistenceError> {
-        let mut conn = self.lock();
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if !super::iac_owners::public_write_allowed(
-            &tx,
-            &firecrab_stack::ManagedResource {
-                kind: "auth".into(),
-                id: provider.as_str().into(),
-            },
-        )? {
-            return Err(PersistenceError::IacOwnershipConflict);
-        }
-        tx.execute(
+        self.lock().execute(
             "DELETE FROM pipe_auth_credentials WHERE provider = ?1",
             [provider.as_str()],
         )?;
-        tx.commit()?;
         Ok(())
     }
 }

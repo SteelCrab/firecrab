@@ -1548,51 +1548,25 @@ fn recovery_catalog_keeps_old_pending_writes_ahead_of_completed_receipts() {
     assert_eq!(db.file_operations("pending.txt").unwrap()[0].id, pending.id);
 }
 #[tokio::test]
-async fn native_project_cleanup_cannot_delete_retained_data_or_race_workspace_reservation() {
-    let (_dir, state, b) = fixture().await;
-    let operation = state
-        .store
-        .begin_sandbox_project_delete(b.project_id, Uuid::new_v4())
-        .unwrap();
-    assert!(
-        state
-            .store
-            .reserve_project_workspace(b.project_id, b.volume_id, b.vm_id, None)
-            .is_err()
-    );
-    assert!(
-        state
-            .store
-            .project_workspace(b.project_id)
-            .unwrap()
-            .is_none()
-    );
-    state
-        .store
-        .fail_native_project_delete(operation.operation_id)
-        .unwrap();
-    assert!(
-        state
-            .store
-            .reserve_project_workspace(b.project_id, b.volume_id, b.vm_id, None)
-            .is_err()
-    );
-    let (_dir, state, b) = fixture().await;
-    bind(&state, &b).await;
-    let error = state
-        .store
-        .begin_sandbox_project_delete(b.project_id, Uuid::new_v4())
-        .unwrap_err();
+async fn project_delete_rejects_retained_workspace_without_removing_its_records() {
+    let (_dir, state, binding) = fixture().await;
+    bind(&state, &binding).await;
     assert!(matches!(
-        error,
-        crate::persistence::PersistenceError::BlockStorageConflict { .. }
+        state.store.delete_sandbox_project(binding.project_id),
+        Err(crate::persistence::PersistenceError::BlockStorageConflict { .. })
     ));
     assert!(
         state
             .store
-            .project_workspace(b.project_id)
+            .project_workspace(binding.project_id)
             .unwrap()
             .is_some()
     );
-    assert!(state.store.sandbox_project(b.project_id).unwrap().is_some());
+    assert!(
+        state
+            .store
+            .sandbox_project(binding.project_id)
+            .unwrap()
+            .is_some()
+    );
 }
