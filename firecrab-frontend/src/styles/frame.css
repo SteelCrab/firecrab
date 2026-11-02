@@ -589,6 +589,10 @@ body[data-panel-resizing] {
     left: 10px;
     z-index: 35;
   }
+  /* A full-screen detail owns the header; its background menu must not overlay it. */
+  .app-frame:has(.detail-panel) > .nav-toggle {
+    display: none;
+  }
   .app-frame[data-nav-open] .nav-backdrop {
     display: block;
     position: fixed;
