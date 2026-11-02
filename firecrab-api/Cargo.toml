@@ -39,6 +39,7 @@ rustls-pemfile = "2"
 webpki-roots = "1"
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
+serde-saphyr = { version = "2.0", default-features = false, features = ["deserialize"] }
 sha2 = { workspace = true }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "mysql"] }
 sqlparser = { version = "0.63", default-features = false, features = ["std", "visitor"] }

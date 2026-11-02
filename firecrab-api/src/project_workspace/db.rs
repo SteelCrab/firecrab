@@ -11,7 +11,7 @@ use std::{
 use uuid::Uuid;
 
 /// Private schema with an additive file-history migration from version 1.
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 /// SQLite application identity prevents opening an unrelated database.
 const APPLICATION_ID: i64 = 0x46575031;
 /// Maximum serialized size of a project metadata object.
@@ -206,6 +206,10 @@ impl ProjectDb {
         if version < 8 {
             conn.execute_batch(crate::persistence::sandbox_project_db::TASK_SCHEMA)?;
             conn.execute_batch("CREATE TABLE IF NOT EXISTS sandbox_migration(singleton INTEGER PRIMARY KEY CHECK(singleton=1),operation TEXT NOT NULL,source_sha TEXT NOT NULL) STRICT;")?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        if version < 9 {
+            conn.execute_batch(super::skills::db::SCHEMA)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         let epoch = epoch

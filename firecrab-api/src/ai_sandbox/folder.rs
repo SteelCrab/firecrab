@@ -191,6 +191,11 @@ pub async fn tool(
     saved: &mut SavedTask,
     call: &model::Call,
 ) -> Result<(String, String, Option<i32>, bool), String> {
+    if call.name == "read_skill_file" {
+        return reply(
+            crate::project_workspace::skills::tasks::read(state, saved, &call.arguments).await?,
+        );
+    }
     if call.name == "run_argv" {
         return shell::tool(state, saved, call).await;
     }

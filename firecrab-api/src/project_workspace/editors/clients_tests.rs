@@ -433,7 +433,7 @@ fn schema_seven_adds_browser_close_records_without_replacing_legacy_editors() {
     let root = dir.path().join("state/projects");
     let db = super::super::db::ProjectDb::open(&root, &b, Uuid::new_v4(), true).unwrap();
     let e = prepare(&db, &b, person(), Uuid::new_v4());
-    db.conn.execute_batch("DROP TABLE private_editor_snapshots; DROP TABLE private_editor_clients; PRAGMA user_version=6;").unwrap();
+    db.conn.execute_batch("DROP TABLE skill_catalogs; DROP TABLE skill_installations; DROP TABLE private_editor_snapshots; DROP TABLE private_editor_clients; PRAGMA user_version=6;").unwrap();
     drop(db);
     b.provisioning = false;
     let db = super::super::db::ProjectDb::open(&root, &b, Uuid::new_v4(), false).unwrap();

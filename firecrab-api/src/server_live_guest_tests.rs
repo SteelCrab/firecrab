@@ -71,6 +71,7 @@ async fn real_guest_operator_transport_runs_exports_cancels_and_cleans_owned_dat
     };
     let mut saved = SavedTask {
         instructions: None,
+        skills: Vec::new(),
         caller: Default::default(),
         task: SandboxTask {
             folder_mutations: Vec::new(),
@@ -87,6 +88,7 @@ async fn real_guest_operator_transport_runs_exports_cancels_and_cleans_owned_dat
             runtime: Some(guest::binding(&state, target.vm_id).unwrap()),
             request: SandboxTaskInput {
                 project_shell: false,
+                selected_skill_ids: Vec::new(),
                 project_directory: None,
                 instruction_snapshot_id: None,
                 coordination: Default::default(),

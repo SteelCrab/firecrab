@@ -1102,6 +1102,7 @@ dependencies = [
  "rustls-pemfile",
  "semver",
  "serde",
+ "serde-saphyr",
  "serde_json",
  "sha2",
  "sqlparser",

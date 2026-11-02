@@ -90,6 +90,13 @@ integration does not satisfy Phase 5's full exit criterion.
 
 **Exit criterion:** install a skill from a selected official source, use it in an authorized agent session, restart and recover its installed revision and selections, and verify removal/model-change behavior. UI-only add/remove toggles do not complete this phase.
 
+Pinned official-source catalogs, skill-only bundle/individual installation, retained
+write receipts, compatible private session selections and immutable Sandbox skill
+context are implemented in the [project skill adapter](../guides/project-official-skills.md).
+Real source downloads are verified separately from UI fixtures. Native workload
+installation, real-model use and complete restart/removal acceptance remain pending;
+this partial delivery does not satisfy Phase 6's full exit criterion.
+
 ### 7. Automated backup/restore and integrated acceptance
 
 **Depends on:** Phases 1–6. Phase 1's basic checkpoint/recovery procedure remains required before migrations; this phase automates and validates the complete system.

@@ -942,8 +942,10 @@ pub async fn create_task(
             SandboxPermission::Execute,
         )
         .map_err(|e| denied(id, e))?;
-    ai_sandbox::proof(&state, &selection, input.kind == SandboxTaskKind::Code)
-        .map_err(|e| invalid(id, "selection", e))?;
+    let skill_provider = ai_sandbox::proof(&state, &selection, input.kind == SandboxTaskKind::Code)
+        .map_err(|e| invalid(id, "selection", e))?
+        .connection
+        .provider;
     let mut runtime = None;
     let mut environment_ref = None;
     let mut execution_mode = None;
@@ -1079,7 +1081,31 @@ pub async fn create_task(
     } else {
         None
     };
+    if !input.selected_skill_ids.is_empty() && input.project_directory.is_none() {
+        return Err(invalid(
+            id,
+            "selectedSkillIds",
+            "Installed skills require a retained folder task",
+        ));
+    }
+    let skills = if input.selected_skill_ids.is_empty() {
+        Vec::new()
+    } else {
+        let runtime = runtime
+            .ok_or_else(|| invalid(id, "selectedSkillIds", "Skills require a project runtime"))?;
+        crate::project_workspace::skills::tasks::capture(
+            state.clone(),
+            caller,
+            project_id,
+            runtime,
+            input.selected_skill_ids.clone(),
+            skill_provider,
+            id.0,
+        )
+        .await?
+    };
     let saved = SavedTask {
+        skills,
         instructions,
         caller,
         task: SandboxTask {

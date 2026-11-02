@@ -4,6 +4,7 @@ use firecrab_api_types::*;
 pub(super) fn saved(project: Uuid, index: u64) -> SavedTask {
     SavedTask {
         instructions: None,
+        skills: Vec::new(),
         caller: Default::default(),
         project: SandboxProjectSpec {
             context: Default::default(),
@@ -36,6 +37,7 @@ pub(super) fn saved(project: Uuid, index: u64) -> SavedTask {
             runtime: None,
             request: SandboxTaskInput {
                 project_shell: false,
+                selected_skill_ids: Vec::new(),
                 project_directory: None,
                 instruction_snapshot_id: None,
                 coordination: Default::default(),

@@ -1,8 +1,16 @@
+import {
+  validSkillSource,
+  validSkillInstall,
+  type SkillRef,
+  type SkillSource,
+  type SkillInstall,
+} from "./skills.ts";
 import type { Node } from "./types.ts";
 export type Selection = { connectionId: string; model: string };
 export type AgentRequest = {
   kind: "code";
   projectShell?: true;
+  selectedSkillIds?: string[];
   input: string;
   projectDirectory: string;
   instructionSnapshotId: string;
@@ -16,6 +24,8 @@ export type AgentDocument = {
   draft: string;
   selection?: Selection;
   shell?: boolean;
+  skills?: SkillRef[];
+  skillInstall?: { id: string; request: SkillInstall };
   pending?: { id: string; snapshot: string; request: AgentRequest };
   taskId?: string;
 };
@@ -38,7 +48,12 @@ export type AgentTask = {
   }[];
   events?: { name: string; input: string; output: string; stderr: string }[];
 };
-export type Choice = { selection: Selection; label: string; verified: boolean };
+export type Choice = {
+  selection: Selection;
+  label: string;
+  verified: boolean;
+  source?: SkillSource;
+};
 export type Context = {
   id: string;
   files: { path: string; version: number }[];
@@ -83,6 +98,20 @@ export function agentDocument(
       typeof d.draft !== "string" ||
       d.draft.length > 4096 ||
       (d.shell !== undefined && typeof d.shell !== "boolean") ||
+      (d.skills !== undefined &&
+        (!Array.isArray(d.skills) ||
+          d.skills.length > 8 ||
+          new Set(d.skills.map((s) => s.id)).size !== d.skills.length ||
+          d.skills.some(
+            (s) =>
+              !uuid(s.id) ||
+              !validSkillSource(s.source) ||
+              typeof s.name !== "string" ||
+              s.name.length > 256,
+          ))) ||
+      (d.skillInstall &&
+        (!uuid(d.skillInstall.id) ||
+          !validSkillInstall(d.skillInstall.request))) ||
       (d.selection && !selection(d.selection)) ||
       (d.taskId && !uuid(d.taskId))
     )
@@ -95,6 +124,13 @@ export function agentDocument(
         !uuid(p.snapshot) ||
         !r ||
         r.kind !== "code" ||
+        (r.selectedSkillIds !== undefined &&
+          (!Array.isArray(r.selectedSkillIds) ||
+            r.selectedSkillIds.length > 8 ||
+            new Set(r.selectedSkillIds).size !== r.selectedSkillIds.length ||
+            r.selectedSkillIds.some(
+              (id) => !uuid(id) || !d.skills?.some((s) => s.id === id),
+            ))) ||
         (r.projectShell !== undefined && r.projectShell !== true) ||
         (r.projectShell === true && d.shell !== true) ||
         r.projectDirectory !== d.directory ||

@@ -606,6 +606,27 @@ async fn execute(
         history.push(json!({"role":"user","content":previous.request.input}));
         history.push(json!({"role":"assistant","content":previous.result}));
     }
+    let skill_index = if let Some(message) =
+        crate::project_workspace::skills::tasks::message(saved, &[]).map_err(execution_error)?
+    {
+        saved.task.events.push(SandboxEvent {
+            sequence: saved.task.events.len(),
+            at: now(),
+            name: "selected_skills".into(),
+            input: serde_json::to_string(
+                &saved.skills.iter().map(|s| &s.revision).collect::<Vec<_>>(),
+            )
+            .map_err(execution_error)?,
+            output: "Applied the admitted installed skill revisions".into(),
+            stderr: String::new(),
+            exit_code: None,
+        });
+        let index = history.len();
+        history.push(message);
+        Some(index)
+    } else {
+        None
+    };
     let instruction_index =
         if let Some(message) = instructions::message(saved, &[]).map_err(execution_error)? {
             saved.task.events.push(SandboxEvent {
@@ -626,9 +647,14 @@ async fn execute(
     history.push(json!({"role":"user","content":saved.task.request.input}));
     let folder_profile = folder::enabled(saved);
     let project_shell = saved.task.request.project_shell;
+    let project_skills = !saved.skills.is_empty();
     let task_tools = || {
         if folder_profile {
-            folder::task_tools(project_shell)
+            let mut tools = folder::task_tools(project_shell);
+            if project_skills {
+                tools.push(crate::project_workspace::skills::tasks::tool_definition());
+            }
+            tools
         } else if code {
             model::tools()
         } else {
@@ -672,6 +698,21 @@ async fn execute(
             history[index] = instructions::message(saved, &connections)
                 .map_err(execution_error)?
                 .ok_or_else(|| execution_error("Admitted saved rules disappeared"))?;
+        }
+        if saved.skills.iter().any(|s| {
+            !crate::project_workspace::skills::tasks::compatible(
+                s.revision.source,
+                account.connection.provider,
+            )
+        }) {
+            return Err(execution_error(
+                "The selected skill adapter no longer matches this model account",
+            ));
+        }
+        if let Some(index) = skill_index {
+            history[index] = crate::project_workspace::skills::tasks::message(saved, &connections)
+                .map_err(execution_error)?
+                .ok_or_else(|| execution_error("Admitted skill snapshots disappeared"))?;
         }
         history = serde_json::from_str(&redact(
             &connections,

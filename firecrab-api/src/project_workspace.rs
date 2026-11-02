@@ -13,6 +13,7 @@ mod instructions_db;
 #[cfg(test)]
 mod instructions_tests;
 mod sandbox_migration;
+pub(crate) mod skills;
 mod terminals;
 mod terminals_db;
 mod terminals_guest;
@@ -322,6 +323,7 @@ pub fn routes() -> Router<AppState> {
         .merge(editors::routes())
         .merge(instructions::routes())
         .merge(sandbox_migration::routes())
+        .merge(skills::routes())
 }
 /// Read project metadata even when the workload VM is stopped.
 async fn get_workspace(

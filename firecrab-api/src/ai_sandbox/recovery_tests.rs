@@ -41,6 +41,7 @@ pub(super) async fn fixture() -> (tempfile::TempDir, AppState, SavedTask) {
     };
     let saved = SavedTask {
         instructions: None,
+        skills: Vec::new(),
         results_exported: false,
         execution_mode: None,
         caller: Default::default(),
@@ -73,6 +74,7 @@ pub(super) async fn fixture() -> (tempfile::TempDir, AppState, SavedTask) {
             runtime: Some(runtime),
             request: SandboxTaskInput {
                 project_shell: false,
+                selected_skill_ids: Vec::new(),
                 project_directory: None,
                 instruction_snapshot_id: None,
                 coordination: Default::default(),

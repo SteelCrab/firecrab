@@ -256,6 +256,39 @@ impl Files {
         }
     }
 
+    /// Apply or reconcile an exact versioned write while retaining this VM/database lease.
+    pub(super) async fn write(&mut self, input: Operation) -> Result<ProjectFile, Error> {
+        if !self.writable {
+            return Err(Error::Denied);
+        }
+        validate_write(&input)?;
+        self.permission()?;
+        if let Some(op) = self.db.file_operation(input.id)? {
+            identical(&op, &input)?;
+            if let Some(version) = op.version {
+                return self
+                    .db
+                    .file_version(&op.path, version)
+                    .map(Version::response);
+            }
+            if op.state != "pending" {
+                return Err(Error::Conflict(
+                    "The file operation was rejected; use a new operation identity",
+                ));
+            }
+            return self.apply(op).await;
+        }
+        self.recover_pending(&input.path).await?;
+        let current = self.current(&input.path).await?;
+        if current.as_ref().map_or(0, |v| v.metadata.id) != input.expected {
+            return Err(Error::Conflict(
+                "The file changed; reload before saving with a new operation identity",
+            ));
+        }
+        let op = self.db.stage_file(input)?;
+        self.apply(op).await
+    }
+
     async fn apply(&mut self, op: Operation) -> Result<ProjectFile, Error> {
         let frame = wire::operation_frame(&self.db, &op)?;
         match self.request(frame).await? {
@@ -355,34 +388,7 @@ pub(super) async fn write_bound(
             Error::Conflict("Folder task runtime changed before file mutation").response(id),
         );
     }
-    let result = async {
-        if let Some(op) = files.db.file_operation(input.id)? {
-            identical(&op, &input)?;
-            if let Some(version) = op.version {
-                return files
-                    .db
-                    .file_version(&op.path, version)
-                    .map(Version::response);
-            }
-            if op.state != "pending" {
-                return Err(Error::Conflict(
-                    "The file operation was rejected; use a new operation identity",
-                ));
-            }
-            return files.apply(op).await;
-        }
-        files.recover_pending(&input.path).await?;
-        let current = files.current(&input.path).await?;
-        if current.as_ref().map_or(0, |v| v.metadata.id) != input.expected {
-            return Err(Error::Conflict(
-                "The file changed; reload before saving with a new operation identity",
-            ));
-        }
-        let op = files.db.stage_file(input)?;
-        files.apply(op).await
-    }
-    .await;
-    result.map_err(|e| e.response(id))
+    files.write(input).await.map_err(|e| e.response(id))
 }
 
 async fn read(

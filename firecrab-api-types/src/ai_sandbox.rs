@@ -216,6 +216,9 @@ pub struct SandboxTaskInput {
     /// This profile defaults to versioned file tools and never stages host copies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_directory: Option<String>,
+    /// Explicit installed project skill revisions captured before dispatch; old requests omit this field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_skill_ids: Vec<Uuid>,
     /// Explicit opt-in to bounded commands in the retained project VM; old requests remain file-only.
     #[serde(default, skip_serializing_if = "shell_disabled")]
     pub project_shell: bool,

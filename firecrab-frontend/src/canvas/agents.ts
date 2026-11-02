@@ -1,3 +1,9 @@
+import {
+  validSkillSource,
+  type SkillInstall,
+  type SkillInstallation,
+  type SkillRef,
+} from "./skills.ts";
 import { request, WorkspaceError, message } from "./request.ts";
 import { base, type Tab, type Node } from "./types.ts";
 import {
@@ -74,10 +80,21 @@ export class FolderAgents {
   change(
     t: Tab,
     n: Node,
-    patch: { draft?: string; selection?: Selection; shell?: boolean },
+    patch: {
+      draft?: string;
+      selection?: Selection;
+      shell?: boolean;
+      skills?: SkillRef[];
+    },
   ) {
     const d = this.document(t, n);
-    if ((patch.selection || patch.shell !== undefined) && d.pending) return;
+    if (
+      (patch.selection ||
+        patch.shell !== undefined ||
+        patch.skills !== undefined) &&
+      d.pending
+    )
+      return;
     this.store(t, n, { ...d, ...patch });
   }
   async models(t: Tab, n: Node, discover = false) {
@@ -122,6 +139,9 @@ export class FolderAgents {
             (m): Choice => ({
               selection: { connectionId: connection.id, model: m.id },
               label: provider + " · " + connection.name + " · " + m.name,
+              source: validSkillSource(connection.provider)
+                ? connection.provider
+                : undefined,
               verified: m.verified && m.toolsVerified,
             }),
           );
@@ -136,6 +156,97 @@ export class FolderAgents {
         .map((r) => message(r.reason))
         .join("; ");
     } catch (error) {
+      if (this.valid(t, n, s)) s.error = message(error);
+    } finally {
+      s.busy = false;
+      this.host.changed();
+    }
+  }
+  async installSkill(
+    t: Tab,
+    n: Node,
+    input?: SkillInstall,
+  ): Promise<SkillInstallation | undefined> {
+    if (!agentDocument(n, t.project) || !this.host.owned(t, n)) return;
+    const s = this.get(t, n);
+    if (s.busy || s.refreshing) return;
+    s.busy = true;
+    s.error = "";
+    this.host.changed();
+    try {
+      let d = this.document(t, n);
+      if (
+        d.skillInstall &&
+        input &&
+        ["source", "kind", "path", "revision"].some(
+          (key) =>
+            d.skillInstall!.request[key as keyof SkillInstall] !==
+            input[key as keyof SkillInstall],
+        )
+      )
+        throw new Error(
+          "Resolve the saved installation before selecting another package",
+        );
+      if (!d.skillInstall) {
+        if (!input) throw new Error("No saved installation request");
+        this.store(t, n, {
+          ...d,
+          skillInstall: { id: crypto.randomUUID(), request: input },
+        });
+      }
+      d = this.document(t, n);
+      const pending = d.skillInstall!;
+      await this.host.persist(t);
+      if (!this.valid(t, n, s)) return;
+      const result = await this.api<SkillInstallation>(
+        "PUT",
+        base(t.project) + "/skills/installations/" + pending.id,
+        pending.request,
+      );
+      if (
+        !["installed", "removed"].includes(result.status) ||
+        result.id !== pending.id ||
+        result.entry.source !== pending.request.source ||
+        result.entry.path !== pending.request.path ||
+        result.entry.revision !== pending.request.revision ||
+        result.entry.kind !== pending.request.kind
+      )
+        throw new Error("Installed skill differs from the saved request");
+      if (
+        this.valid(t, n, s) &&
+        this.document(t, n).skillInstall?.id === pending.id
+      )
+        this.store(t, n, { ...this.document(t, n), skillInstall: undefined });
+      return result;
+    } catch (error) {
+      // A completed rejection plus an absent server record proves there was no install admission.
+      if (
+        error instanceof WorkspaceError &&
+        error.status !== undefined &&
+        error.status >= 400 &&
+        error.status < 500 &&
+        this.valid(t, n, s)
+      ) {
+        const pending = this.document(t, n).skillInstall;
+        if (pending)
+          try {
+            await this.api(
+              "GET",
+              base(t.project) + "/skills/installations/" + pending.id,
+            );
+          } catch (lookup) {
+            if (
+              lookup instanceof WorkspaceError &&
+              lookup.status === 404 &&
+              this.valid(t, n, s) &&
+              this.document(t, n).skillInstall?.id === pending.id
+            )
+              this.store(t, n, {
+                ...this.document(t, n),
+                skillInstall: undefined,
+              });
+          }
+      }
       if (this.valid(t, n, s)) s.error = message(error);
     } finally {
       s.busy = false;
@@ -246,6 +357,8 @@ export class FolderAgents {
   ) {
     if (
       !!task.request.projectShell !== !!pending.request.projectShell ||
+      JSON.stringify(task.request.selectedSkillIds || []) !==
+        JSON.stringify(pending.request.selectedSkillIds || []) ||
       task.request.instructionSnapshotId !== pending.snapshot ||
       task.request.input !== pending.request.input.trim() ||
       selectionKey(task.selection) !== selectionKey(pending.request.selection)
@@ -281,6 +394,9 @@ export class FolderAgents {
         )
       )
         return;
+      const choice = s.models.find(
+        (m) => selectionKey(m.selection) === selectionKey(d.selection),
+      )!;
       const snapshot = crypto.randomUUID();
       d = {
         ...d,
@@ -290,6 +406,13 @@ export class FolderAgents {
           request: {
             kind: "code",
             ...(d.shell ? { projectShell: true as const } : {}),
+            ...((d.skills || []).some((s) => s.source === choice.source)
+              ? {
+                  selectedSkillIds: (d.skills || [])
+                    .filter((s) => s.source === choice.source)
+                    .map((s) => s.id),
+                }
+              : {}),
             input: d.draft.trim(),
             projectDirectory: d.directory,
             instructionSnapshotId: snapshot,

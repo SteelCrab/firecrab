@@ -105,3 +105,35 @@ test('shell execution is opt-in, retained before dispatch, and immutable while c
  const files=fixture();await files.ready();await files.manager.submit(files.tab,files.node);
  assert.equal(Object.hasOwn([...files.records.values()][0].request,'projectShell'),false);
 });
+
+test('model changes keep incompatible skill selections inactive and checkpoint only compatible IDs',async()=>{
+ const f=fixture();await f.ready();const first=randomUUID(),second=randomUUID();
+ f.manager.change(f.tab,f.node,{skills:[{id:first,source:'openai',name:'OpenAI review'},{id:second,source:'anthropic',name:'Claude review'}]});
+ await f.manager.submit(f.tab,f.node);assert.deepEqual([...f.records.values()][0].request.selectedSkillIds,[first]);assert.equal(agentDocument(f.node,f.project).skills.length,2);
+ const claude={connectionId:randomUUID(),model:'qa-claude'};f.manager.get(f.tab,f.node).models.push({selection:claude,source:'anthropic',label:'Claude',verified:true});
+ f.manager.change(f.tab,f.node,{selection:claude,draft:'Use Claude skill'});await f.manager.submit(f.tab,f.node);
+ assert.deepEqual([...f.records.values()][1].request.selectedSkillIds,[second]);assert.equal(agentDocument(f.node,f.project).skills.length,2);
+});
+test('installation waits for private checkpoint and an ambiguous response retries its original UUID and body',async()=>{
+ const f=fixture();await f.ready();const admissions=[];let lose=true;
+ const api=async(method,path,body)=>{
+  if(method==='PUT'&&path.includes('/skills/installations/')){admissions.push({id:path.split('/').at(-1),body:structuredClone(body)});if(lose){lose=false;throw new WorkspaceError('lost install acknowledgement');}return {id:admissions[0].id,entry:body,status:'installed',root:'fixture',files:[],sha256:'fixture'};}
+  return f.api(method,path,body);
+ };
+ const manager=new FolderAgents(f.host,api);let release;f.gate=new Promise(r=>release=r);
+ const input={source:'openai',kind:'skill',path:'plugins/example/skills/review',revision:'a'.repeat(40)};
+ const pending=manager.installSkill(f.tab,f.node,input);await new Promise(r=>setImmediate(r));assert.equal(admissions.length,0);assert.ok(agentDocument(f.node,f.project).skillInstall);release();await pending;
+ const id=agentDocument(f.node,f.project).skillInstall.id;f.gate=null;await manager.installSkill(f.tab,f.node);
+ assert.equal(admissions.length,2);assert.equal(admissions[0].id,id);assert.deepEqual(admissions[1],admissions[0]);assert.equal(agentDocument(f.node,f.project).skillInstall,undefined);
+});
+test('failed private installation storage cannot download or mutate a project package',async()=>{
+ const f=fixture({saveFailure:true});await f.ready();await f.manager.installSkill(f.tab,f.node,{source:'anthropic',kind:'skill',path:'skills/review',revision:'a'.repeat(40)});
+ assert.equal(f.calls.length,0);assert.ok(agentDocument(f.node,f.project).skillInstall);assert.match(f.manager.get(f.tab,f.node).error,/private save failed/);
+});
+
+test('a definitive pre-admission installation rejection releases its saved draft only after a missing-record proof',async()=>{
+ const f=fixture();await f.ready();const calls=[];
+ const api=async(method,path)=>{calls.push({method,path});throw new WorkspaceError(method==='PUT'?'Package unsupported':'Not found',method==='PUT'?400:404,'fixture');};
+ const manager=new FolderAgents(f.host,api);await manager.installSkill(f.tab,f.node,{source:'openai',kind:'skill',path:'plugins/example/skills/review',revision:'a'.repeat(40)});
+ assert.deepEqual(calls.map(c=>c.method),['PUT','GET']);assert.equal(calls[0].path,calls[1].path);assert.equal(agentDocument(f.node,f.project).skillInstall,undefined);
+});

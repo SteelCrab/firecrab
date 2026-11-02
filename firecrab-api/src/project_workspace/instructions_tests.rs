@@ -122,7 +122,7 @@ fn additive_schema_six_preserves_saved_files_and_private_views() {
     )
     .unwrap();
     db.conn
-        .execute_batch("DROP TABLE private_editor_snapshots; DROP TABLE private_editor_clients; DROP TABLE instruction_snapshots; PRAGMA user_version=5")
+        .execute_batch("DROP TABLE skill_catalogs; DROP TABLE skill_installations; DROP TABLE private_editor_snapshots; DROP TABLE private_editor_clients; DROP TABLE instruction_snapshots; PRAGMA user_version=5")
         .unwrap();
     drop(db);
     binding.provisioning = false;

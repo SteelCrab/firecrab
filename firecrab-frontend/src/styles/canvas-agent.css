@@ -271,3 +271,107 @@
   color: var(--text-3);
   font-size: 11px;
 }
+
+.cw-skills {
+  border-block: 1px solid var(--cw-border, #e3e5ec);
+  padding: 8px 10px;
+}
+.cw-skills > button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  font-size: 12px;
+}
+.cw-skill-store {
+  max-height: 480px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+  padding-block: 8px;
+}
+.cw-skill-store p,
+.cw-skill-store small {
+  font-size: 11px;
+  color: var(--cw-muted, #707787);
+  line-height: 1.5;
+}
+.cw-skill-store h4 {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+.cw-skill-filters {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  min-width: 0;
+}
+.cw-skill-filters input,
+.cw-skill-filters select {
+  width: 100%;
+  min-width: 0;
+  padding: 5px;
+  font-size: 11px;
+}
+.cw-skill-source {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+}
+.cw-skill-item {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid var(--cw-border, #e3e5ec);
+  border-radius: 7px;
+  min-width: 0;
+}
+.cw-skill-item label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cw-skill-item label input {
+  width: auto;
+  margin: 0;
+}
+.cw-skill-item strong {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.cw-skill-item code {
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.cw-skill-store button {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 5px;
+}
+.cw-skill-selections {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+  font-size: 11px;
+}
+.cw-skill-selections li {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+.cw-skill-selections small {
+  margin-left: auto;
+  color: var(--cw-muted, #707787);
+}
+.cw-skill-selections button {
+  padding: 1px 5px;
+}

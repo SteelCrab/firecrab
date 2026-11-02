@@ -48,6 +48,9 @@ pub struct SavedTask {
     /// Immutable saved rules and their retained project binding, fixed before dispatch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<SavedInstructions>,
+    /// Immutable selected skill guidance, retained by the existing canonical task record.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<crate::project_workspace::skills::tasks::SavedSkill>,
 }
 
 /// Saved instruction provenance; it contains no model account configuration.

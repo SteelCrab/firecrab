@@ -1,3 +1,4 @@
+import ProjectSkills from "./ProjectSkills";
 import { useEffect } from "react";
 import { Play, RefreshCw, Square, FileText, ChevronUp } from "lucide-react";
 import { useI18n } from "../i18n";
@@ -136,6 +137,12 @@ export default function CanvasAgent({ tab, node }: { tab: Tab; node: Node }) {
           <a href="#/pipe/ai">Pipe → AI</a>
         </p>
       )}
+      <ProjectSkills
+        tab={tab}
+        node={node}
+        choice={selected}
+        disabled={disabled}
+      />
       <label className="cw-agent-shell">
         <input
           type="checkbox"
