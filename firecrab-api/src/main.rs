@@ -156,6 +156,7 @@ async fn run() -> Result<(), StartupError> {
     tokio::task::spawn_blocking(move || {
         store.interrupt_sandbox_tasks()?;
         store.interrupt_stack_applies()?;
+        store.interrupt_native_iac_operations()?;
         store.interrupt_stack_checks(stack_source::now())
     })
     .await

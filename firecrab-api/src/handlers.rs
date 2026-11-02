@@ -5,6 +5,7 @@ pub mod bootstrap;
 pub mod builder_vm;
 pub mod console;
 pub mod console_sentinel;
+pub mod iac;
 pub mod images;
 #[cfg(test)]
 #[allow(clippy::err_expect)]

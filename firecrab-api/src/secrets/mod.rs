@@ -36,6 +36,12 @@ pub(crate) enum SecretError {
     /// Another record already owns the requested name.
     #[error("a record with this name already exists")]
     Duplicate,
+    /// The local value or connection is managed by another infrastructure writer.
+    #[error("resource is managed by Terraform")]
+    IacManaged,
+    /// A native Stack or Git operation currently owns the mutation boundary.
+    #[error("resource controller operation is active")]
+    IacBusy,
     /// A captured record identity, version, or remote value has changed.
     #[error("the values changed; preview the transfer again")]
     Conflict,

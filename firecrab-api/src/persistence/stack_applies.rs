@@ -109,7 +109,9 @@ impl Store {
                     })
             })
             .count();
-        if current.bindings.len() + creates.len() - pruned > firecrab_stack::MAX_RESOURCES {
+        if super::stacks::binding_count(&tx, current.id, None)? + creates.len() - pruned
+            > firecrab_stack::MAX_RESOURCES
+        {
             return Err(PersistenceError::StackBindingLimit);
         }
         tx.execute("INSERT INTO stack_applies (operation_id,stack_id,desired_hash,allow_stop,state,status) VALUES (?1,?2,?3,?4,'queued',?5)",
@@ -123,6 +125,7 @@ impl Store {
             if id.is_nil() || !firecrab_stack::logical_name(&change.key) {
                 return Err(PersistenceError::StackApplyIdentity);
             }
+            super::iac_owners::native_binding_changed(&tx, change.kind.as_str(), id)?;
             tx.execute("INSERT INTO stack_bindings (stack_id,kind,logical_key,resource_id) VALUES (?1,?2,?3,?4)",
                 params![current.id.to_string(), change.kind.as_str(), change.key, id.to_string()])?;
         }
