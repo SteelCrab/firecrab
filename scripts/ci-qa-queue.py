@@ -88,7 +88,20 @@ def api(path, method="GET", body=None, status=200):
         if error.code == status:
             error.close()
             return None
-        raise RuntimeError(f"{method} {path}: HTTP {error.code}") from None
+        diagnostic = ""
+        try:
+            problem = json.loads(error.read(64 * 1024))["error"]
+            code = problem.get("code", "")
+            fields = sorted(key for key in problem.get("fields", {})
+                            if re.fullmatch(r"[A-Za-z0-9_.]{1,80}", key))
+            if isinstance(code, str) and re.fullmatch(r"[a-z0-9_]{1,80}", code):
+                diagnostic = f" ({code}; fields: {', '.join(fields) or 'none'})"
+        except (ValueError, KeyError, TypeError, AttributeError):
+            pass
+        finally:
+            error.close()
+        # Do not relay API messages or field values: they may contain credentials.
+        raise RuntimeError(f"{method} {path}: HTTP {error.code}{diagnostic}") from None
     except OSError:
         raise RuntimeError("Local Firecrab API is unavailable") from None
     with response:

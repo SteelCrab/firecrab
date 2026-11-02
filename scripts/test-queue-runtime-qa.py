@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Queue QA target guards and failure handling; no VM or network changes."""
 import importlib.util
+import io
 import json
 import sqlite3
 import subprocess
@@ -61,6 +62,23 @@ class QueueQaContracts(unittest.TestCase):
 
     def test_http_redirects_are_not_followed(self):
         self.assertIsNone(qa.NoRedirect().redirect_request(None, None, 302, "redirect", {}, "http://remote"))
+
+    def test_http_failure_reports_validation_fields_without_private_values(self):
+        body = {"error": {"code": "validation_failed", "message": "private-message",
+                          "fields": {"storageRoot": "private-value"}}}
+        error = qa.urllib.error.HTTPError(qa.ORIGIN, 400, "bad request", {}, io.BytesIO(json.dumps(body).encode()))
+        with patch.object(qa.OPENER, "open", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "validation_failed; fields: storageRoot") as caught:
+                qa.api("/api/queue/engine", "POST", {})
+        self.assertNotIn("private", str(caught.exception))
+        self.assertTrue(error.closed)
+
+    def test_malformed_http_failure_keeps_the_status_without_response_contents(self):
+        error = qa.urllib.error.HTTPError(qa.ORIGIN, 500, "bad response", {}, io.BytesIO(b"private-value"))
+        with patch.object(qa.OPENER, "open", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, r"HTTP 500$"):
+                qa.api("/api/queue/engine")
+        self.assertTrue(error.closed)
 
 
 if __name__ == "__main__":
