@@ -16,6 +16,7 @@ summary: their token cannot write comments.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -422,10 +423,14 @@ class GitHub:
                 )
             except urllib.error.HTTPError as error:
                 error.close()
-                if error.code != 404 or attempt == 2:
+                if error.code not in (404, 408, 429, 500, 502, 503, 504) or attempt == 2:
                     print(f"::warning::log of job {job_id}: HTTP {error.code}")
                     return None
-                time.sleep(5)
+            except (OSError, http.client.HTTPException):
+                if attempt == 2:
+                    print(f"::warning::log of job {job_id}: download unavailable after retries")
+                    return None
+            time.sleep(5)
         return None
 
 
