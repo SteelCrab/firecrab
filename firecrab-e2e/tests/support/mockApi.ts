@@ -60,6 +60,12 @@ export async function openDashboard(page: Page, options: DashboardOptions = {}):
     const custom = routes[path];
     if (typeof custom === "function") return custom(route);
     if (custom) return route.fulfill({ json: custom });
+    if (path === "/api/iac/identity") {
+      return route.fulfill({ json: {
+        endpointId: "54800000-0000-4000-8000-000000000001",
+        inventoryKinds: ["image"], transferKinds: ["image"],
+      } });
+    }
     if (path === "/api/iac/native-operations") {
       return route.fulfill({ json: { operations: [], nextBefore: null } });
     }

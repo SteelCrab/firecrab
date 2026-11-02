@@ -43,12 +43,23 @@ fn change(state: &AppState, generation: u64, owner: Option<ResourceOwner>) -> Ch
     }
 }
 fn transfer(state: &AppState, change: &ChangeResourceOwner) {
-    let presence = image_lifecycle::prepare_transfer(
-        &state.templates,
-        &change.resource,
-        change.owner.is_some(),
-    )
-    .unwrap();
+    // Linux's parallel command tests can briefly inherit this flock between fork and exec.
+    // A busy host is a valid rejection; retry this test's unchanged CAS after that child exits.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let presence = loop {
+        match image_lifecycle::prepare_transfer(
+            &state.templates,
+            &change.resource,
+            change.owner.is_some(),
+        ) {
+            Err(crate::persistence::PersistenceError::IacResourceBusy)
+                if std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            result => break result.unwrap(),
+        }
+    };
     state
         .store
         .change_iac_image_owner(change, &presence)

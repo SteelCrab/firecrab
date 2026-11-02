@@ -42,6 +42,11 @@ async function open(
   };
   await page.route(/^https?:\/\/[^/]+\/api\//, async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === "/api/iac/identity")
+      return route.fulfill({ json: {
+        endpointId: "54800000-0000-4000-8000-000000000001",
+        inventoryKinds: ["image"], transferKinds: ["image"],
+      } });
     if (path === "/api/images")
       return route.fulfill({ json: installed ? [image] : [] });
     if (path === "/api/pipe/registry-images") {
