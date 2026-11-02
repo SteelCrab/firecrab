@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Journal managed database broker preparation, repair and disconnection before
+  guest changes. Recover original TLS, UUIDs, pinned images and disk generations.
+  Atomically record activation, preserve disks on disconnect, fence ownership
+  transfer and retain accepted dashboard operations until completion (#548).
+
 - Retain external database broker verification requests before connection attempts.
   Commit selection and its immutable receipt together. Keep original credentials
   and endpoint identities across API restart, HTTP disconnect and dashboard reload (#548).

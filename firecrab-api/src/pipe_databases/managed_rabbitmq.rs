@@ -26,6 +26,9 @@ pub struct Broker {
     pub id: Uuid,
     /// Broker address advertised to its peers and the host relay.
     pub ipv4: String,
+    /// Pin the persistent data disk after boot; a later missing pointer is not permission to replace it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_generation: Option<Uuid>,
     /// Private broker settings, including generated TLS keys.
     pub env: BTreeMap<String, String>,
     #[serde(default)]
@@ -90,6 +93,22 @@ fn check(state: &AppState, watch: &BrokerWatch, mutating: bool) -> Result<(), Er
         .check_database_broker_watch(watch, mutating)
         .map_err(|_| Error::Invalid("RabbitMQ execution authority changed or is reserved"))
 }
+/// Legacy independent VM owners must explicitly release authority before parent control resumes.
+fn child_unowned(state: &AppState, id: Uuid) -> Result<(), Error> {
+    let ownership = state
+        .store
+        .iac_resource_owner(&firecrab_stack::ManagedResource {
+            kind: "vm".into(),
+            id: id.to_string(),
+        })
+        .map_err(|_| Error::Invalid("Cannot read RabbitMQ VM authority"))?;
+    if ownership.owner.is_some() {
+        return Err(Error::Invalid(
+            "Release the broker VM's independent owner before managed control",
+        ));
+    }
+    Ok(())
+}
 
 /// Reserve capacity before downloading an image or creating any broker.
 pub fn preflight(state: &AppState, development: bool) -> Result<(), Error> {
@@ -122,6 +141,23 @@ pub fn preflight(state: &AppState, development: bool) -> Result<(), Error> {
 
 /// Start owned brokers and supervise each endpoint with bounded repair attempts.
 pub fn queue(state: AppState, cluster: Cluster, guard: std::fs::File) -> Result<(), Error> {
+    monitor(state, cluster, guard, true)
+}
+/// Continue observation after the admitted native setup has already completed.
+pub(crate) fn queue_ready(
+    state: AppState,
+    cluster: Cluster,
+    guard: std::fs::File,
+) -> Result<(), Error> {
+    monitor(state, cluster, guard, false)
+}
+/// One process owns the whole supervisor; every guest mutation obtains a durable root operation.
+fn monitor(
+    state: AppState,
+    cluster: Cluster,
+    guard: std::fs::File,
+    initial: bool,
+) -> Result<(), Error> {
     let mut watch = state
         .store
         .database_broker_watch(&cluster)
@@ -129,13 +165,10 @@ pub fn queue(state: AppState, cluster: Cluster, guard: std::fs::File) -> Result<
     tokio::spawn(async move {
         let _runtime_guard = guard;
         let mut cluster = cluster;
-        if let Err(error) = start(&state, &mut cluster, &mut watch).await {
+        if initial
+            && let Err(error) = reconcile_native(&state, &mut cluster, &mut watch, None).await
+        {
             tracing::warn!(%error, "Managed RabbitMQ setup failed");
-            cluster.phase = "failed".into();
-            cluster.error = Some(format!(
-                "RabbitMQ setup failed: {error}. Owned broker disks are retained. Retry setup after checking capacity, image import and networking."
-            ));
-            let _ = persist(&state, &cluster, &mut watch);
             return;
         }
         let mut misses = BTreeMap::<Uuid, u8>::new();
@@ -154,11 +187,11 @@ pub fn queue(state: AppState, cluster: Cluster, guard: std::fs::File) -> Result<
                     .is_some_and(|v| matches!(v.state, VmState::Stopped | VmState::Error))
             });
             if stopped {
-                if start(&state, &mut cluster, &mut watch).await.is_err() {
-                    cluster.phase = "degraded".into();
-                    cluster.error =
-                        Some("A RabbitMQ broker needs recovery; its data disk is retained".into());
-                    let _ = persist(&state, &cluster, &mut watch);
+                if reconcile_native(&state, &mut cluster, &mut watch, None)
+                    .await
+                    .is_err()
+                {
+                    return;
                 }
                 continue;
             }
@@ -198,28 +231,15 @@ pub fn queue(state: AppState, cluster: Cluster, guard: std::fs::File) -> Result<
                         .get(id)
                         .is_none_or(|at| at.elapsed() >= Duration::from_secs(120))
             }) {
-                if check(&state, &watch, true).is_err() {
-                    continue;
-                }
                 restarted.insert(id, std::time::Instant::now());
-                if vms::stop_vm(
-                    State(state.clone()),
-                    Extension(RequestId(cluster.id)),
-                    Path(id.to_string()),
-                )
-                .await
-                .is_ok()
+                if reconcile_native(&state, &mut cluster, &mut watch, Some(id))
+                    .await
+                    .is_err()
                 {
-                    if check(&state, &watch, true).is_err() {
-                        continue;
-                    }
-                    let _ = vms::start_vm(
-                        State(state.clone()),
-                        Extension(RequestId(cluster.id)),
-                        Path(id.to_string()),
-                    )
-                    .await;
+                    return;
                 }
+                misses.insert(id, 0);
+                continue;
             }
             let phase = if healthy { "ready" } else { "degraded" };
             if cluster.phase != phase {
@@ -237,6 +257,127 @@ pub fn queue(state: AppState, cluster: Cluster, guard: std::fs::File) -> Result<
         }
     });
     Ok(())
+}
+
+/// A captured controller cannot repair guests without reserving the exact root first.
+async fn reconcile_native(
+    state: &AppState,
+    cluster: &mut Cluster,
+    watch: &mut BrokerWatch,
+    restart_vm: Option<Uuid>,
+) -> Result<(), Error> {
+    use crate::persistence::iac_managed_database_brokers::{Admission, ManagedBrokerCommand};
+    let intent = match state
+        .store
+        .begin_managed_database_broker(
+            Uuid::new_v4(),
+            ManagedBrokerCommand::Repair {
+                cluster: cluster.id,
+                restart_vm,
+            },
+            Some(watch),
+        )
+        .map_err(|_| Error::Invalid("RabbitMQ repair is reserved or its authority changed"))?
+    {
+        Admission::Ready(intent, true) => *intent,
+        _ => return Err(Error::Invalid("Cannot admit RabbitMQ repair")),
+    };
+    match execute(state, &intent).await {
+        Ok(Some(value)) => {
+            *cluster = value;
+            *watch = state
+                .store
+                .database_broker_watch(cluster)
+                .map_err(|_| Error::Invalid("Cannot resume RabbitMQ observation"))?;
+            Ok(())
+        }
+        _ => {
+            let _ = state.store.fail_managed_database_broker(&intent);
+            Err(Error::Invalid(
+                "Recover the original RabbitMQ repair operation",
+            ))
+        }
+    }
+}
+
+/// Execute only the original private identities; readiness and acknowledgement commit together.
+pub(crate) async fn execute(
+    state: &AppState,
+    intent: &crate::persistence::iac_managed_database_brokers::ManagedBrokerIntent,
+) -> Result<Option<Cluster>, Error> {
+    let work = async {
+        state
+            .store
+            .managed_database_broker_effects(intent)
+            .map_err(|_| Error::Invalid("RabbitMQ execution changed"))?;
+        let Some(mut cluster) = intent.cluster() else {
+            if !intent.disconnecting() {
+                return Err(Error::Invalid("Managed RabbitMQ is missing"));
+            }
+            state
+                .store
+                .finish_database_broker_disconnect(intent)
+                .map_err(|_| Error::Invalid("Cannot acknowledge RabbitMQ disconnection"))?;
+            return Ok(None);
+        };
+        let mut watch = state
+            .store
+            .native_database_broker_watch(intent)
+            .map_err(|_| Error::Invalid("RabbitMQ execution changed"))?;
+        if intent.disconnecting() {
+            for broker in &cluster.brokers {
+                check(state, &watch, true)?;
+                child_unowned(state, broker.id)?;
+                let existing = state
+                    .vms
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .get(&broker.id)
+                    .cloned();
+                let Some(vm) = existing else {
+                    if !broker.ipv4.is_empty() {
+                        return Err(Error::Invalid(
+                            "Restore the original broker VM record before disconnection",
+                        ));
+                    }
+                    continue;
+                };
+                if matches!(vm.state, VmState::Created | VmState::Stopped) {
+                    continue;
+                }
+                let _ = vms::stop_vm(
+                    State(state.clone()),
+                    Extension(RequestId(intent.operation.operation_id)),
+                    Path(broker.id.to_string()),
+                )
+                .await
+                .map_err(|_| Error::Invalid("Cannot stop the retained RabbitMQ broker"))?;
+            }
+            state
+                .store
+                .finish_database_broker_disconnect(intent)
+                .map_err(|_| Error::Invalid("Cannot acknowledge retained RabbitMQ disks"))?;
+            return Ok(None);
+        }
+        if let Some(id) = intent.restart_vm() {
+            check(state, &watch, true)?;
+            child_unowned(state, id)?;
+            let _ = vms::stop_vm(
+                State(state.clone()),
+                Extension(RequestId(intent.operation.operation_id)),
+                Path(id.to_string()),
+            )
+            .await
+            .map_err(|_| Error::Invalid("Cannot stop the original RabbitMQ broker for repair"))?;
+        }
+        start(state, &mut cluster, &mut watch, intent.first_boot_allowed()).await?;
+        Ok(Some(cluster))
+    };
+    tokio::time::timeout(Duration::from_secs(2400), work)
+        .await
+        .map_err(|_| {
+            Error::Invalid("RabbitMQ operation timed out; recover its original identity")
+        })?
 }
 
 /// Resolve and import the pinned RabbitMQ image through the existing OCI pipeline.
@@ -270,7 +411,15 @@ async fn image(
         ),
         ..original
     };
-    cluster.image = format!("docker.io/library/rabbitmq@{}", resolved.digest);
+    if !matches!(
+        ImageReference::parse(&cluster.image).map(|r| r.version),
+        Ok(ImageVersion::Digest(_))
+    ) {
+        cluster.image = format!(
+            "{}/{}@{}",
+            pinned.registry, pinned.repository, resolved.digest
+        );
+    }
     persist(state, cluster, watch)?;
     let alias = oci::template_name_from_reference(&pinned)
         .map_err(|_| Error::Invalid("Cannot name the RabbitMQ image"))?
@@ -312,6 +461,7 @@ async fn start(
     state: &AppState,
     cluster: &mut Cluster,
     watch: &mut BrokerWatch,
+    first_boot_allowed: bool,
 ) -> Result<(), Error> {
     let _permit = state
         .service_deploy_permits
@@ -331,18 +481,7 @@ async fn start(
     for index in 0..cluster.brokers.len() {
         check(state, watch, true)?;
         let broker = &cluster.brokers[index];
-        let ownership = state
-            .store
-            .iac_resource_owner(&firecrab_stack::ManagedResource {
-                kind: "vm".into(),
-                id: broker.id.to_string(),
-            })
-            .map_err(|_| Error::Invalid("Cannot read RabbitMQ VM authority"))?;
-        if ownership.owner.is_some() {
-            return Err(Error::Invalid(
-                "Release the broker VM's independent owner before managed setup",
-            ));
-        }
+        child_unowned(state, broker.id)?;
         let existing = state
             .vms
             .lock()
@@ -366,6 +505,14 @@ async fn start(
             {
                 return Err(Error::Invalid(
                     "RabbitMQ disk is missing; restore the original disk",
+                ));
+            }
+            if broker.disk_generation.is_some() && broker.disk_generation != vm.disk_generation
+                || (vm.disk_generation.is_none()
+                    && (!first_boot_allowed || vm.last_runtime_id.is_some()))
+            {
+                return Err(Error::Invalid(
+                    "Restore the original RabbitMQ data disk identity before starting this broker",
                 ));
             }
             vms::lease_for(state, broker.id)
@@ -462,6 +609,21 @@ async fn start(
     })
     .await
     .map_err(|_| Error::Invalid("RabbitMQ did not become ready"))?;
+    for broker in &mut cluster.brokers {
+        let generation = state
+            .vms
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&broker.id)
+            .and_then(|v| v.disk_generation)
+            .ok_or(Error::Invalid(
+                "Cannot acknowledge RabbitMQ readiness without its original data disk",
+            ))?;
+        if broker.disk_generation.is_some_and(|old| old != generation) {
+            return Err(Error::Invalid("RabbitMQ data disk identity changed"));
+        }
+        broker.disk_generation = Some(generation);
+    }
     let _claim = state.service_mutations.lock().await;
     cluster.phase = "ready".into();
     state
@@ -497,6 +659,7 @@ fn reserve_brokers(
         cluster.brokers.push(Broker {
             id: Uuid::new_v4(),
             ipv4: String::new(),
+            disk_generation: None,
             env: BTreeMap::new(),
             files: BTreeMap::new(),
         });
@@ -813,6 +976,7 @@ mod tests {
             brokers: (1..=3)
                 .map(|i| Broker {
                     id: Uuid::new_v4(),
+                    disk_generation: None,
                     ipv4: format!(
                         "{}-{i}.internal",
                         std::env::var("FIRECRAB_RABBITMQ_QA_PREFIX")

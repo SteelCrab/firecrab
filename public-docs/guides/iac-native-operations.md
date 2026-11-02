@@ -177,14 +177,31 @@ failure preserves the saved configuration. Restart recovery reuses the original
 credentials; older attempts cannot commit. A completed retry acknowledges its
 original selection without overwriting any newer configuration.
 
-These controller safeguards are prerequisites. Complete managed broker operation
-journals, broker ownership transfer and expanded Stack/Terraform execution remain
-pending in stage 2 and later stages.
+Managed preparation, automatic repair and disconnection retain their original
+operation before image import or guest changes. Complete UUID sets and generated
+TLS material survive restart. Recovery reuses the pinned image, addresses and
+existing disk generations. A changed or missing retained disk cannot activate a
+replacement client. Final readiness, client selection and the success receipt
+commit together. A no-effect failure restores the previous configuration;
+uncertain work retains its original resources and recovery fence.
+
+`DELETE /api/pipe/database-rabbitmq` stops owned guests and disconnects the client.
+It retains VM records, disks and broker credentials. Event captures must be
+removed before preparation or disconnection. A narrowly scoped repair may restore
+transport for unfinished capture work only with its existing pinned image,
+addresses and credentials. It cannot rotate configuration under that capture.
+
+The exact `database_rabbitmq/default` slot supports explicit ownership transfer.
+Transfer preserves external credentials and managed guest identities. Terraform
+ownership blocks ordinary external selection, preparation, disconnection and
+controller repair. Releasing and reclaiming ownership invalidates older workers
+even when settings are unchanged. These are shared prerequisites; complete
+replacement/data policies and expanded Stack/Terraform execution remain pending.
 
 ## Dashboard retries
 
 The database dashboard retains the operation UUID and endpoint UUID before sending
-connection, binding, event or external broker changes. It stores no URI, password, certificate or request
+connection, binding, event or broker changes. It stores no URI, password, certificate or request
 body in browser storage. Reloading the page reuses the original identity.
 A failed receipt lookup does not allocate a new create operation.
 

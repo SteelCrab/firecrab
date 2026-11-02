@@ -8,6 +8,12 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeAction {
+    /// Prepare managed delivery using the original broker UUIDs and retained disks.
+    PrepareDatabaseBroker,
+    /// Reconcile or repair the original owned delivery cluster.
+    RepairDatabaseBroker,
+    /// Disconnect delivery and stop owned guests while retaining their disks.
+    DisconnectDatabaseBroker,
     /// Verify and select a delivery broker without declaring or deleting queues.
     ConfigureDatabaseBroker,
     /// Set up owned event capture, delivery queues and a private inbox.

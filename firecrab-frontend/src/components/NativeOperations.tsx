@@ -18,6 +18,12 @@ type Operation = {
 };
 type Page = { operations: Operation[]; nextBefore: string | null };
 const ACTIONS: Record<string, [string, string]> = {
+  prepare_database_broker: ["Prepare database broker", "DB 브로커 준비"],
+  repair_database_broker: ["Repair database broker", "DB 브로커 복구"],
+  disconnect_database_broker: [
+    "Disconnect database broker",
+    "DB 브로커 연결 해제",
+  ],
   configure_database_broker: ["Configure database broker", "DB 브로커 설정"],
   create_database_events: ["Create database events", "DB 이벤트 생성"],
   pause_database_events: ["Change event delivery", "이벤트 전달 변경"],
@@ -53,6 +59,9 @@ function validOperation(value: Operation): boolean {
   );
 }
 const RECOVERABLE = new Set([
+  "prepare_database_broker",
+  "repair_database_broker",
+  "disconnect_database_broker",
   "configure_database_broker",
   "create_database_events",
   "pause_database_events",

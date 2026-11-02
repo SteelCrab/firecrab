@@ -21,6 +21,7 @@ pub mod microregistry;
 pub mod network;
 pub mod oci;
 pub(crate) mod pipe_database_broker_mutations;
+pub(crate) mod pipe_database_managed_broker_mutations;
 pub mod pools;
 pub mod queues;
 pub mod registries;

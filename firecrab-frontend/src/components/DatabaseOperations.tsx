@@ -168,7 +168,9 @@ export default function DatabaseOperations({
         : null;
     const nativeEvent = eventAction !== null;
     const nativeBinding = bindingCreate || bindingDelete;
-    const nativeConfiguration = nativeBinding || nativeEvent;
+    const managedPrepare =
+      method === "POST" && url === "/api/pipe/database-rabbitmq/managed";
+    const nativeConfiguration = nativeBinding || nativeEvent || managedPrepare;
     const key = JSON.stringify({ method, url, body });
     if (
       identity &&
@@ -193,12 +195,17 @@ export default function DatabaseOperations({
           : eventMatch
             ? decodeURIComponent(eventMatch[1])
             : undefined;
-        const kind = nativeEvent ? "database_events" : "database_binding";
-        const action =
-          eventAction ??
-          (bindingCreate
-            ? "create_database_binding"
-            : "delete_database_binding");
+        const kind = managedPrepare
+          ? "database_rabbitmq"
+          : nativeEvent
+            ? "database_events"
+            : "database_binding";
+        const action = managedPrepare
+          ? "prepare_database_broker"
+          : (eventAction ??
+            (bindingCreate
+              ? "create_database_binding"
+              : "delete_database_binding"));
         const expected = nativeEvent
           ? creating
             ? (operationId: string) =>
@@ -206,7 +213,7 @@ export default function DatabaseOperations({
             : `${database.id}:${id}`
           : (fixedResourceId ?? id);
         const result = await nativeMutation<
-          Binding | Trigger | { deleted: boolean }
+          Binding | Trigger | Managed | { deleted: boolean }
         >(
           method,
           url,
@@ -219,6 +226,8 @@ export default function DatabaseOperations({
           action,
           kind,
           async (resource) => {
+            if (managedPrepare)
+              return fetchJson<Managed>("/api/pipe/database-rabbitmq/managed");
             if (deleting) return { deleted: true };
             const child = nativeEvent
               ? resource.slice(resource.indexOf(":") + 1)
@@ -231,10 +240,13 @@ export default function DatabaseOperations({
               ).find((item) => item.id === child) ?? null
             );
           },
-          expected,
+          managedPrepare
+            ? { id: "default", waitForCompletion: true }
+            : expected,
         );
         if (!mounted.current) return;
-        if (result.value && "id" in result.value) {
+        if (managedPrepare && result.value) setManaged(result.value as Managed);
+        if (!managedPrepare && result.value && "id" in result.value) {
           if (nativeEvent) {
             const saved = result.value as Trigger;
             setTriggers((current) => [
@@ -257,15 +269,20 @@ export default function DatabaseOperations({
         }
         if (result.recovered)
           setNotice(
-            nativeEvent
+            managedPrepare
               ? t(
-                  "The original request completed. Review event configuration before making further changes.",
-                  "원래 요청을 완료했다. 다음 변경 전에 이벤트 설정을 확인한다.",
+                  "The original request completed. Review broker configuration before making further changes.",
+                  "원래 요청을 완료했다. 다음 변경 전에 브로커 설정을 확인한다.",
                 )
-              : t(
-                  "The original request completed. Review service access before making further changes.",
-                  "원래 요청을 완료했다. 다음 변경 전에 서비스 접근을 확인한다.",
-                ),
+              : nativeEvent
+                ? t(
+                    "The original request completed. Review event configuration before making further changes.",
+                    "원래 요청을 완료했다. 다음 변경 전에 이벤트 설정을 확인한다.",
+                  )
+                : t(
+                    "The original request completed. Review service access before making further changes.",
+                    "원래 요청을 완료했다. 다음 변경 전에 서비스 접근을 확인한다.",
+                  ),
           );
         setPendingWork(false);
         result.acknowledge();

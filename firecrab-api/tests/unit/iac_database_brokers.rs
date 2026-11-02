@@ -7,10 +7,10 @@ use crate::{
     },
 };
 
-fn cluster() -> Cluster {
+pub(super) fn cluster() -> Cluster {
     serde_json::from_value(json!({"id":Uuid::new_v4(),"enabled":true,"image":default_image(),"development":true,"phase":"ready","error":null,"brokers":[{"id":Uuid::new_v4(),"ipv4":"127.0.0.1","env":{},"files":{}}],"config":{"brokers":["127.0.0.1:9"],"tls":false,"username":"fixture","password":"private-broker-fixture","development":true}})).unwrap()
 }
-fn install(state: &AppState, cluster: &Cluster) -> crate::persistence::BrokerWatch {
+pub(super) fn install(state: &AppState, cluster: &Cluster) -> crate::persistence::BrokerWatch {
     let authority = state.store.database_broker_authority().unwrap();
     state
         .store

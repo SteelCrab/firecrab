@@ -450,7 +450,8 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/pipe/database-rabbitmq",
-            get(handlers::pipe_database_events::rabbitmq_get),
+            get(handlers::pipe_database_events::rabbitmq_get)
+                .delete(handlers::pipe_database_events::rabbitmq_disconnect),
         )
         .route(
             "/api/pipe/database-rabbitmq/managed",

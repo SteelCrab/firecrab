@@ -9,7 +9,6 @@ use crate::{
     pipe_databases::{
         DatabaseConnection,
         events::{self, TriggerStatus},
-        write::Error,
     },
     server::RequestId,
     state::AppState,
@@ -77,14 +76,6 @@ pub async fn list(
     Ok(Json(output))
 }
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Explicit choice of durable or development RabbitMQ profile.
-pub struct ManagedInput {
-    #[serde(default)]
-    /// Explicit single-broker profile instead of three replicas.
-    development: bool,
-}
 /// Return public state of the owned RabbitMQ cluster.
 pub async fn managed_get(
     State(state): State<AppState>,
@@ -99,76 +90,10 @@ pub async fn managed_get(
             .unwrap_or(serde_json::Value::Null),
     ))
 }
-/// Reserve durable capacity and queue owned broker preparation.
-pub async fn managed_create(
-    State(state): State<AppState>,
-    Extension(rid): Extension<RequestId>,
-    ValidatedJson(input): ValidatedJson<ManagedInput>,
-) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
-    use crate::pipe_databases::managed_rabbitmq::{self, Cluster};
-    let _claim = state.service_mutations.lock().await;
-    let runtime = state
-        .store
-        .database_broker_runtime_lock()
-        .map_err(|e| super::stacks::persistence_error(e, rid.0))?;
-    let authority = state
-        .store
-        .database_broker_authority()
-        .map_err(|e| super::stacks::persistence_error(e, rid.0))?;
-    if !state
-        .store
-        .database_triggers()
-        .map_err(|_| AppError::internal(rid.0))?
-        .is_empty()
-    {
-        return Err(crate::pipe_databases::validation(
-            "Finish retained triggers before replacing the RabbitMQ cluster",
-            rid.0,
-        ));
-    }
-    let existing = state
-        .store
-        .managed_database_rabbitmq()
-        .map_err(|_| AppError::internal(rid.0))?;
-    let cluster = if let Some(mut cluster) = existing {
-        if (cluster.enabled && cluster.phase != "failed")
-            || cluster.development != input.development
-        {
-            return Err(AppError::conflict(
-                "rabbitmq_in_use",
-                "The managed RabbitMQ cluster already exists",
-                rid.0,
-            ));
-        }
-        cluster.enabled = true;
-        cluster.phase = "queued".into();
-        cluster
-    } else {
-        managed_rabbitmq::preflight(&state, input.development).map_err(|e| match e {
-            Error::Invalid(message) => crate::pipe_databases::validation(message, rid.0),
-            _ => AppError::internal(rid.0),
-        })?;
-        Cluster {
-            id: uuid::Uuid::new_v4(),
-            enabled: true,
-            image: managed_rabbitmq::default_image(),
-            development: input.development,
-            phase: "queued".into(),
-            error: None,
-            brokers: vec![],
-            config: None,
-        }
-    };
-    state
-        .store
-        .configure_managed_database_broker(&cluster, &authority)
-        .map_err(|_| AppError::internal(rid.0))?;
-    let summary = cluster.summary();
-    managed_rabbitmq::queue(state.clone(), cluster, runtime)
-        .map_err(|_| AppError::internal(rid.0))?;
-    Ok((axum::http::StatusCode::ACCEPTED, Json(summary)))
-}
 pub use super::pipe_database_event_mutations::{create, delete, detach, pause};
+pub use super::pipe_database_managed_broker_mutations::{
+    disconnect as rabbitmq_disconnect, prepare as managed_create,
+};
 /// Return replayable failure IDs without source row contents.
 pub async fn failures(
     State(state): State<AppState>,

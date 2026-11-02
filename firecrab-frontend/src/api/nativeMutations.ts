@@ -13,6 +13,10 @@ export type NativeMutationResult<T> = {
   acknowledge: () => void;
 };
 export class NativeMutationPending extends Error {}
+type ResourceIdentity = string | ((operationId: string) => string);
+type MutationTarget =
+  | ResourceIdentity
+  | { id: ResourceIdentity; waitForCompletion: boolean };
 
 /** Retain identities only. Credentials and request bodies never enter browser storage. */
 export async function nativeMutation<T>(
@@ -22,8 +26,11 @@ export async function nativeMutation<T>(
   action: string,
   resourceKind: string,
   resolve: (id: string) => Promise<T | null>,
-  resourceId?: string | ((operationId: string) => string),
+  target?: MutationTarget,
 ): Promise<NativeMutationResult<T>> {
+  const resourceId = typeof target === "object" ? target.id : target;
+  const waitForCompletion =
+    typeof target === "object" && target.waitForCompletion;
   const key = `firecrab.native-mutation:${method}:${url}`;
   function parse(stored: string): Pending {
     let value: Pending;
@@ -75,8 +82,9 @@ export async function nativeMutation<T>(
     if (sessionStorage.getItem(key) === JSON.stringify(pending))
       sessionStorage.removeItem(key);
   };
+  let value: T;
   try {
-    const value = await fetchJson<T>(url, {
+    value = await fetchJson<T>(url, {
       method,
       headers: {
         "Content-Type": "application/json",
@@ -91,9 +99,18 @@ export async function nativeMutation<T>(
             ),
           }),
     });
-    // The mounted UI acknowledges only after it can display the saved resource.
-    return { value, recovered, acknowledge };
   } catch (failure) {
+    return observe(failure);
+  }
+  if (waitForCompletion)
+    return observe(
+      new Error(
+        "The original request was accepted; inspect its completion status.",
+      ),
+    );
+  // Only the mounted UI acknowledges a resource it can show.
+  return { value, recovered, acknowledge };
+  async function observe(failure: unknown): Promise<NativeMutationResult<T>> {
     let operation: Operation;
     try {
       operation = await fetchJson<Operation>(
@@ -128,6 +145,10 @@ export async function nativeMutation<T>(
       );
     if (operation.state === "failed") {
       acknowledge();
+      if (waitForCompletion)
+        throw new Error(
+          "The original request failed before managed changes. Submit corrected configuration.",
+        );
       throw failure;
     }
     if (operation.state === "succeeded") {

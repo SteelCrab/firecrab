@@ -191,6 +191,16 @@ pub async fn recover_native_operation(
             .await
             .map(Json);
     }
+    if matches!(
+        operation.action,
+        firecrab_stack::NativeAction::PrepareDatabaseBroker
+            | firecrab_stack::NativeAction::RepairDatabaseBroker
+            | firecrab_stack::NativeAction::DisconnectDatabaseBroker
+    ) {
+        return super::pipe_database_managed_broker_mutations::recover(state, request, id)
+            .await
+            .map(Json);
+    }
     if crate::persistence::queue_engine_operations::is_engine_action(operation.action) {
         return crate::queues::recover_operation(state, request.0, operation.operation_id)
             .await

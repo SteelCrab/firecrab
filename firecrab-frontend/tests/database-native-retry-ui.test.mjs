@@ -444,6 +444,67 @@ test("broker configuration keeps its original operation across reload without st
   assert.deepEqual(await pending(page), []);
 });
 
+test("accepted managed setup keeps its identity until terminal completion across reload", async (t) => {
+  const { fixture, page } = await setup(t);
+  const ids = [];
+  let completed = false;
+  fixture.handlers.set(
+    `GET /api/pipe/databases/${database.id}/bindings`,
+    ({ send }) => send(200, []),
+  );
+  fixture.handlers.set(
+    "POST /api/pipe/database-rabbitmq/managed",
+    ({ req, body, send }) => {
+      const id = req.headers["x-firecrab-operation-id"];
+      ids.push(id);
+      assert.deepEqual(body, { development: false });
+      fixture.handlers.set(`GET /api/iac/native-operations/${id}`, ({ send }) =>
+        send(200, {
+          operationId: id,
+          action: "prepare_database_broker",
+          state: completed ? "succeeded" : "running",
+          ownership: {
+            endpointId,
+            resource: { kind: "database_rabbitmq", id: "default" },
+          },
+        }),
+      );
+      fixture.handlers.set(
+        "GET /api/pipe/database-rabbitmq/managed",
+        ({ send }) =>
+          send(200, { phase: completed ? "ready" : "queued", error: null }),
+      );
+      send(202, { phase: completed ? "ready" : "queued", error: null });
+    },
+  );
+  await accessPanel(fixture, page);
+  await page
+    .getByRole("button", {
+      name: "Prepare RabbitMQ automatically",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByRole("link", { name: "Review original operation" }),
+  ).toBeVisible();
+  const saved = await pending(page);
+  assert.equal(saved.length, 1);
+  await accessPanel(fixture, page);
+  completed = true;
+  await page
+    .getByRole("button", {
+      name: "Prepare RabbitMQ automatically",
+      exact: true,
+    })
+    .click();
+  await expect(page.getByRole("status")).toContainText(
+    "Review broker configuration",
+  );
+  assert.equal(ids.length, 2);
+  assert.equal(new Set(ids).size, 1);
+  assert.deepEqual(await pending(page), []);
+});
+
 async function eventPanel(fixture, page, triggers) {
   fixture.handlers.set(
     `GET /api/pipe/databases/${database.id}/bindings`,

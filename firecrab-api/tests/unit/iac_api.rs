@@ -92,6 +92,7 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "database_connection",
             "database_binding",
             "database_events",
+            "database_rabbitmq",
             "storage_connection",
             "secret",
             "secret_connection",
@@ -1128,3 +1129,5 @@ mod database_binding_tests;
 mod database_broker_tests;
 #[path = "iac_database_events.rs"]
 mod database_event_tests;
+#[path = "iac_managed_database_brokers.rs"]
+mod managed_database_broker_tests;
