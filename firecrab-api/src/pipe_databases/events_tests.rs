@@ -524,6 +524,9 @@ async fn durable_events_real_rabbitmq() {
         )
         .await
         .unwrap();
+        // AppState construction alone is not an API startup. Run the same
+        // interrupted-operation checkpoint used before the production server resumes work.
+        restored.store.interrupt_native_iac_operations().unwrap();
         let recovered = crate::handlers::pipe_database_event_mutations::recover(
             restored,
             crate::server::RequestId(Uuid::new_v4()),
