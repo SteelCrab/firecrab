@@ -650,10 +650,6 @@ test("registry kernels show download and extraction steps without a local build"
       page.getByRole("heading", { name: "Verify", exact: true }),
     ).toBeVisible();
     await expect(page.locator("body")).not.toContainText("Build percentage");
-    await page.screenshot({
-      path: "/private/tmp/firecrab-registry-kernel-progress.png",
-      fullPage: true,
-    });
     log += "\ninstalling kernel package";
     await expect(
       page.getByRole("heading", { name: "Install", exact: true }),
