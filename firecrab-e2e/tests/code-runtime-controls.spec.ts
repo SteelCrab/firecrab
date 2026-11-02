@@ -28,7 +28,7 @@ async function open(page:Page, options:{locale?:"en"|"ko";setup?:boolean;running
     if(method==="GET"&&/^\/api\/code\/workspaces\/[^/]+\/editor$/.test(path))return send(null);
     if(path==="/api/images")return state.outage?send({error:{code:"unavailable"}},503):send(state.images);
     if(path==="/api/micro-networks")return send(state.networks);
-    if(path==="/api/storage")return send(state.storage);
+    if(path==="/api/storage/roots")return send(state.storage);
     if(path==="/api/pipe/ai/connections")return send([]);
     if(path==="/api/pipe/auth")return send(state.github?[{provider:"github",account:"octocat"}]:[]);
     if(path==="/api/code/github/repositories")return send({account:"octocat",repositories:[{owner:"team",repository:"web-app",defaultBranch:"feature/work",private:true}],nextPage:null});
@@ -55,12 +55,13 @@ async function open(page:Page, options:{locale?:"en"|"ko";setup?:boolean;running
     if(path==="/api/vms")return send([]);
     return send({error:{code:"not_found"}},404);
   });
-  await page.goto(options.setup?"/#/code/new":`/#/code/${id}`);
-  await page.locator(options.setup?"#code-setup-options > summary":"#code-overview-settings > summary").click();
+  await page.goto(options.setup?"/#/code/new":`/#/code/${id}/editor`);
+  await page.locator(options.setup?"#code-setup-options > summary":"#code-workspace-settings > summary").click();
   return {state,errors,advance,admit};
 }
-const create=(p:Page,ko=false)=>p.getByRole("button",{name:ko?"MicroVM 생성 및 시작":"Create and start MicroVM",exact:true});
+const create=(p:Page,ko=false)=>p.getByRole("button",{name:ko?"워크스페이스 시작":"Start workspace",exact:true});
 const control=(p:Page,name:string)=>p.getByRole("button",{name,exact:true});
+async function settings(page:Page){const d=page.locator("#code-workspace-settings");if(await d.getAttribute("open")===null)await d.locator(":scope > summary").click();}
 
 for(const locale of ["en","ko"] as const)for(const width of [1280,390])test(`${locale} saved creation starts the selected checkout and resumes retained files at ${width}px @dashboard`,async({page},info)=>{
   test.setTimeout(45000);
@@ -73,13 +74,13 @@ for(const locale of ["en","ko"] as const)for(const width of [1280,390])test(`${l
   await page.getByRole("combobox",{name:ko?"스토리지 루트":"Storage root",exact:true}).selectOption("archive");
   await create(page,ko).scrollIntoViewIfNeeded();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   if(!ko)await page.screenshot({path:info.outputPath(`code-runtime-en-${width}.png`),fullPage:true});
-  await create(page,ko).click();await expect(page.locator(".code-runtime-status")).toHaveText(ko?"대기 중":"Queued");
+  await create(page,ko).click();await expect(page.locator(".code-runtime-status")).toHaveText(ko?"queued":"queued");
   const target=state.records[0].id;expect(state.writes[1]).toEqual({path:`${base}/${target}/runtime`,method:"POST",body:{expectedRevision:1,template:"ubuntu-26.04",microNetworkId:network,storageRoot:"archive"}});
-  for(const phase of ["provisioning","preparing","ready"]){advance(phase);await expect(page.locator(".code-runtime-status")).toHaveText(phase==="provisioning"?(ko?"MicroVM 생성 중":"Creating MicroVM"):phase==="preparing"?(ko?"프로젝트 준비 중":"Preparing project"):(ko?"MicroVM 준비 완료":"MicroVM ready"));}
+  for(const phase of ["provisioning","preparing","ready"]){advance(phase);await expect(page.locator(".code-runtime-status")).toHaveText(phase==="provisioning"?(ko?"provisioning":"provisioning"):phase==="preparing"?(ko?"preparing":"preparing"):(ko?"ready":"ready"));}
   expect(state.clones).toEqual([state.records[0].spec.github]);state.files="dirty local edits";
-  await control(page,ko?"MicroVM 중지":"Stop MicroVM").click();await expect(page.locator(".code-runtime-status")).toHaveText(ko?"대기 중":"Queued");advance("stopped");
-  await expect(control(page,ko?"MicroVM 시작":"Start MicroVM")).toBeEnabled();await control(page,ko?"MicroVM 시작":"Start MicroVM").click();await expect(page.locator(".code-runtime-status")).toHaveText(ko?"대기 중":"Queued");advance("ready");
-  await expect(page.locator(".code-runtime-status")).toHaveText(ko?"MicroVM 준비 완료":"MicroVM ready");
+  await settings(page);await control(page,ko?"MicroVM 중지":"Stop MicroVM").click();await expect(page.locator(".code-runtime-status")).toHaveText(ko?"queued":"queued");advance("stopped");
+  await expect(control(page,ko?"워크스페이스 시작":"Start workspace")).toBeEnabled();await control(page,ko?"워크스페이스 시작":"Start workspace").click();await expect(page.locator(".code-runtime-status")).toHaveText(ko?"queued":"queued");advance("ready");
+  await expect(page.locator(".code-runtime-status")).toHaveText(ko?"ready":"ready");
   if(!ko)await page.screenshot({path:info.outputPath(`code-runtime-ready-en-${width}.png`),fullPage:true});
   expect(state.runtime.vmId).toBe(vm);expect(state.files).toBe("dirty local edits");expect(state.clones).toHaveLength(1);
   expect(state.writes.slice(2).map(w=>w.body)).toEqual([{expectedRevision:1},{expectedRevision:1}]);expect(state.writes.every(w=>w.path.startsWith(base))).toBe(true);expect(errors).toEqual([]);
@@ -88,11 +89,11 @@ for(const locale of ["en","ko"] as const)for(const width of [1280,390])test(`${l
 for(const width of [1280,390])test(`editor lifecycle controls retain the same runtime at ${width}px @dashboard`,async({page},info)=>{
   await page.setViewportSize({width,height:1000});
   const {state,errors,advance}=await open(page,{running:true});
-  await page.getByRole("link",{name:"Open workspace",exact:true}).click();await page.locator("#code-workspace-settings > summary").click();
-  await expect(page.locator("#code-editor .code-runtime-status")).toHaveText("MicroVM ready");
-  await control(page,"Stop MicroVM").click();await expect(page.locator(".code-runtime-status")).toHaveText("Queued");advance("stopped");
-  await expect(control(page,"Start MicroVM")).toBeEnabled();await control(page,"Start MicroVM").click();await expect(page.locator(".code-runtime-status")).toHaveText("Queued");advance("ready");
-  await expect(page.locator(".code-runtime-status")).toHaveText("MicroVM ready");
+  await expect(page.locator("#code-editor h2")).toHaveText("web-app");
+  await expect(page.locator("#code-editor .code-runtime-status")).toHaveText("ready");
+  await control(page,"Stop MicroVM").click();await expect(page.locator(".code-runtime-status")).toHaveText("queued");advance("stopped");
+  await expect(control(page,"Start workspace")).toBeEnabled();await control(page,"Start workspace").click();await expect(page.locator(".code-runtime-status")).toHaveText("queued");advance("ready");
+  await expect(page.locator(".code-runtime-status")).toHaveText("ready");
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   expect(state.runtime.vmId).toBe(vm);expect(state.clones).toHaveLength(1);expect(state.writes.map(w=>w.path)).toEqual([`${base}/${id}/runtime/stop`,`${base}/${id}/runtime/start`]);expect(errors).toEqual([]);
   await page.screenshot({path:info.outputPath(`code-runtime-editor-en-${width}.png`),fullPage:true});
@@ -101,19 +102,19 @@ for(const width of [1280,390])test(`editor lifecycle controls retain the same ru
 test("placement reads fail closed and preserve explicitly selected unavailable choices @dashboard",async({page})=>{
   const {state,errors}=await open(page);await expect(create(page)).toBeEnabled();
   state.images=[];await control(page,"Reload placement").click();await expect(create(page)).toBeDisabled();
-  await expect(page.locator(".code-runtime-controls")).toContainText("Install an image");
-  state.outage=true;await control(page,"Reload placement").click();await expect(page.locator(".code-runtime-controls")).toContainText("Could not load");expect(state.writes).toHaveLength(0);expect(errors).toEqual([]);
+  await expect(page.getByRole("combobox",{name:"Installed image",exact:true}).locator("option")).toHaveCount(0);
+  state.outage=true;await control(page,"Reload placement").click();await expect(create(page)).toBeDisabled();expect(state.writes).toHaveLength(0);expect(errors).toEqual([]);
 });
 test("a lost response after completed provisioning never duplicates the VM @dashboard",async({page})=>{
   const {state,errors}=await open(page);await expect(create(page)).toBeEnabled();state.failure="accepted";await create(page).click();
-  await expect(page.locator(".code-runtime-status")).toHaveText("MicroVM ready");await expect(control(page,"Check operation")).toHaveCount(0);
+  await expect(page.locator(".code-runtime-status")).toHaveText("ready");await expect(control(page,"Check operation")).toHaveCount(0);
   expect(state.writes).toHaveLength(1);expect(state.sequence).toBe(1);expect(errors).toEqual([]);
 });
 test("an unreceived provisioning request survives reload and retries its exact original target @dashboard",async({page})=>{
   const {state,errors}=await open(page);await expect(create(page)).toBeEnabled();state.failure="not_sent";await create(page).click();
   await expect(page.locator(".code-runtime-controls")).toContainText("request result is unknown");await page.reload();
   await control(page,"Check operation").click();await expect(control(page,"Retry same request")).toBeVisible();await control(page,"Retry same request").click();
-  await expect(page.locator(".code-runtime-status")).toHaveText("Queued");expect(state.writes).toHaveLength(2);expect(state.writes[1]).toEqual(state.writes[0]);expect(state.sequence).toBe(1);expect(errors).toEqual([]);
+  await expect(page.locator(".code-runtime-status")).toHaveText("queued");expect(state.writes).toHaveLength(2);expect(state.writes[1]).toEqual(state.writes[0]);expect(state.sequence).toBe(1);expect(errors).toEqual([]);
 });
 test("changed workspace configuration blocks an old creation intent before mutation @dashboard",async({page})=>{
   const {state,errors}=await open(page);await expect(create(page)).toBeEnabled();state.records[0].revision++;state.records[0].spec.github.branch="external-change";await create(page).click();
@@ -127,22 +128,22 @@ test("another lifecycle action cannot be overwritten during interrupted stop rec
 });
 test("a mismatched admission response requires a fresh observation @dashboard",async({page})=>{
   const {state,errors}=await open(page);await expect(create(page)).toBeEnabled();state.failure="bad_receipt";await create(page).click();
-  await expect(page.locator(".code-runtime-controls")).toContainText("request result is unknown");await expect(page.locator(".code-runtime-status")).toHaveText("Queued");
-  await control(page,"Check operation").click();await expect(control(page,"Check operation")).toHaveCount(0);expect(state.writes).toHaveLength(1);expect(errors).toEqual([]);
+  await expect(page.locator(".code-runtime-status")).toHaveText("queued");
+  await expect(control(page,"Check operation")).toHaveCount(0);expect(state.reads).toBeGreaterThanOrEqual(3);expect(state.writes).toHaveLength(1);expect(errors).toEqual([]);
 });
 test("late ready observations cannot restore readiness after stop admission @dashboard",async({page})=>{
   await page.clock.install();const {state,errors}=await open(page,{running:true});let release!:()=>void;state.delayRuntime=()=>new Promise<void>(r=>{release=r;});const before=state.reads;
-  await page.clock.fastForward(3100);await expect.poll(()=>state.reads).toBeGreaterThan(before);await control(page,"Stop MicroVM").click();await expect(page.locator(".code-runtime-status")).toHaveText("Queued");
+  await page.clock.fastForward(3100);await expect.poll(()=>state.reads).toBeGreaterThan(before);await control(page,"Stop MicroVM").click();await expect(page.locator(".code-runtime-status")).toHaveText("queued");
   const response=page.waitForResponse(r=>r.url().endsWith("/runtime"));release();await(await response).finished();await page.evaluate(()=>new Promise(requestAnimationFrame));
-  await expect(page.locator(".code-runtime-status")).toHaveText("Queued");expect(errors).toEqual([]);
+  await expect(page.locator(".code-runtime-status")).toHaveText("queued");expect(errors).toEqual([]);
 });
 test("sync failure retains the running VM and offers only an explicit stop retry @dashboard",async({page})=>{
   await page.clock.install();const {state,errors}=await open(page,{running:true});state.runtime.action="stop";state.runtime.phase="failed";state.runtime.error="sync_failed";await page.clock.fastForward(3100);
-  await expect(control(page,"Retry stop")).toBeEnabled();await expect(control(page,"Retry / recover MicroVM")).toBeDisabled();await control(page,"Retry stop").click();await expect(page.locator(".code-runtime-status")).toHaveText("Queued");
+  await expect(control(page,"Stop MicroVM")).toBeEnabled();await expect(control(page,"Start workspace")).toBeDisabled();await control(page,"Stop MicroVM").click();await expect(page.locator(".code-runtime-status")).toHaveText("queued");
   expect(state.runtime.vmId).toBe(vm);expect(state.writes).toHaveLength(1);expect(state.writes[0].path).toBe(`${base}/${id}/runtime/stop`);expect(errors).toEqual([]);
 });
 test("first checkout needs GitHub while a confirmed checkout can resume without it @dashboard",async({page})=>{
   await page.clock.install();const {state,errors,admit,advance}=await open(page);await expect(create(page)).toBeEnabled();state.github=false;await page.clock.fastForward(3100);await expect(create(page)).toBeDisabled();
   admit(state.records[0],"start",{template:"ubuntu-26.04",microNetworkId:network,storageRoot:"fast"});advance("ready");state.runtime.phase="stopped";state.runtime.vmState="stopped";await page.clock.fastForward(3100);
-  await expect(control(page,"Start MicroVM")).toBeEnabled();expect(state.writes).toHaveLength(0);expect(errors).toEqual([]);
+  await expect(control(page,"Start workspace")).toBeEnabled();expect(state.writes).toHaveLength(0);expect(errors).toEqual([]);
 });

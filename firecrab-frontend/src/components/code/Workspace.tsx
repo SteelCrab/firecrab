@@ -29,6 +29,7 @@ export default function CodeWorkspace({
   auth,
   refresh,
   manage,
+  managing,
   onDirty,
 }: {
   workspace: Workspace;
@@ -38,6 +39,7 @@ export default function CodeWorkspace({
   auth: ReturnType<typeof useAccounts>;
   refresh: () => void;
   manage: () => void;
+  managing: boolean;
   onDirty: (v: boolean) => void;
 }) {
   const { t } = useI18n();
@@ -71,14 +73,19 @@ export default function CodeWorkspace({
   }, [bindingDirty, runtimeDirty, taskDirty, editorBusy, checking, onDirty]);
   useEffect(() => {
     setReport(null);
-  }, [w.revision, r?.runtimeId, r?.operationId, auth.accounts]);
+  }, [w.revision, r?.runtimeId, r?.operationId, auth.accounts, managing]);
   const runtimeKey = r
     ? `${r.vmId}/${r.runtimeId}/${r.operationId}/${r.phase}`
     : "";
-  const verificationContext = useRef("");
+  const verificationContext = useRef(0);
   useLayoutEffect(() => {
-    verificationContext.current = `${w.revision}/${runtimeKey}/${JSON.stringify(auth.accounts)}`;
-  }, [w.revision, runtimeKey, auth.accounts]);
+    verificationContext.current++;
+  }, [w.revision, runtimeKey, auth.accounts, managing]);
+  function openManager() {
+    verificationContext.current++;
+    setReport(null);
+    manage();
+  }
   useEffect(() => {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
@@ -223,7 +230,7 @@ export default function CodeWorkspace({
         accounts={auth.accounts}
         editing={binding}
         setEditing={setBinding}
-        manage={manage}
+        manage={openManager}
         refresh={refresh}
         onDirty={setBindingDirty}
         blocked={runtimeDirty || taskDirty || editorBusy || checking}

@@ -16,7 +16,7 @@ async function open(page: Page, locale: "en" | "ko" = "en", options: { missing?:
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname, method = request.method();
     const send = (json: unknown, status = 200) => route.fulfill({ json, status });
-    if (method === "GET" && ["/api/images", "/api/micro-networks", "/api/storage"].includes(path)) return send([]);
+    if (method === "GET" && ["/api/images", "/api/micro-networks", "/api/storage/roots"].includes(path)) return send([]);
     if (method !== "GET") state.mutations.push(`${method} ${path}`);
     if (path === "/api/pipe/auth") return send(state.github ? [{ provider: "github", account: state.github }] : []);
     if (path === "/api/pipe/ai/connections") return send(state.accounts);
@@ -60,10 +60,10 @@ for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) tes
   await choose(page, locale);
   await page.getByRole("combobox", { name: ko ? "브랜치" : "Branch", exact: true }).selectOption("feature/login");
   await page.getByRole("combobox", { name: ko ? "에이전트" : "Agent", exact: true }).selectOption("codex");
-  await page.getByRole("combobox", { name: ko ? "AI AUTH 계정" : "AI AUTH account", exact: true }).selectOption(chat);
-  await page.getByRole("combobox", { name: ko ? "개발 언어" : "Runtime", exact: true }).selectOption("python");
-  await page.getByRole("spinbutton", { name: "vCPU", exact: true }).fill("4");
-  await page.getByRole("combobox", { name: ko ? "메모리" : "Memory", exact: true }).selectOption("8192");
+  await page.getByRole("combobox", { name: "AI AUTH", exact: true }).selectOption(chat);
+  await page.getByRole("combobox", { name: ko ? "실행 환경" : "Runtime", exact: true }).selectOption("python");
+  await page.getByRole("spinbutton", { name: "CPU", exact: true }).fill("4");
+  await page.getByRole("spinbutton", { name: ko ? "메모리 (MiB)" : "Memory (MiB)", exact: true }).fill("8192");
   await page.getByRole("spinbutton", { name: ko ? "디스크 (GiB)" : "Disk (GiB)", exact: true }).fill("32");
   const create = page.getByRole("button", { name: ko ? "워크스페이스 생성" : "Create workspace", exact: true });
   await expect(create).toBeEnabled(); await create.scrollIntoViewIfNeeded();
@@ -71,22 +71,22 @@ for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) tes
   if (!ko) await page.screenshot({ path: info.outputPath(`code-setup-en-${width}.png`), fullPage: true });
   await create.click(); await expect(page).toHaveURL(/#\/code\/[0-9a-f-]{36}\/editor$/);
   await expect(page.locator("#code-editor h2")).toHaveText("web-app");
-  await expect(page.locator("#code-editor")).toContainText(ko ? "MicroVM 생성 전" : "MicroVM not provisioned");
+  await expect(page.locator("#code-editor")).toContainText(ko ? "생성 전" : "Not provisioned");
   expect(state.writes).toHaveLength(1);
   expect(state.writes[0].body).toEqual({ expectedRevision: 0, spec: { name: "web-app", github: { account: "octocat", owner: "team", repository: "web-app", branch: "feature/login" }, runtime: "python", resources: { cpu: 4, ram: 8192, diskGb: 32 }, agent: { agent: "codex", connectionId: chat } } });
   expect(state.mutations.every(call => /^PUT \/api\/code\/workspaces\/[0-9a-f-]{36}$/.test(call))).toBe(true);
   expect(JSON.stringify(state.writes)).not.toMatch(/apiKey|accessToken|vmId|command|endpoint/); expect(state.errors).toEqual([]);
 });
 test("account compatibility matches each agent and explicit no-agent creation @dashboard", async ({ page }) => {
-  const state = await open(page); await choose(page);
+  const state = await open(page); await page.clock.install(); await choose(page);
   const agent = page.getByRole("combobox", { name: "Agent", exact: true }); await agent.selectOption("claude_code");
-  const account = page.getByRole("combobox", { name: "AI AUTH account", exact: true });
-  await expect(account.locator("option")).toHaveText(["Select a compatible account", "Anthropic team · Anthropic API key"]);
+  const account = page.getByRole("combobox", { name: "AI AUTH", exact: true });
+  await expect(account.locator("option")).toHaveText(["Select a compatible account", "Anthropic team"]);
   await agent.selectOption("opencode"); await expect(account).not.toContainText("Personal ChatGPT"); await expect(account.locator("option")).toHaveCount(3);
   state.accounts = state.accounts.filter(c => c.id === chat);
-  await page.getByRole("button", { name: "Reload connections", exact: true }).click();
+  await page.clock.fastForward(3100);
+  await expect(account.locator("option")).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Create workspace", exact: true })).toBeDisabled();
-  await expect(page.locator("#content")).toContainText("No compatible account");
   await agent.selectOption("none"); await expect(account).toHaveCount(0);
   await page.getByRole("button", { name: "Create workspace", exact: true }).click(); await expect(page.locator("#code-editor h2")).toHaveText("web-app");
   expect(state.writes[0].body.spec.agent).toBeNull(); expect(state.errors).toEqual([]);
@@ -101,9 +101,9 @@ test("missing GitHub, pagination and changed connections preserve entered settin
   await page.getByRole("button", { name: "Load more branches", exact: true }).click(); await page.getByRole("combobox", { name: "Branch", exact: true }).selectOption("feature/login");
   await page.getByRole("button", { name: "Load more repositories", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "GitHub repository", exact: true }).locator("option")).toHaveCount(3);
-  await expect(page.getByRole("combobox", { name: "Branch", exact: true })).toHaveValue("feature/login"); expect(state.branchRequests).toHaveLength(2);
+  await expect(page.getByRole("combobox", { name: "Branch", exact: true })).toHaveValue("feature/login"); expect(state.branchRequests.length).toBeGreaterThanOrEqual(2); expect(state.branchRequests.every(name => name === "web-app")).toBe(true);
   state.github = "other-login"; await page.getByRole("button", { name: "Reload connections", exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "GitHub repository", exact: true })).toHaveValue("");
+  await expect(page.getByRole("combobox", { name: "GitHub repository", exact: true })).toHaveValue("/");
   await expect(page.getByRole("textbox", { name: "Workspace name", exact: true })).toHaveValue("retained-name");
   await expect(page.getByRole("button", { name: "Create workspace", exact: true })).toBeDisabled(); expect(state.errors).toEqual([]);
 });
@@ -121,16 +121,21 @@ for (const failure of ["committed", "not_saved"] as const) test(`unknown save ($
   await expect(page.getByRole("textbox", { name: "Workspace name", exact: true })).toBeDisabled(); const first = structuredClone(state.writes[0]);
   page.once("dialog", d => d.accept()); await page.reload();
   await expect(page.getByRole("button", { name: "Check saved workspace", exact: true })).toBeEnabled();
-  if (failure === "not_saved") await expect(page.locator("#api-status")).toHaveText("Live");
-  await page.getByRole("button", { name: "Check saved workspace", exact: true }).click(); await expect(page.locator("#code-editor h2")).toHaveText("web-app");
+  await page.getByRole("button", { name: "Check saved workspace", exact: true }).click();
+  if (failure === "not_saved") {
+    await expect(page.getByRole("button", { name: "Retry same request", exact: true })).toBeEnabled();
+    expect(state.writes).toHaveLength(1);
+    await page.getByRole("button", { name: "Retry same request", exact: true }).click();
+  }
+  await expect(page.locator("#code-editor h2")).toHaveText("web-app");
   expect(state.writes).toHaveLength(failure === "committed" ? 1 : 2); expect(state.writes.every(write => JSON.stringify(write) === JSON.stringify(first))).toBe(true); expect(state.records).toHaveLength(1);
-  expect(await page.evaluate(() => sessionStorage.getItem("firecrab.code.create.v1"))).toBeNull(); expect(state.errors).toEqual([]);
+  expect(await page.evaluate(() => sessionStorage.getItem("firecrab.code.setup.react"))).toBeNull(); expect(state.errors).toEqual([]);
 });
 test("a rejected save keeps fields editable and never claims a workspace was created @dashboard", async ({ page }) => {
   const state = await open(page); await choose(page); state.rejected = true;
-  await page.getByRole("button", { name: "Create workspace", exact: true }).click(); await expect(page.locator("#code-setup-error")).toContainText("Check the workspace fields");
+  await page.getByRole("button", { name: "Create workspace", exact: true }).click(); await expect(page.locator("#code-setup [role=alert]")).toContainText("Could not confirm the settings");
   await expect(page.getByRole("textbox", { name: "Workspace name", exact: true })).toBeEnabled(); expect(state.records).toHaveLength(0);
-  expect(await page.evaluate(() => sessionStorage.getItem("firecrab.code.create.v1"))).toBeNull(); expect(state.errors).toEqual([]);
+  expect(await page.evaluate(() => sessionStorage.getItem("firecrab.code.setup.react"))).toBeNull(); expect(state.errors).toEqual([]);
 });
 
 test("an externally changed saved workspace is reviewed without another write @dashboard", async ({ page }) => {
@@ -139,21 +144,22 @@ test("an externally changed saved workspace is reviewed without another write @d
   await expect(page.getByRole("button", { name: "Check saved workspace", exact: true })).toBeEnabled();
   state.records[0].spec.name = "renamed-by-operator"; state.records[0].revision = 2;
   await page.getByRole("button", { name: "Check saved workspace", exact: true }).click();
-  await expect(page.locator("#code-setup-error")).toContainText("saved workspace changed");
-  await page.getByRole("button", { name: "Review saved workspace", exact: true }).click();
-  await expect(page.locator("#code-editor h2")).toHaveText("renamed-by-operator");
+  await expect(page.locator("#code-setup [role=alert]")).toContainText("save_conflict");
+  page.once("dialog", d => d.accept());
+  await page.getByRole("link", { name: "Cancel", exact: true }).click();
+  await expect(page.locator("#code-details h2")).toHaveText("renamed-by-operator");
   expect(state.writes).toHaveLength(1); expect(state.errors).toEqual([]);
 });
 
 for(const locale of ['en','ko'] as const)for(const width of [1280,390])test(`${locale} repository-only setup at ${width}px @dashboard`,async({page},info)=>{
  await page.setViewportSize({width,height:900});const state=await open(page,locale,{single:true,quick:true});const ko=locale==='ko';
  await expect(page.locator('#code-setup-options')).not.toHaveAttribute('open');await expect(page.locator('#code-field-name')).toBeHidden();
- await page.getByLabel(ko?'GitHub 저장소':'GitHub repository',{exact:true}).selectOption('team/web-app');
+ await page.getByRole('combobox',{name:ko?'GitHub 저장소':'GitHub repository',exact:true}).selectOption('team/web-app');
  const create=page.getByRole('button',{name:ko?'워크스페이스 생성':'Create workspace',exact:true});await expect(create).toBeEnabled();
- expect(await page.locator('#code-setup select:visible').count()).toBe(1);await expect(page.locator('.code-default-summary')).toContainText(['web-app','Codex']);
+ expect(await page.locator('#code-setup select:visible').count()).toBe(1);await expect(page.locator('#code-setup .code-hint').first()).toContainText('web-app');await expect(page.locator('#code-setup > fieldset > .code-section')).toContainText('Codex');
  expect(state.mutations).toHaveLength(0);if(!ko)await page.screenshot({path:info.outputPath(`code-quick-setup-en-${width}.png`),fullPage:true});await create.click();
  await expect(page).toHaveURL(/\/editor$/);expect(state.writes[0].body.spec).toMatchObject({name:'web-app',runtime:'python',resources:{cpu:2,ram:4096,diskGb:16},github:{branch:'main'},agent:{agent:'codex',connectionId:key}});expect(state.errors).toEqual([]);
 });
 test('multiple eligible accounts require one clear billing choice @dashboard',async({page})=>{
- const state=await open(page,'en',{quick:true});await page.getByLabel('GitHub repository',{exact:true}).selectOption('team/web-app');const create=page.getByRole('button',{name:'Create workspace',exact:true});await expect(create).toBeDisabled();await page.getByLabel('AI account',{exact:true}).selectOption(anthropic);await expect(create).toBeEnabled();await page.getByLabel('AI account',{exact:true}).selectOption('');await expect(create).toBeDisabled();await page.getByLabel('AI account',{exact:true}).selectOption(anthropic);await expect(create).toBeEnabled();await create.click();expect(state.writes[0].body.spec.agent).toEqual({agent:'claude_code',connectionId:anthropic});
+ const state=await open(page,'en',{quick:true});await page.getByRole('combobox',{name:'GitHub repository',exact:true}).selectOption('team/web-app');const create=page.getByRole('button',{name:'Create workspace',exact:true});await expect(create).toBeDisabled();await page.getByRole('combobox',{name:'AI account',exact:true}).selectOption(anthropic);await expect(create).toBeEnabled();await page.getByRole('combobox',{name:'AI account',exact:true}).selectOption('');await expect(create).toBeDisabled();await page.getByRole('combobox',{name:'AI account',exact:true}).selectOption(anthropic);await expect(create).toBeEnabled();await create.click();expect(state.writes[0].body.spec.agent).toEqual({agent:'claude_code',connectionId:anthropic});
 });

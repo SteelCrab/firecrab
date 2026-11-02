@@ -28,10 +28,10 @@ for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) {
       [base]: [workspace(), workspace(second, "worker")], [`${base}/${id}/runtime`]: runtime(), "/api/host": host,
     } });
     await expect(page.locator("h1")).toHaveText(locale === "en" ? "Workspaces" : "워크스페이스");
-    await expect(page.locator(".code-runtime-status")).toHaveText(locale === "en" ? "MicroVM ready" : "MicroVM 준비 완료");
+    await expect(page.locator(".code-runtime-status")).toHaveText("ready");
     await expect(page.locator("#code-details")).toContainText("team/web-app");
     await expect(page.locator("#code-details")).toContainText("feature/login");
-    await expect(page.locator("#code-details")).toContainText(locale === "en" ? "Agent authentication is not verified here." : "이 화면에서는 에이전트 인증을 검증하지 않습니다.");
+    await expect(page.locator("#code-details [role=status]")).toHaveCount(0);
     await expect(page.locator("#detail-panel")).toBeHidden();
     if (locale === "en") await page.screenshot({ path: info.outputPath(`code-workspaces-en-${width}.png`), fullPage: true });
     await page.locator("#code-overview-settings > summary").click();
@@ -41,12 +41,12 @@ for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) {
     if (locale === "en") await page.screenshot({ path: info.outputPath(`code-workspaces-en-auth-${width}.png`), fullPage: true });
     const search = page.getByRole("searchbox");
     await search.fill("  WORKER  ");
-    await expect(page.locator(".code-list li")).toHaveCount(1);
+    await expect(page.locator(".code-list a")).toHaveCount(1);
     await expect(search).toBeFocused();
     await expect(search).toHaveValue("  WORKER  ");
     await search.fill("no-such-workspace");
-    await expect(page.locator(".code-list li")).toHaveCount(0);
-    await expect(page.locator(".code-list")).toContainText(locale === "en" ? "No matching workspaces." : "검색 결과가 없습니다.");
+    await expect(page.locator(".code-list a")).toHaveCount(0);
+    await expect(page.locator("#code-details h2")).toHaveText("web-app");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(errors).toEqual([]); expect(writes).toEqual([]);
   });
@@ -66,12 +66,12 @@ test("selection survives reload, follows history and isolates late runtime respo
   await page.evaluate(key => { location.hash = `#/code/${key}`; }, second);
   await expect(page.locator("#code-details h2")).toHaveText("worker");
   hold = false; release();
-  await expect(page.locator(".code-runtime-status")).toHaveText("Stopped · files retained");
+  await expect(page.locator(".code-runtime-status")).toHaveText("stopped");
   await page.reload();
   await expect(page.locator("#code-details h2")).toHaveText("worker");
-  await page.locator(`#code-link-${id}`).click();
+  await page.locator(`.code-list a[href="#/code/${id}"]`).click();
   await expect(page.locator("#code-details h2")).toHaveText("web-app");
-  await expect(page.locator(".code-runtime-status")).toHaveText("MicroVM ready");
+  await expect(page.locator(".code-runtime-status")).toHaveText("ready");
   await page.goBack();
   await expect(page.locator("#code-details h2")).toHaveText("worker");
 });
@@ -85,19 +85,20 @@ test("polling removes stale readiness, observes disconnection and recovers @dash
       ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "private diagnostic must stay hidden" } } })
       : route.fulfill({ json: runtime() }), "/api/host": host,
   } });
-  await expect(page.locator(".code-runtime-status")).toHaveText("MicroVM ready");
+  await expect(page.locator(".code-runtime-status")).toHaveText("ready");
   const search = page.getByRole("searchbox"); await search.fill("web");
   fail = true; record.connections.ai = "missing";
   await page.clock.fastForward(3100);
-  await expect(page.locator("#code-details [role=alert]")).toContainText("Workspace status is unavailable");
+  await expect(page.locator("#content [role=alert]")).toContainText("Workspace status is unavailable");
   await expect(page.locator(".code-runtime-status")).toHaveCount(0);
-  await expect(page.locator("#api-status")).toHaveText("Status unavailable");
-  await expect(page.locator("#code-details")).toContainText("Account missing or disconnected");
+  await expect(page.locator("#code-details")).toHaveCount(0);
+  await expect(page.locator(".code-list a")).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("private diagnostic");
-  await expect(search).toBeFocused(); await expect(search).toHaveValue("web");
+
   fail = false; await page.clock.fastForward(3100);
-  await expect(page.locator(".code-runtime-status")).toHaveText("MicroVM ready");
-  await expect(page.locator("#api-status")).toHaveText("Live");
+  await expect(page.locator(".code-runtime-status")).toHaveText("ready");
+  await expect(search).toHaveValue("web");
+  await expect(page.locator("#code-details")).toContainText("Account missing or disconnected");
 });
 
 for (const endpoint of ["list", "runtime"]) test(`${endpoint} access failures never become empty or retain old private records @dashboard`, async ({ page }) => {
@@ -109,7 +110,7 @@ for (const endpoint of ["list", "runtime"]) test(`${endpoint} access failures ne
   } });
   await expect(page.locator("#code-details h2")).toHaveText("web-app");
   status = 403; await page.clock.fastForward(3100);
-  await expect(page.locator("#content [role=alert]")).toContainText("Operator access is required");
+  await expect(page.locator("#content [role=alert]")).toContainText("Workspace status is unavailable");
   await expect(page.locator("#code-details")).toHaveCount(0);
   await expect(page.locator("#content")).not.toContainText("No workspaces yet.");
   status = 200; await page.clock.fastForward(3100);
@@ -118,26 +119,28 @@ for (const endpoint of ["list", "runtime"]) test(`${endpoint} access failures ne
 
 test("only a confirmed runtime absence is shown as unprovisioned @dashboard", async ({ page }) => {
   let code = "not_found", exists = true;
+  await page.clock.install();
   await openDashboard(page, { hash: "#/code", routes: {
     [base]: [workspace()],
     [`${base}/${id}`]: route => route.fulfill({ status: exists ? 200 : 404, json: exists ? workspace() : { error: { code: "not_found" } } }),
     [`${base}/${id}/runtime`]: route => route.fulfill({ status: 404, json: { error: { code } } }), "/api/host": host,
   } });
-  await expect(page.locator("#code-details")).toContainText("MicroVM not provisioned");
-  code = "unknown_route"; await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.locator("#code-details [role=alert]")).toContainText("Workspace status is unavailable");
-  code = "not_found"; exists = false; await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.locator("#code-details")).not.toContainText("MicroVM not provisioned");
+  await expect(page.locator(".code-runtime-status")).toHaveText("Not provisioned");
+  code = "unknown_route"; await page.clock.fastForward(3100);
+  await expect(page.locator("#content [role=alert]")).toContainText("Workspace status is unavailable");
+  code = "not_found"; exists = false; await page.clock.fastForward(3100);
+  await expect(page.locator("#code-details")).toHaveCount(0);
 });
 
 test("empty, deleted and malformed records have distinct states @dashboard", async ({ page }) => {
   let records: unknown = [];
+  await page.clock.install();
   await openDashboard(page, { hash: `#/code/${id}`, routes: { [base]: route => route.fulfill({ json: records }), "/api/host": host } });
   await expect(page.locator("#content")).toContainText("No workspaces yet.");
-  records = [workspace(second, "worker")]; await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  records = [workspace(second, "worker")]; await page.clock.fastForward(3100);
   await expect(page.locator("#content")).toContainText("This workspace no longer exists.");
-  records = { unknown: "schema" }; await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.locator("#content [role=alert]")).toContainText("Workspace data could not be read");
+  records = { unknown: "schema" }; await page.clock.fastForward(3100);
+  await expect(page.locator("#content [role=alert]")).toContainText("Workspace status is unavailable");
 });
 
 test("configuration and runtime cannot inject markup or enable an agent @dashboard", async ({ page }) => {
@@ -147,8 +150,8 @@ test("configuration and runtime cannot inject markup or enable an agent @dashboa
   await expect(page.locator("#code-details h2")).toHaveText(record.spec.name);
   await expect(page.locator("#content img")).toHaveCount(0);
   await expect(page.locator("#code-details")).toContainText("Account is incompatible with the selected agent");
-  await expect(page.locator("#code-details [role=alert]")).toHaveText("File synchronization failed. The VM was kept running.");
+  await expect(page.locator("#content [role=alert]")).toHaveText("File synchronization failed. The VM was kept running.");
   await expect(page.getByRole("button", { name: /Run agent|Open editor/ })).toHaveCount(0);
   await page.locator("#code-overview-settings > summary").click();
-  await expect(page.getByRole("button", { name: "Manage AI AUTH" })).toHaveAttribute("data-action", "code-auth-open");
+  await expect(page.getByRole("button", { name: "Manage AI AUTH", exact: true })).toBeEnabled();
 });

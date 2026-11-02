@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { openDashboard, vm } from "./support/mockApi";
+import { openPoolCreate } from "./support/pools";
 import type {
   PoolLeaseResponse,
   PoolResponse,
@@ -60,6 +61,27 @@ const routes = {
 
 test.describe("pool dashboard @dashboard", () => {
   test.use({ timezoneId: "Asia/Seoul" });
+  for (const existing of [false, true]) {
+    test(`opens pool creation after a delayed ${existing ? "populated" : "empty"} list`, async ({ page }) => {
+      let release!: () => void;
+      const response = new Promise<void>((resolve) => { release = resolve; });
+      await openDashboard(page, {
+        hash: "#/pools",
+        routes: {
+          ...routes,
+          "/api/pools": async (route) => {
+            await response;
+            await route.fulfill({ json: existing ? [pool] : [] });
+          },
+        },
+      });
+      await expect(page.getByText("Loading pools…", { exact: true })).toBeVisible();
+      release();
+      const form = await openPoolCreate(page);
+      await expect(form.getByLabel("Name", { exact: true })).toBeEditable();
+      await expect(page.getByRole("button", { name: "New pool", exact: true })).toHaveCount(0);
+    });
+  }
   test("keeps the acquire key after a lost response, polling, and reload", async ({
     page,
   }) => {
