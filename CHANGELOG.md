@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Retain native database event setup, pause, detach and removal intents. Recover
+  original captures and inbox credentials after interruption. Guard qualified
+  capture ownership, broker settings and parent reservations. Keep retained-event
+  delivery available when removal is blocked. Preserve dashboard retry identities (#548).
+
 - Preserve native database operation and endpoint identities across dashboard
   reloads and lost responses without storing credentials or request bodies in
   browser storage. Resolve original receipts before further changes, and retry

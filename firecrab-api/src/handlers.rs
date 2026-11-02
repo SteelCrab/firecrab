@@ -44,6 +44,7 @@ pub mod pipe_ai;
 pub mod pipe_auth;
 pub(crate) mod pipe_database_binding_mutations;
 pub mod pipe_database_bindings;
+pub(crate) mod pipe_database_event_mutations;
 pub mod pipe_database_events;
 pub mod pipe_database_maintenance;
 pub(crate) mod pipe_database_mutations;

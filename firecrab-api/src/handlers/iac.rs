@@ -170,6 +170,17 @@ pub async fn recover_native_operation(
             .await
             .map(Json);
     }
+    if matches!(
+        operation.action,
+        firecrab_stack::NativeAction::CreateDatabaseEvents
+            | firecrab_stack::NativeAction::PauseDatabaseEvents
+            | firecrab_stack::NativeAction::DetachDatabaseEvents
+            | firecrab_stack::NativeAction::DeleteDatabaseEvents
+    ) {
+        return super::pipe_database_event_mutations::recover(state, request, id)
+            .await
+            .map(Json);
+    }
     if operation.action == firecrab_stack::NativeAction::DeleteVm {
         return super::vm_deletion::recover(state, request, operation)
             .await

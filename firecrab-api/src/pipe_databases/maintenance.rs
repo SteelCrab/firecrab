@@ -1058,10 +1058,11 @@ async fn reconcile_dependencies(
         {
             super::events::install(&mut c, &trigger).await?;
         } else {
+            let before = trigger.clone();
             trigger.detached = true;
             state
                 .store
-                .save_database_trigger(&trigger)
+                .save_database_trigger_observation(job, &before, &trigger)
                 .map_err(|_| Error::Invalid("Cannot save detached table capture"))?;
         }
     }

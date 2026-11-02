@@ -86,10 +86,6 @@ async fn iac_database_binding_recovery_keeps_generated_credentials_and_blocks_pa
     let root = tempfile::tempdir().unwrap();
     let (state, _, network) = fixture(root.path()).await;
     let (record, binding) = setup(&state, root.path(), network);
-    let authority = state
-        .store
-        .database_binding_configuration_authority(binding.id, &record, binding.input.service_id)
-        .unwrap();
     let original = create(&state, &record, &binding);
     state
         .store
@@ -101,9 +97,13 @@ async fn iac_database_binding_recovery_keeps_generated_credentials_and_blocks_pa
         Err(PersistenceError::IacResourceBusy)
     ));
     assert!(matches!(
-        state
-            .store
-            .save_database_binding_configuration(&binding, &authority),
+        state.store.begin_database_binding(
+            Uuid::new_v4(),
+            BindingChange::Create {
+                database: record.id,
+                input: binding.input.clone()
+            }
+        ),
         Err(PersistenceError::IacResourceBusy)
     ));
     assert!(matches!(
@@ -206,16 +206,12 @@ async fn iac_database_binding_completed_retry_survives_account_removal_and_canno
 }
 
 #[tokio::test]
-async fn iac_database_binding_transfer_guards_both_http_mutators_and_legacy_inbox_writes() {
+async fn iac_database_binding_transfer_guards_both_http_mutators_and_keeps_private_accounts() {
     let root = tempfile::tempdir().unwrap();
     let (state, app, network) = fixture(root.path()).await;
     let (record, mut binding) = setup(&state, root.path(), network);
     binding.ready = true;
     state.store.save_database_binding(&binding).unwrap();
-    let authority = state
-        .store
-        .database_binding_configuration_authority(binding.id, &record, binding.input.service_id)
-        .unwrap();
     let claim: ChangeResourceOwner =
         serde_json::from_value(claim_configuration(&state, &binding_resource(binding.id))).unwrap();
     state.store.change_iac_resource_owner(&claim).unwrap();
@@ -235,14 +231,6 @@ async fn iac_database_binding_transfer_guards_both_http_mutators_and_legacy_inbo
         assert_eq!(status, StatusCode::CONFLICT, "{error}");
         assert_eq!(error["error"]["code"], "iac_ownership_conflict");
     }
-    let mut broadened = binding.clone();
-    broadened.event_inbox = true;
-    assert!(matches!(
-        state
-            .store
-            .save_database_binding_configuration(&broadened, &authority),
-        Err(PersistenceError::StaleIacOwner)
-    ));
     assert!(matches!(
         state.store.delete_micro_service(binding.input.service_id),
         Err(PersistenceError::IacManagedDependent)
@@ -323,7 +311,7 @@ async fn iac_database_binding_event_setup_rejects_implicit_privilege_change_befo
     state.store.save_database_rabbitmq(&broker).unwrap();
     let (status,error)=call(&app,"POST",&format!("/api/pipe/databases/{}/triggers",record.id),json!({"requestId":Uuid::new_v4(),"schema":"public","table":"orders","serviceId":binding.input.service_id})).await;
     assert_eq!(status, StatusCode::CONFLICT, "{error}");
-    assert_eq!(error["error"]["code"], "iac_resource_managed");
+    assert_eq!(error["error"]["code"], "iac_ownership_conflict");
     assert!(state.store.database_triggers().unwrap().is_empty());
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(60), listener.accept())
@@ -365,50 +353,6 @@ async fn iac_database_binding_failed_completion_keeps_pending_credentials_and_al
         state.store.database_bindings().unwrap()[0].connection.uri,
         binding.connection.uri
     );
-}
-
-#[tokio::test]
-async fn iac_database_binding_inbox_writer_cannot_cross_release_reclaim_history() {
-    let root = tempfile::tempdir().unwrap();
-    let (state, _, network) = fixture(root.path()).await;
-    let (record, mut binding) = setup(&state, root.path(), network);
-    binding.ready = true;
-    state.store.save_database_binding(&binding).unwrap();
-    let captured = state
-        .store
-        .database_binding_configuration_authority(binding.id, &record, binding.input.service_id)
-        .unwrap();
-    let claim: ChangeResourceOwner =
-        serde_json::from_value(claim_configuration(&state, &binding_resource(binding.id))).unwrap();
-    let owned = state.store.change_iac_resource_owner(&claim).unwrap();
-    state
-        .store
-        .change_iac_resource_owner(&ChangeResourceOwner {
-            operation_id: Uuid::new_v4(),
-            expected_endpoint_id: owned.endpoint_id,
-            resource: owned.resource,
-            expected_generation: owned.generation,
-            expected_owner: owned.owner,
-            owner: None,
-        })
-        .unwrap();
-    binding.event_inbox = true;
-    assert!(matches!(
-        state
-            .store
-            .save_database_binding_configuration(&binding, &captured),
-        Err(PersistenceError::StaleIacOwner)
-    ));
-    assert!(!state.store.database_bindings().unwrap()[0].event_inbox);
-    let current = state
-        .store
-        .database_binding_configuration_authority(binding.id, &record, binding.input.service_id)
-        .unwrap();
-    state
-        .store
-        .save_database_binding_configuration(&binding, &current)
-        .unwrap();
-    assert!(state.store.database_bindings().unwrap()[0].event_inbox);
 }
 
 #[tokio::test]

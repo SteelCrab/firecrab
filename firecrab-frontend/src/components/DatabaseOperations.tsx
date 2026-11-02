@@ -17,10 +17,12 @@ type Trigger = {
   schema: string;
   table: string;
   serviceId: string;
-  pending: number;
-  failed: number;
-  delivered: number;
-  skipped: number;
+  pending?: number;
+  failed?: number;
+  delivered?: number;
+  skipped?: number;
+  installed?: boolean;
+  path?: string;
   paused: boolean;
   detached: boolean;
   lastError: string | null;
@@ -150,61 +152,120 @@ export default function DatabaseOperations({
     const bindingCreate = method === "POST" && url === `${base}/bindings`;
     const bindingDelete =
       method === "DELETE" && url.startsWith("/api/pipe/database-bindings/");
+    const eventCreate = method === "POST" && url === `${base}/triggers`;
+    const eventMatch =
+      /^\/api\/pipe\/database-triggers\/([^/]+)(\/detach)?$/.exec(url);
+    const eventAction = eventCreate
+      ? "create_database_events"
+      : eventMatch
+        ? method === "PUT" && !eventMatch[2]
+          ? "pause_database_events"
+          : method === "POST" && eventMatch[2]
+            ? "detach_database_events"
+            : method === "DELETE" && !eventMatch[2]
+              ? "delete_database_events"
+              : null
+        : null;
+    const nativeEvent = eventAction !== null;
     const nativeBinding = bindingCreate || bindingDelete;
+    const nativeConfiguration = nativeBinding || nativeEvent;
     const key = JSON.stringify({ method, url, body });
     if (
       identity &&
-      !nativeBinding &&
+      !nativeConfiguration &&
       (!pending.current || pending.current.key !== key)
     )
       pending.current = { key, id: crypto.randomUUID() };
     const payload =
-      identity && !nativeBinding
+      identity && !nativeConfiguration
         ? { ...body, requestId: pending.current!.id }
         : body;
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      if (nativeBinding) {
+      if (nativeConfiguration) {
+        const deleting =
+          bindingDelete || eventAction === "delete_database_events";
+        const creating = bindingCreate || eventCreate;
         const id = bindingDelete
           ? decodeURIComponent(url.slice("/api/pipe/database-bindings/".length))
-          : undefined;
-        const result = await nativeMutation<Binding | { deleted: boolean }>(
+          : eventMatch
+            ? decodeURIComponent(eventMatch[1])
+            : undefined;
+        const kind = nativeEvent ? "database_events" : "database_binding";
+        const action =
+          eventAction ??
+          (bindingCreate
+            ? "create_database_binding"
+            : "delete_database_binding");
+        const expected = nativeEvent
+          ? creating
+            ? (operationId: string) =>
+                `${database.id}:${fixedResourceId ?? operationId}`
+            : `${database.id}:${id}`
+          : (fixedResourceId ?? id);
+        const result = await nativeMutation<
+          Binding | Trigger | { deleted: boolean }
+        >(
           method,
           url,
-          bindingCreate
+          creating
             ? (requestId: string) => ({
                 ...body,
                 requestId: fixedResourceId ?? requestId,
               })
-            : undefined,
-          bindingCreate ? "create_database_binding" : "delete_database_binding",
-          "database_binding",
-          async (resource) =>
-            bindingDelete
-              ? { deleted: true }
-              : ((await fetchJson<Binding[]>(`${base}/bindings`)).find(
-                  (item) => item.id === resource,
-                ) ?? null),
-          fixedResourceId ?? id,
+            : body,
+          action,
+          kind,
+          async (resource) => {
+            if (deleting) return { deleted: true };
+            const child = nativeEvent
+              ? resource.slice(resource.indexOf(":") + 1)
+              : resource;
+            return (
+              (
+                await fetchJson<(Binding | Trigger)[]>(
+                  `${base}/${nativeEvent ? "triggers" : "bindings"}`,
+                )
+              ).find((item) => item.id === child) ?? null
+            );
+          },
+          expected,
         );
         if (!mounted.current) return;
-        if (bindingCreate && result.value && "id" in result.value) {
-          const saved = result.value;
-          setBindings((current) => [
-            ...current.filter((item) => item.id !== saved.id),
-            saved,
-          ]);
+        if (result.value && "id" in result.value) {
+          if (nativeEvent) {
+            const saved = result.value as Trigger;
+            setTriggers((current) => [
+              ...current.filter((item) => item.id !== saved.id),
+              { ...current.find((item) => item.id === saved.id), ...saved },
+            ]);
+          } else {
+            const saved = result.value as Binding;
+            setBindings((current) => [
+              ...current.filter((item) => item.id !== saved.id),
+              saved,
+            ]);
+          }
         }
-        if (bindingDelete)
-          setBindings((current) => current.filter((item) => item.id !== id));
+        if (deleting) {
+          if (nativeEvent)
+            setTriggers((current) => current.filter((item) => item.id !== id));
+          else
+            setBindings((current) => current.filter((item) => item.id !== id));
+        }
         if (result.recovered)
           setNotice(
-            t(
-              "The original request completed. Review service access before making further changes.",
-              "원래 요청을 완료했다. 다음 변경 전에 서비스 접근을 확인한다.",
-            ),
+            nativeEvent
+              ? t(
+                  "The original request completed. Review event configuration before making further changes.",
+                  "원래 요청을 완료했다. 다음 변경 전에 이벤트 설정을 확인한다.",
+                )
+              : t(
+                  "The original request completed. Review service access before making further changes.",
+                  "원래 요청을 완료했다. 다음 변경 전에 서비스 접근을 확인한다.",
+                ),
           );
         setPendingWork(false);
         result.acknowledge();
@@ -538,11 +599,35 @@ export default function DatabaseOperations({
             <article key={item.id}>
               <p>
                 {item.schema}.{item.table} → {item.serviceId} ·{" "}
-                {t("Pending", "대기")} {item.pending} · {t("Failed", "실패")}{" "}
-                {item.failed} · {t("Delivered", "전달")} {item.delivered} ·{" "}
-                {t("Skipped", "건너뜀")} {item.skipped}
+                {t("Pending", "대기")} {item.pending ?? "—"} ·{" "}
+                {t("Failed", "실패")} {item.failed ?? "—"} ·{" "}
+                {t("Delivered", "전달")} {item.delivered ?? "—"} ·{" "}
+                {t("Skipped", "건너뜀")} {item.skipped ?? "—"}
               </p>
               {item.lastError && <p role="alert">{item.lastError}</p>}
+              {item.installed === false && !item.detached && (
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busy}
+                  onClick={() =>
+                    void act(
+                      "POST",
+                      `${base}/triggers`,
+                      {
+                        schema: item.schema,
+                        table: item.table,
+                        serviceId: item.serviceId,
+                        path: item.path ?? "/events/database",
+                      },
+                      true,
+                      item.id,
+                    )
+                  }
+                >
+                  {t("Retry event setup", "이벤트 설정 재시도")}
+                </button>
+              )}
               <button
                 className="btn"
                 disabled={busy}
@@ -560,7 +645,11 @@ export default function DatabaseOperations({
                 className="btn"
                 disabled={
                   busy ||
-                  (item.detached && (item.pending > 0 || item.failed > 0))
+                  (item.detached &&
+                    (item.pending === undefined ||
+                      item.failed === undefined ||
+                      item.pending > 0 ||
+                      item.failed > 0))
                 }
                 onClick={() => {
                   if (

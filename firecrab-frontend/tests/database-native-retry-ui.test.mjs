@@ -27,6 +27,7 @@ async function setup(t) {
   );
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+  page.setDefaultTimeout(5000);
   t.after(async () => {
     await page.close();
     await browser.close();
@@ -382,4 +383,178 @@ test("legacy pending binding setup retries its existing account instead of alloc
   assert.equal(requests, 1);
   assert.equal(bindings[0].id, id);
   assert.deepEqual(await pending(page), []);
+});
+
+async function eventPanel(fixture, page, triggers) {
+  fixture.handlers.set(
+    `GET /api/pipe/databases/${database.id}/bindings`,
+    ({ send }) => send(200, []),
+  );
+  const { base, serviceId } = await accessPanel(fixture, page);
+  fixture.handlers.set(`GET ${base}/tables`, ({ send }) =>
+    send(200, {
+      tables: [{ schema: "public", name: "orders" }],
+      truncated: false,
+    }),
+  );
+  fixture.handlers.set(`GET ${base}/triggers`, ({ send }) =>
+    send(200, triggers()),
+  );
+  fixture.handlers.set("GET /api/pipe/database-rabbitmq", ({ send }) =>
+    send(200, { configured: true }),
+  );
+  await page.reload();
+  await page.getByRole("button", { name: `Browse ${database.name}` }).click();
+  await page
+    .getByRole("button", { name: "Service access and events", exact: true })
+    .click();
+  await page
+    .getByRole("combobox", { name: "Source table", exact: true })
+    .selectOption(JSON.stringify(["public", "orders"]));
+  await page
+    .getByRole("combobox", { name: "Handler service", exact: true })
+    .selectOption(serviceId);
+  return { base, serviceId };
+}
+
+function eventReceipt(
+  operationId,
+  state,
+  id,
+  action = "create_database_events",
+) {
+  return {
+    operationId,
+    state,
+    action,
+    ownership: {
+      endpointId,
+      resource: { kind: "database_events", id: `${database.id}:${id}` },
+    },
+  };
+}
+
+test("event setup retains its qualified trigger identity across reload and resolves a lost acknowledgement", async (t) => {
+  const { fixture, page } = await setup(t);
+  let triggers = [];
+  const ids = [];
+  let completed = false;
+  const base = `/api/pipe/databases/${database.id}`;
+  fixture.handlers.set(`POST ${base}/triggers`, ({ req, body, send }) => {
+    const id = req.headers["x-firecrab-operation-id"];
+    ids.push(id);
+    assert.equal(body.requestId, id);
+    assert.equal(req.headers["x-firecrab-endpoint-id"], endpointId);
+    fixture.handlers.set(`GET /api/iac/native-operations/${id}`, ({ send }) =>
+      send(
+        200,
+        eventReceipt(id, completed ? "succeeded" : "needs_recovery", id),
+      ),
+    );
+    if (completed)
+      triggers = [
+        { ...body, id, installed: true, paused: false, detached: false },
+      ];
+    send(503, { error: { message: "Event acknowledgement unavailable" } });
+  });
+  await eventPanel(fixture, page, () => triggers);
+  await page
+    .getByRole("button", { name: "Enable events", exact: true })
+    .click();
+  await expect(
+    page.getByRole("link", { name: "Review original operation" }),
+  ).toBeVisible();
+  const saved = await pending(page);
+  assert.equal(saved.length, 1);
+  await eventPanel(fixture, page, () => triggers);
+  completed = true;
+  await page
+    .getByRole("button", { name: "Enable events", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toContainText(
+    "Review event configuration",
+  );
+  await expect(
+    page.getByRole("button", { name: "Detach capture", exact: true }),
+  ).toBeVisible();
+  assert.equal(ids.length, 2);
+  assert.equal(new Set(ids).size, 1);
+  assert.equal(triggers.length, 1);
+  assert.deepEqual(await pending(page), []);
+});
+
+test("lost event removal acknowledgement resolves its qualified receipt without repeating deletion", async (t) => {
+  const { fixture, page } = await setup(t);
+  const id = "a079dc53-16f3-4e5f-87d5-7312bb6b3a6f";
+  let triggers = [
+    {
+      id,
+      schema: "public",
+      table: "orders",
+      serviceId: "8f51d057-15ef-4212-b7e4-dcc8affb852d",
+      detached: true,
+      installed: true,
+      paused: false,
+      pending: 0,
+      failed: 0,
+    },
+  ];
+  let deletes = 0;
+  fixture.handlers.set(
+    `DELETE /api/pipe/database-triggers/${id}`,
+    ({ req, send }) => {
+      deletes++;
+      triggers = [];
+      const operation = req.headers["x-firecrab-operation-id"];
+      fixture.handlers.set(
+        `GET /api/iac/native-operations/${operation}`,
+        ({ send }) =>
+          send(
+            200,
+            eventReceipt(operation, "succeeded", id, "delete_database_events"),
+          ),
+      );
+      send(503, { error: { message: "Removal acknowledgement lost" } });
+    },
+  );
+  await eventPanel(fixture, page, () => triggers);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page
+    .getByRole("button", { name: "Remove trigger", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toContainText(
+    "Review event configuration",
+  );
+  await expect(
+    page.getByRole("button", { name: "Remove trigger", exact: true }),
+  ).toHaveCount(0);
+  assert.equal(deletes, 1);
+  assert.deepEqual(await pending(page), []);
+});
+
+test("a receipt for another database cannot acknowledge event setup", async (t) => {
+  const { fixture, page } = await setup(t);
+  fixture.handlers.set(
+    `POST /api/pipe/databases/${database.id}/triggers`,
+    ({ req, send }) => {
+      const id = req.headers["x-firecrab-operation-id"];
+      const receipt = eventReceipt(id, "succeeded", id);
+      receipt.ownership.resource.id = `9f9a4772-7e77-47ea-a39c-38497e64520f:${id}`;
+      fixture.handlers.set(`GET /api/iac/native-operations/${id}`, ({ send }) =>
+        send(200, receipt),
+      );
+      send(503, { error: { message: "Event acknowledgement lost" } });
+    },
+  );
+  await eventPanel(fixture, page, () => []);
+  await page
+    .getByRole("button", { name: "Enable events", exact: true })
+    .click();
+  await expect(
+    page.getByRole("link", { name: "Review original operation" }),
+  ).toBeVisible();
+  assert.equal((await pending(page)).length, 1);
+  await expect(
+    page.getByRole("button", { name: "Detach capture", exact: true }),
+  ).toHaveCount(0);
 });

@@ -166,14 +166,6 @@ impl Store {
             })?;
         Ok(parent.join("database-backups"))
     }
-    /// Remove trigger metadata after the caller verifies retained events are drained.
-    pub fn delete_database_trigger(&self, id: Uuid) -> Result<(), PersistenceError> {
-        self.lock().execute(
-            "DELETE FROM database_triggers WHERE id=?1",
-            [id.to_string()],
-        )?;
-        Ok(())
-    }
     /// Read private broker ownership and generated TLS material.
     pub fn managed_database_rabbitmq(
         &self,
@@ -193,7 +185,10 @@ impl Store {
         &self,
         cluster: &crate::pipe_databases::managed_rabbitmq::Cluster,
     ) -> Result<(), PersistenceError> {
-        self.lock().execute("INSERT INTO database_managed_rabbitmq VALUES (1,?1) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",[encode(cluster)?])?;
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        Self::save_database_broker_observation(&tx, cluster)?;
+        tx.commit()?;
         Ok(())
     }
     /// Read private generated account bindings for service deployment.
@@ -296,7 +291,10 @@ impl Store {
     }
     /// Replace private RabbitMQ settings after the caller checks retained triggers.
     pub fn save_database_rabbitmq(&self, input: &RabbitMQInput) -> Result<(), PersistenceError> {
-        self.lock().execute("INSERT INTO database_rabbitmq VALUES (1,?1) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",[encode(input)?])?;
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        Self::save_database_broker_input(&tx, input)?;
+        tx.commit()?;
         Ok(())
     }
     /// Read capture definitions and persisted delivery controls.
@@ -320,9 +318,72 @@ impl Store {
             .optional()?;
         spec.as_deref().map(decode).transpose()
     }
-    /// Persist capture ownership before nontransactional setup or lifecycle changes.
+    /// Seed legacy metadata in tests; production configuration uses durable event intents.
+    #[cfg(test)]
     pub fn save_database_trigger(&self, trigger: &Trigger) -> Result<(), PersistenceError> {
-        self.lock().execute("INSERT INTO database_triggers VALUES (?1,?2) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",params![trigger.id.to_string(),encode(trigger)?])?;
+        self.lock().execute("INSERT INTO database_triggers VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec",params![trigger.id.to_string(),encode(trigger)?])?;
+        Ok(())
+    }
+    /// A migration may observe capture detachment, without changing its definition or pause state.
+    pub(crate) fn save_database_trigger_observation(
+        &self,
+        job: &crate::pipe_databases::maintenance::Job,
+        before: &Trigger,
+        after: &Trigger,
+    ) -> Result<(), PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current = super::database_job_claims::read(&tx, job.id)?
+            .ok_or(PersistenceError::StaleIacOwner)?;
+        if current.status != "running"
+            || current.execution_generation != job.execution_generation
+            || !super::iac_database_targets::same_request(&current, job)
+        {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+        let raw: String = tx.query_row(
+            "SELECT spec FROM pipe_databases WHERE id=?1",
+            [before.database_id.to_string()],
+            |r| r.get(0),
+        )?;
+        let record = crate::pipe_databases::DatabaseRecord {
+            id: before.database_id,
+            input: decode(&raw)?,
+        };
+        if crate::pipe_databases::maintenance::target_hash(&record)
+            .map_err(|_| PersistenceError::IacOperationIdentity)?
+            != job.target_hash
+        {
+            return Err(PersistenceError::IacOperationIdentity);
+        }
+        let actual: String = tx.query_row(
+            "SELECT spec FROM database_triggers WHERE id=?1",
+            [before.id.to_string()],
+            |r| r.get(0),
+        )?;
+        if serde_json::from_str::<serde_json::Value>(&actual)
+            .map_err(|_| PersistenceError::IacOperationIdentity)?
+            != serde_json::to_value(before).map_err(|_| PersistenceError::IacOperationIdentity)?
+        {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+        let mut expected = before.clone();
+        expected.detached = true;
+        if encode(&expected)? != encode(after)? {
+            return Err(PersistenceError::IacOperationIdentity);
+        }
+        super::iac_native::ensure_idle(
+            &tx,
+            &firecrab_stack::ManagedResource {
+                kind: "database_events".into(),
+                id: format!("{}:{}", before.database_id, before.id),
+            },
+        )?;
+        tx.execute(
+            "UPDATE database_triggers SET spec=?2 WHERE id=?1",
+            params![after.id.to_string(), encode(after)?],
+        )?;
+        tx.commit()?;
         Ok(())
     }
     /// Return or create the private HMAC key for one handler service.

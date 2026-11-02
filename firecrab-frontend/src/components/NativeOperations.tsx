@@ -18,6 +18,10 @@ type Operation = {
 };
 type Page = { operations: Operation[]; nextBefore: string | null };
 const ACTIONS: Record<string, [string, string]> = {
+  create_database_events: ["Create database events", "DB 이벤트 생성"],
+  pause_database_events: ["Change event delivery", "이벤트 전달 변경"],
+  detach_database_events: ["Detach database events", "DB 이벤트 분리"],
+  delete_database_events: ["Delete database events", "DB 이벤트 삭제"],
   create_database_binding: ["Create database binding", "DB 바인딩 생성"],
   delete_database_binding: ["Delete database binding", "DB 바인딩 삭제"],
   create_database_connection: ["Create database connection", "DB 연결 생성"],
@@ -39,13 +43,19 @@ function validOperation(value: Operation): boolean {
     !!value &&
     typeof value.operationId === "string" &&
     typeof value.action === "string" &&
-    ["running", "needs_recovery", "succeeded", "failed"].includes(value.state) &&
+    ["running", "needs_recovery", "succeeded", "failed"].includes(
+      value.state,
+    ) &&
     typeof value.ownership?.endpointId === "string" &&
     typeof value.ownership?.resource?.kind === "string" &&
     typeof value.ownership?.resource?.id === "string"
   );
 }
 const RECOVERABLE = new Set([
+  "create_database_events",
+  "pause_database_events",
+  "detach_database_events",
+  "delete_database_events",
   "create_database_binding",
   "delete_database_binding",
   "create_database_connection",
@@ -93,7 +103,8 @@ export default function NativeOperations() {
           if (
             !page.operations.every(
               (operation) =>
-                validOperation(operation) && ["running", "needs_recovery"].includes(operation.state),
+                validOperation(operation) &&
+                ["running", "needs_recovery"].includes(operation.state),
             )
           )
             throw new Error("Invalid active operation");

@@ -15,8 +15,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 mod admission;
-mod configuration;
-pub(super) use admission::validate_owner;
+pub(super) use admission::{service_idle, validate_owner};
 
 pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS iac_database_binding_mutations (
  operation_id TEXT PRIMARY KEY REFERENCES iac_native_operations(operation_id),

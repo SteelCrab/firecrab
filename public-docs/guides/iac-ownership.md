@@ -7,7 +7,7 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 ## Current support
 
 Network, standalone VM, MicroService, registered storage root, volume/VM attachment, security group,
-shell, schedule, pool, Queue, database connection/binding, S3 connection, Secret, Secret connection,
+shell, schedule, pool, Queue, database connection/binding/events, S3 connection, Secret, Secret connection,
 Auth, registry, AI connection, project model-default, Sandbox environment/project, Git source,
 Sandbox access policy, Queue engine, cluster host/placement/service, service automatic deployment, OTLP settings and Deploy tokens
 can move between native Stack and a Terraform state owner.
@@ -37,6 +37,9 @@ Database maintenance also blocks transfers through other saved aliases of the sa
 These checks include backups, migrations, restores and work awaiting recovery.
 Pool leases and application row/object operations retain their existing permissions.
 Connection ownership manages configuration and credentials, while external data stays with its existing owner.
+Event identity is the exact `database_uuid:trigger_uuid` pair. Installed or detached
+captures can transfer without changing their table, handler, queues or retained
+events. Unfinished setup and configured-target maintenance prevent transfer.
 
 Secret ownership uses the encrypted vault's file lock through the metadata commit.
 Single-value edits and bulk imports check the current writer inside that same lock.

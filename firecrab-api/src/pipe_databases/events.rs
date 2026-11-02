@@ -98,9 +98,12 @@ pub struct TriggerStatus {
     pub last_error: Option<String>,
 }
 
-/// Install transactional row capture after checking supported table semantics.
-pub async fn install(connection: &mut DatabaseConnection, trigger: &Trigger) -> Result<(), Error> {
-    if trigger.input.service_id.is_nil()
+/// Validate request fields before any broker declaration or database mutation.
+pub(crate) fn validate_input(trigger: &Trigger) -> Result<(), Error> {
+    if trigger.id.is_nil()
+        || trigger.database_id.is_nil()
+        || trigger.id != trigger.input.request_id
+        || trigger.input.service_id.is_nil()
         || !trigger.input.path.starts_with('/')
         || trigger.input.path.starts_with("//")
         || trigger.input.path.len() > 256
@@ -111,6 +114,16 @@ pub async fn install(connection: &mut DatabaseConnection, trigger: &Trigger) -> 
             "Choose a service and a valid event endpoint path",
         ));
     }
+    trigger.table().validate()?;
+    Ok(())
+}
+
+/// Read-only capability checks can fail without leaving partial broker configuration.
+pub(crate) async fn validate_capture(
+    connection: &mut DatabaseConnection,
+    trigger: &Trigger,
+) -> Result<write::TableInfo, Error> {
+    validate_input(trigger)?;
     let table = trigger.table();
     let definition = connection.table_info(&table).await?;
     if !definition.transactional || definition.primary_key.is_empty() {
@@ -118,6 +131,37 @@ pub async fn install(connection: &mut DatabaseConnection, trigger: &Trigger) -> 
             "Reliable events require a transactional table with a primary key",
         ));
     }
+    write::verify_owner(connection, trigger.database_id).await?;
+    if let DatabaseConnection::Mysql(c) = connection {
+        let cascades:i64=sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.referential_constraints WHERE CONSTRAINT_SCHEMA=? AND TABLE_NAME=? AND (DELETE_RULE IN ('CASCADE','SET NULL') OR UPDATE_RULE IN ('CASCADE','SET NULL'))").bind(&table.schema).bind(&table.table).fetch_one(&mut *c).await?;
+        if cascades != 0 {
+            return Err(Error::Invalid(
+                "MySQL row triggers cannot capture foreign-key CASCADE or SET NULL; use RESTRICT before enabling events",
+            ));
+        }
+        if definition
+            .columns
+            .iter()
+            .any(|column| column.binary || column.data_type == "bytea")
+        {
+            return Err(Error::Invalid(
+                "Binary columns require a CDC connector; row-trigger capture is unavailable for this table",
+            ));
+        }
+        let generated:i64=sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.columns WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND GENERATION_EXPRESSION<>''").bind(&table.schema).bind(&table.table).fetch_one(&mut *c).await?;
+        if generated != 0 {
+            return Err(Error::Invalid(
+                "MySQL generated columns require a CDC connector",
+            ));
+        }
+    }
+    Ok(definition)
+}
+
+/// Install transactional row capture after checking supported table semantics.
+pub async fn install(connection: &mut DatabaseConnection, trigger: &Trigger) -> Result<(), Error> {
+    let definition = validate_capture(connection, trigger).await?;
+    let table = trigger.table();
     write::verify_owner(connection, trigger.database_id).await?;
     let engine = connection.engine();
     let source = table.qualified(engine);
@@ -132,27 +176,6 @@ pub async fn install(connection: &mut DatabaseConnection, trigger: &Trigger) -> 
             tx.commit().await?;
         }
         DatabaseConnection::Mysql(c) => {
-            let cascades:i64=sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.referential_constraints WHERE CONSTRAINT_SCHEMA=? AND TABLE_NAME=? AND (DELETE_RULE IN ('CASCADE','SET NULL') OR UPDATE_RULE IN ('CASCADE','SET NULL'))").bind(&table.schema).bind(&table.table).fetch_one(&mut *c).await?;
-            if cascades != 0 {
-                return Err(Error::Invalid(
-                    "MySQL row triggers cannot capture foreign-key CASCADE or SET NULL; use RESTRICT before enabling events",
-                ));
-            }
-            if definition
-                .columns
-                .iter()
-                .any(|column| column.binary || column.data_type == "bytea")
-            {
-                return Err(Error::Invalid(
-                    "Binary columns require a CDC connector; row-trigger capture is unavailable for this table",
-                ));
-            }
-            let generated:i64=sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.columns WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND GENERATION_EXPRESSION<>''").bind(&table.schema).bind(&table.table).fetch_one(&mut *c).await?;
-            if generated != 0 {
-                return Err(Error::Invalid(
-                    "MySQL generated columns require a CDC connector",
-                ));
-            }
             sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {outbox} (id bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,payload longtext NOT NULL,status varchar(16) NOT NULL DEFAULT 'pending',attempts int NOT NULL DEFAULT 0,next_attempt bigint NOT NULL DEFAULT 0,last_error text,created_at timestamp(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),delivered_at timestamp(6) NULL,KEY pending_events(status,next_attempt,id)) ENGINE=InnoDB")).execute(&mut *c).await?;
             // MySQL DDL commits implicitly. Install all three before returning success.
             // A failed install remains paused in the host store and is never advertised active.

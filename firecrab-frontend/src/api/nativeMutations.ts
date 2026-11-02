@@ -22,7 +22,7 @@ export async function nativeMutation<T>(
   action: string,
   resourceKind: string,
   resolve: (id: string) => Promise<T | null>,
-  resourceId?: string,
+  resourceId?: string | ((operationId: string) => string),
 ): Promise<NativeMutationResult<T>> {
   const key = `firecrab.native-mutation:${method}:${url}`;
   function parse(stored: string): Pending {
@@ -118,9 +118,12 @@ export async function nativeMutation<T>(
       operation.ownership?.endpointId !== pending.endpointId ||
       operation.ownership?.resource?.kind !== resourceKind ||
       (resourceId !== undefined &&
-        operation.ownership.resource.id !== resourceId)
+        operation.ownership.resource.id !==
+          (typeof resourceId === "function"
+            ? resourceId(pending.operationId)
+            : resourceId))
     )
-      throw new Error(
+      throw new NativeMutationPending(
         "Original operation identity changed; review Stack operations.",
       );
     if (operation.state === "failed") {
@@ -137,7 +140,7 @@ export async function nativeMutation<T>(
           ? "The original database request is still running. Review it in Stack operations."
           : "The original database request needs recovery. Review it in Stack operations.",
       );
-    throw new Error(
+    throw new NativeMutationPending(
       "Original operation state is unavailable; review Stack operations.",
     );
   }

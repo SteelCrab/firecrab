@@ -1,6 +1,9 @@
 use super::*;
 
-fn service_idle(conn: &Connection, id: Uuid) -> Result<(), PersistenceError> {
+pub(in crate::persistence) fn service_idle(
+    conn: &Connection,
+    id: Uuid,
+) -> Result<(), PersistenceError> {
     let raw: Option<String> = conn
         .query_row(
             "SELECT deployment FROM micro_service_deployments WHERE service_id=?1",

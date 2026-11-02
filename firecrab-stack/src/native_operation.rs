@@ -8,6 +8,14 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeAction {
+    /// Set up owned event capture, delivery queues and a private inbox.
+    CreateDatabaseEvents,
+    /// Change the saved delivery pause state without replaying application data.
+    PauseDatabaseEvents,
+    /// Remove owned capture while retaining its outbox and delivery evidence.
+    DetachDatabaseEvents,
+    /// Remove only drained, detached delivery configuration and owned queues.
+    DeleteDatabaseEvents,
     /// Provision one private service account with stable generated credentials.
     CreateDatabaseBinding,
     /// Revoke only the exact binding-owned service account.

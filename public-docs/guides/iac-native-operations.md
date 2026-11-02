@@ -93,8 +93,8 @@ and database locks remain necessary for SQL execution.
 Maintenance claims move atomically from queued to running. A second API process
 cannot execute the same attempt. Recovery invalidates older progress writes.
 The internal safety snapshot must carry its exact running parent attempt.
-These are shared lifecycle prerequisites. Full database binding/event capture,
-managed RabbitMQ and declarative migration contracts are still under implementation in
+These are shared lifecycle prerequisites. Managed RabbitMQ, declarative migration
+and complete cross-workflow database contracts are still under implementation in
 stage 2; this connection work does not establish full IaC coverage.
 
 ## Database binding accounts
@@ -125,13 +125,40 @@ Event setup cannot implicitly broaden a Terraform-owned account's inbox grants.
 It checks this before declaring broker resources. A maintenance job may refresh
 only derived table grants under its original running execution generation; it
 cannot change account credentials, access policy or association. Active jobs
-also prevent ownership transfer. Full event/broker/declarative-migration lifecycle
+also prevent ownership transfer. Full broker/declarative-migration lifecycle
 and expanded Stack/Terraform execution remain pending.
+
+## Database event capture
+
+`database_events` identifies a capture by `database_uuid:trigger_uuid`. Native
+create, pause, detach and removal retain immutable private requests and original
+receipts. Creation defaults the operation UUID to `requestId`; controls accept
+`x-firecrab-operation-id`. Retrying a removed capture returns its original removal
+receipt. Reusing a retired capture UUID for another creation is rejected.
+
+Setup reserves the stopped handler, database, account and broker configuration.
+A borrowed account with existing inbox grants can remain independent. Otherwise,
+changing its grants requires the current writer. Generated account credentials
+are prepared once and kept across recovery. The worker continues after its HTTP
+caller disconnects. Its source SQL session lock remains held through broker work,
+account setup, source capture and the final local receipt.
+
+Preparation pauses local delivery. A verified failure before external changes
+restores the previous metadata or removes new staging and releases reservations.
+An uncertain remote change keeps the capture paused and reserves the original
+resources for recovery. Recovery rejects older execution generations.
+
+Detach stops new capture and retains the source outbox. Removal requires a
+detached, drained capture. If retained pending or failed events prevent removal,
+the operation restores delivery instead of leaving it paused. Successful removal
+deletes its owned broker queues and local capture record. Application rows and
+source outbox evidence remain. Migration jobs may record derived detachment only
+under their original running execution generation.
 
 ## Dashboard retries
 
 The database dashboard retains the operation UUID and endpoint UUID before sending
-connection or binding changes. It stores no URI, password, certificate or request
+connection, binding or event changes. It stores no URI, password, certificate or request
 body in browser storage. Reloading the page reuses the original identity.
 A failed receipt lookup does not allocate a new create operation.
 
@@ -140,7 +167,8 @@ completed request displays its existing resource and a review notice. Pending or
 uncertain work links to Stack operations. Only a known failure before managed
 effects permits corrected input to use a new operation. A completion received
 after leaving the page remains unacknowledged until the resource can be shown.
-Legacy pending bindings offer Retry setup using their existing account UUID.
+Legacy pending bindings and captures retry setup using their existing UUID.
+Event receipts must match both the database UUID and capture UUID.
 
 ## Observe and recover
 

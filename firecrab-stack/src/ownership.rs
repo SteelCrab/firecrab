@@ -54,7 +54,7 @@ impl ManagedResource {
         }
         if matches!(
             self.kind.as_str(),
-            "service_deploy_token" | "volume_attachment"
+            "service_deploy_token" | "volume_attachment" | "database_events"
         ) {
             let (left, right) = self
                 .id
