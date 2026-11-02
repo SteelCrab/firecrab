@@ -8,6 +8,7 @@ const initialEngine: QueueEngine = { vmId: VM_ID, microNetworkId: NETWORK_ID, ph
 const initialQueue: ApplicationQueue = { id: QUEUE_ID, name: "notifications", phase: "ready", maxBytes: 64 * 1024 * 1024, deliveryLimit: 5, error: null, services: [] };
 async function open(page: Page, installed = true, bound = false, options: { phase?: string; locale?: string; empty?: boolean; error?: string; log?: string } = {}) {
   const state = { engine: installed ? { ...initialEngine, phase: options.phase ?? "running", error: options.error ?? null, log: options.log ?? "" } : null as QueueEngine | null, rows: installed && !options.empty ? [{ ...initialQueue, services: bound ? [{ id: "app", name: "mail-app", bindings: { NOTIFICATIONS: "consume" as const } }] : [] }] : [] as ApplicationQueue[], fail: false };
+  const operations: { operationId: string; state: string }[] = [];
   const writes: { path: string; body: unknown }[] = [];
   await page.addInitScript(locale => localStorage.setItem("firecrab.locale", locale), options.locale ?? "en");
   for (const url of ["https://fonts.googleapis.com/**", "https://cdn.jsdelivr.net/gh/orioncactus/pretendard@*/**"]) {
@@ -15,6 +16,11 @@ async function open(page: Page, installed = true, bound = false, options: { phas
   }
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const request = route.request(); const path = new URL(request.url()).pathname; const method = request.method();
+    if (path === `/api/iac/native-operations/resources/queue_engine/${VM_ID}`) return route.fulfill({ json: operations });
+    if (method === "POST" && path.endsWith("/recover")) {
+      const operation = operations.find(operation => path === `/api/iac/native-operations/${operation.operationId}/recover`);
+      if (operation && state.engine) { writes.push({ path, body: null }); operation.state = "running"; state.engine.phase = "starting"; return route.fulfill({ json: operation }); }
+    }
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/micro-networks") return route.fulfill({ json: [{ id: NETWORK_ID, name: "apps", subnetCidr: "10.42.0.0/24" }] });
     if (state.fail && ["/api/queue/engine", "/api/queues"].includes(path)) return route.fulfill({ status: 503, json: { error: { message: "Queue API unavailable" } } });
@@ -31,7 +37,7 @@ async function open(page: Page, installed = true, bound = false, options: { phas
     if (path === `/api/queues/${QUEUE_ID}` && method === "DELETE") { writes.push({ path, body: null }); state.rows = []; return route.fulfill({ status: 204 }); }
     return route.fulfill({ status: 404, json: { error: { message: "Fixture unavailable" } } });
   });
-  await page.goto("/#/queues"); return { state, writes };
+  await page.goto("/#/queues"); return { state, writes, operations };
 }
 
 test.describe("Queue @dashboard", () => {
@@ -71,6 +77,15 @@ test.describe("Queue @dashboard", () => {
     await expect(engine.locator(".queue-engine-log")).toHaveAttribute("open", "");
     await expect(engine.locator(".queue-log")).toContainText("Missing kernel build tool: make");
     await page.screenshot({ path: testInfo.outputPath("queue-recovery.png"), fullPage: true });
+  });
+  test("recovers the original failed engine operation instead of submitting a new start", async ({ page }) => {
+    const { operations, writes } = await open(page, true, false, { phase: "failed", empty: true, error: "Recover the existing broker" });
+    const operationId = "00000000-0000-0000-0000-000000000504";
+    operations.push({ operationId: "completed-earlier-stop", state: "succeeded" }, { operationId, state: "needs_recovery" });
+    await page.getByRole("button", { name: "Recover engine", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Queue engine", exact: true })).toContainText("Starting");
+    expect(writes).toEqual([{ path: `/api/iac/native-operations/${operationId}/recover`, body: null }]);
+    expect(operations[1].state).toBe("running");
   });
   test("reads in Korean and keeps queue controls inside a phone", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 390, height: 1000 });
