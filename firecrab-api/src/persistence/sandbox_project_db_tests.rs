@@ -468,3 +468,92 @@ async fn agent_checkpoint_waits_for_workspace_owner_and_never_retries_a_missing_
     );
     assert!(!path.exists());
 }
+
+#[test]
+fn startup_interrupts_available_work_without_falling_back_from_fenced_or_missing_project_storage() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(&directory.path().join("state.db")).unwrap();
+    let (b, db) = project(&store);
+    let mut target = saved(b.project_id, 1);
+    store.save_sandbox_task(&target).unwrap();
+    store
+        .migrate_sandbox_tasks(&b, &db, Uuid::new_v4(), Uuid::new_v4())
+        .unwrap();
+    let path = db.directory.join("project.db");
+    drop(db);
+    target.task.state = SandboxTaskState::Accepted;
+    store.save_sandbox_task(&target).unwrap();
+    let mut healthy = saved(Uuid::new_v4(), 2);
+    healthy.task.state = SandboxTaskState::InProgress;
+    store.save_sandbox_task(&healthy).unwrap();
+    let (legacy, legacy_db) = project(&store);
+    let mut legacy_task = saved(legacy.project_id, 3);
+    legacy_task.task.state = SandboxTaskState::Accepted;
+    store.save_sandbox_task(&legacy_task).unwrap();
+    let legacy_path = legacy_db.directory.join("project.db");
+    drop(legacy_db);
+    let legacy_kept = legacy_path.with_extension("kept");
+    std::fs::rename(&legacy_path, &legacy_kept).unwrap();
+    std::fs::write(&legacy_path, b"damaged registered project database").unwrap();
+    let fence = store
+        .workspaces
+        .root
+        .parent()
+        .unwrap()
+        .join("project-backups")
+        .join(b.project_id.to_string())
+        .join("fence.json");
+    std::fs::write(&fence, serde_json::to_vec(&Uuid::new_v4()).unwrap()).unwrap();
+    store.interrupt_sandbox_tasks().unwrap();
+    assert_eq!(
+        store
+            .sandbox_task(healthy.task.id)
+            .unwrap()
+            .unwrap()
+            .task
+            .state,
+        SandboxTaskState::Interrupted
+    );
+    assert!(store.sandbox_task(target.task.id).is_err());
+    assert!(store.sandbox_task(legacy_task.task.id).is_err());
+    assert!(store.sandbox_pending_count().is_err());
+    assert_eq!(
+        store
+            .lock()
+            .query_row::<i64, _, _>(
+                "SELECT count(*) FROM ai_sandbox_tasks WHERE project_id=?1",
+                [b.project_id.to_string()],
+                |r| r.get(0)
+            )
+            .unwrap(),
+        0
+    );
+    std::fs::remove_file(&fence).unwrap();
+    let kept = path.with_extension("kept");
+    std::fs::rename(&path, &kept).unwrap();
+    store.interrupt_sandbox_tasks().unwrap();
+    assert!(store.sandbox_task(target.task.id).is_err());
+    assert!(!path.exists());
+    std::fs::rename(kept, &path).unwrap();
+    std::fs::remove_file(&legacy_path).unwrap();
+    std::fs::rename(legacy_kept, &legacy_path).unwrap();
+    store.interrupt_sandbox_tasks().unwrap();
+    assert_eq!(
+        store
+            .sandbox_task(legacy_task.task.id)
+            .unwrap()
+            .unwrap()
+            .task
+            .state,
+        SandboxTaskState::Interrupted
+    );
+    assert_eq!(
+        store
+            .sandbox_task(target.task.id)
+            .unwrap()
+            .unwrap()
+            .task
+            .state,
+        SandboxTaskState::Interrupted
+    );
+}

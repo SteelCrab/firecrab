@@ -184,6 +184,20 @@ async fn restart_resumes_after_only_database_was_installed_and_keeps_vm_fenced()
     let resumed = AppState::with_db_file(templates, dir.path().join("control.db"))
         .await
         .unwrap();
+    // Main runs this recovery step before starting workspace maintenance or HTTP serving.
+    #[cfg(target_os = "linux")]
+    let _controller_owner = resumed.store.scheduler_lock().unwrap();
+    resumed.store.interrupt_sandbox_tasks().unwrap();
+    let (status, rows) = call(
+        &resumed,
+        "GET",
+        &format!("{}/backups", base(&b)),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(rows[0]["pendingReconciliation"].as_bool().unwrap());
     tick(resumed.clone()).await.unwrap();
     assert_eq!(
         resumed

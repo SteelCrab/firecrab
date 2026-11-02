@@ -61,7 +61,7 @@ pub struct ProjectBackupOperation {
     pub request: ProjectBackupRequest,
     /// Pending, database_frozen, prepared, installing, complete or aborted.
     pub phase: String,
-    /// Data is committed but maintenance cleanup may still need an exact retry.
+    /// An admitted operation still holds its maintenance gate, including after data commit.
     #[serde(default)]
     pub pending_reconciliation: bool,
     /// Unix admission time.

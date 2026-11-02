@@ -1,5 +1,7 @@
 # Project backup and restore implementation — 2026-11-02
 
+Updated: 2026-11-03.
+
 Delivery: [#550](https://github.com/SteelCrab/firecrab/issues/550),
 [Draft PR #562](https://github.com/SteelCrab/firecrab/pull/562),
 `feat/550-ai-canvas` → `release/v0.5.0`. No merge or deployment is authorized.
@@ -17,8 +19,9 @@ Recovery controls remain available when project DB connection fails.
 
 ## Evidence
 
-- Codecov on preceding transport commit `c0594e0fe8d30d1f19bf247e4b298f2f277fad8d`
-  passed at **86.28%**, with the existing **80%** target unchanged.
+- Codecov on preceding commit `67f30c2211591a748112a464e0bff787a90d8ea9`
+  passed at **86.12%**, with the existing **80%** target unchanged.
+  Final acceptance must use the checks for the current PR head.
 - Selected final workspace regressions: **100 passed, 0 failed**, with two explicitly
   gated environment tests skipped. New backup regressions exercise real SQLite and sparse disk fixture bytes:
   paired restoration, stale HTTP write denial, completed retry, restart after only
@@ -71,6 +74,15 @@ worker's admitted-state checkpoint. The fixture now owns the existing admission
 claim only around its direct database edits. Public retry still acquires its own
 claim. All original frozen-rule, attempt identity and no-dispatch assertions remain.
 The exact regression passed locally and passed ten additional exact executions.
+
+Startup previously queried all project task databases before HTTP serving and backup
+maintenance started. One retained backup fence or a damaged project DB could therefore
+prevent the recovery API from starting. Startup now interrupts available projects
+independently and logs inaccessible registered projects without falling back to stale
+controller task records. Ordinary task queries and admission remain blocked for those
+projects. Three focused startup, migration and half-installed restoration regressions
+passed locally, alongside API Clippy with warnings denied. The restoration regression
+also acquires the controller owner lock on Linux before invoking startup interruption.
 
 ## UI evidence
 

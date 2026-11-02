@@ -100,6 +100,11 @@ mixed pair. A restart resumes an admitted interrupted operation, including a cra
 between the two file replacements or after the control commit. Missing/corrupt DB
 files and a missing volume can be recovered explicitly with their existing identities.
 
+Controller startup interrupts available task records independently. A fenced, missing
+or damaged registered project DB does not prevent the recovery API from starting.
+That project remains blocked for normal task reads, scheduling and writes. Startup
+never substitutes controller task records for an unavailable private project DB.
+
 For a missing canonical Sandbox DB, explicit disaster recovery additionally requires
 no active controller task workers. Admission stays locked. Restored task indexes must
 be idle, the migration marker must match the current route, and global task/attempt

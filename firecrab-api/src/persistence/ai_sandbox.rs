@@ -474,16 +474,47 @@ impl Store {
     }
     /// Restart settles active records one by one; terminal file payloads are not loaded.
     pub fn interrupt_sandbox_tasks(&self) -> Result<(), PersistenceError> {
-        let groups:Vec<Vec<String>>=self.all_task_queries(|conn|Ok(conn.prepare("SELECT id FROM ai_sandbox_task_index WHERE busy=1 AND json_extract(summary,'$.state') IN ('waiting','accepted','in_progress')")?.query_map([],|r|r.get(0))?.collect::<Result<_,_>>()?))?;
-        let ids = groups.into_iter().flatten();
-        for id in ids {
-            let key = Uuid::parse_str(&id).map_err(|_| corrupt())?;
-            let mut saved = self.sandbox_task(key)?.ok_or_else(corrupt)?;
-            saved.task.state = SandboxTaskState::Interrupted;
-            saved.task.error_code = Some("sandbox_restarted".into());
-            saved.task.error =
-                Some("Controller restarted. Reconcile the attempt before retrying.".into());
-            self.save_sandbox_task(&saved)?;
+        let projects: Vec<Uuid> = {
+            let c = self.lock();
+            let mut q = c.prepare(
+                "SELECT DISTINCT project_id FROM sandbox_task_catalog ORDER BY project_id",
+            )?;
+            q.query_map([], |r| r.get::<_, String>(0))?
+                .map(|p| Uuid::parse_str(&p?).map_err(|_| corrupt()))
+                .collect::<Result<_, _>>()?
+        };
+        for project in projects {
+            let ids = (|| -> Result<Vec<String>, PersistenceError> {
+                let c = self.task_connection(project, false)?;
+                Ok(c.prepare("SELECT id FROM ai_sandbox_task_index WHERE project_id=?1 AND busy=1 AND json_extract(summary,'$.state') IN ('waiting','accepted','in_progress')")?.query_map([project.to_string()],|r|r.get(0))?.collect::<Result<_,_>>()?)
+            })();
+            let ids = match ids {
+                Ok(ids) => ids,
+                Err(error) => {
+                    let unavailable = matches!(
+                        &error,
+                        PersistenceError::ProjectDatabaseBusy
+                            | PersistenceError::BlockStorageConflict { .. }
+                    ) || (matches!(&error, PersistenceError::Database(_))
+                        && self.project_workspace_unfenced(project)?.is_some());
+                    if !unavailable {
+                        return Err(error);
+                    }
+                    // Recovery APIs stay reachable. Never read the controller as a fallback for
+                    // a private DB; normal task queries and admission still fail closed.
+                    tracing::warn!(%project,%error,"retained project unavailable during startup interruption; explicit storage reconciliation required");
+                    continue;
+                }
+            };
+            for id in ids {
+                let key = Uuid::parse_str(&id).map_err(|_| corrupt())?;
+                let mut saved = self.sandbox_task(key)?.ok_or_else(corrupt)?;
+                saved.task.state = SandboxTaskState::Interrupted;
+                saved.task.error_code = Some("sandbox_restarted".into());
+                saved.task.error =
+                    Some("Controller restarted. Reconcile the attempt before retrying.".into());
+                self.save_sandbox_task(&saved)?;
+            }
         }
         Ok(())
     }
