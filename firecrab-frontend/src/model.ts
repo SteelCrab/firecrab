@@ -8,7 +8,7 @@ export const VM_STATE_LABELS: Record<VmState, [string, string]> = {
   starting: ["Starting", "시작 중"],
   running: ["Running", "실행 중"],
   pausing: ["Pausing", "일시정지 중"],
-  paused: ["Paused", "일시정지됨"],
+  paused: ["Paused", "일시정지"],
   resuming: ["Resuming", "재개 중"],
   stopping: ["Stopping", "중지 중"],
   stopped: ["Stopped", "중지됨"],

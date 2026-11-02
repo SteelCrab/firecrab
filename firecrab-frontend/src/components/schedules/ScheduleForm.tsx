@@ -96,10 +96,13 @@ export default function ScheduleForm({
       setFields({
         timing:
           draft.repeat === "weekly" && draft.days.length === 0
-            ? t("Choose at least one day.", "실행할 요일을 하나 이상 선택한다.")
+            ? t(
+                "Choose at least one day.",
+                "실행할 요일을 하나 이상 선택하세요.",
+              )
             : t(
                 "Check the date and time. This local time may not exist during a daylight saving change.",
-                "날짜와 시각을 확인한다. 서머타임 변경으로 존재하지 않는 시각은 선택할 수 없다.",
+                "날짜와 시각을 확인하세요. 서머타임 전환으로 건너뛰는 시각은 선택할 수 없습니다.",
               ),
       });
       return;
@@ -133,7 +136,7 @@ export default function ScheduleForm({
         <p>
           {t(
             "Choose a VM, an operation, and a time.",
-            "VM, 작업과 실행 시간을 선택한다.",
+            "VM과 실행할 작업, 실행 시간을 선택하세요.",
           )}
         </p>
       </div>
@@ -301,7 +304,7 @@ export default function ScheduleForm({
             <strong>
               {timing
                 ? timingLabel(timing, locale)
-                : t("Choose an execution time", "실행 시간을 선택한다")}
+                : t("Choose an execution time", "실행 시간 선택")}
             </strong>
             <span>
               {vm?.name ?? t("Choose a VM", "VM 선택")} ·{" "}
@@ -374,7 +377,7 @@ export default function ScheduleForm({
         <p className="schedule-footnote">
           {t(
             "Keep Firecrab running for scheduled operations to execute.",
-            "예약을 실행하려면 Firecrab이 실행 중이어야 한다.",
+            "예약된 작업을 실행하려면 Firecrab이 실행 중이어야 합니다.",
           )}
         </p>
         <div className="schedule-form-actions">

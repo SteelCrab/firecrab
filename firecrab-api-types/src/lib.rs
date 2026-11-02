@@ -8,8 +8,25 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod workspace_setup;
+pub use workspace_setup::*;
+
 mod queues;
 pub use queues::*;
+mod code_workspaces;
+pub use code_workspaces::*;
+mod code_catalog;
+pub use code_catalog::*;
+mod code_verification;
+pub use code_verification::*;
+mod code_runtime;
+pub use code_runtime::*;
+mod code_agent_run;
+pub use code_agent_run::*;
+mod code_editor;
+pub use code_editor::*;
+mod code_agent_auth;
+pub use code_agent_auth::*;
 mod pool;
 pub use pool::*;
 mod cluster;
@@ -383,6 +400,14 @@ pub struct ShellRevisionResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct UpdateVmResourcesRequest {
+    /// Omitted keeps the current network. A present UUID moves an inactive VM.
+    /// Explicit null is rejected; detaching the network is not supported.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_network_update",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub micro_network_id: Option<Uuid>,
     /// New RAM in MiB.
     pub ram: u32,
     /// New vCPU count.
@@ -403,6 +428,12 @@ pub struct UpdateVmResourcesRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub security_group_id: Option<Option<Uuid>>,
+}
+
+fn deserialize_network_update<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Uuid>, D::Error> {
+    Uuid::deserialize(deserializer).map(Some)
 }
 
 fn deserialize_security_group_update<'de, D: serde::Deserializer<'de>>(
@@ -1425,13 +1456,25 @@ pub struct ImageResponse {
 pub struct KernelResponse {
     /// Upstream Linux release, for example `7.2.2`.
     pub version: String,
+    /// Upstream publication date in ISO 8601 calendar format (YYYY-MM-DD).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released_at: Option<String>,
+    /// Registry package publication timestamp (RFC 3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
+    /// Installation mode reported by this API; omitted by older services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_source: Option<String>,
+    /// Upstream EOL status when the release appears in the publication catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_of_life: Option<bool>,
     /// Firecracker architecture label (`x86_64` or `aarch64`).
     pub architecture: String,
-    /// Host-built or previously installed kernel filename.
+    /// Registry or previously installed kernel filename.
     pub image: String,
-    /// SHA256 of the kernel image; empty until a source build completes.
+    /// SHA256 of the kernel image; empty before installation.
     pub image_sha256: String,
-    /// SHA256 of the upstream source archive; empty before installation.
+    /// SHA256 of the registry package archive; empty when unavailable.
     pub package_sha256: String,
     /// Local unpacked image size when installed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1440,7 +1483,7 @@ pub struct KernelResponse {
     pub installed: bool,
     /// Whether an installed image currently references this kernel.
     pub in_use: bool,
-    /// Upstream kernel source archive URL when source downloads are enabled.
+    /// Registry package URL when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package_url: Option<String>,
 }
@@ -1461,6 +1504,10 @@ pub struct KernelInstallResponse {
     pub version: String,
     /// Current job state.
     pub status: ImageInstallStatus,
+    /// Whether the worker is stopping and cleaning up. Present (including false)
+    /// on hosts supporting cancellation; absent in older API responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancelling: Option<bool>,
     /// Multi-line acquisition and verification log.
     pub log: String,
     /// Epoch millis when the attempt started, if any.
@@ -1527,7 +1574,7 @@ pub struct MicroRegistryResponse {
     pub images: Vec<MicroRegistryImageResponse>,
 }
 
-/// Lifecycle of an image install job (`POST/GET /api/images/{alias}/install`).
+/// Lifecycle of an image or managed kernel install job.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ImageInstallStatus {
@@ -1539,6 +1586,8 @@ pub enum ImageInstallStatus {
     Succeeded,
     /// Last attempt failed; see `log` for details. Can retry.
     Failed,
+    /// The worker stopped and removed its temporary files. Can retry.
+    Cancelled,
 }
 
 /// Status + log for `GET /api/images/{alias}/install` (and the POST response).
@@ -1928,6 +1977,7 @@ mod tests {
         assert_eq!(
             request,
             UpdateVmResourcesRequest {
+                micro_network_id: None,
                 security_group_id: None,
                 ram: 1024,
                 cpu: 2,
@@ -1978,6 +2028,25 @@ mod tests {
             let expected = matches!(state, Created | Stopped | Error);
             assert_eq!(state.can_edit_resources(), expected, "{state:?}");
         }
+    }
+
+    #[test]
+    fn network_update_preserves_omission_and_requires_a_non_null_uuid_when_present() {
+        let mut body = serde_json::json!({"cpu":1,"ram":128,"diskGb":1});
+        let omitted: UpdateVmResourcesRequest = serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(omitted.micro_network_id, None);
+        assert!(
+            serde_json::to_value(omitted)
+                .unwrap()
+                .get("microNetworkId")
+                .is_none()
+        );
+        let id = Uuid::from_u128(42);
+        body["microNetworkId"] = serde_json::json!(id);
+        let selected: UpdateVmResourcesRequest = serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(selected.micro_network_id, Some(id));
+        body["microNetworkId"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<UpdateVmResourcesRequest>(body).is_err());
     }
 
     #[test]
@@ -2292,6 +2361,10 @@ mod tests {
     fn kernel_management_types_keep_the_wire_names_and_status() {
         let kernel = KernelResponse {
             version: "7.2.2".to_owned(),
+            released_at: Some("2026-08-30".to_owned()),
+            published_at: None,
+            install_source: None,
+            end_of_life: Some(true),
             architecture: "x86_64".to_owned(),
             image: "vmlinux-7.2.2-x86_64".to_owned(),
             image_sha256: "a".repeat(64),
@@ -2308,6 +2381,17 @@ mod tests {
         assert_eq!(json["packageSha256"], "b".repeat(64));
         assert_eq!(json["sizeBytes"], 52 * 1024 * 1024);
         assert_eq!(json["inUse"], false);
+        assert_eq!(json["releasedAt"], "2026-08-30");
+        assert_eq!(json["endOfLife"], true);
+        let mut legacy = json.clone();
+        legacy.as_object_mut().unwrap().remove("releasedAt");
+        legacy.as_object_mut().unwrap().remove("endOfLife");
+        let legacy: KernelResponse = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.released_at, None);
+        assert_eq!(legacy.end_of_life, None);
+        let legacy = serde_json::to_value(legacy).unwrap();
+        assert!(legacy.get("releasedAt").is_none());
+        assert!(legacy.get("endOfLife").is_none());
 
         let request: UpdateImageKernelRequest = serde_json::from_value(serde_json::json!({
             "kernelVersion": "7.2.2"
@@ -2318,16 +2402,25 @@ mod tests {
         let job = KernelInstallResponse {
             version: "7.2.2".to_owned(),
             status: ImageInstallStatus::Succeeded,
+            cancelling: None,
             log: "kernel ready".to_owned(),
             started_at_ms: Some(1),
             ended_at_ms: Some(2),
             downloaded_bytes: None,
             total_bytes: None,
         };
-        let json = serde_json::to_value(job).unwrap();
+        let json = serde_json::to_value(&job).unwrap();
         assert_eq!(json["status"], "succeeded");
         assert_eq!(json["startedAtMs"], 1);
         assert!(json.get("downloadedBytes").is_none());
+        let cancelled = KernelInstallResponse {
+            status: ImageInstallStatus::Cancelled,
+            cancelling: Some(false),
+            ..job
+        };
+        let json = serde_json::to_value(cancelled).unwrap();
+        assert_eq!(json["status"], "cancelled");
+        assert_eq!(json["cancelling"], false);
     }
 
     #[test]

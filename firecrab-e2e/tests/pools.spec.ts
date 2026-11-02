@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { importOci } from "./support/dashboard";
+import { openPoolCreate as openCreate } from "./support/pools";
 import { ApiCleanup } from "../src/api.js";
 import {
   FIXED_ALIAS,
@@ -48,15 +49,6 @@ async function openEnglish(page: Page, hash: string): Promise<void> {
 
 function poolsPanel(page: Page): Locator {
   return page.locator("#content");
-}
-
-async function openCreate(page: Page): Promise<Locator> {
-  const form = page.getByRole("region", { name: "Create a pool", exact: true });
-  const button = page.getByRole("button", { name: "New pool", exact: true });
-  await expect(form.or(button)).toBeVisible();
-  if (!(await form.isVisible())) await button.click();
-  await expect(form).toBeVisible();
-  return form;
 }
 
 async function deleteOwnedPool(): Promise<void> {

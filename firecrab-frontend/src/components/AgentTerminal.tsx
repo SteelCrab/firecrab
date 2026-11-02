@@ -98,7 +98,7 @@ export default function AgentTerminal({
         setError(
           t(
             "Terminal input is congested. Inspect the terminal before reconnecting; input was not retried.",
-            "터미널 입력이 밀려 연결을 중단했다. 다시 연결하기 전에 터미널을 확인한다. 입력은 다시 전송하지 않는다.",
+            "터미널 입력이 밀려 연결을 끊었습니다. 터미널 상태를 확인한 뒤 다시 연결하세요. 이전 입력은 자동으로 재전송되지 않습니다.",
           ),
         );
         socket.close();
@@ -111,7 +111,7 @@ export default function AgentTerminal({
         setError(
           t(
             "Paste is limited to 256 KiB. No input was sent.",
-            "붙여넣기는 256 KiB까지 지원한다. 입력을 전송하지 않았다.",
+            "한 번에 붙여넣을 수 있는 크기는 최대 256 KiB입니다. 입력은 전송되지 않았습니다.",
           ),
         );
         return;
@@ -300,7 +300,7 @@ export default function AgentTerminal({
           setError(
             t(
               "Terminal disconnected. Reconnect to the existing session; keystrokes are not replayed.",
-              "터미널 연결이 끊겼다. 다시 연결하면 기존 세션을 연다. 입력은 다시 전송하지 않는다.",
+              "터미널 연결이 끊겼습니다. 다시 연결하면 기존 세션이 열립니다. 이전 입력은 자동으로 재전송되지 않습니다.",
             ),
           );
       };
@@ -310,7 +310,7 @@ export default function AgentTerminal({
           setError(
             t(
               "Could not connect to this agent terminal. Check the native service and Herdr in this MicroVM.",
-              "에이전트 터미널에 연결하지 못했다. 이 MicroVM의 Herdr와 Firecrab 서비스를 확인한다.",
+              "에이전트 터미널에 연결하지 못했습니다. 이 MicroVM의 Herdr와 Firecrab 서비스를 확인하세요.",
             ),
           );
         }

@@ -97,6 +97,7 @@ cd {cwd}
 for file in package.json Cargo.toml pyproject.toml requirements.txt; do
   if [ -f "$file" ]; then printf 'FILE:%s:' "$file"; head -c 8192 "$file" | base64 -w0; printf '\n'; fi
 done
+if [ -f package-lock.json ]; then printf 'LOCKFILE:package-lock.json\n'; fi
 printf 'BRANCH:'; git branch --show-current 2>/dev/null || true; printf '\n'
 printf 'HEAD:'; git rev-parse HEAD 2>/dev/null || true; printf '\n'
 printf 'REMOTE:'; git config --get remote.origin.url 2>/dev/null || true; printf '\n'
@@ -455,9 +456,25 @@ fn parse_status(text: &str, config_path: &Path, vm: Uuid, agent: &Agent) -> Resu
     } else if let Some(package) = files.get("package.json") {
         if let Ok(package) = serde_json::from_str::<Value>(package) {
             config.test_command = if package["scripts"]["test"].is_string() {
-                "npm ci && npm test"
+                if fields.get("LOCKFILE") == Some(&"package-lock.json") {
+                    "npm ci && npm test"
+                } else {
+                    "npm install && npm test"
+                }
             } else {
                 ""
+            }
+            .into();
+            config.start_command = match package["scripts"]["dev"].as_str() {
+                Some(script) if script.contains("vite") => {
+                    "npm run dev -- --host 0.0.0.0 --port 3000"
+                }
+                Some(script) if script.contains("next") => {
+                    "npm run dev -- --hostname 0.0.0.0 --port 3000"
+                }
+                Some(_) => "npm run dev",
+                None if package["scripts"]["start"].is_string() => "npm start",
+                None => "",
             }
             .into();
             config.build_command = if package["scripts"]["build"].is_string() {
@@ -624,6 +641,37 @@ fn workflow(config: &Config) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn node_project_commands_follow_its_lockfile_and_saved_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        let agent:Agent=serde_json::from_value(json!({"id":Uuid::new_v4(),"name":"task","role":"Implementation","kind":"codex","cwd":"/workspace/firecrab/project","model":"","workspaceId":"project","paneId":"pane","terminalId":"terminal","closed":false,"launchError":null,"lastOutput":""})).unwrap();
+        let package = STANDARD
+            .encode(r#"{"scripts":{"test":"vitest run","build":"vite build","dev":"vite"}}"#);
+        let metadata = format!("FILE:package.json:{package}\n");
+        let vm = Uuid::new_v4();
+        let fresh = parse_status(&metadata, &path, vm, &agent).unwrap();
+        assert_eq!(fresh["config"]["testCommand"], "npm install && npm test");
+        assert_eq!(
+            fresh["config"]["startCommand"],
+            "npm run dev -- --host 0.0.0.0 --port 3000"
+        );
+        let locked = parse_status(
+            &format!("{metadata}LOCKFILE:package-lock.json\n"),
+            &path,
+            vm,
+            &agent,
+        )
+        .unwrap();
+        assert_eq!(locked["config"]["testCommand"], "npm ci && npm test");
+        let mut custom: Config = serde_json::from_value(fresh["config"].clone()).unwrap();
+        custom.start_command = "npm start".into();
+        custom.port = 8080;
+        fs::write(&path, serde_json::to_vec(&custom).unwrap()).unwrap();
+        let saved = parse_status(&metadata, &path, vm, &agent).unwrap();
+        assert_eq!(saved["config"]["startCommand"], "npm start");
+        assert_eq!(saved["config"]["port"], 8080);
+    }
     #[test]
     fn preview_checks_reject_other_origins_and_unverified_connector_assets() {
         for address in [

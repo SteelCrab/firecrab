@@ -118,7 +118,7 @@ export default function EditableDatabase({
       !window.confirm(
         t(
           "Delete this row? This changes the source database.",
-          "이 행을 삭제할까? 원본 DB가 변경된다.",
+          "이 행을 삭제할까요? 원본 DB에도 반영됩니다.",
         ),
       )
     )
@@ -139,7 +139,9 @@ export default function EditableDatabase({
           values[key] = null;
       }
     if (draft.operation === "update" && !Object.keys(values).length) {
-      setError(t("Change at least one field.", "변경할 필드를 입력한다."));
+      setError(
+        t("Change at least one field.", "하나 이상의 필드를 수정하세요."),
+      );
       return;
     }
     setBusy(true);
@@ -189,7 +191,7 @@ export default function EditableDatabase({
             <p>
               {t(
                 "Row edits require a transactional table with a supported primary key.",
-                "행 편집에는 트랜잭션과 기본 키를 지원하는 테이블이 필요하다.",
+                "행을 편집하려면 테이블이 트랜잭션을 지원하고 기본 키가 있어야 합니다.",
               )}
             </p>
           )}
@@ -275,7 +277,7 @@ export default function EditableDatabase({
             <p role="status">
               {t(
                 "The result is unknown. Retry the same request.",
-                "결과를 확인하지 못했다. 같은 요청을 재시도한다.",
+                "결과를 확인하지 못했습니다. 같은 요청으로 다시 시도하세요.",
               )}
             </p>
           )}

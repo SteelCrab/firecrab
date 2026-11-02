@@ -60,7 +60,7 @@ export default function ServiceReleases({
           throw new Error(
             t(
               "Invalid release list response.",
-              "릴리스 목록 응답이 올바르지 않다.",
+              "릴리스 목록 응답이 올바르지 않습니다.",
             ),
           );
         if (live) {
@@ -86,7 +86,7 @@ export default function ServiceReleases({
       !window.confirm(
         t(
           "Restore the selected release? External data is not restored.",
-          "선택한 릴리스로 되돌릴까? 외부 데이터는 복원하지 않는다.",
+          "선택한 릴리스로 되돌릴까요? 외부 데이터는 복원되지 않습니다.",
         ),
       )
     )
@@ -155,7 +155,7 @@ export default function ServiceReleases({
         <p>
           {t(
             "Releases require a domain.",
-            "릴리스 기능을 사용하려면 도메인이 필요하다.",
+            "릴리스 기능을 사용하려면 도메인을 설정하세요.",
           )}
         </p>
       ) : (
@@ -165,12 +165,12 @@ export default function ServiceReleases({
               {error
                 ? t(
                     "Release history is unavailable.",
-                    "릴리스 목록을 확인할 수 없다.",
+                    "릴리스 목록을 확인할 수 없습니다.",
                   )
                 : t("Loading releases…", "릴리스를 불러오는 중…")}
             </p>
           ) : releases.length === 0 ? (
-            <p>{t("No retained releases.", "보관 중인 릴리스가 없다.")}</p>
+            <p>{t("No retained releases.", "보관 중인 릴리스가 없습니다.")}</p>
           ) : (
             <div className="table-scroll">
               <table className="vm-table release-table">

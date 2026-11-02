@@ -5,7 +5,7 @@ terminal uses xterm.js. Its production build has no WebAssembly assets.
 
 The `service dev` launcher uses this directory. Release packaging builds this React dashboard. All dashboard routes run in React; the Rust/WASM frontend and its build pipeline are removed.
 
-The React screens include MicroVMs, pools, schedules, Stack, cluster,
+The React screens include CODE workspaces, MicroVMs, pools, schedules, Stack, cluster,
 MicroService, security groups, Pipe Auth, AI, S3 and databases, Queue, Secrets,
 MicroBlockStorage, images, kernels, Shell, host and AI Sandbox. Automated
 browser tests cover resource editing, database maintenance, service releases,

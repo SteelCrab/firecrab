@@ -372,6 +372,15 @@ export function getKernelInstall(
   return fetchJson(`/api/kernels/${encodeURIComponent(version)}/install`);
 }
 
+/** Stop a kernel install; polling reports when process cleanup has completed. */
+export function cancelKernelInstall(
+  version: string,
+): Promise<KernelInstallResponse> {
+  return fetchJson(`/api/kernels/${encodeURIComponent(version)}/install`, {
+    method: "DELETE",
+  });
+}
+
 /** Delete one unused installed kernel. */
 export async function deleteKernel(version: string): Promise<void> {
   let response: Response;

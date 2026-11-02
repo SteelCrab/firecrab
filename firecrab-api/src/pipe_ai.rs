@@ -163,6 +163,24 @@ impl OpenAi {
 
     /// Check the bearer credential without choosing a model or generating text.
     pub async fn verify_credentials(&self, api_key: &str) -> Result<(), Failure> {
+        let document = self.credential_document(api_key).await?;
+        if document["object"] != "list" || !document["data"].is_array() {
+            return Err(Failure::Provider);
+        }
+        Ok(())
+    }
+
+    /// ChatGPT plan catalogue uses `models`, unlike the API-key `object`/`data` format.
+    /// Successful listing is credential acceptance, not model inference or agent login.
+    pub async fn verify_chatgpt_credentials(&self, access_token: &str) -> Result<(), Failure> {
+        let document = self.credential_document(access_token).await?;
+        if !document["models"].is_array() {
+            return Err(Failure::Provider);
+        }
+        Ok(())
+    }
+
+    async fn credential_document(&self, api_key: &str) -> Result<Value, Failure> {
         let response = self
             .client
             .get(&self.credential_endpoint)
@@ -178,10 +196,7 @@ impl OpenAi {
         }
         let bytes = response_bytes(response).await?;
         let document: Value = serde_json::from_slice(&bytes).map_err(|_| Failure::Provider)?;
-        if document["object"] != "list" || !document["data"].is_array() {
-            return Err(Failure::Provider);
-        }
-        Ok(())
+        Ok(document)
     }
 
     /// Both verification and normal inference use the same permission check.

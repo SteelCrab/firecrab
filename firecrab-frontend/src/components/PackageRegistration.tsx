@@ -130,7 +130,7 @@ export default function PackageRegistration({
         <p>
           {t(
             "Register a published image package, then select it in the image list to install it.",
-            "공개된 이미지 패키지를 등록한 뒤 이미지 목록에서 선택해 설치한다.",
+            "공개된 이미지 패키지를 등록하면 이미지 목록에서 선택해 설치할 수 있습니다.",
           )}
         </p>
         {error && (
@@ -161,7 +161,7 @@ export default function PackageRegistration({
           <p>
             {t(
               "No additional packages are available.",
-              "등록할 추가 패키지가 없다.",
+              "추가로 등록할 패키지가 없습니다.",
             )}
           </p>
         )}

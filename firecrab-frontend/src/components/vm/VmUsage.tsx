@@ -76,7 +76,7 @@ export default function VmUsage({ vm }: { vm: VmResponse }) {
       <p className="detail-note">
         {t(
           "CPU and memory usage are measured while this VM runs.",
-          "이 VM이 실행 중일 때 CPU와 메모리 사용량을 측정한다.",
+          "VM이 실행 중일 때 CPU와 메모리 사용량을 측정합니다.",
         )}
       </p>
     );
@@ -106,7 +106,7 @@ export default function VmUsage({ vm }: { vm: VmResponse }) {
       <p className="vm-usage-description">
         {t(
           "Measured inside this VM. Charts show recent usage from 0 to 100%.",
-          "이 VM 내부에서 측정한 값이다. 그래프는 최근 사용률을 0~100%로 표시한다.",
+          "VM 내부에서 측정한 값입니다. 그래프는 최근 사용률을 0~100%로 표시합니다.",
         )}
       </p>
       <div className="vm-usage-cards">

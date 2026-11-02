@@ -60,7 +60,7 @@ export function ImagePackageActions({
       else {
         if (
           !window.confirm(
-            t("Delete this installation file?", "이 설치 파일을 삭제할까?"),
+            t("Delete this installation file?", "이 설치 파일을 삭제할까요?"),
           )
         )
           return;
@@ -90,11 +90,11 @@ export function ImagePackageActions({
         {image.installed
           ? t(
               "Keep this compressed archive to reinstall the image. Deleting the file keeps the installed image.",
-              "이미지를 다시 설치할 때 쓰는 압축 파일이다. 파일을 삭제해도 설치된 이미지는 유지된다.",
+              "이미지를 다시 설치할 때 사용하는 압축 파일입니다. 파일을 삭제해도 설치된 이미지는 유지됩니다.",
             )
           : t(
               "Prepare the compressed archive, then install the image from it.",
-              "압축 파일을 준비한 뒤 이미지로 설치한다.",
+              "압축 파일을 준비한 뒤 이미지를 설치하세요.",
             )}
       </p>
       {error && <p role="alert">{error}</p>}

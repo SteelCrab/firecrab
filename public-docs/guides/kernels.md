@@ -1,48 +1,20 @@
-# Kernel management
+# Kernels
 
-Firecrab builds guest kernels on the Linux host from kernel.org's current `stable` release.
-Kernel installation and OCI import share the same verified cache.
-Kernel installation does not change the kernels assigned to existing images.
+Firecrab downloads prebuilt guest kernels from `https://registry.firecrab.dev/kernel/catalog.json`.
+The catalog supplies versions, architecture, package checksum, publication date, and EOL status.
+The dashboard lists the three newest published versions for the host architecture.
+Locally installed versions remain visible for rollback.
+Versions are read from the catalog, not hardcoded in the application.
 
-## Catalog
+## Installation
 
-`GET /api/kernels` lists the latest upstream stable release and locally cached versions.
-Release discovery uses `https://www.kernel.org/releases.json` and caches metadata for one hour.
-Only the `stable` entry is selected; `mainline`, release candidates, and `longterm` entries are excluded.
-Cached metadata and installed kernels remain available during upstream outages.
+Select a version in **Kernels** and choose **Download kernel**.
+The detail panel shows package resolution, download, extraction, verification, and installation.
+Download progress uses received bytes and the server's content length.
+Other stages show their current activity without an estimated percentage.
+Completed installations no longer show a progress panel.
 
-The cache lives at `<FIRECRAB_IMAGE_ROOT>/.oci/kernel/<architecture>/`.
-The host builds `vmlinux` for `x86_64` and `Image` for `aarch64`.
-Required block, network, ext4, serial, and virtio-vsock drivers are built in.
-No initrd or guest module tree is required.
-
-Each successful build stores the kernel, its `.config`, and a `.json` build receipt.
-The receipt records the source URL, source SHA256, image SHA256, architecture, and build revision.
-Image digests and architecture are verified before cache reuse.
-Previously installed Firecrab kernels remain usable when their compiled legacy digests match.
-New installations never download a kernel package from `registry.firecrab.dev`.
-
-## Host requirements
-
-Install a native C compiler, make, flex, bison, bc, Perl, tar, xz, and development headers.
-For Debian and Ubuntu:
-
-```sh
-sudo apt-get install build-essential flex bison bc perl xz-utils libssl-dev libelf-dev
-```
-
-The first installation downloads source and compiles the kernel.
-Allow enough free disk space for the source tree and compiler output.
-Build files are removed after each completed or failed attempt; the verified source archive is retained.
-The API must have permission to write to `FIRECRAB_IMAGE_ROOT`.
-
-`FIRECRAB_KERNEL_BUILD_JOBS` controls compiler parallelism and defaults to `2`.
-The host runs one kernel compilation at a time and stops a build after two hours.
-Builds require a Linux host with the requested CPU architecture.
-
-## Install
-
-Select the current stable version or request `stable`:
+The API supports concrete catalog versions and the `stable` alias:
 
 ```sh
 curl -s http://127.0.0.1:5523/api/kernels
@@ -50,64 +22,57 @@ curl -s -X POST http://127.0.0.1:5523/api/kernels/stable/install
 curl -s http://127.0.0.1:5523/api/kernels/stable/install
 ```
 
-A concrete final release such as `7.2.12` can also be requested.
-The POST returns `202`; GET reports `running`, `succeeded`, or `failed` with build logs.
-A verified installed kernel is reused. A corrupt cache is rebuilt.
-Source archives are checked against kernel.org's published SHA256 before extraction.
+The POST returns `202`. GET returns status, log, timing, and download bytes.
+The dashboard follows an existing job after refresh instead of starting a second installation.
 
-`FIRECRAB_KERNEL_RELEASES_URL` changes the release metadata endpoint.
-Set it to `none` to disable source downloads and allow only cached kernels or an operator override.
-Source URLs must identify the corresponding archive on `https://cdn.kernel.org`.
-`FIRECRAB_IMAGE_BASE_URL` controls image packages independently and does not select the kernel source.
+Installation verifies the compressed package SHA256, image architecture, and built-in runtime drivers.
+Vsock drivers are required for VM terminal communication.
+Packages with missing or modular required drivers are rejected before publication to the local cache.
+No compiler, source download, initrd, or guest module installation is required.
 
-API compatibility fields describe the source build:
+Each successful installation stores an image, its `.config`, and a `.json` receipt.
+The receipt records package URL, package SHA256, upstream source SHA256, image SHA256, and architecture.
+Previously verified native builds and pinned legacy kernels remain usable.
+Existing images keep their assigned kernel until explicitly changed.
 
-- `packageUrl` is the upstream source archive URL when downloads are enabled.
-- `packageSha256` is the source archive SHA256 after a build.
-- `imageSha256` is the image SHA256 after a build, or the known legacy image digest.
-- Digests that are not yet known are empty strings.
+## Registry and offline operation
 
-## OCI import and offline hosts
+`FIRECRAB_KERNEL_BASE_URL` selects the kernel registry base URL.
+Set it to `none` to disable downloads and use verified cached kernels or an operator override.
+The legacy setting `FIRECRAB_KERNEL_RELEASES_URL=none` also disables downloads unless the new setting is explicit.
+The old source metadata URL and `FIRECRAB_KERNEL_BUILD_JOBS` no longer control API installations.
 
-OCI import resolves the current stable release and builds it if needed.
-If upstream access or compilation fails, it can reuse a verified installed kernel.
-An installed catalog image with a compatible kernel remains the final fallback.
-`FIRECRAB_OCI_KERNEL_PATH` selects a local kernel without requiring upstream access.
-The supplied file must be regular, have the host architecture, and be smaller than 256 MiB.
-Firecrab copies and hashes it into a separate cache entry before use.
+`FIRECRAB_IMAGE_BASE_URL` controls image packages independently.
+Changing the kernel registry does not change image package management.
 
-The manual `scripts/firecracker-menual/install-linux-kernel.sh` entry point uses the same native builder.
-It checks source SHA256 and preserves the filenames used by the manual console scripts.
-The older `scripts/build-guest-kernel.sh` and `packaging/guest-kernel.json` remain for reproducing legacy published artifacts.
-They are not used by the API's host build path.
+Registry metadata is cached for five minutes and reused during network outages.
+Catalog caches are bound to their registry URL.
+A verified installed version can be reused without network access.
+OCI import resolves a published kernel or reuses a verified installed fallback.
+The operator override `FIRECRAB_OCI_KERNEL_PATH` remains available.
 
-## Update an image
+API fields:
 
-An installed image detail record exposes its kernel filename and digest.
-Managed-kernel images also expose `kernelVersion`.
-Use a concrete installed version when changing an image:
+- `installSource: "registry"` identifies the prebuilt installation path.
+- `publishedAt` is the registry package publication timestamp.
+- `releasedAt`, when present from an older service, is the upstream release date.
+- `packageUrl` and `packageSha256` identify the registry archive.
+- `imageSha256` identifies the installed kernel image.
 
-```sh
-curl -s -X PUT http://127.0.0.1:5523/api/images/ubuntu-26.04/kernel \
-  -H 'Content-Type: application/json' \
-  -d '{"kernelVersion":"7.2.12"}'
-```
+## Cancellation and deletion
 
-The selected kernel must already be installed and verified.
-The operation changes the image's kernel and retains its rootfs and optional initrd.
-It returns `409 in_use` while an instance VM references the image.
-Installing a newer stable release does not automatically update existing images.
+`DELETE /api/kernels/{version}/install` requests cancellation.
+The job remains `running` with `cancelling: true` until temporary files are removed.
+Its final status is `cancelled` unless the short final publication already completed.
 
-## Delete
-
-`DELETE /api/kernels/{version}` removes a concrete local version and its build metadata.
+`DELETE /api/kernels/{version}` stops an unfinished installation and removes that version's managed files.
+It preserves other versions and manually named files.
 Deletion returns `409 in_use` while an installed image references the kernel.
-Deleting an image does not remove its independently managed kernel cache.
+Deleting an image does not remove the independent kernel cache.
 
 ## Related
 
 - [Images](images.md)
 - [OCI images](oci.md)
 - [API](../reference/api.md)
-- [Storage](storage.md)
 - [Operations](operations.md)

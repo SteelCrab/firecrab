@@ -201,7 +201,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   const sessionEndedNoticeRef = useRef("");
   const sessionEndedNotice = t(
     "Guest session ended. Use New session to open another.",
-    "게스트 세션이 종료되었습니다. 새 세션으로 다시 열 수 있습니다.",
+    "게스트 세션이 종료되었습니다. 새 세션을 열어 다시 연결할 수 있습니다.",
   );
   useEffect(() => {
     sessionEndedNoticeRef.current = sessionEndedNotice;
@@ -817,7 +817,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
               aria-label={t("Terminal only", "터미널만")}
               title={t(
                 "Hide the header and details; show the terminal only (Esc to return)",
-                "헤더·세부정보를 숨기고 터미널만 표시 (Esc로 복귀)",
+                "헤더와 상세 정보를 숨기고 터미널만 표시 (Esc로 돌아가기)",
               )}
               onClick={() => {
                 setTerminalOnly(true);
@@ -903,7 +903,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
           onClick={() => setTerminalOnly(false)}
           title={t(
             "Show the header and details (Esc)",
-            "헤더·세부정보 다시 표시 (Esc)",
+            "헤더와 상세 정보 다시 표시 (Esc)",
           )}
         >
           {t("Exit terminal only", "터미널만 끝내기")}

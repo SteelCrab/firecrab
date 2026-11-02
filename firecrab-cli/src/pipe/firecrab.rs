@@ -229,6 +229,9 @@ pub(super) fn require_editable(id: Uuid) -> Result<()> {
 /// Full manifest applies must not silently remove an address's selected connector.
 pub(super) fn validate_config(config: &Config) -> Result<()> {
     for binding in read()?.bindings {
+        if matches!(binding.target, Target::Preview { .. }) {
+            continue;
+        }
         let present = config
             .quick_tunnels
             .iter()
@@ -315,10 +318,12 @@ pub(super) fn manage_request(request: Request) -> Result<()> {
                     );
                 }
             }
-            let _pipe_lock = super::host::lock()?;
-            let mut config = config()?;
-            release(&mut store, &mut config, &binding);
-            apply(&config)?;
+            if !matches!(binding.target, Target::Preview { .. }) {
+                let _pipe_lock = super::host::lock()?;
+                let mut config = config()?;
+                release(&mut store, &mut config, &binding);
+                apply(&config)?;
+            }
             store.bindings.retain(|b| b.subdomain != subdomain);
             write(&store)?;
             if store.bindings.is_empty() {
@@ -330,6 +335,49 @@ pub(super) fn manage_request(request: Request) -> Result<()> {
 }
 /// Change one local target after resolving its dashboard-issued ownership token.
 fn save(store: &mut Store, subdomain: String, target: Target, token: Option<String>) -> Result<()> {
+    if matches!(target, Target::Preview { .. }) {
+        if store.bindings.len() >= MAX_ADDRESSES
+            && !store
+                .bindings
+                .iter()
+                .any(|binding| binding.subdomain == subdomain)
+        {
+            return Err("At most 16 Firecrab addresses can be saved on one host".into());
+        }
+        let old = store
+            .bindings
+            .iter()
+            .find(|binding| binding.subdomain == subdomain);
+        if old.is_some_and(|binding| !matches!(binding.target, Target::Preview { .. })) {
+            return Err(
+                "Disconnect the existing address before using it for a workspace preview".into(),
+            );
+        }
+        let token = token
+            .or_else(|| old.map(|binding| binding.token.clone()))
+            .ok_or("Use a dashboard connection token to add a new Firecrab address")?;
+        let binding = Binding {
+            subdomain: subdomain.clone(),
+            target,
+            connector_id: old
+                .map(|binding| binding.connector_id)
+                .unwrap_or_else(Uuid::new_v4),
+            owned_connector: false,
+            token,
+            registered: false,
+            connected: false,
+            last_success: 0,
+            error: None,
+        };
+        store
+            .bindings
+            .retain(|binding| binding.subdomain != subdomain);
+        store.bindings.push(binding);
+        write(store)?;
+        unit(true)?;
+        let _ = sync_locked(store);
+        return Ok(());
+    }
     let pipe_lock = super::host::lock()?;
     if store.bindings.len() >= MAX_ADDRESSES
         && !store.bindings.iter().any(|b| b.subdomain == subdomain)
@@ -357,6 +405,7 @@ fn save(store: &mut Store, subdomain: String, target: Target, token: Option<Stri
             .unwrap_or_else(Uuid::new_v4)
     };
     let (connector_id, connector_target) = match &target {
+        Target::Preview { .. } => unreachable!("preview targets are handled before Pipe mutation"),
         Target::Apps { upstreams } => (
             managed_id(),
             Some(QuickTunnelTarget::Apps {
@@ -554,7 +603,11 @@ fn refresh_bindings(
             .quick_tunnels
             .iter()
             .find(|q| q.id == binding.connector_id);
-        let url = connector.and_then(|q| q.public_url.as_ref());
+        let url = match &binding.target {
+            Target::Preview { url, .. } => Some(url)
+                .filter(|url| firecrab_helper_protocol::firecrab_tunnel::valid_preview_url(url)),
+            _ => connector.and_then(|q| q.public_url.as_ref()),
+        };
         let kind = if matches!(binding.target, Target::Nginx { .. }) {
             "nginx"
         } else {
@@ -828,6 +881,31 @@ mod tests {
         assert!(
             requests[0].ends_with(r#"{"tunnel_url":"https://recovered-crab.trycloudflare.com"}"#)
         );
+    }
+
+    #[test]
+    fn vm_preview_heartbeat_uses_the_guest_origin_without_a_host_connector() {
+        let snapshot:firecrab_helper_protocol::pipe::Snapshot=serde_json::from_value(serde_json::json!({"config":null,"units":[],"quickTunnels":[],"nginxAvailable":false,"cloudflaredAvailable":false})).unwrap();
+        let (endpoint, server) = registry(vec![(
+            200,
+            serde_json::json!({"ok":true,"url":"https://first.firecrab.dev","suspended":false}),
+        )]);
+        let mut guest = binding("first", Uuid::new_v4(), false);
+        guest.target = Target::Preview {
+            vm_id: Uuid::new_v4(),
+            url: "https://guest-owned.trycloudflare.com".into(),
+        };
+        let mut store = Store {
+            endpoint,
+            protocol: RegistryProtocol::RegisterV1,
+            bindings: vec![guest],
+        };
+        refresh_bindings(&mut store, &snapshot).unwrap();
+        assert!(store.bindings[0].connected);
+        assert!(!store.bindings[0].owned_connector);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].ends_with(r#"{"tunnel_url":"https://guest-owned.trycloudflare.com"}"#));
     }
 
     #[test]

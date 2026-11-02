@@ -589,6 +589,9 @@ pub struct ResolvedImage {
 /// Why a reference could not be resolved against its registry.
 #[derive(Debug, Error)]
 pub enum ResolveError {
+    /// The caller cancelled the managed kernel installation.
+    #[error("kernel installation cancelled")]
+    Cancelled,
     /// The registry could not be reached or answered malformed bytes.
     #[error("registry request failed: {0}")]
     Transport(String),

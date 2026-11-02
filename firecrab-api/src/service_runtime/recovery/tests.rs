@@ -41,6 +41,31 @@ fn failure_threshold_hysteresis_and_stable_health_bound_restart_loops() {
 }
 
 #[test]
+fn exited_vm_enters_recovery_without_waiting_for_http_failure_threshold() {
+    for state in [VmState::Stopped, VmState::Error] {
+        let mut record = running();
+        let failed = record.instances[0].vm_id;
+        let mut healthy = record.instances[0].clone();
+        healthy.vm_id = Uuid::new_v4();
+        healthy.ipv4 = "127.0.0.2".into();
+        let retained = healthy.vm_id;
+        record.instances.push(healthy);
+        record.spec.replicas = 2;
+
+        observe(&mut record, &[state, VmState::Running], &[false, true], 0);
+
+        assert!(!record.instances[0].healthy, "{state:?}");
+        assert!(record.instances[1].healthy);
+        assert_eq!(record.instances[1].vm_id, retained);
+        assert_eq!(record.phase, ServicePhase::Degraded);
+        assert!(admit(&mut record, 0));
+        let repair = record.recovery.as_ref().unwrap().repair.as_ref().unwrap();
+        assert_eq!(repair.vm_id, failed);
+        assert_eq!(repair.stage, ReplicaRepairStage::Withdraw);
+    }
+}
+
+#[test]
 fn retry_budget_and_delay_survive_serialization_without_new_intent() {
     let mut record = running();
     let id = record.instances[0].vm_id;

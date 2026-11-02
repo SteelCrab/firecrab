@@ -514,6 +514,7 @@ fn vm_create(desired: &firecrab_stack::Vm, network: Uuid) -> CreateVmRequest {
 
 fn vm_update(desired: &firecrab_stack::Vm) -> UpdateVmResourcesRequest {
     UpdateVmResourcesRequest {
+        micro_network_id: None,
         ram: desired.ram,
         cpu: desired.cpu,
         disk_gb: desired.disk_gb,

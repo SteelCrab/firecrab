@@ -66,7 +66,7 @@ Success returns `201` and the VM UUID.
 | `cpu` | 1–32 vCPUs |
 | `ram` | Power of two, 128–32768 MiB |
 | `diskGb` | Image minimum through 500 GiB; grow only |
-| `microNetworkId` | Existing network UUID, required |
+| `microNetworkId` | Existing network UUID; required on create, optional on PUT; PUT omission preserves it and null is rejected |
 | `securityGroupId` | Optional group UUID from the same IPv4-only network; PUT omission preserves it, null detaches it |
 | `egressPolicy` | `internet` or `isolated` |
 | `storageRoot` | Optional registered storage ID |
@@ -79,6 +79,21 @@ Values are stored in plaintext in the guest.
 Updating `env` while running restarts the app service; images without one ignore runtime environment changes.
 See [Guest runtime](guest-runtime.md#environment).
 CPU, RAM, disk, and egress edits require `created`, `stopped`, or `error`.
+
+### Change a VM's MicroNetwork
+
+Send `microNetworkId` in `PUT /api/vms/{id}` with the current CPU, RAM, disk, and egress values.
+A different UUID requires an inactive VM with no surviving runtime; otherwise the response is `409`.
+Service-owned replicas and pool-managed VMs also return `409` for direct network changes.
+An unchanged UUID does not rotate the lease and can accompany an otherwise valid running environment update.
+Unknown networks and exhausted destination subnets return `400` with a `microNetworkId` field error.
+An incompatible retained security group returns a `securityGroupId` field error; choose a destination group or explicitly send `securityGroupId: null`.
+
+The VM record and replacement lease commit together; allocation or storage failure preserves both previous values.
+The next start uses the destination bridge and address; PUT does not attach a live TAP.
+If DHCP synchronization fails after commit, `503` explicitly reports that the change was saved.
+Read the VM to confirm its network; starting it retries synchronization.
+See [network changes](../guides/networking.md#change-a-vms-network) for a request example.
 
 ### VM states and console
 
@@ -375,6 +390,54 @@ use `400 validation_failed` with a `cloudflare` field. An unavailable helper use
 See [token issuance and connection](../guides/cloudflare-tunnel.md) for permissions
 and manual verification. Actual public access requires a real Cloudflare domain.
 
+## CODE workspace configuration
+
+These operator-only routes persist CODE configuration. They create no VM,
+repository checkout, editor, or agent. Account references reuse existing Pipe AUTH
+and Pipe AI metadata. Read responses recompute account observations from a single
+database snapshot and never claim that an agent is authenticated.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/api/code/workspaces` | List configuration records by case-insensitive name |
+| GET | `/api/code/github/repositories?account=LOGIN&page=N` | Operator-only saved GitHub login discovery; at most 20 sanitized repository choices and optional `nextPage` |
+| GET | `/api/code/github/branches?account=LOGIN&owner=OWNER&repository=REPO&page=N` | Operator-only exact branch choices; recheck credentials after discovery and reject stale account results |
+| GET | `/api/code/workspaces/{id}` | Read configuration, revision, timestamps, and current `connections` observations |
+| PUT | `/api/code/workspaces/{id}` | Save `{expectedRevision, spec}`; revision 0 creates, later writes must match the saved revision |
+| DELETE | `/api/code/workspaces/{id}?expectedRevision=N` | Delete only the matching configuration revision; return `204` |
+| POST | `/api/code/workspaces/{id}/verify` | Check `{expectedRevision}` against current GitHub identity/exact branch and AI AUTH provider credentials; allocate no runtime resources |
+| GET | `/api/code/agent-auth/adapters` | Operator-only fixed CLI recipe metadata; supported does not mean authenticated |
+| POST | `/api/code/workspaces/{id}/agent-auth/verify` | Operator-only `{expectedRevision}` check of provider credentials and disposable pinned CLI configuration in the current ready runtime; no execution grant |
+
+The specification contains `name`, `github: {account, owner, repository, branch}`,
+`runtime`, `resources: {cpu, ram, diskGb}`, and an optional
+`agent: {agent, connectionId}`. RAM is in MiB; disk is in GiB.
+Credentials and caller-supplied runtime/readiness fields are rejected.
+See [CODE workspace configuration](../guides/code-workspaces.md) for eligibility,
+connection states, limits, conflict/retry behavior, and the remaining integration work.
+Explicit verification returns independent `github` and `ai` results with secret-free
+failure reasons. It rejects stale revisions before provider requests and rejects
+configuration/account changes observed during requests with `409 code_workspace_bindings_changed`.
+The report does not verify clone success, model entitlement, or CLI-agent login.
+
+## CODE MicroVM runtime
+
+These operator-only routes use existing VM lifecycle APIs and a pinned guest SSH
+transport. Placement uses an installed image, existing internet-enabled network,
+and existing storage root. Lifecycle requests return pollable durable operations.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/api/code/workspaces/{id}/runtime` | Read durable operation state with fresh VM observations |
+| POST | `/api/code/workspaces/{id}/runtime` | Provision `{expectedRevision, template, microNetworkId, storageRoot}`; return `202` |
+| POST | `/api/code/workspaces/{id}/runtime/start` | Start/reconcile with `{expectedRevision}`; preserve the checkout and VM ID |
+| POST | `/api/code/workspaces/{id}/runtime/stop` | Confirm guest sync, then stop; return `202`, retain data |
+| POST | `/api/code/workspaces/{id}/runtime/detach` | Release a stopped/absent VM binding; retain the VM and disk |
+
+See [CODE MicroVM runtime](../guides/code-runtime.md) for image requirements,
+checkout credentials, phase meanings, restart recovery, ownership fences and
+retention. `ready` is a runtime/worktree observation and does not authenticate an agent.
+
 ## Pipe AI
 
 These routes share the existing host REST policy and a 60-second request deadline.
@@ -390,6 +453,7 @@ Pipe AI UI manages accounts only. Model verification, selection, and response ro
 | DELETE | `/api/pipe/ai/connections/{id}` | Remove credentials/defaults; return `{deleted, remoteRevocationConfirmed}` |
 | POST | `/api/pipe/ai/connections/{id}/login` | Start official ChatGPT login with `{name, model?: string}`; no inference unless `model` is supplied; return `{loginId, authorizationUrl, expiresIn}` |
 | GET | `/api/pipe/ai/logins/{id}` | Return `{status, message}`; status is `pending`, `working`, `connected`, or `failed` |
+| DELETE | `/api/pipe/ai/logins/{id}` | Cancel unconsumed sign-in without deleting a saved account; completed sign-in remains connected; callback processing shares the mutation gate |
 | GET | `/auth/callback` | One-time state-bound OAuth callback; never returns tokens to the browser |
 | GET | `/api/pipe/ai/projects/{id}/model` | Saved `{connectionId, model}` or null |
 | PUT | `/api/pipe/ai/projects/{id}/model` | Persist a verified `{connectionId, model}` |

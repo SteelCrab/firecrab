@@ -512,7 +512,7 @@ test.describe("MicroVM pause and resume", () => {
         }),
       ).toBeVisible();
       await expect(detail).toContainText(
-        locale === "en" ? "Memory stays allocated" : "메모리는 계속 점유합니다",
+        locale === "en" ? "Memory stays allocated" : "메모리는 계속 사용합니다",
       );
       await expect(
         detail.getByRole("button", {
@@ -583,7 +583,7 @@ test.describe("MicroVM pause and resume", () => {
         }),
       ).toBeVisible();
       await page
-        .getByRole("tab", { name: locale === "en" ? /^Paused/ : /^일시정지됨/ })
+        .getByRole("tab", { name: locale === "en" ? /^Paused/ : /^일시정지/ })
         .click();
       await expect(row).toBeVisible();
     });

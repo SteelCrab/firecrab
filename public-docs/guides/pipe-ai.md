@@ -5,6 +5,8 @@ The Dashboard is limited to connecting accounts, showing connection status, repl
 It supports OpenAI through ChatGPT sign-in or an API key, and Anthropic through an official API key.
 Model selection, conversation, and task UI belong to **AI Sandbox** and are not implemented on the Pipe AI page.
 Dashboard, CLI, and a local stdio MCP adapter reuse the same saved account connections.
+The [CODE AI AUTH](code-ai-auth.md) view embeds this same account manager and
+reuses its login, replacement, cancellation, disconnect and refresh lifecycle.
 This is the connection and entry-point slice of [issue #414](https://github.com/SteelCrab/firecrab/issues/414).
 Project conversations, native tool calls, and guest execution are available in [AI Sandbox](ai-sandbox.md).
 

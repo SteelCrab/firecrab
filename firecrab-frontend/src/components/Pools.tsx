@@ -191,7 +191,7 @@ export default function Pools() {
       !window.confirm(
         t(
           `Delete pool "${pool.name}" and its VMs?`,
-          `풀 "${pool.name}"과(와) VM을 삭제할까요?`,
+          `"${pool.name}" 풀과 소속 VM을 삭제할까요?`,
         ),
       )
     )

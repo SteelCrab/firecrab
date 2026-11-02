@@ -136,15 +136,15 @@ export default function NamedCloudflareTunnel({
       const messages = {
         start: t(
           "Cloudflare Tunnel start requested.",
-          "Cloudflare Tunnel 시작을 요청했다.",
+          "Cloudflare Tunnel 시작을 요청했습니다.",
         ),
         stop: t(
           "Cloudflare Tunnel stop requested.",
-          "Cloudflare Tunnel 중지를 요청했다.",
+          "Cloudflare Tunnel 중지를 요청했습니다.",
         ),
         restart: t(
           "Cloudflare Tunnel restart requested.",
-          "Cloudflare Tunnel 재시작을 요청했다.",
+          "Cloudflare Tunnel 재시작을 요청했습니다.",
         ),
       };
       setNotice(messages[action]);
@@ -276,7 +276,7 @@ export default function NamedCloudflareTunnel({
           <p className="poll-note">
             {t(
               "Disconnect keeps Cloudflare DNS and tunnels.",
-              "연결을 해제해도 Cloudflare의 DNS와 터널은 유지된다.",
+              "연결을 해제해도 Cloudflare의 DNS 설정과 터널은 유지됩니다.",
             )}
           </p>
         </>
@@ -290,7 +290,7 @@ export default function NamedCloudflareTunnel({
               <li>
                 {t(
                   "Register your domain in Cloudflare and complete nameserver setup.",
-                  "Cloudflare에 소유 도메인을 등록하고 네임서버 설정을 완료한다.",
+                  "Cloudflare에 보유한 도메인을 등록하고 네임서버 설정을 마치세요.",
                 )}
               </li>
               <li>
@@ -303,19 +303,19 @@ export default function NamedCloudflareTunnel({
                 </a>
                 {t(
                   " → Create Token → Create Custom Token.",
-                  "에서 Create Token → Create Custom Token을 선택한다.",
+                  "에서 Create Token → Create Custom Token을 선택하세요.",
                 )}
               </li>
               <li>
                 {t(
                   "Grant Account / Cloudflare Tunnel / Edit, Zone / DNS / Edit, and Zone / Zone / Read. Limit resources to your account and domain.",
-                  "Account / Cloudflare Tunnel / Edit, Zone / DNS / Edit, Zone / Zone / Read 권한을 추가한다. 사용할 계정과 도메인으로 범위를 제한한다.",
+                  "Account / Cloudflare Tunnel / Edit, Zone / DNS / Edit, Zone / Zone / Read 권한을 추가하세요. 권한 범위는 사용할 계정과 도메인으로 제한하세요.",
                 )}
               </li>
               <li>
                 {t(
                   "Create the token and paste it below. Firecrab uses it only during setup.",
-                  "토큰을 발급한 뒤 아래에 입력한다. Firecrab은 연결 작업에만 토큰을 사용한다.",
+                  "토큰을 발급한 뒤 아래에 입력하세요. Firecrab은 연결할 때만 이 토큰을 사용합니다.",
                 )}
               </li>
             </ol>
@@ -402,7 +402,7 @@ export default function NamedCloudflareTunnel({
                   <p className="field-error named-tunnel-note">
                     {t(
                       "Save a route for this domain first.",
-                      "이 도메인의 라우트를 먼저 저장한다.",
+                      "이 도메인의 라우트를 먼저 저장하세요.",
                     )}
                   </p>
                 )}
@@ -423,7 +423,7 @@ export default function NamedCloudflareTunnel({
               >
                 {t(
                   "Save the existing Quick Tunnel first. Its URL will change.",
-                  "기존 Quick Tunnel을 먼저 저장한다. 임시 주소가 바뀐다.",
+                  "기존 Quick Tunnel을 먼저 저장하세요. 저장하면 임시 주소가 바뀝니다.",
                 )}
               </p>
             )}

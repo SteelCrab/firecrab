@@ -125,7 +125,10 @@ export default function PipeStorage({
     if (
       !editorDirty ||
       window.confirm(
-        t("Discard these connection changes?", "연결 변경 사항을 취소할까요?"),
+        t(
+          "Discard these connection changes?",
+          "연결 설정을 저장하지 않고 닫을까요?",
+        ),
       )
     )
       cancelEditor();
@@ -196,7 +199,7 @@ export default function PipeStorage({
       !window.confirm(
         t(
           `Disconnect ${connection.name}? Your S3 files will stay in AWS.`,
-          `${connection.name} 연결을 해제할까요? S3 파일은 AWS에 보존한다.`,
+          `${connection.name} 연결을 해제할까요? S3 파일은 AWS에 그대로 보관됩니다.`,
         ),
       )
     )
@@ -226,7 +229,7 @@ export default function PipeStorage({
                 setNotice(
                   t(
                     "Listing is allowed. File permissions are checked when you use them.",
-                    "목록 조회 권한을 확인했다. 파일 권한은 해당 작업을 할 때 확인한다.",
+                    "파일 목록을 조회할 수 있습니다. 개별 파일의 접근 권한은 해당 작업을 실행할 때 확인합니다.",
                   ),
                 );
               }),
@@ -254,7 +257,7 @@ export default function PipeStorage({
       setError(
         t(
           "Files must be at most 512 MiB.",
-          "파일 크기는 512 MiB 이하여야 한다.",
+          "512 MiB 이하의 파일을 선택하세요.",
         ),
       );
       if (fileInput.current) fileInput.current.value = "";
@@ -280,7 +283,7 @@ export default function PipeStorage({
     await perform(async () => {
       await uploadObject(browsing.id, key, file, overwrite);
       clearFile();
-      setNotice(t("Upload complete.", "파일을 업로드했다."));
+      setNotice(t("Upload complete.", "파일을 업로드했습니다."));
       setPage(await listObjects(browsing.id, page.prefix));
     });
   }
@@ -291,7 +294,7 @@ export default function PipeStorage({
       !window.confirm(
         t(
           `Delete ${key}? This cannot be undone.`,
-          `${key} 파일을 삭제할까요? 이 작업은 되돌릴 수 없다.`,
+          `${key} 파일을 삭제할까요? 삭제한 파일은 복구할 수 없습니다.`,
         ),
       )
     )
@@ -299,7 +302,7 @@ export default function PipeStorage({
     void perform(async () => {
       await removeObject(browsing.id, key);
       setPage(await listObjects(browsing.id, page.prefix));
-      setNotice(t("File deleted.", "파일을 삭제했다."));
+      setNotice(t("File deleted.", "파일을 삭제했습니다."));
     });
   }
   function modified(value: string) {
@@ -361,7 +364,10 @@ export default function PipeStorage({
           <p>
             {browsing
               ? `s3://${browsing.bucket}/${browsing.prefix}`
-              : t("Access your files in AWS.", "AWS에 저장한 파일을 관리한다.")}
+              : t(
+                  "Access your files in AWS.",
+                  "AWS에 저장된 파일을 관리합니다.",
+                )}
           </p>
         </div>
         <div className="s3-toolbar">
@@ -427,7 +433,7 @@ export default function PipeStorage({
                 <p>
                   {t(
                     "Browse and upload files without leaving Firecrab.",
-                    "Firecrab에서 파일을 조회하고 업로드한다.",
+                    "Firecrab에서 파일을 조회하고 업로드할 수 있습니다.",
                   )}
                 </p>
                 <button
@@ -490,7 +496,7 @@ export default function PipeStorage({
               <p className="s3-hint s3-connection-note">
                 {t(
                   "Unbind these services before editing or disconnecting.",
-                  "연결을 수정하거나 해제하려면 서비스에서 연결을 먼저 해제한다.",
+                  "연결 설정을 수정하거나 삭제하려면 이 연결을 사용하는 서비스에서 먼저 연결을 해제하세요.",
                 )}
               </p>
             )}
@@ -701,12 +707,9 @@ export default function PipeStorage({
               {!page.objects.length && !page.prefixes.length && (
                 <div className="s3-empty s3-empty-folder">
                   <FolderOpen aria-hidden="true" />
-                  <h3>{t("This folder is empty", "폴더가 비어 있다")}</h3>
+                  <h3>{t("This folder is empty", "폴더가 비어 있습니다")}</h3>
                   <p>
-                    {t(
-                      "Upload a file to get started.",
-                      "파일을 업로드해 시작한다.",
-                    )}
+                    {t("Upload a file to get started.", "파일을 업로드하세요.")}
                   </p>
                 </div>
               )}
@@ -738,7 +741,7 @@ export default function PipeStorage({
               {browsing.services.map((service) => service.name).join(", ")}.{" "}
               {t(
                 "Unbind these services before editing or disconnecting.",
-                "연결을 수정하거나 해제하려면 서비스에서 연결을 먼저 해제한다.",
+                "연결 설정을 수정하거나 삭제하려면 이 연결을 사용하는 서비스에서 먼저 연결을 해제하세요.",
               )}
             </p>
           )}

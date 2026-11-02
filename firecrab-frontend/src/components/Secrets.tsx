@@ -149,14 +149,14 @@ export default function Secrets({
       setMessage(
         t(
           `${result.applied.length} secret(s) applied.`,
-          `${result.applied.length}개 시크릿을 적용했다.`,
+          `시크릿 ${result.applied.length}개를 적용했습니다.`,
         ),
       );
       if (result.failed.length)
         setError(
           t(
             `Upload failed: ${result.failed.map((item) => item.name).join(", ")}. Preview again to retry.`,
-            `업로드 실패: ${result.failed.map((item) => item.name).join(", ")}. 다시 미리보기한 뒤 재시도한다.`,
+            `업로드 실패: ${result.failed.map((item) => item.name).join(", ")}. 미리보기를 다시 확인한 뒤 시도하세요.`,
           ),
         );
       await refresh();
@@ -207,7 +207,7 @@ export default function Secrets({
               <p>
                 {t(
                   "Preview account secrets and copy only selected values locally.",
-                  "계정 시크릿을 미리 보고 선택한 항목만 이 호스트에 복사한다.",
+                  "계정에 저장된 시크릿을 미리 확인하고 선택한 항목만 이 호스트에 복사합니다.",
                 )}
               </p>
               <button
@@ -226,7 +226,7 @@ export default function Secrets({
             <p>
               {t(
                 "Connect a Firecrab account in Auth to import account secrets.",
-                "계정 시크릿을 가져오려면 Auth에서 Firecrab 계정을 연결한다.",
+                "계정의 시크릿을 가져오려면 Auth에서 Firecrab 계정을 연결하세요.",
               )}{" "}
               <a href="#/pipe/auth">Auth</a>
             </p>
@@ -235,7 +235,7 @@ export default function Secrets({
         <p className="poll-note">
           {t(
             "Store secrets in Firecrab. Import from or upload to external stores.",
-            "Firecrab에 시크릿을 저장한다. 외부 저장소에서 가져오거나 업로드한다.",
+            "Firecrab에 시크릿을 저장하고 관리합니다. 외부 저장소에서 가져오거나 업로드할 수 있습니다.",
           )}
         </p>
         <div
@@ -333,7 +333,7 @@ export default function Secrets({
               {error
                 ? t(
                     "Unable to load Secrets. Refresh to retry.",
-                    "Secrets를 불러오지 못했다. 새로 고침으로 재시도한다.",
+                    "시크릿을 불러오지 못했습니다. 새로고침해 다시 시도하세요.",
                   )
                 : t("Loading…", "불러오는 중…")}
             </p>
@@ -379,10 +379,10 @@ export default function Secrets({
               {!rows.length ? (
                 <p className="empty" role="status">
                   {secrets.length
-                    ? t("No matching secrets.", "검색 결과가 없다.")
+                    ? t("No matching secrets.", "검색 결과가 없습니다.")
                     : t(
                         "No secrets yet. Add a secret or import from an external connection.",
-                        "저장된 시크릿이 없다. 시크릿을 추가하거나 외부 연결에서 가져온다.",
+                        "저장된 시크릿이 없습니다. 새로 추가하거나 연결된 외부 저장소에서 가져오세요.",
                       )}
                 </p>
               ) : (
@@ -489,7 +489,7 @@ export default function Secrets({
                                       throw new Error(
                                         t(
                                           "The secret changed. Reveal it again.",
-                                          "시크릿이 변경되었다. 다시 보기를 선택한다.",
+                                          "시크릿이 변경되었습니다. 다시 보기를 선택하세요.",
                                         ),
                                       );
                                     }
@@ -578,16 +578,16 @@ export default function Secrets({
               <p className="poll-note">
                 {t(
                   "Imports create local copies in PipeSecrets. External changes appear after another import. Upload selected local secrets from the Internal tab.",
-                  "가져온 값은 PipeSecrets에 복사한다. 외부 변경은 다시 가져올 때 반영한다. 내부 관리에서 시크릿을 선택해 업로드한다.",
+                  "가져온 값은 PipeSecrets에 복사됩니다. 외부 저장소의 변경 사항은 다시 가져올 때 반영됩니다. 업로드하려면 내부 관리에서 시크릿을 선택하세요.",
                 )}
               </p>
               {!links.length ? (
                 <p className="empty">
                   {connections.length
-                    ? t("No matching connections.", "검색 결과가 없다.")
+                    ? t("No matching connections.", "검색 결과가 없습니다.")
                     : t(
                         "Connect AWS Secrets Manager or another Firecrab instance.",
-                        "AWS Secrets Manager 또는 다른 Firecrab 인스턴스를 연결한다.",
+                        "AWS Secrets Manager 또는 다른 Firecrab 인스턴스를 연결하세요.",
                       )}
                 </p>
               ) : (
@@ -640,7 +640,7 @@ export default function Secrets({
                               window.confirm(
                                 t(
                                   `Remove connection "${connection.name}"? Imported PipeSecrets values remain available.`,
-                                  `"${connection.name}" 연결을 삭제할까요? 가져온 시크릿은 PipeSecrets에 유지한다.`,
+                                  `"${connection.name}" 연결을 삭제할까요? 가져온 시크릿은 PipeSecrets에 유지됩니다.`,
                                 ),
                               )
                             )
@@ -751,20 +751,20 @@ function TransferPanel({
       <p className="poll-note">
         {t(
           "Select changes to apply. Replacements require selection. Deletes are not transferred.",
-          "적용할 변경을 선택한다. 기존 값 교체는 직접 선택한다. 삭제는 전파하지 않는다.",
+          "적용할 변경 사항을 선택하세요. 기존 값을 교체하려면 해당 항목을 직접 선택해야 합니다. 한쪽에서 시크릿을 삭제해도 다른 쪽에는 반영되지 않습니다.",
         )}
       </p>
       {expired && (
         <p className="field-error" role="alert">
           {t(
             "This preview expired. Create a new preview.",
-            "미리보기가 만료되었다. 다시 미리보기한다.",
+            "미리보기가 만료되었습니다. 미리보기를 다시 실행하세요.",
           )}
         </p>
       )}
       {!preview.changes.length ? (
         <p className="empty">
-          {t("No secrets in this scope.", "선택한 범위에 시크릿이 없다.")}
+          {t("No secrets in this scope.", "선택한 범위에 시크릿이 없습니다.")}
         </p>
       ) : (
         <div className="secrets-changes">

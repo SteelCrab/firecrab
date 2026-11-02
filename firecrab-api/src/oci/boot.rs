@@ -6,7 +6,7 @@
 //! modules need their matching initrd, and that initrd would take PID 1 away
 //! from the injected guest init.
 //!
-//! Firecrab builds the latest kernel.org stable source on this host. Verified
+//! Firecrab downloads prebuilt guest kernels from the kernel registry. Verified
 //! cached kernels and installed catalog images keep offline hosts importing.
 //! This stage records the pair and registers nothing.
 
@@ -40,7 +40,7 @@ pub(super) async fn host_kernel_pair(image_root: &Path) -> Result<KernelBootPair
         image_root,
         Architecture::HOST,
         kernel::configured_kernel_override().as_deref(),
-        kernel::configured_releases_url().as_deref(),
+        kernel::configured_registry_url().as_deref(),
     )
     .await
 }

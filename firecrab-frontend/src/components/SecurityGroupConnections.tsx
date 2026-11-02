@@ -73,7 +73,10 @@ export default function SecurityGroupConnections({
       ) : error ? (
         <div className="sg-connection-note">
           <p role="alert">
-            {t("Connections are unavailable.", "연결 정보를 불러오지 못했다.")}
+            {t(
+              "Connections are unavailable.",
+              "연결 정보를 불러오지 못했습니다.",
+            )}
           </p>
           <button className="btn" type="button" onClick={onRetry}>
             {t("Retry connections", "연결 정보 다시 불러오기")}
@@ -87,9 +90,12 @@ export default function SecurityGroupConnections({
           {incomplete
             ? t(
                 "Some deployments could not be checked.",
-                "일부 배포 정보를 확인하지 못했다.",
+                "일부 배포 정보를 확인하지 못했습니다.",
               )
-            : t("No MicroServices connected.", "연결된 MicroService가 없다.")}
+            : t(
+                "No MicroServices connected.",
+                "연결된 MicroService가 없습니다.",
+              )}
         </p>
       ) : (
         <div className="sg-connection-tree">
@@ -136,7 +142,7 @@ export default function SecurityGroupConnections({
                     <p className="sg-connection-note" role="alert">
                       {t(
                         "VM status unavailable.",
-                        "VM 상태를 불러오지 못했다.",
+                        "VM 상태를 불러오지 못했습니다.",
                       )}
                     </p>
                   ) : instances.length === 0 ? (

@@ -67,6 +67,13 @@ jobs:
       - name: Validate the example stack offline
         run: cargo run -p firecrab-cli --locked -- stack validate --file examples/stacks/basic.yaml --json
 
+      - name: CODE guest, AUTH, editor and execution contracts
+        run: |
+          python3 scripts/test-code-guest.py
+          python3 scripts/test-code-agent-auth.py
+          python3 scripts/test-code-editor.py
+          python3 scripts/test-code-agent-run.py
+
       - name: Shared source development deployment contract
         run: python3 scripts/test-micromanager-dev.py
 
@@ -77,6 +84,7 @@ jobs:
         run: |
           python3 scripts/test-ci-qa-guest.py
           python3 scripts/test-ci-qa-ssh.py
+          python3 scripts/test-ci-prepare-stable-kernel.py
 
       - name: Deploy QA guards and OCI fixture contract
         run: python3 scripts/test-ci-qa-deploy.py
@@ -690,6 +698,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Free unused runner SDKs
+        # Kernel builds and guest disks share this disposable runner's filesystem.
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
       - name: Cache cargo
         uses: actions/cache@v6
         with:
@@ -700,6 +714,13 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-
+
+      - name: Remove unused incremental artifacts
+        run: |
+          if [ -d target ]; then
+            find target -type d -name incremental -prune -exec rm -rf {} +
+          fi
+          df -h /
 
       - name: Install pinned toolchain
         run: rustup show
@@ -883,7 +904,7 @@ jobs:
           done
           curl -fsS http://127.0.0.1:5523/api/host >/dev/null
 
-      - name: Build current stable guest kernel
+      - name: Install current stable guest kernel
         id: guest-kernel
         if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
         timeout-minutes: 35

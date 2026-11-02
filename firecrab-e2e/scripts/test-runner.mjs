@@ -41,3 +41,24 @@ test("managed runtime QA cannot silently launch a replacement API", () => {
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /refusing to start a second API/);
 });
+
+test("CODE fixtures run with dashboard tests and stay out of real guest boot", () => {
+  const cli = require.resolve("@playwright/test/cli");
+  const list = (config) => {
+    const result = run(cli, ["test", "--list", "--config", config]);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    return result.stdout;
+  };
+  const dashboard = list("playwright.dashboard.config.ts");
+  const guest = list("playwright.guest.config.ts");
+  for (const spec of [
+    "code-agent-auth", "code-agent-run", "code-ai-auth", "code-auth-states",
+    "code-runtime-controls", "code-setup", "code-web-editor", "code-workspaces",
+  ]) {
+    assert.ok(dashboard.includes(`${spec}.spec.ts:`), `${spec} must run in dashboard CI`);
+    assert.ok(!guest.includes(`${spec}.spec.ts:`), `${spec} must not run in guest CI`);
+  }
+  for (const spec of ["microregistry-register", "network-ipv6", "oci-dhcp-boot", "oci-image-import", "pipe-registries-live", "pools"])
+    assert.ok(guest.includes(`${spec}.spec.ts:`), `${spec} must keep its guest coverage`);
+  assert.match(guest, /moves the stopped guest to another network and boots with its new DHCP address/);
+});

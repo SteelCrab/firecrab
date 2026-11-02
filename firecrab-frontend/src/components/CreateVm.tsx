@@ -31,6 +31,7 @@ type AvailableVolume = {
 import { isValidPort } from "../lib/portForward";
 import { useHostStatus } from "../hostStatusContext";
 import ShellCheckboxList from "./ShellCheckboxList";
+import MicroNetworkSelect from "./MicroNetworkSelect";
 import { useI18n } from "../i18n";
 
 const FIELDS_WITH_OWN_ERROR = [
@@ -196,7 +197,7 @@ export default function CreateVm({
           setResourceError(
             t(
               "Could not load security groups or data volumes.",
-              "보안그룹 또는 데이터 볼륨을 불러오지 못했다.",
+              "보안그룹 또는 데이터 볼륨을 불러오지 못했습니다.",
             ),
           );
       });
@@ -299,7 +300,7 @@ export default function CreateVm({
       setPortForwardsError(
         t(
           "Every port forward needs a host and guest port (1-65535).",
-          "모든 포트 포워딩 규칙에는 호스트/게스트 포트(1-65535)가 필요합니다.",
+          "각 포트 포워딩 규칙에 호스트 포트와 게스트 포트를 입력하세요. 포트 범위는 1~65535입니다.",
         ),
       );
       return;
@@ -313,7 +314,7 @@ export default function CreateVm({
         setEnvError(
           t(
             "Every environment variable needs a key.",
-            "모든 환경 변수에는 키가 필요합니다.",
+            "각 환경 변수의 이름을 입력하세요.",
           ),
         );
         return;
@@ -322,7 +323,7 @@ export default function CreateVm({
         setEnvError(
           t(
             "Environment keys must be unique.",
-            "환경 변수 키는 중복될 수 없습니다.",
+            "환경 변수 이름이 중복되었습니다. 서로 다른 이름을 입력하세요.",
           ),
         );
         return;
@@ -391,12 +392,12 @@ export default function CreateVm({
     : imagesError
       ? t(
           "Unable to load the image catalog",
-          "이미지 목록을 불러오지 못했습니다",
+          "이미지 목록을 불러오지 못했습니다.",
         )
       : noTemplates
         ? t(
             "No installed images. Run install.sh or install an image.",
-            "설치된 이미지가 없습니다 (install.sh 또는 이미지 설치 필요)",
+            "설치된 이미지가 없습니다. 이미지 메뉴 또는 install.sh로 먼저 설치하세요.",
           )
         : null;
 
@@ -408,7 +409,7 @@ export default function CreateVm({
           <p>
             {t(
               "Name the VM and choose an installed image.",
-              "이름과 설치된 이미지를 선택한다.",
+              "이름을 입력하고 설치된 이미지를 선택하세요.",
             )}
           </p>
         </div>
@@ -451,7 +452,7 @@ export default function CreateVm({
                   {imagesError ??
                     t(
                       "Install an image before creating a VM.",
-                      "생성하려면 먼저 이미지를 설치하세요",
+                      "VM을 만들려면 먼저 이미지를 설치하세요.",
                     )}
                 </span>
               )}
@@ -459,7 +460,7 @@ export default function CreateVm({
               <span style={{ fontSize: "0.75rem", color: "var(--text-3)" }}>
                 {t(
                   "Runtime env is ignored: this image has no guest service.",
-                  "게스트 서비스가 없는 이미지라 런타임 환경 변수는 적용되지 않습니다.",
+                  "이 이미지에는 게스트 서비스가 없어 런타임 환경 변수가 적용되지 않습니다.",
                 )}
               </span>
             )}
@@ -472,7 +473,7 @@ export default function CreateVm({
           <p>
             {t(
               "Allocate CPU, memory and disk space.",
-              "CPU, 메모리와 디스크 용량을 지정한다.",
+              "CPU 수와 메모리, 디스크 용량을 지정하세요.",
             )}
           </p>
         </div>
@@ -576,35 +577,22 @@ export default function CreateVm({
           <p>
             {t(
               "Choose a network and outbound access.",
-              "네트워크와 외부 통신 범위를 선택한다.",
+              "네트워크와 외부 통신 범위를 선택하세요.",
             )}
           </p>
         </div>
         <div className="form-section-fields">
           <div className="field">
             <label htmlFor="vm-micro-network">MicroNetwork</label>
-            <select
+            <MicroNetworkSelect
               id="vm-micro-network"
               value={microNetworkId}
-              onChange={(event) => {
-                setMicroNetworkId(event.target.value);
+              networks={microNetworks}
+              onChange={(id) => {
+                setMicroNetworkId(id);
                 setSecurityGroupId("");
               }}
-            >
-              <option value={NO_NETWORK} disabled>
-                {microNetworks.length === 0
-                  ? t(
-                      "Create a MicroNetwork first",
-                      "먼저 MicroNetwork를 만드세요",
-                    )
-                  : t("Select a MicroNetwork", "MicroNetwork 선택")}
-              </option>
-              {microNetworks.map((network) => (
-                <option key={network.id} value={network.id}>
-                  {network.name} ({network.subnetCidr})
-                </option>
-              ))}
-            </select>
+            />
             {fieldError("microNetworkId")}
           </div>
           <div className="field">
@@ -712,7 +700,7 @@ export default function CreateVm({
               idPrefix={`vm-create-shell-${formEpoch}`}
               emptyLabel={t(
                 "No shells yet — create one under Shells, then come back.",
-                "등록된 Shell이 없습니다. Shell 메뉴에서 만든 뒤 다시 오세요.",
+                "등록된 Shell이 없습니다. Shell 메뉴에서 먼저 만드세요.",
               )}
             />
             {fieldError("shellIds")}

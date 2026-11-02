@@ -112,6 +112,7 @@ export default function FirecrabTunnel({
     setError(null);
   }
   function addressTarget(address: FirecrabAddress): FirecrabTarget | null {
+    if (address.target.type === "preview") return null;
     if (address.target.type !== "quick_tunnel") return address.target;
     const id = address.target.id;
     const saved = snapshot?.quickTunnels?.find(
@@ -293,7 +294,7 @@ export default function FirecrabTunnel({
         <p className="poll-note">{t("Loading addresses…", "주소 조회 중…")}</p>
       ) : !addresses.length ? (
         <div className="empty">
-          {t("No fixed addresses.", "등록한 고정 주소가 없다.")}
+          {t("No fixed addresses.", "등록된 고정 주소가 없습니다.")}
         </div>
       ) : (
         <div className="table-scroll">
@@ -344,7 +345,7 @@ export default function FirecrabTunnel({
                           ))}
                         </>
                       ) : (
-                        t("Unavailable", "확인 불가")
+                        address.target.type === "preview" ? t("AI workspace preview", "AI 작업 공간 앱") : t("Unavailable", "확인 불가")
                       )}
                     </td>
                     <td>
@@ -368,7 +369,7 @@ export default function FirecrabTunnel({
                         items={[
                           {
                             label: t("Edit", "수정"),
-                            disabled: !!editor,
+                            disabled: !!editor || address.target.type === "preview",
                             onSelect: () => edit(address),
                           },
                           {

@@ -4,7 +4,7 @@ const vmId = "33333333-3333-4333-8333-333333333333";
 
 for (const locale of ["en", "ko"] as const)
   for (const retiredLink of [false, true])
-    test(`${locale} Sandbox opens MicroVM tasks without project setup${retiredLink ? " from an old model-task link" : ""} @dashboard`, async ({
+    test(`${locale} Sandbox opens quick start without creating a workspace${retiredLink ? " from an old model-task link" : ""} @dashboard`, async ({
       page,
     }) => {
       const obsoleteRequests: string[] = [];
@@ -80,22 +80,31 @@ for (const locale of ["en", "ko"] as const)
       ).toBeVisible();
       await expect(
         page.getByRole("combobox", { name: "MicroVM", exact: true }),
-      ).toBeVisible();
+      ).toHaveValue("");
       await expect(
         page.getByRole("heading", {
           name:
             locale === "ko"
-              ? "멀티 에이전트 작업 공간"
-              : "Multi-agent workspace",
+              ? "새 작업 공간"
+              : "New workspace",
           exact: true,
         }),
       ).toBeVisible();
+      await expect(
+        page.getByRole("button", {
+          name: locale === "ko" ? "작업 공간 만들기" : "Create workspace",
+          exact: true,
+        }),
+      ).toBeEnabled();
       await expect(
         page.getByRole("button", {
           name: locale === "ko" ? "새 MicroVM" : "New MicroVM",
           exact: true,
         }),
       ).toBeEnabled();
+      await expect(page.getByRole("combobox", { name: "MicroVM", exact: true })).toHaveValue("");
+      await expect(page.getByText("Ubuntu 26.04 LTS", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: locale === "ko" ? "작업 공간 만들기" : "Create workspace", exact: true })).toBeEnabled();
       for (const name of [
         "Model tasks",
         "모델 작업",

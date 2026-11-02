@@ -108,6 +108,7 @@ pub fn package_url(base: &str, alias: &str) -> String {
 #[derive(Debug, Clone, Default)]
 pub struct ImageInstallTracker {
     jobs: Arc<Mutex<HashMap<String, ImageInstallJob>>>,
+    operations: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     /// Base URL for package downloads (`FIRECRAB_IMAGE_BASE_URL`), trailing
     /// slash stripped. `None` when remote install is disabled.
     base_url: Option<String>,
@@ -122,6 +123,8 @@ struct ImageInstallJob {
     ended_at_ms: Option<u64>,
     downloaded_bytes: Option<u64>,
     total_bytes: Option<u64>,
+    cancellation: tokio::sync::watch::Sender<bool>,
+    completion: tokio::sync::watch::Sender<bool>,
 }
 
 impl ImageInstallTracker {
@@ -140,6 +143,7 @@ impl ImageInstallTracker {
     pub fn with_base_url(base_url: impl Into<String>) -> Self {
         Self {
             jobs: Arc::new(Mutex::new(HashMap::new())),
+            operations: Default::default(),
             base_url: normalize_base_url(&base_url.into()),
         }
     }
@@ -148,6 +152,7 @@ impl ImageInstallTracker {
     pub fn disabled() -> Self {
         Self {
             jobs: Arc::new(Mutex::new(HashMap::new())),
+            operations: Default::default(),
             base_url: None,
         }
     }
@@ -212,6 +217,8 @@ impl ImageInstallTracker {
             ended_at_ms: None,
             downloaded_bytes: None,
             total_bytes: None,
+            cancellation: tokio::sync::watch::channel(false).0,
+            completion: tokio::sync::watch::channel(false).0,
         };
         let response = job.to_response();
         jobs.insert(alias.to_owned(), job);
@@ -257,6 +264,7 @@ impl ImageInstallTracker {
             job.log.push(format!("[{}] {}", clock(now), message.into()));
             job.status = ImageInstallStatus::Succeeded;
             job.ended_at_ms = Some(now);
+            job.completion.send_replace(true);
         }
     }
 
@@ -274,6 +282,72 @@ impl ImageInstallTracker {
             job.log.push(format!("[{}] {}", clock(now), message.into()));
             job.status = ImageInstallStatus::Failed;
             job.ended_at_ms = Some(now);
+            job.completion.send_replace(true);
+        }
+    }
+
+    /// Serialize a job's start, cancellation and deletion without blocking polling.
+    pub(crate) fn operation_lock(&self, alias: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.operations
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(alias.to_owned())
+            .or_default()
+            .clone()
+    }
+
+    /// Each attempt owns its signal, including a cancellation before its first poll.
+    pub(crate) fn cancellation(&self, alias: &str) -> Option<tokio::sync::watch::Receiver<bool>> {
+        self.jobs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(alias)
+            .map(|job| job.cancellation.subscribe())
+    }
+
+    pub(crate) fn is_cancelling(&self, alias: &str) -> bool {
+        self.jobs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(alias)
+            .is_some_and(|job| {
+                job.status == ImageInstallStatus::Running && *job.cancellation.borrow()
+            })
+    }
+
+    /// Signal the worker and retain a completion subscription for this exact attempt.
+    pub(crate) fn request_cancel(&self, alias: &str) -> Option<tokio::sync::watch::Receiver<bool>> {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|p| p.into_inner());
+        let job = jobs
+            .get_mut(alias)
+            .filter(|job| job.status == ImageInstallStatus::Running)?;
+        if !job.cancellation.send_replace(true) {
+            job.log
+                .push(format!("[{}] cancellation requested", clock(now_ms())));
+        }
+        Some(job.completion.subscribe())
+    }
+
+    /// Cleanup completes before deletion or a new attempt can proceed.
+    pub(crate) async fn cancel_and_wait(&self, alias: &str) {
+        if let Some(mut completion) = self.request_cancel(alias) {
+            while !*completion.borrow_and_update() {
+                if completion.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn finish_cancelled(&self, alias: &str) {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(job) = jobs.get_mut(alias) {
+            let now = now_ms();
+            job.log
+                .push(format!("[{}] kernel installation cancelled", clock(now)));
+            job.status = ImageInstallStatus::Cancelled;
+            job.ended_at_ms = Some(now);
+            job.completion.send_replace(true);
         }
     }
 

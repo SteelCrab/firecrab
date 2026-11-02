@@ -110,7 +110,7 @@ exec /bin/busybox init
 
             try:
                 wait_for(b"FCR_PROMPT>")
-                command("printf 'FCR_KERNEL_'; /bin/busybox uname -r", b"FCR_KERNEL_" + args.expected_release.encode())
+                command("printf 'FCR_KERNEL_%s_END\\n' \"$(/bin/busybox uname -r)\"", b"FCR_KERNEL_" + args.expected_release.encode() + b"_END")
                 resize(30, 100)
                 command("printf 'FCR_SIZE_'; /bin/busybox stty size", b"FCR_SIZE_30 100")
                 results.append("ttyS0 is 30 rows by 100 columns after acknowledged resize")
