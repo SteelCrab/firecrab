@@ -650,7 +650,13 @@ sleep 1
     .unwrap();
     std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
     let toolbox = root.join("bb");
-    std::fs::write(&toolbox, "#!/bin/sh\nexec \"$@\"\n").unwrap();
+    // The guest has BusyBox's setsid applet; macOS has no standalone setsid.
+    // This fixture checks startup ordering and PID reuse, not session creation.
+    std::fs::write(
+        &toolbox,
+        "#!/bin/sh\n[ \"$1\" != setsid ] || shift\nexec \"$@\"\n",
+    )
+    .unwrap();
     std::fs::set_permissions(&toolbox, std::fs::Permissions::from_mode(0o755)).unwrap();
     let fastfetch = root.join("fastfetch");
     std::fs::write(&fastfetch, "#!/bin/sh\nexit 0\n").unwrap();
@@ -717,7 +723,11 @@ fi
         .env("QA_PREINSTALLED_SSH", preinstalled.to_string())
         .output()
         .unwrap();
-    assert!(output.status.success(), "{output:?}");
+    let console = std::fs::read_to_string(root.join("console")).unwrap_or_default();
+    assert!(
+        output.status.success(),
+        "{output:?}\nguest console:\n{console}"
+    );
     assert!(
         root.join("packages-done").exists(),
         "The package worker must finish its startup observations"
@@ -728,7 +738,7 @@ fi
     }
     assert!(
         observed.exists(),
-        "Application startup waited for optional packages"
+        "Application startup waited for optional packages; guest console:\n{console}"
     );
     assert!(
         ssh_ready.exists(),

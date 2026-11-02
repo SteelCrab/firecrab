@@ -78,6 +78,18 @@ npm test --prefix firecrab-frontend
 For native Windows and macOS CLI changes, run `cargo clippy -p firecrab-cli --all-targets -- -D warnings` and `cargo test -p firecrab-cli --locked` on that OS.
 Linux API/helper checks still run on Linux; Windows source deployment builds them inside managed Debian.
 Clippy allows zero warnings; test-only code belongs behind `#[cfg(test)]`.
+
+For the OCI filesystem and provisioning subset on macOS, install the real test tools and use the runner:
+
+```sh
+brew install coreutils e2fsprogs fakeroot
+TMPDIR=/tmp scripts/test-oci.sh --test-threads=4
+```
+
+The runner selects GNU `chown` and Homebrew e2fsprogs on macOS.
+The macOS-protected system `chown` cannot use fakeroot's ownership interception.
+The tests create real ext4 images and verify root ownership without changing the source tree's ownership.
+This subset does not establish MicroVM boot support for the native macOS API binary.
 Run `npm ci --prefix firecrab-e2e` before its runner checks.
 The React frontend uses Vite. The E2E-only `typecheck:pipe` uses [tsrs](https://github.com/oxc-project/tsrs), which ships binaries for macOS arm64 and Linux x64/arm64 only.
 On Windows or Intel macOS, run the E2E type check in WSL2 or on Linux.

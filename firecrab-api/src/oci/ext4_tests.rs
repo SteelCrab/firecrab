@@ -183,9 +183,10 @@ async fn packed_inodes_are_root_owned_even_though_the_source_tree_is_not() {
     let tree = tree_with_payload(directory.path(), 4096);
     let destination = directory.path().join("rootfs.ext4");
 
-    let source_uid = std::fs::metadata(tree.join("app/payload"))
-        .expect("stat fixture file")
-        .uid();
+    let payload = tree.join("app/payload");
+    let source_metadata = std::fs::metadata(&payload).expect("stat fixture file");
+    let source_uid = source_metadata.uid();
+    let source_gid = source_metadata.gid();
     assert_ne!(
         source_uid, 0,
         "fixture must start non-root-owned to exercise the fix; test is running as root"
@@ -195,30 +196,25 @@ async fn packed_inodes_are_root_owned_even_though_the_source_tree_is_not() {
         .await
         .expect("pack tree");
 
-    let output = std::process::Command::new("debugfs")
-        .args(["-R", "stat /app/payload"])
-        .arg(&destination)
-        .output()
-        .expect("run debugfs stat");
-    let stat = String::from_utf8_lossy(&output.stdout);
-    let tokens: Vec<&str> = stat.split_whitespace().collect();
-    let field = |name: &str| {
-        tokens
-            .iter()
-            .position(|t| *t == name)
-            .map(|i| tokens[i + 1])
-            .unwrap_or_else(|| panic!("debugfs stat missing {name} field: {stat}"))
-    };
-    assert_eq!(
-        field("User:"),
-        "0",
-        "packed file must be root-owned: {stat}"
-    );
-    assert_eq!(
-        field("Group:"),
-        "0",
-        "packed file must be root-owned: {stat}"
-    );
+    let preserved = std::fs::metadata(&payload).expect("stat source after packing");
+    assert_eq!((preserved.uid(), preserved.gid()), (source_uid, source_gid));
+
+    for path in ["/", "/app", "/app/payload"] {
+        let output = std::process::Command::new("debugfs")
+            .args(["-R", &format!("stat {path}")])
+            .arg(&destination)
+            .output()
+            .expect("run debugfs stat");
+        let stat = String::from_utf8_lossy(&output.stdout);
+        let tokens: Vec<&str> = stat.split_whitespace().collect();
+        for field in ["User:", "Group:"] {
+            let owner = tokens
+                .windows(2)
+                .find(|pair| pair[0] == field)
+                .map(|pair| pair[1]);
+            assert_eq!(owner, Some("0"), "packed {path} must be root-owned: {stat}");
+        }
+    }
 }
 
 #[test]
