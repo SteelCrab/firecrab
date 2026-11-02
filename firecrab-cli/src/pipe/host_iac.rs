@@ -66,7 +66,10 @@ pub(super) fn run() -> Result<()> {
             resource,
         } => {
             let config = config(&root)?;
-            ledger.set_runtime_busy(config.is_some() && native_busy()?);
+            let present = ledger
+                .observe(&host, endpoint_id, &resource, config.as_ref())?
+                .exists;
+            prepare_activity(&mut ledger, &resource, present)?;
             Reply::Observation {
                 observation: ledger.observe(&host, endpoint_id, &resource, config.as_ref())?,
             }
@@ -84,7 +87,15 @@ pub(super) fn run() -> Result<()> {
                 config(&root)?
             };
             if config.is_some() {
-                ledger.set_runtime_busy(native_busy()?);
+                let present = ledger
+                    .observe(
+                        &host,
+                        request.change.expected_endpoint_id,
+                        &request.change.resource,
+                        config.as_ref(),
+                    )?
+                    .exists;
+                prepare_activity(&mut ledger, &request.change.resource, present)?;
             }
             let reply = ledger.transition(&host, config.as_ref(), *request)?;
             write(&root, &ledger)?;
@@ -96,12 +107,9 @@ pub(super) fn run() -> Result<()> {
 }
 
 /// Native controls queue asynchronous systemd jobs; releasing their CLI lock does not finish them.
-fn native_busy() -> Result<bool> {
+fn native_busy(unit: &str) -> Result<bool> {
     use crate::shell::{CommandRunner, RealCommandRunner};
-    let state = RealCommandRunner.run(
-        "systemctl",
-        &["show", super::INGRESS_UNIT, "--property=ActiveState"],
-    )?;
+    let state = RealCommandRunner.run("systemctl", &["show", unit, "--property=ActiveState"])?;
     let jobs = RealCommandRunner.run(
         "systemctl",
         &["list-jobs", "--no-legend", "--plain", "--no-pager"],
@@ -117,7 +125,26 @@ fn native_busy() -> Result<bool> {
     Ok(!matches!(state, "active" | "inactive" | "failed")
         || String::from_utf8(jobs.stdout)?
             .split_whitespace()
-            .any(|field| field == super::INGRESS_UNIT))
+            .any(|field| field == unit))
+}
+
+/// Only validated stable IDs select native units; controller ownership never comes from display names.
+fn prepare_activity(
+    ledger: &mut Ledger,
+    resource: &firecrab_stack::ManagedResource,
+    present: bool,
+) -> Result<()> {
+    firecrab_helper_protocol::host_iac::validate_resource(resource)?;
+    let unit = if resource.kind == "quick_tunnel" {
+        let id = uuid::Uuid::parse_str(&resource.id)?;
+        ledger.set_controller_owned(super::firecrab::connector_is_owned(id)?);
+        firecrab_helper_protocol::pipe::quick_tunnel_unit(id)
+    } else {
+        super::INGRESS_UNIT.into()
+    };
+    ledger
+        .set_runtime_busy(super::firecrab::pipe_has_pending()? || (present && native_busy(&unit)?));
+    Ok(())
 }
 
 /// Read the original managed manifest; malformed configuration cannot masquerade as absence.
@@ -154,7 +181,10 @@ pub(super) fn read(root: &Path) -> Result<Ledger> {
     if bytes.len() > 64 * 1024 * 1024 {
         return Err("host ownership state exceeds its read limit".into());
     }
-    serde_json::from_slice(&bytes).map_err(|_| "host ownership state is invalid".into())
+    let mut ledger: Ledger =
+        serde_json::from_slice(&bytes).map_err(|_| "host ownership state is invalid")?;
+    ledger.normalize_keys()?;
+    Ok(ledger)
 }
 
 /// Preserve prior receipts through a synced atomic rename under the Pipe transaction lock.
@@ -186,4 +216,11 @@ pub(super) fn check_configuration(root: &Path, next: &Config) -> Result<()> {
 /// Shared ingress unit control affects every owned route on that listener.
 pub(super) fn check_ingress_control(root: &Path) -> Result<()> {
     read(root)?.check_ingress_control()
+}
+
+/// Exact saved connector ownership also gates the legacy shared tunnel service controls.
+pub(super) fn check_quick_control(root: &Path, id: uuid::Uuid) -> Result<()> {
+    read(root)?.check_resource_control(&firecrab_helper_protocol::host_iac::quick_tunnel_resource(
+        id,
+    ))
 }

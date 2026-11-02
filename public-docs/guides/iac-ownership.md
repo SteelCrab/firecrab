@@ -6,7 +6,7 @@ The full service contract remains in [the inventory](../reference/iac-services.m
 
 ## Current support
 
-Network, standalone VM, MicroService, host Ingress, registered storage root, volume/VM attachment, security group,
+Network, standalone VM, MicroService, host Ingress/Quick Tunnel, registered storage root, volume/VM attachment, security group,
 shell, schedule, pool, Queue, database connection/binding/events/broker/migration, image, kernel, S3 connection, Secret, Secret connection,
 Auth, registry, AI connection, project model-default, Sandbox environment/project, Git source,
 Sandbox access policy, Queue engine, cluster host/placement/service, service automatic deployment, OTLP settings and Deploy tokens
@@ -295,6 +295,6 @@ operator revocation, retired credentials and parent-removal protection.
 See [volume attachments and native operation recovery](iac-native-operations.md) for
 scoped mount ownership, VM cleanup fences and the active-work dashboard.
 
-See [automatic deployment policy ownership](iac-auto-deploy.md), [kernel leases](iac-kernels.md), [image recovery](iac-images.md), and [host Ingress ownership](iac-ingress.md) for the corresponding mutation fences and retained identities.
+See [automatic deployment policy ownership](iac-auto-deploy.md), [kernel leases](iac-kernels.md), [image recovery](iac-images.md), [host Ingress](iac-ingress.md), and [Quick Tunnel ownership](iac-quick-tunnels.md) for mutation fences and retained identities.
 
 Database connection edits compare captured authority during credential commits. Service edits and deletion recheck their exact writer in SQLite; an old Stack operation never becomes an idle native writer.

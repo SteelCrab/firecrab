@@ -1,4 +1,49 @@
 use super::*;
+
+#[tokio::test]
+async fn iac_quick_tunnel_target_receipt_and_api_mirror_recover_the_original_connector() {
+    let fixture = Fixture::new(1, false);
+    let state = fixture.state().await;
+    let mut request = fixture.request(&state);
+    request.resource = firecrab_helper_protocol::host_iac::quick_tunnel_resource(Uuid::new_v4());
+    request.owner.as_mut().unwrap().key = "firecrab_quick_tunnel.app".into();
+    assert!(
+        change(state.clone(), Uuid::new_v4(), request.clone())
+            .await
+            .is_err()
+    );
+    let connector = request.resource.id.clone();
+    drop(state);
+    let state = fixture.state().await;
+    let recovered = change(state.clone(), Uuid::new_v4(), request.clone())
+        .await
+        .unwrap();
+    assert_eq!(recovered.resource.id, connector);
+    assert_eq!(recovered.generation, 1);
+    fixture.helper.abort();
+    let denied = crate::handlers::pipe::control_quick_tunnel(
+        axum::extract::State(state.clone()),
+        axum::extract::Path(Uuid::parse_str(&connector).unwrap()),
+        axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+        axum::Json(serde_json::from_value(serde_json::json!({"action":"stop"})).unwrap()),
+    )
+    .await
+    .unwrap_err();
+    use axum::response::IntoResponse;
+    assert_eq!(
+        denied.into_response().status(),
+        axum::http::StatusCode::CONFLICT
+    );
+    assert_eq!(fixture.target.lock().unwrap().receipts.len(), 1);
+    assert_eq!(
+        state.store.iac_resource_owner(&request.resource).unwrap(),
+        recovered
+    );
+    assert_eq!(
+        change(state, Uuid::new_v4(), request).await.unwrap(),
+        recovered
+    );
+}
 use firecrab_helper_protocol::{
     PROTOCOL_VERSION,
     framing::{read_frame, write_frame},

@@ -18,11 +18,14 @@ use tokio::io::AsyncWriteExt;
 async fn iac_ingress_browser_fixture() {
     let container = std::env::var("FIRECRAB_IAC_QA_CONTAINER").unwrap();
     assert!(
-        container.starts_with("firecrab-548-ingress-evidence-")
+        (container.starts_with("firecrab-548-ingress-evidence-")
+            || container.starts_with("firecrab-548-quick-evidence-"))
             && container
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     );
+    let resource_kind = std::env::var("FIRECRAB_IAC_QA_KIND").unwrap_or_else(|_| "ingress".into());
+    assert!(matches!(resource_kind.as_str(), "ingress" | "quick_tunnel"));
     let info = std::path::PathBuf::from(std::env::var_os("FIRECRAB_IAC_QA_INFO").unwrap());
     let assets = std::path::PathBuf::from(std::env::var_os("FIRECRAB_IAC_QA_ASSETS").unwrap());
     assert!(assets.join("index.html").is_file());
@@ -99,23 +102,24 @@ async fn iac_ingress_browser_fixture() {
     let first_owner = Uuid::new_v4();
     let second_owner = Uuid::new_v4();
     let mut ownerships = Vec::new();
-    for (host, owner, key) in [
-        ("app.example.com", first_owner, "firecrab_ingress.app"),
-        ("peer.example.com", second_owner, "firecrab_ingress.peer"),
-    ] {
+    for (index, owner, label) in [(0, first_owner, "app"), (1, second_owner, "peer")] {
         let request = ChangeResourceOwner {
             operation_id: Uuid::new_v4(),
             expected_endpoint_id: endpoint,
             resource: ManagedResource {
-                kind: "ingress".into(),
-                id: format!("route:{host}/"),
+                kind: resource_kind.clone(),
+                id: if resource_kind == "ingress" {
+                    format!("route:{label}.example.com/")
+                } else {
+                    Uuid::from_u128(0x548001 + index).to_string()
+                },
             },
             expected_generation: 0,
             expected_owner: None,
             owner: Some(ResourceOwner {
                 manager: Manager::Terraform,
                 id: owner,
-                key: key.into(),
+                key: format!("firecrab_{resource_kind}.{label}"),
             }),
         };
         ownerships.push(
@@ -133,7 +137,7 @@ async fn iac_ingress_browser_fixture() {
         owner: Some(ResourceOwner {
             manager: Manager::Terraform,
             id: second_owner,
-            key: "firecrab_ingress.app".into(),
+            key: format!("firecrab_{resource_kind}.app"),
         }),
     };
     let router = crate::server::build_router(
@@ -165,7 +169,7 @@ async fn iac_ingress_browser_fixture() {
             .unwrap();
     });
     std::fs::write(&info,serde_json::to_vec_pretty(&serde_json::json!({
-        "fixture":true,"url":url,"container":container,"transfer":transfer,"ownerships":ownerships,
+        "fixture":true,"url":url,"container":container,"resourceKind":resource_kind,"apiExecutable":std::env::current_exe().unwrap(),"transfer":transfer,"ownerships":ownerships,
         "scope":"Actual local Axum/SQLite/production React and the real root CLI broker inside an isolated Linux container. A test Unix-socket proxy forwards typed helper requests to that CLI and intentionally drops one committed acknowledgement. No live systemd/Nginx, KVM guest, Stack apply, Terraform provider or remote host runs. Terraform cards represent ownership metadata."
     })).unwrap()).unwrap();
     let stop = info.with_extension("stop");

@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Protect independent Quick Tunnel ownership, including legacy shared-unit
+  controls. Retain generated address connector IDs and original private input
+  before publication, fence uncertain local changes and preserve parent authority
+  through interruption and recovery (#548).
+
 - Retain host Ingress ownership in the privileged Pipe broker as well as the API.
   Fence native CLI changes under the same host lock. Recover lost ownership
   acknowledgements and API restarts without a second transfer or data changes (#548).

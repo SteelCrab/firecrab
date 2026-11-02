@@ -235,6 +235,23 @@ async fn manage_quick_tunnel(
     };
     if let Some(connector) = connector {
         require_unclaimed(&state, request_id, Some(connector))?;
+        let resource = firecrab_helper_protocol::host_iac::quick_tunnel_resource(connector);
+        let store = state.store.clone();
+        let allowed = super::stacks::database(request_id.0, move || {
+            let owner = store.iac_resource_owner(&resource)?;
+            if owner.owner.is_some() {
+                return Ok(false);
+            }
+            store.iac_public_write_allowed(&resource)
+        })
+        .await?;
+        if !allowed {
+            return Err(AppError::conflict(
+                "iac_resource_managed",
+                "connector is managed; use its workflow or transfer or release its ownership",
+                request_id.0,
+            ));
+        }
     }
     call(
         &state.network,

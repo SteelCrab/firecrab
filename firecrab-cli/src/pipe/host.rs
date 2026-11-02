@@ -231,6 +231,17 @@ pub(super) fn apply_quick_locked(config_file: &Path) -> Result<()> {
     apply_mode_locked(config_file, None, None, ApplyMode::QuickTunnel, || Ok(()))
 }
 
+/// A root-owned, input-checked parent intent supplies this private recovery permit.
+pub(super) fn apply_address_locked(config_file: &Path, operation: uuid::Uuid) -> Result<()> {
+    apply_mode_locked(
+        config_file,
+        None,
+        None,
+        ApplyMode::Address { operation },
+        || Ok(()),
+    )
+}
+
 /// Publish a healthy service without starting stopped tunnel connectors.
 pub(super) fn apply_service_locked(config_file: &Path) -> Result<()> {
     apply_mode_locked(config_file, None, None, ApplyMode::ServiceRoute, || Ok(()))
@@ -307,6 +318,10 @@ fn apply_mode_locked(
 /// Configuration applies retain the legacy start behavior; Quick intents preserve peers.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ApplyMode {
+    /// Resume only the original uncertain address publication.
+    Address {
+        operation: uuid::Uuid,
+    },
     /// Start ingress for a healthy service while preserving connector state.
     ServiceRoute,
     Configuration,
@@ -335,6 +350,13 @@ fn apply_with(
     verify: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     let (confdir, unitdir) = directories;
+    super::firecrab::ensure_pipe_idle_at(
+        confdir,
+        match mode {
+            ApplyMode::Address { operation } => Some(operation),
+            _ => None,
+        },
+    )?;
     super::host_iac::check_configuration(confdir, config)?;
     let (nginx, cloudflared) = engines;
     let confdir_text = unit_path(confdir)?;
@@ -482,6 +504,28 @@ fn apply_with(
         });
     }
     let ingress_active = unit_state(runner, "is-active", INGRESS_UNIT);
+    for tunnel in &tunnels {
+        let file = &files[tunnel.file];
+        let enable = file.previous.is_none() || tunnel.resume;
+        if file.next.is_some()
+            && ((!tunnel.enabled && enable)
+                || (!tunnel.active && enable)
+                || (tunnel.active && tunnel.changed))
+        {
+            let id = if tunnel.unit == TUNNEL_UNIT {
+                Some(LEGACY_QUICK_TUNNEL_ID)
+            } else {
+                config
+                    .quick_tunnels
+                    .iter()
+                    .find(|entry| quick_tunnel_unit(entry.id) == tunnel.unit)
+                    .map(|entry| entry.id)
+            };
+            if let Some(id) = id {
+                super::host_iac::check_quick_control(confdir, id)?;
+            }
+        }
+    }
     let ingress_enabled = unit_state(runner, "is-enabled", INGRESS_UNIT);
     let ingress_unit_file = &files[1];
     if ingress_active && ingress_unit_file.changed() {
@@ -511,6 +555,9 @@ fn apply_with(
         super::host_iac::check_ingress_control(confdir)?;
     }
     let apply = || -> Result<()> {
+        if let ApplyMode::Address { operation } = mode {
+            super::firecrab::mark_address_effects(confdir, operation)?;
+        }
         for tunnel in &tunnels {
             if files[tunnel.file].next.is_none() && files[tunnel.file].previous.is_some() {
                 tunnel.touched.set(true);
@@ -942,8 +989,12 @@ fn control_with(
     confdir: &Path,
     request: &ServiceRequest,
 ) -> Result<()> {
+    super::firecrab::ensure_pipe_idle_at(confdir, None)?;
     if request.service == Service::Ingress {
         super::host_iac::check_ingress_control(confdir)?;
+    }
+    if request.service == Service::Tunnel {
+        super::host_iac::check_quick_control(confdir, LEGACY_QUICK_TUNNEL_ID)?;
     }
     let (unit, name) = match request.service {
         Service::Ingress => (INGRESS_UNIT, "Nginx"),
@@ -1035,6 +1086,8 @@ fn control_quick_with(
     id: uuid::Uuid,
     action: ServiceAction,
 ) -> Result<()> {
+    super::firecrab::ensure_pipe_idle_at(confdir, None)?;
+    super::host_iac::check_quick_control(confdir, id)?;
     if id == LEGACY_QUICK_TUNNEL_ID && config.quick_tunnel.is_some() {
         return control_with(
             runner,
@@ -1070,6 +1123,7 @@ pub(super) fn disable() -> Result<()> {
 
 // Stop remains usable when a saved manifest has broken routes or invalid JSON.
 fn disable_with(runner: &dyn CommandRunner, confdir: &Path, unitdir: &Path) -> Result<()> {
+    super::firecrab::ensure_pipe_idle_at(confdir, None)?;
     super::host_iac::check_ingress_control(confdir)?;
     let manifest = fs::read(confdir.join("pipe/manifest.json"))
         .ok()

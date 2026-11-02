@@ -347,7 +347,7 @@ impl Store {
             if request.owner.is_some() && !exists {
                 return Err(PersistenceError::InvalidStackResource);
             }
-        } else if request.resource.kind == "ingress" {
+        } else if firecrab_helper_protocol::host_iac::is_pipe_kind(&request.resource.kind) {
             host_proof
                 .ok_or(PersistenceError::UnsupportedIacResource)?
                 .check(&request)?;

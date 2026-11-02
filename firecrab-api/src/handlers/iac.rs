@@ -62,7 +62,7 @@ pub async fn owner(
     Path((kind, id)): Path<(String, String)>,
 ) -> Result<Json<ResourceOwnership>, AppError> {
     let resource = ManagedResource { kind, id };
-    if resource.kind == "ingress" {
+    if firecrab_helper_protocol::host_iac::is_pipe_kind(&resource.kind) {
         return crate::host_lifecycle::observe(&state, request.0, resource)
             .await
             .map(|observation| Json(observation.ownership));
@@ -310,7 +310,7 @@ pub async fn change_owner(
     })?;
     let store = state.store.clone();
     let operation = change.operation_id;
-    if change.resource.kind == "ingress" {
+    if firecrab_helper_protocol::host_iac::is_pipe_kind(&change.resource.kind) {
         return crate::host_lifecycle::change(state, request.0, change)
             .await
             .map(Json);

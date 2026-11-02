@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   host-iac-broker:
-    name: Host Ingress ownership broker (Linux Release fixture)
+    name: Host Pipe ownership broker (Linux Release fixture)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     steps:

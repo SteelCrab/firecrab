@@ -31,6 +31,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Inspect and transfer IaC ownership | [Shared ownership](guides/iac-ownership.md) |
 | Recover image installation, import or deletion | [Image operations](guides/iac-images.md) |
 | Transfer host Ingress ownership safely | [Host Ingress ownership](guides/iac-ingress.md) |
+| Transfer independent Quick Tunnel ownership | [Quick Tunnel ownership](guides/iac-quick-tunnels.md) |
 | Register stack ownership and preview configuration changes | [Stack planning](guides/stack-planning.md) |
 | Apply YAML stacks and inspect durable execution status | [Stack apply](guides/stack-apply.md) |
 | Replace or prune owned resources with default VM disk retention | [Stack lifecycle policies](guides/stack-lifecycle.md) |
