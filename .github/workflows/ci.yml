@@ -720,22 +720,29 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v7
 
-      - name: Cache cargo
+      - name: Free unused runner SDKs
+        # Keep kernel builds and real guest QA on the disposable runner's local disk.
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
+      - name: Cache installer release dependencies
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+            target/release
+          key: installer-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            cargo-${{ runner.os }}-
+            installer-cargo-${{ runner.os }}-
 
       - name: Install pinned toolchain
         run: rustup show
@@ -935,6 +942,9 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:5523/api/host >/dev/null
+
+      - name: Report disk capacity before guest kernel build
+        run: df -h / /var/lib/firecrab "$GITHUB_WORKSPACE"
 
       - name: Build current stable guest kernel
         id: guest-kernel
