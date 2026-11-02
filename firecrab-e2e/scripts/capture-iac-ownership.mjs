@@ -175,7 +175,9 @@ try {
   await work.screenshot({path:path.join(output,`iac-548-vm-recovery-desktop-${captureDate}.png`)});
   await page.setViewportSize({width:375,height:812});
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "native recovery must fit mobile");
-  await work.screenshot({path:path.join(output,`iac-548-vm-recovery-mobile-${captureDate}.png`)});
+  const vmCard=work.locator(`[data-operation-id="${vmProof.operationId}"]`);
+  await vmCard.getByRole("button",{name:"Resume VM deletion",exact:true}).scrollIntoViewIfNeeded();
+  await vmCard.screenshot({path:path.join(output,`iac-548-vm-recovery-mobile-${captureDate}.png`)});
   await page.setViewportSize({width:1440,height:1000});
   await work.getByRole("button", { name: "Resume VM deletion", exact: true }).click();
   await work.getByRole("status").filter({hasText:"Original operation completed."}).waitFor();

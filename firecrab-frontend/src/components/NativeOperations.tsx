@@ -276,6 +276,9 @@ export default function NativeOperations() {
             {operation.state === "needs_recovery" && recoverable && (
               <button
                 type="button"
+                className={
+                  operation.action.startsWith("delete_") ? "btn danger" : "btn"
+                }
                 disabled={!!busy || !!lookupError}
                 onClick={() => void recover(operation)}
               >
@@ -292,6 +295,7 @@ export default function NativeOperations() {
       {more && (
         <button
           type="button"
+          className="btn"
           disabled={!!busy || !!lookupError}
           onClick={() => setPages((value) => value + 1)}
         >

@@ -25,7 +25,7 @@ async fn wait_state(state: &AppState, id: Uuid, wanted: NativeOperationState) {
 
 #[tokio::test]
 async fn iac_vm_delete_survives_lost_waiter_and_retires_identity_and_lease() {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     let vm = record("owned-cleanup", Uuid::new_v4());
     seed_vm(&state, &vm);
@@ -115,7 +115,7 @@ async fn iac_vm_delete_survives_lost_waiter_and_retires_identity_and_lease() {
 
 #[tokio::test]
 async fn iac_vm_delete_metadata_failure_retains_authority_until_same_operation_recovers() {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     let vm = record("failed-cleanup", Uuid::new_v4());
     seed_vm(&state, &vm);
@@ -180,7 +180,7 @@ async fn iac_vm_delete_metadata_failure_retains_authority_until_same_operation_r
 
 #[tokio::test]
 async fn iac_vm_delete_stale_attempt_and_changed_retention_cannot_finish_or_replay() {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     let vm = record("attempt-fences", Uuid::new_v4());
     seed_vm(&state, &vm);
@@ -227,7 +227,7 @@ async fn iac_vm_delete_stale_attempt_and_changed_retention_cannot_finish_or_repl
 #[tokio::test]
 async fn iac_vm_delete_retention_preserves_exact_private_disk_and_parent_requests_have_distinct_receipts()
  {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     let request = crate::server::RequestId(Uuid::new_v4());
     for name in ["retained-one", "retained-two"] {
@@ -274,7 +274,7 @@ async fn iac_vm_delete_retention_preserves_exact_private_disk_and_parent_request
 
 #[tokio::test]
 async fn iac_vm_delete_fence_blocks_stack_admission_even_when_its_vm_is_not_in_the_new_plan() {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     let vm = record("stack-cleanup-fence", Uuid::new_v4());
     seed_vm(&state, &vm);

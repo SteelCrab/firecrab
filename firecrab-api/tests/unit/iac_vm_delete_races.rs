@@ -23,7 +23,7 @@ fn member(
 #[tokio::test]
 async fn iac_vm_delete_parent_lease_blocks_transfer_through_failure_and_allows_it_after_completion()
 {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     let mut vm = record("generated-parent", Uuid::new_v4());
     vm.purpose = crate::model::VmPurpose::Pool;
@@ -65,7 +65,7 @@ async fn iac_vm_delete_parent_lease_blocks_transfer_through_failure_and_allows_i
 
 #[tokio::test]
 async fn iac_vm_delete_generated_child_blocks_stack_work_via_parent_ownership() {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     let mut vm = record("generated-stack-parent", Uuid::new_v4());
     vm.purpose = crate::model::VmPurpose::Pool;
@@ -125,7 +125,7 @@ async fn iac_vm_delete_generated_child_blocks_stack_work_via_parent_ownership() 
 
 #[tokio::test]
 async fn iac_vm_delete_old_worker_cannot_dispatch_or_restore_a_vm_after_recovery_elsewhere() {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     let vm = record("stale-cleanup-worker", Uuid::new_v4());
     seed_vm(&state, &vm);

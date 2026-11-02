@@ -51,7 +51,7 @@ fn release(store: &Store, owned: ResourceOwnership) {
 
 #[tokio::test]
 async fn iac_volume_attachment_transfer_preserves_disk_and_blocks_implicit_parent_delete() {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     let vm = record("attachment-owner", Uuid::new_v4());
     seed_vm(&state, &vm);
@@ -132,7 +132,7 @@ async fn iac_volume_attachment_transfer_preserves_disk_and_blocks_implicit_paren
 
 #[tokio::test]
 async fn iac_volume_attachment_cannot_retarget_or_adopt_generated_or_busy_vm() {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     let mut vm = record("attachment-validation", Uuid::new_v4());
     seed_vm(&state, &vm);
@@ -177,7 +177,7 @@ async fn iac_volume_attachment_cannot_retarget_or_adopt_generated_or_busy_vm() {
 
 #[tokio::test]
 async fn iac_volume_attachment_late_attach_and_detach_cannot_cross_release_or_parent_transfer() {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     let vm = record("attachment-generation", Uuid::new_v4());
     seed_vm(&state, &vm);
@@ -232,7 +232,7 @@ async fn iac_volume_attachment_late_attach_and_detach_cannot_cross_release_or_pa
 
 #[tokio::test]
 async fn iac_volume_attachment_rejects_adoption_during_durable_parent_cleanup() {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     let vm = record("attachment-delete-fence", Uuid::new_v4());
     seed_vm(&state, &vm);

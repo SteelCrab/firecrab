@@ -60,6 +60,9 @@ export async function openDashboard(page: Page, options: DashboardOptions = {}):
     const custom = routes[path];
     if (typeof custom === "function") return custom(route);
     if (custom) return route.fulfill({ json: custom });
+    if (path === "/api/iac/native-operations") {
+      return route.fulfill({ json: { operations: [], nextBefore: null } });
+    }
     if (path === "/api/vms") return route.fulfill({ json: typeof vms === "function" ? vms() : vms });
     if (["/api/microblockstorage", "/api/security-groups", "/api/schedules", "/api/pipe/storage"].includes(path)) return route.fulfill({ json: [] });
     if (path === "/api/update") return route.fulfill({ json: { current: "0.3.1", latest: "0.3.1", updateAvailable: false } });

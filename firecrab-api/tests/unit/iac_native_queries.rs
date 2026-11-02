@@ -17,7 +17,7 @@ fn router(state: AppState) -> Router {
 
 #[tokio::test]
 async fn iac_native_pages_include_unowned_work_and_exclude_completed_receipts() {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     for i in 10..13 {
         let vm = record("query-work", Uuid::new_v4());
@@ -95,7 +95,7 @@ async fn iac_native_pages_include_unowned_work_and_exclude_completed_receipts() 
 
 #[tokio::test]
 async fn iac_native_vm_recovery_requires_operator_and_pins_expected_endpoint() {
-    let root = tempfile::tempdir_in("/private/tmp").unwrap();
+    let root = crate::firecracker::test_support::short_tempdir();
     let state = test_state(root.path()).await;
     let vm = record("recovery-scope", Uuid::new_v4());
     seed_vm(&state, &vm);
