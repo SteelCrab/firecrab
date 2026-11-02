@@ -288,6 +288,9 @@ mod tests {
         };
         let (status, Json(first)) = submit(input.clone()).await.unwrap();
         assert_eq!(status, StatusCode::ACCEPTED);
+        // Direct fixture edits must not race the worker's admitted-state checkpoint.
+        // Execution stays blocked by the provider permits; public retries still take their own claim.
+        let fixture_claim = state.sandbox.admission.lock().await;
         let retained = state.store.sandbox_task(key).unwrap().unwrap();
         assert_eq!(retained.instructions.as_ref().unwrap().snapshot, snapshot);
         let db = open(&state, &b).unwrap();
@@ -300,6 +303,7 @@ mod tests {
             )
             .unwrap();
         drop(db);
+        drop(fixture_claim);
         let (status, Json(replayed)) = submit(input.clone()).await.unwrap();
         assert_eq!(status, StatusCode::OK);
         assert_eq!(first.attempt_id, replayed.attempt_id);

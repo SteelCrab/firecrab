@@ -66,6 +66,12 @@ regression verifies this behavior. Assertions and pool mutation coverage remain 
 Live workload interruption, different-host restore, production-user/multi-user checks
 and retention/deletion remain unchecked. PR #562 stays Draft and unmerged.
 
+A later release-profile CI run exposed a direct fixture mutation racing the task
+worker's admitted-state checkpoint. The fixture now owns the existing admission
+claim only around its direct database edits. Public retry still acquires its own
+claim. All original frozen-rule, attempt identity and no-dispatch assertions remain.
+The exact regression passed locally and passed ten additional exact executions.
+
 ## UI evidence
 
 These screenshots use a synthetic controller in the compiled React app. No live
