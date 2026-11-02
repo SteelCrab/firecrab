@@ -249,7 +249,17 @@ fn copied_sessions_cannot_control_primary_or_other_private_dashboards() {
         assert!(port(home).is_err());
         assert_eq!(fs::read(&record).unwrap(), *foreign);
         for server in [&primary_server, &first_server, &second_server] {
-            assert!(running(&client, &server.0, &server.0.url()));
+            // A loaded Windows runner can exceed one HTTP probe's one-second timeout.
+            // Keep checking the exact session identity; never accept a listening foreign server.
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while !running(&client, &server.0, &server.0.url()) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Owned dashboard stopped: {}",
+                    server.0.url()
+                );
+                thread::sleep(Duration::from_millis(50));
+            }
         }
         fs::write(record, original).unwrap();
     }
