@@ -8,6 +8,12 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeAction {
+    /// Install the broker using its one reserved VM and disk identity.
+    InstallQueueEngine,
+    /// Start or repair the same broker; never replace an existing disk.
+    StartQueueEngine,
+    /// Stop the broker while retaining all declarations and messages.
+    StopQueueEngine,
     /// Delete one project's private workspace and metadata; borrowed sources survive.
     DeleteSandboxProject,
     /// Disconnect Git configuration without deleting its Stack or infrastructure.
@@ -42,7 +48,14 @@ pub struct NativeOperation {
     pub state: NativeOperationState,
     /// Static failure category, without upstream messages or supplied values.
     pub error_code: Option<String>,
+    /// Recovery advances the attempt fence; workers from an older attempt cannot commit.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub execution_generation: u64,
     /// Original configuration generation for a versioned metadata removal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub configuration_generation: Option<u64>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }

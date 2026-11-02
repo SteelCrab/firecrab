@@ -150,6 +150,7 @@ impl Store {
             action: NativeAction::RevokeSandboxAccess,
             state: NativeOperationState::Succeeded,
             error_code: None,
+            execution_generation: 0,
             configuration_generation: None,
         };
         super::iac_native::save(&tx, &operation)?;

@@ -9,7 +9,7 @@ use crate::{
 use axum::{
     Extension, Json,
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use firecrab_api_types::*;
@@ -23,35 +23,94 @@ pub async fn engine(
 ) -> Result<Json<Option<QueueEngineResponse>>, AppError> {
     queues::engine_status(&state, id.0).await.map(Json)
 }
+/// A retry key selects an immutable operation; it never provides write authority.
+fn operation_id(headers: &HeaderMap, request_id: Uuid) -> Result<Uuid, AppError> {
+    let Some(value) = headers.get("x-firecrab-operation-id") else {
+        return Ok(request_id);
+    };
+    value
+        .to_str()
+        .ok()
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .filter(|id| !id.is_nil())
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_operation_id",
+                "provide a non-nil operation UUID",
+                request_id,
+            )
+        })
+}
+
+type EngineAccepted = (
+    StatusCode,
+    [(&'static str, String); 1],
+    Json<QueueEngineResponse>,
+);
+
 /// Accept installation of the single internal RabbitMQ engine.
 pub async fn create_engine(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
+    headers: HeaderMap,
     ValidatedJson(spec): ValidatedJson<CreateQueueEngineRequest>,
-) -> Result<(StatusCode, Json<QueueEngineResponse>), AppError> {
+) -> Result<EngineAccepted, AppError> {
+    let operation = operation_id(&headers, id.0)?;
+    let result = queues::operate_engine(
+        state,
+        firecrab_stack::NativeAction::InstallQueueEngine,
+        Some(spec),
+        id.0,
+        operation,
+    )
+    .await?;
     Ok((
         StatusCode::ACCEPTED,
-        Json(queues::create_engine(state, spec, id.0).await?),
+        [("x-firecrab-operation-id", operation.to_string())],
+        Json(result),
     ))
 }
 /// Accept recovery of the same broker VM and disk.
 pub async fn start_engine(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
-) -> Result<(StatusCode, Json<QueueEngineResponse>), AppError> {
+    headers: HeaderMap,
+) -> Result<EngineAccepted, AppError> {
+    let operation = operation_id(&headers, id.0)?;
+    let result = queues::operate_engine(
+        state,
+        firecrab_stack::NativeAction::StartQueueEngine,
+        None,
+        id.0,
+        operation,
+    )
+    .await?;
     Ok((
         StatusCode::ACCEPTED,
-        Json(queues::start_engine(state, id.0).await?),
+        [("x-firecrab-operation-id", operation.to_string())],
+        Json(result),
     ))
 }
 /// Accept a broker stop without deleting messages or credentials.
 pub async fn stop_engine(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
-) -> Result<(StatusCode, Json<QueueEngineResponse>), AppError> {
+    headers: HeaderMap,
+) -> Result<EngineAccepted, AppError> {
+    let operation = operation_id(&headers, id.0)?;
+    let result = queues::operate_engine(
+        state,
+        firecrab_stack::NativeAction::StopQueueEngine,
+        None,
+        id.0,
+        operation,
+    )
+    .await?;
     Ok((
         StatusCode::ACCEPTED,
-        Json(queues::stop_engine(state, id.0).await?),
+        [("x-firecrab-operation-id", operation.to_string())],
+        Json(result),
     ))
 }
 /// List public queue declarations and their service references.

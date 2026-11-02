@@ -99,7 +99,8 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "sandbox_environment",
             "sandbox_project",
             "stack_source",
-            "sandbox_access"
+            "sandbox_access",
+            "queue_engine"
         ])
     );
     assert_eq!(
@@ -280,6 +281,12 @@ fn configuration_resource(
                 created_at_ms: 1,
             })
             .unwrap(),
+        "queue_engine" => state.store.save_queue_engine(&crate::queues::EngineRecord {
+            vm_id: id, vm_created: true,
+            spec: firecrab_api_types::CreateQueueEngineRequest {micro_network_id: network, cpu: 1, ram: 512, disk_gb: 8, storage_root: None},
+            phase: firecrab_api_types::QueueEnginePhase::Stopped, error: None,
+            username: "fixture-admin".into(), password: "fixture-credential-never-echo".into(),
+        }).unwrap(),
         "queue" => state
             .store
             .save_queue(&crate::queues::QueueRecord {
@@ -1033,6 +1040,7 @@ async fn iac_owner_browser_fixture() {
         "secret_connection",
         "sandbox_project",
         "sandbox_access",
+        "queue_engine",
     ] {
         let resource = configuration_resource(&state, root.path(), id, kind);
         let before = state.store.iac_resource_owner(&resource).unwrap();
@@ -1201,3 +1209,6 @@ mod source;
 
 #[path = "iac_access.rs"]
 mod access;
+
+#[path = "iac_queue_engine.rs"]
+mod queue_engine_tests;

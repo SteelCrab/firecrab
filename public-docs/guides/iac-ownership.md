@@ -234,3 +234,19 @@ The check uses actual HTTP and compiled React dashboard, with isolated SQLite fi
 It verifies direct-mutation rejection, the durable acknowledgement, desktop and mobile rendering.
 The actual CLI discovers a native cleanup failure, recovers its original operation and checks the immutable retry.
 It does not boot Linux/KVM workloads or run a Terraform provider.
+
+## Queue engine admission and recovery
+
+The `queue_engine` ownership identity is the exact reserved broker VM UUID, including before VM creation.
+Its VM is a generated child and cannot be adopted or mutated independently.
+Transferring ownership preserves credentials, engine configuration, VM identity and all message storage.
+Active engine operations and queue provisioning block ownership changes.
+
+Installation, start and stop atomically persist the engine checkpoint and typed native operation before dispatch.
+Retries preserve the same operation and never dispatch again. A failed operation keeps a recovery fence.
+API restart marks unfinished work as requiring recovery. Explicit operator recovery advances its execution generation.
+Workers from older attempts cannot commit. A completed receipt remains immutable after later ownership transfers.
+Only confirmed runtime stop or RabbitMQ readiness completes the operation.
+
+These ownership and native-operation prerequisites are not complete Stack or Terraform lifecycle support.
+The complete #548 merge hold remains in force.

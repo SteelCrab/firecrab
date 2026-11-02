@@ -90,6 +90,7 @@ impl Store {
             action: NativeAction::DeleteStackSource,
             state: NativeOperationState::Succeeded,
             error_code: None,
+            execution_generation: 0,
             configuration_generation: Some(source.generation),
         };
         tx.execute(

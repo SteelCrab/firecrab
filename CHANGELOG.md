@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Reserve Queue engine ownership by exact broker VM UUID. Journal installation,
+  start and stop before dispatch, retain the original VM/disk/credentials during
+  recovery, and fence older execution attempts. Recover interrupted work through
+  the API, CLI and dashboard; never redispatch an acknowledged retry (#548).
+
 - Protect Sandbox access-policy ownership by exact delegated host UUID.
   Keep operator revocation available with atomic permission denial, authority invalidation
   and a durable acknowledgement. Reject late saves after revocation and preserve newer

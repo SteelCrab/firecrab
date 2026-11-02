@@ -153,6 +153,7 @@ impl Store {
             action: NativeAction::DeleteSandboxProject,
             state: NativeOperationState::Running,
             error_code: None,
+            execution_generation: 0,
             configuration_generation: None,
         };
         save(&tx, &operation)?;

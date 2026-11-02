@@ -64,6 +64,7 @@ impl ManagedResource {
                 | "schedule"
                 | "pool"
                 | "queue"
+                | "queue_engine"
                 | "database_connection"
                 | "storage_connection"
                 | "secret"

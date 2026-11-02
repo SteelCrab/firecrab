@@ -29,7 +29,7 @@ try {
   const capabilities = await identity.json();
   assert.equal(capabilities.endpointId, ownership.endpointId);
   assert.equal(capabilities.inventoryKinds.length, 43);
-  assert.deepEqual(capabilities.transferKinds, ["network", "vm", "service", "storage_root", "volume", "security_group", "shell", "schedule", "pool", "queue", "database_connection", "storage_connection", "secret", "secret_connection", "auth", "registry", "ai_connection", "ai_model", "sandbox_environment", "sandbox_project", "stack_source", "sandbox_access"]);
+  assert.deepEqual(capabilities.transferKinds, ["network", "vm", "service", "storage_root", "volume", "security_group", "shell", "schedule", "pool", "queue", "database_connection", "storage_connection", "secret", "secret_connection", "auth", "registry", "ai_connection", "ai_model", "sandbox_environment", "sandbox_project", "stack_source", "sandbox_access", "queue_engine"]);
   const observed = await context.request.get(`${origin}api/iac/owners`);
   assert.equal(observed.status(), 200);
   assert.deepEqual((await observed.json()).filter(item=>item.owner.manager==="terraform"), fixture.ownerships);
@@ -131,7 +131,7 @@ try {
   await page.locator('.stack-card[data-manager="terraform"]').first().evaluate(element => element.scrollIntoView({ block: "start" }));
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(output, `iac-548-ownership-overview-${captureDate}.png`), fullPage: true });
-  const focus = fixture.ownerships.find(owned => owned.resource.kind === "volume") || ownership;
+  const focus = fixture.ownerships.find(owned => owned.resource.kind === "queue_engine") || ownership;
   async function focusOwnership() {
     const resource=page.locator(`.stack-resource[data-resource-id="${focus.resource.id}"]`);
     await resource.evaluate(element => element.scrollIntoView({ block: "center" }));
@@ -169,13 +169,62 @@ try {
   assert.deepEqual(command(["sandbox","get-access",access.resource.id]),{grants:[]});
   await page.locator(`.stack-resource[data-resource-id="${access.resource.id}"]`).waitFor({state:"detached"});
   const accessRevocation={operation:accessOperation,released,checks:["actual CLI policy observation and revocation","managed grant replacement rejected","atomic deny and authority release","immutable completed recovery","React poll removes revoked ownership"]};
+  const engineOwner=fixture.ownerships.find(item=>item.resource.kind==="queue_engine");
+  assert.ok(engineOwner,"fixture must include the exact reserved broker owner");
+  for(const action of ["start","stop"]) {
+    const denied=await context.request.post(`${origin}api/queue/engine/${action}`);
+    assert.equal(denied.status(),409);
+    assert.equal((await denied.json()).error.code,"iac_ownership_conflict");
+  }
+  const releaseFile=path.join(output,"queue-engine-release.json");
+  const release={operationId:randomUUID(),expectedEndpointId:engineOwner.endpointId,resource:engineOwner.resource,
+    expectedGeneration:engineOwner.generation,expectedOwner:engineOwner.owner,owner:null};
+  await writeFile(releaseFile,JSON.stringify(release));
+  const engineReleased=cli(["change-owner","--file",releaseFile]);
+  assert.equal(engineReleased.owner,null);
+  const stopId=randomUUID();
+  const accepted=await context.request.post(`${origin}api/queue/engine/stop`,{headers:{"x-firecrab-operation-id":stopId}});
+  assert.equal(accepted.status(),202);
+  assert.equal(accepted.headers()["x-firecrab-operation-id"],stopId);
+  async function engineFailure() {
+    const deadline=Date.now()+5000;
+    while(Date.now()<deadline) {
+      const operation=cli(["native-operation","--id",stopId]);
+      if(operation.state==="needs_recovery") return operation;
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+    throw new Error("expected the deliberately absent reserved VM to retain a recovery fence");
+  }
+  const failedStop=await engineFailure();
+  assert.equal(failedStop.ownership.resource.id,engineOwner.resource.id);
+  assert.equal(failedStop.action,"stop_queue_engine");
+  assert.equal(failedStop.errorCode,"queue_engine_incomplete");
+  const resumed=cli(["recover-native-operation","--id",stopId]);
+  assert.equal(resumed.operationId,stopId);
+  assert.equal(resumed.executionGeneration,1);
+  const failedRecovery=await engineFailure();
+  assert.equal(failedRecovery.executionGeneration,1);
+  assert.deepEqual(failedRecovery.ownership,failedStop.ownership);
+  const retryStop=await context.request.post(`${origin}api/queue/engine/stop`,{headers:{"x-firecrab-operation-id":stopId}});
+  assert.equal(retryStop.status(),202);
+  assert.deepEqual(cli(["native-operation","--id",stopId]),failedRecovery);
+  await page.setViewportSize({width:1440,height:1000});
+  await page.goto(`${origin}#/queues`);
+  await page.getByRole("button",{name:"Recover engine",exact:true}).waitFor();
+  await page.screenshot({path:path.join(output,`iac-548-queue-recovery-desktop-${captureDate}.png`),fullPage:true});
+  await page.setViewportSize({width:375,height:812});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
+  await page.screenshot({path:path.join(output,`iac-548-queue-recovery-mobile-${captureDate}.png`),fullPage:true});
+  const queueEngine={owned:engineOwner,released:engineReleased,failedStop,resumed,failedRecovery,
+    fixtureObservation:"the broker VM is intentionally absent; its checkpoint says previously created, so native stop/recovery must fail without creating a replacement. No Linux/KVM boot or RabbitMQ connection occurred",
+    checks:["Terraform-owned start/stop rejected","actual CLI explicit release","caller-retained stop operation UUID","native missing-VM failure retains fence","actual CLI original-operation recovery increments execution generation","same reserved VM identity","HTTP retry does not redispatch","actual React recovery button","375px without horizontal overflow"]};
   assert.deepEqual(errors, []);
   await writeFile(path.join(output, "iac-548-ownership-evidence.json"), JSON.stringify({
     capturedAt: new Date().toISOString(), captureDate, sourceCommit, sourceDirty, focusResource:focus.resource, versions:{browser:browser.version(),node:process.version}, fixture: true, transport: "actual local Axum HTTP; no mocked API responses",
     runtime: "compiled React dashboard with disposable SQLite resource records; no Linux/KVM boot",
-    ownership, ownerships:fixture.ownerships,nativeRecovery,sourceRemoval,accessRevocation, checks: ["endpoint identity", `43 inventory kinds; ${capabilities.transferKinds.length} transfer adapters`, "actual ownership read", "direct PATCH rejected with 409", `${blockedConfigurations} configuration kinds reject direct DELETE with 409`, "immutable operation acknowledgement", `${fixture.ownerships.length} Terraform ownership records and one retained native binding in the actual dashboard before operator revocation`, `${states.size} Terraform states remain separate; each resource kind has its own icon section and count`, "native bindings are displayed once", "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
+    ownership, ownerships:fixture.ownerships,nativeRecovery,sourceRemoval,accessRevocation,queueEngine, checks: ["endpoint identity", `43 inventory kinds; ${capabilities.transferKinds.length} transfer adapters`, "actual ownership read", "direct PATCH rejected with 409", `${blockedConfigurations} configuration kinds reject direct DELETE with 409`, "immutable operation acknowledgement", `${fixture.ownerships.length} Terraform ownership records and one retained native binding in the actual dashboard before operator revocation`, `${states.size} Terraform states remain separate; each resource kind has its own icon section and count`, "native bindings are displayed once", "desktop dashboard", "375px mobile without horizontal overflow", "no browser page errors"],
   }, null, 2) + "\n");
-  console.log("Actual API ownership, separate state cards, icon sections and four dashboard screenshots verified.");
+  console.log("Actual API ownership, separate state cards, icon sections and six dashboard screenshots verified.");
 } finally {
   await browser.close();
 }

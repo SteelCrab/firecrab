@@ -29,6 +29,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "sandbox_project",
     "stack_source",
     "sandbox_access",
+    "queue_engine",
 ];
 
 /// Reservations and tombstones keep generated identities with their parent.
@@ -42,7 +43,13 @@ pub(super) fn ensure_independent(
         params![resource.kind, resource.id],
         |row| row.get(0),
     )?;
-    if generated {
+    let queue_child = resource.kind == "vm"
+        && conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM queue_engine WHERE json_extract(record,'$.vm_id')=?1)",
+            [&resource.id],
+            |row| row.get::<_, bool>(0),
+        )?;
+    if generated || queue_child {
         return Err(PersistenceError::IacParentManaged);
     }
     Ok(())
@@ -66,6 +73,9 @@ pub(super) fn validate(
         "shell" => "SELECT EXISTS(SELECT 1 FROM shells WHERE id=?1)",
         "schedule" => "SELECT EXISTS(SELECT 1 FROM schedules WHERE id=?1)",
         "pool" => "SELECT EXISTS(SELECT 1 FROM vm_pools WHERE id=?1)",
+        "queue_engine" => {
+            "SELECT EXISTS(SELECT 1 FROM queue_engine WHERE json_extract(record,'$.vm_id')=?1)"
+        }
         "queue" => {
             "SELECT EXISTS(SELECT 1 FROM application_queues WHERE id=?1 AND json_extract(record,'$.id')=?1)"
         }
@@ -118,6 +128,12 @@ pub(super) fn validate(
         "pool" => Some(
             "SELECT EXISTS(SELECT 1 FROM vm_pools WHERE id=?1 AND deleting<>0)
              OR EXISTS(SELECT 1 FROM vm_pool_members WHERE pool_id=?1 AND state NOT IN ('ready','leased'))",
+        ),
+        "queue_engine" => Some(
+            "SELECT EXISTS(SELECT 1 FROM queue_engine WHERE json_extract(record,'$.vm_id')=?1
+             AND COALESCE(json_extract(record,'$.phase'),'') NOT IN ('running','stopped','failed'))
+             OR EXISTS(SELECT 1 FROM application_queues WHERE COALESCE(json_extract(record,'$.phase'),'') NOT IN ('ready','failed'))
+             OR EXISTS(SELECT 1 FROM vms WHERE id=?1 AND state IN ('starting','pausing','resuming','stopping'))",
         ),
         "queue" => Some(
             "SELECT EXISTS(SELECT 1 FROM application_queues WHERE id=?1 AND COALESCE(json_extract(record,'$.phase'),'') NOT IN ('ready','failed'))

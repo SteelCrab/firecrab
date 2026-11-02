@@ -112,6 +112,11 @@ pub async fn recover_native_operation(
     if operation.state == firecrab_stack::NativeOperationState::Succeeded {
         return Ok(Json(operation));
     }
+    if crate::persistence::queue_engine_operations::is_engine_action(operation.action) {
+        return crate::queues::recover_operation(state, request.0, operation.operation_id)
+            .await
+            .map(Json);
+    }
     super::ai_sandbox::recover_project_delete(state, request, caller, operation)
         .await
         .map(Json)
@@ -167,6 +172,17 @@ pub async fn change_owner(
         None
     };
     let _services = state.service_mutations.lock().await;
+    let _queue = if matches!(change.resource.kind.as_str(), "queue" | "queue_engine") {
+        Some(state.queue_mutations.try_lock().map_err(|_| {
+            AppError::conflict(
+                "iac_resource_busy",
+                "Queue engine has an operation in progress",
+                request.0,
+            )
+        })?)
+    } else {
+        None
+    };
     let _ai = if matches!(change.resource.kind.as_str(), "ai_connection" | "ai_model") {
         Some(state.pipe_ai_mutations.lock().await)
     } else {

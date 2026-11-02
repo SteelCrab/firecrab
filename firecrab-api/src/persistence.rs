@@ -52,6 +52,7 @@ pub(crate) use stack_sources::SourceTrigger;
 pub(crate) mod iac_native;
 mod iac_owners;
 mod iac_resources;
+pub(crate) mod queue_engine_operations;
 pub(crate) use iac_resources::TRANSFER_KINDS as IAC_TRANSFER_KINDS;
 mod stacks;
 pub use registries::RegistryLogin;
@@ -859,6 +860,7 @@ impl Store {
         conn.execute_batch(stacks::SCHEMA_SQL)?;
         conn.execute_batch(stack_applies::SCHEMA_SQL)?;
         conn.execute_batch(queues::SCHEMA)?;
+        conn.execute_batch(queue_engine_operations::SCHEMA)?;
         conn.execute_batch(stack_sources::SCHEMA_SQL)?;
         iac_owners::initialize(&conn)?;
         conn.execute_batch(iac_native::SCHEMA)?;
