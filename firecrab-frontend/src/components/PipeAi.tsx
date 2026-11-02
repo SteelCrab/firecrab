@@ -20,6 +20,7 @@ import {
   saveAiConnection,
   startAiLogin,
   getAiLogin,
+  cancelAiLogin,
   type AiLogin,
   type AiConnection,
 } from "../api/pipeAi";
@@ -46,6 +47,7 @@ export default function PipeAi({
   const [login, setLogin] = useState<AiLogin | null>(null);
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
+  const loginPoll = useRef<AbortController | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const waitingLogin = login !== null;
@@ -75,6 +77,7 @@ export default function PipeAi({
   useEffect(() => {
     if (!login) return;
     const controller = new AbortController();
+    loginPoll.current = controller;
     let timer: ReturnType<typeof setTimeout>;
     const deadline = Date.now() + login.expiresIn * 1000;
     async function poll() {
@@ -198,10 +201,12 @@ export default function PipeAi({
         window.open(started.authorizationUrl, "_blank", "noopener,noreferrer");
         return;
       }
+      const submittedKey = apiKey;
+      setApiKey("");
       const saved = await saveAiConnection(editing, {
         name: name.trim(),
         provider,
-        apiKey,
+        apiKey: submittedKey,
       });
       setConnections((current) => [
         ...(current ?? []).filter((value) => value.id !== saved.id),
@@ -209,6 +214,26 @@ export default function PipeAi({
       ]);
       setApiKey("");
       setEditing(null);
+    });
+  }
+  function cancel() {
+    if (!login) {
+      setEditing(null);
+      setApiKey("");
+      return;
+    }
+    const pending = login;
+    loginPoll.current?.abort();
+    void act(async () => {
+      try {
+        await cancelAiLogin(pending.loginId);
+        setLogin(null);
+        setEditing(null);
+        setNotice(t("Sign-in cancelled.", "로그인을 취소했습니다."));
+      } catch (error) {
+        setLogin({ ...pending });
+        throw error;
+      }
     });
   }
 
@@ -320,12 +345,13 @@ export default function PipeAi({
             <button
               className="icon-btn"
               type="button"
-              aria-label={t("Cancel", "취소")}
-              disabled={busy || waitingLogin}
-              onClick={() => {
-                setEditing(null);
-                setApiKey("");
-              }}
+              aria-label={
+                waitingLogin
+                  ? t("Cancel sign-in", "로그인 취소")
+                  : t("Cancel", "취소")
+              }
+              disabled={busy}
+              onClick={cancel}
             >
               <X aria-hidden="true" />
             </button>

@@ -50,8 +50,23 @@ export default function Binding({
     ),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [original, setOriginal] = useState(() => ({
+    revision: pending?.revision ?? w.revision,
+    spec: structuredClone(pending?.original ?? w.spec),
+  }));
+  const changed =
+    original.revision !== w.revision || !equal(original.spec, w.spec);
   const lock = useRef(false),
-    alive = useRef(true);
+    alive = useRef(true),
+    wasEditing = useRef(false);
+  useEffect(() => {
+    if (editing && !wasEditing.current && !pending) {
+      setOriginal({ revision: w.revision, spec: structuredClone(w.spec) });
+      setDraft(w.spec.agent);
+      setError("");
+    }
+    wasEditing.current = editing;
+  }, [editing, w, pending]);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -70,15 +85,15 @@ export default function Binding({
     setPending(null);
   }
   async function save() {
-    if (lock.current || blocked) return;
+    if (lock.current || blocked || (!pending && changed)) return;
     lock.current = true;
     setBusy(true);
     setError("");
     const p = pending ?? {
       workspace: w.id,
-      revision: w.revision,
-      original: structuredClone(w.spec),
-      spec: { ...structuredClone(w.spec), agent: draft },
+      revision: original.revision,
+      original: structuredClone(original.spec),
+      spec: { ...structuredClone(original.spec), agent: draft },
     };
     try {
       const latest = await fetchJson<Workspace>(`${CODE}/${w.id}`);
@@ -134,7 +149,9 @@ export default function Binding({
   async function open() {
     try {
       await current(w);
+      setOriginal({ revision: w.revision, spec: structuredClone(w.spec) });
       setDraft(w.spec.agent);
+      setError("");
       setEditing(true);
     } catch {
       setError("changed");
@@ -236,7 +253,12 @@ export default function Binding({
         <div className="code-actions">
           <button
             className="btn primary"
-            disabled={busy || blocked || (!pending && !valid)}
+            disabled={
+              busy ||
+              blocked ||
+              error === "changed" ||
+              (!pending && (!valid || changed))
+            }
             onClick={() => void save()}
           >
             {pending
@@ -261,9 +283,9 @@ export default function Binding({
       >
         {t("Manage AI AUTH", "AI AUTH 관리")}
       </button>
-      {error && (
+      {(error || (editing && !pending && changed)) && (
         <p role="alert">
-          {error === "changed"
+          {error === "changed" || (!pending && changed)
             ? t(
                 "The workspace changed. Review its latest configuration.",
                 "워크스페이스가 변경되었습니다. 최신 설정을 확인해 주세요.",

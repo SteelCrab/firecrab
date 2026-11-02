@@ -245,6 +245,19 @@ export default function RuntimeSettings({
       <p className="code-runtime-status">
         {r?.phase ?? t("Not provisioned", "생성 전")}
       </p>
+      {r?.error && (
+        <p role="alert">
+          {r.error === "sync_failed"
+            ? t(
+                "File synchronization failed. The VM was kept running.",
+                "파일 동기화에 실패했습니다. VM은 계속 실행 중입니다.",
+              )
+            : t(
+                "The runtime operation failed. Check its state before retrying.",
+                "실행 작업에 실패했습니다. 다시 시도하기 전에 상태를 확인해 주세요.",
+              )}
+        </p>
+      )}
       {!r && (
         <div className="code-fields">
           <label>
