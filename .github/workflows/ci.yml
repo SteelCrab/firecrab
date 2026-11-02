@@ -901,10 +901,26 @@ jobs:
             --busybox /usr/bin/busybox --expected-release "$FIRECRAB_CI_KERNEL_RELEASE" \
             --report target/qa/guest-console-vm.json
 
-      - name: Deploy with real MicroVMs and Nginx
+      - name: Start disposable SigNoz for guest observability acceptance
+        id: signoz
         if: ${{ !cancelled() && steps.guest-kernel.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          docker compose -p firecrab-signoz-qa -f scripts/fixtures/signoz/compose.yaml up -d --wait --wait-timeout 180
+          curl --fail --retry 30 --retry-connrefused --retry-all-errors --retry-delay 1 --max-time 5 \
+            -H 'Content-Type: application/json' -d '{"resourceLogs":[]}' http://127.0.0.1:25878/v1/logs
+
+      - name: Deploy with real MicroVMs and Nginx
+        if: ${{ !cancelled() && steps.signoz.outcome == 'success' }}
         timeout-minutes: 25
-        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation --replica-recovery --queue-controls --automatic-deploy --ci-deploy --observability --report target/qa/secret-rotation.json 2>&1 | tee target/qa/deploy.log
+        run: sudo python3 scripts/ci-qa-deploy.py --disposable-host --secret-rotation --replica-recovery --queue-controls --automatic-deploy --ci-deploy --observability --signoz-endpoint http://127.0.0.1:25878 --signoz-query-endpoint http://127.0.0.1:25876 --report target/qa/secret-rotation.json 2>&1 | tee target/qa/deploy.log
+
+      - name: Capture and remove disposable SigNoz
+        if: ${{ always() && steps.signoz.outcome != 'skipped' }}
+        run: |
+          mkdir -p target/qa
+          docker compose -p firecrab-signoz-qa -f scripts/fixtures/signoz/compose.yaml logs --no-color > target/qa/signoz.log
+          docker compose -p firecrab-signoz-qa -f scripts/fixtures/signoz/compose.yaml down --volumes --remove-orphans
 
       - name: Retain Deploy acceptance evidence
         if: always()
@@ -914,6 +930,7 @@ jobs:
           path: |
             target/qa/secret-rotation.json
             target/qa/deploy.log
+            target/qa/signoz.log
           if-no-files-found: warn
           retention-days: 7
 

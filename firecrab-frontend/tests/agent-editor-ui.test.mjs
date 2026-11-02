@@ -88,6 +88,7 @@ async function setup(
   });
   await page.goto(
     `${fixture.url}/#/ai-sandbox?editor=${agentId}&vm=${vmId}&controller=${mismatch ? "other-controller" : "native-controller"}`,
+    { waitUntil: "domcontentloaded" },
   );
   return { page, calls, destination, install: () => (installed = true) };
 }

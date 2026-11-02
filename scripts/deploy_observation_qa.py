@@ -7,6 +7,8 @@ import threading
 import time
 import uuid
 
+from deploy_signoz_qa import run_signoz
+
 
 class Collector:
     """Local OTLP/HTTP receiver with a controllable failure response."""
@@ -75,7 +77,7 @@ class Collector:
         assert not self.errors, self.errors
 
 
-def run_observation(api, wait_for, traffic, network, spec_a, port, evidence):
+def run_observation(api, wait_for, traffic, network, spec_a, port, evidence, signoz_endpoint=None, signoz_query_endpoint=None):
     services = []
     collector = Collector()
     errors = []
@@ -177,6 +179,10 @@ def run_observation(api, wait_for, traffic, network, spec_a, port, evidence):
                  message="collector did not receive the lifecycle event")
         metrics["stages"].append("lifecycle event exported after API restart")
         print("PASS isolated service logs, API restart buffer, events and OTLP export", flush=True)
+        if signoz_endpoint:
+            api.call("PUT", path(alpha, "/observability/otlp"), {"endpoint": None})
+            run_signoz(api, wait_for, traffic, network, alpha, beta, port,
+                       signoz_endpoint, signoz_query_endpoint, metrics)
     except BaseException as error:
         metrics["failure"] = str(error)
         raise
