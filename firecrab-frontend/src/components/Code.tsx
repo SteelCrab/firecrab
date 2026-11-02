@@ -47,7 +47,10 @@ export default function Code({
   const selected =
     snapshot.rows.find((w) => w.id === id) ??
     (!id ? snapshot.rows[0] : undefined);
-  // The default workspace needs its own runtime observation on the stable detail route.
+  useEffect(() => {
+    if (!creating && !id && snapshot.loaded && !snapshot.error && selected)
+      location.replace(`#/code/${selected.id}`);
+  }, [creating, id, snapshot.loaded, snapshot.error, selected]);
   const openManager = () => setManager(true);
   return (
     <Screen
@@ -120,7 +123,7 @@ export default function Code({
                           .filter((w) =>
                             `${w.spec.name} ${w.spec.github.owner}/${w.spec.github.repository} ${w.spec.github.branch}`
                               .toLowerCase()
-                              .includes(query.toLowerCase()),
+                              .includes(query.trim().toLowerCase()),
                           )
                           .map((w) => (
                             <a
@@ -149,6 +152,7 @@ export default function Code({
                       auth={auth}
                       refresh={snapshot.refresh}
                       manage={openManager}
+                      managing={manager}
                       onDirty={setDirty}
                     />
                   ) : (

@@ -11,9 +11,9 @@ async function open(page: Page, options: { locale?: "en" | "ko"; setup?: boolean
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
     const send = (json: unknown, status = 200) => route.fulfill({ json, status });
-    if (method === "GET" && ["/api/images", "/api/micro-networks", "/api/storage"].includes(path)) return send([]);
+    if (method === "GET" && ["/api/images", "/api/micro-networks", "/api/storage/roots"].includes(path)) return send([]);
     if (method !== "GET") state.writes.push({ method, path, body: request.postData() ? request.postDataJSON() : null });
-    if (path === "/api/pipe/ai/connections") return state.unavailable ? send({ error: { code: "unavailable" } }, 503) : send(state.connections);
+    if (path === "/api/pipe/ai/connections") return state.unavailable ? send({ error: { code: "unavailable", message: "AI accounts temporarily unavailable" } }, 503) : send(state.connections);
     if (path.endsWith("/login")) { state.loginConnection = path.split("/")[5]; state.loginName = request.postDataJSON().name; state.cancelled = false; return send({ loginId, authorizationUrl: "https://auth.openai.com/api/accounts/authorize?state=test", expiresIn: 600 }); }
     if (path === `/api/pipe/ai/logins/${loginId}`) {
       if (method === "DELETE") { state.cancelled = true; return send({ status: "failed", message: "Sign-in cancelled." }); }
@@ -63,12 +63,12 @@ for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) tes
   await page.getByRole("textbox", { name: ko ? "연결 이름" : "Connection name", exact: true }).fill("Shared CODE key");
   await page.getByLabel(ko ? "OpenAI API 키" : "OpenAI API key", { exact: true }).fill("code-auth-private-key");
   await page.getByRole("button", { name: ko ? "검증 후 저장" : "Verify and save", exact: true }).click();
-  await expect(page.getByRole("table")).toContainText("Shared CODE key");
+  await expect(page.locator(".pipe-ai-connections")).toContainText("Shared CODE key");
   expect(state.connections).toHaveLength(1);
   if (!ko) await page.screenshot({ path: info.outputPath(`code-auth-en-${width}.png`), fullPage: true });
   await page.getByRole("button", { name: ko ? "워크스페이스로 돌아가기" : "Back to workspace", exact: true }).click();
   await expect(page.getByRole("textbox", { name: ko ? "워크스페이스 이름" : "Workspace name", exact: true })).toHaveValue("retained-draft");
-  const select = page.getByRole("combobox", { name: ko ? "AI AUTH 계정" : "AI AUTH account", exact: true });
+  const select = page.getByRole("combobox", { name: "AI AUTH", exact: true });
   await select.selectOption(state.connections[0].id);
   await page.getByRole("button", { name: ko ? "워크스페이스 생성" : "Create workspace", exact: true }).click();
   await expect(page.locator("#code-editor h2")).toHaveText("retained-draft");
@@ -81,19 +81,19 @@ for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) tes
 
 test("shared key replacement and disconnection retain the connection ID and invalidate checks @dashboard", async ({ page }) => {
   const { state, errors } = await open(page);
-  await page.getByRole("button", { name: "Check saved connections", exact: true }).click();
-  await expect(page.locator(".code-credential-result")).toContainText("Provider credentials verified");
-  await expect(page.locator("#content")).toContainText("Agent authentication remains unverified.");
+  await page.getByRole("button", { name: "Check connections", exact: true }).click();
+  await expect(page.locator("#code-overview-settings [role=status]")).toContainText("credentials_verified");
+  await expect(page.locator("#code-overview-settings [role=status]")).not.toContainText("configuration_verified");
   expect(state.reports).toEqual([{ expectedRevision: 4 }]);
   await manage(page); await page.getByRole("button", { name: "Replace API key", exact: true }).click();
   await page.getByLabel("OpenAI API key", { exact: true }).fill("code-auth-private-replacement");
-  await page.getByRole("button", { name: "Verify and save", exact: true }).click(); await expect(page.getByRole("table")).toContainText(connection.name);
+  await page.getByRole("button", { name: "Verify and save", exact: true }).click(); await expect(page.locator(".pipe-ai-connections")).toContainText(connection.name);
   expect(state.writes.find(w => w.method === "PUT")?.path).toBe(`/api/pipe/ai/connections/${accountId}`);
-  await page.getByRole("button", { name: "Disconnect", exact: true }).click(); await expect(page.getByRole("table")).toHaveCount(0);
+  await page.getByRole("button", { name: "Disconnect", exact: true }).click(); await expect(page.locator(".pipe-ai-connections")).toHaveCount(0);
   await expect(page.locator("#content")).toContainText("Remote revocation was not confirmed");
   await page.getByRole("button", { name: "Back to workspace", exact: true }).click();
   await expect(page.locator("#code-details")).toContainText("Account missing or disconnected");
-  await expect(page.locator(".code-credential-result")).toHaveCount(0);
+  await expect(page.locator("#code-overview-settings [role=status]")).toHaveCount(0);
   expect(state.writes.filter(w => w.method === "PUT" && w.path.startsWith("/api/code/"))).toHaveLength(0); expect(errors).toEqual([]);
 });
 
@@ -106,7 +106,7 @@ test("ChatGPT approval uses the shared login service and returns to the same dra
   await expect(page.getByRole("button", { name: "Back to workspace", exact: true })).toBeDisabled();
   const start = state.writes.find(w => w.path.endsWith("/login"))!; expect(start.body).toEqual({ name: "ChatGPT" });
   state.approved = true; await page.clock.fastForward(1600);
-  await expect(page.getByRole("table")).toContainText("ChatGPT account");
+  await expect(page.locator(".pipe-ai-connections")).toContainText("ChatGPT account");
   await page.getByRole("button", { name: "Back to workspace", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "Workspace name", exact: true })).toHaveValue("kept-on-sign-in"); expect(errors).toEqual([]);
 });
@@ -135,21 +135,21 @@ test("failed key rotation clears the secret input and retains the existing accou
 
 test("late verification results cannot survive AUTH management or navigation @dashboard", async ({ page }) => {
   const { state, errors } = await open(page); let release!: () => void; const held = new Promise<void>(r => { release = r; }); state.delayCheck = () => held;
-  await page.getByRole("button", { name: "Check saved connections", exact: true }).click(); await expect.poll(() => state.reports.length).toBe(1);
-  await manage(page); release(); await expect(page.getByRole("table")).toBeVisible();
-  await page.getByRole("button", { name: "Back to workspace", exact: true }).click(); await expect(page.locator(".code-credential-result")).toHaveCount(0); expect(errors).toEqual([]);
+  await page.getByRole("button", { name: "Check connections", exact: true }).click(); await expect.poll(() => state.reports.length).toBe(1);
+  await page.getByRole("button", { name: "AI AUTH", exact: true }).click(); release(); await expect(page.locator(".pipe-ai-connections")).toBeVisible();
+  await page.getByRole("button", { name: "Back to workspace", exact: true }).click(); await expect(page.locator("#code-overview-settings [role=status]")).toHaveCount(0); expect(errors).toEqual([]);
 });
 
 test("Anthropic uses the same account service and ChatGPT checks stay distinct from agent authentication @dashboard", async ({ page }) => {
   const { state, errors } = await open(page, { chatgpt: true });
-  await page.getByRole("button", { name: "Check saved connections", exact: true }).click();
-  await expect(page.locator(".code-credential-result")).toContainText("ChatGPT plan");
+  await page.getByRole("button", { name: "Check connections", exact: true }).click();
+  await expect(page.locator("#code-overview-settings [role=status]")).toContainText("chatgpt_plan");
   await manage(page); await page.getByRole("button", { name: "Add connection", exact: true }).click();
   await page.getByRole("radio", { name: "API key", exact: true }).check();
   await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption("anthropic");
   await page.getByLabel("Anthropic API key", { exact: true }).fill("code-auth-private-anthropic");
   await page.getByRole("button", { name: "Verify and save", exact: true }).click();
-  await expect(page.getByRole("table")).toContainText("Anthropic API key");
+  await expect(page.locator(".pipe-ai-connections")).toContainText("Anthropic API key");
   const write = state.writes.find(w => w.method === "PUT")!;
   expect(write.path).toMatch(/^\/api\/pipe\/ai\/connections\/[0-9a-f-]{36}$/);
   expect(write.body.provider).toBe("anthropic"); expect(write.body.model).toBeUndefined(); expect(state.configs).toHaveLength(0); expect(errors).toEqual([]);
@@ -159,9 +159,9 @@ test("failed account reads are retryable and do not erase a CODE draft @dashboar
   const { state, errors } = await open(page, { setup: true });
   await page.getByRole("textbox", { name: "Workspace name", exact: true }).fill("kept-through-outage");
   state.unavailable = true; await manage(page);
-  await expect(page.locator("#content [role=alert]")).toContainText("Could not load AI AUTH accounts");
+  await expect(page.locator(".pipe-ai [role=alert]")).toContainText("AI accounts temporarily unavailable");
   state.unavailable = false; await page.getByRole("button", { name: "Retry", exact: true }).click();
-  await expect(page.getByRole("table")).toContainText(connection.name);
+  await expect(page.locator(".pipe-ai-connections")).toContainText(connection.name);
   await page.getByRole("button", { name: "Back to workspace", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "Workspace name", exact: true })).toHaveValue("kept-through-outage"); expect(errors).toEqual([]);
 });
@@ -169,10 +169,10 @@ test("failed account reads are retryable and do not erase a CODE draft @dashboar
 test("known disconnection invalidates a delayed successful credential report @dashboard", async ({ page }) => {
   const { state, errors } = await open(page); await page.clock.install();
   let release!: () => void; const held = new Promise<void>(r => { release = r; }); state.delayCheck = () => held;
-  await page.getByRole("button", { name: "Check saved connections", exact: true }).click(); await expect.poll(() => state.reports.length).toBe(1);
+  await page.getByRole("button", { name: "Check connections", exact: true }).click(); await expect.poll(() => state.reports.length).toBe(1);
   state.connections = []; await page.clock.fastForward(3100);
   await expect(page.locator("#code-details")).toContainText("Account missing or disconnected"); release();
-  await expect(page.locator("#code-details [role=alert]")).toContainText("Connections changed"); await expect(page.locator(".code-credential-result")).toHaveCount(0); expect(errors).toEqual([]);
+  await expect(page.locator("#code-overview-settings [role=status]")).toHaveCount(0); expect(errors).toEqual([]);
 });
 
 test("cancelling the shared account form keeps the workspace's unsaved-change guard @dashboard", async ({ page }) => {

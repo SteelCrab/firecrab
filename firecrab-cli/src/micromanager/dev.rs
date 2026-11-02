@@ -36,6 +36,7 @@ const SOURCE_INPUTS: &[&str] = &[
 ];
 // Older checkouts predate these resources and remain valid development sources.
 const OPTIONAL_SOURCE_INPUTS: &[&str] = &[
+    "firecrab-frontend/code-terminal.html",
     "scripts/micromanager/dev-container.Dockerfile",
     "scripts/micromanager/dev-container-bootstrap.sh",
     "scripts/micromanager/dev-container-entrypoint.sh",
@@ -358,6 +359,7 @@ members = ["firecrab-api", "firecrab-api-types", "firecrab-cli", "firecrab-helpe
             .unwrap();
         assert!(status.success());
         for input in [
+            "firecrab-frontend/code-terminal.html",
             "install.sh",
             "scripts/firecrab-release.sh",
             "scripts/build-ingress.sh",
