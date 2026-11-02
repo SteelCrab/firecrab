@@ -1614,6 +1614,7 @@ mod tests {
             write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
+                    host_iac: None,
                     version: firecrab_helper_protocol::PROTOCOL_VERSION,
                     request_id: envelope.request_id,
                     result: Ok(()),
@@ -1757,6 +1758,7 @@ mod tests {
                 write_frame(
                     &mut stream,
                     &NetworkResponseEnvelope {
+                        host_iac: None,
                         version: firecrab_helper_protocol::PROTOCOL_VERSION,
                         request_id: envelope.request_id,
                         result: Ok(()),

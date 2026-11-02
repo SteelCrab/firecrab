@@ -177,7 +177,7 @@ pub struct OwnershipOperation {
 }
 
 /// Atomic ownership change and its durable lost-acknowledgement retry identity.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ChangeResourceOwner {
     /// Caller-retained UUID; replay must use the same normalized request.

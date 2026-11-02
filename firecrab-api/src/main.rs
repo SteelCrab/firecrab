@@ -15,6 +15,7 @@ mod guest_agent;
 mod guest_console;
 mod guest_ssh;
 mod handlers;
+mod host_lifecycle;
 mod host_platform;
 mod image_install;
 mod image_lifecycle;

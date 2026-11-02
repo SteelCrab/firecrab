@@ -111,7 +111,7 @@ fn default_path() -> String {
 }
 
 /// Accept only literal lowercase DNS names safe for native engine configs.
-fn hostname(host: &str) -> bool {
+pub(crate) fn hostname(host: &str) -> bool {
     !host.is_empty()
         && host.len() <= 253
         && host.split('.').all(|label| {
@@ -131,13 +131,13 @@ pub fn valid_route_hostname(host: &str) -> bool {
 }
 
 /// Reserve generated anonymous-connector hosts from editable local route groups.
-fn reserved_quick_host(host: &str) -> bool {
+pub(crate) fn reserved_quick_host(host: &str) -> bool {
     host == QUICK_TUNNEL_HOST
         || (host.starts_with("quick-") && host.ends_with(".firecrab.internal"))
 }
 
 /// Reject wildcard, interpolation and directive syntax in literal paths.
-fn path(path: &str) -> bool {
+pub(crate) fn path(path: &str) -> bool {
     path.starts_with('/')
         && path.bytes().all(|c| {
             c.is_ascii_graphic()

@@ -62,6 +62,11 @@ pub async fn owner(
     Path((kind, id)): Path<(String, String)>,
 ) -> Result<Json<ResourceOwnership>, AppError> {
     let resource = ManagedResource { kind, id };
+    if resource.kind == "ingress" {
+        return crate::host_lifecycle::observe(&state, request.0, resource)
+            .await
+            .map(|observation| Json(observation.ownership));
+    }
     database(request.0, move || state.store.iac_resource_owner(&resource))
         .await
         .map(Json)
@@ -73,6 +78,14 @@ pub async fn operation(
     Extension(request): Extension<RequestId>,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<firecrab_stack::OwnershipOperation>, AppError> {
+    let store = state.store.clone();
+    if let Some(intent) = database(request.0, move || store.host_owner_intent(id)).await? {
+        let ownership = crate::host_lifecycle::change(state, request.0, intent.change).await?;
+        return Ok(Json(firecrab_stack::OwnershipOperation {
+            operation_id: id,
+            ownership,
+        }));
+    }
     database(request.0, move || state.store.iac_ownership_operation(id))
         .await?
         .map(Json)
@@ -297,6 +310,11 @@ pub async fn change_owner(
     })?;
     let store = state.store.clone();
     let operation = change.operation_id;
+    if change.resource.kind == "ingress" {
+        return crate::host_lifecycle::change(state, request.0, change)
+            .await
+            .map(Json);
+    }
     if database(request.0, move || store.iac_ownership_operation(operation))
         .await?
         .is_some()

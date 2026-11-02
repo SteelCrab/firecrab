@@ -1318,6 +1318,7 @@ pub(super) async fn domain_helper(
                 write_frame(
                     &mut stream,
                     &NetworkResponseEnvelope {
+                        host_iac: None,
                         version: PROTOCOL_VERSION,
                         request_id: envelope.request_id,
                         result,
@@ -1549,6 +1550,7 @@ async fn publication_helper(
             write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
+                    host_iac: None,
                     version: PROTOCOL_VERSION,
                     request_id: envelope.request_id,
                     result: failures.next().map_or(Ok(()), Err),

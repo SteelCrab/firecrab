@@ -13,6 +13,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  host-iac-broker:
+    name: Host Ingress ownership broker (Linux Release fixture)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: target/iac-host-check
+          key: host-iac-arm64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            host-iac-arm64-
+      - name: Verify the real privileged CLI in an isolated container
+        run: |
+          mkdir -p target/iac-host-check
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD:/src:ro" -v "$PWD/target/iac-host-check:/build" \
+            -e CARGO_HOME=/build/cargo -e CARGO_TARGET_DIR=/build/target \
+            -e CARGO_INCREMENTAL=0 -e RUSTUP_TOOLCHAIN=1.97.1 -w /src \
+            rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f \
+            sh -ec '
+              cargo build --release --locked -p firecrab-cli
+              cargo check --locked -p firecrab-helper --all-targets
+              python3 scripts/test-host-iac.py /build/target/release/firecrab
+            '
   rust:
     name: Rust (fmt, clippy, test + coverage)
     runs-on: ubuntu-latest

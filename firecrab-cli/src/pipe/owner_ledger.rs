@@ -1,0 +1,305 @@
+//! Durable host ownership under the same cross-process lock as native Pipe changes.
+
+use std::collections::BTreeMap;
+
+use firecrab_helper_protocol::host_iac::{
+    HostIdentity, Observation, OwnerChange, OwnerReceipt, OwnerRejection, Reply,
+};
+use firecrab_helper_protocol::pipe::{Config, Route};
+use firecrab_stack::{ManagedResource, ResourceOwnership};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
+
+/// Validation or CAS rejection; public messages contain no configuration values.
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// Written atomically while the privileged caller holds the Pipe transaction lock.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct Ledger {
+    /// Fresh systemd jobs/state are observed under the lock and are never persisted as configuration.
+    #[serde(skip)]
+    runtime_busy: bool,
+    /// First admitted transition binds the physical installation and API database.
+    binding: Option<(HostIdentity, Uuid)>,
+    /// Released records retain their monotonically increasing generations.
+    owners: BTreeMap<String, ResourceOwnership>,
+    /// Immutable results survive acknowledgement loss and later transfers.
+    receipts: BTreeMap<Uuid, OwnerReceipt>,
+    /// Known no-effect rejections cannot turn into a later successful replay.
+    #[serde(default)]
+    rejections: BTreeMap<Uuid, OwnerRejection>,
+}
+
+/// Canonical route key; trailing slashes describe the same Nginx location.
+fn route_key(route: &Route) -> String {
+    firecrab_helper_protocol::host_iac::ingress_route_key(&route.host, &route.path_prefix)
+}
+
+/// Exact projection excludes credentials and changes to unrelated routes or connectors.
+fn projection(config: Option<&Config>, resource: &ManagedResource) -> serde_json::Value {
+    let Some(config) = config else {
+        return serde_json::Value::Null;
+    };
+    if resource.id == "listener" {
+        serde_json::json!({"listen":config.listen})
+    } else {
+        config
+            .routes
+            .iter()
+            .find(|route| route_key(route) == resource.id)
+            .map(|route| serde_json::json!({"listen":config.listen,"route":route}))
+            .unwrap_or(serde_json::Value::Null)
+    }
+}
+
+impl Ledger {
+    /// Include asynchronous native unit work in the ownership admission check.
+    pub(super) fn set_runtime_busy(&mut self, busy: bool) {
+        self.runtime_busy = busy;
+    }
+    /// Terminal replays bypass mutable manifest IO, including later corruption or removal.
+    pub(super) fn has_outcome(&self, operation: Uuid) -> bool {
+        self.receipts.contains_key(&operation) || self.rejections.contains_key(&operation)
+    }
+    /// Retain both committed and no-effect outcomes before the helper sends its acknowledgement.
+    pub(super) fn transition(
+        &mut self,
+        host: &HostIdentity,
+        config: Option<&Config>,
+        mut request: OwnerChange,
+    ) -> Result<Reply> {
+        request.validate()?;
+        self.check_binding(host, request.change.expected_endpoint_id)?;
+        let hash = request.request_sha256()?;
+        if let Some(rejected) = self.rejections.get(&request.change.operation_id) {
+            if rejected.request_sha256 != hash {
+                return Err("operation ID belongs to another request".into());
+            }
+            return Ok(Reply::OwnerRejected {
+                rejection: rejected.clone(),
+            });
+        }
+        // A mismatching replay must never overwrite an existing committed result with a rejection.
+        if let Some(receipt) = self.receipts.get(&request.change.operation_id) {
+            if receipt.request_sha256 != hash {
+                return Err("operation ID belongs to another request".into());
+            }
+            return Ok(Reply::OwnerReceipt {
+                receipt: Some(receipt.clone()),
+            });
+        }
+        match self.change(host, config, request.clone()) {
+            Ok(receipt) => Ok(Reply::OwnerReceipt {
+                receipt: Some(receipt),
+            }),
+            Err(_) => {
+                let rejection = OwnerRejection {
+                    operation_id: request.change.operation_id,
+                    request_sha256: hash,
+                    host: host.clone(),
+                };
+                self.rejections
+                    .insert(rejection.operation_id, rejection.clone());
+                Ok(Reply::OwnerRejected { rejection })
+            }
+        }
+    }
+    /// Fail closed if another API or replacement directory reaches the persisted namespace.
+    fn check_binding(&self, host: &HostIdentity, endpoint: Uuid) -> Result<()> {
+        if endpoint.is_nil()
+            || self
+                .binding
+                .as_ref()
+                .is_some_and(|bound| bound != &(host.clone(), endpoint))
+        {
+            return Err(
+                "host ownership belongs to another physical installation or API endpoint".into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Observe without binding an unused host or granting write permission.
+    pub(super) fn observe(
+        &self,
+        host: &HostIdentity,
+        endpoint: Uuid,
+        resource: &ManagedResource,
+        config: Option<&Config>,
+    ) -> Result<Observation> {
+        firecrab_helper_protocol::host_iac::validate_resource(resource)?;
+        self.check_binding(host, endpoint)?;
+        let value = projection(config, resource);
+        Ok(Observation {
+            host: host.clone(),
+            ownership: self
+                .owners
+                .get(&resource.id)
+                .cloned()
+                .unwrap_or(ResourceOwnership {
+                    endpoint_id: endpoint,
+                    resource: resource.clone(),
+                    generation: 0,
+                    owner: None,
+                }),
+            exists: !value.is_null(),
+            parent_controlled: value
+                .get("route")
+                .and_then(|route| route.get("owner"))
+                .is_some_and(|owner| !owner.is_null()),
+            configuration_sha256: format!("{:x}", Sha256::digest(serde_json::to_vec(&value)?)),
+            busy: self.runtime_busy
+                || self
+                    .receipts
+                    .values()
+                    .any(|receipt| !receipt.confirmed && receipt.ownership.resource == *resource),
+        })
+    }
+
+    /// Commit only the original observed CAS and retain the reservation until API confirmation.
+    pub(super) fn change(
+        &mut self,
+        host: &HostIdentity,
+        config: Option<&Config>,
+        mut request: OwnerChange,
+    ) -> Result<OwnerReceipt> {
+        request.validate()?;
+        let digest = request.request_sha256()?;
+        self.check_binding(host, request.change.expected_endpoint_id)?;
+        if let Some(receipt) = self.receipts.get(&request.change.operation_id) {
+            if receipt.request_sha256 != digest {
+                return Err("operation ID belongs to a different ownership request".into());
+            }
+            return Ok(receipt.clone());
+        }
+        let observation = self.observe(
+            host,
+            request.change.expected_endpoint_id,
+            &request.change.resource,
+            config,
+        )?;
+        if request.host != *host || request.configuration_sha256 != observation.configuration_sha256
+        {
+            return Err("physical host or configuration changed after observation".into());
+        }
+        if observation.busy {
+            return Err("host ownership transition awaits API confirmation".into());
+        }
+        if request.change.owner.as_ref().is_some_and(|owner| {
+            self.owners.values().any(|current| {
+                current.resource != request.change.resource && current.owner.as_ref() == Some(owner)
+            })
+        }) {
+            return Err("logical owner address already controls another host resource".into());
+        }
+        if observation.ownership.generation != request.change.expected_generation
+            || observation.ownership.owner != request.change.expected_owner
+        {
+            return Err("host ownership changed after observation".into());
+        }
+        if request.change.owner.is_some() && (!observation.exists || observation.parent_controlled)
+        {
+            return Err("only an existing independent host resource can be adopted".into());
+        }
+        let mut ownership = observation.ownership;
+        if ownership.owner != request.change.owner {
+            ownership.generation = ownership
+                .generation
+                .checked_add(1)
+                .filter(|generation| *generation <= i64::MAX as u64)
+                .ok_or("ownership generation exhausted")?;
+        }
+        ownership.owner = request.change.owner;
+        let receipt = OwnerReceipt {
+            operation_id: request.change.operation_id,
+            request_sha256: digest,
+            host: host.clone(),
+            ownership,
+            confirmed: false,
+        };
+        self.binding = Some((host.clone(), receipt.ownership.endpoint_id));
+        self.owners.insert(
+            receipt.ownership.resource.id.clone(),
+            receipt.ownership.clone(),
+        );
+        self.receipts.insert(receipt.operation_id, receipt.clone());
+        Ok(receipt)
+    }
+
+    /// Acknowledge the API mirror without changing the original owner result.
+    pub(super) fn confirm(
+        &mut self,
+        host: &HostIdentity,
+        endpoint: Uuid,
+        operation: Uuid,
+    ) -> Result<OwnerReceipt> {
+        self.check_binding(host, endpoint)?;
+        let receipt = self
+            .receipts
+            .get_mut(&operation)
+            .ok_or("host ownership operation does not exist")?;
+        receipt.confirmed = true;
+        Ok(receipt.clone())
+    }
+
+    /// Read before mutable configuration lookup so an original acknowledgement survives later drift.
+    pub(super) fn receipt(
+        &self,
+        host: &HostIdentity,
+        endpoint: Uuid,
+        operation: Uuid,
+    ) -> Result<Option<OwnerReceipt>> {
+        self.check_binding(host, endpoint)?;
+        Ok(self.receipts.get(&operation).cloned())
+    }
+
+    /// Native configuration writes may preserve, but cannot edit, another workflow's exact slots.
+    pub(super) fn check_configuration(
+        &self,
+        current: Option<&Config>,
+        next: &Config,
+    ) -> Result<()> {
+        for ownership in self.owners.values() {
+            if self.protected(&ownership.resource)
+                && projection(current, &ownership.resource)
+                    != projection(Some(next), &ownership.resource)
+            {
+                return Err(
+                    "ingress resource is managed or has an unconfirmed ownership transition".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// A shared ingress unit action changes every route's declared runtime state.
+    pub(super) fn check_ingress_control(&self) -> Result<()> {
+        if self
+            .owners
+            .values()
+            .any(|owner| self.protected(&owner.resource))
+        {
+            return Err(
+                "ingress unit has managed resources or an unconfirmed ownership transition".into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Even a released owner remains reserved until its mirror is durably acknowledged.
+    fn protected(&self, resource: &ManagedResource) -> bool {
+        self.owners
+            .get(&resource.id)
+            .is_some_and(|owner| owner.owner.is_some())
+            || self
+                .receipts
+                .values()
+                .any(|receipt| !receipt.confirmed && receipt.ownership.resource == *resource)
+    }
+}
+
+#[cfg(test)]
+#[path = "owner_ledger_tests.rs"]
+mod tests;

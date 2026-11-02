@@ -754,6 +754,7 @@ async fn pending_handoff_can_stop_the_verified_predecessor_before_any_new_publis
             write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
+                    host_iac: None,
                     version: firecrab_helper_protocol::PROTOCOL_VERSION,
                     request_id: envelope.request_id,
                     result: Ok(()),
@@ -958,6 +959,7 @@ async fn raw_start_waits_until_sandbox_stop_has_persisted_its_inactive_snapshot(
                 write_frame(
                     &mut stream,
                     &NetworkResponseEnvelope {
+                        host_iac: None,
                         version: firecrab_helper_protocol::PROTOCOL_VERSION,
                         request_id: envelope.request_id,
                         result: Ok(()),
@@ -971,6 +973,7 @@ async fn raw_start_waits_until_sandbox_stop_has_persisted_its_inactive_snapshot(
             write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
+                    host_iac: None,
                     version: firecrab_helper_protocol::PROTOCOL_VERSION,
                     request_id: envelope.request_id,
                     result: Ok(()),

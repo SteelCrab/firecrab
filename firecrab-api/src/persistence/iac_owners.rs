@@ -83,6 +83,7 @@ pub(super) fn public_write_allowed(
     resource: &ManagedResource,
 ) -> Result<bool, PersistenceError> {
     super::iac_native::ensure_idle(conn, resource)?;
+    super::iac_host::ensure_resource_idle(conn, resource)?;
     super::iac_resources::ensure_independent(conn, resource)?;
     if let Some(kind) = resource.legacy_kind() {
         let id = Uuid::parse_str(&resource.id).map_err(|_| PersistenceError::InvalidIacOwner)?;
@@ -199,7 +200,7 @@ impl Store {
         &self,
         request: &ChangeResourceOwner,
     ) -> Result<ResourceOwnership, PersistenceError> {
-        self.change_iac_owner_checked(request, None, None, None)
+        self.change_iac_owner_checked(request, None, None, None, None)
     }
 
     /// Hold the encrypted vault's file lock through the SQLite ownership commit.
@@ -235,7 +236,7 @@ impl Store {
                         .iter()
                         .any(|record| record.summary.id == id)
                 };
-                Ok(self.change_iac_owner_checked(request, Some(exists), None, None))
+                Ok(self.change_iac_owner_checked(request, Some(exists), None, None, None))
             })
             .map_err(|_| PersistenceError::IacVaultUnavailable)?
     }
@@ -249,7 +250,7 @@ impl Store {
         if request.resource.kind != "kernel" {
             return Err(PersistenceError::UnsupportedIacResource);
         }
-        self.change_iac_owner_checked(request, None, Some(presence), None)
+        self.change_iac_owner_checked(request, None, Some(presence), None, None)
     }
 
     pub(crate) fn change_iac_image_owner(
@@ -260,7 +261,16 @@ impl Store {
         if request.resource.kind != "image" {
             return Err(PersistenceError::UnsupportedIacResource);
         }
-        self.change_iac_owner_checked(request, None, None, Some(presence))
+        self.change_iac_owner_checked(request, None, None, Some(presence), None)
+    }
+
+    /// Mirror a privileged target acknowledgement while its reservation still excludes host writers.
+    pub(super) fn change_iac_host_owner(
+        &self,
+        request: &ChangeResourceOwner,
+        proof: &super::iac_host::HostProof,
+    ) -> Result<ResourceOwnership, PersistenceError> {
+        self.change_iac_owner_checked(request, None, None, None, Some(proof))
     }
 
     fn change_iac_owner_checked(
@@ -269,6 +279,7 @@ impl Store {
         vault_presence: Option<bool>,
         kernel_presence: Option<&crate::kernel_lifecycle::KernelPresence>,
         image_presence: Option<&crate::image_lifecycle::ImagePresence>,
+        host_proof: Option<&super::iac_host::HostProof>,
     ) -> Result<ResourceOwnership, PersistenceError> {
         let mut request = request.clone();
         request
@@ -300,6 +311,7 @@ impl Store {
                 .map_err(|_| PersistenceError::IacOperationIdentity);
         }
         // Kind support grows only when its existence, parent and activity checks exist.
+        super::iac_host::ensure_available(&tx, &request)?;
         let before = read(&tx, &request.resource)?;
         if before.generation != request.expected_generation
             || before.owner != request.expected_owner
@@ -335,6 +347,10 @@ impl Store {
             if request.owner.is_some() && !exists {
                 return Err(PersistenceError::InvalidStackResource);
             }
+        } else if request.resource.kind == "ingress" {
+            host_proof
+                .ok_or(PersistenceError::UnsupportedIacResource)?
+                .check(&request)?;
         } else if request.resource.kind == "image" {
             image_presence
                 .ok_or(PersistenceError::UnsupportedIacResource)?

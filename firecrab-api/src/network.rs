@@ -79,6 +79,22 @@ impl NetworkClient {
         )
         .await
         .map_err(|_| NetworkError::Timeout)??
+        .pipe
+        .ok_or(NetworkError::MismatchedResponse)
+    }
+
+    /// Typed physical-host ownership, never a fallback to a guest-local observation.
+    pub async fn host_iac(
+        &self,
+        request: firecrab_helper_protocol::host_iac::Request,
+    ) -> Result<firecrab_helper_protocol::host_iac::Reply, NetworkError> {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            self.exchange(NetworkRequest::HostIac { request }),
+        )
+        .await
+        .map_err(|_| NetworkError::Timeout)??
+        .host_iac
         .ok_or(NetworkError::MismatchedResponse)
     }
 
@@ -274,7 +290,7 @@ impl NetworkClient {
     async fn exchange(
         &self,
         request: NetworkRequest,
-    ) -> Result<Option<firecrab_helper_protocol::pipe::Snapshot>, NetworkError> {
+    ) -> Result<NetworkResponseEnvelope, NetworkError> {
         let mut stream = UnixStream::connect(&self.socket_path)
             .await
             .map_err(|source| NetworkError::Unavailable {
@@ -289,8 +305,11 @@ impl NetworkClient {
         if response.request_id != envelope.request_id {
             return Err(NetworkError::MismatchedResponse);
         }
-        response.result.map_err(NetworkError::Helper)?;
-        Ok(response.pipe)
+        response
+            .result
+            .as_ref()
+            .map_err(|error| NetworkError::Helper(error.clone()))?;
+        Ok(response)
     }
 }
 
@@ -330,6 +349,7 @@ pub(crate) mod test_support {
                 Err(_) => return,
             };
             let response = NetworkResponseEnvelope {
+                host_iac: None,
                 pipe: matches!(envelope.request, NetworkRequest::Pipe { .. }).then(|| {
                     firecrab_helper_protocol::pipe::Snapshot {
                         config: None,
@@ -359,6 +379,7 @@ pub(crate) mod test_support {
         match request {
             NetworkRequest::CheckPrivateDnsSupport => "check_private_dns_support",
             NetworkRequest::Pipe { .. } => "pipe",
+            NetworkRequest::HostIac { .. } => "host_iac",
             NetworkRequest::EnsureBridge => "ensure_bridge",
             NetworkRequest::EnsureMicroNetworkBridge { .. } => "ensure_micro_network_bridge",
             NetworkRequest::RemoveMicroNetworkBridge { .. } => "remove_micro_network_bridge",
@@ -454,6 +475,7 @@ pub(crate) mod test_support {
                 Ok(())
             };
             let response = NetworkResponseEnvelope {
+                host_iac: None,
                 pipe: matches!(envelope.request, NetworkRequest::Pipe { .. }).then(|| {
                     firecrab_helper_protocol::pipe::Snapshot {
                         ingress_workers: None,
@@ -499,6 +521,7 @@ pub(crate) mod test_support {
                 _ => Ok(()),
             };
             let response = NetworkResponseEnvelope {
+                host_iac: None,
                 pipe: matches!(envelope.request, NetworkRequest::Pipe { .. }).then(|| {
                     firecrab_helper_protocol::pipe::Snapshot {
                         ingress_workers: None,
@@ -596,6 +619,7 @@ mod tests {
         let path = dir.path().join("helper.sock");
         let listener = UnixListener::bind(&path).expect("bind");
         fake_helper(listener, |envelope| NetworkResponseEnvelope {
+            host_iac: None,
             pipe: None,
             version: PROTOCOL_VERSION,
             request_id: envelope.request_id,
@@ -614,6 +638,7 @@ mod tests {
         let path = dir.path().join("helper.sock");
         let listener = UnixListener::bind(&path).expect("bind");
         fake_helper(listener, |envelope| NetworkResponseEnvelope {
+            host_iac: None,
             pipe: None,
             version: PROTOCOL_VERSION,
             request_id: envelope.request_id,
@@ -640,6 +665,7 @@ mod tests {
         let path = dir.path().join("helper.sock");
         let listener = UnixListener::bind(&path).expect("bind");
         fake_helper(listener, |_| NetworkResponseEnvelope {
+            host_iac: None,
             pipe: None,
             version: PROTOCOL_VERSION,
             request_id: Uuid::new_v4(),

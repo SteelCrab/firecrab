@@ -96,6 +96,7 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "database_migration",
             "kernel",
             "image",
+            "ingress",
             "storage_connection",
             "secret",
             "secret_connection",

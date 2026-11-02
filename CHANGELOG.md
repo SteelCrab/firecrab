@@ -33,6 +33,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Retain host Ingress ownership in the privileged Pipe broker as well as the API.
+  Fence native CLI changes under the same host lock. Recover lost ownership
+  acknowledgements and API restarts without a second transfer or data changes (#548).
+
 - Retain image install, OCI import, kernel update and deletion intents with exact
   source, credential and boot pins. Reuse completed OCI files during recovery,
   fence late writers and SQL creation, support image ownership transfer and

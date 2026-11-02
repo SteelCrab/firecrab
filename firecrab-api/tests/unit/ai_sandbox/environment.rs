@@ -247,6 +247,7 @@ async fn helper(
             write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
+                    host_iac: None,
                     version: firecrab_helper_protocol::PROTOCOL_VERSION,
                     request_id: envelope.request_id,
                     result: Ok(()),

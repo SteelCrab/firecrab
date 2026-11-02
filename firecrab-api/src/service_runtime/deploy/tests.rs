@@ -159,6 +159,7 @@ pub(in crate::service_runtime) async fn helper(
             let _ = write_frame(
                 &mut stream,
                 &NetworkResponseEnvelope {
+                    host_iac: None,
                     version: PROTOCOL_VERSION,
                     request_id: envelope.request_id,
                     result,

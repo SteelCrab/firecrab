@@ -111,6 +111,37 @@ pub(super) async fn run(request: Operation) -> Result<Snapshot, HelperFailure> {
     run_with_cli(&cli()?, request).await
 }
 
+/// Run the restricted host ownership broker through the same trusted CLI discovery.
+pub(super) async fn host_iac(
+    mut request: firecrab_helper_protocol::host_iac::Request,
+) -> Result<firecrab_helper_protocol::host_iac::Reply, HelperFailure> {
+    use firecrab_helper_protocol::host_iac::{Request, validate_resource};
+    let validation = match &mut request {
+        Request::Observe {
+            endpoint_id,
+            resource,
+        } if !endpoint_id.is_nil() => validate_resource(resource),
+        Request::ChangeOwner { request } => request.validate(),
+        Request::ConfirmOwner {
+            endpoint_id,
+            operation_id,
+        }
+        | Request::OwnerReceipt {
+            endpoint_id,
+            operation_id,
+        } if !endpoint_id.is_nil() && !operation_id.is_nil() => Ok(()),
+        _ => Err("provide non-nil endpoint and operation identities"),
+    };
+    validation.map_err(|detail| HelperFailure::InvalidRequest {
+        detail: detail.into(),
+    })?;
+    let bytes = serde_json::to_vec(&request).map_err(failure)?;
+    if bytes.len() > 16 * 1024 {
+        return Err(failure("host ownership request exceeds 16 KiB"));
+    }
+    serde_json::from_slice(&execute(&cli()?, "host-iac", Some(bytes)).await?).map_err(failure)
+}
+
 /// Keep command execution separate from trusted executable discovery for isolated tests.
 async fn run_with_cli(cli: &Path, request: Operation) -> Result<Snapshot, HelperFailure> {
     match request {

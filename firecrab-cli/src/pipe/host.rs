@@ -335,6 +335,7 @@ fn apply_with(
     verify: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     let (confdir, unitdir) = directories;
+    super::host_iac::check_configuration(confdir, config)?;
     let (nginx, cloudflared) = engines;
     let confdir_text = unit_path(confdir)?;
     unit_path(unitdir)?;
@@ -498,6 +499,17 @@ fn apply_with(
         || mode == ApplyMode::Configuration
         || connector_will_start
         || mode == ApplyMode::ServiceRoute;
+    let enable_ingress = ingress_unit_file.previous.is_none()
+        || mode == ApplyMode::Configuration
+        || mode == ApplyMode::ServiceRoute;
+    // Unrelated service routes can reconcile an already running listener, but cannot
+    // start, enable or replace a unit whose runtime is declared by another workflow.
+    if (run_ingress && !ingress_active)
+        || (enable_ingress && !ingress_enabled)
+        || ingress_unit_file.changed()
+    {
+        super::host_iac::check_ingress_control(confdir)?;
+    }
     let apply = || -> Result<()> {
         for tunnel in &tunnels {
             if files[tunnel.file].next.is_none() && files[tunnel.file].previous.is_some() {
@@ -509,10 +521,7 @@ fn apply_with(
             write_atomic(&file.path, file.next.as_deref(), file.mode)?;
         }
         command(runner, "systemctl", &["daemon-reload"])?;
-        if ingress_unit_file.previous.is_none()
-            || mode == ApplyMode::Configuration
-            || mode == ApplyMode::ServiceRoute
-        {
+        if enable_ingress {
             command(runner, "systemctl", &["enable", INGRESS_UNIT])?;
         }
         if run_ingress {
@@ -933,6 +942,9 @@ fn control_with(
     confdir: &Path,
     request: &ServiceRequest,
 ) -> Result<()> {
+    if request.service == Service::Ingress {
+        super::host_iac::check_ingress_control(confdir)?;
+    }
     let (unit, name) = match request.service {
         Service::Ingress => (INGRESS_UNIT, "Nginx"),
         Service::Tunnel => (TUNNEL_UNIT, "Cloudflare Tunnel"),
@@ -1058,6 +1070,7 @@ pub(super) fn disable() -> Result<()> {
 
 // Stop remains usable when a saved manifest has broken routes or invalid JSON.
 fn disable_with(runner: &dyn CommandRunner, confdir: &Path, unitdir: &Path) -> Result<()> {
+    super::host_iac::check_ingress_control(confdir)?;
     let manifest = fs::read(confdir.join("pipe/manifest.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Config>(&bytes).ok());
