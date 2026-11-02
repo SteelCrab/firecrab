@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { ApiClientError, fetchJson } from "../../api/client";
 import {
   CODE,
@@ -57,9 +63,13 @@ export default function CodeSetup({
     [retry, setRetry] = useState(false);
   const manual = useRef({ name: !!initial, runtime: !!initial }),
     observedLogin = useRef(initial?.spec.github.account ?? ""),
+    pendingSave = useRef(pending),
     lock = useRef(false),
     alive = useRef(true),
     committed = useRef(false);
+  useLayoutEffect(() => {
+    pendingSave.current = pending;
+  }, [pending]);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -88,7 +98,7 @@ export default function CodeSetup({
         const github = rows.find((a) => a.provider === "github")?.account ?? "";
         if (controller.signal.aborted) return;
         if (github !== observedLogin.current) {
-          if (observedLogin.current && !pending) {
+          if (observedLogin.current && !pendingSave.current) {
             set((old) => ({
               ...old,
               github: {
@@ -141,7 +151,7 @@ export default function CodeSetup({
       }
     })();
     return () => controller.abort();
-  }, [repoPage, metadataEpoch, pending]);
+  }, [repoPage, metadataEpoch]);
   useEffect(() => {
     if (!spec.github.repository || !login) return;
     const controller = new AbortController();

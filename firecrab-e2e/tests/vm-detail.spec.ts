@@ -583,7 +583,7 @@ test.describe("MicroVM pause and resume", () => {
         }),
       ).toBeVisible();
       await page
-        .getByRole("tab", { name: locale === "en" ? /^Paused/ : /^일시정지됨/ })
+        .getByRole("tab", { name: locale === "en" ? /^Paused/ : /^일시정지/ })
         .click();
       await expect(row).toBeVisible();
     });

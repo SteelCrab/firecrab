@@ -574,9 +574,9 @@ test.describe("dashboard frame", () => {
       "네트워크",
     ]);
     await expect(page.locator(".form-section-head p")).toHaveText([
-      "이름과 설치된 이미지를 선택한다.",
-      "CPU, 메모리와 디스크 용량을 지정한다.",
-      "네트워크와 외부 통신 범위를 선택한다.",
+      "이름을 입력하고 설치된 이미지를 선택하세요.",
+      "CPU 수와 메모리, 디스크 용량을 지정하세요.",
+      "네트워크와 외부 통신 범위를 선택하세요.",
     ]);
     await expect(page.locator("#hint-ram")).toHaveText(
       "남은 호스트 메모리 2.8 GiB",

@@ -1144,7 +1144,7 @@ test.describe("MicroService configuration @dashboard", () => {
       "아직 MicroService가 없습니다",
     );
     await expect(empty.locator("p")).toHaveText(
-      "컨테이너 이미지를 MicroVM에서 실행하고 무중단으로 배포합니다.",
+      "컨테이너 이미지를 MicroVM에서 실행하고 서비스 중단 없이 배포합니다.",
     );
     await expect(
       empty.getByRole("link", { name: "새 MicroService", exact: true }),
