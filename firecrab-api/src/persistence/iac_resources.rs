@@ -22,6 +22,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "database_binding",
     "database_events",
     "database_rabbitmq",
+    "database_migration",
     "storage_connection",
     "secret",
     "secret_connection",
@@ -95,6 +96,9 @@ pub(super) fn validate(
         }
         "database_events" => {
             return super::iac_database_events::validate_owner(conn, resource, adopting);
+        }
+        "database_migration" => {
+            return super::iac_database_migrations::validate(conn, resource, adopting);
         }
         "database_rabbitmq" => {
             return super::database_broker_mutations::validate_owner(conn, resource);

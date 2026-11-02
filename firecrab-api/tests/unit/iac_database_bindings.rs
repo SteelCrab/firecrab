@@ -253,7 +253,9 @@ async fn iac_database_binding_maintenance_observation_changes_only_tables_under_
     let claim: ChangeResourceOwner =
         serde_json::from_value(claim_configuration(&state, &binding_resource(binding.id))).unwrap();
     state.store.change_iac_resource_owner(&claim).unwrap();
-    let queued = Job::new(&record, Uuid::new_v4(), Kind::Migration).unwrap();
+    let mut queued = Job::new(&record, Uuid::new_v4(), Kind::Migration).unwrap();
+    queued.version = Some("v1".into());
+    queued.sql = Some("ALTER TABLE orders ADD COLUMN native_observation int".into());
     state.store.save_database_job(&queued).unwrap();
     let job = state
         .store

@@ -166,6 +166,17 @@ async fn native_backups_migrations_and_restore() {
         ));
         migration.status = "running".into();
         state.store.save_database_job(&migration).unwrap();
+        // The actual SQL session excludes another saved alias before its schema initialization.
+        let mut held = DatabaseConnection::connect_write(&record.input, &settings)
+            .await
+            .unwrap();
+        migration_lock(&mut held, &record).await.unwrap();
+        let mut alias = record.clone();
+        alias.id = Uuid::new_v4();
+        assert!(
+            matches!(apply_migration(&alias,&migration).await,Err(Error::Invalid(message)) if message.contains("session is active"))
+        );
+        drop(held);
         run(&state, &record, &mut migration).await.unwrap();
         migration.status = "succeeded".into();
         persist(&state, &migration).unwrap();

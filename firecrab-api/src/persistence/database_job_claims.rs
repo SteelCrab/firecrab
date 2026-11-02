@@ -29,6 +29,17 @@ fn advance(job: &mut Job) -> Result<(), PersistenceError> {
 }
 
 impl Store {
+    /// Check the original claim after the actual source session has been reserved.
+    pub(crate) fn check_database_job(&self, job: &Job) -> Result<(), PersistenceError> {
+        let current = read(&self.lock(), job.id)?.ok_or(PersistenceError::StaleIacOwner)?;
+        if current.status != "running"
+            || current.execution_generation != job.execution_generation
+            || !super::iac_database_targets::same_request(&current, job)
+        {
+            return Err(PersistenceError::StaleIacOwner);
+        }
+        Ok(())
+    }
     pub(crate) fn claim_database_job(
         &self,
         id: Uuid,

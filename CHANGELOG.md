@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Preserve immutable migration versions across database aliases and management
+  transfers. Expose redacted original job receipts, serialize migration SQL on its
+  source session, reject stale executors and permit generation-checked retries
+  only after known failures before maintenance effects (#548).
+
 - Journal managed database broker preparation, repair and disconnection before
   guest changes. Recover original TLS, UUIDs, pinned images and disk generations.
   Atomically record activation, preserve disks on disconnect, fence ownership

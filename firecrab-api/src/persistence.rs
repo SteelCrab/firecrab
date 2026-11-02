@@ -57,6 +57,7 @@ mod iac_cluster;
 pub(crate) mod iac_database_bindings;
 pub(crate) mod iac_database_brokers;
 pub(crate) mod iac_database_events;
+mod iac_database_migrations;
 pub(crate) mod iac_database_operations;
 mod iac_database_targets;
 mod iac_dependencies;

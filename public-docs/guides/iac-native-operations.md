@@ -125,8 +125,8 @@ Event setup cannot implicitly broaden a Terraform-owned account's inbox grants.
 It checks this before declaring broker resources. A maintenance job may refresh
 only derived table grants under its original running execution generation; it
 cannot change account credentials, access policy or association. Active jobs
-also prevent ownership transfer. Full broker/declarative-migration lifecycle
-and expanded Stack/Terraform execution remain pending.
+also prevent ownership transfer. Full declarative execution and expanded Stack/Terraform execution remain pending.
+See [migration ownership and recovery](iac-database-migrations.md).
 
 ## Database event capture
 

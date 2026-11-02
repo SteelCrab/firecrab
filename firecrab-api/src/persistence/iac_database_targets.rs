@@ -80,6 +80,9 @@ pub(super) fn accept_job(
             return Err(PersistenceError::IacOperationIdentity);
         }
     }
+    if before.is_none() {
+        super::iac_database_migrations::admit(conn, job)?;
+    }
     let nested = job.parent.is_some();
     if let Some(scope) = &job.parent
         && job.status != "expired"

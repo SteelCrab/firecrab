@@ -512,6 +512,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             post(handlers::pipe_database_maintenance::restore),
         )
         .route(
+            "/api/pipe/database-jobs/{id}",
+            get(handlers::pipe_database_maintenance::get),
+        )
+        .route(
+            "/api/pipe/database-jobs/{id}/retry",
+            post(handlers::pipe_database_maintenance::retry),
+        )
+        .route(
             "/api/pipe/database-jobs/{id}/backup",
             get(handlers::pipe_database_maintenance::download)
                 .delete(handlers::pipe_database_maintenance::delete_backup),

@@ -123,7 +123,7 @@ impl Job {
     }
     /// Return public metadata without credentials or private SQL.
     pub fn summary(&self) -> serde_json::Value {
-        serde_json::json!({"id":self.id,"databaseId":self.database_id,"kind":self.kind,"status":self.status,"createdAt":self.created_at,"backupId":self.backup_id,"safetyBackupId":self.safety_backup_id,"version":self.version,"checksum":self.checksum,"bytes":self.bytes,"error":self.error})
+        serde_json::json!({"id":self.id,"databaseId":self.database_id,"kind":self.kind,"status":self.status,"executionGeneration":self.execution_generation,"retryable":self.kind==Kind::Migration && self.status=="failed" && !self.maintenance_started,"createdAt":self.created_at,"backupId":self.backup_id,"safetyBackupId":self.safety_backup_id,"version":self.version,"versionChecksum":self.sql.as_ref().filter(|_|self.kind==Kind::Migration).map(|sql|format!("{:x}",Sha256::digest(sql.as_bytes()))),"checksum":self.checksum,"bytes":self.bytes,"error":self.error})
     }
 }
 /// Hash engine, endpoint and database so credentials can rotate independently.
@@ -695,8 +695,44 @@ pub fn validate_version(version: &str) -> Result<(), Error> {
     Ok(())
 }
 
-/// Check the version ledger and apply supported SQL without blind DDL retries.
-pub async fn apply_migration(record: &DatabaseRecord, job: &Job) -> Result<(), Error> {
+/// Serialize actual schema SQL on its own source session, including saved aliases.
+async fn migration_lock(
+    connection: &mut DatabaseConnection,
+    record: &DatabaseRecord,
+) -> Result<(), Error> {
+    let key = format!("fc-schema:{}", &target_hash(record)?[..48]);
+    let locked = match connection {
+        DatabaseConnection::Postgres(c) => {
+            sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock(hashtextextended($1,0))")
+                .bind(&key)
+                .fetch_one(c)
+                .await?
+        }
+        DatabaseConnection::Mysql(c) => {
+            sqlx::query_scalar::<_, Option<i64>>("SELECT GET_LOCK(?,0)")
+                .bind(&key)
+                .fetch_one(c)
+                .await?
+                == Some(1)
+        }
+    };
+    if !locked {
+        return Err(Error::Invalid(
+            "Another schema migration session is active; inspect its original operation",
+        ));
+    }
+    Ok(())
+}
+#[cfg(test)]
+async fn apply_migration(record: &DatabaseRecord, job: &Job) -> Result<(), Error> {
+    apply_migration_inner(None, record, job).await
+}
+/// Check the version ledger and the original executor after taking its SQL-session lock.
+async fn apply_migration_inner(
+    store: Option<&crate::persistence::Store>,
+    record: &DatabaseRecord,
+    job: &Job,
+) -> Result<(), Error> {
     let settings = record.input.settings(record.id).map_err(Error::Invalid)?;
     let sql = job
         .sql
@@ -711,6 +747,12 @@ pub async fn apply_migration(record: &DatabaseRecord, job: &Job) -> Result<(), E
         migration_statements(settings.summary.engine, &settings.summary.database, sql)?;
     let hash = format!("{:x}", Sha256::digest(sql.as_bytes()));
     let mut c = DatabaseConnection::connect_write(&record.input, &settings).await?;
+    migration_lock(&mut c, record).await?;
+    if let Some(store) = store {
+        store.check_database_job(job).map_err(|_| {
+            Error::Invalid("The original migration executor changed before SQL dispatch")
+        })?;
+    }
     write::initialize(&mut c, record.id).await?;
     let ledger = format!(
         "{}.migrations",
@@ -721,10 +763,6 @@ pub async fn apply_migration(record: &DatabaseRecord, job: &Job) -> Result<(), E
             sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {ledger}(version text PRIMARY KEY,checksum text NOT NULL,status text NOT NULL,applied_at timestamptz)" )).execute(&mut *c).await?;
             let mut tx = write::pg_transaction(c).await?;
             sqlx::query("SET LOCAL search_path=public")
-                .execute(&mut *tx)
-                .await?;
-            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
-                .bind(format!("firecrab-migration:{}", record.id))
                 .execute(&mut *tx)
                 .await?;
             let previous: Option<(String, String)> = sqlx::query_as(&format!(
@@ -761,13 +799,6 @@ pub async fn apply_migration(record: &DatabaseRecord, job: &Job) -> Result<(), E
         }
         DatabaseConnection::Mysql(c) => {
             sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {ledger}(version varchar(100) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,checksum char(64) NOT NULL,status varchar(16) NOT NULL,applied_at timestamp(6) NULL) ENGINE=InnoDB")).execute(&mut *c).await?;
-            let locked: i32 = sqlx::query_scalar("SELECT GET_LOCK(?,0)")
-                .bind(format!("fc-migration:{}", record.id))
-                .fetch_one(&mut *c)
-                .await?;
-            if locked != 1 {
-                return Err(Error::Invalid("Another schema migration is active"));
-            }
             let previous: Option<(String, String)> = sqlx::query_as(&format!(
                 "SELECT checksum,status FROM {ledger} WHERE version=?"
             ))
@@ -1121,7 +1152,7 @@ async fn run(state: &AppState, record: &DatabaseRecord, job: &mut Job) -> Result
         super::events::detach(&mut c, &trigger).await?;
     }
     if job.kind == Kind::Migration {
-        apply_migration(record, job).await?;
+        apply_migration_inner(Some(&state.store), record, job).await?;
     } else {
         let snapshot = state
             .store
