@@ -1,0 +1,33 @@
+{
+  "sourceCommit": "e32543f3",
+  "sourceDirty": false,
+  "verifiedOn": "2026-11-03",
+  "scope": "Stage 2 immutable image-version prerequisites. Full Linux API Release suite with existing fixtures, actual sparse tar restoration, filesystem integrity, process and mTLS behavior. No real image guest, expanded Stack apply or Terraform provider acceptance is established.",
+  "toolchain": "rustc 1.97.1",
+  "profile": "release --locked; CARGO_INCREMENTAL=0",
+  "containerImage": "rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f",
+  "execution": "unprivileged nobody user; temporary CWD and imageRoot; read-only source",
+  "results": {
+    "apiUnit": {
+      "passed": 1827,
+      "failed": 0,
+      "ignored": 25
+    },
+    "tlsStartup": {
+      "passed": 2,
+      "failed": 0
+    },
+    "vmShim": {
+      "passed": 6,
+      "failed": 0
+    },
+    "gnuSparseArtifactRegression": "passed within apiUnit"
+  },
+  "artifactSha256": {
+    "apiUnit": "91b4ede1fc698407d408ab5f80fe2d2f6b78fec65a777f66d57c73170ea4c39f",
+    "tlsStartup": "5539e1fbc850cb8b17dfae8746f31a7d1319dd61e48fa43e6d3a21a81d4f8966",
+    "vmShim": "99944449aee37c02b1da34d5dfc146348aa8b7a165ed7a0468b6c9a7ee4add0a"
+  },
+  "remaining": "Image lifecycle/ownership adapter and full shared contracts remain incomplete. Ownership count remains35/43. Expanded Stack, dedicated Terraform provider and complete every-row live acceptance remain open.",
+  "cleanup": "Disposable verification container exited and was removed; detached verification worktree was removed; no production resources or backups were created."
+}
