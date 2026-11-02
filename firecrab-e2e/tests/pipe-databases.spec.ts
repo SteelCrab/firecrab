@@ -7,6 +7,7 @@ import type {
 } from "./support/database-types";
 
 const id = "11111111-1111-4111-8111-111111111111";
+const endpointId = "876c718d-0bec-48d9-92ea-4e021abf418e";
 const saved: PipeDatabase = {
   id,
   name: "Application DB",
@@ -59,6 +60,8 @@ async function open(page: Page, options: Options = {}) {
   await page.route(/^https?:\/\/[^/]+\/api\//, async (route) => {
     const path = new URL(route.request().url()).pathname;
     const method = route.request().method();
+    if (path === "/api/iac/identity")
+      return route.fulfill({ json: { endpointId } });
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/update")
       return route.fulfill({
@@ -942,6 +945,8 @@ async function openWritable(page: Page, failure?: "unknown" | "conflict") {
   await page.route(/^https?:\/\/[^/]+\/api\//, async (route) => {
     const path = new URL(route.request().url()).pathname,
       method = route.request().method();
+    if (path === "/api/iac/identity")
+      return route.fulfill({ json: { endpointId } });
     const input = () => route.request().postDataJSON();
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/update")
