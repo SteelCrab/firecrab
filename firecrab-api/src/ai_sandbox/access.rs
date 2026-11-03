@@ -67,6 +67,11 @@ pub struct Caller {
     /// Immutable caller UUID/transport origin captured at admission.
     pub principal: SandboxPrincipal,
     operator: bool,
+    /// Concurrency acknowledgement only. It never grants identity or permission.
+    #[serde(skip)]
+    workspace_generation: Option<u64>,
+    #[serde(skip)]
+    workspace_write: bool,
 }
 
 impl Default for Caller {
@@ -74,6 +79,8 @@ impl Default for Caller {
         Self {
             principal: SandboxPrincipal::Local,
             operator: true,
+            workspace_generation: None,
+            workspace_write: false,
         }
     }
 }
@@ -81,9 +88,20 @@ impl Default for Caller {
 impl<S: Send + Sync> FromRequestParts<S> for Caller {
     type Rejection = AppError;
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        let workspace_generation = parts
+            .headers
+            .get("x-firecrab-workspace-generation")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+        let workspace_write = !matches!(
+            parts.method,
+            axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+        );
         if let Some(ConnectInfo(peer)) = parts.extensions.get::<ConnectInfo<AuthenticatedHost>>() {
             return Ok(Self {
                 principal: SandboxPrincipal::Host(peer.host_id),
+                workspace_generation,
+                workspace_write,
                 operator: parts
                     .extensions
                     .get::<ControllerIdentity>()
@@ -91,7 +109,11 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
             });
         }
         if parts.extensions.get::<LocalOperator>().is_some() {
-            return Ok(Self::default());
+            return Ok(Self {
+                workspace_generation,
+                workspace_write,
+                ..Self::default()
+            });
         }
         let id = parts
             .extensions
@@ -107,6 +129,22 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 }
 
 impl Caller {
+    /// Call while holding the project database owner lock, before an HTTP mutation.
+    pub(crate) fn workspace_current(
+        self,
+        state: &AppState,
+        project: Uuid,
+    ) -> Result<(), crate::project_workspace::Error> {
+        if self.workspace_write
+            && let Some((generation, true)) = state.store.workspace_generation(project)?
+            && self.workspace_generation != Some(generation)
+        {
+            return Err(crate::project_workspace::Error::Conflict(
+                "Workspace restored. Reload the page or reopen Web VS Code before saving.",
+            ));
+        }
+        Ok(())
+    }
     /// Only controller identities can administer resource policies.
     pub fn operator(self) -> Result<(), String> {
         if self.operator {
@@ -251,12 +289,16 @@ impl Caller {
         saved: &super::SavedTask,
         permission: SandboxPermission,
     ) -> Result<(), String> {
+        if permission != SandboxPermission::Read {
+            reject_imported_attempt(state, saved)?;
+        }
         self.require_all(state, &task_rights(saved, permission))
     }
 }
 
 /// Re-read current grants and owning project before provider/file/guest side effects.
 pub fn attempt(state: &AppState, saved: &super::SavedTask) -> Result<(), String> {
+    reject_imported_attempt(state, saved)?;
     let mut rights = task_rights(saved, SandboxPermission::Execute);
     rights.push((
         SandboxResource::Connection {
@@ -265,6 +307,7 @@ pub fn attempt(state: &AppState, saved: &super::SavedTask) -> Result<(), String>
         SandboxPermission::Execute,
     ));
     saved.caller.require_all(state, &rights)?;
+    super::instructions::verify(state, saved)?;
     let project = state
         .store
         .sandbox_project(saved.task.project_id)
@@ -320,7 +363,9 @@ fn task_rights(
         (project.clone(), SandboxPermission::Read),
         (project, permission),
     ];
-    if let Some(path) = &saved.project.source_path {
+    if saved.task.request.project_directory.is_none()
+        && let Some(path) = &saved.project.source_path
+    {
         rights.push((
             SandboxResource::Source { path: path.clone() },
             SandboxPermission::Read,
@@ -332,6 +377,14 @@ fn task_rights(
             ));
         }
     }
+    if saved.task.request.project_directory.is_some() && permission == SandboxPermission::Execute {
+        rights.push((
+            SandboxResource::Project {
+                id: saved.task.project_id,
+            },
+            SandboxPermission::Write,
+        ));
+    }
     if permission == SandboxPermission::Execute
         && saved.task.request.kind == SandboxTaskKind::Code
         && let Some(id) = saved.project.vm_id
@@ -339,4 +392,18 @@ fn task_rights(
         rights.push((SandboxResource::Vm { id }, SandboxPermission::Execute));
     }
     rights
+}
+
+/// Imported history cannot acquire a guest, provider or file mutation capability on another host.
+fn reject_imported_attempt(state: &AppState, saved: &super::SavedTask) -> Result<(), String> {
+    if state
+        .store
+        .imported_sandbox_task(saved.task.id)
+        .map_err(|_| "Cannot read imported attempt ownership")?
+    {
+        return Err(
+            "Imported attempts are read-only history; submit a new task on this host".into(),
+        );
+    }
+    Ok(())
 }

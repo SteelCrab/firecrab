@@ -17,11 +17,17 @@ use uuid::Uuid;
 use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
+mod backup_cleanup;
 mod block_storage;
 mod cluster;
 mod cluster_services;
 mod database_services;
 mod pools;
+mod project_backups;
+mod project_deletions;
+mod project_imports;
+mod project_workspaces;
+mod project_provision;
 mod queues;
 pub(crate) use cluster::ClusterError;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
@@ -38,6 +44,7 @@ mod pipe_databases;
 mod pipe_storage;
 mod registries;
 mod sandbox_environments;
+pub(crate) mod sandbox_project_db;
 mod sandbox_tunnels;
 mod schedules;
 pub(crate) mod security_activity;
@@ -524,6 +531,9 @@ pub enum PersistenceError {
     /// A disk is reserved, being prepared, or conflicts with another mount.
     #[error("{message}")]
     BlockStorageConflict { message: &'static str },
+    /// A bounded workspace operation currently holds the private project DB.
+    #[error("project database is busy")]
+    ProjectDatabaseBusy,
     /// A source needs explicit configuration before it can be checked.
     #[error("stack Git source does not exist")]
     MissingStackSource,
@@ -730,6 +740,8 @@ pub struct NewShell<'a> {
 pub struct Store {
     /// The shared, mutex-guarded SQLite connection.
     conn: Arc<Mutex<Connection>>,
+    pub(crate) workspaces: Arc<crate::project_workspace::Runtime>,
+    sandbox_gate: Arc<Mutex<()>>,
 }
 
 /// Restricts the database file to its owner.
@@ -799,6 +811,14 @@ impl Store {
         migrate_dns_mode_column(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute_batch(block_storage::SCHEMA)?;
+        conn.execute_batch(project_workspaces::SCHEMA)?;
+        conn.execute_batch(project_provision::SCHEMA)?;
+        conn.execute_batch(project_imports::SCHEMA)?;
+        project_imports::require_complete(&conn)?;
+        conn.execute_batch(project_deletions::SCHEMA)?;
+        project_deletions::require_complete(&conn)?;
+        conn.execute_batch(project_backups::SCHEMA)?;
+        conn.execute_batch(backup_cleanup::SCHEMA)?;
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
@@ -808,6 +828,8 @@ impl Store {
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
         conn.execute_batch(ai_sandbox::SCHEMA)?;
+        conn.execute_batch(ai_sandbox::TASK_SCHEMA)?;
+        conn.execute_batch(sandbox_project_db::SCHEMA)?;
         conn.execute_batch(sandbox_tunnels::SCHEMA)?;
         conn.execute_batch(sandbox_environments::SCHEMA)?;
         conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
@@ -853,8 +875,13 @@ impl Store {
 
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
+            workspaces: Arc::new(crate::project_workspace::Runtime::new(
+                path.with_extension("sandbox").join("projects"),
+            )),
+            sandbox_gate: Arc::new(Mutex::new(())),
         };
         store.import_legacy(&path.with_file_name(LEGACY_FILE_NAME))?;
+        store.backfill_sandbox_catalog()?;
         store.rebuild_sandbox_references()?;
         store.rebuild_sandbox_index()?;
         Ok(store)

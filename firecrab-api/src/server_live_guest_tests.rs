@@ -70,8 +70,11 @@ async fn real_guest_operator_transport_runs_exports_cancels_and_cleans_owned_dat
         model: "no-provider-used".into(),
     };
     let mut saved = SavedTask {
+        instructions: None,
+        skills: Vec::new(),
         caller: Default::default(),
         task: SandboxTask {
+            folder_mutations: Vec::new(),
             git_commit: None,
             retry_root: None,
             retry_number: 0,
@@ -84,6 +87,10 @@ async fn real_guest_operator_transport_runs_exports_cancels_and_cleans_owned_dat
             attempt_id: Uuid::new_v4(),
             runtime: Some(guest::binding(&state, target.vm_id).unwrap()),
             request: SandboxTaskInput {
+                project_shell: false,
+                selected_skill_ids: Vec::new(),
+                project_directory: None,
+                instruction_snapshot_id: None,
                 coordination: Default::default(),
                 environment_role: None,
                 kind: SandboxTaskKind::Code,

@@ -46,6 +46,9 @@ jobs:
           ./scripts/build-ingress.sh target/ingress
           ./scripts/build-guest-console.sh target/ingress
           python3 scripts/test-guest-console.py
+          python3 scripts/test-workspace-files.py
+          sudo python3 scripts/test-workspace-terminals.py
+          sudo python3 scripts/test-workspace-commands.py
           sudo python3 scripts/test-sandbox-user.py
           python3 scripts/test-guest-app-log.py
 
@@ -100,6 +103,12 @@ jobs:
       - name: Sandbox live QA evidence and ownership guards
         run: python3 scripts/test-ci-qa-ai-sandbox.py
 
+      - name: Project workspace live QA ownership guards
+        run: python3 scripts/test-ci-qa-project-workspace.py
+
+      - name: Project editor immutable bundle publication (root filesystem fixture)
+        run: sudo node --test firecrab-frontend/tests/editor-bundle.test.mjs firecrab-frontend/tests/editor-client.test.mjs
+
       - name: Sandbox recovery QA ownership and fault guards
         run: python3 scripts/test-ci-qa-ai-sandbox-recovery.py
 
@@ -138,6 +147,8 @@ jobs:
           # an isolated disposable root container; retain its instrumented profile.
           api_test_binary=$(cargo test -p firecrab-api --bin firecrab-api --no-run --message-format=json | python3 -c 'import json,sys; entries=[json.loads(line) for line in sys.stdin]; print(next(item["executable"] for item in entries if item.get("reason") == "compiler-artifact" and item.get("profile", {}).get("test") and item.get("target", {}).get("name") == "firecrab-api" and item.get("executable")))')
           bash scripts/test-ai-sandbox-guest.sh "$api_test_binary" "$CARGO_LLVM_COV_TARGET_DIR"
+          bash scripts/test-project-workspace-transport.sh "$api_test_binary" "$CARGO_LLVM_COV_TARGET_DIR"
+          cargo test -p firecrab-api --bin firecrab-api --locked official_catalogs_and_small_packages_match_their_pinned_git_blobs -- --ignored --nocapture
           # The terminal test is ignored by cargo test because it needs a PTY.
           # Run its instrumented binary before exporting the coverage report.
           test_binary=$(cargo test -p firecrab-cli --no-run --message-format=json | python3 -c 'import json,sys; entries=[json.loads(line) for line in sys.stdin]; print(next(item["executable"] for item in entries if item.get("reason") == "compiler-artifact" and item.get("profile", {}).get("test") and item.get("target", {}).get("name") == "firecrab" and item.get("executable")))')
@@ -1250,3 +1261,12 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
+      - name: Retain Canvas skill UI evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: canvas-skills-ui-${{ github.sha }}
+          path: |
+            test-results/canvas-skills/
+            test-results/canvas-backups/
+          if-no-files-found: ignore

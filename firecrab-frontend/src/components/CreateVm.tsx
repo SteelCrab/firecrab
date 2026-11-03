@@ -58,6 +58,11 @@ interface CreateVmProps {
   onError: (message: string) => void;
   onCancel?: () => void;
   initialResources?: { cpu: number; ram: number; diskGb: number };
+  preferredImageFamily?: "ubuntu";
+  hideDataVolumes?: boolean;
+  beforeCreate?: () => boolean;
+  submitRequest?: (request: CreateVmRequest) => Promise<void>;
+  hideAdvanced?: boolean;
 }
 
 function storageLabel(root: StorageRootResponse): string {
@@ -87,6 +92,11 @@ export default function CreateVm({
   onError,
   onCancel,
   initialResources,
+  preferredImageFamily,
+  hideDataVolumes = false,
+  beforeCreate,
+  submitRequest,
+  hideAdvanced = false,
 }: CreateVmProps) {
   const { t } = useI18n();
   const host = useHostStatus();
@@ -132,16 +142,21 @@ export default function CreateVm({
         // Create form only offers installed templates (uninstalled come later
         // with the install API).
         const installed = next.filter((image) => image.installed);
+        const preferred = preferredImageFamily
+          ? installed.find((image) =>
+              image.alias.startsWith(`${preferredImageFamily}-`),
+            )
+          : installed[0];
         setImages(installed);
         setImagesError(null);
         setTemplate((current) => {
           if (current && installed.some((image) => image.alias === current)) {
             return current;
           }
-          return installed[0]?.alias ?? "";
+          return preferred?.alias ?? "";
         });
-        if (installed[0] && Number(diskGb) < diskFloorGb(installed[0])) {
-          setDiskGb(String(diskFloorGb(installed[0])));
+        if (preferred && Number(diskGb) < diskFloorGb(preferred)) {
+          setDiskGb(String(diskFloorGb(preferred)));
         }
       })
       .catch((error) => {
@@ -286,7 +301,7 @@ export default function CreateVm({
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!canSubmit) return;
+    if (!canSubmit || (beforeCreate && !beforeCreate())) return;
 
     // Incomplete rows must block submission, not be silently dropped — a
     // dropped row would leave the user believing a rule was created when it
@@ -353,6 +368,10 @@ export default function CreateVm({
     setSubmitting(true);
     setFieldErrors(null);
     try {
+      if (submitRequest) {
+        await submitRequest(request);
+        return;
+      }
       const vm = await createVm(request);
       // Clear identity + shell pins + port forwards so the next create does not re-send
       setName("");
@@ -368,15 +387,18 @@ export default function CreateVm({
         .catch(() => setShells([]));
       onCreated(vm);
     } catch (error) {
-      const apiError = error as ApiClientError;
-      if (
-        FIELDS_WITH_OWN_ERROR.every(
-          (field) => apiError.fieldError(field) === undefined,
-        )
-      ) {
-        onError(apiError.message);
+      if (error instanceof ApiClientError) {
+        if (
+          FIELDS_WITH_OWN_ERROR.every(
+            (field) => error.fieldError(field) === undefined,
+          )
+        ) {
+          onError(error.message);
+        }
+        setFieldErrors(error);
+      } else {
+        onError(error instanceof Error ? error.message : String(error));
       }
-      setFieldErrors(apiError);
     } finally {
       setSubmitting(false);
     }
@@ -437,11 +459,16 @@ export default function CreateVm({
               {imageHint ? (
                 <option value="">{imageHint}</option>
               ) : (
-                images.map((image) => (
-                  <option key={image.alias} value={image.alias}>
-                    {templateLabel(image)}
+                <>
+                  <option value="">
+                    {t("Choose an image", "이미지 선택")}
                   </option>
-                ))
+                  {images.map((image) => (
+                    <option key={image.alias} value={image.alias}>
+                      {templateLabel(image)}
+                    </option>
+                  ))}
+                </>
               )}
             </select>
             {fieldError("template")}
@@ -453,6 +480,18 @@ export default function CreateVm({
                       "Install an image before creating a VM.",
                       "생성하려면 먼저 이미지를 설치하세요",
                     )}
+                </span>
+              )}
+            {preferredImageFamily === "ubuntu" &&
+              !imagesLoading &&
+              !imagesError &&
+              !images.some((image) => image.alias.startsWith("ubuntu-")) && (
+                <span className="field-error">
+                  {t(
+                    "Ubuntu is not installed. Install it or explicitly choose another image.",
+                    "Ubuntu 이미지가 없다. 이미지를 설치하거나 다른 이미지를 직접 선택한다.",
+                  )}{" "}
+                  <a href="#/images">{t("Open Images", "이미지 열기")}</a>
                 </span>
               )}
             {selectedImage && !selectedImage.hasGuestService && (
@@ -654,10 +693,10 @@ export default function CreateVm({
           </fieldset>
         </div>
       </section>
-      <details className="form-advanced">
+      <details className="form-advanced" hidden={hideAdvanced}>
         <summary>{t("Advanced options", "고급 설정")}</summary>
         <div className="advanced-fields">
-          {volumes.length > 0 && (
+          {!hideDataVolumes && volumes.length > 0 && (
             <fieldset className="field field-span-2">
               <legend>{t("Data volumes", "데이터 볼륨")}</legend>
               {volumes.map((volume) => (

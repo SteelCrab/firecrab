@@ -14,6 +14,10 @@ uapi_arch=$("$cc" -dumpmachine)
     "$root/packaging/guest-console/main.c" "$root/packaging/guest-console/resize.c" \
     "$root/packaging/guest-console/user.c" \
     "$root/packaging/guest-console/app_log.c" \
+    "$root/packaging/guest-console/workspace.c" \
+    "$root/packaging/guest-console/terminal.c" \
+    "$root/packaging/guest-console/workspace_process.c" \
+    "$root/packaging/guest-console/command.c" \
     -o "$output/firecrab-guest-console"
 "$root/scripts/verify-release-binary.sh" "$output/firecrab-guest-console" "$(uname -m)" musl
 "$output/firecrab-guest-console" --version

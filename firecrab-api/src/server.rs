@@ -803,6 +803,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             post(handlers::sandbox_tunnels::retarget),
         )
         .merge(handlers::sandbox_environments::routes())
+        .merge(crate::project_workspace::routes())
         .merge(handlers::sandbox_guest::routes())
         .route(
             "/api/ai-sandbox/tunnel-addresses",
@@ -851,6 +852,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::ai_sandbox::get_project)
                 .put(handlers::ai_sandbox::save_project)
                 .delete(handlers::ai_sandbox::delete_project),
+        )
+        .route(
+            "/api/ai-sandbox/connections",
+            get(handlers::ai_sandbox::connections),
         )
         .route(
             "/api/ai-sandbox/connections/{id}/models",
@@ -1065,8 +1070,12 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     };
 
     app.layer(middleware::from_fn_with_state(
-        state,
+        state.clone(),
         crate::ai_sandbox::access::restrict_delegates,
+    ))
+    .layer(middleware::from_fn_with_state(
+        state,
+        crate::project_workspace::editors::dispatch,
     ))
     .layer(middleware::from_fn_with_state(policy, enforce_origin))
     .layer(middleware::from_fn(assign_request_id))

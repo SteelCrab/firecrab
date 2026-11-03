@@ -1,0 +1,53 @@
+# Project Canvas and Web VS Code
+
+The AI Canvas opens the retained folder of an existing Sandbox project. It uses the project file APIs, private view APIs, and native terminal APIs. Project setup and volume verification must complete before live file operations or editor execution.
+
+## Independent tabs
+
+The plus button creates an empty canvas. Choose a project explicitly. A new tab does not copy another tab's panels, private notes, or editor documents.
+
+Canvas layouts are saved to the project SQLite database under the verified caller and a stable view UUID. Browser storage contains tab identities. Select **Saved canvases → Reopen** to open a previously saved private canvas. Closing a tab retains its server-side view and sessions. The editor client can remain hidden so pending private drafts can finish.
+
+## Personal Page
+
+Select **Personal Page · Web VS Code** or open a file from the shared folder. Each caller/view pair has its own editor identity, native UID, token, and private editor data. Saved project files are shared. Unsaved buffers and editor state belong to that caller/view pair.
+
+The pinned OpenVSCode server runs inside the project's verified workload VM as an unprivileged native terminal process. The controller never passes Pipe AI provider credentials into the guest. The editor proxy checks project and VM execution rights, caller ownership, and runtime binding. Editor hosts cannot call controller, provider, or other project APIs.
+
+New editor processes record an immutable code-bundle revision in their private metadata. Each revision has its own package path on the retained volume. Official binaries are linked from the pinned base package; custom extension files are published in a new directory. Starting another editor cannot replace a running editor's code. Existing editor records keep their legacy package path until their process ends. An explicit reopen after termination uses the current revision and the retained private editor data.
+
+Incomplete package stages are never used as executable bundles. A retry validates a completed revision before reuse. Old completed bundles and stages from interrupted invocations are retained; automatic package garbage collection is not implemented.
+
+The editor uses a virtual `firecrab:` filesystem. Reads and saves go through the authorized project file API. A save includes the file version it was based on. If another tab changed the saved file, the old buffer remains dirty and the save fails. Preserve the draft and compare the latest saved file before retrying.
+
+Private buffers retain their saved base version. An accepted private draft survives API restart and VM restart. Discarded buffers retain a revision tombstone that rejects stale requests. The extension provides **Firecrab: Open Unsaved Draft Recovery Copy** and **Firecrab: Retry Private Draft Persistence** commands.
+
+The editor metadata includes an opaque `instance` identity for its current native execution. An operator can POST `{ "expectedInstance": "<instance from metadata>" }` to `/api/ai-sandbox/projects/{project}/workspace/editors/{view}/stop`. A completed retry returns the retained status, including with a stopped VM. A request for an earlier execution conflicts after a replacement starts. A new stop requires the caller's project and VM execution rights.
+
+Stop intent is committed before contacting the guest. Background recovery verifies the original process proof and finishes an uncertain stop. It does not replay launch commands. An unconfirmed or missing established process scope stays unresolved instead of being reported as a confirmed stop. The process stop preserves the project volume, private editor directory, view, and drafts. Private draft reads/writes remain authorized through the scoped editor gateway after the process stops; shared-file access still requires a ready editor/runtime.
+
+This API stops the native execution only. It does not close a browser iframe or automatically discard a dirty document. Browser-client flush/detach integration and its live acceptance remain pending.
+
+## Terminals
+
+Add a terminal to create a new native shell. Use the retained-session selector to attach an existing terminal. Closing a panel disconnects its client and releases its input lease. It does not replay a command or create a replacement shell. A terminal interrupted by VM shutdown keeps its recorded output.
+
+## Version comparison and restore
+
+Add a **Version history** panel. Select **Compare** to read the selected retained version beside the current saved file. Text previews display at most 64 KiB per side. Binary files show their byte lengths and SHA-256 values. Download links retain the complete selected bytes. Use **Load older history** to page beyond the latest 100 records.
+
+**Restore selected version** creates a new shared version. Its request retains the exact current version shown in the comparison and a stable operation UUID. A concurrent change rejects the restore. Compare again before explicitly starting a new restore. Restoration preserves earlier history and private editor drafts.
+
+An uncertain response keeps the original request. **Retry the same restore** reuses its UUID, selected version, and saved base. **Check saved outcome** reconciles that exact durable operation. The retained operation catalog prioritizes pending operations. Reopening a history panel can recover pending operations after a browser restart. A refresh never dispatches a restore automatically.
+
+## Current support
+
+- Scoped `*.editor.localhost` origins on the controller's port.
+- Pinned OpenVSCode 1.109.5 on Linux arm64/x64 with glibc. The real editor gate uses Ubuntu 26.04; Alpine is not an editor target.
+- Authorized file reads/saves, private buffers, independent views, shared directory navigation, native terminals, and retained file-history listing, comparison, and explicit restore.
+- Folder creation, file rename, and deletion currently use a project terminal. The virtual filesystem rejects those IDE operations.
+- IDE extensions must support virtual workspaces. Native workspace extensions can have additional limitations.
+
+This is an implementation slice of #550. Final editor-session cleanup, remaining model/skills integration, production service-user QA, and cross-host restore acceptance remain pending. Do not treat this guide or its screenshots as full issue acceptance.
+
+See [private views](project-private-views.md), [workspace files](project-workspace-files.md), and [real editor recovery evidence](../development/project-editor-recovery-2026-11-01.md).

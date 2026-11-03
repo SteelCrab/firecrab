@@ -23,6 +23,20 @@ mod sandbox_control;
 pub use sandbox_control::*;
 mod sandbox_canvas;
 pub use sandbox_canvas::*;
+mod project_workspace;
+pub use project_workspace::*;
+mod workspace_retention;
+pub use workspace_retention::*;
+mod workspace_backups;
+pub use workspace_backups::*;
+mod workspace_skills;
+pub use workspace_skills::*;
+mod workspace_files;
+pub use workspace_files::*;
+mod workspace_terminals;
+pub use workspace_terminals::*;
+mod workspace_views;
+pub use workspace_views::*;
 mod block_storage;
 mod network_dns;
 mod sandbox_environment;
@@ -2866,3 +2880,6 @@ mod tests {
         );
     }
 }
+
+mod workspace_instructions;
+pub use workspace_instructions::*;

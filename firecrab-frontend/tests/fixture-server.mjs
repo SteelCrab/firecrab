@@ -123,10 +123,12 @@ export async function createFixtureServer(root, initialRows = 100) {
     failNext: null,
     delayNext: null,
     handlers: new Map(),
+    matchHandler: null,
     state: {},
     reset(rows = initialRows) {
       this.requests = [];
       this.handlers.clear();
+      this.matchHandler = null;
       this.failNext = null;
       this.delayNext = null;
       this.state = {
@@ -282,7 +284,7 @@ export async function createFixtureServer(root, initialRows = 100) {
         headers: req.headers,
         query: Object.fromEntries(url.searchParams),
       });
-      const handler = fixture.handlers.get(`${method} ${path}`);
+      const handler = fixture.handlers.get(`${method} ${path}`) ?? fixture.matchHandler?.({ method, path });
       if (handler) return await handler({ req, res, url, body, send, fixture });
       if (fixture.delayNext?.path === path) {
         const delay = fixture.delayNext;

@@ -24,6 +24,7 @@ import FirecrabPanel from "./components/FirecrabPanel";
 import HostInfo from "./components/HostInfo";
 import Cluster from "./components/Cluster";
 import AiSandbox from "./components/AiSandbox";
+import AiCanvas from "./components/AiCanvas";
 import Images from "./components/Images";
 import Kernels from "./components/Kernels";
 import Queues from "./components/Queues";
@@ -372,6 +373,9 @@ export default function App() {
       : route.kind === "pipe-card"
         ? "pipe"
         : route.view;
+
+  if (view === "ai-canvas")
+    return <AiCanvas onUnsavedChange={setHasUnsavedChanges} />;
 
   return (
     <HostStatusProvider>

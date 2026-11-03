@@ -209,6 +209,22 @@ pub struct SandboxTaskInput {
     /// Managed Environment role; required when the Environment has multiple roles.
     #[serde(default)]
     pub environment_role: Option<String>,
+    /// Explicit caller-private saved AGENTS.md context; never a live editor buffer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction_snapshot_id: Option<Uuid>,
+    /// File-agent target in the retained volume. Some("") selects its root.
+    /// This profile defaults to versioned file tools and never stages host copies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_directory: Option<String>,
+    /// Explicit installed project skill revisions captured before dispatch; old requests omit this field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_skill_ids: Vec<Uuid>,
+    /// Explicit opt-in to bounded commands in the retained project VM; old requests remain file-only.
+    #[serde(default, skip_serializing_if = "shell_disabled")]
+    pub project_shell: bool,
+}
+fn shell_disabled(value: &bool) -> bool {
+    !*value
 }
 
 /// A declared test is backed by one retained guest-command event, never a model assertion.
@@ -332,6 +348,9 @@ pub struct SandboxTask {
     pub events: Vec<SandboxEvent>,
     /// Reviewable modifications to the isolated project copy.
     pub changes: Vec<SandboxFileChange>,
+    /// Confirmed retained-folder writes, in tool-call order; all are already applied.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folder_mutations: Vec<SandboxFolderMutation>,
     /// Git commit fixed at admission when the project selects a local ref.
     #[serde(default)]
     pub git_commit: Option<String>,
@@ -474,4 +493,20 @@ impl From<&SandboxTask> for SandboxTaskSummary {
             artifact_count: task.artifacts.len(),
         }
     }
+}
+
+/// One actual retained-folder operation, linked to the project's append-only file history.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxFolderMutation {
+    /// Server-generated id persisted before native dispatch.
+    pub operation_id: Uuid,
+    /// Path relative to the project root.
+    pub path: String,
+    /// Exact optimistic base; zero denotes a newly created file.
+    pub before_version: u64,
+    /// Confirmed appended file-history version.
+    pub after_version: u64,
+    /// Confirmed resulting bytes.
+    pub sha256: String,
 }

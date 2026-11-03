@@ -31,7 +31,7 @@ pub struct SavedTask {
     pub workspace: Option<PathBuf>,
     /// Borrowed VM boot identity captured before any guest side effect.
     pub guest: Option<GuestBinding>,
-    /// The guest may still own a process or an unexported workspace.
+    /// A guest command, retained file write, or unexported workspace remains uncertain.
     pub guest_pending: bool,
     /// Immutable identity of the most recently admitted guest command.
     #[serde(default)]
@@ -45,4 +45,23 @@ pub struct SavedTask {
     /// Environment-owned execution isolation fixed at admission; absent for borrowed VMs.
     #[serde(default)]
     pub execution_mode: Option<SandboxExecutionMode>,
+    /// Immutable saved rules and their retained project binding, fixed before dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<SavedInstructions>,
+    /// Immutable selected skill guidance, retained by the existing canonical task record.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<crate::project_workspace::skills::tasks::SavedSkill>,
+}
+
+/// Saved instruction provenance; it contains no model account configuration.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct SavedInstructions {
+    /// Private project database selected at admission.
+    pub database_id: uuid::Uuid,
+    /// Retained project volume selected at admission.
+    pub volume_id: uuid::Uuid,
+    /// Reject a later runtime handoff instead of silently reusing context.
+    pub generation: u64,
+    /// Exact ordered saved-file versions; private editor drafts are never included.
+    pub snapshot: ProjectInstructionSnapshot,
 }

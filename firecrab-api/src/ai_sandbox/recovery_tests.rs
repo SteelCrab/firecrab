@@ -40,6 +40,8 @@ pub(super) async fn fixture() -> (tempfile::TempDir, AppState, SavedTask) {
         runtime_id: Uuid::new_v4(),
     };
     let saved = SavedTask {
+        instructions: None,
+        skills: Vec::new(),
         results_exported: false,
         execution_mode: None,
         caller: Default::default(),
@@ -58,6 +60,7 @@ pub(super) async fn fixture() -> (tempfile::TempDir, AppState, SavedTask) {
         guest_command: Some(Uuid::new_v4()),
         guest_staged: true,
         task: SandboxTask {
+            folder_mutations: Vec::new(),
             git_commit: None,
             retry_root: None,
             retry_number: 0,
@@ -70,6 +73,10 @@ pub(super) async fn fixture() -> (tempfile::TempDir, AppState, SavedTask) {
             attempt_id: Uuid::new_v4(),
             runtime: Some(runtime),
             request: SandboxTaskInput {
+                project_shell: false,
+                selected_skill_ids: Vec::new(),
+                project_directory: None,
+                instruction_snapshot_id: None,
                 coordination: Default::default(),
                 environment_role: None,
                 kind: SandboxTaskKind::Code,

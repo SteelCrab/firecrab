@@ -436,3 +436,8 @@ Keep logs and summaries; see [QA script coverage](qa.md#script-coverage).
   to `scripts/ci-qa-deploy.py --disposable-host --report PATH`. Check CLI disconnect,
   API restart, Action resume, failed health, expiry/revocation and HTTP continuity
   through private verified TLS and Nginx. Retain `ciDeploy` measurements and cleanup.
+
+## Project workspace recovery
+
+Use the [isolated Linux/KVM recovery gate](project-workspace-recovery-qa.md).
+Run its ownership guards in CI. Keep live acceptance scoped to the tested template.

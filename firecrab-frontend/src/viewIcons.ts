@@ -1,8 +1,9 @@
-import { Bot, Shield, createLucideIcon, type LucideIcon } from "lucide-react";
+import {Bot,Shield,LayoutDashboard,createLucideIcon,type LucideIcon} from "lucide-react";
 import type { ViewId } from "./navigation";
 
 /** Keep the established navigation symbols during the React migration. */
 export const VIEW_ICONS: Record<ViewId, LucideIcon> = {
+  "ai-canvas": LayoutDashboard,
   vms: createLucideIcon("dashboard-vms", [
     [
       "path",

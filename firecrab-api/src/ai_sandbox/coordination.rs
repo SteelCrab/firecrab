@@ -111,6 +111,16 @@ pub fn dependencies(
             .map_err(|_| "Cannot read dependency")?
             .ok_or("Dependency task is unavailable")?;
         caller.task(state, &saved, SandboxPermission::Read)?;
+        if state
+            .store
+            .imported_sandbox_task(*id)
+            .map_err(|_| "Cannot read imported dependency ownership")?
+        {
+            return Err(
+                "Imported attempts are read-only history; choose a dependency created on this host"
+                    .into(),
+            );
+        }
         if saved.task.project_id != project || saved.project.source_path.as_deref() != source {
             return Err("Dependencies must belong to the same project and source directory".into());
         }

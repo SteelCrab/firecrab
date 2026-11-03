@@ -490,6 +490,18 @@ pub async fn delete_project(
             "Stop and delete active preview bindings before deleting their project",
         ));
     }
+    if state
+        .store
+        .project_workspace(key)
+        .map_err(|_| AppError::internal(id.0))?
+        .is_some()
+    {
+        return Err(error(
+            id,
+            "project_workspace_retained",
+            "Project has retained workspace data; explicit data retention/deletion is required",
+        ));
+    }
     let owned = state.sandbox.root.join(key.to_string());
     if owned.exists() {
         tokio::task::spawn_blocking(move || std::fs::remove_dir_all(owned))
@@ -500,6 +512,32 @@ pub async fn delete_project(
     let store = state.store.clone();
     db(id, move || store.delete_sandbox_project(key)).await?;
     Ok(Json(json!({"deleted":true})))
+}
+
+/// List only connection metadata that this verified caller can use for Sandbox tasks.
+pub async fn connections(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    caller: Caller,
+) -> Result<Json<Vec<AiConnection>>, AppError> {
+    let store = state.store.clone();
+    let saved = db(id, move || store.ai_connections()).await?;
+    let mut visible = Vec::new();
+    for saved in saved {
+        let resource = SandboxResource::Connection {
+            id: saved.connection.id,
+        };
+        if caller
+            .allowed(&state, &resource, SandboxPermission::Read)
+            .map_err(|_| AppError::internal(id.0))?
+            && caller
+                .allowed(&state, &resource, SandboxPermission::Execute)
+                .map_err(|_| AppError::internal(id.0))?
+        {
+            visible.push(saved.connection);
+        }
+    }
+    Ok(Json(visible))
 }
 
 /// Discover available models without treating catalogue membership as inference proof.
@@ -708,6 +746,10 @@ pub struct TaskQuery {
     pub since: Option<u64>,
     /// Read the previous page before this task identity.
     pub before: Option<Uuid>,
+    /// Explicit retained-folder session filter; an empty string selects the root.
+    pub project_directory: Option<String>,
+    /// Exact agent label in that folder; omission selects unassigned tasks only.
+    pub assigned_agent: Option<String>,
 }
 /// Conversation and Kanban consume these same task records.
 pub async fn tasks(
@@ -718,7 +760,17 @@ pub async fn tasks(
     Query(query): Query<TaskQuery>,
 ) -> Result<Json<Vec<SandboxTaskSummary>>, AppError> {
     project(&state, id, key, caller, SandboxPermission::Read).await?;
-    let sources = caller.sources(&state, key).map_err(|e| denied(id, e))?;
+    if query.project_directory.is_none() && query.assigned_agent.is_some() {
+        return Err(invalid(
+            id,
+            "projectDirectory",
+            "An agent filter requires a retained project directory",
+        ));
+    }
+    if let Some(directory) = &query.project_directory {
+        crate::project_workspace::folder::path(directory, "", true)
+            .map_err(|e| invalid(id, "projectDirectory", e))?;
+    }
     let store = state.store.clone();
     let before = if let Some(cursor) = query.before {
         let store = state.store.clone();
@@ -730,6 +782,24 @@ pub async fn tasks(
     } else {
         None
     };
+    if let Some(directory) = query.project_directory {
+        let rows = db(id, move || {
+            store.sandbox_folder_summaries(
+                key,
+                &directory,
+                query.assigned_agent.as_deref(),
+                caller.principal,
+                query.since,
+                before,
+            )
+        })
+        .await?;
+        caller
+            .project(&state, key, SandboxPermission::Read)
+            .map_err(|e| denied(id, e))?;
+        return Ok(Json(rows));
+    }
+    let sources = caller.sources(&state, key).map_err(|e| denied(id, e))?;
     Ok(Json(
         db(id, move || {
             store.sandbox_visible_summaries(key, query.since, before, sources)
@@ -788,6 +858,19 @@ pub async fn create_task(
         return Ok((StatusCode::OK, Json(previous.task)));
     }
     ai_sandbox::coordination::validate(&input).map_err(|e| invalid(id, "coordination", e))?;
+    ai_sandbox::folder::validate_request(&project.spec, &input)
+        .map_err(|e| invalid(id, "projectDirectory", e))?;
+    if let Some(snapshot) = input.instruction_snapshot_id
+        && (snapshot.is_nil()
+            || input.kind != SandboxTaskKind::Code
+            || project.spec.environment_id.is_some())
+    {
+        return Err(invalid(
+            id,
+            "instructionSnapshotId",
+            "Saved rules require a non-empty snapshot and a code task on the project's selected VM",
+        ));
+    }
     let serialized = serde_json::to_string(&input).map_err(|_| AppError::internal(id.0))?;
     if ai_sandbox::redact(&accounts, &serialized) != serialized {
         return Err(invalid(
@@ -859,8 +942,10 @@ pub async fn create_task(
             SandboxPermission::Execute,
         )
         .map_err(|e| denied(id, e))?;
-    ai_sandbox::proof(&state, &selection, input.kind == SandboxTaskKind::Code)
-        .map_err(|e| invalid(id, "selection", e))?;
+    let skill_provider = ai_sandbox::proof(&state, &selection, input.kind == SandboxTaskKind::Code)
+        .map_err(|e| invalid(id, "selection", e))?
+        .connection
+        .provider;
     let mut runtime = None;
     let mut environment_ref = None;
     let mut execution_mode = None;
@@ -875,10 +960,27 @@ pub async fn create_task(
         ));
     }
     if input.kind == SandboxTaskKind::Code {
-        caller
-            .settings(&state, &project.spec)
-            .map_err(|e| denied(id, e))?;
-        if project.spec.source_path.is_none() {
+        if input.project_directory.is_some() {
+            caller
+                .project(&state, project_id, SandboxPermission::Write)
+                .map_err(|e| denied(id, e))?;
+            let vm = project
+                .spec
+                .vm_id
+                .ok_or_else(|| invalid(id, "vmId", "Select the project VM"))?;
+            caller
+                .require(
+                    &state,
+                    &SandboxResource::Vm { id: vm },
+                    SandboxPermission::Execute,
+                )
+                .map_err(|e| denied(id, e))?;
+        } else {
+            caller
+                .settings(&state, &project.spec)
+                .map_err(|e| denied(id, e))?;
+        }
+        if input.project_directory.is_none() && project.spec.source_path.is_none() {
             return Err(invalid(
                 id,
                 "sourcePath",
@@ -926,10 +1028,14 @@ pub async fn create_task(
     }
     let timestamp = ai_sandbox::now();
     let spec = project.spec.clone();
-    let git_commit = tokio::task::spawn_blocking(move || ai_sandbox::context::resolve(&spec))
-        .await
-        .map_err(|_| AppError::internal(id.0))?
-        .map_err(|e| invalid(id, "gitRef", e))?;
+    let git_commit = if input.project_directory.is_some() {
+        None
+    } else {
+        tokio::task::spawn_blocking(move || ai_sandbox::context::resolve(&spec))
+            .await
+            .map_err(|_| AppError::internal(id.0))?
+            .map_err(|e| invalid(id, "gitRef", e))?
+    };
     if matches!(
         execution_mode,
         Some(SandboxExecutionMode::PersistentWorkspace)
@@ -947,9 +1053,63 @@ pub async fn create_task(
             "Retained Workspace source or Git base changed. Restore its original source/ref or explicitly select a new Environment.",
         ));
     }
+    let instructions = if let Some(snapshot) = input.instruction_snapshot_id {
+        let runtime = runtime.ok_or_else(|| {
+            invalid(
+                id,
+                "instructionSnapshotId",
+                "Saved rules require an admitted project runtime",
+            )
+        })?;
+        let captured = crate::project_workspace::task_instructions(
+            state.clone(),
+            caller,
+            project_id,
+            runtime.vm_id,
+            snapshot,
+            id.0,
+        )
+        .await?;
+        if captured.contains_credentials(&accounts) {
+            return Err(invalid(
+                id,
+                "instructionSnapshotId",
+                "Saved rules must not contain connected provider credentials",
+            ));
+        }
+        Some(captured)
+    } else {
+        None
+    };
+    if !input.selected_skill_ids.is_empty() && input.project_directory.is_none() {
+        return Err(invalid(
+            id,
+            "selectedSkillIds",
+            "Installed skills require a retained folder task",
+        ));
+    }
+    let skills = if input.selected_skill_ids.is_empty() {
+        Vec::new()
+    } else {
+        let runtime = runtime
+            .ok_or_else(|| invalid(id, "selectedSkillIds", "Skills require a project runtime"))?;
+        crate::project_workspace::skills::tasks::capture(
+            state.clone(),
+            caller,
+            project_id,
+            runtime,
+            input.selected_skill_ids.clone(),
+            skill_provider,
+            id.0,
+        )
+        .await?
+    };
     let saved = SavedTask {
+        skills,
+        instructions,
         caller,
         task: SandboxTask {
+            folder_mutations: Vec::new(),
             git_commit,
             retry_root: Some(retry_root),
             retry_number,
@@ -984,6 +1144,14 @@ pub async fn create_task(
     caller
         .task(&state, &saved, SandboxPermission::Execute)
         .map_err(|e| denied(id, e))?;
+    if ai_sandbox::folder::enabled(&saved) {
+        let target =
+            ai_sandbox::folder::target(&saved).map_err(|e| invalid(id, "projectDirectory", e))?;
+        crate::project_workspace::folder::admit(state.clone(), target.clone(), id.0).await?;
+        if saved.task.request.project_shell {
+            crate::project_workspace::folder::command::probe(state.clone(), target, id.0).await?;
+        }
+    }
     let state = state.clone();
     let response = tokio::spawn(async move { ai_sandbox::admit(state, saved, claim).await })
         .await
@@ -1034,15 +1202,21 @@ pub async fn reconcile_task(
             "Only an interrupted attempt needs reconciliation",
         ));
     }
-    if let Some(binding) = &saved.guest {
-        saved.guest = Some(
-            ai_sandbox::guest::binding(&state, binding.vm_id)
-                .map_err(|e| invalid(id, "guest", e))?,
-        );
+    if ai_sandbox::folder::enabled(&saved) {
+        ai_sandbox::folder::settle(&state, &mut saved, caller)
+            .await
+            .map_err(|e| invalid(id, "fileOperation", e))?;
+    } else {
+        if let Some(binding) = &saved.guest {
+            saved.guest = Some(
+                ai_sandbox::guest::binding(&state, binding.vm_id)
+                    .map_err(|e| invalid(id, "guest", e))?,
+            );
+        }
+        ai_sandbox::reconcile_guest(&state, &mut saved)
+            .await
+            .map_err(|e| invalid(id, "guest", e))?;
     }
-    ai_sandbox::reconcile_guest(&state, &mut saved)
-        .await
-        .map_err(|e| invalid(id, "guest", e))?;
     if let Some(path) = &saved.workspace {
         saved.task.changes = match ai_sandbox::workspace::changes(path) {
             Ok(changes) => changes,
@@ -1125,6 +1299,13 @@ pub async fn apply_task(
 ) -> Result<Json<SandboxTask>, AppError> {
     let _claim = state.sandbox.admission.lock().await;
     let mut saved = task(&state, id, key, caller, SandboxPermission::Apply).await?;
+    if ai_sandbox::folder::enabled(&saved) {
+        return Err(error(
+            id,
+            "sandbox_folder_already_applied",
+            "Folder file changes are saved immediately; use project version history to review or restore them",
+        ));
+    }
     if saved.task.state.active() || saved.guest_pending || saved.guest_staged {
         return Err(error(
             id,

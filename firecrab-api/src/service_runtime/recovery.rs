@@ -142,7 +142,13 @@ fn observe(record: &mut MicroServiceDeployment, states: &[VmState], probes: &[bo
         } else {
             status.successes = 0;
             status.healthy_since = None;
-            status.failures = status.failures.saturating_add(1).min(3);
+            // A confirmed exit cannot serve requests. Debounce HTTP failures only
+            // while the VM can still be running, rather than routing to a dead peer.
+            status.failures = if matches!(state, VmState::Stopped | VmState::Error) {
+                3
+            } else {
+                status.failures.saturating_add(1).min(3)
+            };
             if status.failures >= 3 {
                 instance.healthy = false;
             }

@@ -729,7 +729,10 @@ test.describe("dashboard frame", () => {
   }) => {
     await openDashboard(page, { vms: VMS, routes: { "/api/host": HOST } });
     const items = nav(page).locator(".sidebar-item");
-    await expect(items).toHaveCount(19); // one per VIEWS entry in src/navigation.ts
+    await expect(items).toHaveCount(20); // includes the AI Canvas destination
+    await expect(
+      nav(page).getByRole("link", { name: "AI Canvas", exact: true }),
+    ).toHaveAttribute("href", "#/ai-canvas");
     await expect(
       nav(page).getByRole("link", { name: "Stack", exact: true }),
     ).toHaveAttribute("href", "#/stacks");

@@ -1129,7 +1129,6 @@ async fn claim_start(
 ) -> Result<(Uuid, VmRecord), AppError> {
     let id = parse_id(&id, request_id.0)?;
     let _guard = state.lock_vm(id).await;
-    let _network_guard = state.network_mutations.lock().await;
     let vm = state
         .vms
         .lock()
@@ -1137,6 +1136,21 @@ async fn claim_start(
         .get(&id)
         .cloned()
         .ok_or_else(|| AppError::not_found(request_id.0))?;
+    ensure_no_workspace_backup(&state, id, request_id.0)?;
+    let store = state.store.clone();
+    let migration_pending =
+        tokio::task::spawn_blocking(move || store.sandbox_vm_migration_pending(id))
+            .await
+            .map_err(|_| AppError::internal(request_id.0))?
+            .map_err(|_| AppError::internal(request_id.0))?;
+    if migration_pending {
+        return Err(AppError::conflict(
+            "sandbox_migration_pending",
+            "Resume the prepared Sandbox project migration before starting this VM",
+            request_id.0,
+        ));
+    }
+    let _network_guard = state.network_mutations.lock().await;
     if !state
         .store
         .vm_block_storages(id)
@@ -1539,11 +1553,27 @@ pub(crate) async fn delete_vm_with_disk_policy(
     Ok(StatusCode::NO_CONTENT)
 }
 
+fn ensure_no_workspace_backup(state: &AppState, vm: Uuid, request: Uuid) -> Result<(), AppError> {
+    if state
+        .store
+        .workspace_vm_backup_pending(vm)
+        .map_err(|_| AppError::internal(request))?
+    {
+        return Err(AppError::conflict(
+            "workspace_backup_pending",
+            "Resume or abort the retained project backup before changing this VM",
+            request,
+        ));
+    }
+    Ok(())
+}
+
 fn ensure_no_active_sandbox_previews(
     state: &AppState,
     vm: Uuid,
     request: Uuid,
 ) -> Result<(), AppError> {
+    ensure_no_workspace_backup(state, vm, request)?;
     if state
         .store
         .sandbox_vm_has_live_tunnels(vm)

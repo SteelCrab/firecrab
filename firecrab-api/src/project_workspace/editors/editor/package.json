@@ -1,0 +1,67 @@
+{
+  "name": "project-workspace",
+  "publisher": "firecrab",
+  "version": "0.2.0",
+  "displayName": "Firecrab Project Workspace",
+  "description": "Authorized project files and private unsaved buffers.",
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "browser": "./extension.js",
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onFileSystem:firecrab"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "license": "Apache-2.0",
+  "contributes": {
+    "commands": [
+      {
+        "command": "firecrabWorkspace.recoverDrafts",
+        "title": "Firecrab: Open Unsaved Draft Recovery Copy"
+      },
+      {
+        "command": "firecrabWorkspace.retryDrafts",
+        "title": "Firecrab: Retry Private Draft Persistence"
+      },
+      {
+        "command": "firecrabWorkspace.closedDrafts",
+        "title": "Firecrab: Open Closed Editor Recovery Copy"
+      }
+    ],
+    "configuration": {
+      "title": "Firecrab",
+      "properties": {
+        "firecrab.browserClientId": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "description": "Browser identity supplied by the authorized Firecrab workbench.",
+          "restricted": true
+        },
+        "firecrab.browserWindowProof": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "restricted": true,
+          "description": "Window identity supplied by the authorized Firecrab workbench."
+        },
+        "firecrab.workspaceGeneration": {
+          "type": "integer",
+          "default": 0,
+          "scope": "window",
+          "restricted": true,
+          "description": "Workspace generation supplied by the authorized Firecrab workbench. Reopen after project restoration."
+        }
+      }
+    }
+  }
+}

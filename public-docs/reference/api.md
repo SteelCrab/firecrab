@@ -506,3 +506,59 @@ Members:
 
 `DELETE /api/pools/{id}` answers `409 pool_in_use` while a lease is active. Otherwise it returns
 `202` with `deleting: true`, and the pool disappears once its members are deleted.
+
+
+## Project workspaces
+
+See [Private views and drafts](../guides/project-private-views.md) for the
+caller-scoped `/workspace/views` and `/workspace/views/{view}/draft` routes.
+
+Project workspace routes extend the authenticated Sandbox project API at
+`/api/ai-sandbox/projects/{project}/workspace`.
+
+| Method and suffix | Purpose |
+| --- | --- |
+| `GET`, `PUT /` | Read retained identities or bind an existing volume/runtime |
+| `PUT /state` | Save bounded project metadata with an expected revision |
+| `POST /reconcile` | Verify the current guest mount and initial import |
+| `GET`, `PUT /checkpoints/{id}` | Inspect or create a matched offline database/disk checkpoint |
+| `GET /files/tree` | List confined directory children |
+| `GET`, `PUT /files` | Read a file or save an optimistic, idempotent write |
+| `GET /files/history`, `/files/versions/{id}` | Inspect retained file versions |
+| `GET /files/diff` | Compare two versions of the same path |
+| `POST /files/restore` | Append a new version from earlier contents |
+| `GET /file-operations` | Inspect durable write outcomes |
+| `POST /file-operations/{id}/reconcile` | Recover that exact admitted write |
+| `GET`, `PUT /editors/{view}` | Read or explicitly open the verified caller's private editor |
+| `POST /editors/{view}/stop` | Stop only the execution selected by `{expectedInstance}`; retain editor data and private drafts |
+
+Saved instruction context:
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| PUT | `/api/ai-sandbox/projects/{id}/workspace/instructions/snapshots/{snapshot}` | Capture saved root-to-selected-directory `AGENTS.md` context with `{directory}` under a stable UUID. |
+| GET | `/api/ai-sandbox/projects/{id}/workspace/instructions/snapshots/{snapshot}` | Read the verified caller's immutable saved context, including while the workload VM is stopped. |
+
+Sandbox code-task admission accepts optional `instructionSnapshotId` to retain and apply
+that caller's saved context. See [saved task instructions](../guides/sandbox-saved-instructions.md)
+for prerequisites and runtime fencing. Adding `projectDirectory` explicitly selects
+the [retained-folder file-only profile](../guides/sandbox-folder-file-agents.md);
+it requires a matching saved snapshot and exposes confirmed `folderMutations`.
+Omitting that field retains isolated-copy execution.
+The existing project task-list endpoint also accepts `projectDirectory` and optional
+`assignedAgent` to page the verified caller's folder session records, including
+active and interrupted attempts, with the existing `before` and `since` filters.
+
+See [saved project instructions](../guides/project-instructions.md) for limits, private access and retries.
+
+See [workspace retention and checkpoints](../guides/project-workspaces.md) and
+[file API bodies, permissions and limits](../guides/project-workspace-files.md).
+
+### Project terminals
+
+The project workspace also exposes `GET /terminals`, `GET|PUT /terminals/{session}`,
+`GET /terminals/{session}/output`, `POST|PUT|DELETE /terminals/{session}/control`,
+`POST /terminals/{session}/input`, `POST /terminals/{session}/stop` and
+`GET /terminals/{session}/socket`. These paths extend the workspace prefix above.
+See [Project workspace terminals](../guides/project-workspace-terminals.md) for
+input leases, replay cursors, runtime fencing and message bodies.
