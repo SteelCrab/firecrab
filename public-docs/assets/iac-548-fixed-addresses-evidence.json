@@ -1,0 +1,75 @@
+{
+  "sourceCommit": "852bcb1de714d04779f9d0912ac137028ed27d45",
+  "sourceDirty": false,
+  "capturedOn": "2026-11-03",
+  "fixture": true,
+  "scope": "Actual local Axum/SQLite/production React and the real root CLI broker inside an isolated Linux container. A test Unix-socket proxy forwards typed helper requests to that CLI and intentionally drops one committed acknowledgement. No live systemd/Nginx, KVM guest, Stack apply, Terraform provider or remote host runs. Terraform cards represent ownership metadata.",
+  "runtimeArtifacts": {
+    "apiTestBinary": {
+      "file": "firecrab_api-18966e5ed9aabb38",
+      "sha256": "28197654020719651b42fa160670cc1e56c7355865f30f3966501dbfeeeaccb3"
+    },
+    "linuxCli": {
+      "file": "firecrab",
+      "sha256": "6bf233242247e083de173f462a72285775fb24c352c5771b95f64095cc6b240e"
+    },
+    "transportProxy": true,
+    "systemdObservations": "Explicit fixtures; no actual systemd job executes."
+  },
+  "originalRequest": {
+    "expectedEndpointId": "f9dcbad4-b39b-4ccd-93ac-af30fa07d9ba",
+    "expectedGeneration": 1,
+    "expectedOwner": {
+      "id": "3c69c125-8f13-4c9a-b382-a7ddc0663868",
+      "key": "firecrab_fixed_address.app",
+      "manager": "terraform"
+    },
+    "operationId": "f54a3abd-d7da-4c7b-ad46-3119ecee6089",
+    "owner": {
+      "id": "ab1c97e8-d176-4b76-8c17-94ea8cee0902",
+      "key": "firecrab_fixed_address.app",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "fixture-app",
+      "kind": "firecrab_tunnel"
+    }
+  },
+  "recovered": {
+    "operationId": "f54a3abd-d7da-4c7b-ad46-3119ecee6089",
+    "ownership": {
+      "endpointId": "f9dcbad4-b39b-4ccd-93ac-af30fa07d9ba",
+      "resource": {
+        "kind": "firecrab_tunnel",
+        "id": "fixture-app"
+      },
+      "generation": 2,
+      "owner": {
+        "manager": "terraform",
+        "id": "ab1c97e8-d176-4b76-8c17-94ea8cee0902",
+        "key": "firecrab_fixed_address.app"
+      }
+    }
+  },
+  "peerOwnership": {
+    "endpointId": "f9dcbad4-b39b-4ccd-93ac-af30fa07d9ba",
+    "generation": 1,
+    "owner": {
+      "id": "ab1c97e8-d176-4b76-8c17-94ea8cee0902",
+      "key": "firecrab_fixed_address.peer",
+      "manager": "terraform"
+    },
+    "resource": {
+      "id": "fixture-peer",
+      "kind": "firecrab_tunnel"
+    }
+  },
+  "manifestSha256Before": "355b09e66c8ce615eb6bdbf1102c85b1d4d40e94cfaf87efbc54fba14a90d990",
+  "manifestSha256After": "355b09e66c8ce615eb6bdbf1102c85b1d4d40e94cfaf87efbc54fba14a90d990",
+  "screenshots": {
+    "iac-548-fixed-addresses-desktop-2026-11-03.png": "5b22619584bbb3594a13f374f24cc274594f1639583d2201ab91b97f687aa336",
+    "iac-548-fixed-addresses-mobile-2026-11-03.png": "c3962d2a91b4f3ab37662c7433683c873beb174c5d823c48ff38c11e6a6075ec",
+    "iac-548-fixed-addresses-recovery-mobile-2026-11-03.png": "1afb471b76553c7bf4feafa91b8d9efa48cbd10af0af194d6fff678d30402444",
+    "iac-548-fixed-addresses-recovery-desktop-2026-11-03.png": "223d20ed3cad86c6d1d5645b84ef578069c6df097caf0dfccbec4a48cf7b252d"
+  }
+}
