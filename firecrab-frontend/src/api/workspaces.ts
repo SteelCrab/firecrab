@@ -61,9 +61,13 @@ export type AppVerification = {
     exitCode: number | null;
     config: AppConfig | null;
   };
+  /** The workspace's tunnel. It outlives app restarts while the app port stays the same. */
   preview: null | {
     running: boolean;
+    /** Set once cloudflared registers a connection; null while the tunnel starts. */
     publicUrl: string | null;
+    /** The app port the tunnel serves. Older services omit it. */
+    port?: number | null;
     error: string | null;
   };
   /** The app on this computer's loopback through SSH. Older services omit it. */

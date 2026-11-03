@@ -125,22 +125,21 @@ if [ -f "$root/latest" ]; then
         if [ -f "$root/$job/app" ]; then printf 'app:ready\n'; fi
       fi
     fi
-    if [ -f "$root/$job/preview.pid" ] && [ -f "$root/$job/preview.start" ]; then
-      printf 'PREVIEW:present\n'
+    # Older builds kept the tunnel in the job directory. Adopt it, so its address survives.
+    if [ -f "$root/$job/preview.pid" ] && [ -f "$root/$job/preview.start" ] && [ ! -f "$root/preview.pid" ]; then
       pid=$(cat "$root/$job/preview.pid")
       case "$pid" in *[!0-9]*|'') exit 1;; esac
-      if [ -r "/proc/$pid/stat" ] && [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $20}}')" = "$(cat "$root/$job/preview.start")" ] && [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $1}}')" != Z ]; then
-        printf 'PREVIEWRUNNING:true\n'
-        printf 'PUBLICURL:'; grep -oE 'https://[a-z0-9-]+[.]trycloudflare[.]com' "$root/$job/preview.log" | tail -n1 || true; printf '\n'
-      else
-        printf 'PREVIEWERROR:'; tail -c 1200 "$root/$job/preview.log" | base64 -w0; printf '\n'
-      fi
+      tr '\0' '\n' 2>/dev/null <"/proc/$pid/cmdline" | sed -n 's|^http://127[.]0[.]0[.]1:\([0-9][0-9]*\)$|\1|p' > "$root/preview.port"
+      cat /proc/sys/kernel/random/boot_id > "$root/preview.boot"
+      mv "$root/$job/preview.log" "$root/preview.log" 2>/dev/null || :
+      mv "$root/$job/preview.start" "$root/preview.start" 2>/dev/null || :
+      mv "$root/$job/preview.pid" "$root/preview.pid" 2>/dev/null || :
     fi
   fi
   if [ -f "$root/$job/log" ]; then printf 'LOG:'; tail -c 24000 "$root/$job/log" | base64 -w0; printf '\n'; fi
   if [ -f "$root/$job/config" ]; then printf 'CONFIG:'; cat "$root/$job/config" | base64 -w0; printf '\n'; fi
 fi
-"#), Duration::from_secs(20))?;
+{PREVIEW_STATUS}"#), Duration::from_secs(20))?;
         let mut status =
             parse_status(&output, &self.automation_config_path(id)?, guest.id, &agent)?;
         status["local"] = self.local_view(id, &status["run"])?;
@@ -178,29 +177,36 @@ fi
                 }
                 let port = state["run"]["config"]["port"]
                     .as_u64()
+                    .and_then(|port| u16::try_from(port).ok())
                     .ok_or_else(|| invalid("The test app port is unavailable."))?;
                 self.ensure_preview_connector()?;
+                // A running tunnel to the same port is reused, so its address stays the same.
+                guest.shell(
+                    &stop_preview_script(&root, Some(port)),
+                    Duration::from_secs(10),
+                )?;
                 guest.shell(&format!(r#"set -eu
 root={root}
-job=$(cat "$root/latest")
-case "$job" in *[!a-f0-9-]*|'') exit 1;; esac
-if [ -f "$root/$job/preview.pid" ]; then
-  pid=$(cat "$root/$job/preview.pid")
+boot=$(cat /proc/sys/kernel/random/boot_id)
+if [ -f "$root/preview.pid" ] && [ -f "$root/preview.start" ] && [ "$(cat "$root/preview.boot" 2>/dev/null)" = "$boot" ]; then
+  pid=$(cat "$root/preview.pid")
   case "$pid" in *[!0-9]*|'') exit 1;; esac
-  if [ -r "/proc/$pid/stat" ] && [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $20}}')" = "$(cat "$root/$job/preview.start")" ] && [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $1}}')" != Z ]; then exit 0; fi
+  if [ -r "/proc/$pid/stat" ] && [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $20}}')" = "$(cat "$root/preview.start")" ] && [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $1}}')" != Z ]; then exit 0; fi
 fi
-nohup setsid cloudflared --no-autoupdate tunnel --url http://127.0.0.1:{port} --protocol http2 --grace-period 1s </dev/null > "$root/$job/preview.log" 2>&1 &
+nohup setsid cloudflared --no-autoupdate tunnel --url http://127.0.0.1:{port} --protocol http2 --grace-period 1s </dev/null > "$root/preview.log" 2>&1 &
 pid=$!
-printf '%s' "$pid" > "$root/$job/preview.pid"
-sed 's/^.*) //' "/proc/$pid/stat" | awk '{{print $20}}' > "$root/$job/preview.start"
+printf '%s' "$boot" > "$root/preview.boot"
+printf '%s' {port} > "$root/preview.port"
+sed 's/^.*) //' "/proc/$pid/stat" | awk '{{print $20}}' > "$root/preview.start"
+printf '%s' "$pid" > "$root/preview.pid"
 "#),Duration::from_secs(15))?;
             }
             "stop_preview" => {
-                guest.shell(&stop_preview_script(&root), Duration::from_secs(10))?;
+                guest.shell(&stop_preview_script(&root, None), Duration::from_secs(10))?;
             }
+            // Public access stays on: the tunnel keeps its address for the next run of the app.
             "stop_app" => {
                 close_local_view(&self.local_key(id)?);
-                guest.shell(&stop_preview_script(&root), Duration::from_secs(10))?;
                 guest.shell(
                     &format!(
                         r#"set -eu
@@ -231,6 +237,12 @@ rm -f "$root/$job/app"
                         "Stop this task's existing test app before starting a new verification.",
                     ));
                 }
+                // The tunnel outlives the app. A new port stops it, so it never serves another
+                // program on the old port; the next connect starts one for the new port.
+                guest.shell(
+                    &stop_preview_script(&root, Some(input.config.port)),
+                    Duration::from_secs(10),
+                )?;
                 // The VM owns the lock and process. A browser/native-server restart cannot replay it.
                 let script = pipeline(&agent.cwd, &root, input.id, &input.config);
                 let encoded = STANDARD.encode(script);
@@ -346,6 +358,12 @@ install -m 755 "$work/cloudflared" /root/.local/bin/cloudflared
                 "Start and verify this task's app and preview first.",
             ));
         }
+        // A tunnel kept from an earlier run must point at this run's app.
+        if state["preview"]["port"] != state["run"]["config"]["port"] {
+            return Err(invalid(
+                "The tunnel serves another app port. Start public access again.",
+            ));
+        }
         let address = state["preview"]["publicUrl"]
             .as_str()
             .ok_or_else(|| invalid("Wait for the tunnel's HTTPS address."))?;
@@ -355,10 +373,29 @@ install -m 755 "$work/cloudflared" /root/.local/bin/cloudflared
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| invalid(e.to_string()))?;
-        let started = Instant::now();
-        let response = client.get(url).send().map_err(|_| {
-            invalid("The public HTTPS check failed. Inspect the tunnel and app, then retry.")
-        })?;
+        // A new hostname can be missing from DNS at first, and resolvers keep that answer for up
+        // to 60 s. Connect (DNS included) and timeout errors are retried for about 90 s; any
+        // HTTP response ends the wait. The resource server holds no agents lock for this action.
+        let first = Instant::now();
+        let mut pause = Duration::from_secs(2);
+        let (started, response) = loop {
+            let started = Instant::now();
+            match client.get(url.clone()).send() {
+                Ok(response) => break (started, response),
+                Err(error)
+                    if (error.is_connect() || error.is_timeout())
+                        && first.elapsed() + pause < PUBLIC_WAIT =>
+                {
+                    std::thread::sleep(pause);
+                    pause = (pause * 2).min(Duration::from_secs(10));
+                }
+                Err(_) => {
+                    return Err(invalid(
+                        "The public HTTPS address did not answer, after retries for about 90 seconds. Inspect the tunnel and app, then retry.",
+                    ));
+                }
+            }
+        };
         Ok(
             json!({"url":address,"status":response.status().as_u16(),"ok":response.status().is_success(),"latencyMs":started.elapsed().as_millis()}),
         )
@@ -408,28 +445,52 @@ fn connector_asset(release: &Value, name: &str) -> Result<(String, String), Erro
         .ok_or_else(|| invalid("The connector's published checksum is unavailable."))?;
     Ok((url.into(), sha.into()))
 }
-fn stop_preview_script(root: &str) -> String {
+/// How long the HTTPS check waits for a new tunnel address. It outlasts the 60 s that
+/// resolvers keep a missing `trycloudflare.com` name.
+const PUBLIC_WAIT: Duration = Duration::from_secs(90);
+/// The workspace's tunnel, kept beside the jobs so that it outlives each run of the app:
+/// `preview.pid`, `.start` and `.boot` identify the process, `.port` is the app port it
+/// serves. Its address counts only after cloudflared registers a connection, so the check
+/// does not look up a name that is not in DNS yet.
+const PREVIEW_STATUS: &str = r#"if [ -f "$root/preview.pid" ] && [ -f "$root/preview.start" ] && [ "$(cat "$root/preview.boot" 2>/dev/null)" = "$(cat /proc/sys/kernel/random/boot_id)" ]; then
+  printf 'PREVIEW:present\n'
+  printf 'PREVIEWPORT:'; cat "$root/preview.port" 2>/dev/null || true; printf '\n'
+  pid=$(cat "$root/preview.pid")
+  case "$pid" in *[!0-9]*|'') exit 1;; esac
+  if [ -r "/proc/$pid/stat" ] && [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{print $20}')" = "$(cat "$root/preview.start")" ] && [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{print $1}')" != Z ]; then
+    printf 'PREVIEWRUNNING:true\n'
+    if grep -q 'Registered tunnel connection' "$root/preview.log" 2>/dev/null; then
+      printf 'PUBLICURL:'; grep -oE 'https://[a-z0-9-]+[.]trycloudflare[.]com' "$root/preview.log" | tail -n1 || true; printf '\n'
+    fi
+  else
+    printf 'PREVIEWERROR:'; tail -c 1200 "$root/preview.log" 2>/dev/null | base64 -w0; printf '\n'
+  fi
+fi
+"#;
+/// Stops the workspace's tunnel. With `keep`, a tunnel that serves that app port stays.
+/// After a VM reboot the process is gone, so only its files are removed.
+fn stop_preview_script(root: &str, keep: Option<u16>) -> String {
+    let keep = keep.map_or(String::new(), |port| {
+        format!("  [ \"$(cat \"$root/preview.port\" 2>/dev/null)\" != {port} ] || exit 0\n")
+    });
     format!(
         r#"set -eu
 root={root}
-if [ ! -f "$root/latest" ]; then exit 0; fi
-job=$(cat "$root/latest")
-case "$job" in *[!a-f0-9-]*|'') exit 1;; esac
-if [ ! -f "$root/$job/preview.pid" ]; then exit 0; fi
-[ "$(cat "$root/$job/boot")" = "$(cat /proc/sys/kernel/random/boot_id)" ] || exit 1
-pid=$(cat "$root/$job/preview.pid")
-case "$pid" in *[!0-9]*|'') exit 1;; esac
-if [ -r "/proc/$pid/stat" ] && [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $1}}')" != Z ]; then
-  [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $20}}')" = "$(cat "$root/$job/preview.start")" ] || exit 1
-  [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $3}}')" = "$pid" ] || exit 1
-  kill -TERM "-$pid"
-  for attempt in $(seq 1 40); do
-    if [ ! -r "/proc/$pid/stat" ] || [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $1}}')" = Z ]; then break; fi
-    sleep .1
-  done
-  if [ -r "/proc/$pid/stat" ] && [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $1}}')" != Z ]; then echo 'The preview connector is still stopping. Retry after inspecting it.' >&2; exit 1; fi
+if [ ! -f "$root/preview.pid" ]; then exit 0; fi
+if [ "$(cat "$root/preview.boot" 2>/dev/null)" = "$(cat /proc/sys/kernel/random/boot_id)" ]; then
+{keep}  pid=$(cat "$root/preview.pid")
+  case "$pid" in *[!0-9]*|'') exit 1;; esac
+  if [ -r "/proc/$pid/stat" ] && [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $1}}')" != Z ] && [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $20}}')" = "$(cat "$root/preview.start")" ]; then
+    [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $3}}')" = "$pid" ] || exit 1
+    kill -TERM "-$pid"
+    for attempt in $(seq 1 40); do
+      if [ ! -r "/proc/$pid/stat" ] || [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $1}}')" = Z ]; then break; fi
+      sleep .1
+    done
+    if [ -r "/proc/$pid/stat" ] && [ "$(sed 's/^.*) //' /proc/$pid/stat | awk '{{print $1}}')" != Z ]; then echo 'The preview connector is still stopping. Retry after inspecting it.' >&2; exit 1; fi
+  fi
 fi
-rm -f "$root/$job/preview.pid" "$root/$job/preview.start"
+rm -f "$root/preview.pid" "$root/preview.start" "$root/preview.boot" "$root/preview.port"
 "#
     )
 }
@@ -506,7 +567,7 @@ fn parse_status(text: &str, config_path: &Path, vm: Uuid, agent: &Agent) -> Resu
     };
     let run=fields.get("JOB").map(|id|json!({"id":id,"state":state,"phase":fields.get("phase").copied().unwrap_or("starting"),"exitCode":fields.get("exit").and_then(|v|v.parse::<i32>().ok()),"appReady":fields.get("app")==Some(&"ready"),"appRunning":fields.get("APPRUNNING")==Some(&"true"),"config":fields.get("CONFIG").and_then(|c|serde_json::from_str::<Value>(&decode(c)).ok()),"log":decode(fields.get("LOG").copied().unwrap_or(""))}));
     Ok(
-        json!({"vmId":vm,"agentId":agent.id,"config":config,"branch":fields.get("BRANCH"),"head":fields.get("HEAD"),"repository":fields.get("REMOTE").and_then(|url|guest::repository_url(url).ok()),"workflowConfigured":fields.contains_key("WORKFLOW"),"run":run,"preview":if fields.contains_key("PREVIEW"){json!({"running":fields.get("PREVIEWRUNNING")==Some(&"true"),"publicUrl":fields.get("PUBLICURL").filter(|s|!s.is_empty()),"error":fields.get("PREVIEWERROR").map(|e|decode(e))})}else{Value::Null}}),
+        json!({"vmId":vm,"agentId":agent.id,"config":config,"branch":fields.get("BRANCH"),"head":fields.get("HEAD"),"repository":fields.get("REMOTE").and_then(|url|guest::repository_url(url).ok()),"workflowConfigured":fields.contains_key("WORKFLOW"),"run":run,"preview":if fields.contains_key("PREVIEW"){json!({"running":fields.get("PREVIEWRUNNING")==Some(&"true"),"publicUrl":fields.get("PUBLICURL").filter(|s|!s.is_empty()),"port":fields.get("PREVIEWPORT").and_then(|p|p.parse::<u16>().ok()),"error":fields.get("PREVIEWERROR").map(|e|decode(e))})}else{Value::Null}}),
     )
 }
 

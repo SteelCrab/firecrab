@@ -91,6 +91,8 @@ export default function AgentWorkspaceApp({
   const [token, setToken] = useState(""),
     [addressName, setAddressName] = useState("");
   const [proof, setProof] = useState<Proof | null>(null);
+  // True while a connect or HTTPS check waits for a new tunnel address.
+  const [preparing, setPreparing] = useState(false);
   const alive = useRef(true),
     mutating = useRef(false),
     initialized = useRef(false),
@@ -129,6 +131,15 @@ export default function AgentWorkspaceApp({
       ? status.local
       : null;
   const localCheck = local?.check;
+  const tunnel = ready ? status?.preview : null;
+  const addressPending =
+    preparing || (!!tunnel?.running && !publicPreview(tunnel.publicUrl));
+  // The tunnel outlives the app, so its address stays the same for the next run.
+  const publicWhileStopped = !!tunnel?.running && !appReady;
+  const publicWhileStoppedText = t(
+    "Public access stays on while the app is stopped, and visitors see an error page.",
+    "앱이 멈춰도 공개 접속은 켜져 있어요. 방문자에게는 오류 페이지가 보여요.",
+  );
   const addresses = (pipe?.firecrabTunnels || []).filter(
     (address) =>
       address.target.type === "preview" && address.target.vm_id === vm.id,
@@ -205,6 +216,7 @@ export default function AgentWorkspaceApp({
     revision.current++;
     setStatus(null);
     setProof(null);
+    setPreparing(false);
     setError("");
     setLoadError("");
     pendingRun.current = localStorage.getItem(key);
@@ -290,6 +302,7 @@ export default function AgentWorkspaceApp({
             "검증을 통과하고 앱을 먼저 실행해 주세요.",
           ),
         );
+      setPreparing(true);
       let next = status!;
       if (kind !== "check") next = await native("start_preview");
       const deadline = Date.now() + 45_000;
@@ -403,6 +416,7 @@ export default function AgentWorkspaceApp({
       mutating.current = false;
       if (active()) {
         setBusy("");
+        setPreparing(false);
         void inspect();
       }
     }
@@ -629,6 +643,22 @@ export default function AgentWorkspaceApp({
               <RefreshCw />
             </button>
           </div>
+          {publicWhileStopped && (
+            <>
+              <p>{publicWhileStoppedText}</p>
+              <div className="awa-actions">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!ready || !!busy}
+                  onClick={() => void act("stop_preview")}
+                >
+                  <Square />
+                  {t("Stop public access", "공개 접속 중지")}
+                </button>
+              </div>
+            </>
+          )}
           {run?.exitCode === 127 && (
             <p>
               {t(
@@ -740,7 +770,16 @@ export default function AgentWorkspaceApp({
             </button>
           </div>
           {address?.error && <p className="awc-error">{address.error}</p>}
-          {(origin || currentAddress) && (
+          {addressPending && (
+            <p role="status">
+              {t(
+                "Preparing the address. A new address can take about a minute.",
+                "주소를 준비하고 있어요. 새 주소는 1분 정도 걸릴 수 있어요.",
+              )}
+            </p>
+          )}
+          {publicWhileStopped && <p>{publicWhileStoppedText}</p>}
+          {(origin || currentAddress || tunnel?.running) && (
             <div className="awa-actions">
               <button
                 className="btn"

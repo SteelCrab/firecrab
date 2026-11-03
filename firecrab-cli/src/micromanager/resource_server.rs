@@ -414,7 +414,13 @@ async fn run_vm_automation(
     Json(input): Json<super::agents::automation::Request>,
 ) -> Result<Json<serde_json::Value>, Error> {
     tokio::task::spawn_blocking(move || {
-        let _lock = controller.agents.try_lock().map_err(|_| Error::Busy)?;
+        // The HTTPS check only reads status and then waits up to about 90 s for a new tunnel
+        // address, so it must not keep other agent actions waiting.
+        let _lock = if input.action == "check_preview" {
+            None
+        } else {
+            Some(controller.agents.try_lock().map_err(|_| Error::Busy)?)
+        };
         super::agents::Runtime::for_vm(&controller.home, vm, true)?
             .automate(id, input)
             .map(Json)

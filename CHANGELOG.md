@@ -97,6 +97,21 @@ Entries land here as work merges, and move under the next version heading when t
 - The App run log no longer shows a `curl: (7) Failed to connect` line while it
   waits for the test app to start, which made a passed run look failed. When the
   app answers, the log ends with `Test application is ready at http://127.0.0.1:<port>`.
+- AI Sandbox's public HTTPS check for App preview no longer fails right after
+  a temporary address starts. A new `trycloudflare.com` name can be missing
+  from DNS at first, and the computer's resolver keeps that answer for up to
+  60 seconds. Firecrab now shows the address only after the tunnel registers
+  its connection, and the HTTPS check retries connect, DNS and timeout errors
+  for about 90 seconds while App preview shows **Preparing the address**. Any
+  HTTP response ends the wait. The check of a connected Firecrab address
+  retries the same way. See [#576](https://github.com/SteelCrab/firecrab/issues/576).
+- AI Sandbox keeps the temporary public address when the app restarts.
+  **Stop app** and a new **Verify and run** with the same app port leave the
+  tunnel and its address on, so a connected Firecrab address keeps working; a
+  new run still needs a new HTTPS check. While the app is stopped, visitors
+  see an error page and App run says so. A new app port, **Stop public
+  access** and a VM restart stop the tunnel. A tunnel that an older build
+  started keeps running and is used the same way.
 
 ## [0.4.3] - 2026-11-02
 

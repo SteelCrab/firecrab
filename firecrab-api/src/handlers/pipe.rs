@@ -184,14 +184,31 @@ pub async fn check_firecrab_address(
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|_| AppError::internal(request_id.0))?;
-    let started = std::time::Instant::now();
-    let response = client.get(&address.public_url).send().await.map_err(|_| {
-        AppError::conflict(
-            "address_unreachable",
-            "The public app did not answer HTTPS; inspect its preview and retry",
-            request_id.0,
-        )
-    })?;
+    // Right after a tunnel starts, DNS can still miss the name and resolvers keep that answer
+    // for up to 60 s. Connect (DNS included) and timeout errors are retried for about 90 s;
+    // any HTTP response ends the wait.
+    let first = std::time::Instant::now();
+    let mut pause = std::time::Duration::from_secs(2);
+    let (started, response) = loop {
+        let started = std::time::Instant::now();
+        match client.get(&address.public_url).send().await {
+            Ok(response) => break (started, response),
+            Err(error)
+                if (error.is_connect() || error.is_timeout())
+                    && first.elapsed() + pause < std::time::Duration::from_secs(90) =>
+            {
+                tokio::time::sleep(pause).await;
+                pause = (pause * 2).min(std::time::Duration::from_secs(10));
+            }
+            Err(_) => {
+                return Err(AppError::conflict(
+                    "address_unreachable",
+                    "The public app did not answer HTTPS, after retries for about 90 seconds; inspect its preview and retry",
+                    request_id.0,
+                ));
+            }
+        }
+    };
     Ok(Json(
         serde_json::json!({"url":expected,"status":response.status().as_u16(),"ok":response.status().is_success(),"latencyMs":started.elapsed().as_millis() as u64}),
     ))
