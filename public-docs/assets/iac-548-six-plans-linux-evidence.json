@@ -1,0 +1,50 @@
+{
+  "sourceCommit": "ce30c01e6db38761353f723c700c71a431edfc85",
+  "sourceDirty": false,
+  "verifiedOn": "2026-11-04",
+  "platform": "linux/arm64",
+  "rustVersion": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "containerImage": "rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f",
+  "profile": "release",
+  "buildEnvironment": {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_INCREMENTAL": "0"
+  },
+  "results": {
+    "tlsStartup": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "vmShim": {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    "api": {
+      "passed": 1957,
+      "failed": 0,
+      "ignored": 27
+    }
+  },
+  "artifacts": [
+    {
+      "file": "firecrab_api-ddca5945616d069a",
+      "sha256": "34036c6dfcfae55802fe38697b51b43d11fbfa1028e9c3c0473427fc1c526165"
+    },
+    {
+      "file": "tls_startup-3f0f7ebf2f315d5f",
+      "sha256": "c45db94b430ed61e71cc923bc22a5727242a7c6e42392e5514107c1be06a5121"
+    },
+    {
+      "file": "vm_shim_subcommand-df07976ac27f236c",
+      "sha256": "cc45168018fdbd51b3f11781dda4cdfe51eaf75eefb24439b56ab4ac2e8a2b88"
+    }
+  ],
+  "logs": {
+    "buildSha256": "3ed7342a241f04ec219b85eccde06881a9dad6b6abb64215daeb743bc43f12fe",
+    "testSha256": "8230c479abcfec126cc6b7240fb75895357e14f29661188908c5e2be96c8d8ef",
+    "clippySha256": "12202e11e1264c8f76722a3403772aeb1c9d6539d99c8b5c3d37f017d587db44"
+  },
+  "scope": "Full clean Linux Release API/TLS/VM-shim suite and strict API/Stack all-target Clippy for six shared configuration adapters: Shell, AI model defaults, Sandbox access, Secret, security group and local service OTLP. Includes actual loopback HTTP collector delivery, consent/no-op/disable/re-enable behavior, late activation and SQL rollback, metadata-only OTLP observation and conflicting service-environment writer orders. This predates the later schedule-write/macOS-lock and common resource-state API changes. Fixture evidence is not full native YAML, Terraform-provider or every-row live Linux/KVM acceptance."
+}
