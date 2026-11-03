@@ -19,9 +19,9 @@ export type WorkspaceSetup = Omit<WorkspaceRequest, "id"> & {
 };
 export const workspaceDefaults = () => ({
   name: "my-workspace",
-  cpu: 2,
-  ram: 4096,
-  diskGb: 8,
+  cpu: 4,
+  ram: 8192,
+  diskGb: 16,
   microNetworkId: null as string | null,
   storageRoot: null as string | null,
 });

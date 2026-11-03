@@ -46,6 +46,23 @@ pub enum Error {
     Conflict,
 }
 impl Settings {
+    /// Settings before the first save. On macOS the RAM is the microManager's
+    /// new-install default, so turning on the controller with unchanged values
+    /// keeps that allocation. Windows keeps the WSL-wide 4096 MiB default.
+    fn unsaved() -> Result<Self, Error> {
+        #[cfg(target_os = "macos")]
+        {
+            let host = super::macos::resource::physical_memory_mib()?;
+            Ok(Self {
+                // At most 16384 MiB, so the cast cannot truncate.
+                memory_mib: super::resource::default_memory_mib(host) as u32,
+                ..Self::default()
+            })
+        }
+        #[cfg(not(target_os = "macos"))]
+        Ok(Self::default())
+    }
+
     #[cfg(any(target_os = "macos", test))]
     pub fn update_saved_resources(&self, home: &Path) -> Result<(), Error> {
         let _lock = super::resource::lock(home)?;
@@ -120,11 +137,10 @@ impl Store {
     }
     pub fn load(&self) -> Result<Snapshot, Error> {
         let bytes = self.bytes()?;
-        let settings: Settings = bytes
-            .as_deref()
-            .map(serde_json::from_slice)
-            .transpose()?
-            .unwrap_or_default();
+        let settings = match bytes.as_deref() {
+            Some(bytes) => serde_json::from_slice(bytes)?,
+            None => Settings::unsaved()?,
+        };
         settings.validate()?;
         Ok(Snapshot { settings, bytes })
     }
@@ -249,6 +265,41 @@ pub fn merge_wsl(text: &str, settings: &Settings) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn unsaved_settings_keep_the_micromanager_memory_default_of_this_mac() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new("/usr/sbin/sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .unwrap();
+        let bytes: u64 = String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let host = firecrab_api_types::ManagerHostCapacity {
+            cpu: 8,
+            memory_mib: bytes >> 20,
+            disk_available_gib: 100,
+            network_interfaces: vec![],
+            network_modes: vec![firecrab_api_types::ManagerNetworkMode::Nat],
+        };
+        let new_install = super::super::resource::defaults(dir.path(), &host).unwrap();
+        let store = Store::new(dir.path());
+        let unsaved = store.load().unwrap();
+        assert_eq!(
+            u64::from(unsaved.settings.memory_mib),
+            new_install.memory_mib
+        );
+        assert_eq!(unsaved.settings.cpu, 2);
+        let chosen = Settings {
+            memory_mib: 6144,
+            ..unsaved.settings.clone()
+        };
+        store.save(&unsaved, chosen).unwrap();
+        assert_eq!(store.load().unwrap().settings.memory_mib, 6144);
+    }
     #[test]
     fn resource_updates_preserve_saved_disk_and_network_settings() {
         let dir = tempfile::tempdir().unwrap();

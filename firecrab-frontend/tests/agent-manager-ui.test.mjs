@@ -1032,9 +1032,9 @@ test("VM and CLI selection are explicit and opening a VM creation form starts no
     "my-workspace",
   );
   await expect(form).toContainText("Ubuntu 26.04 LTS");
-  await expect(form).toContainText("2 vCPU");
-  await expect(form).toContainText("4 GiB");
+  await expect(form).toContainText("4 vCPU");
   await expect(form).toContainText("8 GiB");
+  await expect(form).toContainText("16 GiB");
   await page.screenshot({
     path: join(tmpdir(), "firecrab-quick-start-1440.png"),
   });
@@ -1058,6 +1058,62 @@ test("VM and CLI selection are explicit and opening a VM creation form starts no
     page.getByRole("radio", { name: "Select automatically", exact: true }),
   ).toHaveCount(0);
   assert.equal(state.calls.filter((c) => c.method === "POST").length, 0);
+});
+
+test("new workspace settings preselect 4 vCPU, 8 GiB memory and a 16 GiB disk", async (t) => {
+  const { page } = await setup(t, { empty: true, select: false });
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "Settings", exact: true })
+    .click();
+  const form = page.getByRole("region", {
+    name: "Workspace setup",
+    exact: true,
+  });
+  await expect(form.getByRole("combobox", { name: "vCPU" })).toHaveValue("4");
+  await expect(form.getByRole("combobox", { name: "Memory" })).toHaveValue(
+    "8192",
+  );
+  await expect(form.getByRole("spinbutton", { name: "Disk" })).toHaveValue(
+    "16",
+  );
+});
+
+test("a workspace request saved with the old defaults resumes with its own resources", async (t) => {
+  const { fixture, page } = await setup(t, { empty: true, select: false });
+  const request = {
+    id: "0b6f3f43-8a43-4d38-9a39-3f7f43d1c0de",
+    name: "older-workspace",
+    cpu: 2,
+    ram: 4096,
+    diskGb: 8,
+    microNetworkId: null,
+    storageRoot: null,
+  };
+  fixture.handlers.set(`GET /api/workspace-setups/${request.id}`, ({ send }) =>
+    send(200, {
+      ...request,
+      vmId: "vm-older",
+      state: "running",
+      phase: "image",
+      error: null,
+    }),
+  );
+  await page.evaluate(
+    (saved) =>
+      localStorage.setItem(
+        "firecrab.workspaceSetup.native-controller",
+        JSON.stringify(saved),
+      ),
+    { request, cli: "codex" },
+  );
+  await page.reload();
+  const resources = page
+    .getByRole("region", { name: "Workspace setup" })
+    .locator(".awc-resources");
+  await expect(resources).toContainText("2 vCPU");
+  await expect(resources).toContainText("4 GiB");
+  await expect(resources).toContainText("8 GiB");
 });
 
 test("preparation and VM account connection do not submit a model task", async (t) => {
@@ -1145,7 +1201,7 @@ test("quick start prepares the default VM and resumes the same job after reload"
       microNetworkId: job.microNetworkId,
       storageRoot: job.storageRoot,
     },
-    { cpu: 2, ram: 4096, diskGb: 8, microNetworkId: null, storageRoot: null },
+    { cpu: 4, ram: 8192, diskGb: 16, microNetworkId: null, storageRoot: null },
   );
   const row = vm(9, { id, name: job.name, state: "running" });
   fixture.state.vms.push(row);

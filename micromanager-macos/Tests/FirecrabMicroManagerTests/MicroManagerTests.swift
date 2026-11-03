@@ -110,6 +110,21 @@ func managerResourceSettingsReachTheNativeVM() {
 }
 
 @Test
+func unsavedAllocationsGetSixteenGiBWhileTheHostKeepsEightGiB() {
+    let cases: [(hostGiB: UInt64, memoryMiB: UInt64)] = [
+        (64, 16384), (24, 16384), (16, 8192), (8, 4096), (4, 4096)
+    ]
+    for (hostGiB, memoryMiB) in cases {
+        let options = VMOptions.managedDefaults(environment: [:], physicalMemory: hostGiB << 30)
+        #expect(options.memorySizeMiB == memoryMiB, "\(hostGiB) GiB host")
+        #expect(options.cpuCount == 2)
+    }
+    let configured = VMOptions.managedDefaults(
+        environment: ["FIRECRAB_MICROMANAGER_MEMORY_MIB": "8192"], physicalMemory: 24 << 30)
+    #expect(configured.memorySizeMiB == 8192)
+}
+
+@Test
 func validateReportsEveryManagedSettingWithoutArguments() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)

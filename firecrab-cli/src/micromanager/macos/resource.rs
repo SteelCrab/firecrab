@@ -30,6 +30,38 @@ pub fn host_capacity(home: &Path) -> Result<ManagerHostCapacity, Error> {
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
+unsafe extern "C" {
+    fn sysctlbyname(
+        name: *const std::ffi::c_char,
+        old: *mut std::ffi::c_void,
+        size: *mut usize,
+        new: *mut std::ffi::c_void,
+        new_size: usize,
+    ) -> i32;
+}
+
+/// Physical RAM in MiB without starting the helper. `hw.memsize` is the value
+/// the helper reports as `ProcessInfo.physicalMemory`.
+pub fn physical_memory_mib() -> std::io::Result<u64> {
+    let mut bytes = 0_u64;
+    let mut size = std::mem::size_of::<u64>();
+    // SAFETY: the name is NUL-terminated, and `bytes`/`size` describe one
+    // writable u64. Nothing is written to the kernel.
+    let result = unsafe {
+        sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&raw mut bytes).cast(),
+            &raw mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(bytes >> 20)
+}
+
 pub fn validate_configuration(home: &Path, settings: &ManagerResources) -> Result<(), Error> {
     let mut input = tempfile::NamedTempFile::new()?;
     input.write_all(&serde_json::to_vec(settings)?)?;

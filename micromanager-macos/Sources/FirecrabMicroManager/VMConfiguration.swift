@@ -40,9 +40,18 @@ struct VMOptions: Equatable, Sendable {
         return "console=hvc0 root=PARTUUID=\(partuuid.uuidString.lowercased()) ro systemd.unified_cgroup_hierarchy=1"
     }
 
+    /// Memory without a saved allocation: 16 GiB while the host keeps 8 GiB, but
+    /// never below the earlier 4 GiB default or above the host. firecrab-cli
+    /// reports the same rule (`resource::default_memory_mib`).
+    static func defaultMemorySizeMiB(physicalMemoryMiB: UInt64) -> UInt64 {
+        let spare = physicalMemoryMiB > 8192 ? physicalMemoryMiB - 8192 : 0
+        return min(max(min(spare, 16384), 4096), physicalMemoryMiB)
+    }
+
     static func managedDefaults(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        physicalMemory: UInt64 = ProcessInfo.processInfo.physicalMemory
     ) -> VMOptions {
         let managedHomeURL: URL
         if let override = environment["FIRECRAB_MICROMANAGER_HOME"], !override.isEmpty {
@@ -61,7 +70,8 @@ struct VMOptions: Equatable, Sendable {
             osDiskURL: systemDirectory.appendingPathComponent("debian-system.raw"),
             dataDiskURL: dataDirectory.appendingPathComponent("firecrab-data.raw"),
             cpuCount: environment["FIRECRAB_MICROMANAGER_CPU"].map { Int($0) ?? 0 } ?? 2,
-            memorySizeMiB: environment["FIRECRAB_MICROMANAGER_MEMORY_MIB"].map { UInt64($0) ?? 0 } ?? 4096,
+            memorySizeMiB: environment["FIRECRAB_MICROMANAGER_MEMORY_MIB"].map { UInt64($0) ?? 0 }
+                ?? defaultMemorySizeMiB(physicalMemoryMiB: physicalMemory / (1024 * 1024)),
             commandLine: commandLine(managedHomeURL: managedHomeURL)
         )
     }

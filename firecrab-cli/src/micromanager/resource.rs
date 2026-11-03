@@ -156,18 +156,40 @@ pub fn host_capacity(home: &Path) -> Result<ManagerHostCapacity, Error> {
 /// Sparse data disk a new macOS install creates; an existing image keeps its size.
 pub const DEFAULT_DATA_DISK_GIB: u64 = 64;
 
+/// RAM for an allocation that was never saved: 16 GiB while the host keeps
+/// 8 GiB, but never below the earlier 4 GiB default or above the host.
+/// Unsaved controller settings use it too. The Swift helper boots with the
+/// same rule (`VMOptions.defaultMemorySizeMiB`).
+#[cfg(not(target_os = "windows"))]
+pub(super) fn default_memory_mib(host_memory_mib: u64) -> u64 {
+    host_memory_mib
+        .saturating_sub(8 * 1024)
+        .clamp(4 * 1024, 16 * 1024)
+        .min(host_memory_mib)
+}
+
 pub fn defaults(home: &Path, host: &ManagerHostCapacity) -> Result<ManagerResources, Error> {
     #[cfg(target_os = "windows")]
     return super::windows::resource::defaults(home, host);
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = host;
         let disk = fs::metadata(home.join("data/firecrab-data.raw"))
             .map(|metadata| metadata.len().div_ceil(1 << 30))
             .unwrap_or(DEFAULT_DATA_DISK_GIB);
+        // The controlled daemon passes the controller's CPU and RAM to the
+        // helper (macos/daemon.rs), which boots with them when nothing is saved.
+        let (cpu, memory_mib) = if home.join("runtime/controlled").is_file() {
+            let settings = super::settings::Store::new(home)
+                .load()
+                .map_err(|error| Error::Invalid(error.to_string()))?
+                .settings;
+            (u32::from(settings.cpu), u64::from(settings.memory_mib))
+        } else {
+            (2, default_memory_mib(host.memory_mib))
+        };
         Ok(ManagerResources {
-            cpu: 2,
-            memory_mib: 4096,
+            cpu,
+            memory_mib,
             disk_gib: disk,
             network_mode: ManagerNetworkMode::Nat,
             network_interface: None,

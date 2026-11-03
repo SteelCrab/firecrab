@@ -35,6 +35,10 @@ editor preserves other sections and creates a backup before changing an
 existing file. Limits take effect after the next WSL2 VM restart. Firecrab does
 not shut down the user's other distributions. On macOS, resources are passed
 to the native helper; build/install the matching updated helper.
+Before the first save, macOS settings use 2 CPUs and the microManager's
+new-install RAM default (16384 MiB on a 24 GiB Mac; see
+[microManager resources](micromanager-resources.md)). Windows uses 2 CPUs and
+4096 MiB.
 
 The host controller remains running when the management VM sleeps. It listens
 on `127.0.0.1` at the configured port (5523 by default). Windows uses a separate

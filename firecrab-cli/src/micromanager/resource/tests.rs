@@ -432,6 +432,78 @@ fn default_disk_capacity_tracks_the_existing_sparse_image() {
     assert_eq!(defaults(dir.path(), &host()).unwrap().disk_gib, 18);
 }
 
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn new_install_memory_is_16_gib_while_the_host_keeps_8_gib() {
+    let dir = tempfile::tempdir().unwrap();
+    for (host_gib, expected_mib) in [(64, 16384), (24, 16384), (16, 8192), (8, 4096), (4, 4096)] {
+        let host = ManagerHostCapacity {
+            memory_mib: host_gib * 1024,
+            ..host()
+        };
+        let memory = defaults(dir.path(), &host).unwrap().memory_mib;
+        assert_eq!(memory, expected_mib, "{host_gib} GiB host");
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn saved_memory_wins_over_the_new_install_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let native = Platform {
+        capacity: |_| {
+            Ok(ManagerHostCapacity {
+                memory_mib: 24 * 1024,
+                ..host()
+            })
+        },
+        defaults,
+        ..platform()
+    };
+    assert_eq!(
+        native.status(dir.path()).unwrap().settings.memory_mib,
+        16384
+    );
+    write(&dir.path().join("resources.json"), &settings()).unwrap();
+    assert_eq!(native.status(dir.path()).unwrap().settings.memory_mib, 8192);
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn controller_mode_status_shows_the_cpu_and_memory_its_daemon_boots_with() {
+    use super::super::settings::{Settings, Store};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::new(dir.path());
+    let chosen = Settings {
+        cpu: 3,
+        memory_mib: 12288,
+        ..Settings::default()
+    };
+    store.save(&store.load().unwrap(), chosen).unwrap();
+    fs::create_dir_all(dir.path().join("runtime")).unwrap();
+    fs::write(dir.path().join("runtime/controlled"), b"1\n").unwrap();
+    let native = Platform {
+        capacity: |_| {
+            Ok(ManagerHostCapacity {
+                memory_mib: 24 * 1024,
+                ..host()
+            })
+        },
+        defaults,
+        ..platform()
+    };
+    // The controlled daemon passes these as FIRECRAB_MICROMANAGER_CPU and
+    // FIRECRAB_MICROMANAGER_MEMORY_MIB; the helper uses them when nothing is saved.
+    let status = native.status(dir.path()).unwrap();
+    assert_eq!(
+        (status.settings.cpu, status.settings.memory_mib),
+        (3, 12288)
+    );
+    // A saved allocation still wins, in the helper and in the status.
+    write(&dir.path().join("resources.json"), &settings()).unwrap();
+    assert_eq!(native.status(dir.path()).unwrap().settings, settings());
+}
+
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[test]
 fn unsupported_native_hosts_never_write_an_active_allocation() {
