@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
+mod backup_cleanup;
 mod block_storage;
 mod cluster;
 mod cluster_services;
@@ -809,6 +810,7 @@ impl Store {
         conn.execute_batch(block_storage::SCHEMA)?;
         conn.execute_batch(project_workspaces::SCHEMA)?;
         conn.execute_batch(project_backups::SCHEMA)?;
+        conn.execute_batch(backup_cleanup::SCHEMA)?;
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;

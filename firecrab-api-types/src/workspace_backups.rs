@@ -64,6 +64,15 @@ pub struct ProjectBackupOperation {
     /// An admitted operation still holds its maintenance gate, including after data commit.
     #[serde(default)]
     pub pending_reconciliation: bool,
+    /// Protected checkpoints cannot be deleted.
+    #[serde(default)]
+    pub protected: bool,
+    /// Cleanup intent; its artifacts cannot be restored once admitted.
+    #[serde(default)]
+    pub cleanup_id: Option<Uuid>,
+    /// Artifact cleanup completion time; the receipt and integrity metadata remain.
+    #[serde(default)]
+    pub cleaned_at: Option<u64>,
     /// Unix admission time.
     pub created_at: u64,
     /// Most recent durable progress time.

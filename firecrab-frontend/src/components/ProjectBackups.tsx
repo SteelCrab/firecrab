@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DatabaseBackup, RefreshCw, X } from "lucide-react";
+import ProjectBackupRetention from "./ProjectBackupRetention";
 import { useI18n } from "../i18n";
 import { base } from "../canvas/types";
 import { request, message, WorkspaceError } from "../canvas/request";
@@ -10,6 +11,7 @@ import {
   type BackupPolicy,
   type BackupOperation,
   type BackupIntent,
+  type CleanupOperation,
 } from "../canvas/backups";
 
 export default function ProjectBackups({ project }: { project: string }) {
@@ -23,8 +25,12 @@ export default function ProjectBackups({ project }: { project: string }) {
   const [generation, setGeneration] = useState<number>(),
     [pending, setPending] = useState<BackupIntent>();
   const [restore, setRestore] = useState("");
+  const [cleanups, setCleanups] = useState<CleanupOperation[]>();
   const path = base(project) + "/backups";
-  const maintenance = rows.some((r) => r.pendingReconciliation);
+  const maintenance =
+    !cleanups ||
+    rows.some((r) => r.pendingReconciliation) ||
+    cleanups.some((r) => r.pendingReconciliation);
   useEffect(() => {
     if (open) dialog.current?.showModal();
     else dialog.current?.close();
@@ -33,6 +39,7 @@ export default function ProjectBackups({ project }: { project: string }) {
     const results = await Promise.allSettled([
       request<BackupPolicy>("GET", path + "/policy"),
       request<BackupOperation[]>("GET", path),
+      request<CleanupOperation[]>("GET", path + "/cleanups"),
       request<{ generation: number }>(
         "GET",
         path + "/binding",
@@ -55,9 +62,10 @@ export default function ProjectBackups({ project }: { project: string }) {
       } else setPending(retained);
     }
     // Backup controls stay usable when the damaged/fenced project DB cannot be opened.
-    if (results[2].status === "fulfilled")
-      setGeneration(results[2].value.generation);
-    const failed = results.slice(0, 2).filter((r) => r.status === "rejected");
+    if (results[2].status === "fulfilled") setCleanups(results[2].value);
+    if (results[3].status === "fulfilled")
+      setGeneration(results[3].value.generation);
+    const failed = results.slice(0, 3).filter((r) => r.status === "rejected");
     if (failed.length)
       throw new Error(
         failed
@@ -179,8 +187,8 @@ export default function ProjectBackups({ project }: { project: string }) {
           </p>
           <p className="cw-backup-limit">
             {t(
-              "Backups are kept outside the project folder on this host. A lost host needs a separate host backup. Up to 64 checkpoints are retained; the scheduler stops at that limit without deleting old data.",
-              "백업은 이 호스트의 프로젝트 폴더 밖에 보관한다. 호스트 손실에는 별도 호스트 백업이 필요하다. 최대 64개를 보존한다. 한도에 도달하면 기존 데이터를 지우지 않고 백업을 멈춘다.",
+              "Backups are kept outside the project folder on this host. A lost host needs a separate host backup. Up to 64 retained checkpoints are allowed. Configure explicit retention cleanup below; protected checkpoints stay.",
+              "백업은 이 호스트의 프로젝트 폴더 밖에 보관한다. 호스트 손실에는 별도 호스트 백업이 필요하다. 최대 64개를 보존한다. 아래에서 정리 정책을 직접 설정한다. 보호한 백업은 유지한다.",
             )}
           </p>
           <div className="cw-backup-actions">
@@ -269,6 +277,18 @@ export default function ProjectBackups({ project }: { project: string }) {
               {policy.error && <p role="status">{policy.error}</p>}
             </section>
           )}
+          {open && (
+            <ProjectBackupRetention
+              project={project}
+              generation={generation}
+              rows={rows}
+              cleanups={cleanups ?? []}
+              busy={busy}
+              disabled={!!pending || maintenance}
+              run={action}
+              reload={load}
+            />
+          )}
           {pending && (
             <section>
               <h3>{t("Retained request", "보존된 요청")}</h3>
@@ -309,7 +329,10 @@ export default function ProjectBackups({ project }: { project: string }) {
             {!rows.length && (
               <p>{t("No checkpoints yet.", "아직 백업이 없다.")}</p>
             )}
-            <ol className="cw-backup-records">
+            <ol
+              className="cw-backup-records"
+              aria-label={t("Backup operation history", "백업 작업 기록")}
+            >
               {rows.slice(0, 100).map((row) => (
                 <li key={row.id}>
                   <div>
@@ -335,9 +358,23 @@ export default function ProjectBackups({ project }: { project: string }) {
                       {(row.manifest.volumeBytes / 1024 ** 3).toFixed(1)} GiB
                     </small>
                   )}
+                  {row.cleanupId && (
+                    <small>
+                      {row.cleanedAt
+                        ? t(
+                            "Artifacts cleaned; receipt retained",
+                            "파일 정리 완료 · 작업 기록 유지",
+                          )
+                        : t(
+                            "Artifacts selected for cleanup",
+                            "파일 정리 대상으로 확정됨",
+                          )}
+                    </small>
+                  )}
                   {row.error && <p role="status">{row.error}</p>}
                   {row.phase === "complete" &&
-                    !row.request.restoreCheckpoint && (
+                    !row.request.restoreCheckpoint &&
+                    !row.cleanupId && (
                       <button
                         type="button"
                         disabled={

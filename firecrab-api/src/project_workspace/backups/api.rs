@@ -42,6 +42,9 @@ pub(super) fn record(
             },
             phase: "pending".into(),
             pending_reconciliation: false,
+            protected: false,
+            cleanup_id: None,
+            cleaned_at: None,
             created_at: ai_sandbox::now(),
             updated_at: ai_sandbox::now(),
             manifest: None,
@@ -55,7 +58,7 @@ pub(super) fn record(
         original: None,
     }
 }
-fn permit(
+pub(super) fn permit(
     state: &AppState,
     caller: Caller,
     project: Uuid,
@@ -247,6 +250,9 @@ async fn abort(
             let _owner =
                 db::OwnerLock::acquire(db::private_file(&directory.join("operation.lock"), true)?)?;
             let mut r = retained(&state, project, id)?;
+            if r.public.cleanup_id.is_some() || state.store.workspace_cleanup_active(project)? {
+                return Err(Error::Busy);
+            }
             if !matches!(
                 r.public.phase.as_str(),
                 "pending" | "database_frozen" | "prepared" | "aborted"

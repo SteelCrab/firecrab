@@ -9,7 +9,7 @@ use serde_json::json;
 use std::io::{Seek, SeekFrom};
 use tower::ServiceExt;
 
-async fn initialized() -> (tempfile::TempDir, AppState, Binding) {
+pub(super) async fn initialized() -> (tempfile::TempDir, AppState, Binding) {
     let (dir, state, seed) = fixture().await;
     bind(&state, &seed).await;
     let b = binding(&state, seed.project_id).unwrap();
@@ -541,6 +541,38 @@ async fn workspace_backup_qa_restores_real_ext4_contents_and_sqlite_without_a_wo
     );
     eprintln!(
         "PASS real ext4 contents and SQLite revision restored together; original disk retained; no workload VM or provider executed"
+    );
+    let preserved = disk.with_file_name(format!(
+        "{}.before-{}",
+        disk.file_name().unwrap().to_str().unwrap(),
+        restore.id
+    ));
+    assert!(preserved.exists());
+    let (status, cleanup) = call(
+        &state,
+        "PUT",
+        &format!("{}/backups/cleanups/{}", base(&b), Uuid::new_v4()),
+        json!({"expectedGeneration":2,"targetIds":[restore.id]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(cleanup["pendingReconciliation"], false);
+    assert!(!preserved.exists());
+    run("e2fsck", &["-f", "-n", disk.to_str().unwrap()]);
+    assert_eq!(
+        open(&state, &current).unwrap().document().unwrap().1["name"],
+        "before"
+    );
+    assert!(
+        root(&state.workspaces, b.project_id, false)
+            .unwrap()
+            .join(backup.id.to_string())
+            .join("data.ext4")
+            .exists()
+    );
+    eprintln!(
+        "PASS real ext4 preserved-original cleanup retained the live filesystem, SQLite revision and verified checkpoint"
     );
 }
 

@@ -107,8 +107,13 @@ impl Store {
             && (old.binding != record.binding
                 || old.public.project_id != record.public.project_id
                 || old.public.request != record.public.request
-                || old.caller.principal != record.caller.principal)
+                || old.caller.principal != record.caller.principal
+                || old.public.cleanup_id != record.public.cleanup_id
+                || old.public.cleaned_at != record.public.cleaned_at)
         {
+            return Err(conflict());
+        }
+        if self.cleanup_record(record.public.id)?.is_some() {
             return Err(conflict());
         }
         let json = encode(record)?;
@@ -176,6 +181,7 @@ impl Store {
         };
         for project in projects {
             if self.workspace_backup_active(project)?
+                || self.workspace_cleanup_active(project)?
                 || crate::project_workspace::backups::fenced(&self.workspaces, project)
                     .map_err(|_| conflict())?
             {

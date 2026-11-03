@@ -5,10 +5,10 @@ use std::io::{Read, Seek, SeekFrom};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Original {
-    database: Option<String>,
-    volume: Option<String>,
-    wal: Option<String>,
-    shm: Option<String>,
+    pub(super) database: Option<String>,
+    pub(super) volume: Option<String>,
+    pub(super) wal: Option<String>,
+    pub(super) shm: Option<String>,
 }
 /// Replace only our validated staging file, then publish and sync its parent directory.
 pub(super) fn publish(path: &FsPath, bytes: &[u8]) -> Result<(), Error> {
@@ -347,6 +347,7 @@ fn prepare_restore(
     let id = r.public.id;
     let source = r.public.request.restore_checkpoint.ok_or(Error::Missing)?;
     if r.public.phase == "pending" {
+        restore_source(state, &r.binding, source)?;
         let m = completed(state, root, &r.binding, source)?;
         let disk = state.store.block_storage(r.binding.volume_id)?;
         let target = block_storage::disk_path(state, &disk)
@@ -458,4 +459,19 @@ pub(super) fn restore(
     )?;
     install(&target, id, &m.checkpoint.volume_sha256, &old.volume)?;
     verify_installed(state, r)
+}
+
+pub(super) fn restore_source(state: &AppState, b: &Binding, source: Uuid) -> Result<(), Error> {
+    let receipt = state.store.backup_record(source)?.ok_or(Error::Missing)?;
+    if receipt.public.project_id != b.project_id
+        || receipt.public.request.restore_checkpoint.is_some()
+        || receipt.public.phase != "complete"
+        || receipt.active
+        || receipt.public.cleanup_id.is_some()
+    {
+        return Err(Error::Conflict(
+            "Backup is incomplete or selected for cleanup",
+        ));
+    }
+    Ok(())
 }

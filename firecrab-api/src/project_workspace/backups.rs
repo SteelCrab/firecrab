@@ -1,6 +1,7 @@
 //! Offline paired backups. Durable fences outlive requests, SQLite replacement and service restarts.
 mod api;
 mod archive;
+pub(crate) mod cleanup;
 #[cfg(test)]
 mod tests;
 use super::*;
@@ -23,7 +24,7 @@ impl Record {
     }
 }
 pub(super) fn routes() -> Router<AppState> {
-    api::routes()
+    api::routes().merge(cleanup::routes())
 }
 
 pub(super) fn root(runtime: &Runtime, project: Uuid, create: bool) -> Result<PathBuf, Error> {
@@ -209,6 +210,9 @@ fn execute_locked(
         }
         return Ok(r.response());
     }
+    if state.store.workspace_cleanup_active(r.binding.project_id)? {
+        return Err(Error::Busy);
+    }
     let current = raw_binding(state, r.binding.project_id)?;
     if current != r.binding {
         return Err(Error::Conflict("Workspace binding changed"));
@@ -243,6 +247,7 @@ fn execute_locked(
                     .filter(|x| {
                         x.public.request.restore_checkpoint.is_none()
                             && x.public.phase == "complete"
+                            && x.public.cleanup_id.is_none()
                     })
                     .count();
                 if count >= 64 {
@@ -251,6 +256,11 @@ fn execute_locked(
                     ));
                 }
             }
+        }
+        if state.store.backup_record(r.public.id)?.is_none()
+            && let Some(source) = r.public.request.restore_checkpoint
+        {
+            archive::restore_source(state, &current, source)?;
         }
         // Acquire the normal owner's lock without opening or repairing a damaged DB.
         // The permanent service lease lives outside the directory being recovered.
@@ -315,6 +325,7 @@ pub(super) fn start(state: AppState) {
     });
 }
 async fn tick(state: AppState) -> Result<(), Error> {
+    cleanup::tick(state.clone()).await?;
     let local = state.clone();
     let records = tokio::task::spawn_blocking(move || local.store.backup_records(None))
         .await

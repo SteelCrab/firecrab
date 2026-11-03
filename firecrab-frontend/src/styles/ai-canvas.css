@@ -830,3 +830,5 @@
 .cw-backup-dialog header button { flex:none; padding:8px; }
 .cw-backup-confirm button { margin-right:8px; }
 .cw-backup-confirm button:first-of-type { background:#fae8d7; border-color:#e7b989; }
+.cw-backup-dialog input[type="number"] { width:88px; padding:6px; border:1px solid #dcdce3; border-radius:6px; }
+.cw-backup-dialog section>button,.cw-backup-dialog section>div>button { margin:6px 8px 6px 0; }

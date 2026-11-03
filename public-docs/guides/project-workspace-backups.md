@@ -127,14 +127,15 @@ not protect against losing that host. Preserve the controller registry, archives
 storage pools with a separate host backup.
 
 The catalog admits at most 64 completed backups and 4,096 operation receipts per
-project. It stops at the limit without deleting old data. There is no pruning/deletion
-API in this increment. Preserved originals and partial copies also consume disk space;
-retain them until the explicit retention/deletion workflow is implemented and qualified.
+project. Completed archive tombstones no longer occupy checkpoint slots. Explicit
+[retention and cleanup controls](project-backup-retention.md) can remove selected
+checkpoint files, aborted temporary copies and completed-restore originals. Automatic
+cleanup is disabled by default. Protected and active checkpoints remain retained.
 A full disk produces a retained error, not a successful backup. Existing legacy
 `/checkpoints` files remain readable for their original API and migration workflow;
 new managed restoration selects backups from the new operation catalog.
 
 Live KVM interruption/reboot, production service-user permissions, multi-user
-qualification, retention/deletion and genuine different-host restore remain issue
+qualification, live retention interruption and genuine different-host restore remain issue
 acceptance gates. The Linux component QA uses real ext4 bytes and SQLite in its own
 container. It does not boot a workload VM or call an AI provider.
