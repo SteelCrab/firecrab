@@ -479,6 +479,10 @@ async function setup(
         agent.state = "closed";
         return route.fulfill({ json: agent });
       }
+      if (op === "name") {
+        agent.name = body.name.trim();
+        return route.fulfill({ json: agent });
+      }
       return route.fulfill({
         json: {
           agent,
@@ -732,6 +736,117 @@ test("a different native controller cannot receive agent commands", async (t) =>
   await expect(panel.getByRole("textbox")).toBeDisabled();
   assert.equal(state.streams.length, 0);
   assert.equal(state.calls.filter((c) => c.method === "POST").length, 0);
+});
+
+test("a session can be renamed from its menu", async (t) => {
+  const { page, state } = await setup(t);
+  await openTerminals(page);
+  const pane = page.getByRole("region", { name: "Builder", exact: true });
+  await pane.getByLabel("Builder session actions", { exact: true }).click();
+  await page
+    .getByRole("button", { name: "Rename session", exact: true })
+    .click();
+  const field = pane.getByRole("textbox", { name: "Session name" });
+  await expect(field).toHaveValue("Builder");
+  await field.press("Escape");
+  await expect(field).toHaveCount(0);
+  assert.equal(state.calls.filter((c) => c.path.endsWith("/name")).length, 0);
+  await pane.getByLabel("Builder session actions", { exact: true }).click();
+  await page
+    .getByRole("button", { name: "Rename session", exact: true })
+    .click();
+  await field.fill("  API builder  ");
+  await field.press("Enter");
+  const renamed = page.getByRole("region", {
+    name: "API builder",
+    exact: true,
+  });
+  await expect(
+    renamed.getByRole("heading", { name: "API builder" }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".am-agent", { hasText: "API builder" }),
+  ).toBeVisible();
+  const call = state.calls.find((c) => c.path.endsWith("/name"));
+  assert.deepEqual(call.body, { name: "API builder" });
+  assert.equal(call.headers["x-firecrab-controller-id"], "native-controller");
+});
+
+async function openTerminals(page) {
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "AI tasks", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Terminals", exact: true }).click();
+  const session = page
+    .locator(".am-terminal-session")
+    .filter({ visible: true });
+  await expect(session.first()).toBeVisible();
+  return session;
+}
+const resizes = (state) =>
+  state.keys.filter((k) => k.type === "terminal.resize").length;
+
+test("a terminal keeps its size while the CLI account is not connected", async (t) => {
+  const { page, state } = await setup(t, { authenticated: false });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const session = await openTerminals(page);
+  await page.waitForTimeout(600);
+  const height = async () =>
+    Math.round((await session.first().boundingBox()).height);
+  const first = await height();
+  const sent = resizes(state);
+  const box = await session.first().boundingBox();
+  await page.mouse.click(box.x + 40, box.y + 40);
+  await page.keyboard.type("abc");
+  await page.waitForTimeout(600);
+  // Fitting the terminal to its box must not grow the box it is measured from.
+  assert.ok(first <= 900, `terminal is ${first}px tall in a 900px viewport`);
+  assert.equal(await height(), first);
+  assert.equal(resizes(state), sent);
+});
+
+test("split terminals settle instead of resizing continuously", async (t) => {
+  const { page, state } = await setup(t, { authenticated: false });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openTerminals(page);
+  for (const agent of await page.locator(".am-agent").all())
+    if ((await agent.getAttribute("aria-pressed")) !== "true")
+      await agent.click();
+  await expect(page.locator(".am-panels.split")).toBeVisible();
+  await page.waitForTimeout(800);
+  const sent = resizes(state);
+  await page.waitForTimeout(1200);
+  assert.equal(resizes(state), sent, "split terminals kept sending new sizes");
+});
+
+test("dragging terminal output selects it and Cmd+C copies it", async (t) => {
+  const { page } = await setup(t, { authenticated: false });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const session = await openTerminals(page);
+  await expect(session.first().getByRole("log")).toContainText(
+    "health endpoint",
+  );
+  await page.waitForTimeout(600);
+  await page.evaluate(() => {
+    window.__copied = null;
+    window.addEventListener("copy", (event) => {
+      window.__copied = event.clipboardData?.getData("text/plain") ?? null;
+    });
+  });
+  const box = await session.first().locator(".xterm-screen").boundingBox();
+  await page.mouse.move(box.x + 2, box.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.6, box.y + 40, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  await expect(
+    session.first().locator(".xterm-selection div").first(),
+  ).toBeAttached();
+  await page.keyboard.press("Meta+c");
+  await expect
+    .poll(() => page.evaluate(() => window.__copied))
+    .toContain("codex");
 });
 
 test("agent terminals forward raw keys, Unicode, paste, resize and scroll to their own PTY", async (t) => {
@@ -1474,7 +1589,8 @@ test("One VM repository is selected after AUTH and reused by new tasks", async (
     page.getByText("example/private-project", { exact: true }),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: "Start an AI task", exact: true })
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "AI tasks", exact: true })
     .click();
   await page.getByRole("button", { name: "Start task", exact: true }).click();
   const task = state.calls.find((c) => c.path === "/tasks");
@@ -2285,6 +2401,61 @@ test("discard and refine again never write", async (t) => {
   await page.getByRole("button", { name: "Discard", exact: true }).click();
   await expect(page.locator(".arl-proposal")).toHaveCount(0);
   assert.equal(state.calls.filter((c) => c.path === "/rules/apply").length, 0);
+});
+
+test("the task page names only what is missing and keeps the repository row compact", async (t) => {
+  const { page } = await setup(t, {
+    authenticated: false,
+    github: {
+      state: "failed",
+      error:
+        "GitHub authorization ended or expired. Start again to get a new code.",
+    },
+  });
+  const nav = (name) =>
+    page
+      .locator(".am-quick-sidebar")
+      .getByRole("button", { name, exact: true })
+      .click();
+  const githubAuth = page.getByRole("button", {
+    name: "Connect with GitHub AUTH",
+  });
+  await nav("AI tasks");
+  const notice = page.locator(".am-quick-notice");
+  await expect(notice).toContainText("Sign in to Codex");
+  await expect(notice).not.toContainText("repository");
+  await expect(
+    page.getByText("example/project", { exact: true }),
+  ).toBeVisible();
+  await expect(githubAuth).toHaveCount(0);
+  await nav("Connect accounts");
+  await expect(githubAuth).toBeVisible();
+});
+
+test("the account step shows each coding CLI's connection state without a dead start button", async (t) => {
+  const { page, state } = await setup(t, { empty: true });
+  state.driverAuth = { codex: false, claude: true };
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "Connect accounts", exact: true })
+    .click();
+  const choice = (name) =>
+    page
+      .getByRole("group", { name: "Coding CLI" })
+      .locator("label", { has: page.getByRole("radio", { name }) });
+  await expect(choice("Codex")).toContainText("Not signed in");
+  await expect(choice("Claude Code")).toContainText("Connected");
+  await expect(
+    page.getByRole("button", { name: "Start an AI task", exact: true }),
+  ).toHaveCount(0);
+  state.ready = false;
+  await page.reload();
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "Connect accounts", exact: true })
+    .click();
+  await expect(choice("Codex")).toContainText("Not installed");
+  await expect(choice("Claude Code")).toContainText("Not installed");
 });
 
 test("agent picker lists only logged-in Codex and Claude Code", async (t) => {

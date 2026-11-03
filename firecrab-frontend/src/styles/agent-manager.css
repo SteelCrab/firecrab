@@ -256,6 +256,15 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.am-pane-rename {
+  width: min(100%, 260px);
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  font: 600 14px/1.4 var(--font);
+  color: var(--text);
+  background: var(--bg);
+}
 .am-pane-heading-copy > span {
   font-size: 11px;
   color: var(--text-3);
@@ -978,6 +987,9 @@
   min-width: 0;
   padding: 12px;
   overflow: hidden;
+  /* xterm fits its rows to this box; those rows must never size the box,
+     or an auto-height layout grows and resizes the terminal without end. */
+  contain: size;
 }
 .am-terminal .xterm {
   height: 100%;
@@ -1582,6 +1594,15 @@
 .am-environment .am-cli-choice .am-agent-brand {
   width: 18px;
   height: 18px;
+}
+.am-environment .am-cli-state {
+  display: inline;
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.am-environment .am-cli-state[data-state="connected"] {
+  color: var(--green-ink);
 }
 .am-environment .am-choice-check {
   display: none;

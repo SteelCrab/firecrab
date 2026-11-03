@@ -10,6 +10,7 @@ import {
   Check,
   Plus,
   PanelLeftClose,
+  Pencil,
   Square,
   RefreshCw,
   MoreHorizontal,
@@ -344,6 +345,37 @@ function VmAgentWorkspace({
     status?.preparation?.state !== "installing";
   const canLaunch =
     canControl && cliReady && status?.project?.state === "ready";
+  // Name the first thing that still blocks a task, not everything that could.
+  const blocker = (() => {
+    if (canLaunch) return null;
+    const name = driver?.name || cli;
+    if (status?.preparation?.state === "installing")
+      return t(
+        "Coding tools are still being installed in this VM.",
+        "이 VM에 AI 도구를 설치하고 있어요.",
+      );
+    if (!cli)
+      return t(
+        "Choose a coding CLI in Connect accounts to start coding.",
+        "계정 연결에서 코딩 CLI를 선택하면 작업을 시작할 수 있어요.",
+      );
+    if (!driver?.available)
+      return t(
+        `Prepare ${name} in Connect accounts to start coding.`,
+        `계정 연결에서 ${name}를 준비하면 작업을 시작할 수 있어요.`,
+      );
+    if (["codex", "claude"].includes(cli) && !driver.authenticated)
+      return t(
+        `Sign in to ${name} in Connect accounts to start coding.`,
+        `계정 연결에서 ${name}에 로그인하면 작업을 시작할 수 있어요.`,
+      );
+    if (status?.project?.state !== "ready")
+      return t(
+        "Connect a repository in Connect accounts to start coding.",
+        "계정 연결에서 저장소를 연결하면 작업을 시작할 수 있어요.",
+      );
+    return null;
+  })();
   const openEditor = () => {
     const next = starter.input.trim() ? { ...starter } : blank();
     next.cli = cli;
@@ -634,6 +666,7 @@ function VmAgentWorkspace({
                 <AgentRepository
                   project={status?.project || null}
                   github={status?.github}
+                  compact={page !== "connections"}
                   connectionUnavailable={stale}
                   vmId={vmId}
                   controllerId={status?.controllerId || controllerId}
@@ -650,27 +683,9 @@ function VmAgentWorkspace({
                 />
               )}
             </div>
-            <div
-              hidden={page !== "connections"}
-              className="am-connections-footer"
-            >
-              <button
-                className="btn primary am-connections-next"
-                disabled={!canLaunch}
-                onClick={() => navigate("tasks")}
-              >
-                {t("Start an AI task", "AI 작업 시작하기")}
-                <ChevronRight />
-              </button>
-            </div>
-            {page === "tasks" && !canLaunch && (
+            {page === "tasks" && blocker && (
               <div className="am-quick-notice">
-                <span>
-                  {t(
-                    "Connect your AI account and repository to start coding.",
-                    "AI 계정과 저장소를 연결하면 코딩 작업을 시작할 수 있어요.",
-                  )}
-                </span>
+                <span>{blocker}</span>
                 <button className="btn" onClick={() => navigate("connections")}>
                   {t("Connect accounts", "계정 연결")}
                 </button>
@@ -1176,6 +1191,26 @@ function AgentPane({
     )
       void action({}, "close");
   };
+  const [renaming, setRenaming] = useState(false);
+  const rename = async (value: string) => {
+    const name = value.trim();
+    setRenaming(false);
+    if (!name || name === agent.name || !canControl) return;
+    setError("");
+    try {
+      onUpdate(
+        await agentRequest<AgentSession>(
+          `/${encodeURIComponent(agent.id)}/name`,
+          { name },
+          controllerId,
+          vmId,
+        ),
+        true,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
   return (
     <section className="am-pane" aria-label={agent.name}>
       {automation && (
@@ -1191,7 +1226,32 @@ function AgentPane({
         <div className="am-pane-heading">
           <AgentBrandIcon kind={agent.kind} />
           <div className="am-pane-heading-copy">
-            <h3 title={agent.name}>{agent.name}</h3>
+            {renaming ? (
+              <input
+                className="am-pane-rename"
+                aria-label={t("Session name", "세션 이름")}
+                defaultValue={agent.name}
+                maxLength={128}
+                autoFocus
+                onFocus={(e) => e.currentTarget.select()}
+                // Leaving the field is the one save path; Escape marks it cancelled first.
+                onBlur={(e) =>
+                  e.currentTarget.dataset.cancelled
+                    ? setRenaming(false)
+                    : void rename(e.currentTarget.value)
+                }
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.stopPropagation();
+                    e.currentTarget.dataset.cancelled = "true";
+                  }
+                  if (e.key === "Enter" || e.key === "Escape")
+                    e.currentTarget.blur();
+                }}
+              />
+            ) : (
+              <h3 title={agent.name}>{agent.name}</h3>
+            )}
             <span>
               {agentName(agent.kind)}
               {agent.model ? ` · ${agent.model}` : ""}
@@ -1213,6 +1273,14 @@ function AgentPane({
             >
               <Square aria-hidden="true" />
               {t("Interrupt task", "작업 중단")}
+            </button>
+            <button
+              type="button"
+              disabled={busy || !canControl}
+              onClick={() => setRenaming(true)}
+            >
+              <Pencil aria-hidden="true" />
+              {t("Rename session", "이름 변경")}
             </button>
             {agent.role !== "authentication" && (
               <button

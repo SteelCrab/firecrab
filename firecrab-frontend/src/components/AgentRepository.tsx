@@ -29,6 +29,8 @@ type Props = {
   onPrepareGitHub: () => void;
   preparingGitHub: boolean;
   connectionUnavailable?: boolean;
+  /** Summary row only; sign-in belongs to the Connect accounts page. */
+  compact?: boolean;
 };
 
 function GitHubMark() {
@@ -176,7 +178,7 @@ export default function AgentRepository(p: Props) {
   );
   return (
     <section
-      className={`am-vm-repository${ready && connected ? " is-ready" : " is-setup"}`}
+      className={`am-vm-repository${ready && (connected || p.compact) ? " is-ready" : " is-setup"}`}
       aria-label={t("MicroVM repository", "MicroVM 저장소")}
     >
       <header className="am-connection-overview">
@@ -218,7 +220,7 @@ export default function AgentRepository(p: Props) {
           </span>
         )}
       </header>
-      {!connected && (
+      {!connected && !p.compact && (
         <div
           className="am-connection-step am-github-auth"
           aria-label="GitHub AUTH"

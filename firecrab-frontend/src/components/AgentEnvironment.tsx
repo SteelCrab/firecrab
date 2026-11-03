@@ -34,6 +34,16 @@ export default function AgentEnvironment(p: Props) {
     ...(p.status?.drivers.filter((d) => d.available && d.id === "copilot") ||
       []),
   ];
+  // Installed and signed in inside this VM, as the guest reports it.
+  const cliState = (id: string) => {
+    const found = p.status?.drivers.find((d) => d.id === id);
+    if (!found) return null;
+    if (!found.available)
+      return { id: "missing", label: t("Not installed", "설치 전") };
+    if (!found.authenticated)
+      return { id: "signed-out", label: t("Not signed in", "로그인 전") };
+    return { id: "connected", label: t("Connected", "연결됨") };
+  };
   const vmState = (state: string) => {
     switch (state) {
       case "running":
@@ -128,23 +138,33 @@ export default function AgentEnvironment(p: Props) {
             <fieldset className="am-cli-options am-runtime-clis">
               <legend>{t("Coding CLI", "코딩 CLI")}</legend>
               <div className="am-cli-choice-grid">
-                {drivers.map((d) => (
-                  <label key={d.id} className="am-cli-choice">
-                    <input
-                      type="radio"
-                      name="coding-cli"
-                      aria-label={d.name}
-                      checked={p.cli === d.id}
-                      disabled={p.busy || installing}
-                      onChange={() => p.onCli(d.id)}
-                    />
-                    <AgentBrandIcon kind={d.id} />
-                    <span>{d.name}</span>
-                    <span className="am-choice-check" aria-hidden>
-                      {p.cli === d.id && <Check />}
-                    </span>
-                  </label>
-                ))}
+                {drivers.map((d) => {
+                  const state = cliState(d.id);
+                  return (
+                    <label key={d.id} className="am-cli-choice">
+                      <input
+                        type="radio"
+                        name="coding-cli"
+                        aria-label={d.name}
+                        checked={p.cli === d.id}
+                        disabled={p.busy || installing}
+                        onChange={() => p.onCli(d.id)}
+                      />
+                      <AgentBrandIcon kind={d.id} />
+                      <span>
+                        {d.name}
+                        {state && (
+                          <small className="am-cli-state" data-state={state.id}>
+                            {state.label}
+                          </small>
+                        )}
+                      </span>
+                      <span className="am-choice-check" aria-hidden>
+                        {p.cli === d.id && <Check />}
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
             </fieldset>
             <div className="am-runtime-actions">
