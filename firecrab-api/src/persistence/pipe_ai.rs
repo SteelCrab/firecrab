@@ -73,6 +73,23 @@ impl Store {
         spec.map(decode).transpose()
     }
 
+    /// Capture credentials and their retained configuration lifetime in one read snapshot.
+    pub(crate) fn ai_connection_with_generation(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<(SavedConnection, u64)>, PersistenceError> {
+        let row:Option<(String,Option<i64>)>=self.lock().query_row(
+            "SELECT c.spec,v.generation FROM pipe_ai_connections c LEFT JOIN iac_ai_connection_versions v
+             ON v.connection_id=c.id WHERE c.id=?1",[id.to_string()],|row|Ok((row.get(0)?,row.get(1)?))).optional()?;
+        row.map(|(raw, version)| {
+            let generation = version
+                .and_then(|version| u64::try_from(version).ok())
+                .ok_or(PersistenceError::StaleIacExecution)?;
+            Ok((decode(raw)?, generation))
+        })
+        .transpose()
+    }
+
     /// Credential replacement invalidates old model proofs and stale project defaults.
     pub fn save_ai_connection(&self, saved: &SavedConnection) -> Result<(), PersistenceError> {
         let spec = serde_json::to_string(saved).map_err(|_| PersistenceError::CorruptRecord {
@@ -82,6 +99,13 @@ impl Store {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let id = saved.connection.id.to_string();
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT spec FROM pipe_ai_connections WHERE id=?1",
+                [&id],
+                |row| row.get(0),
+            )
+            .optional()?;
         if !super::iac_owners::public_write_allowed(
             &tx,
             &firecrab_stack::ManagedResource {
@@ -95,6 +119,9 @@ impl Store {
             let spec = serde_json::json!({"client_id":session.client_id,"subject":session.subject})
                 .to_string();
             tx.execute("INSERT INTO pipe_ai_registrations (id,spec) VALUES (?1,?2) ON CONFLICT(id) DO UPDATE SET spec=excluded.spec", params![id, spec])?;
+        }
+        if previous.as_deref() != Some(spec.as_str()) {
+            super::iac_ai_connections::advance(&tx, saved.connection.id)?;
         }
         tx.execute(
             "INSERT INTO pipe_ai_connections (id, spec) VALUES (?1, ?2)
@@ -159,10 +186,13 @@ impl Store {
             "DELETE FROM pipe_ai_defaults WHERE connection_id=?1",
             [id.to_string()],
         )?;
-        tx.execute(
+        let removed = tx.execute(
             "DELETE FROM pipe_ai_connections WHERE id=?1",
             [id.to_string()],
         )?;
+        if removed != 0 {
+            super::iac_ai_connections::advance(&tx, id)?;
+        }
         tx.execute(
             "DELETE FROM ai_sandbox_models WHERE connection_id=?1",
             [id.to_string()],
@@ -177,6 +207,7 @@ impl Store {
         &self,
         previous: &SavedConnection,
         refreshed: &SavedConnection,
+        expected_generation: u64,
     ) -> Result<(), PersistenceError> {
         if previous.connection != refreshed.connection
             || previous.connection.provider != firecrab_api_types::AiProvider::Openai
@@ -190,8 +221,10 @@ impl Store {
         let replacement =
             serde_json::to_string(refreshed).map_err(|_| PersistenceError::IacOwnershipConflict)?;
         let changed = self.lock().execute(
-            "UPDATE pipe_ai_connections SET spec=?1 WHERE id=?2 AND spec=?3",
-            params![replacement, previous.connection.id.to_string(), expected],
+            "UPDATE pipe_ai_connections SET spec=?1 WHERE id=?2 AND spec=?3
+             AND EXISTS(SELECT 1 FROM iac_ai_connection_versions WHERE connection_id=?2 AND generation=?4)",
+            params![replacement, previous.connection.id.to_string(), expected,
+                i64::try_from(expected_generation).map_err(|_|PersistenceError::StaleIacExecution)?],
         )?;
         if changed != 1 {
             return Err(PersistenceError::IacOwnershipConflict);

@@ -33,6 +33,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Add shared AI model-default plans with exact project scope, borrowed connection
+  ownership and retained credential-source generations. Fence rotation and UUID
+  recreation, preserve same-account token renewal and retain apply workers after
+  HTTP cancellation. Keep original Shell plan hashes compatible.
+
 - Add typed shared Shell plans for Stack and Terraform ownership. Freeze exact
   inputs before execution, commit configuration and original receipts atomically,
   preserve VM revision pins and reject stale plans or conflicting public writes.

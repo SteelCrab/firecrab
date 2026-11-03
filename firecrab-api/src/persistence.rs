@@ -52,6 +52,7 @@ pub(crate) mod service_observation;
 mod stack_applies;
 mod stack_sources;
 pub(crate) use stack_sources::SourceTrigger;
+mod iac_ai_connections;
 pub(crate) mod iac_auto_deploy;
 mod iac_cluster;
 pub(crate) mod iac_database_bindings;
@@ -906,6 +907,7 @@ impl Store {
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(database_services::CREATE_SQL)?;
         conn.execute(pipe_ai::CONNECTIONS_SQL, [])?;
+        iac_ai_connections::initialize(&conn)?;
         conn.execute(pipe_ai::DEFAULTS_SQL, [])?;
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;

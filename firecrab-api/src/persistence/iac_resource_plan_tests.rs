@@ -2,6 +2,51 @@ use super::*;
 use firecrab_api_types::CreateShellRequest;
 use std::sync::{Arc, Barrier};
 
+#[test]
+fn iac_resource_plan_schema_one_literal_keeps_original_hash_and_executes_after_adapter_expansion() {
+    const ORIGINAL: &str = r#"{"schema":1,"request":{"operationId":"11111111-1111-4111-8111-111111111111","expectedEndpointId":"22222222-2222-4222-8222-222222222222","owner":{"manager":"terraform","id":"44444444-4444-4444-8444-444444444444","key":"firecrab_shell.setup"},"resource":null,"desired":{"kind":"shell","configuration":{"name":"legacy-plan","description":null,"content":"echo old-plan"}}},"ownership":{"endpointId":"22222222-2222-4222-8222-222222222222","resource":{"kind":"shell","id":"33333333-3333-4333-8333-333333333333"},"generation":0,"owner":null},"before":null,"revision":"55555555-5555-4555-8555-555555555555","expires":600100}"#;
+    let frozen: Frozen = decode(ORIGINAL).unwrap();
+    assert_eq!(encode(&frozen).unwrap(), ORIGINAL);
+    let expected = "7ae23f9c12653e15c1bafc4f521469c991588e662b1aad597f40a9437e58a1c0";
+    assert_eq!(frozen.summary().unwrap().plan_sha256, expected);
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("state.db");
+    let store = Store::open(&path).unwrap();
+    store
+        .lock()
+        .execute(
+            "UPDATE iac_endpoint SET endpoint_id=?1",
+            [frozen.request.expected_endpoint_id.to_string()],
+        )
+        .unwrap();
+    store
+        .lock()
+        .execute(
+            "INSERT INTO iac_resource_plans(operation_id,request_hash,definition) VALUES(?1,?2,?3)",
+            params![
+                frozen.request.operation_id.to_string(),
+                "798986f85d919344881a049139f5246cd3b61c4729be417852f0e825febcee6a",
+                ORIGINAL
+            ],
+        )
+        .unwrap();
+    drop(store);
+    let reopened = Store::open(&path).unwrap();
+    let plan = reopened.plan_resource(frozen.request.clone(), 101).unwrap();
+    assert_eq!(plan.plan_sha256, expected);
+    let receipt = apply(&reopened, &plan, 102).unwrap();
+    assert_eq!(receipt.revision_id, Some(frozen.revision));
+    assert_eq!(
+        reopened
+            .shell_detail(plan.ownership.resource.id.parse().unwrap())
+            .unwrap()
+            .unwrap()
+            .latest_content
+            .as_deref(),
+        Some("echo old-plan")
+    );
+}
+
 fn request(store: &Store, manager: Manager) -> PlanResource {
     let owner_id = if manager == Manager::Stack {
         store.register_stack("shared-plan").unwrap().id

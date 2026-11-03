@@ -41,23 +41,15 @@ async fn stored<T: Send + 'static>(
     super::stacks::database(id.0, work).await
 }
 
-async fn connection(
-    state: &AppState,
-    key: Uuid,
-    id: RequestId,
-) -> Result<SavedConnection, AppError> {
-    let store = state.store.clone();
-    stored(id, move || store.ai_connection(key))
-        .await?
-        .ok_or_else(|| missing(id))
-}
-
 async fn refreshed(
     state: &AppState,
     key: Uuid,
     id: RequestId,
 ) -> Result<SavedConnection, AppError> {
-    let mut saved = connection(state, key, id).await?;
+    let store = state.store.clone();
+    let (mut saved, generation) = stored(id, move || store.ai_connection_with_generation(key))
+        .await?
+        .ok_or_else(|| missing(id))?;
     let previous = saved.clone();
     if saved.connection.provider == AiProvider::Anthropic {
         return Err(AppError::new(
@@ -75,7 +67,10 @@ async fn refreshed(
     {
         let copy = saved.clone();
         let store = state.store.clone();
-        stored(id, move || store.refresh_ai_connection(&previous, &copy)).await?;
+        stored(id, move || {
+            store.refresh_ai_connection(&previous, &copy, generation)
+        })
+        .await?;
     }
     Ok(saved)
 }

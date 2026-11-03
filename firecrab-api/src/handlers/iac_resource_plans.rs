@@ -67,14 +67,48 @@ pub(crate) async fn apply(
     ValidatedJson(input): ValidatedJson<ApplyResourcePlan>,
 ) -> Result<Json<ResourcePlanReceipt>, AppError> {
     operator(&caller, request.0)?;
+    let rid = request.0;
+    tokio::spawn(async move { execute(state, request, id, input).await })
+        .await
+        .map_err(|_| AppError::internal(rid))?
+        .map(Json)
+}
+
+async fn execute(
+    state: AppState,
+    request: RequestId,
+    id: Uuid,
+    input: ApplyResourcePlan,
+) -> Result<ResourcePlanReceipt, AppError> {
     let _admission = state.stack_apply_admission.lock().await;
+    let _ai = state.pipe_ai_mutations.lock().await;
+    let store = state.store.clone();
+    let observed = input.clone();
+    if let Some((mut source, generation)) = database(request.0, move || {
+        store.resource_plan_ai_source(id, &observed, crate::secrets::now_ms())
+    })
+    .await?
+    {
+        let original = source.clone();
+        if state.pipe_ai.refresh(&mut source).await.map_err(|_| {
+            AppError::unavailable(
+                "original AI credential readiness could not be verified",
+                request.0,
+            )
+        })? {
+            let store = state.store.clone();
+            database(request.0, move || {
+                store.refresh_ai_connection(&original, &source, generation)
+            })
+            .await?;
+        }
+    }
     database(request.0, move || {
         state
             .store
             .apply_resource_plan(id, &input, crate::secrets::now_ms())
     })
     .await
-    .map(Json)
 }
 
 #[cfg(test)]

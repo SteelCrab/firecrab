@@ -1,7 +1,7 @@
 # Shared resource plans
 
 The shared planning API is part of [#548 stage 2](../reference/iac.md).
-The first executable configuration adapter is `shell`.
+The executable configuration adapters are `shell` and `ai_model`.
 `GET /api/iac/identity` advertises it separately in `resourcePlanKinds`.
 The 43 ownership adapters do not imply 43 executable configuration adapters.
 Native Stack expansion and the typed Terraform provider remain pending.
@@ -90,3 +90,10 @@ Shell readiness here means saved metadata and an available immutable revision.
 Saving a Shell does not run its guest script. Guest execution, other configuration
 adapters, complete Stack/Terraform workflows and every-row live acceptance are
 separate unfinished requirements. Do not merge #548 until all are verified.
+
+## AI model defaults
+
+The `ai_model` adapter saves an exact project-scoped default using a versioned
+reference to an existing inference-verified connection. It preserves the borrowed
+connection and exposes no credentials or credential hashes. See the
+[model reference and recovery contract](iac-model-defaults.md).

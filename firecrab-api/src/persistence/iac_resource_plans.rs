@@ -9,7 +9,8 @@ use super::{
 use firecrab_stack::{
     ApplyResourcePlan, ChangeResourceOwner, ManagedResource, Manager, NativeAction,
     NativeOperation, NativeOperationState, PlanResource, ResourceConfiguration, ResourceOwner,
-    ResourceOwnership, ResourcePlan, ResourcePlanAction, ResourcePlanReceipt,
+    ResourceOwnership, ResourcePlan, ResourcePlanAction, ResourcePlanDependency,
+    ResourcePlanReceipt,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -26,15 +27,25 @@ struct ShellObservation {
     content: String,
 }
 
+/// Original Shell serialization stays unchanged; each inner type rejects unknown fields.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+enum Observation {
+    Shell(ShellObservation),
+    AiModel(firecrab_api_types::AiModelSelection),
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Frozen {
     schema: u8,
     request: PlanResource,
     ownership: ResourceOwnership,
-    before: Option<ShellObservation>,
+    before: Option<Observation>,
     revision: Uuid,
     expires: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    dependencies: Vec<ResourcePlanDependency>,
 }
 
 fn fingerprint<T: Serialize>(value: &T) -> Result<String, PersistenceError> {
@@ -70,7 +81,85 @@ fn shell(
     }))
 }
 
+fn observe(
+    conn: &Connection,
+    target: &ManagedResource,
+) -> Result<Option<Observation>, PersistenceError> {
+    match target.kind.as_str() {
+        "shell" => shell(conn, target).map(|before| before.map(Observation::Shell)),
+        "ai_model" => {
+            let value: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT connection_id,model FROM pipe_ai_defaults WHERE project_id=?1",
+                    [&target.id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            value
+                .map(|(connection, model)| {
+                    Ok(Observation::AiModel(firecrab_api_types::AiModelSelection {
+                        connection_id: connection
+                            .parse()
+                            .map_err(|_| PersistenceError::IacOperationIdentity)?,
+                        model,
+                    }))
+                })
+                .transpose()
+        }
+        _ => Err(PersistenceError::UnsupportedIacResource),
+    }
+}
+
+fn model_connection(
+    conn: &Connection,
+    selection: &firecrab_api_types::AiModelSelection,
+) -> Result<crate::pipe_ai::SavedConnection, PersistenceError> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT spec FROM pipe_ai_connections WHERE id=?1",
+            [selection.connection_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let source: crate::pipe_ai::SavedConnection =
+        decode(&raw.ok_or(PersistenceError::InvalidStackResource)?)?;
+    if source.connection.id != selection.connection_id
+        || source.connection.provider != firecrab_api_types::AiProvider::Openai
+        || source.api_key.is_empty()
+        || !source.connection.models.contains(&selection.model)
+    {
+        return Err(PersistenceError::InvalidStackResource);
+    }
+    Ok(source)
+}
+
+fn dependencies(
+    conn: &Connection,
+    desired: Option<&ResourceConfiguration>,
+) -> Result<Vec<ResourcePlanDependency>, PersistenceError> {
+    let Some(ResourceConfiguration::AiModel(config)) = desired else {
+        return Ok(Vec::new());
+    };
+    model_connection(conn, &config.selection)?;
+    let source = ManagedResource {
+        kind: "ai_connection".into(),
+        id: config.selection.connection_id.to_string(),
+    };
+    iac_native::ensure_idle(conn, &source)?;
+    super::iac_host::ensure_resource_idle(conn, &source)?;
+    Ok(vec![ResourcePlanDependency {
+        ownership: iac_owners::read(conn, &source)?,
+        configuration_generation: super::iac_ai_connections::generation(
+            conn,
+            config.selection.connection_id,
+        )?,
+    }])
+}
+
 fn deletable(conn: &Connection, resource: &ManagedResource) -> Result<(), PersistenceError> {
+    if resource.kind == "ai_model" {
+        return Ok(());
+    }
     let pinned: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM vm_shells WHERE shell_id=?1)",
         [&resource.id],
@@ -95,18 +184,36 @@ pub(crate) fn validate(request: &mut PlanResource) -> Result<(), PersistenceErro
         resource
             .normalize()
             .map_err(|_| PersistenceError::InvalidIacOwner)?;
-        if resource.kind != "shell" {
+        if !matches!(resource.kind.as_str(), "shell" | "ai_model") {
             return Err(PersistenceError::UnsupportedIacResource);
         }
     }
     match &request.desired {
         Some(ResourceConfiguration::Shell(configuration)) => {
+            if request
+                .resource
+                .as_ref()
+                .is_some_and(|target| target.kind != "shell")
+            {
+                return Err(PersistenceError::InvalidIacOwner);
+            }
             if !crate::handlers::shells::validate_shell_write(
                 &configuration.name,
                 configuration.description.as_deref(),
                 &configuration.content,
             )
             .is_empty()
+            {
+                return Err(PersistenceError::InvalidIacOwner);
+            }
+        }
+        Some(ResourceConfiguration::AiModel(config)) => {
+            if config.project_id.is_nil()
+                || config.selection.connection_id.is_nil()
+                || crate::pipe_ai::validate_model(&config.selection.model).is_err()
+                || request.resource.as_ref().is_some_and(|target| {
+                    target.kind != "ai_model" || target.id != config.project_id.to_string()
+                })
             {
                 return Err(PersistenceError::InvalidIacOwner);
             }
@@ -130,6 +237,9 @@ fn authority(conn: &Connection, frozen: &Frozen) -> Result<(), PersistenceError>
     iac_native::ensure_idle(conn, target)?;
     super::iac_host::ensure_resource_idle(conn, target)?;
     super::iac_resources::ensure_independent(conn, target)?;
+    if dependencies(conn, frozen.request.desired.as_ref())? != frozen.dependencies {
+        return Err(PersistenceError::StaleIacExecution);
+    }
     let owner = &frozen.request.owner;
     super::iac_host::ensure_available(
         conn,
@@ -190,7 +300,7 @@ impl Frozen {
         let action = match (&self.before, &self.request.desired) {
             (None, Some(_)) => ResourcePlanAction::Create,
             (Some(_), None) => ResourcePlanAction::Delete,
-            (Some(before), Some(ResourceConfiguration::Shell(desired))) => {
+            (Some(Observation::Shell(before)), Some(ResourceConfiguration::Shell(desired))) => {
                 if before.name != desired.name {
                     fields.push("name".into());
                 }
@@ -199,6 +309,19 @@ impl Frozen {
                 }
                 if before.content != desired.content {
                     fields.push("content".into());
+                }
+                if fields.is_empty() {
+                    ResourcePlanAction::Noop
+                } else {
+                    ResourcePlanAction::Update
+                }
+            }
+            (Some(Observation::AiModel(before)), Some(ResourceConfiguration::AiModel(desired))) => {
+                if before.connection_id != desired.selection.connection_id {
+                    fields.push("connectionId".into());
+                }
+                if before.model != desired.selection.model {
+                    fields.push("model".into());
                 }
                 if fields.is_empty() {
                     ResourcePlanAction::Noop
@@ -216,6 +339,7 @@ impl Frozen {
             action,
             changed_fields: fields,
             expires_at_ms: self.expires,
+            dependencies: self.dependencies.clone(),
         })
     }
 }
@@ -234,11 +358,16 @@ fn read(conn: &Connection, id: Uuid) -> Result<Option<Frozen>, PersistenceError>
     let mut frozen: Frozen = decode(&raw)?;
     validate(&mut frozen.request)?;
     if frozen.request.operation_id != id
-        || frozen.ownership.resource.kind != "shell"
+        || !matches!(
+            frozen.ownership.resource.kind.as_str(),
+            "shell" | "ai_model"
+        )
         || frozen.ownership.endpoint_id != frozen.request.expected_endpoint_id
         || frozen.revision.is_nil()
         || frozen.expires == 0
         || fingerprint(&frozen.request)? != expected
+        || frozen.request.desired.as_ref().is_some_and(|desired|desired.kind()!=frozen.ownership.resource.kind
+            || matches!(desired,ResourceConfiguration::AiModel(config) if config.project_id.to_string()!=frozen.ownership.resource.id))
         || frozen
             .request
             .resource
@@ -309,14 +438,27 @@ impl Store {
         if iac_native::read(&tx, request.operation_id)?.is_some() {
             return Err(PersistenceError::IacOperationIdentity);
         }
-        let target = request.resource.clone().unwrap_or_else(|| ManagedResource {
-            kind: "shell".into(),
-            id: Uuid::new_v4().to_string(),
-        });
-        let before = shell(&tx, &target)?;
+        let target = request
+            .resource
+            .clone()
+            .unwrap_or_else(|| match &request.desired {
+                Some(ResourceConfiguration::AiModel(config)) => ManagedResource {
+                    kind: "ai_model".into(),
+                    id: config.project_id.to_string(),
+                },
+                _ => ManagedResource {
+                    kind: "shell".into(),
+                    id: Uuid::new_v4().to_string(),
+                },
+            });
+        let before = observe(&tx, &target)?;
         if request.resource.is_some() && before.is_none() {
             return Err(PersistenceError::InvalidStackResource);
         }
+        if request.resource.is_none() && before.is_some() {
+            return Err(PersistenceError::IacOwnershipConflict);
+        }
+        let dependencies = dependencies(&tx, request.desired.as_ref())?;
         let frozen = Frozen {
             schema: 1,
             ownership: iac_owners::read(&tx, &target)?,
@@ -327,6 +469,7 @@ impl Store {
                 .checked_add(600_000)
                 .filter(|value| *value <= i64::MAX as u64)
                 .ok_or(PersistenceError::IacOperationIdentity)?,
+            dependencies,
         };
         authority(&tx, &frozen)?;
         if frozen.request.desired.is_none() {
@@ -369,6 +512,49 @@ impl Store {
         raw.map(|raw| decode(&raw)).transpose()
     }
 
+    /// Read only the original versioned credential source before a possible OAuth renewal.
+    /// The returned private value never reaches HTTP or routine logging.
+    pub(crate) fn resource_plan_ai_source(
+        &self,
+        id: Uuid,
+        request: &ApplyResourcePlan,
+        now: u64,
+    ) -> Result<Option<(crate::pipe_ai::SavedConnection, u64)>, PersistenceError> {
+        let conn = self.lock();
+        let tx = rusqlite::Transaction::new_unchecked(&conn, TransactionBehavior::Deferred)?;
+        if iac_owners::endpoint(&tx)? != request.expected_endpoint_id {
+            return Err(PersistenceError::IacEndpointConflict);
+        }
+        let frozen = read(&tx, id)?.ok_or(PersistenceError::IacOperationIdentity)?;
+        if frozen.request.expected_endpoint_id != request.expected_endpoint_id
+            || frozen.summary()?.plan_sha256 != request.plan_sha256
+        {
+            return Err(PersistenceError::IacOperationIdentity);
+        }
+        let completed: bool = tx.query_row(
+            "SELECT receipt IS NOT NULL FROM iac_resource_plans WHERE operation_id=?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )?;
+        if completed {
+            return Ok(None);
+        }
+        let Some(ResourceConfiguration::AiModel(config)) = &frozen.request.desired else {
+            return Ok(None);
+        };
+        if now >= frozen.expires {
+            return Err(PersistenceError::StaleIacExecution);
+        }
+        authority(&tx, &frozen)?;
+        if observe(&tx, &frozen.ownership.resource)? != frozen.before {
+            return Err(PersistenceError::StaleIacExecution);
+        }
+        Ok(Some((
+            model_connection(&tx, &config.selection)?,
+            super::iac_ai_connections::generation(&tx, config.selection.connection_id)?,
+        )))
+    }
+
     /// Configuration, exact ownership and original completion are committed together.
     pub(crate) fn apply_resource_plan(
         &self,
@@ -401,12 +587,14 @@ impl Store {
         }
         authority(&tx, &frozen)?;
         let target = &frozen.ownership.resource;
-        if shell(&tx, target)? != frozen.before {
+        if observe(&tx, target)? != frozen.before {
             return Err(PersistenceError::StaleIacExecution);
         }
-        let mut revision = frozen
-            .before
-            .as_ref()
+        let before_shell = match &frozen.before {
+            Some(Observation::Shell(before)) => Some(before),
+            _ => None,
+        };
+        let mut revision = before_shell
             .map(|before| {
                 before
                     .revision
@@ -417,17 +605,28 @@ impl Store {
         match (&frozen.request.desired, summary.action) {
             (None, ResourcePlanAction::Delete) => {
                 deletable(&tx, target)?;
-                tx.execute(
-                    "DELETE FROM shell_revisions WHERE shell_id=?1",
-                    [&target.id],
-                )?;
-                tx.execute("DELETE FROM shells WHERE id=?1", [&target.id])?;
+                match target.kind.as_str() {
+                    "shell" => {
+                        tx.execute(
+                            "DELETE FROM shell_revisions WHERE shell_id=?1",
+                            [&target.id],
+                        )?;
+                        tx.execute("DELETE FROM shells WHERE id=?1", [&target.id])?;
+                    }
+                    "ai_model" => {
+                        tx.execute(
+                            "DELETE FROM pipe_ai_defaults WHERE project_id=?1",
+                            [&target.id],
+                        )?;
+                    }
+                    _ => return Err(PersistenceError::UnsupportedIacResource),
+                }
                 revision = None;
             }
             (Some(ResourceConfiguration::Shell(desired)), action)
                 if action != ResourcePlanAction::Noop =>
             {
-                if frozen.before.is_none() {
+                if before_shell.is_none() {
                     tx.execute("INSERT INTO shells(id,name,description,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4,?4)",
                         params![target.id,desired.name,desired.description,now as i64])?;
                 } else {
@@ -436,20 +635,21 @@ impl Store {
                         params![target.id, desired.name, desired.description, now as i64],
                     )?;
                 }
-                if frozen
-                    .before
-                    .as_ref()
-                    .is_none_or(|before| before.content != desired.content)
-                {
-                    let version = frozen
-                        .before
-                        .as_ref()
+                if before_shell.is_none_or(|before| before.content != desired.content) {
+                    let version = before_shell
                         .map_or(Some(1), |before| before.version.checked_add(1))
                         .ok_or(PersistenceError::IacOperationIdentity)?;
                     tx.execute("INSERT INTO shell_revisions(id,shell_id,version,content,content_sha256,created_at_ms) VALUES(?1,?2,?3,?4,?5,?6)",
                         params![frozen.revision.to_string(),target.id,version,desired.content,crate::shells::content_sha256(&desired.content),now as i64])?;
                     revision = Some(frozen.revision);
                 }
+            }
+            (Some(ResourceConfiguration::AiModel(desired)), action)
+                if action != ResourcePlanAction::Noop =>
+            {
+                tx.execute("INSERT INTO pipe_ai_defaults(project_id,connection_id,model) VALUES(?1,?2,?3)
+                    ON CONFLICT(project_id) DO UPDATE SET connection_id=excluded.connection_id,model=excluded.model",
+                    params![target.id,desired.selection.connection_id.to_string(),desired.selection.model])?;
             }
             (Some(_), ResourcePlanAction::Noop) => (),
             _ => return Err(PersistenceError::IacOperationIdentity),
@@ -493,3 +693,7 @@ impl Store {
 #[cfg(test)]
 #[path = "iac_resource_plan_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "iac_resource_model_tests.rs"]
+mod model_tests;

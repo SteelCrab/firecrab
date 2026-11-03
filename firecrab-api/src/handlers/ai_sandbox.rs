@@ -227,7 +227,7 @@ async fn task(
 }
 async fn account(state: &AppState, id: RequestId, key: Uuid) -> Result<SavedConnection, AppError> {
     let store = state.store.clone();
-    let mut saved = db(id, move || store.ai_connection(key))
+    let (mut saved, generation) = db(id, move || store.ai_connection_with_generation(key))
         .await?
         .ok_or_else(|| error(id, "ai_connection_missing", "AI account is disconnected"))?;
     let previous = saved.clone();
@@ -240,7 +240,10 @@ async fn account(state: &AppState, id: RequestId, key: Uuid) -> Result<SavedConn
     {
         let store = state.store.clone();
         let copy = saved.clone();
-        db(id, move || store.refresh_ai_connection(&previous, &copy)).await?;
+        db(id, move || {
+            store.refresh_ai_connection(&previous, &copy, generation)
+        })
+        .await?;
     }
     Ok(saved)
 }

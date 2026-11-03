@@ -34,8 +34,8 @@ pub use planning::{
     ResourceKind, ServiceSnapshot, StackRecord, VmSnapshot, fingerprint, plan,
 };
 pub use resource_plan::{
-    ApplyResourcePlan, PlanResource, ResourceConfiguration, ResourcePlan, ResourcePlanAction,
-    ResourcePlanReceipt,
+    AiModelConfiguration, ApplyResourcePlan, PlanResource, ResourceConfiguration, ResourcePlan,
+    ResourcePlanAction, ResourcePlanDependency, ResourcePlanReceipt,
 };
 pub use source::{
     ConfigureGitSource, DeleteGitSource, GitCheck, GitCheckState, GitCredential, GitRevision,

@@ -1,7 +1,7 @@
 //! Shared typed resource plans. Public results omit desired configuration values.
 
 use crate::{ManagedResource, ResourceOwner, ResourceOwnership};
-use firecrab_api_types::CreateShellRequest;
+use firecrab_api_types::{AiModelSelection, CreateShellRequest};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -17,6 +17,38 @@ use uuid::Uuid;
 pub enum ResourceConfiguration {
     /// Versioned guest script, including all persisted user-writable metadata.
     Shell(CreateShellRequest),
+    /// Project-local default referencing an inference-verified connection model.
+    AiModel(AiModelConfiguration),
+}
+
+impl ResourceConfiguration {
+    /// Stable inventory namespace for this typed configuration.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Shell(_) => "shell",
+            Self::AiModel(_) => "ai_model",
+        }
+    }
+}
+
+/// Complete model-default scope and its exact verified connection reference.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AiModelConfiguration {
+    /// Logical project scope; configuring a default does not create a project.
+    pub project_id: Uuid,
+    /// Selected connection UUID and inference-verified provider model name.
+    pub selection: AiModelSelection,
+}
+
+/// Read-only reference proof without credential values or fingerprints.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourcePlanDependency {
+    /// Original dependency endpoint, identity and ownership generation.
+    pub ownership: ResourceOwnership,
+    /// Source configuration version; automatic session refresh preserves it.
+    pub configuration_generation: u64,
 }
 
 /// Immutable input to an advisory plan; a retry must use the same normalized request.
@@ -67,6 +99,9 @@ pub struct ResourcePlan {
     pub changed_fields: Vec<String>,
     /// Server deadline for first admission. Completed acknowledgements never expire.
     pub expires_at_ms: u64,
+    /// Exact dependency authority and source versions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<ResourcePlanDependency>,
 }
 
 /// Execute only the previously reviewed plan; no replacement configuration is accepted.

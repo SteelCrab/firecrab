@@ -129,7 +129,7 @@ async fn iac_ai_oauth_refresh_preserves_configuration_and_cannot_undo_rotation_o
     refreshed.oauth.as_mut().unwrap().refresh_token = "refreshed-private-refresh".into();
     state
         .store
-        .refresh_ai_connection(&previous, &refreshed)
+        .refresh_ai_connection(&previous, &refreshed, 1)
         .unwrap();
     assert_eq!(
         state
@@ -149,7 +149,7 @@ async fn iac_ai_oauth_refresh_preserves_configuration_and_cannot_undo_rotation_o
         1
     );
     assert!(matches!(
-        state.store.refresh_ai_connection(&previous, &refreshed),
+        state.store.refresh_ai_connection(&previous, &refreshed, 1),
         Err(PersistenceError::IacOwnershipConflict)
     ));
     let mut wrong_account = refreshed.clone();
@@ -157,13 +157,15 @@ async fn iac_ai_oauth_refresh_preserves_configuration_and_cannot_undo_rotation_o
     assert!(matches!(
         state
             .store
-            .refresh_ai_connection(&refreshed, &wrong_account),
+            .refresh_ai_connection(&refreshed, &wrong_account, 1),
         Err(PersistenceError::IacOwnershipConflict)
     ));
     let mut wrong_config = refreshed.clone();
     wrong_config.connection.name = "renamed".into();
     assert!(matches!(
-        state.store.refresh_ai_connection(&refreshed, &wrong_config),
+        state
+            .store
+            .refresh_ai_connection(&refreshed, &wrong_config, 1),
         Err(PersistenceError::IacOwnershipConflict)
     ));
     let released=call(&app,"POST","/api/iac/owners/transition",json!({
@@ -175,7 +177,7 @@ async fn iac_ai_oauth_refresh_preserves_configuration_and_cannot_undo_rotation_o
     rotated.api_key = "operator-rotated-private-access".into();
     state.store.save_ai_connection(&rotated).unwrap();
     assert!(matches!(
-        state.store.refresh_ai_connection(&refreshed, &previous),
+        state.store.refresh_ai_connection(&refreshed, &previous, 1),
         Err(PersistenceError::IacOwnershipConflict)
     ));
     state
@@ -183,7 +185,7 @@ async fn iac_ai_oauth_refresh_preserves_configuration_and_cannot_undo_rotation_o
         .delete_ai_connection(previous.connection.id)
         .unwrap();
     assert!(matches!(
-        state.store.refresh_ai_connection(&rotated, &refreshed),
+        state.store.refresh_ai_connection(&rotated, &refreshed, 2),
         Err(PersistenceError::IacOwnershipConflict)
     ));
     assert!(
