@@ -202,6 +202,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Fixed
 
+- Retain original AWS signing credentials for ECR image recovery. Renew expired
+  registry logins only for the original account and region; preserve legacy
+  static-login retries and omit all credential values from public operations.
+
 - Read Linux directory birth times through statx on both GNU and musl builds.
   Permit an explicitly supplied matching CLI to verify native ownership when
   purging data after a prior uninstall removed the installed CLI.

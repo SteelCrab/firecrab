@@ -51,6 +51,7 @@ fn iac_image_source_login_is_frozen_before_admission_and_leased_through_uncertai
             registry: login.registry.clone(),
             username: login.username.clone(),
             secret: login.secret.clone(),
+            refresh_auth: None,
         }),
         authentication: Some(pin),
     };
@@ -96,6 +97,107 @@ fn iac_image_source_login_is_frozen_before_admission_and_leased_through_uncertai
     assert!(!public.contains(&login.secret));
     assert!(!public.contains(&rotated.secret));
 }
+#[test]
+fn iac_image_ecr_refresh_keeps_original_signing_input_and_rejects_changed_binding() {
+    use crate::pipe_auth::{AwsCredentials, SavedAuth};
+    let (root, store, mut definition) = fixture();
+    let source = SavedAuth::Aws {
+        account_id: "123456789012".into(),
+        credentials: AwsCredentials {
+            access_key_id: "AKIAIOSFODNN7EXAMPLE".into(),
+            secret_access_key: "private-original-signing-key".into(),
+            session_token: "private-original-session-token".into(),
+            region: "ap-northeast-2".into(),
+        },
+    };
+    store.put_pipe_auth(&source).unwrap();
+    let registry = source.connection().registry.unwrap();
+    let target = ManagedResource {
+        kind: "auth".into(),
+        id: "aws".into(),
+    };
+    let pin = store.image_auth_pin(&target).unwrap().unwrap();
+    let login = ImageCredential {
+        registry: registry.clone(),
+        username: "AWS".into(),
+        secret: "private-expiring-ecr-login".into(),
+        refresh_auth: Some(source.clone()),
+    };
+    assert!(login.matches_source(&registry, Some(&pin)));
+    let mut invalid = login.clone();
+    if let Some(SavedAuth::Aws { credentials, .. }) = invalid.refresh_auth.as_mut() {
+        credentials.secret_access_key = "different-original-key".into();
+    }
+    assert!(!invalid.matches_source(&registry, Some(&pin)));
+    let original = format!("{registry}/app:v1");
+    let name = crate::oci::template_name_from_reference(
+        &crate::oci::ImageReference::parse(&original).unwrap(),
+    )
+    .unwrap();
+    definition.alias = name.alias;
+    definition.dependencies.push(target);
+    definition.source = ImageSource::Oci {
+        reference: format!("{registry}/app@sha256:{}", "a".repeat(64)),
+        naming_reference: original.clone(),
+        display_version: "v1".into(),
+        kernel_version: "7.2.2".into(),
+        kernel_override: None,
+        credential: Some(login),
+        authentication: Some(pin),
+    };
+    let id = Uuid::new_v4();
+    let (intent, _) = store
+        .begin_image(
+            id,
+            ImageRequest::Import {
+                reference: original,
+            },
+            definition,
+        )
+        .unwrap();
+    store.image_effects(&intent).unwrap();
+    store.fail_image(&intent).unwrap();
+    drop(store);
+    let reopened = Store::open(&root.path().join("state.db")).unwrap();
+    let retained = reopened.image_intent(id).unwrap().unwrap();
+    let ImageSource::Oci {
+        credential: Some(login),
+        authentication: Some(pin),
+        ..
+    } = &retained.definition().source
+    else {
+        panic!("missing original input")
+    };
+    assert!(login.matches_source(&registry, Some(pin)));
+    assert_eq!(
+        serde_json::to_value(login.refresh_auth.as_ref().unwrap()).unwrap(),
+        serde_json::to_value(source).unwrap()
+    );
+    let public = serde_json::to_string(&retained.operation).unwrap();
+    for private in [
+        "private-original-signing-key",
+        "private-original-session-token",
+        "private-expiring-ecr-login",
+    ] {
+        assert!(!public.contains(private));
+    }
+    assert!(matches!(
+        reopened.delete_pipe_auth(crate::pipe_auth::Provider::Aws),
+        Err(PersistenceError::IacResourceBusy)
+    ));
+}
+
+#[tokio::test]
+async fn iac_image_legacy_static_credential_keeps_its_exact_wire_shape_and_login() {
+    let legacy = serde_json::json!({"registry":"oci.example.test", "username":"original", "secret":"private-static-login"});
+    let login: ImageCredential = serde_json::from_value(legacy.clone()).unwrap();
+    assert!(login.refresh_auth.is_none());
+    assert_eq!(serde_json::to_value(&login).unwrap(), legacy);
+    let resolved = login.login().await.unwrap();
+    assert_eq!(resolved.registry, "oci.example.test");
+    assert_eq!(resolved.secret, "private-static-login");
+}
+
 fn version() -> ImageVersion {
     ImageVersion {
         spec: TemplateSpec {

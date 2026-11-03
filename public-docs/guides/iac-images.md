@@ -30,6 +30,14 @@ before rootfs publication. A completed OCI rootfs belongs to the original
 operation and is reused during recovery. Recovery does not rebuild different
 bytes over a prepared pin.
 
+New ECR imports also retain their original AWS signing source in the private
+journal. Recovery requests a fresh temporary registry login from that source.
+The verified account, region, registry, owner and configuration must still match.
+It never reads a newer Auth credential to continue an older operation. Expired
+or revoked original AWS session credentials require operator recovery; they do
+not authorize a different account. Legacy imports without this proof retain
+their original static login and do not infer a signing source.
+
 A host publication lock coordinates image writers and ownership transfers.
 Asynchronous producers capture their original authority before source work.
 Late publication rejects a changed owner or generation, including a claim and

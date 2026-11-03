@@ -559,6 +559,8 @@ async fn import_auth(
                     registry: credential.registry,
                     username: credential.username,
                     secret: credential.secret,
+                    refresh_auth: matches!(&auth, crate::pipe_auth::SavedAuth::Aws { .. })
+                        .then_some(auth),
                 }),
                 Some(pin),
             ));
@@ -597,6 +599,7 @@ async fn import_auth(
                     registry: login.registry,
                     username: login.username,
                     secret: login.secret,
+                    refresh_auth: None,
                 }),
                 Some(pin),
             ))
@@ -703,13 +706,12 @@ async fn execute(state: &AppState, intent: ImageIntent, guard: FileLock) -> Resu
                 } else {
                     let reference =
                         crate::oci::ImageReference::parse(naming_reference).map_err(|_| ())?;
-                    let login = credential
-                        .as_ref()
-                        .map(|login| crate::oci::RegistryCredential {
-                            registry: login.registry.clone(),
-                            username: login.username.clone(),
-                            secret: login.secret.clone(),
-                        });
+                    work.check().map_err(|_| ())?;
+                    let login = match credential {
+                        Some(credential) => Some(credential.login().await?),
+                        None => None,
+                    };
+                    work.check().map_err(|_| ())?;
                     crate::oci::import_oci_image(
                         &state.oci_imports,
                         &templates,

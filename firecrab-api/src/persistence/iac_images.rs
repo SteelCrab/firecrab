@@ -108,6 +108,54 @@ pub(crate) struct ImageCredential {
     pub username: String,
     /// Private password or token; never returned in operation observations.
     pub secret: String,
+    /// Original AWS signing source. Retained privately so an expired ECR login
+    /// can be renewed without resolving another account or credential version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_auth: Option<crate::pipe_auth::SavedAuth>,
+}
+
+impl ImageCredential {
+    /// Resolve only the retained credential source, never the current Auth store.
+    pub(crate) async fn login(&self) -> Result<crate::oci::RegistryCredential, ()> {
+        let login = match &self.refresh_auth {
+            Some(source @ crate::pipe_auth::SavedAuth::Aws { .. }) => {
+                source.registry_credential().await.map_err(|_| ())?
+            }
+            Some(_) => return Err(()),
+            None => crate::oci::RegistryCredential {
+                registry: self.registry.clone(),
+                username: self.username.clone(),
+                secret: self.secret.clone(),
+            },
+        };
+        if login.registry != self.registry || login.username != self.username {
+            return Err(());
+        }
+        Ok(login)
+    }
+
+    fn matches_source(&self, registry: &str, pin: Option<&ImageAuthPin>) -> bool {
+        if !(self.registry == registry
+            || (crate::oci::is_docker_hub_registry(&self.registry)
+                && crate::oci::is_docker_hub_registry(registry)))
+            || self.username.is_empty()
+            || self.secret.is_empty()
+        {
+            return false;
+        }
+        let Some(source) = &self.refresh_auth else {
+            return true;
+        };
+        matches!(source, crate::pipe_auth::SavedAuth::Aws { .. })
+            && self.username == "AWS"
+            && source.connection().registry.as_deref() == Some(registry)
+            && pin.is_some_and(|pin| {
+                pin.ownership.resource.kind == "auth"
+                    && pin.ownership.resource.id == "aws"
+                    && serde_json::to_value(source)
+                        .is_ok_and(|value| hash(&value).is_ok_and(|sha| sha == pin.sha256))
+            })
+    }
 }
 /// Authentication ownership and configuration must still match when source work is admitted.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -275,6 +323,9 @@ impl ImageDefinition {
                 naming_reference == reference
                     && frozen.version.is_immutable()
                     && credential.is_some() == authentication.is_some()
+                    && credential.as_ref().is_none_or(|login| {
+                        login.matches_source(&requested.registry, authentication.as_ref())
+                    })
                     && authentication
                         .as_ref()
                         .is_none_or(|pin| digest(&pin.sha256))
