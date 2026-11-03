@@ -135,6 +135,16 @@ impl Store {
     pub fn save_sandbox_project(&self, project: &SandboxProject) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction()?;
+        let deleted: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM project_workspace_deletions WHERE project_id=?1)",
+            [project.id.to_string()],
+            |row| row.get(0),
+        )?;
+        if deleted {
+            return Err(PersistenceError::BlockStorageConflict {
+                message: "Project identity is reserved by a deletion operation",
+            });
+        }
         let previous: Option<String> = tx
             .query_row(
                 "SELECT spec FROM ai_sandbox_projects WHERE id=?1",

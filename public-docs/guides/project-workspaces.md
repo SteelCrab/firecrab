@@ -101,8 +101,9 @@ precedes filesystem/attachment work. A GET never initializes a missing database.
 Closing tabs or restarting the controller does not delete project data. VM deletion
 releases its volume attachment and preserves the workspace registration/database.
 The ordinary project-delete, volume-delete and volume-detach operations reject
-retained workspace data. Permanent project data deletion belongs to the explicit
-retention/deletion phase of #550.
+retained workspace data. The offline [permanent project deletion workflow](project-workspace-deletion.md)
+requires an explicit operator confirmation and retains the borrowed VM and volume
+registrations. Its live acceptance remains pending.
 
 ## Matched offline checkpoints
 

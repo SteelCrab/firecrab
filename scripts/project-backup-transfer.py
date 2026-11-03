@@ -317,6 +317,18 @@ def main():
     purge.add_argument("--destination-control", required=True)
     purge.add_argument("--operation", required=True, type=identifier)
     purge.add_argument("--confirm-delete", action="store_true", help="Permanently delete the listed quarantine files")
+    deletion = commands.add_parser("delete-project", help="Preview or permanently delete retained project data while preserving its VM and volume")
+    deletion.add_argument("--control", required=True, help="Stopped controller SQLite path")
+    deletion.add_argument("--project", required=True, type=identifier)
+    deletion.add_argument("--operation", required=True, type=identifier, help="Stable deletion UUID")
+    deletion.add_argument("--generation", required=True, type=int, help="Current workspace generation")
+    deletion.add_argument("--pool", required=True, help="Configured absolute storage root path")
+    deletion.add_argument("--confirm-vm-stopped", action="store_true", help="Confirm the borrowed VM and its native processes are stopped")
+    deletion.add_argument("--confirm-delete", action="store_true", help="Permanently delete project data and reset volume contents")
+    deletion.add_argument("--confirm-plan", help="Exact previewDigest to authorize or resume deletion")
+    deletion_status = commands.add_parser("deletion-status", help="Read an offline project deletion receipt")
+    deletion_status.add_argument("--control", required=True)
+    deletion_status.add_argument("--operation", type=identifier, help="Exact deletion UUID; omit to list unfinished operations")
     receive = commands.add_parser("import", help="Install and register a fresh project while the destination controller is stopped")
     receive.add_argument("directory", help="Transferred matched checkpoint directory")
     receive.add_argument("--destination-control", required=True, help="Existing destination controller SQLite path")
@@ -338,6 +350,12 @@ def main():
     elif args.command == "purge-abandoned":
         from project_backup_quarantine import purge_abandoned
         purge_abandoned(args, sys.modules[__name__])
+    elif args.command == "delete-project":
+        from project_workspace_delete import delete_project
+        delete_project(args, sys.modules[__name__])
+    elif args.command == "deletion-status":
+        from project_workspace_delete import deletion_status
+        deletion_status(args, sys.modules[__name__])
     elif args.command == "import":
         from project_backup_import import run_import
         run_import(args, sys.modules[__name__])

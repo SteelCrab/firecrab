@@ -150,6 +150,9 @@ def inspect_source(directory, io, files=None):
 
 
 def validate_destination(db, args, project, database, volume, catalog):
+    deletion_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_workspace_deletions'").fetchone()
+    if deletion_table and db.execute("SELECT 1 FROM project_workspace_deletions WHERE project_id=? OR phase!='complete'", (project,)).fetchone():
+        raise ValueError("Project identity is deleted or a project deletion is incomplete")
     vm = db.execute("SELECT state,purpose,last_runtime_id FROM vms WHERE id=?", (args.vm,)).fetchone()
     if vm != ("created", "instance", None):
         raise ValueError("Choose a newly created user VM that has never been started")

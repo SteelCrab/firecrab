@@ -160,3 +160,22 @@ targets. The command does not implement permanent deletion of a retained project
 
 No cleanup was performed and no tests or CI were run for this implementation. Live
 interruption and service-user acceptance remain open in #550.
+
+## Offline permanent retained-project deletion
+
+An operator-only offline CLI path previews and explicitly deletes one project's
+registered private DB, Sandbox attempts, project backups and retained-volume contents.
+It preserves the borrowed VM record and volume record/UUID/size, installs a blank ext4
+volume image, detaches the volume and reserves the deleted project UUID. The command
+journals file identities/hashes and stage/phase information before filesystem effects.
+The updated controller blocks startup until an interrupted operation is resumed with
+the same UUID and finishes. Project-scoped task, backup and grant records are removed.
+
+The [operator guide](../guides/project-workspace-deletion.md) describes source and
+borrowed-resource boundaries. Host source folders, VM disks other than the project
+volume, other projects and external backups are not erased. This is logical data
+removal, not a physical media sanitization guarantee.
+
+Tests, builds and CI were skipped at the user's request. No project was deleted and no
+runtime or volume was modified for this increment. Real interruption, SQLite/WAL,
+service-user, volume and multi-user acceptance remain open in #550.
