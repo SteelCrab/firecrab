@@ -2,6 +2,7 @@
 use super::*;
 use std::os::unix::fs::MetadataExt;
 
+/// Positive archive allowlist includes SQLite crash journals but excludes arbitrary directory entries.
 const ARCHIVE_FILES: &[&str] = &[
     "project.db",
     "data.ext4",
@@ -15,26 +16,43 @@ const ARCHIVE_FILES: &[&str] = &[
     "control.db-wal",
     "control.db-shm",
 ];
+/// File locations are derived from resource identities, never supplied as caller-controlled paths.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) enum Location {
+    /// A validated basename inside the selected checkpoint archive.
     Archive(String),
+    /// Database preserved by the selected completed restoration.
     DatabaseBefore,
+    /// Original WAL preserved separately from the restored live database.
     WalBefore,
+    /// Original shared-memory sidecar preserved during installation.
     ShmBefore,
+    /// Original volume with the selected restoration ID suffix.
     VolumeBefore,
+    /// Uninstalled database copy belonging to an aborted restoration.
     DatabaseStage,
+    /// Uninstalled volume copy belonging to an aborted restoration.
     VolumeStage,
 }
+/// Durable identity and contents of one admitted unlink target.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct Proof {
+    /// Backup or restore receipt owning this artifact.
     target: Uuid,
+    /// Typed location used to rederive and validate the path on every retry.
     location: Location,
+    /// Original resolved path; changed pool/project locations cannot redirect deletion.
     path: PathBuf,
+    /// Full logical file digest captured before admission.
     sha256: String,
+    /// Logical file length used for reconciliation accounting, not allocated sparse blocks.
     bytes: u64,
+    /// Filesystem identity captured with the original private file descriptor.
     device: u64,
+    /// File identity prevents replacing an admitted artifact with another file.
     inode: u64,
 }
+/// Derive only positively allowed filenames in existing project/archive/volume namespaces.
 fn path(
     state: &AppState,
     b: &Binding,
@@ -79,6 +97,7 @@ fn path(
         }
     })
 }
+/// Reject unknown archive entries before planning or resuming any further deletion.
 fn archive_entries(directory: &FsPath) -> Result<Vec<String>, Error> {
     match fs::symlink_metadata(directory) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
@@ -101,6 +120,7 @@ fn archive_entries(directory: &FsPath) -> Result<Vec<String>, Error> {
     names.sort();
     Ok(names)
 }
+/// Open without following aliases and capture contents together with the file identity.
 fn hash(path: &FsPath) -> Result<(String, u64, u64, u64), Error> {
     let file = db::private_file(path, false)?;
     let meta = file.metadata()?;
@@ -111,6 +131,7 @@ fn hash(path: &FsPath) -> Result<(String, u64, u64, u64), Error> {
         meta.ino(),
     ))
 }
+/// Append only existing allowed files; preserved originals require their restore-journal hash.
 fn collect(
     state: &AppState,
     b: &Binding,
@@ -141,6 +162,7 @@ fn collect(
     });
     Ok(())
 }
+/// Choose checkpoint bytes, aborted staging or completed-restore originals without selecting live files.
 pub(super) fn plan(state: &AppState, b: &Binding, targets: &[Backup]) -> Result<Vec<Proof>, Error> {
     let mut files = vec![];
     for r in targets {
@@ -227,6 +249,7 @@ pub(super) fn verify(state: &AppState, r: &Record) -> Result<(), Error> {
     }
     Ok(())
 }
+/// Unlink the next admitted file and sync its parent before advancing durable progress.
 pub(super) fn remove_one(state: &AppState, r: &mut Record) -> Result<bool, Error> {
     let Some(file) = r.files.get(r.public.removed_files as usize) else {
         return Ok(false);
@@ -246,6 +269,7 @@ pub(super) fn remove_one(state: &AppState, r: &mut Record) -> Result<bool, Error
     state.store.save_cleanup_record(r)?;
     Ok(true)
 }
+/// Remove only empty selected archive directories; never recurse into unknown content.
 pub(super) fn remove_empty_archives(state: &AppState, r: &Record) -> Result<(), Error> {
     let root = root(&state.workspaces, r.binding.project_id, false)?;
     for id in &r.public.request.target_ids {

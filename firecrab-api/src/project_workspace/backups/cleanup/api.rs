@@ -1,7 +1,9 @@
 //! Operator-only policy, protection, preview and exact-request cleanup APIs.
 use super::*;
 use crate::project_workspace::backups::api::permit;
+/// Operator endpoints share the existing project backup namespace.
 const PREFIX: &str = "/api/ai-sandbox/projects/{project}/workspace/backups";
+/// Separate irreversible cleanup from the existing pre-installation backup abort endpoint.
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route(&format!("{PREFIX}/retention"), get(policy).put(save_policy))
@@ -20,6 +22,7 @@ pub(super) fn routes() -> Router<AppState> {
             post(retry),
         )
 }
+/// Return the control-owned policy even when the project database cannot be opened.
 async fn policy(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -31,6 +34,7 @@ async fn policy(
         .await
         .map(Json)
 }
+/// Validate bounds and save against the acknowledged generation in one control transaction.
 async fn save_policy(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -65,6 +69,7 @@ async fn save_policy(
     .await
     .map(Json)
 }
+/// Report metadata eligibility only; admission performs filesystem and survivor checks.
 async fn preview(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -78,6 +83,7 @@ async fn preview(
     .await
     .map(Json)
 }
+/// Serialize protection edits against backup, restoration and cleanup admission.
 async fn protect(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -123,6 +129,7 @@ async fn protect(
     .await
     .map(Json)
 }
+/// Return bounded public history, including the active receipt but excluding private file plans.
 async fn list(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -134,6 +141,7 @@ async fn list(
         .await
         .map(Json)
 }
+/// Retrieve an exact old receipt independently of the bounded history list.
 async fn operation(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -147,6 +155,7 @@ async fn operation(
     .await
     .map(Json)
 }
+/// Detach owned execution so a closed browser cannot cancel admitted deletion.
 async fn run(
     state: AppState,
     project: Uuid,
@@ -161,6 +170,7 @@ async fn run(
         .map(Json)
         .map_err(|e| e.response(request_id))
 }
+/// Admit a caller-chosen stable identity and an explicit immutable target selection.
 async fn submit(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -174,6 +184,7 @@ async fn submit(
     }
     run(state, project, id, input, caller, request.0).await
 }
+/// Resume the server-retained target list rather than accepting a replacement selection.
 async fn retry(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,

@@ -9,17 +9,20 @@ use firecrab_api_types::{ProjectBackupCleanupOperation, ProjectBackupRetention};
 use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
+/// Additive control tables retain policies and deletion evidence across project-DB restoration.
 pub(super) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS project_backup_retention(project_id TEXT PRIMARY KEY,document TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS project_backup_cleanups(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,active INTEGER NOT NULL CHECK(active IN (0,1)),document TEXT NOT NULL) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS project_cleanup_active ON project_backup_cleanups(project_id) WHERE active=1;
 ";
+/// Sanitize identity/precondition failures without exposing private paths or SQLite details.
 fn conflict() -> PersistenceError {
     PersistenceError::BlockStorageConflict {
         message: "Backup cleanup identity, generation or protection changed",
     }
 }
 impl Store {
+    /// Read the policy without creating state; automatic deletion defaults to disabled.
     pub(crate) fn backup_retention(
         &self,
         project: Uuid,
@@ -34,6 +37,7 @@ impl Store {
             .optional()?;
         raw.map(decode).transpose().map(Option::unwrap_or_default)
     }
+    /// Atomically acknowledge the current binding generation with the operator policy edit.
     pub(crate) fn save_backup_retention(
         &self,
         project: Uuid,
@@ -51,6 +55,7 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+    /// Compare the saved policy so an old worker cannot overwrite a newer operator edit.
     pub(crate) fn finish_retention_attempt(
         &self,
         project: Uuid,
@@ -65,6 +70,7 @@ impl Store {
         )?;
         Ok(())
     }
+    /// Enumerate only projects with explicitly saved retention configuration.
     pub(crate) fn retention_projects(&self) -> Result<Vec<Uuid>, PersistenceError> {
         let c = self.lock();
         let mut q =
@@ -73,6 +79,7 @@ impl Store {
             .map(|r| Uuid::parse_str(&r?).map_err(|_| conflict()))
             .collect()
     }
+    /// Read a private exact-ID plan and verify the retained receipt identity.
     pub(crate) fn cleanup_record(&self, id: Uuid) -> Result<Option<Record>, PersistenceError> {
         let raw: Option<String> = self
             .lock()
@@ -91,6 +98,7 @@ impl Store {
         })
         .transpose()
     }
+    /// Load project audit records, or only restartable active operations when no project is selected.
     pub(crate) fn cleanup_records(
         &self,
         project: Option<Uuid>,
@@ -119,9 +127,11 @@ impl Store {
         })
         .collect()
     }
+    /// Fence VM lifecycle changes until filesystem and registry cleanup both complete.
     pub(crate) fn workspace_cleanup_active(&self, project: Uuid) -> Result<bool, PersistenceError> {
         self.lock().query_row("SELECT EXISTS(SELECT 1 FROM project_backup_cleanups WHERE project_id=?1 AND active=1)",[project.to_string()],|r|r.get(0)).map_err(Into::into)
     }
+    /// Advance progress or error state without replacing the admitted binding, action or selection.
     pub(crate) fn save_cleanup_record(&self, record: &Record) -> Result<(), PersistenceError> {
         let old = self
             .cleanup_record(record.public.id)?
@@ -190,6 +200,7 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+    /// Mark target bytes cleaned while retaining manifests, receipts and the active maintenance gate.
     pub(crate) fn complete_backup_cleanup(
         &self,
         record: &mut Record,

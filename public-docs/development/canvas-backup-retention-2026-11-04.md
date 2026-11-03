@@ -53,6 +53,9 @@ unit and compiled-browser tests** passed after the policy-selection fixture upda
 Formatting, API Clippy with warnings denied, frontend lint/build, documentation links
 and product-version checks passed. Existing unrelated frontend lint warnings remain;
 no new backup/retention lint warnings are present.
+Linux workspace rustdoc with warnings denied also passed. Documentation completeness
+passed at **75.4796%**, above the unchanged **75%** floor. The new internal state,
+file-proof and recovery boundaries are documented.
 
 Exact-head CI/Codecov links and final hosted outcomes are recorded in the PR progress
 comment. CI success alone does not complete the live acceptance gates below.

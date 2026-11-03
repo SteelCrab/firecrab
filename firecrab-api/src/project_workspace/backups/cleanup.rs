@@ -7,25 +7,35 @@ mod tests;
 use super::Record as Backup;
 use super::*;
 
+/// Private immutable file plan retained independently of the project database being cleaned.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Record {
+    /// Public receipt; internal file paths and proofs must never be serialized through the API.
     pub public: ProjectBackupCleanupOperation,
+    /// Admission-time resource identity; a retry cannot follow a replacement binding.
     pub binding: Binding,
+    /// Maintenance remains active through the final filesystem-fence release.
     pub active: bool,
+    /// Original principal used for automatic restart recovery authorization.
     caller: Caller,
+    /// Ordered unlink plan, committed before any file removal.
     files: Vec<files::Proof>,
+    /// Verified checkpoint retained during deletion; absent only for aborted pre-installation copies.
     survivor: Option<Uuid>,
 }
 impl Record {
+    /// Expose current gate status without copying the private plan into the response.
     fn response(&self) -> ProjectBackupCleanupOperation {
         let mut public = self.public.clone();
         public.pending_reconciliation = self.active;
         public
     }
 }
+/// Mount the operator policy, preview and exact-request recovery endpoints.
 pub(super) fn routes() -> Router<AppState> {
     api::routes()
 }
+/// Lookup is scoped by project before disclosing a cleanup identity.
 fn retained(state: &AppState, project: Uuid, id: Uuid) -> Result<Record, Error> {
     state
         .store
@@ -33,6 +43,7 @@ fn retained(state: &AppState, project: Uuid, id: Uuid) -> Result<Record, Error> 
         .filter(|r| r.public.project_id == project)
         .ok_or(Error::Missing)
 }
+/// Move lifecycle guards into the blocking worker so request cancellation cannot release them early.
 async fn execute(
     state: AppState,
     project: Uuid,
@@ -69,6 +80,7 @@ async fn execute(
     .await
     .map_err(|_| Error::Conflict("Cleanup worker interrupted; retry the retained operation"))?
 }
+/// Resolve the retained intent under exclusive operation ownership before any filesystem effect.
 fn execute_locked(
     state: &AppState,
     project: Uuid,
@@ -167,6 +179,7 @@ fn execute_locked(
     }
     result
 }
+/// Resume admitted work without retained errors, then consider explicitly enabled policy selections.
 pub(super) async fn tick(state: AppState) -> Result<(), Error> {
     let local = state.clone();
     let records = tokio::task::spawn_blocking(move || local.store.cleanup_records(None))
@@ -240,6 +253,7 @@ pub(super) async fn tick(state: AppState) -> Result<(), Error> {
     Ok(())
 }
 
+/// Verify a survivor and every target, then atomically admit the plan with its target tombstones.
 fn prepare_record(
     state: &AppState,
     b: Binding,

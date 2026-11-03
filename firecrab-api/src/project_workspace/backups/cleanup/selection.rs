@@ -1,11 +1,13 @@
 //! Age/count selection is a preview; deletion admission verifies a surviving complete archive.
 use super::*;
 
+/// A completed but tombstoned archive is history, not a retained checkpoint slot.
 fn checkpoint(r: &Backup) -> bool {
     r.public.phase == "complete"
         && r.public.request.restore_checkpoint.is_none()
         && r.public.cleanup_id.is_none()
 }
+/// Combine count, age, protection and manual-backup rules without admitting deletion.
 pub(super) fn preview(
     state: &AppState,
     project: Uuid,
@@ -75,6 +77,7 @@ pub(super) fn preview(
         automatic_target_ids,
     })
 }
+/// Recheck the entire explicit selection against terminal state and retained resource identities.
 pub(super) fn targets(state: &AppState, b: &Binding, ids: &[Uuid]) -> Result<Vec<Backup>, Error> {
     let mut rows = Vec::with_capacity(ids.len());
     for id in ids {
@@ -103,6 +106,7 @@ pub(super) fn targets(state: &AppState, b: &Binding, ids: &[Uuid]) -> Result<Vec
     }
     Ok(rows)
 }
+/// Require a separate fully verified archive before deleting completed recovery artifacts.
 pub(super) fn survivor(
     state: &AppState,
     b: &Binding,
