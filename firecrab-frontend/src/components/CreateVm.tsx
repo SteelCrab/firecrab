@@ -61,6 +61,8 @@ interface CreateVmProps {
   preferredImageFamily?: "ubuntu";
   hideDataVolumes?: boolean;
   beforeCreate?: () => boolean;
+  submitRequest?: (request: CreateVmRequest) => Promise<void>;
+  hideAdvanced?: boolean;
 }
 
 function storageLabel(root: StorageRootResponse): string {
@@ -93,6 +95,8 @@ export default function CreateVm({
   preferredImageFamily,
   hideDataVolumes = false,
   beforeCreate,
+  submitRequest,
+  hideAdvanced = false,
 }: CreateVmProps) {
   const { t } = useI18n();
   const host = useHostStatus();
@@ -364,6 +368,10 @@ export default function CreateVm({
     setSubmitting(true);
     setFieldErrors(null);
     try {
+      if (submitRequest) {
+        await submitRequest(request);
+        return;
+      }
       const vm = await createVm(request);
       // Clear identity + shell pins + port forwards so the next create does not re-send
       setName("");
@@ -379,15 +387,18 @@ export default function CreateVm({
         .catch(() => setShells([]));
       onCreated(vm);
     } catch (error) {
-      const apiError = error as ApiClientError;
-      if (
-        FIELDS_WITH_OWN_ERROR.every(
-          (field) => apiError.fieldError(field) === undefined,
-        )
-      ) {
-        onError(apiError.message);
+      if (error instanceof ApiClientError) {
+        if (
+          FIELDS_WITH_OWN_ERROR.every(
+            (field) => error.fieldError(field) === undefined,
+          )
+        ) {
+          onError(error.message);
+        }
+        setFieldErrors(error);
+      } else {
+        onError(error instanceof Error ? error.message : String(error));
       }
-      setFieldErrors(apiError);
     } finally {
       setSubmitting(false);
     }
@@ -682,7 +693,7 @@ export default function CreateVm({
           </fieldset>
         </div>
       </section>
-      <details className="form-advanced">
+      <details className="form-advanced" hidden={hideAdvanced}>
         <summary>{t("Advanced options", "고급 설정")}</summary>
         <div className="advanced-fields">
           {!hideDataVolumes && volumes.length > 0 && (

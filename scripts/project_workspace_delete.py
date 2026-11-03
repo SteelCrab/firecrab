@@ -370,6 +370,7 @@ def metadata_commit(db, record):
         # The selection belongs to this project; provider connections are shared.
         db.execute("DELETE FROM pipe_ai_defaults WHERE project_id=?", (project,))
         db.execute("INSERT OR IGNORE INTO project_workspace_provision_tombstones(id) SELECT id FROM project_workspace_provisions WHERE project_id=?", (project,))
+        db.execute("DELETE FROM project_workspace_vm_creations WHERE id IN (SELECT id FROM project_workspace_provisions WHERE project_id=?)", (project,))
         db.execute("DELETE FROM project_workspace_provisions WHERE project_id=?", (project,))
         db.execute("DELETE FROM sandbox_task_routes WHERE project_id=?", (project,))
         db.execute("DELETE FROM ai_sandbox_admissions WHERE task_id IN (SELECT id FROM ai_sandbox_tasks WHERE project_id=?)", (project,))

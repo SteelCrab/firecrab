@@ -20,18 +20,23 @@ Ubuntu image, 4 vCPU, 8 GiB RAM and a 16 GiB system disk. The workspace volume i
 separate and defaults to 1 GiB. Both sizes can be changed. If Ubuntu is unavailable,
 install it or explicitly select another image.
 
-After VM creation succeeds, the controller creates a new Sandbox project and an
-operation-owned data volume. It binds the volume, starts the VM and verifies the
-workspace mount. The browser keeps the setup identity so a refresh can resume the
-same project and volume. A failed stage shows a retry action; existing resources
-are not replaced. A stopped or failed VM is not silently restarted by retries. A
-completed setup does not restart a VM later stopped by the user.
+The browser saves a non-secret creation request and operation ID before dispatch.
+The controller journals the same ID and the selected image revision before creating
+the VM. A lost response, browser refresh or temporary connection failure retries the
+same operation. It cannot create a second VM for that operation. Browser storage
+and the Web Locks API are required for this recovery. Canvas creation currently
+omits advanced VM options, including environment variables, Shells, port forwarding
+and extra data volumes. Configure those separately if needed.
 
-VM creation still uses the existing non-idempotent VM API. If its response is lost
-before the browser receives the VM ID, the automatic setup cannot identify it.
-Inspect the MicroVM list before trying creation again. The flow creates a **new**
-project; opening an existing project remains a separate action. Live execution,
-interruption and cross-user verification of this flow remain pending.
+The controller creates a new Sandbox project and an operation-owned data volume.
+It binds the volume, starts the VM and verifies the workspace mount. A failed stage
+shows a retry action; existing resources are not replaced. A stopped or failed VM
+is not silently restarted by retries. A completed setup does not restart a VM later
+stopped by the user. If no VM or project exists, cancellation retires the operation
+ID so a delayed request cannot create one afterwards.
+
+The flow creates a **new** project; opening an existing project remains a separate
+action. Live execution, interruption and cross-user verification remain pending.
 
 For manual setup or an existing project:
 

@@ -31,6 +31,7 @@ import { canvasController as c } from "../canvas/controller";
 import { canvasPanes } from "../canvas-panes.js";
 import { terminalSessions } from "../canvas/terminals";
 import type { Tab, Node as CanvasNode } from "../canvas/types";
+import type { CreateVmRequest } from "../bindings";
 import "../styles/ai-canvas.css";
 import CanvasAgent from "./CanvasAgent";
 import ProjectBackups from "./ProjectBackups";
@@ -46,6 +47,7 @@ type Provision = {
   name: string;
   volumeSizeGib: number;
   tabId: string;
+  vmRequest?: CreateVmRequest;
 };
 type ProvisionResult = { projectId: string; phase: string };
 const provisionKey = "firecrab.canvas.provision";
@@ -60,7 +62,9 @@ function loadProvision(): Provision | null {
       typeof value.tabId === "string" &&
       Number.isInteger(value.volumeSizeGib) &&
       value.volumeSizeGib > 0 &&
-      value.volumeSizeGib <= 65535
+      value.volumeSizeGib <= 65535 &&
+      (value.vmRequest === undefined ||
+        (typeof value.vmRequest === "object" && value.vmRequest !== null))
     )
       return value as Provision;
   } catch {
@@ -121,8 +125,6 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
   const [projectName, setProjectName] = useState("");
   const [volumeSize, setVolumeSize] = useState("1");
   const [provision, setProvision] = useState<Provision | null>(loadProvision);
-  const [unpersistedProvision, setUnpersistedProvision] =
-    useState<Provision | null>(null);
   const [provisionError, setProvisionError] = useState("");
   const [provisioning, setProvisioning] = useState(false);
   const [provisionRetry, setProvisionRetry] = useState(0);
@@ -137,17 +139,33 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
         while (!cancelled) {
           let result: ProvisionResult;
           try {
+            const mode = provision.vmRequest ? "creations" : "provisions";
             result = await request<ProvisionResult>(
               "PUT",
-              `/api/ai-sandbox/canvas/provisions/${encodeURIComponent(provision.operation)}`,
-              {
-                vmId: provision.vmId,
-                name: provision.name,
-                volumeSizeGib: provision.volumeSizeGib,
-              },
+              `/api/ai-sandbox/canvas/${mode}/${encodeURIComponent(provision.operation)}`,
+              provision.vmRequest
+                ? {
+                    vm: provision.vmRequest,
+                    name: provision.name,
+                    volumeSizeGib: provision.volumeSizeGib,
+                  }
+                : {
+                    vmId: provision.vmId,
+                    name: provision.name,
+                    volumeSizeGib: provision.volumeSizeGib,
+                  },
               false,
             );
           } catch (error) {
+            // Reuse the saved operation after transport or gateway failures.
+            if (
+              error instanceof WorkspaceError &&
+              (error.status === undefined ||
+                [502, 503, 504].includes(error.status))
+            ) {
+              await pause(5000);
+              continue;
+            }
             if (
               error instanceof WorkspaceError &&
               error.code === "workspace_conflict" &&
@@ -598,37 +616,7 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
                 () => void c.connect(project),
                 t("Open project", "프로젝트 열기"),
               )}
-              {unpersistedProvision ? (
-                <div role="status">
-                  <p>
-                    {t(
-                      `VM ${unpersistedProvision.vmId} was created. Restore browser storage and retry setup.`,
-                      `VM ${unpersistedProvision.vmId}을 만들었다. 브라우저 저장소를 복구한 뒤 생성을 재시도한다.`,
-                    )}
-                  </p>
-                  {button(
-                    () => {
-                      try {
-                        localStorage.setItem(
-                          provisionKey,
-                          JSON.stringify(unpersistedProvision),
-                        );
-                        setProvision(unpersistedProvision);
-                        setUnpersistedProvision(null);
-                      } catch {
-                        setProvisionError(
-                          t(
-                            "Browser storage is unavailable.",
-                            "브라우저 저장소를 사용할 수 없다.",
-                          ),
-                        );
-                      }
-                    },
-                    t("Retry workspace setup", "작업 공간 생성 재시도"),
-                  )}
-                  {provisionError && <p role="alert">{provisionError}</p>}
-                </div>
-              ) : provision ? (
+              {provision ? (
                 <div role="status">
                   <p>
                     {provisioning
@@ -646,6 +634,28 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
                     button(
                       () => setProvisionRetry((value) => value + 1),
                       t("Retry workspace setup", "작업 공간 생성 재시도"),
+                    )}
+                  {!provisioning &&
+                    provision.vmRequest &&
+                    button(
+                      () =>
+                        void (async () => {
+                          setProvisioning(true);
+                          try {
+                            await request(
+                              "DELETE",
+                              `/api/ai-sandbox/canvas/creations/${encodeURIComponent(provision.operation)}`,
+                            );
+                            localStorage.removeItem(provisionKey);
+                            setProvision(null);
+                            setProvisionError("");
+                          } catch (error) {
+                            setProvisionError(message(error));
+                          } finally {
+                            setProvisioning(false);
+                          }
+                        })(),
+                      t("Cancel if no VM was created", "VM이 없으면 생성 취소"),
                     )}
                 </div>
               ) : (
@@ -840,6 +850,7 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
             initialResources={{ cpu: 4, ram: 8192, diskGb: 16 }}
             preferredImageFamily="ubuntu"
             hideDataVolumes
+            hideAdvanced
             beforeCreate={() => {
               const size = Number(volumeSize);
               if (!Number.isInteger(size) || size < 1 || size > 65535) {
@@ -880,32 +891,45 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
               return true;
             }}
             onCancel={() => setCreatingVm(false)}
-            onError={(error) =>
-              setCreateVmError(
-                `${error} ${t("If the VM creation response was lost, inspect the MicroVM list before retrying.", "VM 생성 응답이 끊겼다면 다시 시도하기 전에 MicroVM 목록을 확인한다.")}`,
-              )
-            }
-            onCreated={(vm) => {
+            onError={setCreateVmError}
+            onCreated={() => {}}
+            submitRequest={async (vmRequest) => {
+              const operation = crypto.randomUUID();
               const next: Provision = {
-                operation: crypto.randomUUID(),
-                vmId: vm.id,
-                name: projectName.trim() || vm.name,
+                operation,
+                vmId: operation,
+                name: projectName.trim() || vmRequest.name,
                 volumeSizeGib: Number(volumeSize),
                 tabId: tab?.id || "",
+                vmRequest,
               };
-              setCreatingVm(false);
-              try {
-                localStorage.setItem(provisionKey, JSON.stringify(next));
-                setProvision(next);
-              } catch {
-                setUnpersistedProvision(next);
-                setProvisionError(
+              // The request contains no advanced options or credentials. Persist it
+              // before dispatch so a reload can retry the same operation identity.
+              if (!navigator.locks) {
+                throw new Error(
                   t(
-                    "Browser storage is unavailable.",
-                    "브라우저 저장소를 사용할 수 없다.",
+                    "Browser locking is required for reliable creation.",
+                    "안전한 생성을 위해 브라우저 잠금 기능이 필요하다.",
                   ),
                 );
               }
+              await navigator.locks.request(
+                provisionKey,
+                { mode: "exclusive" },
+                async () => {
+                  if (localStorage.getItem(provisionKey)) {
+                    throw new Error(
+                      t(
+                        "Another Canvas setup is already pending in this browser.",
+                        "이 브라우저에서 다른 Canvas 생성이 진행 중이다.",
+                      ),
+                    );
+                  }
+                  localStorage.setItem(provisionKey, JSON.stringify(next));
+                  setProvision(next);
+                  setCreatingVm(false);
+                },
+              );
             }}
           />
         </AppDialog>
