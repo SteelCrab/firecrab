@@ -100,3 +100,18 @@ A completed identical import retry can return its stored receipt if the transfer
 directory is gone; existing directories must still match the recorded manifest hash.
 Destination preflight now reports a previously started VM as ineligible, matching
 import admission. Tests, CI and live-host execution remain deferred.
+
+## Prepared import recovery without transfer directory
+
+When a `prepared` import loses its original transfer directory, the same import
+command can resume from the journaled archive copies. It first checks destination
+pool identity, private paths, the entire six-file install plan and each file hash.
+It then validates the matched archive, SQLite identities and task authority before
+publishing any remaining files. Archive copies may be split between private staging
+and their final checkpoint directory after an interrupted rename. Unknown SQLite
+sidecars are rejected. Missing or altered evidence fails closed. Earlier `staging`
+operations still require the original package. A present but invalid source package
+is not bypassed.
+
+Tests and CI were skipped at the user's request. Live destination-host execution,
+interrupted installation and full #550 acceptance remain pending.

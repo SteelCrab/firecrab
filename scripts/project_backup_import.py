@@ -71,16 +71,18 @@ def save(db, record):
     db.execute("UPDATE project_workspace_imports SET phase=?,document=? WHERE id=?", (record["phase"], encode(record), record["id"]))
 
 
-def inspect_source(directory, io):
-    if os.path.lexists(directory / "INCOMPLETE"):
-        raise ValueError("The transferred directory is incomplete")
-    if {entry.name for entry in directory.iterdir()} != set(io.FILES):
-        raise ValueError("Transferred package must contain only the four matched files, without SQLite sidecars")
-    manifest = io.inspect(directory)
+def inspect_source(directory, io, files=None):
+    if files is None:
+        if os.path.lexists(directory / "INCOMPLETE"):
+            raise ValueError("The transferred directory is incomplete")
+        if {entry.name for entry in directory.iterdir()} != set(io.FILES):
+            raise ValueError("Transferred package must contain only the four matched files, without SQLite sidecars")
+        files = {name: directory / name for name in io.FILES}
+    manifest = io.inspect_files(files)
     c = manifest["checkpoint"]
     project = c["projectId"]
-    source = io.connect(directory / "control.db")
-    project_db = io.connect(directory / "project.db")
+    source = io.connect(files["control.db"])
+    project_db = io.connect(files["project.db"])
     try:
         row = source.execute("SELECT vm_id,spec FROM ai_sandbox_projects WHERE id=?", (project,)).fetchone()
         if not row:
@@ -323,7 +325,7 @@ def prepare_files(db, source, record, io):
     transaction(db, lambda: save(db, record))
 
 
-def install_files(record, io):
+def validate_file_plan(record, io):
     folders = {key: Path(value) for key, value in record["folders"].items()}
     allowed = {folders["archive"] / name: folders["archiveStage"] for name in io.FILES}
     allowed.update({folders["project"] / "project.db": folders["projectStage"], folders["volume"] / "data.ext4": folders["volumeStage"]})
@@ -341,12 +343,52 @@ def install_files(record, io):
                 raise ValueError("A destination file conflicts with the retained installation plan")
         elif io.digest(stage) != item["sha"]:
             raise ValueError("Prepared file differs from its retained proof")
+    return {Path(item["path"]): Path(item["path"]) if os.path.lexists(item["path"]) else Path(item["stage"]) for item in record["files"]}
+
+
+def install_files(record, io):
+    validate_file_plan(record, io)
     for item in record["files"]:
         stage, path = Path(item["stage"]), Path(item["path"])
         if not os.path.lexists(path):
             rename_new(stage, path)
         io.sync_dir(path.parent)
         io.sync_dir(stage.parent)
+
+
+def prepared_archive(db, control, args, record, io):
+    """Resolve only journaled files beneath the original owner-controlled namespaces."""
+    c = record["manifest"]["checkpoint"]
+    for name in ("id", "projectId", "databaseId", "volumeId"):
+        io.identifier(c[name])
+    if c["id"] != record["checkpoint"] or c["projectId"] != record["project"]:
+        raise ValueError("Import journal and checkpoint identities differ")
+    row = db.execute("SELECT path FROM micro_storages WHERE id=?", (args.storage,)).fetchone()
+    if not row or not Path(row[0]).is_absolute():
+        raise ValueError("Registered storage is unavailable")
+    pool = Path(row[0])
+    info = os.lstat(pool)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        raise ValueError("Registered storage is not owner-controlled")
+    pool = pool.resolve(strict=True)
+    info = os.stat(pool)
+    if record["poolIdentity"] != [info.st_dev, info.st_ino]:
+        raise ValueError("Destination filesystem identity changed")
+    parent = control.with_suffix(".sandbox")
+    projects, backups, volumes = parent / "projects", parent / "project-backups", pool / "volumes"
+    expected = dict(project=str(projects / c["projectId"]), volume=str(volumes / c["volumeId"]), backup=str(backups / c["projectId"]), archive=str(backups / c["projectId"] / c["id"]), projectStage=str(projects / (".project-import-" + args.operation)), volumeStage=str(volumes / (".project-import-" + args.operation)), archiveStage=str(backups / (".project-import-" + args.operation)))
+    if record["folders"] != expected:
+        raise ValueError("Import journal paths differ from registered resources")
+    for path in (parent, projects, backups):
+        io.private_dir(path)
+    volume_info = os.lstat(volumes)
+    if not stat.S_ISDIR(volume_info.st_mode) or volume_info.st_uid != os.geteuid() or volume_info.st_mode & 0o022:
+        raise ValueError("Volume namespace is not owner-controlled")
+    for path in expected.values():
+        io.private_dir(Path(path))
+    resolved = validate_file_plan(record, io)
+    archive = Path(expected["archive"])
+    return {name: resolved[archive / name] for name in io.FILES}
 
 
 def register(db, args, record, config, route, catalog, actual, io):
@@ -442,16 +484,23 @@ def run_import(args, io):
                 if record["phase"] == "complete" and not os.path.lexists(source):
                     print(encode(dict(status="complete", operationId=args.operation, projectId=record["project"], generation=record["generation"])))
                     return
-            m = io.manifest_at(source)
+            files = None
+            if previous and record["phase"] == "prepared" and not os.path.lexists(source):
+                files = prepared_archive(db, control, args, record, io)
+                m = io.manifest_at(files["manifest.json"].parent, files["manifest.json"])
+                manifest_sha = io.digest(files["manifest.json"])
+            else:
+                m = io.manifest_at(source)
+                manifest_sha = io.digest(source / "manifest.json")
             c = m["checkpoint"]
-            request = dict(manifestSha256=io.digest(source / "manifest.json"), **fixed)
+            request = dict(manifestSha256=manifest_sha, **fixed)
             if previous:
-                if record["request"] != request:
-                    raise ValueError("Import operation has another immutable request")
+                if record["request"] != request or record["manifest"] != m:
+                    raise ValueError("Import operation has another immutable request or manifest")
                 if record["phase"] == "complete":
                     print(encode(dict(status="complete", operationId=args.operation, projectId=record["project"], generation=record["generation"])))
                     return
-            manifest, config, route, catalog, actual = inspect_source(source, io)
+            manifest, config, route, catalog, actual = inspect_source(source, io, files)
             if manifest != m:
                 raise ValueError("Source manifest changed during import admission")
             if previous:

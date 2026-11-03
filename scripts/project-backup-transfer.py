@@ -6,6 +6,7 @@ command registers a fresh destination while its controller is stopped. Existing
 project or volume paths are never overwritten.
 """
 import argparse
+from contextlib import closing
 import fcntl
 import hashlib
 import json
@@ -60,9 +61,9 @@ def digest(path):
     return h.hexdigest()
 
 
-def manifest_at(directory):
+def manifest_at(directory, manifest_path=None):
     private_dir(directory)
-    with private_file(directory / "manifest.json") as f:
+    with private_file(manifest_path or directory / "manifest.json") as f:
         if os.fstat(f.fileno()).st_size > 16384:
             raise ValueError("Manifest is too large")
         manifest = json.load(f)
@@ -77,21 +78,25 @@ def manifest_at(directory):
     return manifest
 
 
-def inspect(directory):
-    m = manifest_at(directory)
+def inspect_files(files):
+    m = manifest_at(files["manifest.json"].parent, files["manifest.json"])
     c = m["checkpoint"]
+    for name in ("project.db", "control.db"):
+        for suffix in ("-wal", "-shm", "-journal"):
+            if os.path.lexists(str(files[name]) + suffix):
+                raise ValueError("SQLite sidecars are not part of the matched checkpoint")
     expected = {"project.db": c["databaseSha256"], "data.ext4": c["volumeSha256"], "control.db": m["controlDatabaseSha256"]}
     for name, sha in expected.items():
-        if digest(directory / name) != sha:
+        if digest(files[name]) != sha:
             raise ValueError("Backup file integrity mismatch: " + name)
-    with private_file(directory / "data.ext4") as volume:
+    with private_file(files["data.ext4"]) as volume:
         if os.fstat(volume.fileno()).st_size != m["volumeBytes"]:
             raise ValueError("Backup volume length mismatch")
         volume.seek(1024)
         header = volume.read(120)
         if len(header) != 120 or header[56:58] != b"\x53\xef" or header[104:120] != uuid.UUID(c["volumeId"]).bytes:
             raise ValueError("Backup ext4 identity mismatch")
-    with connect(directory / "project.db") as db:
+    with closing(connect(files["project.db"])) as db:
         if db.execute("PRAGMA application_id").fetchone()[0] != 0x46575031:
             raise ValueError("Unexpected project DB application ID")
         if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)] or db.execute("PRAGMA foreign_key_check").fetchone():
@@ -100,13 +105,18 @@ def inspect(directory):
         row = db.execute("SELECT project_id,database_id,volume_id,revision,initialized FROM identity WHERE singleton=1").fetchone()
         if not 1 <= version <= 9 or version != c["schemaVersion"] or row != (c["projectId"], c["databaseId"], c["volumeId"], c["revision"], 1):
             raise ValueError("Backup DB identity or revision mismatch")
-    with connect(directory / "control.db") as control:
+    with closing(connect(files["control.db"])) as control:
         if control.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
             raise ValueError("Control DB integrity check failed")
         row = control.execute("SELECT database_id,volume_id,generation,provisioning FROM project_workspaces WHERE project_id=?", (c["projectId"],)).fetchone()
         if row != (c["databaseId"], c["volumeId"], c["generation"], 0):
             raise ValueError("Control snapshot binding differs from the checkpoint")
     return m
+
+
+def inspect(directory):
+    private_dir(directory)
+    return inspect_files({name: directory / name for name in FILES})
 
 
 def sync_dir(path):

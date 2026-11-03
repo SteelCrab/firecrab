@@ -173,12 +173,18 @@ Use `--operation IMPORT_OPERATION_UUID` to read one incomplete or completed rece
 The response exposes operation/resource IDs and phase, not private file contents or
 credentials. It reports journal state only; it does not verify the staged files or
 stop a running controller. Restore missing storage access, permissions or free space,
-then rerun the identical import command with the same operation UUID, checkpoint
-package, VM, pool and volume name.
+then rerun the identical import command with the same operation UUID, VM, pool and
+volume name. The `staging` phase requires the original checkpoint package.
 
 - `staging`: prepare new private copies. Earlier partial files remain for inspection.
 - `prepared`: verify every installed/staged file against the retained plan. Publish
-  only missing members, then retry the single registration transaction.
+  only missing members, then retry the single registration transaction. If the
+  original transfer directory is absent, the importer reads its journaled archive
+  copies from the private staging and checkpoint directories. It checks all six file
+  proofs, the matched checkpoint, SQLite integrity and resource identities before
+  continuing. Missing, conflicting or changed files stop recovery. The destination
+  controller must remain stopped and the same source cutover acknowledgement and
+  command arguments are required.
 - `complete`: return the retained receipt. Do not rewrite the live DB, disk or later
   changes. If the original transfer directory no longer exists, an identical retry
   can return the receipt without reading it. If the directory still exists, its
