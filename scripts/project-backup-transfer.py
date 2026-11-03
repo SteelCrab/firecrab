@@ -191,6 +191,62 @@ def export(args):
         os.close(lock)
 
 
+def destination_plan(args):
+    """Inspect a destination without registering or modifying its resources."""
+    directory = Path(args.directory).absolute()
+    if (directory / "INCOMPLETE").exists():
+        raise ValueError("Transfer is incomplete; retain the directory for inspection")
+    manifest = inspect(directory)
+    checkpoint = manifest["checkpoint"]
+    project = checkpoint["projectId"]
+    database = checkpoint["databaseId"]
+    volume = checkpoint["volumeId"]
+    with connect(directory / "control.db") as source:
+        project_row = source.execute("SELECT spec FROM ai_sandbox_projects WHERE id=?", (project,)).fetchone()
+        if not project_row:
+            raise ValueError("Control snapshot has no matching project registration")
+        source_project = json.loads(project_row[0])
+        if source_project.get("id") != project or not isinstance(source_project.get("spec"), dict):
+            raise ValueError("Source project registration is invalid")
+        route = source.execute("SELECT phase FROM sandbox_task_routes WHERE project_id=?", (project,)).fetchone()
+        task_count = source.execute("SELECT count(*) FROM sandbox_task_catalog WHERE project_id=?", (project,)).fetchone()[0]
+    with connect(directory / "project.db") as project_db:
+        tables = {row[0] for row in project_db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        counts = {}
+        for table in ("ai_sandbox_tasks", "terminal_sessions", "private_editors", "private_views", "private_drafts"):
+            counts[table] = project_db.execute("SELECT count(*) FROM " + table).fetchone()[0] if table in tables else 0
+        pending_files = project_db.execute("SELECT count(*) FROM file_operations WHERE state='pending'").fetchone()[0] if "file_operations" in tables else 0
+        busy_tasks = project_db.execute("SELECT count(*) FROM ai_sandbox_task_index WHERE busy=1").fetchone()[0] if "ai_sandbox_task_index" in tables else 0
+    with connect(Path(args.destination_control)) as target:
+        vm = target.execute("SELECT state,purpose FROM vms WHERE id=?", (args.vm,)).fetchone()
+        if not vm:
+            raise ValueError("Destination VM does not exist")
+        conflicts = []
+        if vm[0] not in ("created", "stopped") or vm[1] != "instance":
+            conflicts.append("Destination VM must be a stopped user VM")
+        if target.execute("SELECT EXISTS(SELECT 1 FROM ai_sandbox_projects WHERE id=? OR vm_id=?)", (project, args.vm)).fetchone()[0]:
+            conflicts.append("Project ID or VM is already assigned")
+        if target.execute("SELECT EXISTS(SELECT 1 FROM project_workspaces WHERE project_id=? OR database_id=? OR volume_id=? OR vm_id=?)", (project, database, volume, args.vm)).fetchone()[0]:
+            conflicts.append("Project, database, volume or VM binding already exists")
+        if target.execute("SELECT EXISTS(SELECT 1 FROM micro_block_storages WHERE id=? OR name=?)", (volume, args.volume_name)).fetchone()[0]:
+            conflicts.append("Volume ID or name already exists")
+        if target.execute("SELECT EXISTS(SELECT 1 FROM sandbox_task_catalog WHERE project_id=?)", (project,)).fetchone()[0]:
+            conflicts.append("Destination already has task reservations for this project")
+        if pending_files or busy_tasks:
+            conflicts.append("Source contains pending file operations or active tasks")
+        if route and route[0] != "project":
+            conflicts.append("Source Sandbox migration is incomplete")
+    print(json.dumps({
+        "projectId": project, "databaseId": database, "volumeId": volume,
+        "checkpointId": checkpoint["id"], "destinationVmId": args.vm,
+        "sourceGeneration": checkpoint["generation"], "sourceSandboxRoute": route[0] if route else "controller",
+        "sourceTaskReservations": task_count, "sourceProjectRecords": counts,
+        "conflicts": conflicts,
+        "status": "inspection_only",
+        "remaining": ["Validate destination storage root and exclusive ownership", "Prove destination VM process is stopped", "Reconcile task catalog and session identities", "Implement journaled registration and matched DB/volume installation"],
+    }))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -202,9 +258,16 @@ def main():
     send.add_argument("--destination", required=True, help="New directory in an existing private parent")
     check = commands.add_parser("inspect", help="Verify a transferred private directory without registering it")
     check.add_argument("directory")
+    plan = commands.add_parser("plan-import", help="Inspect destination registration conflicts without writing")
+    plan.add_argument("directory", help="Verified transferred checkpoint directory")
+    plan.add_argument("--destination-control", required=True, help="Existing destination controller SQLite path")
+    plan.add_argument("--vm", required=True, type=identifier, help="Existing destination user VM UUID")
+    plan.add_argument("--volume-name", required=True, help="Proposed destination volume name")
     args = parser.parse_args()
     if args.command == "export":
         export(args)
+    elif args.command == "plan-import":
+        destination_plan(args)
     else:
         directory = Path(args.directory).absolute()
         if (directory / "INCOMPLETE").exists():

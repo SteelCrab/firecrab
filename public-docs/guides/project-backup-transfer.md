@@ -38,3 +38,21 @@ project/control snapshot identities. It does not prove destination storage, VM,
 Sandbox migration authority or generation compatibility. Do not install the files
 manually as a completed recovery. Destination registration and restartable import
 are still required. No tests or CI were run for this increment at the user's request.
+
+## Inspect the destination
+
+Before attempting a future import, inspect the destination controller and intended VM:
+
+```sh
+python3 scripts/project-backup-transfer.py plan-import /private/transfer/checkpoint \
+  --destination-control /private/destination/control.db \
+  --vm DESTINATION_VM_UUID --volume-name project-volume
+```
+
+This read-only inspection reports project/database/volume/VM identity collisions,
+source task reservations, private view/draft counts and retained session counts.
+It does not copy credentials or display private record contents. A stopped registry
+state alone does not prove that the VM process is stopped. A conflict-free report is
+not an admission, a resource reservation or proof that restoration is safe. The
+actual journaled destination registration and matched DB/volume installation are
+still being implemented. Tests and CI are deferred at the user's request.
