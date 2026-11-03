@@ -68,7 +68,7 @@ export default defineConfig(({ command, isPreview }) => {
       target: "es2022",
       assetsInlineLimit: 0,
       rollupOptions: {
-        input: { main: "index.html", codeTerminal: "code-terminal.html" },
+        input: { main: "index.html" },
       },
     },
   };

@@ -36,6 +36,26 @@ Installed GitHub Copilot commands can also be used. Automatic installation and s
 
 Installation and authentication follow the official [Codex CLI](https://learn.chatgpt.com/docs/codex/cli), [headless Codex authentication](https://learn.chatgpt.com/docs/auth#login-on-headless-devices), [Claude Code setup](https://code.claude.com/docs/en/setup) and [Herdr installation](https://herdr.dev/tui/docs/install/) instructions.
 
+## CODE VS Code links
+
+The **CODE → VS Code** page (`/#/code`) lists the projects linked in AI Sandbox. It is read-only: link repositories and manage tasks in AI Sandbox.
+
+- Each card is one running regular MicroVM with a linked repository. It shows the repository, branch, project state and MicroVM name.
+- Each open agent session gets one **Open VS Code** link. It opens the same AI Sandbox editor in a new tab. Sign-in and closed sessions get no link.
+- A project that is still preparing shows no link. The page checks it again every 5 seconds.
+- **Open in AI Sandbox** selects that MicroVM on the AI Sandbox page.
+- Stopped MicroVMs are not checked. The page shows how many it skipped.
+
+The links need the microManager connection of the main server dashboard at `http://127.0.0.1:5523/`:
+
+| Host | Behavior |
+| --- | --- |
+| macOS | Supported. If the page cannot reach the host, run `firecrab service status` and `firecrab service start` in Terminal. |
+| Windows | Supported. If the page cannot reach the host, run `firecrab service status` and `firecrab service start` in PowerShell. |
+| Linux | Not supported yet. Linux runs the main server natively, without microManager. Check the server with `systemctl status firecrab-helper firecrab-api`. |
+
+CODE workspaces from v0.4.3 were removed. Their MicroVMs stay in the MicroVM list as regular MicroVMs, and their saved records are no longer read.
+
 ## Verification, GitHub Actions and tunnel previews
 
 Open a coding session's **… → Automation and preview** menu.

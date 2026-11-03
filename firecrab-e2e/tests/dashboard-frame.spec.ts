@@ -731,7 +731,7 @@ test.describe("dashboard frame", () => {
     const items = nav(page).locator(".sidebar-item");
     await expect(items).toHaveCount(19);
     await expect(
-      nav(page).getByRole("link", { name: "Workspaces", exact: true }),
+      nav(page).getByRole("link", { name: "VS Code", exact: true }),
     ).toHaveAttribute("href", "#/code");
     await expect(
       nav(page).getByRole("link", { name: "Stack", exact: true }),

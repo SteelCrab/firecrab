@@ -67,13 +67,6 @@ jobs:
       - name: Validate the example stack offline
         run: cargo run -p firecrab-cli --locked -- stack validate --file examples/stacks/basic.yaml --json
 
-      - name: CODE guest, AUTH, editor and execution contracts
-        run: |
-          python3 scripts/test-code-guest.py
-          python3 scripts/test-code-agent-auth.py
-          python3 scripts/test-code-editor.py
-          python3 scripts/test-code-agent-run.py
-
       - name: Shared source development deployment contract
         run: python3 scripts/test-micromanager-dev.py
 

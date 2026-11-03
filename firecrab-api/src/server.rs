@@ -204,10 +204,6 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             crate::pool::guard::reject_pool_owned,
-        ))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            crate::code_runtime::guard::reject_vm_mutation,
         ));
 
     let rest = Router::new()
@@ -919,19 +915,6 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // Registry authentication and manifest GETs retain their bounded inspection deadline.
     let inspection = Router::new()
         .route(
-            "/api/code/agent-auth/adapters",
-            get(handlers::code_workspaces::agent_auth::catalog)
-                .layer(middleware::from_fn(handlers::secrets::no_store)),
-        )
-        .route(
-            "/api/code/workspaces/{id}/agent-auth/verify",
-            post(handlers::code_workspaces::agent_auth::verify)
-                .layer(middleware::from_fn(handlers::secrets::no_store)),
-        )
-        .merge(handlers::code_workspaces::runtime::routes())
-        .merge(crate::code_editor::routes())
-        .merge(crate::code_agent_run::routes())
-        .route(
             "/api/pipe/database-rabbitmq",
             axum::routing::put(handlers::pipe_database_events::rabbitmq_save),
         )
@@ -956,35 +939,8 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/auth/callback", get(handlers::pipe_ai::login_callback))
         .route(
-            "/api/code/workspaces",
-            get(handlers::code_workspaces::list)
-                .layer(middleware::from_fn(handlers::secrets::no_store)),
-        )
-        .route(
-            "/api/code/github/repositories",
-            get(handlers::code_workspaces::catalog::repositories)
-                .layer(middleware::from_fn(handlers::secrets::no_store)),
-        )
-        .route(
-            "/api/code/github/branches",
-            get(handlers::code_workspaces::catalog::branches)
-                .layer(middleware::from_fn(handlers::secrets::no_store)),
-        )
-        .route(
-            "/api/code/workspaces/{id}",
-            get(handlers::code_workspaces::get)
-                .put(handlers::code_workspaces::save)
-                .delete(handlers::code_workspaces::delete)
-                .layer(middleware::from_fn(handlers::secrets::no_store)),
-        )
-        .route(
             "/api/pipe/ai/connections",
             get(handlers::pipe_ai::list).layer(middleware::from_fn(handlers::secrets::no_store)),
-        )
-        .route(
-            "/api/code/workspaces/{id}/verify",
-            post(handlers::code_workspaces::verify)
-                .layer(middleware::from_fn(handlers::secrets::no_store)),
         )
         .route(
             "/api/pipe/ai/connections/{id}",
@@ -1120,11 +1076,18 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         crate::ai_sandbox::access::restrict_delegates,
     ))
     .layer(middleware::from_fn_with_state(policy, enforce_origin))
-    .layer(middleware::from_fn_with_state(
-        (state, config.static_root.clone()),
-        crate::code_editor::isolate,
-    ))
+    .layer(middleware::from_fn(frame_same_origin))
     .layer(middleware::from_fn(assign_request_id))
+}
+
+/// Other sites must not frame the dashboard or its API responses.
+async fn frame_same_origin(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        header::X_FRAME_OPTIONS,
+        HeaderValue::from_static("SAMEORIGIN"),
+    );
+    response
 }
 
 /// Dedicated bearer-only data-plane entry. Operator and dashboard routes never join this router.
@@ -1325,6 +1288,31 @@ mod tests {
             .await
             .unwrap();
         (status, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    #[tokio::test]
+    async fn dashboard_responses_refuse_cross_origin_framing() {
+        use tower::ServiceExt;
+        let directory = tempfile::tempdir().unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "").unwrap();
+        let app = build_router(test_state(directory.path()).await, &config);
+        for path in ["/api/vms", "/api/does-not-exist"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.headers().get(header::X_FRAME_OPTIONS),
+                Some(&HeaderValue::from_static("SAMEORIGIN")),
+                "{path}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2131,18 +2119,6 @@ mod quick_tunnels_tests;
 #[cfg(test)]
 #[path = "server_pipe_auth_tests.rs"]
 mod pipe_auth_tests;
-
-#[cfg(test)]
-#[path = "server_code_workspaces_tests.rs"]
-mod code_workspaces_tests;
-
-#[cfg(test)]
-#[path = "server_code_verification_tests.rs"]
-mod code_verification_tests;
-
-#[cfg(test)]
-#[path = "server_code_runtime_tests.rs"]
-mod code_runtime_tests;
 
 #[cfg(test)]
 #[path = "server_pipe_ai_tests.rs"]

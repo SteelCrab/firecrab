@@ -1,556 +1,284 @@
 import { test } from "node:test";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-const artifacts =
-  process.env.FIRECRAB_CODE_ARTIFACT_DIR ?? join(tmpdir(), "firecrab-code-ui");
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { readFileSync, mkdirSync } from "node:fs";
 import { chromium } from "playwright-core";
 import { expect } from "@playwright/test";
-import { createFixtureServer } from "./fixture-server.mjs";
+import { createFixtureServer, vm } from "./fixture-server.mjs";
 
-const base = "/api/code/workspaces",
-  account = "22222222-2222-4222-8222-222222222222",
-  vm = "33333333-3333-4333-8333-333333333333",
-  instance = "44444444-4444-4444-8444-444444444444",
-  operation = "55555555-5555-4555-8555-555555555555";
-const profiles = JSON.parse(
-  readFileSync(
-    new URL(
-      "../../firecrab-api/src/code_agent_auth/adapters.json",
-      import.meta.url,
-    ),
-    "utf8",
-  ),
-);
-async function setup(locale = "en", width = 1280) {
+const RESOURCE_META =
+  '<meta name="firecrab-resource-endpoint" content="/__firecrab_resources/api/service/resources">';
+
+const agent = (id, name, kind, state, overrides = {}) => ({
+  id,
+  name,
+  role: "Implementation",
+  kind,
+  cwd: "/workspace/firecrab/project",
+  model: "",
+  workspaceId: `w-${id}`,
+  paneId: `p-${id}`,
+  closed: false,
+  launchError: null,
+  state,
+  ...overrides,
+});
+
+const linked = vm(0, { name: "my-workspace", state: "running" });
+const preparing = vm(4, { name: "docs-sandbox", state: "running" });
+const plain = vm(8, { name: "nginx", state: "running" });
+const stopped = vm(1, { name: "old-sandbox", state: "stopped" });
+const builder = vm(12, {
+  name: "builder",
+  state: "running",
+  purpose: "builder",
+});
+
+function statuses() {
+  return {
+    [linked.id]: {
+      controllerId: "native-controller",
+      project: {
+        vmId: linked.id,
+        repository: "https://github.com/steelcrab/web-console.git",
+        branch: "main",
+        path: "/workspace/firecrab/project",
+        state: "ready",
+      },
+      agents: [
+        agent("claude-1", "Fix the sign-in page", "claude", "working"),
+        agent("codex-1", "Add payment tests", "codex", "blocked"),
+        agent("login-1", "Sign in", "claude", "done", {
+          role: "authentication",
+        }),
+        agent("old-1", "Old task", "codex", "closed", { closed: true }),
+      ],
+    },
+    [preparing.id]: {
+      controllerId: "native-controller",
+      project: {
+        vmId: preparing.id,
+        repository: "https://github.com/steelcrab/docs-site.git",
+        branch: "main",
+        path: "/workspace/firecrab/project",
+        state: "preparing",
+      },
+      agents: [],
+    },
+    [plain.id]: {
+      controllerId: "native-controller",
+      project: null,
+      agents: [],
+    },
+  };
+}
+
+async function setup(
+  t,
+  {
+    os = "macos",
+    meta = true,
+    vms = [linked, preparing, plain, stopped, builder],
+    status = statuses(),
+    locale = "en",
+    width = 1440,
+    hash = "#/code",
+  } = {},
+) {
   const fixture = await createFixtureServer(
     fileURLToPath(new URL("../dist", import.meta.url)),
     0,
   );
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width, height: 1000 } });
-  const state = {
-    record: null,
-    runtime: null,
-    editor: null,
-    rows: [],
-    writes: [],
-    connected: true,
-    provider: "openai",
-    dropRun: false,
-    dropVm: false,
-    creations: 0,
-    errors: [],
-  };
-  page.setDefaultTimeout(10000);
-  page.on("dialog", (dialog) => {
-    if (dialog.type() === "beforeunload") void dialog.accept();
-    else {
-      state.errors.push(dialog.message());
-      void dialog.dismiss();
-    }
+  let browser;
+  t.after(async () => {
+    await browser?.close();
+    await fixture.close();
   });
-  page.on("pageerror", (e) => state.errors.push(e.message));
+  fixture.state.vms = structuredClone(vms);
+  fixture.handlers.set("GET /api/host", ({ send }) =>
+    send(200, {
+      loadAverage1m: 1,
+      memoryTotalMib: 4096,
+      memoryAvailableMib: 2048,
+      diskTotalGib: 64,
+      diskAvailableGib: 32,
+      uptimeSeconds: 60,
+      platform: {
+        os,
+        name: { macos: "macOS", windows: "Windows 11", linux: "Ubuntu 24.04" }[
+          os
+        ],
+        architecture: "arm64",
+        virtualization: os === "linux" ? null : "managed",
+        controllerId: "native-controller",
+      },
+    }),
+  );
+  browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width, height: 900 } });
   await page.addInitScript(
-    (locale) => localStorage.setItem("firecrab.locale", locale),
+    (value) => localStorage.setItem("firecrab.locale", value),
     locale,
   );
-  await page.route(
-    /\/api\/(code\/|pipe\/ai\/connections|pipe\/auth|images|micro-networks|storage\/roots)/,
-    async (route) => {
-      const req = route.request(),
-        path = new URL(req.url()).pathname,
-        send = (json, status = 200) => route.fulfill({ json, status });
-      const body = req.method() === "GET" ? null : req.postDataJSON();
-      if (body) state.writes.push({ path, body });
-      if (path === "/api/code/agent-auth/adapters") return send(profiles);
-      if (path === "/api/pipe/ai/connections")
-        return send(
-          state.connected
-            ? [
-                {
-                  id: account,
-                  name: "Development AUTH",
-                  provider: state.provider,
-                  authentication: "api_key",
-                },
-              ]
-            : [],
-        );
-      if (path === "/api/pipe/auth")
-        return send([{ provider: "github", account: "octocat" }]);
-      if (path === "/api/code/github/repositories")
-        return send({
-          account: "octocat",
-          repositories: [
-            {
-              owner: "team",
-              repository: "web-app",
-              defaultBranch: "main",
-              language: "TypeScript",
-              private: true,
-            },
-          ],
-        });
-      if (path === "/api/code/github/branches")
-        return send({
-          account: "octocat",
-          owner: "team",
-          repository: "web-app",
-          branches: ["main", "feature/work"],
-        });
-      if (path === "/api/images")
-        return send([{ alias: "ubuntu-26.04", installed: true, minDiskGb: 8 }]);
-      if (path === "/api/micro-networks")
-        return send([{ id: vm, name: "Development", internetEnabled: true }]);
-      if (path === "/api/storage/roots")
-        return send([{ id: "default", kind: "default" }]);
-      const record = () =>
-        state.record
-          ? {
-              ...state.record,
-              connections: {
-                github: "present_unverified",
-                ai: !state.connected
-                  ? "missing"
-                  : state.provider === "openai"
-                    ? "present_unverified"
-                    : "incompatible",
-              },
-            }
-          : null;
-      if (path === base) return send(state.record ? [record()] : []);
-      const saved = path.match(/^\/api\/code\/workspaces\/([0-9a-f-]+)$/);
-      if (saved) {
-        if (req.method() === "PUT") {
-          assert.equal(body.expectedRevision, state.record?.revision ?? 0);
-          state.record = {
-            id: saved[1],
-            revision: (state.record?.revision ?? 0) + 1,
-            spec: body.spec,
-          };
-          return send(record());
-        }
-        return state.record
-          ? send(record())
-          : send({ error: { code: "not_found", message: "not found" } }, 404);
-      }
-      if (path.endsWith("/runtime/stop") && req.method() === "POST") {
-        state.runtime = {
-          ...state.runtime,
-          action: "stop",
-          phase: "stopped",
-          vmState: "stopped",
-          operationId: "66666666-6666-4666-8666-666666666666",
-        };
-        return send(state.runtime, 202);
-      }
-      if (path.endsWith("/runtime")) {
-        if (req.method() === "POST") {
-          if (state.dropVm) {
-            state.dropVm = false;
-            return route.abort("failed");
-          }
-          assert.equal(body.expectedRevision, state.record.revision);
-          state.creations++;
-          state.runtime = {
-            workspaceId: state.record.id,
-            configurationRevision: state.record.revision,
-            vmId: vm,
-            runtimeId: instance,
-            operationId: operation,
-            action: "start",
-            phase: "queued",
-            projectPath: "/home/fc-code/project",
-            initialCommit: "a".repeat(40),
-            vmState: "running",
-            error: null,
-            placement: {
-              template: { name: body.template, version: "v1" },
-              microNetworkId: body.microNetworkId,
-              storageRoot: body.storageRoot,
-            },
-          };
-        }
-        return state.runtime
-          ? send(state.runtime)
-          : send({ error: { code: "not_found", message: "not found" } }, 404);
-      }
-      if (path.endsWith("/editor")) {
-        if (req.method() === "POST") {
-          assert.deepEqual(body, {
-            expectedRevision: state.record.revision,
-            vmId: vm,
-            runtimeId: instance,
-            operationId: operation,
-          });
-          state.editor = {
-            workspaceId: state.record.id,
-            revision: state.record.revision,
-            vmId: vm,
-            runtimeId: instance,
-            operationId: operation,
-            phase: "ready",
-            version: "4.144.0",
-          };
-        }
-        return send(state.editor);
-      }
-      if (path.endsWith("/agent-runs")) return send(state.rows);
-      const run = path.match(/\/agent-runs\/([0-9a-f-]+)(\/cancel)?$/);
-      if (run) {
-        let row = state.rows.find((v) => v.id === run[1]);
-        if (run[2]) {
-          if (row) row.phase = "cancelled";
-          return send({
-            id: run[1],
-            workspaceId: state.record.id,
-            run: row ?? null,
-          });
-        }
-        if (req.method() === "GET")
-          return row ? send(row) : send({ error: { code: "not_found" } }, 404);
-        assert.deepEqual(Object.keys(body).sort(), [
-          "expectedRevision",
-          "model",
-          "operationId",
-          "prompt",
-          "runtimeId",
-          "vmId",
-        ]);
-        assert.equal(body.vmId, vm);
-        assert.equal(body.runtimeId, instance);
-        assert.equal(body.expectedRevision, state.record.revision);
-        const profile = profiles.find(
-          (p) =>
-            p.agent === state.record.spec.agent.agent &&
-            p.provider === "openai" &&
-            p.authentication === "api_key",
-        );
-        row = {
-          id: run[1],
-          workspaceId: state.record.id,
-          revision: body.expectedRevision,
-          connectionId: account,
-          agent: state.record.spec.agent.agent,
-          adapterId: profile.id,
-          cliVersion: profile.cliVersion,
-          model: body.model,
-          modelsUsed: [],
-          vmId: vm,
-          runtimeId: instance,
-          operationId: operation,
-          phase: "queued",
-          output: "",
-          truncated: false,
-          providerRequests: 0,
-          error: null,
-        };
-        state.rows.unshift(row);
-        if (state.dropRun) {
-          state.dropRun = false;
-          return route.abort("failed");
-        }
-        return send(row, 202);
-      }
-      return send({ error: { code: "not_found" } }, 404);
-    },
-  );
-  return {
-    fixture,
-    browser,
-    page,
-    state,
-    close: async () => {
-      await browser.close();
-      await fixture.close();
-    },
-  };
-}
-async function create(s, ko = false) {
-  const { page, state } = s;
-  await page.goto(`${s.fixture.url}/#/code/new`);
-  await page
-    .getByRole("combobox", {
-      name: ko ? "GitHub 저장소" : "GitHub repository",
-      exact: true,
-    })
-    .selectOption("team/web-app");
-  await expect(page.locator("#code-setup select:visible")).toHaveCount(1);
-  await page
-    .getByRole("button", {
-      name: ko ? "워크스페이스 생성" : "Create workspace",
-      exact: true,
-    })
-    .click();
-  await expect(page.locator("#code-editor h2")).toHaveText("web-app");
-  assert.deepEqual(state.record.spec.agent, {
-    agent: "codex",
-    connectionId: account,
-  });
-}
-for (const [locale, width] of [
-  ["en", 1280],
-  ["en", 390],
-  ["ko", 1280],
-  ["ko", 390],
-])
-  test(`CODE integrated repository → runtime → editor → assigned AUTH, ${locale} ${width}px`, async () => {
-    const s = await setup(locale, width),
-      { page, state } = s,
-      ko = locale === "ko";
-    try {
-      await create(s, ko);
-      await page
-        .getByRole("button", {
-          name: ko ? "워크스페이스 시작" : "Start workspace",
-          exact: true,
-        })
-        .click();
-      await expect.poll(() => state.runtime?.phase).toBe("queued");
-      state.runtime.phase = "ready";
-      await page
-        .getByRole("button", {
-          name: ko ? "편집 도구 준비" : "Prepare editor tools",
-          exact: true,
-        })
-        .click();
-      await expect(
-        page.getByRole("link", {
-          name: ko ? "Web VS Code 열기" : "Open Web VS Code",
-          exact: true,
-        }),
-      ).toHaveAttribute("href", `${base}/${state.record.id}/editor/open`);
-      await expect(
-        page.getByRole("link", {
-          name: ko ? "터미널 열기" : "Open terminal",
-          exact: true,
-        }),
-      ).toHaveAttribute("href", `${base}/${state.record.id}/terminal/open`);
-      const prompt = page.getByLabel(ko ? "작업 지시" : "Task", {
-          exact: true,
-        }),
-        run = page.getByRole("button", {
-          name: ko ? "에이전트 실행" : "Run agent",
-          exact: true,
-        });
-      await prompt.fill("Update README.md in this checkout.");
-      state.dropRun = true;
-      await run.click();
-      await expect.poll(() => state.rows.length).toBe(1);
-      await page.reload();
-      await expect(page.locator("#code-agent-execution")).toContainText(
-        ko ? "대기 중" : "Queued",
-      );
-      assert.equal(
-        state.writes.filter((w) => /\/agent-runs\/[0-9a-f-]+$/.test(w.path))
-          .length,
-        1,
-      );
-      state.rows[0].phase = "succeeded";
-      state.rows[0].output = "Updated README.md";
-      await expect(
-        page.getByLabel(ko ? "에이전트 출력" : "Agent output", { exact: true }),
-      ).toHaveText("Updated README.md");
-      state.provider = "anthropic";
-      await prompt.fill("Must remain blocked");
-      await expect(run).toBeDisabled();
-      state.connected = false;
-      await expect(page.locator("#code-agent-execution")).not.toContainText(
-        "Development AUTH",
-      );
-      await expect(run).toBeDisabled();
-      state.connected = true;
-      state.provider = "openai";
-      await expect(run).toBeEnabled();
-      assert.equal(state.creations, 1);
-      assert.equal(state.rows[0].vmId, state.runtime.vmId);
-      assert.equal(
-        state.rows[0].connectionId,
-        state.record.spec.agent.connectionId,
-      );
-      assert.equal(
-        await page.evaluate(
-          () => document.documentElement.scrollWidth <= innerWidth,
+  if (meta)
+    await page.route(`${fixture.url}/`, async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        body: (await response.text()).replace(
+          "<head>",
+          `<head>${RESOURCE_META}`,
         ),
-        true,
-      );
-      assert.deepEqual(state.errors, []);
-      if (locale === "en") {
-        mkdirSync(artifacts, { recursive: true });
-        await page.screenshot({
-          path: join(artifacts, `code-integrated-en-${width}.png`),
-          fullPage: true,
+      });
+    });
+  const calls = [];
+  await page.route("**/__firecrab_resources/api/service/agents/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const vmId = path.split("/agents/microvms/")[1]?.split("/")[0];
+    calls.push({ method: route.request().method(), path, vmId });
+    const value = status[vmId];
+    return value
+      ? route.fulfill({ json: value })
+      : route.fulfill({
+          status: 400,
+          json: { error: "MicroVM SSH is not ready" },
         });
-      }
-    } finally {
-      await s.close();
-    }
   });
-test("CODE unknown provisioning survives reload and requires an exact explicit retry", async () => {
-  const s = await setup(),
-    { page, state } = s;
-  try {
-    await create(s);
-    state.dropVm = true;
-    await page
-      .getByRole("button", { name: "Start workspace", exact: true })
-      .click();
-    await expect(
-      page.getByRole("button", { name: "Check operation", exact: true }),
-    ).toBeVisible();
-    await page.reload();
-    await page
-      .getByRole("button", { name: "Check operation", exact: true })
-      .click();
-    await page
-      .getByRole("button", { name: "Retry same request", exact: true })
-      .click();
-    await expect.poll(() => state.creations).toBe(1);
-    const attempts = state.writes.filter((w) => w.path.endsWith("/runtime"));
-    assert.equal(attempts.length, 2);
-    assert.deepEqual(attempts[0], attempts[1]);
-    assert.deepEqual(state.errors, []);
-  } finally {
-    await s.close();
-  }
-});
-test("CODE session storage failure prevents agent dispatch", async () => {
-  const s = await setup(),
-    { page, state } = s;
-  try {
-    await create(s);
-    await page
-      .getByRole("button", { name: "Start workspace", exact: true })
-      .click();
-    await expect.poll(() => state.runtime?.phase).toBe("queued");
-    state.runtime.phase = "ready";
-    await page.getByLabel("Task", { exact: true }).fill("Update README");
-    const run = page.getByRole("button", { name: "Run agent", exact: true });
-    await expect(run).toBeEnabled();
-    await page.evaluate(() => {
-      Storage.prototype.setItem = () => {
-        throw new Error("blocked");
-      };
-    });
-    await run.click();
-    await expect(page.getByRole("alert")).toContainText("session storage");
-    assert.equal(state.rows.length, 0);
-    assert.deepEqual(state.errors, []);
-  } finally {
-    await s.close();
-  }
+  await page.goto(`${fixture.url}/${hash}`);
+  return { page, calls };
+}
+
+test("CODE lists AI Sandbox projects with one VS Code link per agent", async (t) => {
+  const { page, calls } = await setup(t);
+  await expect(
+    page.getByRole("heading", { name: "VS Code", exact: true }),
+  ).toBeVisible();
+  const card = page.getByRole("article", { name: "steelcrab/web-console" });
+  await expect(card).toBeVisible();
+  await expect(card).toContainText("main");
+  await expect(card).toContainText("my-workspace");
+
+  const links = card.getByRole("link", { name: "Open VS Code" });
+  await expect(links).toHaveCount(2);
+  const first = card.getByRole("listitem", { name: "Fix the sign-in page" });
+  await expect(first).toContainText("Claude Code");
+  await expect(first).toContainText("Working");
+  const href = new URL(
+    await first
+      .getByRole("link", { name: "Open VS Code" })
+      .getAttribute("href"),
+  );
+  const query = new URLSearchParams(href.hash.split("?")[1]);
+  assert.equal(href.hash.split("?")[0], "#/ai-sandbox");
+  assert.equal(query.get("editor"), "claude-1");
+  assert.equal(query.get("vm"), linked.id);
+  assert.equal(query.get("controller"), "native-controller");
+  await expect(
+    first.getByRole("link", { name: "Open VS Code" }),
+  ).toHaveAttribute("target", "_blank");
+  await expect(card).not.toContainText("Sign in");
+  await expect(card).not.toContainText("Old task");
+
+  // A project that is still preparing shows no editor link.
+  const docs = page.getByRole("article", { name: "steelcrab/docs-site" });
+  await expect(docs).toContainText("Preparing");
+  await expect(docs.getByRole("link", { name: "Open VS Code" })).toHaveCount(0);
+
+  // A VM without a linked project is not listed.
+  await expect(page.getByRole("article")).toHaveCount(2);
+  await expect(
+    page.getByText("1 stopped MicroVM was not checked."),
+  ).toBeVisible();
+
+  // Only running regular MicroVMs are asked, and only with reads.
+  assert.deepEqual(
+    [...new Set(calls.map((c) => c.vmId))].sort(),
+    [linked.id, preparing.id, plain.id].sort(),
+  );
+  assert.ok(calls.every((c) => c.method === "GET"));
 });
 
-test("CODE can stop a retained VM after setup failure", async () => {
-  const s = await setup(),
-    { page, state } = s;
-  try {
-    await create(s);
-    await page
-      .getByRole("button", { name: "Start workspace", exact: true })
-      .click();
-    await expect.poll(() => state.runtime?.phase).toBe("queued");
-    state.runtime.phase = "failed";
-    state.runtime.error = "sync_failed";
-    await expect(
-      page.getByRole("button", { name: "Start workspace", exact: true }),
-    ).toBeDisabled();
-    await page.locator("#code-workspace-settings > summary").click();
-    await page
-      .getByRole("button", { name: "Stop MicroVM", exact: true })
-      .click();
-    await expect.poll(() => state.runtime.phase).toBe("stopped");
-    assert.equal(state.creations, 1);
-    assert.deepEqual(state.writes.at(-1).body, { expectedRevision: 1 });
-    assert.deepEqual(state.errors, []);
-  } finally {
-    await s.close();
-  }
+test("CODE opens the selected MicroVM in AI Sandbox", async (t) => {
+  const { page } = await setup(t);
+  const card = page.getByRole("article", { name: "steelcrab/web-console" });
+  await card.getByRole("button", { name: "Open in AI Sandbox" }).click();
+  await expect(page).toHaveURL(/#\/ai-sandbox$/);
+  assert.equal(
+    await page.evaluate(() =>
+      localStorage.getItem("firecrab.agentVm.native-controller"),
+    ),
+    linked.id,
+  );
 });
 
-test("CODE earlier runs stay available and output remains text", async () => {
-  const s = await setup(),
-    { page, state } = s;
-  try {
-    await create(s);
-    const profile = profiles.find(
-      (p) => p.agent === "codex" && p.authentication === "api_key",
-    );
-    const row = {
-      workspaceId: state.record.id,
-      revision: 1,
-      connectionId: account,
-      agent: "codex",
-      adapterId: profile.id,
-      cliVersion: profile.cliVersion,
-      model: "",
-      modelsUsed: [],
-      vmId: vm,
-      runtimeId: instance,
-      operationId: operation,
-      phase: "succeeded",
-      output: "Latest result",
-      truncated: false,
-      providerRequests: 1,
-      error: null,
-    };
-    state.rows = [
-      { ...row, id: "77777777-7777-4777-8777-777777777777" },
-      {
-        ...row,
-        id: "88888888-8888-4888-8888-888888888888",
-        output: "<img src=x onerror=alert(1)>",
-      },
-    ];
-    await page.getByText("Earlier runs", { exact: true }).click();
-    await expect(
-      page.getByLabel("Agent output", { exact: true }).nth(1),
-    ).toHaveText(state.rows[1].output);
-    await expect(page.locator("#code-agent-execution img")).toHaveCount(0);
-    assert.deepEqual(state.errors, []);
-  } finally {
-    await s.close();
-  }
+test("CODE search filters by repository, branch and MicroVM", async (t) => {
+  const { page } = await setup(t);
+  const search = page.getByRole("searchbox", { name: "Search projects" });
+  await search.fill("docs");
+  await expect(page.getByRole("article")).toHaveCount(1);
+  await expect(
+    page.getByRole("article", { name: "steelcrab/docs-site" }),
+  ).toBeVisible();
+  await search.fill("my-workspace");
+  await expect(
+    page.getByRole("article", { name: "steelcrab/web-console" }),
+  ).toBeVisible();
+  await expect(page.getByRole("article")).toHaveCount(1);
 });
 
-test("CODE terminal bundle connects with binary input and bounded resize messages", async () => {
-  const s = await setup(),
-    { page } = s;
-  const messages = [];
-  try {
-    await page.routeWebSocket("**/_fc/terminal/socket", (socket) => {
-      socket.onMessage((data) => messages.push(data));
-      socket.send(Buffer.from("Workspace terminal ready\r\n"));
-    });
-    await page.goto(`${s.fixture.url}/code-terminal.html`);
-    await expect(page.locator("#terminal-status")).toHaveText(
-      "/home/fc-code/project",
+test("CODE explains how to link a project when none is linked", async (t) => {
+  const { page } = await setup(t, { vms: [plain], locale: "ko" });
+  await expect(
+    page.getByText("프로젝트가 연동된 AI Sandbox가 없습니다"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "AI Sandbox 열기" }).last(),
+  ).toHaveAttribute("href", "#/ai-sandbox");
+});
+
+for (const [os, commands] of [
+  ["macos", ["firecrab service status", "firecrab service start"]],
+  ["windows", ["firecrab service status", "firecrab service start"]],
+])
+  test(`CODE gives ${os} main server commands without a host bridge`, async (t) => {
+    const { page, calls } = await setup(t, { os, meta: false });
+    const notice = page.getByRole("region", { name: "VS Code connection" });
+    await expect(notice).toContainText("http://127.0.0.1:5523/");
+    for (const command of commands) await expect(notice).toContainText(command);
+    await expect(notice).toContainText(
+      os === "windows" ? "PowerShell" : "Terminal",
     );
-    await page.locator(".xterm-helper-textarea").pressSequentially("pwd");
-    await expect
-      .poll(() =>
-        messages
-          .map((v) => (typeof v === "string" ? v : Buffer.from(v).toString()))
-          .join(""),
-      )
-      .toContain("pwd");
-    const sizes = messages
-      .filter((v) => typeof v === "string")
-      .map((v) => JSON.parse(v));
-    assert.ok(sizes.length > 0);
-    assert.ok(
-      sizes.every(
-        (v) => v.rows >= 2 && v.rows <= 1000 && v.cols >= 2 && v.cols <= 1000,
-      ),
-    );
-    await page.getByRole("button", { name: "Disconnect", exact: true }).click();
-    await expect(page.locator("#terminal-status")).toContainText(
-      "Disconnected",
-    );
-  } finally {
-    await s.close();
-  }
+    assert.equal(calls.length, 0);
+  });
+
+test("CODE says Linux hosts cannot open AI Sandbox VS Code yet", async (t) => {
+  const { page, calls } = await setup(t, { os: "linux" });
+  const notice = page.getByRole("region", { name: "VS Code connection" });
+  await expect(notice).toContainText("Linux");
+  await expect(notice).toContainText("macOS");
+  await expect(notice).toContainText("Windows");
+  await expect(notice).toContainText(
+    "systemctl status firecrab-helper firecrab-api",
+  );
+  assert.equal(calls.length, 0);
+});
+
+test("CODE fits a phone screen", async (t) => {
+  const { page } = await setup(t, { width: 390, locale: "ko" });
+  await expect(
+    page.getByRole("article", { name: "steelcrab/web-console" }),
+  ).toBeVisible();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  assert.ok(overflow <= 0, `page scrolls sideways by ${overflow}px`);
+});
+
+test("old CODE workspace links open the VS Code list", async (t) => {
+  const { page } = await setup(t, {
+    hash: "#/code/11111111-1111-4111-8111-111111111111/editor",
+  });
+  await expect(
+    page.getByRole("heading", { name: "VS Code", exact: true }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/#\/code$/);
 });

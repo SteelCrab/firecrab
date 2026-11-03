@@ -428,10 +428,7 @@ export default function App() {
             />
           )}
           {route.kind === "shell" && view === "code" && (
-            <Code
-              path={route.codePath ?? "code"}
-              onUnsavedChange={setHasUnsavedChanges}
-            />
+            <Code vms={state.vms} />
           )}
           {view === "networks" && (
             <MicroNetworks onUnsavedChange={setHasUnsavedChanges} />
