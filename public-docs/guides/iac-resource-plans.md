@@ -1,7 +1,7 @@
 # Shared resource plans
 
 The shared planning API is part of [#548 stage 2](../reference/iac.md).
-The executable configuration adapters are `shell` and `ai_model`.
+The executable configuration adapters are `shell`, `ai_model` and `sandbox_access`.
 `GET /api/iac/identity` advertises it separately in `resourcePlanKinds`.
 The 43 ownership adapters do not imply 43 executable configuration adapters.
 Native Stack expansion and the typed Terraform provider remain pending.
@@ -97,3 +97,10 @@ The `ai_model` adapter saves an exact project-scoped default using a versioned
 reference to an existing inference-verified connection. It preserves the borrowed
 connection and exposes no credentials or credential hashes. See the
 [model reference and recovery contract](iac-model-defaults.md).
+
+## Sandbox access policies
+
+The `sandbox_access` adapter saves the full delegated-host policy and preserves
+borrowed resources. It pins canonical source directories to their physical
+identities before execution. Removal keeps an explicit deny row so the delegated
+certificate cannot bypass Sandbox scope. [Policy lifecycle](iac-sandbox-access.md).

@@ -15,6 +15,88 @@ use std::time::Duration;
 use tower::ServiceExt;
 
 #[tokio::test]
+async fn iac_resource_access_http_preserves_operator_authority_and_restricted_deny_rows() {
+    let root = tempfile::tempdir().unwrap();
+    let templates =
+        crate::templates::TemplateRegistry::from_specs(root.path(), std::iter::empty()).unwrap();
+    let state = AppState::with_db_file(templates, root.path().join("state.db"))
+        .await
+        .unwrap();
+    let app = router(&state).layer(Extension(LocalOperator));
+    let principal = Uuid::new_v4();
+    let project = Uuid::new_v4();
+    let endpoint = state.store.iac_endpoint_id().unwrap();
+    let mut input = json!({"operationId":Uuid::new_v4(),"expectedEndpointId":endpoint,
+        "owner":{"manager":"terraform","id":Uuid::new_v4(),"key":"firecrab_sandbox_access.worker"},"resource":null,
+        "desired":{"kind":"sandbox_access","configuration":{"principal":principal,"policy":{"grants":[
+            {"resource":{"kind":"project","id":project},"permissions":["read","execute"]}]}}}});
+    let (code, plan) = send(&app, "POST", "/api/iac/resource-plans", input.clone()).await;
+    assert_eq!(code, StatusCode::OK, "{plan}");
+    assert!(!plan.to_string().contains(&project.to_string()));
+    let path = format!(
+        "/api/iac/resource-plans/{}/apply",
+        plan["operationId"].as_str().unwrap()
+    );
+    let command = json!({"expectedEndpointId":endpoint,"planSha256":plan["planSha256"]});
+    let (code, receipt) = send(&app, "POST", &path, command.clone()).await;
+    assert_eq!(code, StatusCode::OK, "{receipt}");
+    let remote = app.clone().layer(Extension(ConnectInfo(AuthenticatedHost {
+        host_id: principal,
+    })));
+    assert_eq!(
+        send(&remote, "GET", "/api/iac/identity", Value::Null)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        send(
+            &app,
+            "PUT",
+            &format!("/api/ai-sandbox/access/{principal}"),
+            input["desired"]["configuration"]["policy"].clone()
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    input["resource"] = json!({"kind":"sandbox_access","id":principal});
+    input["operationId"] = json!(Uuid::new_v4());
+    input["desired"] = Value::Null;
+    let (code, deletion) = send(&app, "POST", "/api/iac/resource-plans", input).await;
+    assert_eq!(code, StatusCode::OK, "{deletion}");
+    let (code, deleted) = send(
+        &app,
+        "POST",
+        &format!(
+            "/api/iac/resource-plans/{}/apply",
+            deletion["operationId"].as_str().unwrap()
+        ),
+        json!({"expectedEndpointId":endpoint,"planSha256":deletion["planSha256"]}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{deleted}");
+    assert_eq!(
+        send(&remote, "GET", "/api/iac/identity", Value::Null)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        send(&app, "POST", &path, command).await,
+        (StatusCode::OK, receipt)
+    );
+    assert!(
+        state
+            .store
+            .sandbox_access(principal)
+            .unwrap()
+            .grants
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn iac_resource_plan_http_cancellation_retains_original_worker_while_waiting_for_admission() {
     let root = tempfile::tempdir().unwrap();
     let templates =
@@ -266,7 +348,10 @@ async fn iac_resource_plan_http_uses_verified_operator_identity_and_returns_no_s
     assert_eq!(state.store.list_shells().unwrap().len(), 1);
     let (status, identity) = send(&operator, "GET", "/api/iac/identity", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(identity["resourcePlanKinds"], json!(["shell", "ai_model"]));
+    assert_eq!(
+        identity["resourcePlanKinds"],
+        json!(["shell", "ai_model", "sandbox_access"])
+    );
     let target = receipt["ownership"]["resource"]["id"].as_str().unwrap();
     let (status, _) = send(
         &operator,

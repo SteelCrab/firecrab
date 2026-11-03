@@ -33,6 +33,7 @@ struct ShellObservation {
 enum Observation {
     Shell(ShellObservation),
     AiModel(firecrab_api_types::AiModelSelection),
+    SandboxAccess(firecrab_api_types::SandboxAccessPolicy),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -46,10 +47,37 @@ struct Frozen {
     expires: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     dependencies: Vec<ResourcePlanDependency>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    sources:
+        std::collections::BTreeMap<String, firecrab_helper_protocol::physical_directory::Identity>,
 }
 
 fn fingerprint<T: Serialize>(value: &T) -> Result<String, PersistenceError> {
     Ok(format!("{:x}", Sha256::digest(encode(value)?)))
+}
+
+fn source_pins(
+    desired: Option<&ResourceConfiguration>,
+) -> Result<
+    std::collections::BTreeMap<String, firecrab_helper_protocol::physical_directory::Identity>,
+    PersistenceError,
+> {
+    let mut pins = std::collections::BTreeMap::new();
+    if let Some(ResourceConfiguration::SandboxAccess(config)) = desired {
+        for grant in &config.policy.grants {
+            if let firecrab_api_types::SandboxResource::Source { path } = &grant.resource {
+                let canonical = std::fs::canonicalize(path)
+                    .map_err(|_| PersistenceError::InvalidStackResource)?;
+                if canonical.to_str() != Some(path.as_str()) {
+                    return Err(PersistenceError::InvalidStackResource);
+                }
+                let identity = firecrab_helper_protocol::physical_directory::observe(&canonical)
+                    .map_err(|_| PersistenceError::InvalidStackResource)?;
+                pins.insert(path.clone(), identity);
+            }
+        }
+    }
+    Ok(pins)
 }
 
 fn shell(
@@ -106,6 +134,27 @@ fn observe(
                 })
                 .transpose()
         }
+        "sandbox_access" => {
+            let raw: Option<String> = conn
+                .query_row(
+                    "SELECT spec FROM ai_sandbox_access WHERE principal=?1",
+                    [&target.id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(raw) = raw else {
+                return Ok(None);
+            };
+            let mut policy: firecrab_api_types::SandboxAccessPolicy = decode(&raw)?;
+            policy
+                .normalize()
+                .map_err(|_| PersistenceError::InvalidStackResource)?;
+            // A released deny tombstone keeps this certificate restricted, but has no live managed policy.
+            if policy.grants.is_empty() && iac_owners::read(conn, target)?.owner.is_none() {
+                return Ok(None);
+            }
+            Ok(Some(Observation::SandboxAccess(policy)))
+        }
         _ => Err(PersistenceError::UnsupportedIacResource),
     }
 }
@@ -157,7 +206,7 @@ fn dependencies(
 }
 
 fn deletable(conn: &Connection, resource: &ManagedResource) -> Result<(), PersistenceError> {
-    if resource.kind == "ai_model" {
+    if matches!(resource.kind.as_str(), "ai_model" | "sandbox_access") {
         return Ok(());
     }
     let pinned: bool = conn.query_row(
@@ -184,11 +233,14 @@ pub(crate) fn validate(request: &mut PlanResource) -> Result<(), PersistenceErro
         resource
             .normalize()
             .map_err(|_| PersistenceError::InvalidIacOwner)?;
-        if !matches!(resource.kind.as_str(), "shell" | "ai_model") {
+        if !matches!(
+            resource.kind.as_str(),
+            "shell" | "ai_model" | "sandbox_access"
+        ) {
             return Err(PersistenceError::UnsupportedIacResource);
         }
     }
-    match &request.desired {
+    match &mut request.desired {
         Some(ResourceConfiguration::Shell(configuration)) => {
             if request
                 .resource
@@ -218,6 +270,19 @@ pub(crate) fn validate(request: &mut PlanResource) -> Result<(), PersistenceErro
                 return Err(PersistenceError::InvalidIacOwner);
             }
         }
+        Some(ResourceConfiguration::SandboxAccess(config)) => {
+            if config.principal.is_nil()
+                || request.resource.as_ref().is_some_and(|target| {
+                    target.kind != "sandbox_access" || target.id != config.principal.to_string()
+                })
+            {
+                return Err(PersistenceError::InvalidIacOwner);
+            }
+            config
+                .policy
+                .normalize()
+                .map_err(|_| PersistenceError::InvalidIacOwner)?;
+        }
         None if request.resource.is_none() => return Err(PersistenceError::InvalidIacOwner),
         None => (),
     }
@@ -234,10 +299,22 @@ fn authority(conn: &Connection, frozen: &Frozen) -> Result<(), PersistenceError>
     {
         return Err(PersistenceError::IacOwnershipConflict);
     }
+    if frozen.before.is_none()
+        && let Some(ResourceConfiguration::SandboxAccess(config)) = &frozen.request.desired
+        && config.revocation_generation.unwrap_or(0) != frozen.ownership.generation
+    {
+        return Err(PersistenceError::StaleIacOwner);
+    }
     iac_native::ensure_idle(conn, target)?;
     super::iac_host::ensure_resource_idle(conn, target)?;
     super::iac_resources::ensure_independent(conn, target)?;
     if dependencies(conn, frozen.request.desired.as_ref())? != frozen.dependencies {
+        return Err(PersistenceError::StaleIacExecution);
+    }
+    if source_pins(frozen.request.desired.as_ref())
+        .map_err(|_| PersistenceError::StaleIacExecution)?
+        != frozen.sources
+    {
         return Err(PersistenceError::StaleIacExecution);
     }
     let owner = &frozen.request.owner;
@@ -329,6 +406,19 @@ impl Frozen {
                     ResourcePlanAction::Update
                 }
             }
+            (
+                Some(Observation::SandboxAccess(before)),
+                Some(ResourceConfiguration::SandboxAccess(desired)),
+            ) => {
+                if before != &desired.policy {
+                    fields.push("grants".into());
+                }
+                if fields.is_empty() {
+                    ResourcePlanAction::Noop
+                } else {
+                    ResourcePlanAction::Update
+                }
+            }
             _ => return Err(PersistenceError::IacOperationIdentity),
         };
         Ok(ResourcePlan {
@@ -360,14 +450,15 @@ fn read(conn: &Connection, id: Uuid) -> Result<Option<Frozen>, PersistenceError>
     if frozen.request.operation_id != id
         || !matches!(
             frozen.ownership.resource.kind.as_str(),
-            "shell" | "ai_model"
+            "shell" | "ai_model" | "sandbox_access"
         )
         || frozen.ownership.endpoint_id != frozen.request.expected_endpoint_id
         || frozen.revision.is_nil()
         || frozen.expires == 0
         || fingerprint(&frozen.request)? != expected
         || frozen.request.desired.as_ref().is_some_and(|desired|desired.kind()!=frozen.ownership.resource.kind
-            || matches!(desired,ResourceConfiguration::AiModel(config) if config.project_id.to_string()!=frozen.ownership.resource.id))
+            || matches!(desired,ResourceConfiguration::AiModel(config) if config.project_id.to_string()!=frozen.ownership.resource.id)
+            || matches!(desired,ResourceConfiguration::SandboxAccess(config) if config.principal.to_string()!=frozen.ownership.resource.id))
         || frozen
             .request
             .resource
@@ -446,6 +537,10 @@ impl Store {
                     kind: "ai_model".into(),
                     id: config.project_id.to_string(),
                 },
+                Some(ResourceConfiguration::SandboxAccess(config)) => ManagedResource {
+                    kind: "sandbox_access".into(),
+                    id: config.principal.to_string(),
+                },
                 _ => ManagedResource {
                     kind: "shell".into(),
                     id: Uuid::new_v4().to_string(),
@@ -459,6 +554,7 @@ impl Store {
             return Err(PersistenceError::IacOwnershipConflict);
         }
         let dependencies = dependencies(&tx, request.desired.as_ref())?;
+        let sources = source_pins(request.desired.as_ref())?;
         let frozen = Frozen {
             schema: 1,
             ownership: iac_owners::read(&tx, &target)?,
@@ -470,6 +566,7 @@ impl Store {
                 .filter(|value| *value <= i64::MAX as u64)
                 .ok_or(PersistenceError::IacOperationIdentity)?,
             dependencies,
+            sources,
         };
         authority(&tx, &frozen)?;
         if frozen.request.desired.is_none() {
@@ -620,6 +717,16 @@ impl Store {
                             [&target.id],
                         )?;
                     }
+                    "sandbox_access" => {
+                        tx.execute(
+                            "INSERT INTO ai_sandbox_access(principal,spec) VALUES(?1,?2)
+                            ON CONFLICT(principal) DO UPDATE SET spec=excluded.spec",
+                            params![
+                                target.id,
+                                encode(&firecrab_api_types::SandboxAccessPolicy::default())?
+                            ],
+                        )?;
+                    }
                     _ => return Err(PersistenceError::UnsupportedIacResource),
                 }
                 revision = None;
@@ -651,6 +758,15 @@ impl Store {
                 tx.execute("INSERT INTO pipe_ai_defaults(project_id,connection_id,model) VALUES(?1,?2,?3)
                     ON CONFLICT(project_id) DO UPDATE SET connection_id=excluded.connection_id,model=excluded.model",
                     params![target.id,desired.selection.connection_id.to_string(),desired.selection.model])?;
+            }
+            (Some(ResourceConfiguration::SandboxAccess(desired)), action)
+                if action != ResourcePlanAction::Noop =>
+            {
+                tx.execute(
+                    "INSERT INTO ai_sandbox_access(principal,spec) VALUES(?1,?2)
+                    ON CONFLICT(principal) DO UPDATE SET spec=excluded.spec",
+                    params![target.id, encode(&desired.policy)?],
+                )?;
             }
             (Some(_), ResourcePlanAction::Noop) => (),
             _ => return Err(PersistenceError::IacOperationIdentity),
@@ -698,3 +814,7 @@ mod tests;
 #[cfg(test)]
 #[path = "iac_resource_model_tests.rs"]
 mod model_tests;
+
+#[cfg(test)]
+#[path = "iac_resource_access_tests.rs"]
+mod access_tests;

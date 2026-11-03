@@ -1,7 +1,7 @@
 //! Shared typed resource plans. Public results omit desired configuration values.
 
 use crate::{ManagedResource, ResourceOwner, ResourceOwnership};
-use firecrab_api_types::{AiModelSelection, CreateShellRequest};
+use firecrab_api_types::{AiModelSelection, CreateShellRequest, SandboxAccessPolicy};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -19,6 +19,8 @@ pub enum ResourceConfiguration {
     Shell(CreateShellRequest),
     /// Project-local default referencing an inference-verified connection model.
     AiModel(AiModelConfiguration),
+    /// Exact delegated-host access policy; application resources remain borrowed.
+    SandboxAccess(SandboxAccessConfiguration),
 }
 
 impl ResourceConfiguration {
@@ -27,6 +29,7 @@ impl ResourceConfiguration {
         match self {
             Self::Shell(_) => "shell",
             Self::AiModel(_) => "ai_model",
+            Self::SandboxAccess(_) => "sandbox_access",
         }
     }
 }
@@ -39,6 +42,20 @@ pub struct AiModelConfiguration {
     pub project_id: Uuid,
     /// Selected connection UUID and inference-verified provider model name.
     pub selection: AiModelSelection,
+}
+
+/// Full operator-managed access policy on the selected controller.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxAccessConfiguration {
+    /// Exact mTLS host UUID; policies can explicitly reserve future project UUIDs.
+    pub principal: Uuid,
+    /// Rights over exact resources. No right is implied by another permission.
+    pub policy: SandboxAccessPolicy,
+    /// Explicit new operator intent before re-creating a previously revoked policy.
+    /// Omission acknowledges only the never-managed generation zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revocation_generation: Option<u64>,
 }
 
 /// Read-only reference proof without credential values or fingerprints.

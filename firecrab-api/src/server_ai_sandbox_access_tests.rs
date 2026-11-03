@@ -593,6 +593,7 @@ async fn sandbox_scoped_apply_and_reconciliation_check_the_original_resources() 
     ]);
     start(&f, project, id, "code", "edit").await;
     let original = finish(&f, id).await;
+    assert_eq!(original["state"], "result", "{original}");
     policy(&f, host, grants.clone()).await;
     assert_eq!(
         as_host(
@@ -859,7 +860,8 @@ async fn sandbox_revocation_during_a_provider_turn_prevents_file_tool_execution(
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert!(f.provider.requests.lock().unwrap().len() > before);
+    let dispatched = f.provider.requests.lock().unwrap().len() > before;
+    assert!(dispatched, "{}", finish(&f, id).await);
     call(
         &f.app,
         "DELETE",

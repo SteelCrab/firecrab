@@ -72,65 +72,22 @@ pub async fn set_access(
             "Use a host UUID and at most 256 resource grants",
         ));
     }
-    let mut resources = Vec::new();
-    for grant in &mut policy.grants {
-        grant.permissions.sort();
-        grant.permissions.dedup();
-        if grant.permissions.is_empty() {
-            return Err(invalid(
-                id,
-                "permissions",
-                "A resource grant needs at least one permission",
-            ));
-        }
-        match &grant.resource {
-            SandboxResource::Source { path } => {
-                let canonical = std::fs::canonicalize(path).map_err(|_| {
-                    invalid(id, "path", "Source must be an existing canonical directory")
-                })?;
-                if !canonical.is_dir() || canonical.to_str() != Some(path.as_str()) {
-                    return Err(invalid(
-                        id,
-                        "path",
-                        "Use the exact canonical source directory",
-                    ));
-                }
-                if grant
-                    .permissions
-                    .iter()
-                    .any(|p| !matches!(p, SandboxPermission::Read | SandboxPermission::Write))
-                {
-                    return Err(invalid(
-                        id,
-                        "permissions",
-                        "Sources support read/write grants",
-                    ));
-                }
-            }
-            SandboxResource::Project { id: key }
-            | SandboxResource::Connection { id: key }
-            | SandboxResource::Vm { id: key } => {
-                if key.is_nil() {
-                    return Err(invalid(id, "resource", "Resource UUID cannot be nil"));
-                }
-                if !matches!(grant.resource, SandboxResource::Project { .. })
-                    && grant
-                        .permissions
-                        .iter()
-                        .any(|p| !matches!(p, SandboxPermission::Read | SandboxPermission::Execute))
-                {
-                    return Err(invalid(
-                        id,
-                        "permissions",
-                        "Connections and VMs support read/execute grants",
-                    ));
-                }
+    policy
+        .normalize()
+        .map_err(|(field, message)| invalid(id, field, message))?;
+    for grant in &policy.grants {
+        if let SandboxResource::Source { path } = &grant.resource {
+            let canonical = std::fs::canonicalize(path).map_err(|_| {
+                invalid(id, "path", "Source must be an existing canonical directory")
+            })?;
+            if !canonical.is_dir() || canonical.to_str() != Some(path.as_str()) {
+                return Err(invalid(
+                    id,
+                    "path",
+                    "Use the exact canonical source directory",
+                ));
             }
         }
-        if resources.contains(&grant.resource) {
-            return Err(invalid(id, "grants", "Use one grant per exact resource"));
-        }
-        resources.push(grant.resource.clone());
     }
     let store = state.store.clone();
     let saved = policy.clone();

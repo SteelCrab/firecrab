@@ -3,7 +3,8 @@
 use std::{fs::File, io, os::unix::fs::MetadataExt, path::Path};
 
 /// A physical directory object, independent of its contents or display name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Identity {
     /// Containing filesystem device.
     pub device: u64,

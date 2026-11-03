@@ -83,6 +83,15 @@ async fn execute(
     let _admission = state.stack_apply_admission.lock().await;
     let _ai = state.pipe_ai_mutations.lock().await;
     let store = state.store.clone();
+    let policy = database(request.0, move || store.resource_plan(id))
+        .await?
+        .is_some_and(|plan| plan.ownership.resource.kind == "sandbox_access");
+    let _sandbox = if policy {
+        Some(state.sandbox.admission.clone().lock_owned().await)
+    } else {
+        None
+    };
+    let store = state.store.clone();
     let observed = input.clone();
     if let Some((mut source, generation)) = database(request.0, move || {
         store.resource_plan_ai_source(id, &observed, crate::secrets::now_ms())

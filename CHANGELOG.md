@@ -33,6 +33,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Add shared Sandbox access-policy plans for both managers. Normalize grant sets,
+  pin original source directories, commit authority and receipts atomically, and
+  preserve restricted deny rows on removal and emergency revocation.
+
 - Freeze Stack service Secret versions and borrowed authority before admission.
   Keep original values encrypted, bind them to the accepted parent and child,
   preserve them after rotation or restart, and fence recapture after cleanup.
