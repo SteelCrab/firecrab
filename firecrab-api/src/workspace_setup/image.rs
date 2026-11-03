@@ -1,6 +1,6 @@
 use super::*;
 use crate::image_install::Architecture;
-use crate::oci::{self, ImageReference, ImageVersion, Sha256Digest};
+use crate::oci::{self, ImageReference, ImageVersion, RegistryCredential, Sha256Digest};
 use crate::templates::TemplateSpec;
 use firecrab_api_types::ImageInstallStatus;
 
@@ -54,39 +54,50 @@ async fn preparation_failed(
     )
 }
 
+pub(super) async fn pin_image(
+    state: &AppState,
+    job: &mut SavedSetup,
+    mut source: ImageReference,
+    credential: Option<RegistryCredential>,
+) -> Result<ImageReference, AppError> {
+    if job.image_reference.is_some() {
+        return reference(job);
+    }
+    let request = RequestId(job.progress.id);
+    record(
+        state,
+        job,
+        format!("Resolving {SOURCE} for {}", Architecture::HOST),
+    )
+    .await?;
+    let resolved = match oci::resolve(
+        &source,
+        Architecture::HOST,
+        oci::is_loopback_registry(&source.registry),
+        credential,
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(error) => return Err(preparation_failed(state, job, error).await),
+    };
+    source.version =
+        ImageVersion::Digest(Sha256Digest::parse(&resolved.digest).map_err(|_| failed(request))?);
+    job.image_reference = Some(format!(
+        "{}/{}@{}",
+        source.registry, source.repository, resolved.digest
+    ));
+    save(state, job).await?;
+    Ok(source)
+}
+
 /// Pin both the host's OCI manifest and the current stable kernel before creating a VM.
 pub(super) async fn prepare(state: &AppState, job: &mut SavedSetup) -> Result<String, AppError> {
     let request = RequestId(job.progress.id);
     let mut source = reference(job)?;
     let credential =
         crate::handlers::oci::stored_credential_for(state, &source.registry, request).await?;
-    if job.image_reference.is_none() {
-        record(
-            state,
-            job,
-            format!("Resolving {SOURCE} for {}", Architecture::HOST),
-        )
-        .await?;
-        let resolved = match oci::resolve(
-            &source,
-            Architecture::HOST,
-            oci::is_loopback_registry(&source.registry),
-            credential.clone(),
-        )
-        .await
-        {
-            Ok(resolved) => resolved,
-            Err(error) => return Err(preparation_failed(state, job, error).await),
-        };
-        source.version = ImageVersion::Digest(
-            Sha256Digest::parse(&resolved.digest).map_err(|_| failed(request))?,
-        );
-        job.image_reference = Some(format!(
-            "{}/{}@{}",
-            source.registry, source.repository, resolved.digest
-        ));
-        save(state, job).await?;
-    }
+    source = pin_image(state, job, source, credential.clone()).await?;
 
     let requested = job.kernel_version.as_deref().unwrap_or("stable").to_owned();
     record(

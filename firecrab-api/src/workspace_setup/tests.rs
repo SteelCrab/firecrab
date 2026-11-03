@@ -446,3 +446,112 @@ async fn cached_oci_rootfs_uses_the_latest_host_kernel_and_pins_it_for_retries()
     assert!(progress.log.contains("Linux kernel 7.3.1"));
     assert!(!progress.log.contains("registry.firecrab.dev/ubuntu"));
 }
+
+#[tokio::test]
+async fn resolved_host_oci_digest_survives_restart_and_an_unavailable_original_tag() {
+    let (temp, state) = fixture().await;
+    let mut registry = crate::oci::registry_fixture::LocalOciRegistry::start().await;
+    let original = registry.parsed_reference();
+    let input = input();
+    let reserved = create_without_worker(&state, input.clone()).await.unwrap();
+    let mut job = read(&state, input.id).await.unwrap();
+    assert!(image::template_alias(&job).unwrap().is_none());
+    let pinned = image::pin_image(&state, &mut job, original.clone(), None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        pinned.version,
+        crate::oci::ImageVersion::Digest(_)
+    ));
+    let saved_reference = job.image_reference.clone().unwrap();
+    assert!(saved_reference.starts_with(registry.registry()));
+    assert!(saved_reference.contains("@sha256:"));
+    registry.shutdown().await;
+
+    let reopened = AppState::with_db_file(
+        TemplateRegistry::from_specs(temp.path(), []).unwrap(),
+        temp.path().join("workspaces.sqlite"),
+    )
+    .await
+    .unwrap();
+    let mut restored = read(&reopened, input.id).await.unwrap();
+    let again = image::pin_image(&reopened, &mut restored, original, None)
+        .await
+        .unwrap();
+    assert_eq!(again.version, pinned.version);
+    assert_eq!(
+        restored.image_reference.as_deref(),
+        Some(saved_reference.as_str())
+    );
+    assert_eq!(restored.progress.vm_id, reserved.vm_id);
+    assert!(reopened.vms.lock().unwrap().is_empty());
+    assert!(reopened.store.list_micro_networks().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn foreign_architecture_oci_import_fails_before_creating_a_network_or_vm() {
+    use crate::image_install::{Architecture, ImageInstallTracker};
+    use crate::oci::{self, ImageReference};
+    use sha2::Digest;
+    let (temp, mut state) = fixture().await;
+    state.kernel_installs = ImageInstallTracker::disabled();
+    oci::kernel_tests::install_fixture_kernel(temp.path(), Architecture::HOST, "7.3.1").await;
+    let platform = if Architecture::HOST == Architecture::Aarch64 {
+        "amd64"
+    } else {
+        "arm64"
+    };
+    let manifest = serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [{
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": format!("sha256:{}", "c".repeat(64)),
+            "size": 128,
+            "platform": {"os": "linux", "architecture": platform}
+        }]
+    }))
+    .unwrap();
+    let digest = format!("sha256:{:x}", sha2::Sha256::digest(&manifest));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let source = format!("{}/ubuntu@{digest}", listener.local_addr().unwrap());
+    let router = axum::Router::new().route(
+        "/v2/ubuntu/manifests/{selector}",
+        axum::routing::get(move || {
+            let manifest = manifest.clone();
+            async move {
+                (
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        "application/vnd.oci.image.index.v1+json",
+                    )],
+                    manifest,
+                )
+            }
+        }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let input = input();
+    create_without_worker(&state, input.clone()).await.unwrap();
+    let mut job = read(&state, input.id).await.unwrap();
+    job.image_reference = Some(source.clone());
+    job.kernel_version = Some("7.3.1".into());
+    save(&state, &job).await.unwrap();
+    let error = image::prepare(&state, &mut job).await.unwrap_err();
+    assert_eq!(error.code(), "workspace_image_failed");
+    let alias = oci::template_name_from_reference(&ImageReference::parse(&source).unwrap())
+        .unwrap()
+        .alias;
+    let snapshot = state.oci_imports.snapshot(&alias);
+    assert_eq!(
+        snapshot.status,
+        firecrab_api_types::ImageInstallStatus::Failed
+    );
+    assert!(snapshot.log.contains("image has no "), "{}", snapshot.log);
+    assert!(snapshot.log.contains("manifest"));
+    assert!(state.templates.resolve_alias(&alias).is_none());
+    assert!(state.vms.lock().unwrap().is_empty());
+    assert!(state.store.list_micro_networks().unwrap().is_empty());
+    server.abort();
+    let _ = server.await;
+}
