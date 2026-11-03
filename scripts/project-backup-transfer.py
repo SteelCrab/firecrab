@@ -30,7 +30,7 @@ def identifier(value):
 def private_file(path):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     st = os.fstat(fd)
-    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or st.st_nlink != 1:
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or st.st_nlink != 1 or st.st_mode & 0o077:
         os.close(fd)
         raise ValueError("Expected an owner-controlled, single-link regular file")
     return os.fdopen(fd, "rb")
@@ -97,7 +97,7 @@ def inspect(directory):
             raise ValueError("Project DB integrity check failed")
         version = db.execute("PRAGMA user_version").fetchone()[0]
         row = db.execute("SELECT project_id,database_id,volume_id,revision,initialized FROM identity WHERE singleton=1").fetchone()
-        if version != c["schemaVersion"] or row != (c["projectId"], c["databaseId"], c["volumeId"], c["revision"], 1):
+        if not 1 <= version <= 9 or version != c["schemaVersion"] or row != (c["projectId"], c["databaseId"], c["volumeId"], c["revision"], 1):
             raise ValueError("Backup DB identity or revision mismatch")
     with connect(directory / "control.db") as control:
         if control.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
@@ -143,6 +143,9 @@ def export(args):
     private_dir(project_root)
     lock = os.open(project_root / "operation.lock", os.O_RDWR | os.O_NOFOLLOW)
     try:
+        lock_stat = os.fstat(lock)
+        if not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_uid != os.geteuid() or lock_stat.st_nlink != 1 or lock_stat.st_mode & 0o077:
+            raise ValueError("Backup operation lock is not a private single-link file")
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if (project_root / "fence.json").exists():
             raise ValueError("Project maintenance is pending")
