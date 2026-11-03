@@ -194,7 +194,7 @@ function VmAgentWorkspace({
     setView(next);
   };
 
-  const [cli, setCli] = useState(() => {
+  const [savedCli, setCli] = useState(() => {
     const saved = localStorage.getItem(cliKey) || "";
     return ["codex", "claude", "copilot"].includes(saved) ? saved : "";
   });
@@ -334,6 +334,17 @@ function VmAgentWorkspace({
     status.controllerId === host.platform.controllerId &&
     status.vmId === vmId;
   const canControl = identityMatches && !stale && vm?.state === "running";
+  // The choice is kept per browser origin, but the VM knows which CLI is
+  // signed in. Without a saved choice, use that CLI instead of blocking tasks.
+  const cli =
+    savedCli ||
+    status?.drivers.find(
+      (d) =>
+        ["codex", "claude", "copilot"].includes(d.id) &&
+        d.available &&
+        d.authenticated,
+    )?.id ||
+    "";
   const driver = status?.drivers.find((d) => d.id === cli);
   const cliReady =
     vm?.state === "running" &&
