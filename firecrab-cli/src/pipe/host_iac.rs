@@ -81,12 +81,7 @@ pub(super) fn run() -> Result<()> {
         }
         Request::ChangeOwner { request } => {
             // A retained terminal receipt is readable even if the saved manifest was later removed.
-            let existing = ledger.receipt(
-                &host,
-                request.change.expected_endpoint_id,
-                request.change.operation_id,
-            )?;
-            let terminal = existing.is_some() || ledger.has_outcome(request.change.operation_id);
+            let terminal = ledger.has_outcome(request.change.operation_id);
             let config = if terminal {
                 None
             } else {

@@ -236,10 +236,9 @@ impl Ledger {
         mut request: OwnerChange,
     ) -> Result<Reply> {
         request.validate()?;
-        self.check_binding(host, request.change.expected_endpoint_id)?;
         let hash = request.request_sha256()?;
         if let Some(rejected) = self.rejections.get(&request.change.operation_id) {
-            if rejected.request_sha256 != hash {
+            if rejected.request_sha256 != hash || rejected.host != *host {
                 return Err("operation ID belongs to another request".into());
             }
             return Ok(Reply::OwnerRejected {
@@ -248,13 +247,14 @@ impl Ledger {
         }
         // A mismatching replay must never overwrite an existing committed result with a rejection.
         if let Some(receipt) = self.receipts.get(&request.change.operation_id) {
-            if receipt.request_sha256 != hash {
+            if receipt.request_sha256 != hash || receipt.host != *host {
                 return Err("operation ID belongs to another request".into());
             }
             return Ok(Reply::OwnerReceipt {
                 receipt: Some(receipt.clone()),
             });
         }
+        self.check_binding(host, request.change.expected_endpoint_id)?;
         match self.change(host, config, request.clone()) {
             Ok(receipt) => Ok(Reply::OwnerReceipt {
                 receipt: Some(receipt),

@@ -3,6 +3,48 @@ use firecrab_helper_protocol::host_iac::OwnerChange;
 use firecrab_stack::{ChangeResourceOwner, Manager, ResourceOwner};
 
 #[test]
+fn original_no_effect_rejection_remains_readable_after_another_api_first_claims_the_host() {
+    let current = config();
+    let mut ledger = Ledger::default();
+    let mut stale = request(&ledger, Some(&current), "listener");
+    stale.configuration_sha256 = "0".repeat(64);
+    let original = ledger
+        .transition(&host(), Some(&current), stale.clone())
+        .unwrap();
+    assert!(matches!(original, Reply::OwnerRejected { .. }));
+    let mut next = request(&ledger, Some(&current), "listener");
+    let successor = Uuid::from_u128(549);
+    next.change.expected_endpoint_id = successor;
+    let committed = ledger.transition(&host(), Some(&current), next).unwrap();
+    assert!(matches!(
+        committed,
+        Reply::OwnerReceipt { receipt: Some(_) }
+    ));
+    assert_eq!(
+        ledger.transition(&host(), None, stale.clone()).unwrap(),
+        original
+    );
+    let mut replaced_host = host();
+    replaced_host.inode += 1;
+    assert!(
+        ledger
+            .transition(&replaced_host, None, stale.clone())
+            .is_err()
+    );
+    let mut changed = stale.clone();
+    changed.change.expected_endpoint_id = successor;
+    assert!(ledger.transition(&host(), None, changed).is_err());
+    assert_eq!(
+        ledger
+            .observe(&host(), successor, &stale.change.resource, Some(&current))
+            .unwrap()
+            .ownership
+            .generation,
+        1
+    );
+}
+
+#[test]
 fn fixed_address_proof_retains_origin_credentials_target_and_exclusive_child() {
     let mut current = config();
     let id = Uuid::new_v4();
