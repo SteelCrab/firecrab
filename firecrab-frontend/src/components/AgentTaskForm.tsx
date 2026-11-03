@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useI18n } from "../i18n";
 import {
   agentEfforts,
@@ -9,6 +9,8 @@ import {
   type AgentStatus,
 } from "../api/agents";
 import AgentBrandIcon from "./icons/AgentBrandIcon";
+import { TaskSuggestButton, TaskSuggestionList } from "./AgentTaskSuggestions";
+import { useTaskSuggestions } from "./useTaskSuggestions";
 
 // The select's value while a typed name is in use. Never a model name:
 // catalog names carry no control characters.
@@ -146,6 +148,7 @@ export default function AgentTaskForm({
   drivers,
   error,
   vmId,
+  controllerId,
   inline = false,
 }: {
   draft: AgentTask;
@@ -157,9 +160,51 @@ export default function AgentTaskForm({
   drivers: AgentStatus["drivers"];
   error: string;
   vmId: string;
+  controllerId: string;
   inline?: boolean;
 }) {
   const { t } = useI18n();
+  const taskId = useId();
+  const taskInput = useRef<HTMLTextAreaElement>(null);
+  const driver = drivers.find((d) => d.id === draft.cli);
+  const cliName = driver?.name || draft.cli;
+  const suggestions = useTaskSuggestions({
+    vmId,
+    controllerId,
+    cli: draft.cli,
+    name: cliName,
+    model: draft.model,
+    effort: draft.effort,
+  });
+  // Name the first thing that keeps suggestions off. Copilot is not supported yet.
+  const suggestBlocked = !["codex", "claude"].includes(draft.cli)
+    ? t(
+        "Suggestions work with Codex and Claude Code.",
+        "작업 제안은 Codex와 Claude Code에서만 쓸 수 있어요.",
+      )
+    : !driver?.available || !driver.authenticated
+      ? t(`Sign in to ${cliName} first.`, `먼저 ${cliName}에 로그인해 주세요.`)
+      : !canControl || !controllerId
+        ? t(
+            "Available when a task can start in this VM.",
+            "이 VM에서 작업을 시작할 수 있을 때 쓸 수 있어요.",
+          )
+        : null;
+  const pick = (task: string) => {
+    if (
+      draft.input.trim() &&
+      draft.input !== task &&
+      !window.confirm(
+        t(
+          "Replace the task text with this suggestion?",
+          "작성한 작업 내용을 이 제안으로 바꿀까요?",
+        ),
+      )
+    )
+      return;
+    onChange({ ...draft, input: task });
+    taskInput.current?.focus();
+  };
   const codexModels = useCodexModels(vmId, draft.cli === "codex");
   const models =
     draft.cli === "codex"
@@ -193,9 +238,17 @@ export default function AgentTaskForm({
             {error}
           </p>
         )}
-        <label>
-          {t("Task", "작업")}
+        <div className="am-task-input">
+          <div className="am-task-label-row">
+            <label htmlFor={taskId}>{t("Task", "작업")}</label>
+            <TaskSuggestButton
+              suggestions={suggestions}
+              blocked={suggestBlocked}
+            />
+          </div>
           <textarea
+            id={taskId}
+            ref={taskInput}
             autoFocus={!inline}
             required
             rows={5}
@@ -206,7 +259,8 @@ export default function AgentTaskForm({
             value={draft.input}
             onChange={(e) => onChange({ ...draft, input: e.target.value })}
           />
-        </label>
+          <TaskSuggestionList suggestions={suggestions} onPick={pick} />
+        </div>
         {!inline && (
           <fieldset className="am-task-drivers">
             <legend>{t("Agent", "담당 에이전트")}</legend>

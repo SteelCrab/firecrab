@@ -199,6 +199,10 @@ fn router_with_registry(
                     post(start_vm_agent_task),
                 )
                 .route(
+                    "/api/service/agents/microvms/{vm}/tasks/suggestions",
+                    post(suggest_vm_tasks),
+                )
+                .route(
                     "/api/service/agents/microvms/{vm}/prepare",
                     post(prepare_vm_agents),
                 )
@@ -431,6 +435,17 @@ async fn start_vm_agent_task(
     })
     .await
     .map_err(|e| Error::Invalid(e.to_string()))?
+}
+/// No agents lock: the read-only run takes up to two minutes and must not block task starts.
+async fn suggest_vm_tasks(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+    Json(input): Json<super::agents::suggestions::Suggest>,
+) -> Result<Json<serde_json::Value>, Error> {
+    blocking(move || {
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?.suggest_tasks(input)
+    })
+    .await
 }
 async fn connect_vm_github(
     State(controller): State<Arc<Controller>>,

@@ -24,6 +24,7 @@ pub mod project;
 mod recovery;
 pub mod rules;
 pub mod skills;
+pub mod suggestions;
 pub mod terminal;
 
 const DRIVERS: &[(&str, &str, &str)] = &[

@@ -975,6 +975,7 @@ function VmAgentWorkspace({
                       drivers={status.drivers}
                       error={createError}
                       vmId={vmId}
+                      controllerId={status.controllerId}
                     />
                   ) : (
                     <div className="am-runtime-unavailable">
@@ -1093,6 +1094,7 @@ function VmAgentWorkspace({
                   drivers={status?.drivers || []}
                   error={createError}
                   vmId={vmId}
+                  controllerId={status?.controllerId || ""}
                 />
               </AppDialog>
             )}

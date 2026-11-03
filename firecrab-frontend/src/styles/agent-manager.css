@@ -520,6 +520,85 @@
 .am-task-folder-note {
   margin-top: -12px;
 }
+/* Task field with AI suggestions: label and button share a row that wraps on phones. */
+.am-task-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.am-task-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.am-task-suggest {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.screen[data-view="ai-sandbox"]
+  .agent-manager
+  .am-create
+  .am-task-suggest-status {
+  font-size: 13px;
+  color: var(--text-2);
+}
+.am-task-suggestions {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.am-task-suggestion {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.am-task-suggestion:hover {
+  background: var(--bg-subtle);
+}
+.am-task-suggestion:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.am-task-suggestion strong {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.am-task-suggestion span {
+  font-size: 13px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.screen[data-view="ai-sandbox"]
+  .agent-manager
+  .am-create
+  .am-task-suggestion
+  small {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
 .am-task-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
