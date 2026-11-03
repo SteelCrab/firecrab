@@ -201,12 +201,18 @@ test.describe("Pulled registry images in M2Image @dashboard", () => {
     page,
   }) => {
     const m = await open(page, { running: true });
+    // The row also says Building while the POST is in flight. Reload only after admission.
+    const admitted = page.waitForResponse((response) =>
+      new URL(response.url()).pathname === "/api/oci/import" &&
+      response.request().method() === "POST" && response.status() === 202,
+    );
     await m.row
       .getByRole("button", { name: "Image actions", exact: true })
       .click();
     await page
       .getByRole("menuitem", { name: "Build M2Image", exact: true })
       .click();
+    await admitted;
     await expect(m.row).toContainText("Building…");
     await page.reload();
     await expect(m.row).toContainText("Building…");
