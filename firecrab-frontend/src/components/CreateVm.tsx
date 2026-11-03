@@ -58,6 +58,7 @@ interface CreateVmProps {
   onError: (message: string) => void;
   onCancel?: () => void;
   initialResources?: { cpu: number; ram: number; diskGb: number };
+  preferredImageFamily?: "ubuntu";
 }
 
 function storageLabel(root: StorageRootResponse): string {
@@ -87,6 +88,7 @@ export default function CreateVm({
   onError,
   onCancel,
   initialResources,
+  preferredImageFamily,
 }: CreateVmProps) {
   const { t } = useI18n();
   const host = useHostStatus();
@@ -132,16 +134,21 @@ export default function CreateVm({
         // Create form only offers installed templates (uninstalled come later
         // with the install API).
         const installed = next.filter((image) => image.installed);
+        const preferred = preferredImageFamily
+          ? installed.find((image) =>
+              image.alias.startsWith(`${preferredImageFamily}-`),
+            )
+          : installed[0];
         setImages(installed);
         setImagesError(null);
         setTemplate((current) => {
           if (current && installed.some((image) => image.alias === current)) {
             return current;
           }
-          return installed[0]?.alias ?? "";
+          return preferred?.alias ?? "";
         });
-        if (installed[0] && Number(diskGb) < diskFloorGb(installed[0])) {
-          setDiskGb(String(diskFloorGb(installed[0])));
+        if (preferred && Number(diskGb) < diskFloorGb(preferred)) {
+          setDiskGb(String(diskFloorGb(preferred)));
         }
       })
       .catch((error) => {
@@ -437,11 +444,14 @@ export default function CreateVm({
               {imageHint ? (
                 <option value="">{imageHint}</option>
               ) : (
-                images.map((image) => (
-                  <option key={image.alias} value={image.alias}>
-                    {templateLabel(image)}
-                  </option>
-                ))
+                <>
+                  <option value="">{t("Choose an image", "이미지 선택")}</option>
+                  {images.map((image) => (
+                    <option key={image.alias} value={image.alias}>
+                      {templateLabel(image)}
+                    </option>
+                  ))}
+                </>
               )}
             </select>
             {fieldError("template")}
@@ -453,6 +463,18 @@ export default function CreateVm({
                       "Install an image before creating a VM.",
                       "생성하려면 먼저 이미지를 설치하세요",
                     )}
+                </span>
+              )}
+            {preferredImageFamily === "ubuntu" &&
+              !imagesLoading &&
+              !imagesError &&
+              !images.some((image) => image.alias.startsWith("ubuntu-")) && (
+                <span className="field-error">
+                  {t(
+                    "Ubuntu is not installed. Install it or explicitly choose another image.",
+                    "Ubuntu 이미지가 없다. 이미지를 설치하거나 다른 이미지를 직접 선택한다.",
+                  )}{" "}
+                  <a href="#/images">{t("Open Images", "이미지 열기")}</a>
                 </span>
               )}
             {selectedImage && !selectedImage.hasGuestService && (

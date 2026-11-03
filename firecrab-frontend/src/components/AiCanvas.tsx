@@ -34,6 +34,8 @@ import type { Tab, Node as CanvasNode } from "../canvas/types";
 import "../styles/ai-canvas.css";
 import CanvasAgent from "./CanvasAgent";
 import ProjectBackups from "./ProjectBackups";
+import CreateVm from "./CreateVm";
+import AppDialog from "./ui/AppDialog";
 import { agentDocument } from "../canvas/agent-types";
 
 type Props = { onUnsavedChange: (dirty: boolean) => void };
@@ -85,6 +87,9 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
   const [project, setProject] = useState("");
   const [existing, setExisting] = useState("");
   const [savedView, setSavedView] = useState("");
+  const [creatingVm, setCreatingVm] = useState(false);
+  const [createVmError, setCreateVmError] = useState("");
+  const [createdVm, setCreatedVm] = useState("");
   useEffect(() => {
     void c.start();
     terminalSessions.install(c.changed);
@@ -498,6 +503,21 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
                 () => void c.connect(project),
                 t("Open project", "프로젝트 열기"),
               )}
+              {button(
+                () => {
+                  setCreateVmError("");
+                  setCreatingVm(true);
+                },
+                t("Create workspace MicroVM", "작업용 MicroVM 만들기"),
+              )}
+              {createdVm && (
+                <p role="status">
+                  {t(
+                    `Created ${createdVm}. Assign it to the project and bind a separate workspace volume before opening the project.`,
+                    `${createdVm} VM을 만들었다. 프로젝트에 VM을 지정하고 별도 작업 볼륨을 연결한 후 프로젝트를 연다.`,
+                  )}
+                </p>
+              )}
               <a
                 href="https://github.com/SteelCrab/firecrab/blob/feat/550-ai-canvas/public-docs/guides/project-workspaces.md"
                 target="_blank"
@@ -638,6 +658,31 @@ export default function AiCanvas({ onUnsavedChange }: Props) {
           )}
         </div>
       </main>
+      {creatingVm && (
+        <AppDialog
+          label={t("New workspace MicroVM", "작업용 MicroVM 만들기")}
+          onClose={() => setCreatingVm(false)}
+        >
+          <h2>{t("New workspace MicroVM", "작업용 MicroVM 만들기")}</h2>
+          <p>
+            {t(
+              "Ubuntu, 4 vCPU, 8 GiB memory and a 16 GiB system disk are the initial settings. The workspace volume is separate.",
+              "Ubuntu, 4 vCPU, 메모리 8 GiB, 시스템 디스크 16 GiB를 기본값으로 사용한다. 작업 볼륨은 별도다.",
+            )}
+          </p>
+          {createVmError && <p role="alert">{createVmError}</p>}
+          <CreateVm
+            initialResources={{ cpu: 4, ram: 8192, diskGb: 16 }}
+            preferredImageFamily="ubuntu"
+            onCancel={() => setCreatingVm(false)}
+            onError={setCreateVmError}
+            onCreated={(vm) => {
+              setCreatedVm(vm.name);
+              setCreatingVm(false);
+            }}
+          />
+        </AppDialog>
+      )}
     </div>
   );
 }

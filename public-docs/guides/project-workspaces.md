@@ -14,10 +14,17 @@ starting tools that use its mounted folder.
 
 ## Create and reopen
 
-1. Create an ordinary inactive user MicroVM with the existing VM API.
+1. Create an ordinary inactive user MicroVM with the existing VM API. The empty AI
+   Canvas screen also offers a VM creation form. It defaults to an installed Ubuntu
+   image, 4 vCPU, 8 GiB RAM and a 16 GiB system disk. These values can be changed.
+   If Ubuntu is unavailable, install it or explicitly select another image; the form
+   does not silently choose a different image. An image that requires a larger disk
+   raises the initial disk size. The form creates a VM only; it does not create or bind
+   a project or data volume, or start the VM.
 2. Save an AI Sandbox project selecting that VM. `sourcePath` may select an authorized
    source directory on the API host, or be absent for an empty workspace.
-3. Create a named data volume with `firecrab volume create NAME --size 1`.
+3. Create a named data volume with `firecrab volume create NAME --size 1`. This volume
+   is separate from the VM system disk and its capacity is chosen independently.
 4. Bind that existing volume to the project:
 
 ```sh
