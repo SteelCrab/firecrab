@@ -279,7 +279,7 @@ def import_status(args):
             identifier(project)
             checkpoint = identifier(record["checkpoint"])
             result.append(dict(operationId=operation, projectId=project, checkpointId=checkpoint,
-                               phase=phase, generation=record["generation"],
+                               phase=phase, outcome=record.get("outcome", "abandoning" if record.get("abandonPlan") else None), generation=record["generation"],
                                destinationVmId=record["request"]["vm"],
                                destinationStorageId=record["request"]["storage"],
                                volumeName=record["request"]["volumeName"],
@@ -308,6 +308,10 @@ def main():
     status = commands.add_parser("import-status", help="Read incomplete imports or one saved import receipt")
     status.add_argument("--destination-control", required=True, help="Existing destination controller SQLite path")
     status.add_argument("--operation", type=identifier, help="Exact import UUID; omit to list incomplete imports")
+    abandon = commands.add_parser("abandon-import", help="Quarantine and abandon a pre-installation import")
+    abandon.add_argument("--destination-control", required=True)
+    abandon.add_argument("--operation", required=True, type=identifier)
+    abandon.add_argument("--confirm-abandon", action="store_true")
     receive = commands.add_parser("import", help="Install and register a fresh project while the destination controller is stopped")
     receive.add_argument("directory", help="Transferred matched checkpoint directory")
     receive.add_argument("--destination-control", required=True, help="Existing destination controller SQLite path")
@@ -323,6 +327,9 @@ def main():
         destination_plan(args)
     elif args.command == "import-status":
         import_status(args)
+    elif args.command == "abandon-import":
+        from project_backup_import import abandon_import
+        abandon_import(args, sys.modules[__name__])
     elif args.command == "import":
         from project_backup_import import run_import
         run_import(args, sys.modules[__name__])

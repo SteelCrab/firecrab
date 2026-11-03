@@ -19,7 +19,7 @@ pub(super) fn require_complete(connection: &Connection) -> Result<(), Persistenc
     )?;
     if pending {
         return Err(PersistenceError::BlockStorageConflict {
-            message: "Offline project import is incomplete; stop the controller and resume its import operation",
+            message: "Offline project import is incomplete; inspect import-status and resume or abandon staging while the controller is stopped",
         });
     }
     Ok(())
@@ -33,7 +33,7 @@ impl Store {
     ) -> Result<Option<HashMap<String, i64>>, PersistenceError> {
         let conn = self.lock();
         let raw: Option<String> = conn.query_row(
-            "SELECT json_extract(document,'$.taskOrdinals') FROM project_workspace_imports WHERE project_id=?1 AND phase='complete' AND json_extract(document,'$.checkpoint')=?2",
+            "SELECT json_extract(document,'$.taskOrdinals') FROM project_workspace_imports WHERE project_id=?1 AND phase='complete' AND COALESCE(json_extract(document,'$.outcome'),'imported')='imported' AND json_extract(document,'$.checkpoint')=?2",
             [project.to_string(), checkpoint.to_string()],
             |row| row.get(0),
         ).optional()?.flatten();

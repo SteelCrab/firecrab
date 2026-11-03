@@ -194,9 +194,36 @@ volume name. The `staging` phase requires the original checkpoint package.
 Changing the registered pool path, filesystem identity, immutable request or prepared
 bytes fails closed. A different import cannot bypass an incomplete operation. Do not
 manually delete the journal row or change its phase to unblock controller startup.
-There is no automatic abort, rollback or deletion of partial installation evidence.
-An unrecoverable interrupted import requires operator recovery from the retained
+There is no automatic rollback or deletion of partial installation evidence.
+An unrecoverable `prepared` import requires operator recovery from retained
 controller/storage backups; retain all files before repair.
+
+### Abandon a pre-installation import
+
+If a `staging` import cannot resume, the operator can explicitly abandon it while the
+updated controller is stopped. This operation is unavailable once the import reached
+`prepared`, because files may already have been installed. It does not require the
+original transfer package.
+
+```sh
+python3 scripts/project-backup-transfer.py abandon-import \
+  --destination-control /private/destination/control.db \
+  --operation IMPORT_OPERATION_UUID --confirm-abandon
+```
+
+The command checks the controller lock, registered pool identity, resource bindings,
+private ownership and expected directory contents. It journals the directory identities
+before moving anything. Existing staging files and empty resource directories are
+renamed to private `.abandoned-import-IMPORT_OPERATION_UUID-*` entries beside their
+original namespaces. Nothing is deleted. Unknown files, changed identities or a
+registered project/volume stop the operation for operator inspection.
+
+If interrupted, rerun the same command with the same operation UUID. The controller
+remains blocked until every journaled move and the final receipt are complete. A
+completed abandonment has phase `complete` and outcome `abandoned` in `import-status`.
+The old import UUID cannot be resumed. Start a new import with a new UUID if needed.
+The quarantined evidence remains private and consumes storage until an operator
+handles it separately. This feature has not yet been tested on a live host.
 
 Private `.project-import-IMPORT_OPERATION_UUID` staging directories remain beside
 project, backup and volume namespaces. Partial copies are outside live resource and

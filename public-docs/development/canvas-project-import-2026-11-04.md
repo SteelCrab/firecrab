@@ -115,3 +115,17 @@ is not bypassed.
 
 Tests and CI were skipped at the user's request. Live destination-host execution,
 interrupted installation and full #550 acceptance remain pending.
+
+## Abandon a pre-installation import
+
+An operator can explicitly abandon a `staging` import without its source package.
+The stopped-controller CLI validates the registered pool and resource identities,
+then journals directory identities before moving the import's empty resource
+directories and private staging directories into same-filesystem quarantine names.
+It retains all partial files. A crash leaves the startup guard active; the same
+operation resumes the recorded moves. Only after those moves does it record the
+`abandoned` outcome and release the startup guard. Imported-checkpoint lookup
+excludes abandoned receipts. A prepared or already installed import is not eligible.
+
+This feature has not been tested or executed. Tests and CI remain deferred until
+final integration; live interruption and service-user validation remain open.

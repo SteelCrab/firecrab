@@ -449,6 +449,137 @@ def register(db, args, record, config, route, catalog, actual, io):
     transaction(db, write)
 
 
+def check_abandon_contents(role, path, checkpoint, operation, io):
+    """An unfinished staging import owns only empty live paths and private copies."""
+    entries = list(path.iterdir())
+    if role in ("project", "volume") and entries:
+        raise ValueError("Live resource directory is not empty; inspect it before recovery")
+    if role == "backup":
+        for entry in entries:
+            if entry.name != checkpoint:
+                raise ValueError("Unknown backup artifact prevents abandonment")
+            io.private_dir(entry)
+            if any(entry.iterdir()):
+                raise ValueError("Checkpoint archive is not empty")
+    if role.endswith("Stage"):
+        for entry in entries:
+            if not entry.name.startswith(".import-" + operation + "-"):
+                raise ValueError("Unknown staging artifact prevents abandonment")
+            with io.private_file(entry):
+                pass
+
+
+def abandon_import(args, io):
+    """Quarantine a pre-installation import without deleting files or existing resources."""
+    if not sys.platform.startswith("linux") or not getattr(ctypes.CDLL(None), "renameat2", None):
+        raise ValueError("Import abandonment requires Linux renameat2 support")
+    if not args.confirm_abandon:
+        raise ValueError("Explicit confirmation is required to abandon this import")
+    control = Path(args.destination_control).absolute()
+    with io.private_file(control):
+        pass
+    control = control.resolve(strict=True)
+    lock = os.open(control, os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        db = rw_database(control)
+        try:
+            row = db.execute("SELECT project_id,phase,document FROM project_workspace_imports WHERE id=?", (args.operation,)).fetchone()
+            if not row:
+                raise ValueError("Import operation was not found")
+            record = json.loads(row[2])
+            if (record.get("project"), record.get("phase"), record.get("id")) != (row[0], row[1], args.operation):
+                raise ValueError("Import journal identity or phase is inconsistent")
+            if record["request"]["control"] != str(control):
+                raise ValueError("Import belongs to another controller")
+            if row[1] == "complete" and record.get("outcome") == "abandoned":
+                print(encode(dict(status="abandoned", operationId=args.operation, projectId=row[0])))
+                return
+            if row[1] != "staging" or record.get("files"):
+                raise ValueError("Only an import before prepared file installation can be abandoned")
+            c = record["manifest"]["checkpoint"]
+            for name in ("id", "projectId", "databaseId", "volumeId"):
+                io.identifier(c[name])
+            if c["projectId"] != row[0] or c["id"] != record["checkpoint"]:
+                raise ValueError("Import journal and checkpoint identities differ")
+            if db.execute("SELECT 1 FROM ai_sandbox_projects WHERE id=?", (row[0],)).fetchone() or db.execute("SELECT 1 FROM project_workspaces WHERE project_id=? OR database_id=? OR volume_id=?", (row[0], c["databaseId"], c["volumeId"])).fetchone() or db.execute("SELECT 1 FROM micro_block_storages WHERE id=?", (c["volumeId"],)).fetchone():
+                raise ValueError("A project or volume resource is already registered")
+            pool_row = db.execute("SELECT path FROM micro_storages WHERE id=?", (record["request"]["storage"],)).fetchone()
+            if not pool_row or not Path(pool_row[0]).is_absolute():
+                raise ValueError("Registered destination storage is unavailable")
+            pool_path = Path(pool_row[0])
+            info = os.lstat(pool_path)
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+                raise ValueError("Registered storage is not owner-controlled")
+            pool = pool_path.resolve(strict=True)
+            info = os.stat(pool)
+            if record["poolIdentity"] != [info.st_dev, info.st_ino]:
+                raise ValueError("Destination filesystem identity changed")
+            parent = control.with_suffix(".sandbox")
+            projects, backups, volumes = parent / "projects", parent / "project-backups", pool / "volumes"
+            folders = dict(project=str(projects / c["projectId"]), volume=str(volumes / c["volumeId"]), backup=str(backups / c["projectId"]), archive=str(backups / c["projectId"] / c["id"]), projectStage=str(projects / (".project-import-" + args.operation)), volumeStage=str(volumes / (".project-import-" + args.operation)), archiveStage=str(backups / (".project-import-" + args.operation)))
+            if folders != record["folders"]:
+                raise ValueError("Import journal paths differ from registered resources")
+            for directory in (parent, projects, backups):
+                if os.path.lexists(directory):
+                    io.private_dir(directory)
+            if os.path.lexists(volumes):
+                v = os.lstat(volumes)
+                if not stat.S_ISDIR(v.st_mode) or v.st_uid != os.geteuid() or v.st_mode & 0o022:
+                    raise ValueError("Volume namespace is not owner-controlled")
+            roles = ("project", "volume", "backup", "projectStage", "volumeStage", "archiveStage")
+            paths = {role: Path(folders[role]) for role in roles}
+            targets = {role: path.parent / (".abandoned-import-" + args.operation + "-" + role) for role, path in paths.items()}
+            if not record.get("abandonPlan"):
+                plan = {}
+                for role in roles:
+                    path, target = paths[role], targets[role]
+                    if os.path.lexists(target):
+                        raise ValueError("Abandonment destination already exists")
+                    if not os.path.lexists(path):
+                        plan[role] = None
+                        continue
+                    io.private_dir(path)
+                    check_abandon_contents(role, path, c["id"], args.operation, io)
+                    st = os.lstat(path)
+                    plan[role] = [st.st_dev, st.st_ino]
+                record["abandonPlan"] = plan
+                transaction(db, lambda: save(db, record))
+            plan = record["abandonPlan"]
+            if set(plan) != set(roles):
+                raise ValueError("Abandonment journal is invalid")
+            for role in roles:
+                path, target, expected = paths[role], targets[role], plan[role]
+                source_exists, target_exists = os.path.lexists(path), os.path.lexists(target)
+                if expected is None:
+                    if source_exists or target_exists:
+                        raise ValueError("Unexpected artifact appeared during abandonment")
+                    continue
+                if source_exists == target_exists:
+                    raise ValueError("Abandonment directory is missing or conflicts with another entry")
+                current = path if source_exists else target
+                io.private_dir(current)
+                st = os.lstat(current)
+                if [st.st_dev, st.st_ino] != expected:
+                    raise ValueError("Abandonment directory identity changed")
+                check_abandon_contents(role, current, c["id"], args.operation, io)
+                if source_exists:
+                    rename_new(path, target)
+                io.sync_dir(target.parent)
+            info = os.stat(pool)
+            if record["poolIdentity"] != [info.st_dev, info.st_ino]:
+                raise ValueError("Destination filesystem identity changed during abandonment")
+            record["phase"] = "complete"
+            record["outcome"] = "abandoned"
+            record["completedAt"] = time.time_ns() // 1_000_000
+            transaction(db, lambda: save(db, record))
+            print(encode(dict(status="abandoned", operationId=args.operation, projectId=row[0])))
+        finally:
+            db.close()
+    finally:
+        os.close(lock)
+
+
 def run_import(args, io):
     """Import is explicit and Linux-only; this function is never called by export or inspect."""
     if not sys.platform.startswith("linux"):
@@ -479,6 +610,8 @@ def run_import(args, io):
                 record = json.loads(previous[2])
                 if (record["project"], record["phase"]) != previous[:2] or record["id"] != args.operation:
                     raise ValueError("Import journal identity or phase is inconsistent")
+                if record.get("abandonPlan") or record.get("outcome") == "abandoned":
+                    raise ValueError("This import is being abandoned or was abandoned; use a new operation")
                 if any(record["request"].get(key) != value for key, value in fixed.items()):
                     raise ValueError("Import operation has another immutable request")
                 if record["phase"] == "complete" and not os.path.lexists(source):
