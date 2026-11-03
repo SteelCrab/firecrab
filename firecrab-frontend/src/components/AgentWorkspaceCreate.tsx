@@ -110,6 +110,7 @@ export default function AgentWorkspaceCreate({
     const current = () => alive.current && generation.current === revision;
     while (current()) {
       setJob(next);
+      setLog(next.log || "");
       report.current(next);
       if (next.state === "failed")
         throw Error(

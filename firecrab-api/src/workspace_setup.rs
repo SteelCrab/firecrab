@@ -8,8 +8,7 @@ use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use firecrab_api_types::{
     CreateMicroNetworkRequest, CreateVmRequest, CreateWorkspaceRequest, EgressPolicy,
-    ImageInstallStatus, WorkspaceSetup, WorkspaceSetupPhase as Phase,
-    WorkspaceSetupState as Status,
+    WorkspaceSetup, WorkspaceSetupPhase as Phase, WorkspaceSetupState as Status,
 };
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
@@ -18,12 +17,12 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
-use crate::handlers::{images, micro_networks, vms};
+use crate::handlers::{micro_networks, vms};
 use crate::model::{VmPurpose, VmState};
 use crate::server::RequestId;
 use crate::state::AppState;
 
-pub const IMAGE: &str = "ubuntu-26.04";
+mod image;
 
 #[cfg(test)]
 mod tests;
@@ -51,6 +50,10 @@ pub(crate) struct SavedSetup {
     pub request: CreateWorkspaceRequest,
     pub progress: WorkspaceSetup,
     pub reserved_network: Uuid,
+    #[serde(default)]
+    pub image_reference: Option<String>,
+    #[serde(default)]
+    pub kernel_version: Option<String>,
 }
 
 fn failed(request: RequestId) -> AppError {
@@ -106,14 +109,22 @@ pub async fn list(
         .map_err(|_| failed(request))?
         .map_err(|_| failed(request))?;
     Ok(Json(
-        jobs.into_iter().take(50).map(|job| job.progress).collect(),
+        jobs.into_iter()
+            .take(50)
+            .map(|job| progress(&state, job))
+            .collect(),
     ))
 }
 pub async fn get(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkspaceSetup>, AppError> {
-    Ok(Json(read(&state, id).await?.progress))
+    Ok(Json(progress(&state, read(&state, id).await?)))
+}
+
+fn progress(state: &AppState, mut job: SavedSetup) -> WorkspaceSetup {
+    job.progress.log = image::log(state, &job);
+    job.progress
 }
 
 fn validate(request: &CreateWorkspaceRequest) -> BTreeMap<String, String> {
@@ -188,6 +199,8 @@ pub async fn create(
         };
         let job = SavedSetup {
             reserved_network: Uuid::new_v4(),
+            image_reference: None,
+            kernel_version: None,
             progress: WorkspaceSetup {
                 id: input.id,
                 vm_id: Uuid::new_v4(),
@@ -200,6 +213,7 @@ pub async fn create(
                 state: Status::Queued,
                 phase: Phase::Image,
                 error: None,
+                log: String::new(),
             },
             request: input,
         };
@@ -209,7 +223,7 @@ pub async fn create(
     if job.progress.state != Status::Ready {
         spawn(state.clone(), job.progress.id);
     }
-    Ok((StatusCode::ACCEPTED, Json(job.progress)))
+    Ok((StatusCode::ACCEPTED, Json(progress(&state, job))))
 }
 
 fn spawn(state: AppState, id: Uuid) {
@@ -265,64 +279,6 @@ pub async fn recover(state: &AppState) {
 async fn phase(state: &AppState, job: &mut SavedSetup, phase: Phase) -> Result<(), AppError> {
     job.progress.phase = phase;
     save(state, job).await
-}
-
-async fn image_job(state: &AppState, request: RequestId, package: bool) -> Result<(), AppError> {
-    let tracker = if package {
-        &state.image_packages
-    } else {
-        &state.image_installs
-    };
-    if !tracker.is_running(IMAGE) {
-        let result = if package {
-            images::start_image_package(
-                State(state.clone()),
-                Path(IMAGE.into()),
-                Extension(request),
-            )
-            .await
-            .map(|_| ())
-        } else {
-            images::start_image_install(
-                State(state.clone()),
-                Path(IMAGE.into()),
-                Extension(request),
-            )
-            .await
-            .map(|_| ())
-        };
-        if let Err(error) = result
-            && !tracker.is_running(IMAGE)
-            && state.templates.resolve_alias(IMAGE).is_none()
-        {
-            return Err(error);
-        }
-    }
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(1800);
-    loop {
-        if state.templates.resolve_alias(IMAGE).is_some() {
-            return Ok(());
-        }
-        match tracker.snapshot(IMAGE).status {
-            ImageInstallStatus::Succeeded => return Ok(()),
-            ImageInstallStatus::Running => {}
-            _ => {
-                return Err(conflict(
-                    "workspace_image_failed",
-                    "Ubuntu preparation failed; inspect the image installation log and retry",
-                    request,
-                ));
-            }
-        }
-        if tokio::time::Instant::now() > deadline {
-            return Err(conflict(
-                "workspace_image_timeout",
-                "Ubuntu is still being prepared; retry to check the existing installation",
-                request,
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
 }
 
 async fn network(
@@ -416,20 +372,20 @@ async fn run(state: &AppState, id: Uuid) -> Result<(), AppError> {
     job.progress.state = Status::Running;
     job.progress.error = None;
     phase(state, &mut job, Phase::Image).await?;
-    if state.templates.resolve_alias(IMAGE).is_none() {
-        if !state.image_installs.is_running(IMAGE)
-            && !crate::image_install::staged_package_exists(
-                state.templates.image_root_path(),
-                IMAGE,
-            )
-        {
-            image_job(state, request, true).await?;
-        }
-        image_job(state, request, false).await?;
-    }
+    let existing = state
+        .vms
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&job.progress.vm_id)
+        .cloned();
+    let alias = if let Some(vm) = existing.as_ref() {
+        image::template_alias(&job)?.unwrap_or_else(|| vm.template.clone())
+    } else {
+        image::prepare(state, &mut job).await?
+    };
     let template = state
         .templates
-        .resolve_alias(IMAGE)
+        .resolve_alias(&alias)
         .ok_or_else(|| failed(request))?;
     job.progress.disk_gb = job.request.disk_gb.max(
         u16::try_from(template.rootfs.length().div_ceil(1024 * 1024 * 1024))
@@ -438,14 +394,8 @@ async fn run(state: &AppState, id: Uuid) -> Result<(), AppError> {
     phase(state, &mut job, Phase::Network).await?;
     let network = network(state, &mut job, request).await?;
     phase(state, &mut job, Phase::Create).await?;
-    let existing = state
-        .vms
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&job.progress.vm_id)
-        .cloned();
     if let Some(vm) = existing {
-        if vm.template != IMAGE
+        if vm.template != alias
             || vm.micro_network_id != network
             || vm.purpose != VmPurpose::Instance
             || vm.name != job.progress.name
@@ -466,7 +416,7 @@ async fn run(state: &AppState, id: Uuid) -> Result<(), AppError> {
             request,
             CreateVmRequest {
                 name: job.progress.name.clone(),
-                template: IMAGE.into(),
+                template: alias,
                 cpu: job.progress.cpu,
                 ram: job.progress.ram,
                 disk_gb: job.progress.disk_gb,
