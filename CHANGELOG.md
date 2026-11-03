@@ -27,6 +27,17 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- AI Sandbox **Workspace** has **Rename**. It opens an inline field (Enter
+  saves, Esc cancels) and renames the workspace and its VM together, so AI
+  Sandbox, the MicroVM list and the CODE › VS Code project card show the new
+  name. `PATCH /api/workspace-setups/{id}` with `{ "name": "..." }` writes both
+  names in one SQLite transaction; a failure keeps both old names. Names follow
+  the VM rule: 1–64 ASCII letters, numbers, `.`, `_` or `-`, starting with a
+  letter or number. A running VM can be renamed. Its hostname, SSH keys, files
+  and AI sessions depend on the VM ID, not the name, so they do not change.
+  Firecrab refuses the rename while the workspace is still preparing, while the
+  VM starts, stops or pauses, and for VMs that pools, builders, queues, sandbox
+  environments, cluster workers, MicroServices or stacks manage.
 - AI Sandbox **App address** has **View locally**. It opens the VM's running
   app at `http://127.0.0.1:<port>/` on the computer that runs Firecrab,
   through one SSH loopback forward to the VM. It needs no token and publishes

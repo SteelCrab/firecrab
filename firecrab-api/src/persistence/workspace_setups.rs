@@ -1,6 +1,6 @@
 use super::{PersistenceError, Store};
 use crate::workspace_setup::SavedSetup;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
 pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workspace_setups (
@@ -64,6 +64,38 @@ impl Store {
         if updated != 1 {
             return Err(corrupt());
         }
+        Ok(())
+    }
+    /// Writes a renamed setup and, when it exists, its VM row's name in one transaction.
+    /// Any failure rolls back both, so the workspace and VM never disagree on disk.
+    pub(crate) fn rename_workspace_setup(
+        &self,
+        saved: &SavedSetup,
+        rename_vm: bool,
+    ) -> Result<(), PersistenceError> {
+        let json = serde_json::to_string(saved).map_err(|_| corrupt())?;
+        let id = saved.progress.id.to_string();
+        let vm = saved.progress.vm_id.to_string();
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if rename_vm
+            && tx.execute(
+                "UPDATE vms SET name=?2 WHERE id=?1",
+                params![vm, saved.progress.name],
+            )? != 1
+        {
+            return Err(PersistenceError::MissingVm {
+                id: saved.progress.vm_id,
+            });
+        }
+        if tx.execute(
+            "UPDATE workspace_setups SET record=?3 WHERE id=?1 AND vm_id=?2",
+            params![id, vm, json],
+        )? != 1
+        {
+            return Err(corrupt());
+        }
+        tx.commit()?;
         Ok(())
     }
 }

@@ -3235,7 +3235,7 @@ fn min_disk_gb_for(rootfs_bytes: u64) -> u16 {
     rootfs_bytes.div_ceil(GIB).try_into().unwrap_or(u16::MAX)
 }
 
-fn valid_vm_name(name: &str) -> bool {
+pub(crate) fn valid_vm_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     (1..=64).contains(&bytes.len())
         && bytes[0].is_ascii_alphanumeric()

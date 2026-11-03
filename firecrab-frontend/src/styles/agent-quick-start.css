@@ -489,3 +489,24 @@
     padding: 0 14px 22px;
   }
 }
+/* Workspace title with its inline Rename action. */
+.awc-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.awc-name h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.awc-name .btn {
+  flex: none;
+}
+.awc-rename {
+  margin: 10px 0;
+}
+.awc-rename .awc-name input {
+  flex: 1;
+  font-size: 18px;
+}

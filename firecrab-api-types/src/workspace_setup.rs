@@ -20,6 +20,14 @@ pub struct CreateWorkspaceRequest {
     pub storage_root: Option<String>,
 }
 
+/// Body for `PATCH /api/workspace-setups/{id}`: renames the workspace and its VM together.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RenameWorkspaceRequest {
+    /// 1–64 ASCII letters, numbers, `.`, `_` or `-`, starting with a letter or number.
+    pub name: String,
+}
+
 fn cpu() -> u8 {
     2
 }

@@ -547,7 +547,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/workspace-setups/{id}",
-            get(crate::workspace_setup::get),
+            get(crate::workspace_setup::get).patch(crate::workspace_setup::rename),
         )
         .route(
             "/api/images/{alias}",

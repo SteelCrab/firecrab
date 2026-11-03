@@ -8,7 +8,8 @@ use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use firecrab_api_types::{
     CreateMicroNetworkRequest, CreateVmRequest, CreateWorkspaceRequest, EgressPolicy,
-    WorkspaceSetup, WorkspaceSetupPhase as Phase, WorkspaceSetupState as Status,
+    RenameWorkspaceRequest, WorkspaceSetup, WorkspaceSetupPhase as Phase,
+    WorkspaceSetupState as Status,
 };
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
@@ -120,6 +121,120 @@ pub async fn get(
     Path(id): Path<Uuid>,
 ) -> Result<Json<WorkspaceSetup>, AppError> {
     Ok(Json(progress(&state, read(&state, id).await?)))
+}
+
+/// Renames a workspace and its VM together. A name is display metadata: the guest
+/// hostname, SSH keys, agent sessions and paths all derive from the VM id, so a
+/// running VM keeps working. The original create request keeps its name so an
+/// explicit retry with the saved settings still matches.
+pub async fn rename(
+    State(state): State<AppState>,
+    Extension(request): Extension<RequestId>,
+    Path(id): Path<Uuid>,
+    ValidatedJson(input): ValidatedJson<RenameWorkspaceRequest>,
+) -> Result<Json<WorkspaceSetup>, AppError> {
+    if !vms::valid_vm_name(&input.name) {
+        return Err(AppError::validation(
+            BTreeMap::from([(
+                "name".into(),
+                "must be 1-64 ASCII letters, numbers, '.', '_' or '-', starting with a letter or number"
+                    .into(),
+            )]),
+            request.0,
+        ));
+    }
+    // Admission orders this with create/retry and with a worker recording failure.
+    let _admission = state.workspace_setups.admission.lock().await;
+    let mut job = read(&state, id).await?;
+    let preparing = state
+        .workspace_setups
+        .workers
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&id);
+    if preparing || matches!(job.progress.state, Status::Queued | Status::Running) {
+        return Err(conflict(
+            "workspace_busy",
+            "Wait for the workspace to finish preparing before renaming it",
+            request,
+        ));
+    }
+    if job.progress.name == input.name {
+        return Ok(Json(progress(&state, job)));
+    }
+    let vm_id = job.progress.vm_id;
+    // Start, stop and resource edits hold the same VM lock.
+    let _vm = state.lock_vm(vm_id).await;
+    let vm = state
+        .vms
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&vm_id)
+        .cloned();
+    if let Some(vm) = vm.as_ref() {
+        ensure_renamable(&state, vm, request).await?;
+    }
+    job.progress.name = input.name.clone();
+    let store = state.store.clone();
+    let saved = job.clone();
+    let rename_vm = vm.is_some();
+    tokio::task::spawn_blocking(move || store.rename_workspace_setup(&saved, rename_vm))
+        .await
+        .map_err(|_| failed(request))?
+        .map_err(|error| {
+            tracing::error!(workspace_id=%id,%error,"failed to rename workspace");
+            failed(request)
+        })?;
+    if let Some(vm) = state
+        .vms
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(&vm_id)
+    {
+        vm.name = input.name;
+    }
+    Ok(Json(progress(&state, job)))
+}
+
+/// Only a plain AI Sandbox workspace VM in a settled state is renamed here.
+async fn ensure_renamable(
+    state: &AppState,
+    vm: &crate::model::VmRecord,
+    request: RequestId,
+) -> Result<(), AppError> {
+    if vm.purpose != VmPurpose::Instance {
+        return Err(managed(request));
+    }
+    // A boot in progress persists its own snapshot of the record when it finishes.
+    if !matches!(
+        vm.state,
+        VmState::Created | VmState::Stopped | VmState::Error | VmState::Running
+    ) {
+        return Err(AppError::invalid_state(vm.state, request.0));
+    }
+    let store = state.store.clone();
+    let id = vm.id;
+    let owned = tokio::task::spawn_blocking(move || -> Result<bool, ()> {
+        Ok(store.sandbox_environment_owns_vm(id).map_err(|_| ())?
+            || store.cluster_worker(id).map_err(|_| ())?.is_some()
+            || store.vm_has_service_owner(id).map_err(|_| ())?
+            || store.stack_binds_vm(id).map_err(|_| ())?)
+    })
+    .await
+    .map_err(|_| failed(request))?
+    .map_err(|_| failed(request))?;
+    if owned {
+        return Err(managed(request));
+    }
+    Ok(())
+}
+
+fn managed(request: RequestId) -> AppError {
+    conflict(
+        "vm_managed",
+        "This VM is managed by another feature; rename it there",
+        request,
+    )
 }
 
 fn progress(state: &AppState, mut job: SavedSetup) -> WorkspaceSetup {

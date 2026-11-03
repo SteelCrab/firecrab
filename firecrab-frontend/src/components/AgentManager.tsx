@@ -54,6 +54,7 @@ import AgentRepository from "./AgentRepository";
 import AgentFileTree from "./AgentFileTree";
 import AgentAutomation from "./AgentAutomation";
 import AgentWorkspaceCreate from "./AgentWorkspaceCreate";
+import AgentWorkspaceName from "./AgentWorkspaceName";
 import AgentSkillStore from "./AgentSkillStore";
 import AgentRules from "./AgentRules";
 import AgentWorkspaceApp, {
@@ -110,11 +111,20 @@ function AgentVmSelection(props: Props & { controllerId: string }) {
   const key = `firecrab.agentVm.${props.controllerId}`;
   const [vmId, setVmId] = useState(() => localStorage.getItem(key) || "");
   const [created, setCreated] = useState<VmResponse[]>([]);
+  // A rename shows at once. It applies only while the VM list still has the
+  // old name, so the next refresh (or a later rename elsewhere) wins.
+  const [renamed, setRenamed] = useState<
+    Record<string, { from: string; to: string }>
+  >({});
   const unsaved = useRef(false);
   const vms = [
     ...props.vms,
     ...created.filter((v) => !props.vms.some((p) => p.id === v.id)),
-  ].filter((v) => !v.purpose || v.purpose === "instance");
+  ]
+    .filter((v) => !v.purpose || v.purpose === "instance")
+    .map((v) =>
+      renamed[v.id]?.from === v.name ? { ...v, name: renamed[v.id].to } : v,
+    );
   const onUnsavedChange = props.onUnsavedChange;
   const activeVmId = vms.some((v) => v.id === vmId) ? vmId : "";
   const onDirty = useCallback(
@@ -143,6 +153,11 @@ function AgentVmSelection(props: Props & { controllerId: string }) {
       onUnsavedChange={onDirty}
       vmId={activeVmId}
       onVm={choose}
+      onRenamed={(id, name) => {
+        const from = props.vms.find((v) => v.id === id)?.name;
+        if (from !== undefined)
+          setRenamed((old) => ({ ...old, [id]: { from, to: name } }));
+      }}
       onCreated={(v) => {
         setCreated((old) => [...old, v]);
         localStorage.setItem(key, v.id);
@@ -158,12 +173,14 @@ function VmAgentWorkspace({
   vmId,
   onVm,
   onCreated,
+  onRenamed,
   onUnsavedChange,
 }: Props & {
   controllerId: string;
   vmId: string;
   onVm: (id: string) => void;
   onCreated: (vm: VmResponse) => void;
+  onRenamed: (vmId: string, name: string) => void;
 }) {
   const { t } = useI18n();
   const host = useHostStatus();
@@ -646,7 +663,10 @@ function VmAgentWorkspace({
           {vm && (page === "workspace" || page === "settings") && (
             <section className="awc">
               <small>{t("Workspace", "작업 공간")}</small>
-              <h2>{vm.name}</h2>
+              <AgentWorkspaceName
+                vm={vm}
+                onRenamed={(name) => onRenamed(vm.id, name)}
+              />
               <p>
                 {t(
                   "Continue with accounts, AI tasks and your running app.",

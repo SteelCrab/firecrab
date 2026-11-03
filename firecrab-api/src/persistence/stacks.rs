@@ -26,6 +26,14 @@ CREATE TABLE IF NOT EXISTS stack_bindings (
 ) STRICT;";
 
 impl Store {
+    /// Whether a stack owns this exact VM UUID.
+    pub(crate) fn stack_binds_vm(&self, vm: Uuid) -> Result<bool, PersistenceError> {
+        Ok(self.lock().query_row(
+            "SELECT EXISTS(SELECT 1 FROM stack_bindings WHERE kind='vm' AND resource_id=?1)",
+            [vm.to_string()],
+            |r| r.get(0),
+        )?)
+    }
     /// Recover the newest accepted content pin for this exact bound VM UUID.
     /// This also protects later manual starts and API restart recovery.
     /// Inventory excludes pending updates so admission itself does not create drift.

@@ -40,6 +40,20 @@ export function getWorkspace(id: string): Promise<WorkspaceSetup> {
 export function listWorkspaces(): Promise<WorkspaceSetup[]> {
   return fetchJson("/api/workspace-setups");
 }
+/** Renames the workspace and its VM together. */
+export function renameWorkspace(
+  id: string,
+  name: string,
+): Promise<WorkspaceSetup> {
+  return fetchJson(`/api/workspace-setups/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+/** Same rule as the API: 1–64 letters, numbers, ".", "_" or "-", starting with a letter or number. */
+export const validWorkspaceName = (name: string) =>
+  /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name);
 
 export type AppConfig = {
   testCommand: string;
