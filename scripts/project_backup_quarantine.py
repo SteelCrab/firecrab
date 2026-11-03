@@ -213,7 +213,8 @@ def purge_abandoned(args, io):
             info = os.stat(pool)
             if record["poolIdentity"] != [info.st_dev, info.st_ino]:
                 raise ValueError("Destination storage changed during cleanup")
-            record["quarantineCleanup"] = dict(phase="complete", fileCount=count, bytes=size, completedAt=time.time_ns() // 1_000_000)
+            plan.update(phase="complete", fileCount=count, bytes=size, completedAt=time.time_ns() // 1_000_000)
+            record["quarantineCleanup"] = plan
             transaction(db, lambda: save(db, record))
             print(encode(dict(status="complete", operationId=args.operation, fileCount=count, bytes=size)))
         finally:

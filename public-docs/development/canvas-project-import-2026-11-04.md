@@ -152,7 +152,8 @@ The offline `purge-abandoned` command previews an abandoned import's private
 quarantine file count and logical bytes. With explicit deletion confirmation it
 records bounded exact file identities, hashes and directory identities before
 unlinking. It rejects unknown entries, symlinks and hard links. Interrupted cleanup
-resumes the same plan. A completed receipt does not touch subsequently created files.
+resumes the same plan. A completed receipt retains its file/directory proofs and does
+not touch subsequently created files.
 The controller must be stopped, and the registered pool identity must still match.
 Live projects, volumes, VMs, transfer packages and backup catalogs are not cleanup
 targets. The command does not implement permanent deletion of a retained project.

@@ -248,7 +248,8 @@ Before the first deletion the controller records the exact file hashes and ident
 It checks for unknown entries and changed identities, removes only recorded files,
 syncs each parent directory and removes only recorded empty directories. Interrupted
 cleanup can be resumed with the same operation and `--confirm-delete`. A completed
-receipt returns the saved result without touching newer files. `import-status` reports
+receipt retains the exact file and directory proofs for audit. It returns the saved
+result without touching newer files. `import-status` reports
 whether quarantine cleanup is pending or complete. Missing storage, changed files,
 symlinks, hard links or unknown entries stop cleanup for operator inspection.
 
