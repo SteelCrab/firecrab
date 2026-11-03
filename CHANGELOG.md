@@ -33,6 +33,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Pin VM cleanup to its original physical directories and disk generation.
+  Reject storage remapping, preserve retained artifact identity and require
+  explicit legacy proof review before resuming unproven cleanup.
+
 - Reserve shared IaC operation UUIDs across ownership changes, native mutations
   and Stack applies. Preserve original receipts and reject cross-family reuse
   through SQLite transactions, including concurrent API processes.

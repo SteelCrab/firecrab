@@ -241,6 +241,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/iac/native-operations/{id}/recover",
             post(handlers::iac::recover_native_operation),
         )
+        .route(
+            "/api/iac/native-operations/{id}/vm-storage",
+            get(handlers::vm_storage::observe).post(handlers::vm_storage::review),
+        )
         .route("/api/iac/owners/{kind}/{id}", get(handlers::iac::owner))
         .route(
             "/api/iac/owners/transition",

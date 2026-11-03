@@ -637,6 +637,20 @@ pub(crate) async fn resume_cluster_delete(
     storage: &str,
     request: RequestId,
 ) -> Result<(), AppError> {
+    let store = state.store.clone();
+    let completed =
+        super::stacks::database(request.0, move || store.completed_vm_delete(id)).await?;
+    if let Some(completed) = completed {
+        return if completed.storage_root() == storage {
+            Ok(())
+        } else {
+            Err(AppError::conflict(
+                "cluster_cleanup_identity_changed",
+                "the completed native cleanup has a different original storage identity",
+                request.0,
+            ))
+        };
+    }
     if !state.storage_root_known(storage) {
         return Err(AppError::conflict(
             "storage_missing",
@@ -1515,6 +1529,7 @@ pub(crate) async fn delete_vm_admitted(
     let id = Uuid::parse_str(&native.operation.ownership.resource.id)
         .map_err(|_| AppError::internal(request_id.0))?;
     let retain_disks = native.retain_disks;
+    super::vm_deletion::check_storage(&state, &native, request_id.0)?;
     // Capture the final buffered application output before removing artifacts.
     // A damaged log buffer must never prevent VM cleanup.
     if !matches!(
@@ -1537,6 +1552,11 @@ pub(crate) async fn delete_vm_admitted(
         .validate_native_vm_delete(&native)
         .map_err(|error| super::stacks::persistence_error(error, request_id.0))?;
     super::vm_deletion::teardown(&state, &native, request_id.0).await?;
+    let storage = native
+        .storage_proof()
+        .cloned()
+        .ok_or_else(|| AppError::internal(request_id.0))?;
+    let storage_root = super::vm_deletion::check_storage(&state, &native, request_id.0)?;
     let removed = {
         let mut vms = state
             .vms
@@ -1552,8 +1572,6 @@ pub(crate) async fn delete_vm_admitted(
     };
 
     let store = state.store.clone();
-    let artifact_paths =
-        crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&removed.storage_root), id);
     let expected = native.operation.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
         store
@@ -1561,15 +1579,14 @@ pub(crate) async fn delete_vm_admitted(
             .map_err(|error| error.to_string())?;
         // Retaining the VM keeps its private artifact tree, including runtime
         // logs and disks. Otherwise remove the whole tree before its record.
-        if let Err(error) = if retain_disks {
-            Ok(())
+        if if retain_disks {
+            storage.check(&storage_root)
         } else {
-            crate::artifacts::remove_vm_artifacts(&artifact_paths)
-        } {
-            return Err(format!(
-                "failed to remove {}: {error}",
-                artifact_paths.dir.display()
-            ));
+            storage.remove(&storage_root)
+        }
+        .is_err()
+        {
+            return Err("original VM cleanup storage is unavailable or changed".into());
         }
         store
             .finish_native_vm_delete(&native)

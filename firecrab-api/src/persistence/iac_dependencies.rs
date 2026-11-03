@@ -58,6 +58,14 @@ pub(super) fn reserve_vm_parents(
     vm: Uuid,
 ) -> Result<(), PersistenceError> {
     let mut parents = BTreeSet::new();
+    let storage: String = conn.query_row(
+        "SELECT storage_root FROM vms WHERE id=?1",
+        [vm.to_string()],
+        |row| row.get(0),
+    )?;
+    if let Ok(id) = Uuid::parse_str(&storage) {
+        parents.insert(("storage_root".to_owned(), id.to_string()));
+    }
     let mut pool = conn.prepare("SELECT pool_id FROM vm_pool_members WHERE vm_id=?1")?;
     for id in pool.query_map([vm.to_string()], |row| row.get::<_, String>(0))? {
         parents.insert(("pool".to_owned(), id?));

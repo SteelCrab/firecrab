@@ -176,19 +176,50 @@ async fn run(
             .map_err(|error| persistence_error(error, request.0))?;
         intent
     } else {
-        if let Some(stack) = stack_operation {
-            state
-                .store
-                .begin_stack_vm_delete(&prepared, id, retain_disks, stack)
-        } else {
-            state
-                .store
-                .begin_native_vm_delete(&prepared, id, retain_disks)
-        }
-        .map_err(|error| persistence_error(error, request.0))?
+        let root = state
+            .storage_path_for(&prepared.storage_root)
+            .map_err(|_| storage_unavailable(request.0))?;
+        let storage = crate::artifacts::cleanup::VmCleanupStorage::capture(
+            &root,
+            prepared.id,
+            prepared.disk_generation,
+        )
+        .map_err(|_| AppError::internal(request.0))?;
+        state
+            .store
+            .begin_vm_delete_pinned(&prepared, id, retain_disks, stack_operation, storage)
+            .map_err(|error| persistence_error(error, request.0))?
     };
     *attempt.lock().unwrap_or_else(|p| p.into_inner()) = Some(intent.clone());
     vms::delete_vm_admitted(state, request, intent).await
+}
+
+fn storage_unavailable(id: Uuid) -> AppError {
+    AppError::conflict(
+        "vm_cleanup_storage_changed",
+        "restore the original VM storage mapping before recovering cleanup",
+        id,
+    )
+}
+
+/// Re-read the configured selector; a removed registration never falls back to another disk.
+pub(crate) fn check_storage(
+    state: &AppState,
+    intent: &VmDeleteIntent,
+    id: Uuid,
+) -> Result<std::path::PathBuf, AppError> {
+    let storage = intent.storage_proof().ok_or_else(|| {
+        AppError::conflict(
+            "vm_cleanup_storage_review_required",
+            "review the original storage proof of this legacy cleanup before recovery",
+            id,
+        )
+    })?;
+    let root = state
+        .storage_path_for(intent.storage_root())
+        .map_err(|_| storage_unavailable(id))?;
+    storage.check(&root).map_err(|_| storage_unavailable(id))?;
+    Ok(root)
 }
 
 pub(crate) async fn recover(
@@ -199,6 +230,14 @@ pub(crate) async fn recover(
     let vm = Uuid::parse_str(&operation.ownership.resource.id)
         .map_err(|_| AppError::internal(request.0))?;
     let id = operation.operation_id;
+    let original = state
+        .store
+        .native_vm_delete(id)
+        .map_err(|error| persistence_error(error, request.0))?
+        .ok_or_else(|| AppError::not_found(request.0))?;
+    if original.operation.state != NativeOperationState::Succeeded {
+        check_storage(&state, &original, request.0)?;
+    }
     // Recovery admission and dispatch belong to the server after the request is accepted.
     let store = state.store.clone();
     tokio::spawn(async move {
@@ -242,6 +281,7 @@ pub(crate) async fn teardown(
         .store
         .validate_native_vm_delete(intent)
         .map_err(|error| persistence_error(error, request))?;
+    check_storage(state, intent, request)?;
     let policy = state.network.remove_vm_policy(vm).await;
     state
         .store

@@ -942,7 +942,7 @@ impl Store {
         conn.execute_batch(iac_database_brokers::SCHEMA)?;
         conn.execute_batch(iac_managed_database_brokers::SCHEMA)?;
         conn.execute_batch(iac_kernels::SCHEMA)?;
-        conn.execute_batch(iac_vm_deletes::SCHEMA)?;
+        iac_vm_deletes::initialize(&conn)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;

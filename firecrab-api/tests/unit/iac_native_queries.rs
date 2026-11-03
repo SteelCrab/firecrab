@@ -100,7 +100,16 @@ async fn iac_native_vm_recovery_requires_operator_and_pins_expected_endpoint() {
     let vm = record("recovery-scope", Uuid::new_v4());
     seed_vm(&state, &vm);
     let id = Uuid::new_v4();
-    let intent = state.store.begin_native_vm_delete(&vm, id, true).unwrap();
+    let storage = crate::artifacts::cleanup::VmCleanupStorage::capture(
+        root.path(),
+        vm.id,
+        vm.disk_generation,
+    )
+    .unwrap();
+    let intent = state
+        .store
+        .begin_vm_delete_pinned(&vm, id, true, None, storage)
+        .unwrap();
     state.store.fail_native_vm_delete(&intent).unwrap();
     let path = format!("/api/iac/native-operations/{id}/recover");
     let app = router(state.clone());

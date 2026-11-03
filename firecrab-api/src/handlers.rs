@@ -39,6 +39,7 @@ pub mod update;
 pub(crate) mod vm_boot;
 pub(crate) mod vm_deletion;
 pub mod vm_execution;
+pub(crate) mod vm_storage;
 pub mod vms;
 
 pub mod ai_sandbox;

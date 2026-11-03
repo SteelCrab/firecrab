@@ -59,6 +59,7 @@ VM artifact retention is immutable for the operation. The ordinary VM DELETE
 API removes private VM artifacts. Existing Stack lifecycle policy retains them
 by default. Borrowed data-volume files survive either policy.
 `retainDisks` in a VM cleanup status reports the recorded policy.
+The [physical cleanup proof](iac-vm-storage.md) also retains the exact storage scope and disk generation across recovery.
 
 The host must confirm firewall-policy and TAP removal before the VM address can
 be reused. Metadata removal, shell/port cleanup, lease release and the succeeded

@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub(crate) mod cleanup;
+
 /// Failure modes for creating runtime directories.
 #[derive(Debug, Error)]
 pub enum ArtifactError {
