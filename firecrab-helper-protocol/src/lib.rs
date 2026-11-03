@@ -11,6 +11,9 @@ pub mod host_iac;
 pub mod native_iac;
 /// Network-helper-specific request/response payloads (bridge, TAP, firewall).
 pub mod network;
+/// Stable physical directory proofs used by native configuration and VM cleanup.
+#[cfg(unix)]
+pub mod physical_directory;
 /// Shared pipe manifest and restricted helper operations.
 pub mod pipe;
 pub mod security_group;

@@ -202,6 +202,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Fixed
 
+- Read Linux directory birth times through statx on both GNU and musl builds.
+  Permit an explicitly supplied matching CLI to verify native ownership when
+  purging data after a prior uninstall removed the installed CLI.
+
 - Serialize shared operation-key initialization before reading existing history.
   Explicitly release image/kernel publication locks so forked descriptor copies
   cannot extend a completed native operation lease.

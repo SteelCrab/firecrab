@@ -20,6 +20,9 @@ thiserror = { workspace = true }
 tokio = { version = "1", features = ["io-util"] }
 uuid = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
 [dev-dependencies]
 tempfile = "3.27.0"
 tokio = { version = "1", features = ["io-util", "macros", "rt"] }

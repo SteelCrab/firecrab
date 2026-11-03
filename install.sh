@@ -227,6 +227,9 @@ trap cleanup_payload EXIT
 native_maintenance_cli() {
     local candidate
     local candidates=("$PREFIX/bin/firecrab" "$LIBDIR/firecrab")
+    # A prior uninstall removes the installed CLI but retains the native journal.
+    # An explicitly supplied local payload can authorize a later purge.
+    if [ -n "$BIN_DIR" ]; then candidates+=("$BIN_DIR/firecrab"); fi
     if [ -n "${PAYLOAD_BIN:-}" ]; then candidates+=("$PAYLOAD_BIN/firecrab"); fi
     for candidate in "${candidates[@]}"; do
         if [ -x "$candidate" ] && "$candidate" iac native-maintenance --help >/dev/null 2>&1; then

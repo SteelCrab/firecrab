@@ -184,6 +184,26 @@ def main():
         before=control_log.read_bytes()
         subprocess.run(["bash","-c",guard_script],env=env,capture_output=True,timeout=15,check=True)
         assert control_log.read_bytes()==before
+        # Uninstall removes the installed CLI, while the journal still requires
+        # matching authorization for a later purge. Only explicit input supplies it.
+        installed_cli = prefix / "bin/firecrab"
+        installed_cli.unlink()
+        purge_guard = installer_functions + "\nrequire_sudo_ticket\nnative_maintenance_begin uninstall\nnative_maintenance_complete\n"
+        denied = subprocess.run(["bash", "-c", purge_guard, "installer", "--uninstall", "--purge"],
+                                env=env, capture_output=True, timeout=15)
+        assert denied.returncode != 0
+        assert control_log.read_bytes() == before
+        local_payload = root / "local-payload"
+        local_payload.mkdir()
+        (local_payload / "firecrab").symlink_to(binary)
+        try:
+            subprocess.run(["bash", "-c", purge_guard, "installer", "--uninstall", "--purge",
+                            "--bin-dir", str(local_payload)], env=env,
+                           capture_output=True, timeout=15, check=True)
+            assert control_log.read_bytes() == before
+            assert (home / "api.env").read_bytes() == api_configuration
+        finally:
+            installed_cli.symlink_to(binary)
         borrowed_operation=str(uuid.uuid4())
         borrowed_request=["native-maintenance","--operation-id",borrowed_operation,
                           "--action","install","--input-sha256","c"*64]

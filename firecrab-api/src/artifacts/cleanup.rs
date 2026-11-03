@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs, io,
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
 };
 use uuid::Uuid;
 
@@ -28,23 +26,13 @@ struct Directory {
 impl Directory {
     fn capture(path: &Path) -> io::Result<Self> {
         let path = fs::canonicalize(path)?;
-        let metadata = fs::metadata(&path)?;
-        if !metadata.is_dir() || metadata.ino() == 0 {
-            return Err(changed());
-        }
-        let created = metadata
-            .created()?
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| changed())?;
-        if created.is_zero() {
-            return Err(changed());
-        }
+        let metadata = firecrab_helper_protocol::physical_directory::observe(&path)?;
         Ok(Self {
             path,
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            created_seconds: created.as_secs(),
-            created_nanoseconds: created.subsec_nanos(),
+            device: metadata.device,
+            inode: metadata.inode,
+            created_seconds: metadata.created_seconds,
+            created_nanoseconds: metadata.created_nanoseconds,
         })
     }
 

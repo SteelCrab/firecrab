@@ -102,6 +102,10 @@ After installing the CLI, set a [host profile](../reference/cli.md#host-profiles
 | `--uninstall` | Remove services and binaries; retain data |
 | `--uninstall --purge` | Also delete the configured data directory |
 
+An uninstall removes the installed CLI but retains its native ownership journal.
+For a later purge, supply the matching CLI with `--bin-dir DIR`.
+The same ownership and pending-operation checks still apply.
+
 For the CLI installer, pass `--version TAG` or `-Version TAG` to select the archive version.
 Changing only the installer download URL does not pin that archive.
 

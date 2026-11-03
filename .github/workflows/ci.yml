@@ -1157,7 +1157,7 @@ jobs:
           fi
           test ! -e /etc/firecrab/host-baseline.env
           test -d /var/lib/firecrab
-          sudo ./install.sh --uninstall --purge
+          sudo ./install.sh --uninstall --purge --bin-dir target/release
           test ! -e /var/lib/firecrab
 
       - name: Export runtime QA coverage

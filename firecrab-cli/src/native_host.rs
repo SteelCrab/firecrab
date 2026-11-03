@@ -120,25 +120,12 @@ fn build(home: &Path, platform: Platform, machine: String) -> io::Result<Target>
 #[cfg(unix)]
 /// Creation time prevents a later filesystem object from reusing a retired inode identity.
 fn directory_identity(path: &Path) -> io::Result<String> {
-    use std::os::unix::fs::MetadataExt;
-    let metadata = fs::metadata(path)?;
-    if metadata.ino() == 0 {
-        return Err(invalid(
-            "native filesystem has no stable directory identity",
-        ));
-    }
-    let created = metadata
-        .created()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| invalid("native directory creation time is unavailable"))?
-        .as_nanos();
-    if created == 0 {
-        return Err(invalid("native directory creation time is unavailable"));
-    }
+    let metadata = firecrab_helper_protocol::physical_directory::observe(path)?;
+    let created = u128::from(metadata.created_seconds) * 1_000_000_000
+        + u128::from(metadata.created_nanoseconds);
     Ok(format!(
         "{:x}:{:x}:{created:x}",
-        metadata.dev(),
-        metadata.ino()
+        metadata.device, metadata.inode
     ))
 }
 
