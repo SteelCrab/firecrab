@@ -1,0 +1,52 @@
+{
+  "sourceCommit": "5189cb8fc03e33ed6d73b810260f7b0a0cf19e41",
+  "sourceDirty": false,
+  "verifiedOn": "2026-11-03",
+  "platform": "linux/arm64",
+  "rustVersion": "1.97.1",
+  "containerImage": "rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f",
+  "profile": "release",
+  "buildCommand": "cargo test --release --locked -p firecrab-api --no-run --message-format=json",
+  "buildEnvironment": {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_INCREMENTAL": "0"
+  },
+  "execution": "Compiler-reported binaries executed as nobody with --test-threads=4, writable temporary working directory and image root, read-only clean source worktree",
+  "results": {
+    "tlsStartup": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    "vmShim": {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    "api": {
+      "passed": 1896,
+      "failed": 0,
+      "ignored": 27
+    }
+  },
+  "artifacts": [
+    {
+      "file": "vm_shim_subcommand-df07976ac27f236c",
+      "sha256": "cc45168018fdbd51b3f11781dda4cdfe51eaf75eefb24439b56ab4ac2e8a2b88"
+    },
+    {
+      "file": "firecrab_api-ddca5945616d069a",
+      "sha256": "dec99600c98e201458a8bd2ea20974550b8776ff9782b80d207b28cc695e65b0"
+    },
+    {
+      "file": "tls_startup-3f0f7ebf2f315d5f",
+      "sha256": "c45db94b430ed61e71cc923bc22a5727242a7c6e42392e5514107c1be06a5121"
+    }
+  ],
+  "logs": {
+    "buildSha256": "6bcaedc4978e59ff24a2bdb73203d913c14e493313301f3411169afd7ad73d0d",
+    "testSha256": "5efa05249d72abe7566a221e891b10a919793add8765d9ec0da964d7f02a27af",
+    "clippySha256": "b5d8b3cd911d7aebea60a627b2d15b2afdf6f096bcd6507aeaabc942a0f841bd"
+  },
+  "scope": "Full API/TLS/VM-shim Release regression after original physical VM cleanup proofs, explicit legacy review, actual temporary controller storage, GNU/musl directory identity compatibility and retained original AWS credentials for ECR recovery. ECR uses signed local HTTP fixtures, not a live AWS account. Strict Linux Clippy passed. No every-resource Stack/Terraform or live KVM/controller acceptance claimed."
+}
