@@ -825,29 +825,12 @@
   color: var(--text-3);
   margin-bottom: 8px;
 }
-.screen[data-view="ai-sandbox"]
-  .agent-manager
-  .am-environment
-  .am-cli-choice-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
 .am-runtime-actions {
   display: flex;
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
   min-height: 42px;
-}
-.am-ready {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  color: var(--green);
-  font-size: 13px;
-}
-.am-ready svg {
-  width: 15px;
-  height: 15px;
 }
 .am-prepare-progress {
   display: grid;
@@ -927,27 +910,6 @@
   padding: 0;
   margin: 0 0 8px;
   font-size: 12px;
-}
-.screen[data-view="ai-sandbox"] .agent-manager .am-environment .am-cli-choice {
-  min-height: 44px;
-  padding: 8px 10px;
-  grid-template-columns: 24px minmax(0, 1fr) 14px;
-  font-size: 13px;
-}
-.am-environment .am-cli-choice .am-agent-brand {
-  width: 24px;
-  height: 24px;
-}
-.am-environment .am-choice-check {
-  display: grid;
-  place-items: center;
-  width: 14px;
-  height: 14px;
-  border: 1px solid var(--border-strong);
-}
-.am-environment .am-choice-check svg {
-  width: 11px;
-  height: 11px;
 }
 
 .am-project-editor {
@@ -1555,7 +1517,7 @@
   .agent-manager
   .am-environment
   .am-runtime-clis {
-  width: auto;
+  width: 100%;
 }
 .screen[data-view="ai-sandbox"]
   .agent-manager
@@ -1566,51 +1528,69 @@
   margin-bottom: 5px;
   color: var(--text-3);
 }
-.screen[data-view="ai-sandbox"]
-  .agent-manager
-  .am-environment
-  .am-cli-choice-grid {
-  display: flex;
-  gap: 3px;
-  padding: 3px;
-  border-radius: 7px;
-  background: var(--bg-sidebar);
-  border: 1px solid var(--border);
-}
-.screen[data-view="ai-sandbox"] .agent-manager .am-environment .am-cli-choice {
-  display: grid;
-  grid-template-columns: 18px auto;
-  gap: 7px;
-  min-height: 30px;
-  padding: 4px 10px;
-  border-radius: 5px;
-  border-color: transparent;
-  background: transparent;
+/* One row per coding CLI: check it to install, then sign in on its row. */
+.am-cli-hint {
+  margin: 0 0 10px;
   font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-3);
 }
-.screen[data-view="ai-sandbox"]
-  .agent-manager
-  .am-environment
-  .am-cli-choice:has(input:checked) {
-  background: var(--bg);
-  border-color: var(--border);
-  box-shadow: var(--shadow-xs);
+.am-cli-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
-.am-environment .am-cli-choice .am-agent-brand {
-  width: 18px;
-  height: 18px;
+.am-cli-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-height: 48px;
+  padding: 8px 12px;
+  box-sizing: border-box;
+}
+.am-cli-item + .am-cli-item {
+  border-top: 1px solid var(--border);
+}
+.screen[data-view="ai-sandbox"] .am-cli-item label {
+  flex: 1 1 220px;
+  min-width: 0;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.screen[data-view="ai-sandbox"] .am-cli-item label:has(input:disabled) {
+  cursor: default;
+}
+.am-cli-item .am-agent-brand {
+  width: 20px;
+  height: 20px;
 }
 .am-environment .am-cli-state {
-  display: inline;
-  margin-left: 6px;
+  margin-left: auto;
   font-size: 11px;
   color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .am-environment .am-cli-state[data-state="connected"] {
   color: var(--green-ink);
 }
-.am-environment .am-choice-check {
-  display: none;
+.am-environment .am-cli-state[data-state="installing"] {
+  color: var(--accent);
+}
+.am-environment .am-cli-state[data-state="failed"] {
+  color: var(--red-ink);
+}
+.am-cli-item .btn {
+  height: 32px;
+  min-height: 32px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  font-size: 12px;
 }
 .am-runtime-actions {
   min-height: 38px;
@@ -1622,9 +1602,6 @@
   box-sizing: border-box;
   font-size: 12px;
   padding: 0 10px;
-}
-.am-runtime-actions .am-ready {
-  font-size: 11px;
 }
 .am-install-log {
   margin-top: 10px;

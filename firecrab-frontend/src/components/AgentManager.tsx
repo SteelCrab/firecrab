@@ -36,6 +36,7 @@ import { useHostStatus } from "../hostStatusContext";
 import {
   agentRequest,
   agentEditorUrl,
+  AgentRequestError,
   type AgentTask,
   type AgentSession,
   type AgentStatus,
@@ -174,7 +175,8 @@ function VmAgentWorkspace({
     setView(next);
   };
 
-  const [savedCli, setCli] = useState(() => {
+  // Written by the earlier one-CLI flow; new workspaces save no choice.
+  const [savedCli] = useState(() => {
     const saved = localStorage.getItem(cliKey) || "";
     return ["codex", "claude", "copilot"].includes(saved) ? saved : "";
   });
@@ -219,6 +221,15 @@ function VmAgentWorkspace({
   const [setupDirty, setSetupDirty] = useState(false),
     [appDirty, setAppDirty] = useState(false);
   const [environmentBusy, setEnvironmentBusy] = useState(false);
+  // Coding CLIs checked for installation. The VM runs one preparation at a
+  // time and reports only the latest result, so CLIs install one after
+  // another and each failure is kept here before the next install hides it.
+  const [installs, setInstalls] = useState({
+    queue: [] as string[],
+    current: "",
+    failures: {} as Record<string, string>,
+  });
+  const posting = useRef(false);
   const [status, setStatus] = useState<AgentStatus | null>(null),
     [error, setError] = useState(""),
     [stale, setStale] = useState(false);
@@ -270,6 +281,20 @@ function VmAgentWorkspace({
       );
       if (!alive.current || version !== revision.current) return;
       setStatus(next);
+      setInstalls((old) => {
+        const done = next.preparation;
+        if (!old.current || done?.state === "installing") return old;
+        const failed =
+          done?.cli === old.current &&
+          ["failed", "interrupted"].includes(done.state);
+        return {
+          ...old,
+          current: "",
+          failures: failed
+            ? { ...old.failures, [old.current]: done.error || "" }
+            : old.failures,
+        };
+      });
       setStale(false);
       setError("");
       setSelection((selection) => {
@@ -314,16 +339,20 @@ function VmAgentWorkspace({
     status.controllerId === host.platform.controllerId &&
     status.vmId === vmId;
   const canControl = identityMatches && !stale && vm?.state === "running";
-  // The choice is kept per browser origin, but the VM knows which CLI is
-  // signed in. Without a saved choice, use that CLI instead of blocking tasks.
+  // The VM knows which CLIs are installed and signed in. Prefer a saved choice
+  // that is signed in, then any signed-in CLI, so tasks are not blocked by a
+  // choice this browser cannot change any more. An installed CLI still names
+  // the next step (sign in) when none is signed in.
+  const codingDrivers =
+    status?.drivers.filter((d) =>
+      ["codex", "claude", "copilot"].includes(d.id),
+    ) || [];
+  const signedIn = codingDrivers.filter((d) => d.available && d.authenticated);
   const cli =
+    signedIn.find((d) => d.id === savedCli)?.id ||
+    signedIn[0]?.id ||
     savedCli ||
-    status?.drivers.find(
-      (d) =>
-        ["codex", "claude", "copilot"].includes(d.id) &&
-        d.available &&
-        d.authenticated,
-    )?.id ||
+    codingDrivers.find((d) => d.available)?.id ||
     "";
   const driver = status?.drivers.find((d) => d.id === cli);
   const cliReady =
@@ -337,9 +366,15 @@ function VmAgentWorkspace({
   const canLaunch =
     canControl && cliReady && status?.project?.state === "ready";
   // Name the first thing that still blocks a task, not everything that could.
+  // The repository comes first, as on the Connect accounts page.
   const blocker = (() => {
     if (canLaunch) return null;
     const name = driver?.name || cli;
+    if (status?.project?.state !== "ready")
+      return t(
+        "Connect a repository in Connect accounts to start coding.",
+        "계정 연결에서 저장소를 연결하면 작업을 시작할 수 있어요.",
+      );
     if (status?.preparation?.state === "installing")
       return t(
         "Coding tools are still being installed in this VM.",
@@ -347,8 +382,8 @@ function VmAgentWorkspace({
       );
     if (!cli)
       return t(
-        "Choose a coding CLI in Connect accounts to start coding.",
-        "계정 연결에서 코딩 CLI를 선택하면 작업을 시작할 수 있어요.",
+        "Install a coding CLI in Connect accounts to start coding.",
+        "계정 연결에서 코딩 CLI를 설치하면 작업을 시작할 수 있어요.",
       );
     if (!driver?.available)
       return t(
@@ -359,11 +394,6 @@ function VmAgentWorkspace({
       return t(
         `Sign in to ${name} in Connect accounts to start coding.`,
         `계정 연결에서 ${name}에 로그인하면 작업을 시작할 수 있어요.`,
-      );
-    if (status?.project?.state !== "ready")
-      return t(
-        "Connect a repository in Connect accounts to start coding.",
-        "계정 연결에서 저장소를 연결하면 작업을 시작할 수 있어요.",
       );
     return null;
   })();
@@ -458,6 +488,62 @@ function VmAgentWorkspace({
       setEnvironmentBusy(false);
     }
   };
+  const preparation = status?.preparation;
+  const controller = status?.controllerId;
+  useEffect(() => {
+    const next = installs.queue[0];
+    if (
+      !next ||
+      installs.current ||
+      preparation?.state === "installing" ||
+      !canControl ||
+      posting.current
+    )
+      return;
+    posting.current = true;
+    void (async () => {
+      try {
+        const started = await agentRequest<
+          NonNullable<AgentStatus["preparation"]>
+        >("/prepare", { cli: next }, controller, vmId);
+        posting.current = false;
+        if (!alive.current) return;
+        // A poll sent before this install began may still report the old state.
+        revision.current++;
+        setStatus((old) => (old ? { ...old, preparation: started } : old));
+        setInstalls((old) => ({
+          ...old,
+          queue: old.queue.filter((id) => id !== next),
+          current: next,
+        }));
+      } catch (e) {
+        posting.current = false;
+        if (!alive.current) return;
+        // Busy means another preparation is running; this CLI keeps its turn.
+        if (!(e instanceof AgentRequestError && e.status === 409))
+          setInstalls((old) => ({
+            ...old,
+            queue: old.queue.filter((id) => id !== next),
+            failures: {
+              ...old.failures,
+              [next]: e instanceof Error ? e.message : String(e),
+            },
+          }));
+      }
+      await refresh();
+    })();
+  }, [installs, preparation, canControl, controller, vmId, refresh]);
+  const install = (clis: string[]) =>
+    setInstalls((old) => ({
+      ...old,
+      queue: [
+        ...old.queue,
+        ...clis.filter((id) => !old.queue.includes(id) && id !== old.current),
+      ],
+      failures: Object.fromEntries(
+        Object.entries(old.failures).filter(([id]) => !clis.includes(id)),
+      ),
+    }));
   const updateAgent = useCallback((agent: AgentSession, mutation = false) => {
     if (mutation) revision.current++;
     setStatus((old) =>
@@ -535,11 +621,7 @@ function VmAgentWorkspace({
                 settings={page === "settings"}
                 onProgress={setSetupJob}
                 onDirty={setSetupDirty}
-                onCreated={(value, chosen) => {
-                  localStorage.setItem(
-                    `firecrab.agentCli.${controllerId}.${value.id}`,
-                    chosen,
-                  );
+                onCreated={(value) => {
                   localStorage.setItem(
                     `firecrab.workspacePage.${controllerId}.${value.id}`,
                     "connections",
@@ -605,49 +687,24 @@ function VmAgentWorkspace({
             hidden={!vm || !["connections", "tasks"].includes(page)}
             className={`agent-manager${status?.project?.state !== "ready" || !cliReady ? " am-setting-up" : ""}`}
           >
-            <div
+            <header
               hidden={page !== "connections"}
-              className="am-connections-page"
+              className="am-connections-page am-quick-heading"
             >
-              <header className="am-quick-heading">
-                <small>{t("Connect accounts", "계정 연결")}</small>
-                <h2>
-                  {t(
-                    "Choose your AI and repository",
-                    "사용할 AI와 저장소를 연결해 주세요",
-                  )}
-                </h2>
-                <p>
-                  {t(
-                    "Sign in inside this VM. You can inspect each login command in its terminal.",
-                    "이 VM 안에서 로그인해요. 로그인 명령과 결과는 터미널에서 확인할 수 있어요.",
-                  )}
-                </p>
-              </header>
-              <AgentEnvironment
-                compact
-                vms={vms}
-                vmId={vmId}
-                cli={cli}
-                status={status}
-                busy={creating || environmentBusy}
-                canControl={canControl}
-                onVm={onVm}
-                onCli={(value) => {
-                  localStorage.setItem(cliKey, value);
-                  setCli(value);
-                  setStarter((old) => ({ ...old, cli: value, model: "" }));
-                  setEditor((old) =>
-                    old ? { ...old, cli: value, model: "" } : old,
-                  );
-                }}
-                onCreate={() => onVm("")}
-                onStart={() => void environmentAction("start")}
-                onPrepare={() => void environmentAction("prepare")}
-                onLogin={(value) => void environmentAction("login", value)}
-                onRefresh={() => void refresh()}
-              />
-            </div>
+              <small>{t("Connect accounts", "계정 연결")}</small>
+              <h2>
+                {t(
+                  "Connect a repository, then choose your AI",
+                  "저장소를 연결하고 사용할 AI를 골라 주세요",
+                )}
+              </h2>
+              <p>
+                {t(
+                  "Sign in inside this VM. You can inspect each login command in its terminal.",
+                  "이 VM 안에서 로그인해요. 로그인 명령과 결과는 터미널에서 확인할 수 있어요.",
+                )}
+              </p>
+            </header>
             <div
               hidden={
                 page !== "connections" && status?.project?.state !== "ready"
@@ -673,6 +730,24 @@ function VmAgentWorkspace({
                   }
                 />
               )}
+            </div>
+            <div hidden={page !== "connections"} className="am-connections-cli">
+              <AgentEnvironment
+                compact
+                vms={vms}
+                vmId={vmId}
+                status={status}
+                busy={creating || environmentBusy}
+                canControl={canControl}
+                queue={installs.queue}
+                failures={installs.failures}
+                onVm={onVm}
+                onCreate={() => onVm("")}
+                onStart={() => void environmentAction("start")}
+                onInstall={install}
+                onLogin={(value) => void environmentAction("login", value)}
+                onRefresh={() => void refresh()}
+              />
             </div>
             {page === "tasks" && blocker && (
               <div className="am-quick-notice">

@@ -33,14 +33,15 @@ import type {
   VmResponse,
 } from "../bindings";
 import { useI18n } from "../i18n";
+import { useElapsedSeconds } from "../lib/useElapsedSeconds";
 
-type Saved = { request: WorkspaceRequest; cli: string };
+// Older records also carry the AI chosen at creation. It is ignored: setup
+// now installs base tools only and AIs are installed in Connect accounts.
+type Saved = { request: WorkspaceRequest };
 function restore(key: string): Saved | null {
   try {
     const saved = JSON.parse(localStorage.getItem(key) || "null");
-    return saved?.request?.id && ["codex", "claude"].includes(saved.cli)
-      ? saved
-      : null;
+    return saved?.request?.id ? { request: saved.request } : null;
   } catch {
     return null;
   }
@@ -54,7 +55,7 @@ export default function AgentWorkspaceCreate({
 }: {
   controllerId: string;
   settings: boolean;
-  onCreated: (vm: VmResponse, cli: string) => void;
+  onCreated: (vm: VmResponse) => void;
   onProgress: (job: WorkspaceSetup | null) => void;
   onDirty: (dirty: boolean) => void;
 }) {
@@ -64,12 +65,11 @@ export default function AgentWorkspaceCreate({
   const [draft, setDraft] = useState(
     () => saved?.request ?? { ...workspaceDefaults(), id: crypto.randomUUID() },
   );
-  const [cli, setCli] = useState(saved?.cli || "codex");
   const [job, setJob] = useState<WorkspaceSetup | null>(null);
   const [preparedVm, setPreparedVm] = useState<VmResponse | null>(null);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
-  const [preparingCli, setPreparingCli] = useState(false),
+  const [preparingTools, setPreparingTools] = useState(false),
     [log, setLog] = useState("");
   const [networks, setNetworks] = useState<MicroNetworkResponse[]>([]),
     [roots, setRoots] = useState<StorageRootResponse[]>([]);
@@ -83,12 +83,11 @@ export default function AgentWorkspaceCreate({
   useEffect(() => {
     onDirty(
       !saved &&
-        (cli !== "codex" ||
-          JSON.stringify({ ...draft, id: undefined }) !==
-            JSON.stringify(workspaceDefaults())),
+        JSON.stringify({ ...draft, id: undefined }) !==
+          JSON.stringify(workspaceDefaults()),
     );
     return () => onDirty(false);
-  }, [draft, cli, saved, onDirty]);
+  }, [draft, saved, onDirty]);
   useEffect(() => {
     if (!settings) return;
     let cancelled = false;
@@ -105,11 +104,7 @@ export default function AgentWorkspaceCreate({
     };
   }, [settings]);
   const delay = () => new Promise<void>((resolve) => setTimeout(resolve, 1200));
-  async function follow(
-    initial: WorkspaceSetup,
-    chosen: string,
-    revision: number,
-  ) {
+  async function follow(initial: WorkspaceSetup, revision: number) {
     let next = initial;
     const current = () => alive.current && generation.current === revision;
     while (current()) {
@@ -139,12 +134,12 @@ export default function AgentWorkspaceCreate({
           "준비된 VM을 먼저 실행해 주세요.",
         ),
       );
-    setPreparingCli(true);
+    setPreparingTools(true);
     let prepared = false;
     const deadline = Date.now() + 15 * 60_000;
     const waiting = t(
-      "Waiting for the VM's SSH connection. Coding tool installation will continue when it is ready.",
-      "VM의 SSH 연결을 준비하고 있어요. 연결되면 AI 도구 설치를 이어가요.",
+      "Waiting for the VM's SSH connection. Base tool installation will continue when it is ready.",
+      "VM의 SSH 연결을 준비하고 있어요. 연결되면 기본 도구 설치를 이어가요.",
     );
     setLog(waiting);
     while (current()) {
@@ -183,8 +178,9 @@ export default function AgentWorkspaceCreate({
             "연결된 호스트가 바뀌었어요. 대시보드를 다시 열어 주세요.",
           ),
         );
-      const driver = status.drivers.find((driver) => driver.id === chosen);
-      if (status.available && driver?.available) break;
+      const installing = status.preparation?.state === "installing";
+      // `github` installs Git and GitHub CLI only; coding CLIs come later.
+      if (status.githubAvailable && !installing) break;
       setLog(status.preparation?.log || waiting);
       if (
         ["failed", "interrupted"].includes(status.preparation?.state || "") &&
@@ -192,24 +188,27 @@ export default function AgentWorkspaceCreate({
       )
         throw Error(
           status.preparation?.error ||
-            t("CLI preparation failed.", "AI 도구를 설치하지 못했어요."),
+            t(
+              "Base tool installation failed.",
+              "기본 도구를 설치하지 못했어요.",
+            ),
         );
-      if (status.preparation?.state !== "installing" && !prepared) {
-        await agentRequest("/prepare", { cli: chosen }, controllerId, vm.id);
+      if (!installing && !prepared) {
+        await agentRequest("/prepare", { cli: "github" }, controllerId, vm.id);
         prepared = true;
       }
       if (Date.now() > deadline)
         throw Error(
           t(
-            "CLI setup is still running. Retry to check its progress.",
-            "AI 도구를 설치하고 있어요. 다시 확인하면 기존 작업을 이어서 볼 수 있어요.",
+            "Base tool installation is still running. Retry to check its progress.",
+            "기본 도구를 설치하고 있어요. 다시 확인하면 기존 작업을 이어서 볼 수 있어요.",
           ),
         );
       await delay();
     }
     if (!current()) return;
     localStorage.removeItem(key);
-    onReady.current(vm, chosen);
+    onReady.current(vm);
   }
   async function submit(event?: FormEvent) {
     event?.preventDefault();
@@ -220,17 +219,12 @@ export default function AgentWorkspaceCreate({
     const revision = ++generation.current;
     const pending = saved || {
       request: { ...draft, name: draft.name.trim() },
-      cli,
     };
     // Save the request before the POST; a lost response must reuse its operation ID.
     localStorage.setItem(key, JSON.stringify(pending));
     setSaved(pending);
     try {
-      await follow(
-        await createWorkspace(pending.request),
-        pending.cli,
-        revision,
-      );
+      await follow(await createWorkspace(pending.request), revision);
     } catch (failure) {
       if (alive.current && revision === generation.current) {
         setError(failure instanceof Error ? failure.message : String(failure));
@@ -247,7 +241,7 @@ export default function AgentWorkspaceCreate({
       active.current = false;
       if (alive.current) {
         setBusy(false);
-        setPreparingCli(false);
+        setPreparingTools(false);
       }
     }
   }
@@ -258,7 +252,7 @@ export default function AgentWorkspaceCreate({
       setBusy(true);
       const revision = ++generation.current;
       getWorkspace(saved.request.id)
-        .then((job) => follow(job, saved.cli, revision))
+        .then((job) => follow(job, revision))
         .catch((failure) => {
           if (alive.current)
             setError(
@@ -269,7 +263,7 @@ export default function AgentWorkspaceCreate({
           active.current = false;
           if (alive.current) {
             setBusy(false);
-            setPreparingCli(false);
+            setPreparingTools(false);
           }
         });
     }
@@ -285,9 +279,23 @@ export default function AgentWorkspaceCreate({
     ["network", Network, t("Network and storage", "네트워크와 저장 공간 준비")],
     ["create", CodeXml, t("Create workspace", "작업 공간 만들기")],
     ["start", Play, t("Start MicroVM", "VM 실행")],
-    ["complete", Terminal, t("Install coding tools", "AI 도구 설치")],
+    ["complete", Terminal, t("Install base tools", "기본 도구 설치")],
   ] as const;
   const stage = stages.findIndex(([phase]) => phase === job?.phase);
+  const working = preparingTools || busy;
+  const elapsed = useElapsedSeconds(
+    job && working && stage >= 0 ? `${job.id}:${stages[stage][0]}` : null,
+  );
+  // The stage list is a live region; a count read aloud every second would
+  // bury the stage changes, so only the words are announced.
+  const workingStatus = (
+    <>
+      {t("Working…", "진행 중…")}{" "}
+      <span aria-hidden="true">
+        {t(`${elapsed ?? 0}s`, `${elapsed ?? 0}초`)}
+      </span>
+    </>
+  );
   const frozen = !!saved || busy;
   return (
     <section
@@ -305,8 +313,8 @@ export default function AgentWorkspaceCreate({
         </h2>
         <p>
           {t(
-            "Ubuntu and coding tools are prepared automatically.",
-            "Ubuntu와 코딩 도구를 자동으로 설치해요.",
+            "Ubuntu, Git and GitHub CLI are installed automatically.",
+            "Ubuntu와 Git, GitHub CLI를 자동으로 설치해요.",
           )}
         </p>
       </header>
@@ -322,7 +330,7 @@ export default function AgentWorkspaceCreate({
             className="btn"
             onClick={() => {
               localStorage.removeItem(key);
-              onReady.current(preparedVm, cli);
+              onReady.current(preparedVm);
             }}
           >
             {t("Open the prepared MicroVM", "준비된 VM으로 이동")}
@@ -474,21 +482,6 @@ export default function AgentWorkspaceCreate({
                 <strong>{draft.diskGb} GiB</strong>
               </span>
             </div>
-            <fieldset disabled={frozen} className="awc-cli">
-              <legend>{t("Coding agent", "사용할 AI")}</legend>
-              {["codex", "claude"].map((value) => (
-                <label key={value}>
-                  <input
-                    type="radio"
-                    name="workspace-cli"
-                    value={value}
-                    checked={cli === value}
-                    onChange={() => setCli(value)}
-                  />
-                  {value === "codex" ? "Codex" : "Claude Code"}
-                </label>
-              ))}
-            </fieldset>
             {job && (
               <ol className="awc-progress" aria-live="polite">
                 {stages.map(([id, Icon, label], index) => (
@@ -508,8 +501,8 @@ export default function AgentWorkspaceCreate({
                       {index < stage
                         ? t("Done", "완료")
                         : index === stage
-                          ? preparingCli || busy
-                            ? t("Working…", "진행 중…")
+                          ? working
+                            ? workingStatus
                             : t("Check required", "확인 필요")
                           : t("Waiting", "대기")}
                     </small>
@@ -537,8 +530,8 @@ export default function AgentWorkspaceCreate({
             </button>
             <p>
               {t(
-                "Connect your accounts after installation.",
-                "설치가 끝나면 계정을 연결해 주세요.",
+                "After installation, connect a repository and choose your AI.",
+                "설치가 끝나면 저장소를 연결하고 사용할 AI를 골라 주세요.",
               )}
             </p>
           </>

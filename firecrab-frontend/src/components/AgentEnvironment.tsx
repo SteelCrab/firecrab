@@ -1,49 +1,89 @@
-import { Plus, Play, RefreshCw, SquareTerminal, Check } from "lucide-react";
+import { useState } from "react";
+import { Plus, Play, RefreshCw, SquareTerminal } from "lucide-react";
 import type { VmResponse } from "../bindings";
 import type { AgentStatus } from "../api/agents";
 import { useI18n } from "../i18n";
 import { consolePageUrl } from "../navigation";
+import { useElapsedSeconds } from "../lib/useElapsedSeconds";
 import AgentBrandIcon from "./icons/AgentBrandIcon";
 
 type Props = {
   compact?: boolean;
   vms: VmResponse[];
   vmId: string;
-  cli: string;
   status: AgentStatus | null;
   busy: boolean;
   canControl: boolean;
+  /** CLIs waiting for their turn to install, in order. */
+  queue: string[];
+  /** Install errors kept after a later install replaced the VM's record. */
+  failures: Record<string, string>;
   onVm: (id: string) => void;
-  onCli: (id: string) => void;
   onCreate: () => void;
   onStart: () => void;
-  onPrepare: () => void;
+  onInstall: (clis: string[]) => void;
   onLogin: (cli: string) => void;
   onRefresh: () => void;
 };
 export default function AgentEnvironment(p: Props) {
   const { t } = useI18n();
+  const [picked, setPicked] = useState<string[]>([]);
   const vm = p.vms.find((v) => v.id === p.vmId);
-  const driver = p.status?.drivers.find((d) => d.id === p.cli);
   const transitioning =
     !!vm && ["starting", "pausing", "resuming", "stopping"].includes(vm.state);
-  const installing = p.status?.preparation?.state === "installing";
+  const preparation = p.status?.preparation;
+  const installing = preparation?.state === "installing";
+  const installingCli = installing ? preparation?.cli || null : null;
+  const elapsed = useElapsedSeconds(installingCli);
   const drivers = [
     { id: "codex", name: "Codex" },
     { id: "claude", name: "Claude Code" },
     ...(p.status?.drivers.filter((d) => d.available && d.id === "copilot") ||
       []),
   ];
-  // Installed and signed in inside this VM, as the guest reports it.
+  const installingName =
+    drivers.find((d) => d.id === installingCli)?.name || installingCli;
+  const failure = (id: string) => {
+    if (id in p.failures)
+      return p.failures[id] || t("Install failed", "설치 실패");
+    if (
+      preparation?.cli === id &&
+      ["failed", "interrupted"].includes(preparation.state)
+    )
+      return preparation.error || t("Install failed", "설치 실패");
+    return "";
+  };
+  // Installed and signed in inside this VM, as the guest reports it. A CLI
+  // runs only through Herdr, so it counts as installed only with Herdr.
   const cliState = (id: string) => {
     const found = p.status?.drivers.find((d) => d.id === id);
     if (!found) return null;
-    if (!found.available)
-      return { id: "missing", label: t("Not installed", "설치 전") };
-    if (!found.authenticated)
-      return { id: "signed-out", label: t("Not signed in", "로그인 전") };
-    return { id: "connected", label: t("Connected", "연결됨") };
+    if (installingCli === id)
+      return {
+        id: "installing",
+        label: t(`Installing… ${elapsed ?? 0}s`, `설치 중… ${elapsed ?? 0}초`),
+      };
+    if (p.queue.includes(id))
+      return { id: "waiting", label: t("Waiting", "대기") };
+    if (found.available && p.status?.available)
+      return found.authenticated
+        ? { id: "connected", label: t("Connected", "연결됨") }
+        : { id: "signed-out", label: t("Not signed in", "로그인 전") };
+    if (failure(id))
+      return { id: "failed", label: t("Install failed", "설치 실패") };
+    return { id: "missing", label: t("Not installed", "설치 전") };
   };
+  const installable = (id: string) =>
+    ["missing", "failed"].includes(cliState(id)?.id || "");
+  const chosen = picked.filter(installable);
+  const errors = [
+    ...drivers
+      .filter((d) => cliState(d.id)?.id === "failed")
+      .map((d) => `${d.name}: ${failure(d.id)}`),
+    ...(preparation?.error && !drivers.some((d) => d.id === preparation.cli)
+      ? [preparation.error]
+      : []),
+  ];
   const vmState = (state: string) => {
     switch (state) {
       case "running":
@@ -137,70 +177,75 @@ export default function AgentEnvironment(p: Props) {
           <div className="am-runtime-row">
             <fieldset className="am-cli-options am-runtime-clis">
               <legend>{t("Coding CLI", "코딩 CLI")}</legend>
-              <div className="am-cli-choice-grid">
+              <p className="am-cli-hint">
+                {t(
+                  "Check every AI you want to use. Sign in to each one after it installs.",
+                  "사용할 AI를 모두 골라 주세요. 설치가 끝나면 AI마다 로그인해요.",
+                )}
+              </p>
+              <ul className="am-cli-list">
                 {drivers.map((d) => {
                   const state = cliState(d.id);
+                  const open = installable(d.id);
                   return (
-                    <label key={d.id} className="am-cli-choice">
-                      <input
-                        type="radio"
-                        name="coding-cli"
-                        aria-label={d.name}
-                        checked={p.cli === d.id}
-                        disabled={p.busy || installing}
-                        onChange={() => p.onCli(d.id)}
-                      />
-                      <AgentBrandIcon kind={d.id} />
-                      <span>
-                        {d.name}
+                    <li
+                      key={d.id}
+                      className="am-cli-item"
+                      data-state={state?.id}
+                    >
+                      <label>
+                        <input
+                          type="checkbox"
+                          aria-label={d.name}
+                          checked={open ? picked.includes(d.id) : !!state}
+                          disabled={!open}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setPicked((old) =>
+                              checked
+                                ? [...old, d.id]
+                                : old.filter((id) => id !== d.id),
+                            );
+                          }}
+                        />
+                        <AgentBrandIcon kind={d.id} />
+                        <span>{d.name}</span>
                         {state && (
                           <small className="am-cli-state" data-state={state.id}>
                             {state.label}
                           </small>
                         )}
-                      </span>
-                      <span className="am-choice-check" aria-hidden>
-                        {p.cli === d.id && <Check />}
-                      </span>
-                    </label>
+                      </label>
+                      {state?.id === "signed-out" &&
+                        ["codex", "claude"].includes(d.id) && (
+                          <button
+                            className="btn primary"
+                            disabled={p.busy || !p.canControl}
+                            onClick={() => p.onLogin(d.id)}
+                          >
+                            {t(
+                              `Connect ${d.name} account`,
+                              `${d.name} 계정 연결`,
+                            )}
+                          </button>
+                        )}
+                    </li>
                   );
                 })}
-              </div>
+              </ul>
             </fieldset>
             <div className="am-runtime-actions">
-              {p.cli &&
-                p.status &&
-                (!p.status.available || !driver?.available) && (
-                  <button
-                    className="btn primary"
-                    disabled={p.busy || installing || !p.canControl}
-                    onClick={p.onPrepare}
-                  >
-                    {installing
-                      ? t("Preparing…", "환경 준비 중…")
-                      : t("Prepare CLI environment", "CLI 환경 준비")}
-                  </button>
-                )}
-              {p.status?.available &&
-                driver?.available &&
-                ["codex", "claude"].includes(p.cli) &&
-                !driver.authenticated && (
-                  <button
-                    className="btn primary"
-                    disabled={p.busy || !p.canControl}
-                    onClick={() => p.onLogin(p.cli)}
-                  >
-                    {t("Connect CLI account", "CLI 계정 연결")}
-                  </button>
-                )}
-              {driver?.available && driver.authenticated && (
-                <span className="am-ready">
-                  <Check />
-                  {t(
-                    "CLI account connected in this VM",
-                    "이 VM에서 CLI 계정 연결됨",
-                  )}
-                </span>
+              {drivers.some((d) => installable(d.id)) && (
+                <button
+                  className="btn primary"
+                  disabled={!chosen.length || !p.canControl}
+                  onClick={() => {
+                    p.onInstall(chosen);
+                    setPicked([]);
+                  }}
+                >
+                  {t("Install selected CLIs", "선택한 CLI 설치")}
+                </button>
               )}
               {!!p.status && (
                 <button
@@ -217,24 +262,25 @@ export default function AgentEnvironment(p: Props) {
           </div>
           {installing && (
             <div className="am-prepare-progress" role="status">
-              <progress max={4} value={p.status?.preparation?.step || 1} />
+              <progress max={4} value={preparation?.step || 1} />
               <span>
-                {t(
-                  p.status?.preparation?.cli === "github"
-                    ? "Preparing GitHub tools inside this MicroVM."
-                    : "Preparing tools and the selected CLI inside this MicroVM.",
-                  p.status?.preparation?.cli === "github"
-                    ? "이 VM에 GitHub 로그인 도구를 설치해요."
-                    : "이 VM에 기본 도구와 선택한 AI를 설치해요.",
-                )}
+                {preparation?.cli === "github"
+                  ? t(
+                      "Preparing GitHub tools inside this MicroVM.",
+                      "이 VM에 GitHub 로그인 도구를 설치해요.",
+                    )
+                  : t(
+                      `Installing ${installingName} inside this MicroVM.`,
+                      `이 VM에 ${installingName}를 설치하고 있어요.`,
+                    )}
               </span>
             </div>
           )}
-          {p.status?.preparation?.error && (
-            <p className="am-error" role="alert">
-              {p.status.preparation.error}
+          {errors.map((error) => (
+            <p key={error} className="am-error" role="alert">
+              {error}
             </p>
-          )}
+          ))}
           {!!p.status?.preparation?.log &&
             (installing || !!p.status.preparation.error) && (
               <details className="am-install-log">

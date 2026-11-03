@@ -131,6 +131,8 @@ async function setup(
   state.searchError = null;
   state.vmSkills = { node: "missing", skills: [] };
   state.driverAuth = {};
+  state.driverReady = {};
+  state.preparation = null;
   const rulesDoc = (text) => {
     const lines = text.replace(/\n$/, "").split("\n");
     const blocks = [];
@@ -288,6 +290,7 @@ async function setup(
       }
       if (path === "/prepare" && request.method() === "POST") {
         state.preparing = true;
+        state.preparingCli = body.cli;
         return route.fulfill({
           json: { state: "installing", cli: body.cli, step: 1 },
         });
@@ -377,23 +380,23 @@ async function setup(
             preparation: state.preparing
               ? {
                   state: "installing",
-                  cli: "codex",
+                  cli: state.preparingCli || "codex",
                   step: 2,
                   log: "Installing Herdr",
                 }
-              : null,
+              : state.preparation,
             reason: null,
             drivers: [
               {
                 id: "codex",
                 name: "Codex",
-                available: state.ready,
+                available: state.driverReady.codex ?? state.ready,
                 authenticated: state.driverAuth.codex ?? state.authenticated,
               },
               {
                 id: "claude",
                 name: "Claude Code",
-                available: state.ready,
+                available: state.driverReady.claude ?? state.ready,
                 authenticated: state.driverAuth.claude ?? state.authenticated,
               },
               { id: "gemini", name: "Gemini CLI", available: false },
@@ -499,8 +502,9 @@ async function setup(
     await page
       .getByRole("combobox", { name: "MicroVM", exact: true })
       .selectOption(fixture.state.vms[0].id);
-    if (selectCli)
-      await page.getByRole("radio", { name: "Codex", exact: true }).check();
+    // An installed CLI is already checked; otherwise choose Codex to install.
+    if (selectCli && !ready)
+      await page.getByRole("checkbox", { name: "Codex", exact: true }).check();
   }
   if (select && selectCli && ready && authenticated && project) {
     await page
@@ -657,9 +661,6 @@ test("work calls an agent only when a task is submitted", async (t) => {
     .locator(".am-quick-sidebar")
     .getByRole("button", { name: "Connect accounts", exact: true })
     .click();
-  await page.getByRole("radio", { name: "Claude Code", exact: true }).check();
-  await expect(dialog.getByLabel("Model", { exact: true })).toHaveValue("");
-  await page.getByRole("radio", { name: "Codex", exact: true }).check();
   await page
     .locator(".am-quick-sidebar")
     .getByRole("button", { name: "AI tasks", exact: true })
@@ -688,7 +689,7 @@ test("work calls an agent only when a task is submitted", async (t) => {
       id: "generated",
       input: "Review authentication changes",
       cli: "codex",
-      model: "",
+      model: "temporary-model",
     },
   );
 });
@@ -1011,9 +1012,9 @@ test("preparation and VM account connection do not submit a model task", async (
     authenticated: false,
   });
   await page
-    .getByRole("button", { name: "Prepare CLI environment", exact: true })
+    .getByRole("button", { name: "Install selected CLIs", exact: true })
     .click();
-  await expect(page.getByRole("status")).toContainText("Preparing tools");
+  await expect(page.getByRole("status")).toContainText("Installing Codex");
   assert.equal(
     state.calls.filter((c) => c.method === "POST" && c.path === "/tasks")
       .length,
@@ -1028,7 +1029,7 @@ test("preparation and VM account connection do not submit a model task", async (
     .getByRole("button", { name: "Check environment", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Connect CLI account", exact: true })
+    .getByRole("button", { name: "Connect Codex account", exact: true })
     .click();
   const login = page.getByRole("region", {
     name: "Codex sign in",
@@ -1099,7 +1100,9 @@ test("quick start prepares the default VM and resumes the same job after reload"
     page.getByRole("combobox", { name: "MicroVM", exact: true }),
   ).toHaveValue(id, { timeout: 15000 });
   await expect(
-    page.getByRole("heading", { name: "Choose your AI and repository" }),
+    page.getByRole("heading", {
+      name: "Connect a repository, then choose your AI",
+    }),
   ).toBeVisible();
   assert.equal(
     state.calls.filter((c) => c.method === "POST" && c.path === "/tasks")
@@ -1153,7 +1156,189 @@ test("SSH refusals while the new VM boots stay out of the installation log", asy
   assert.ok(!log.includes("Stdio forwarding"), log);
   booted = true;
   await expect(
-    page.getByRole("heading", { name: "Choose your AI and repository" }),
+    page.getByRole("heading", {
+      name: "Connect a repository, then choose your AI",
+    }),
+  ).toBeVisible({ timeout: 15000 });
+});
+
+test("a new workspace installs only base tools and counts the current stage", async (t) => {
+  const { fixture, page, state } = await setup(t, {
+    empty: true,
+    select: false,
+    ready: false,
+  });
+  const id = "0d8f3c55-2a8e-4c1b-9a77-5b2f1e6c4d21";
+  const row = vm(12, { id, name: "my-workspace", state: "running" });
+  fixture.state.vms.push(row);
+  fixture.handlers.set(`GET /api/vms/${id}`, ({ send }) => send(200, row));
+  fixture.handlers.set("POST /api/workspace-setups", ({ body, send }) => {
+    const job = {
+      ...body,
+      vmId: id,
+      state: "ready",
+      phase: "complete",
+      error: null,
+    };
+    send(202, job);
+    fixture.handlers.set(`GET /api/workspace-setups/${body.id}`, ({ send }) =>
+      send(200, job),
+    );
+  });
+  const form = page.getByRole("region", { name: "Workspace setup" });
+  await expect(form.getByRole("radio")).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "Create workspace", exact: true })
+    .click();
+  await expect
+    .poll(() =>
+      state.calls
+        .filter((c) => c.method === "POST" && c.path === "/prepare")
+        .map((c) => c.body),
+    )
+    .toEqual([{ cli: "github" }]);
+  const stage = form
+    .getByRole("listitem")
+    .filter({ hasText: "Install base tools" });
+  await expect(stage).toHaveAttribute("data-state", "current");
+  await expect(stage).toContainText(/Working… [1-9]\d*s/);
+  state.preparing = false;
+  state.ready = true;
+  await expect(
+    page.getByRole("heading", {
+      name: "Connect a repository, then choose your AI",
+    }),
+  ).toBeVisible({ timeout: 15000 });
+  // No AI was chosen, so this browser keeps no CLI choice for the VM.
+  assert.equal(
+    await page.evaluate(
+      (vmId) =>
+        localStorage.getItem(`firecrab.agentCli.native-controller.${vmId}`),
+      id,
+    ),
+    null,
+  );
+  assert.equal(
+    state.calls.filter((c) => c.method === "POST" && c.path === "/prepare")
+      .length,
+    1,
+  );
+});
+
+test("screen readers hear each stage status but not the ticking seconds", async (t) => {
+  const { fixture, page } = await setup(t, { empty: true, select: false });
+  fixture.handlers.set("POST /api/workspace-setups", ({ body, send }) => {
+    const job = {
+      ...body,
+      vmId: "8a2c4e6f-1b3d-4f5a-9c7e-2d4f6a8b0c13",
+      state: "running",
+      phase: "network",
+      error: null,
+    };
+    send(202, job);
+    fixture.handlers.set(`GET /api/workspace-setups/${body.id}`, ({ send }) =>
+      send(200, job),
+    );
+  });
+  await page
+    .getByRole("button", { name: "Create workspace", exact: true })
+    .click();
+  const progress = page
+    .getByRole("region", { name: "Workspace setup" })
+    .getByRole("list");
+  await expect(
+    progress.getByRole("listitem").filter({ hasText: "Network and storage" }),
+  ).toContainText(/Working… [1-9]\d*s/);
+  // Text a screen reader announces when it changes: inside a live region that
+  // is not turned off, and not hidden from assistive technology.
+  const announced = await progress.locator("li small").evaluateAll((items) =>
+    items.map((item) => {
+      const implicit = {
+        alert: "assertive",
+        log: "polite",
+        status: "polite",
+        marquee: "off",
+        timer: "off",
+      };
+      const regions = `[aria-live], ${Object.keys(implicit)
+        .map((role) => `[role="${role}"]`)
+        .join(", ")}`;
+      const walker = document.createTreeWalker(item, NodeFilter.SHOW_TEXT);
+      let text = "";
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const region = node.parentElement.closest(regions);
+        const live =
+          region?.getAttribute("aria-live") ??
+          implicit[region?.getAttribute("role")] ??
+          "off";
+        if (
+          live !== "off" &&
+          !node.parentElement.closest('[aria-hidden="true"]')
+        )
+          text += node.textContent;
+      }
+      return text.trim();
+    }),
+  );
+  assert.deepEqual(announced, [
+    "Done",
+    "Working…",
+    "Waiting",
+    "Waiting",
+    "Waiting",
+  ]);
+});
+
+test("a setup saved with an AI choice resumes with base tools only", async (t) => {
+  const { fixture, page, state } = await setup(t, {
+    empty: true,
+    select: false,
+    ready: false,
+  });
+  const id = "5c1f0a8e-7d3b-4e62-b1a9-0f4e2d6c8b37";
+  const request = {
+    id: "1f4e2d6c-8b37-4a5c-9e0a-7d3b5c1f0a8e",
+    name: "older-workspace",
+    cpu: 2,
+    ram: 4096,
+    diskGb: 8,
+    microNetworkId: null,
+    storageRoot: null,
+  };
+  const row = vm(13, { id, name: request.name, state: "running" });
+  fixture.state.vms.push(row);
+  fixture.handlers.set(`GET /api/vms/${id}`, ({ send }) => send(200, row));
+  fixture.handlers.set(`GET /api/workspace-setups/${request.id}`, ({ send }) =>
+    send(200, {
+      ...request,
+      vmId: id,
+      state: "ready",
+      phase: "complete",
+      error: null,
+    }),
+  );
+  await page.evaluate(
+    (saved) =>
+      localStorage.setItem(
+        "firecrab.workspaceSetup.native-controller",
+        JSON.stringify(saved),
+      ),
+    { request, cli: "claude" },
+  );
+  await page.reload();
+  await expect
+    .poll(() =>
+      state.calls
+        .filter((c) => c.method === "POST" && c.path === "/prepare")
+        .map((c) => c.body),
+    )
+    .toEqual([{ cli: "github" }]);
+  state.preparing = false;
+  state.ready = true;
+  await expect(
+    page.getByRole("heading", {
+      name: "Connect a repository, then choose your AI",
+    }),
   ).toBeVisible({ timeout: 15000 });
 });
 
@@ -1544,7 +1729,7 @@ test("GitHub authentication tools can be prepared before selecting any coding CL
     project: false,
   });
   await expect(
-    page.getByRole("radio", { name: "Codex", exact: true }),
+    page.getByRole("checkbox", { name: "Codex", exact: true }),
   ).not.toBeChecked();
   await page
     .getByRole("button", { name: "Prepare GitHub AUTH", exact: true })
@@ -1564,7 +1749,7 @@ test("a signed-in CLI starts tasks without a choice saved in this browser", asyn
     .getByRole("button", { name: "AI tasks", exact: true })
     .click();
   await expect(
-    page.getByText("Choose a coding CLI in Connect accounts to start coding."),
+    page.getByText("Install a coding CLI in Connect accounts to start coding."),
   ).toHaveCount(0);
   await expect(page.locator(".am-quick-notice")).toHaveCount(0);
   await page
@@ -1572,7 +1757,7 @@ test("a signed-in CLI starts tasks without a choice saved in this browser", asyn
     .getByRole("button", { name: "Connect accounts", exact: true })
     .click();
   await expect(
-    page.getByRole("radio", { name: "Codex", exact: true }),
+    page.getByRole("checkbox", { name: "Codex", exact: true }),
   ).toBeChecked();
 });
 
@@ -1911,12 +2096,9 @@ test("a board task can call Claude without changing the VM's selected Codex envi
     .getByRole("region", { name: "Task board", exact: true })
     .getByRole("button", { name: /Review the API changes/ });
   await expect(task.locator('[data-agent-kind="claude"]')).toBeVisible();
-  await page
-    .locator(".am-quick-sidebar")
-    .getByRole("button", { name: "Connect accounts", exact: true })
-    .click();
+  await page.getByRole("button", { name: "New task", exact: true }).click();
   await expect(
-    page.getByRole("radio", { name: "Codex", exact: true }),
+    dialog.getByRole("radio", { name: "Codex for this task", exact: true }),
   ).toBeChecked();
   const calls = state.calls.filter((call) => call.method === "POST");
   assert.equal(calls.length, 1);
@@ -1942,7 +2124,7 @@ test("a disconnected board marks its last observation and recovers without start
   assert.equal(state.calls.filter((call) => call.method === "POST").length, 0);
 });
 
-test("failed preparation retries keep the operation ID and install only the selected CLI", async (t) => {
+test("failed preparation retries keep the operation ID and install only base tools", async (t) => {
   const { page, fixture, state } = await setup(t, {
     empty: true,
     select: false,
@@ -1986,10 +2168,15 @@ test("failed preparation retries keep the operation ID and install only the sele
     )
     .toBe(1);
   assert.deepEqual(posted[0], posted[1]);
+  assert.deepEqual(state.calls.find((c) => c.path === "/prepare").body, {
+    cli: "github",
+  });
   state.ready = true;
   state.preparing = false;
   await expect(
-    page.getByRole("heading", { name: "Choose your AI and repository" }),
+    page.getByRole("heading", {
+      name: "Connect a repository, then choose your AI",
+    }),
   ).toBeVisible({ timeout: 15000 });
   assert.equal(
     state.calls.filter((c) => c.method === "POST" && c.path === "/prepare")
@@ -2450,6 +2637,71 @@ test("discard and refine again never write", async (t) => {
   assert.equal(state.calls.filter((c) => c.path === "/rules/apply").length, 0);
 });
 
+test("Connect accounts asks for the repository before the coding CLI", async (t) => {
+  const { page } = await setup(t, {
+    empty: true,
+    ready: false,
+    authenticated: false,
+    project: false,
+    selectCli: false,
+  });
+  await expect(
+    page.getByRole("heading", {
+      name: "Connect a repository, then choose your AI",
+    }),
+  ).toBeVisible();
+  const repository = await page.locator(".am-vm-repository").boundingBox();
+  const cli = await page
+    .getByRole("group", { name: "Coding CLI" })
+    .boundingBox();
+  assert(
+    repository.y + repository.height <= cli.y,
+    JSON.stringify({ repository, cli }),
+  );
+  await page
+    .locator(".am-quick-sidebar")
+    .getByRole("button", { name: "AI tasks", exact: true })
+    .click();
+  await expect(page.locator(".am-quick-notice")).toContainText(
+    "Connect a repository in Connect accounts",
+  );
+});
+
+test("the Korean Connect accounts heading wraps only between words on a phone", async (t) => {
+  const { page } = await setup(t, {
+    width: 390,
+    locale: "ko",
+    empty: true,
+    ready: false,
+    authenticated: false,
+    project: false,
+    selectCli: false,
+  });
+  const heading = page.getByRole("heading", {
+    name: "저장소를 연결하고 사용할 AI를 골라 주세요",
+  });
+  await expect(heading).toBeVisible();
+  // The character before each line break; a space means the break fell
+  // between words, anything else means a word was split across lines.
+  const breaks = await heading.evaluate((h) => {
+    const text = h.firstChild;
+    const range = document.createRange();
+    const tops = [...text.data].map((_, i) => {
+      range.setStart(text, i);
+      range.setEnd(text, i + 1);
+      return range.getBoundingClientRect().top;
+    });
+    return tops.flatMap((top, i) =>
+      i > 0 && top > tops[i - 1] + 1 ? [text.data[i - 1]] : [],
+    );
+  });
+  assert(breaks.length > 0, "the heading fits on one line at 390px");
+  assert.deepEqual(
+    breaks.filter((c) => c !== " "),
+    [],
+  );
+});
+
 test("the task page names only what is missing and keeps the repository row compact", async (t) => {
   const { page } = await setup(t, {
     authenticated: false,
@@ -2489,7 +2741,7 @@ test("the account step shows each coding CLI's connection state without a dead s
   const choice = (name) =>
     page
       .getByRole("group", { name: "Coding CLI" })
-      .locator("label", { has: page.getByRole("radio", { name }) });
+      .locator("label", { has: page.getByRole("checkbox", { name }) });
   await expect(choice("Codex")).toContainText("Not signed in");
   await expect(choice("Claude Code")).toContainText("Connected");
   await expect(
@@ -2503,6 +2755,82 @@ test("the account step shows each coding CLI's connection state without a dead s
     .click();
   await expect(choice("Codex")).toContainText("Not installed");
   await expect(choice("Claude Code")).toContainText("Not installed");
+});
+
+test("checked coding CLIs install one after another and each signs in on its own", async (t) => {
+  const { page, state } = await setup(t, {
+    empty: true,
+    ready: false,
+    authenticated: false,
+    selectCli: false,
+  });
+  state.driverReady = { codex: false, claude: false };
+  const group = page.getByRole("group", { name: "Coding CLI" });
+  const box = (name) => page.getByRole("checkbox", { name, exact: true });
+  const row = (name) => group.getByRole("listitem").filter({ has: box(name) });
+  const prepared = () =>
+    state.calls
+      .filter((c) => c.method === "POST" && c.path === "/prepare")
+      .map((c) => c.body.cli);
+  const install = page.getByRole("button", {
+    name: "Install selected CLIs",
+    exact: true,
+  });
+  await expect(install).toBeDisabled();
+  await box("Codex").check();
+  await box("Claude Code").check();
+  await install.click();
+  // The VM installs one CLI at a time; the next one waits its turn.
+  await expect.poll(prepared).toEqual(["codex"]);
+  await expect(row("Claude Code")).toContainText("Waiting");
+  await expect(row("Codex")).toContainText(/Installing… [1-9]\d*s/);
+  await page.screenshot({
+    path: join(tmpdir(), "firecrab-cli-install-queue-1440.png"),
+  });
+  state.preparing = false;
+  state.preparation = {
+    state: "failed",
+    cli: "codex",
+    error: "Codex download failed",
+  };
+  await expect.poll(prepared, { timeout: 10000 }).toEqual(["codex", "claude"]);
+  await expect(row("Claude Code")).toContainText("Installing…");
+  state.preparing = false;
+  state.preparation = { state: "ready", cli: "claude", error: null };
+  state.ready = true;
+  state.driverReady.claude = true;
+  await expect(row("Claude Code")).toContainText("Not signed in", {
+    timeout: 10000,
+  });
+  await expect(row("Codex")).toContainText("Install failed");
+  await expect(box("Codex")).not.toBeChecked();
+  await expect(box("Claude Code")).toBeChecked();
+  await expect(box("Claude Code")).toBeDisabled();
+  // A failed CLI can be checked and installed again.
+  await box("Codex").check();
+  await install.click();
+  await expect.poll(prepared).toEqual(["codex", "claude", "codex"]);
+  state.preparing = false;
+  state.preparation = { state: "ready", cli: "codex", error: null };
+  state.driverReady.codex = true;
+  await expect(
+    page.getByRole("button", { name: "Connect Codex account", exact: true }),
+  ).toBeVisible({ timeout: 10000 });
+  await page.screenshot({
+    path: join(tmpdir(), "firecrab-cli-install-signin-1440.png"),
+  });
+  await page
+    .getByRole("button", { name: "Connect Claude Code account", exact: true })
+    .click();
+  assert.deepEqual(
+    state.calls.filter((c) => c.path === "/login").map((c) => c.body.cli),
+    ["claude"],
+  );
+  assert.equal(
+    state.calls.filter((c) => c.method === "POST" && c.path === "/tasks")
+      .length,
+    0,
+  );
 });
 
 test("agent picker lists only logged-in Codex and Claude Code", async (t) => {
