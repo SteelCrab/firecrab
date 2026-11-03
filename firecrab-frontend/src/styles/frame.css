@@ -18,6 +18,9 @@
 /* Sidebar */
 
 .sidebar {
+  /* Contain absolutely positioned children (e.g. .sr-only labels): without a
+     positioned ancestor they escape this scroll box and lengthen the page. */
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;

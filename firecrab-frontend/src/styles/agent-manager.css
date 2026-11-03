@@ -985,7 +985,7 @@
   flex: 1;
   min-height: 0;
   min-width: 0;
-  padding: 12px;
+  padding: 0;
   overflow: hidden;
   /* xterm fits its rows to this box; those rows must never size the box,
      or an auto-height layout grows and resizes the terminal without end. */
@@ -993,6 +993,11 @@
 }
 .am-terminal .xterm {
   height: 100%;
+}
+.am-terminal-session .am-terminal .xterm {
+  /* The fit addon subtracts this element's padding but not its parent's.
+     Padding on the parent lets the text grid overflow the right and bottom. */
+  padding: 16px;
 }
 .am-terminal .xterm-viewport {
   scrollbar-width: none;
