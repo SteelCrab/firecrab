@@ -18,6 +18,8 @@ pub mod editor;
 pub mod github;
 mod guest;
 pub mod project;
+pub mod rules;
+pub mod skills;
 pub mod terminal;
 
 const DRIVERS: &[(&str, &str, &str)] = &[
@@ -125,6 +127,8 @@ pub struct Runtime {
     session: String,
     bin_dir: Option<PathBuf>,
     guest: Option<guest::Guest>,
+    /// Controller home: the shared skill store lives under `runtime/skills`.
+    skills_home: PathBuf,
 }
 impl Runtime {
     pub fn new(home: &Path) -> Self {
@@ -137,6 +141,7 @@ impl Runtime {
             program: executable("herdr"),
             bin_dir: None,
             guest: None,
+            skills_home: home.to_path_buf(),
             session: format!("firecrab-{}", &digest[..16]),
         }
     }
@@ -200,6 +205,7 @@ impl Runtime {
             json!({"id":id,"state":"installing","pid":std::process::id(),"cli":cli,"error":null});
         resource::write(&path, &state)?;
         let cli = cli.to_owned();
+        let runtime = self.clone();
         std::thread::spawn(move || {
             let execute = || -> Result<(), Error> {
                 let script = format!(
@@ -242,8 +248,29 @@ impl Runtime {
                 &path,
                 &json!({"id":id,"state":state,"cli":cli,"error":error}),
             );
+            if state == "ready" {
+                runtime.after_preparation(&log_path);
+            }
         });
         Ok(state)
+    }
+    /// Apply skills and AGENTS.md wiring to freshly installed CLIs. Best effort: outcomes are logged.
+    fn after_preparation(&self, log_path: &Path) {
+        let mut line = match self.sync_skills() {
+            Ok(value) => format!(
+                "FIRECRAB_SKILLS={}\n",
+                value["state"].as_str().unwrap_or("")
+            ),
+            Err(error) => format!("FIRECRAB_SKILLS=failed {error}\n"),
+        };
+        line.push_str(&match self.ensure_rule_wiring() {
+            Ok(()) => "FIRECRAB_RULES=ready\n".to_owned(),
+            Err(error) => format!("FIRECRAB_RULES=failed {error}\n"),
+        });
+        if let Ok(mut file) = fs::OpenOptions::new().append(true).open(log_path) {
+            use std::io::Write;
+            let _ = file.write_all(line.as_bytes());
+        }
     }
     pub fn login(&self, id: Uuid, cli: &str) -> Result<Value, Error> {
         if self.guest.is_none() {
@@ -293,6 +320,7 @@ impl Runtime {
             session: format!("firecrab-{}", &digest[..16]),
             bin_dir: None,
             guest: Some(target),
+            skills_home: home.to_path_buf(),
         })
     }
     fn guest_script(&self, args: &[&str]) -> String {
@@ -610,6 +638,8 @@ impl Runtime {
                 ));
             }
             (input.cwd, repository, branch) = self.task_project(&input)?;
+            // New sessions read skills at startup; a failed sync is reported on the skill screen.
+            let _ = self.sync_skills();
         }
         let kind = if !input.cli.is_empty() {
             input.cli

@@ -201,24 +201,66 @@ impl Guest {
         command
     }
     pub fn shell(&self, script: &str, limit: Duration) -> Result<String, Error> {
-        let mut child = self
-            .command(script)?
+        self.execute(script, None, limit, 65536)
+    }
+    /// Like `shell`, keeping up to `capacity` bytes of stdout (for base64 file reads).
+    pub fn shell_capture(
+        &self,
+        script: &str,
+        limit: Duration,
+        capacity: u64,
+    ) -> Result<String, Error> {
+        self.execute(script, None, limit, capacity)
+    }
+    /// Like `shell`, with `input` streamed to the remote command's stdin.
+    pub fn shell_with_input(
+        &self,
+        script: &str,
+        input: &[u8],
+        limit: Duration,
+    ) -> Result<String, Error> {
+        self.execute(script, Some(input), limit, 65536)
+    }
+    fn execute(
+        &self,
+        script: &str,
+        input: Option<&[u8]>,
+        limit: Duration,
+        capacity: u64,
+    ) -> Result<String, Error> {
+        let mut command = self.command(script)?;
+        if input.is_some() {
+            command.stdin(Stdio::piped());
+        }
+        let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
+        // A writer thread keeps a large input from deadlocking against unread output.
+        let writer = input.map(|bytes| {
+            use std::io::Write;
+            let mut stdin = child.stdin.take().unwrap();
+            let bytes = bytes.to_vec();
+            std::thread::spawn(move || {
+                let _ = stdin.write_all(&bytes);
+            })
+        });
         let out = child.stdout.take().unwrap();
         let err = child.stderr.take().unwrap();
-        let read = |mut stream: Box<dyn Read + Send>| {
+        let read = move |mut stream: Box<dyn Read + Send>, capacity: u64| {
             let mut data = Vec::new();
-            let _ = stream.by_ref().take(65536).read_to_end(&mut data);
+            let _ = stream.by_ref().take(capacity).read_to_end(&mut data);
             let _ = io::copy(&mut stream, &mut io::sink());
             data
         };
-        let output = std::thread::spawn(move || read(Box::new(out)));
-        let errors = std::thread::spawn(move || read(Box::new(err)));
+        let output = std::thread::spawn(move || read(Box::new(out), capacity));
+        let errors = std::thread::spawn(move || read(Box::new(err), 65536));
         let deadline = Instant::now() + limit;
         loop {
             if let Some(status) = child.try_wait()? {
+                if let Some(writer) = writer {
+                    let _ = writer.join();
+                }
                 let output = output.join().unwrap_or_default();
                 let errors = errors.join().unwrap_or_default();
                 if status.success() {

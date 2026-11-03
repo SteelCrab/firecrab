@@ -16,12 +16,16 @@ use axum::{
 use firecrab_api_types::{ManagerResourceOperation, ManagerResourceStatus, ManagerResources};
 
 use super::resource::{self, Error};
+use super::skills::{source::Source, store::Store};
 
 struct Controller {
     home: PathBuf,
     platform: resource::Platform,
     agents: Mutex<()>,
     editors: Mutex<()>,
+    /// Serializes skill store imports, VM skill targets and AGENTS.md writes.
+    skills: Mutex<()>,
+    skill_source: Source,
 }
 
 const ORIGINS: [&str; 4] = [
@@ -127,11 +131,17 @@ fn router(home: PathBuf) -> Router {
 }
 
 fn router_for(home: PathBuf, platform: resource::Platform) -> Router {
+    router_with_source(home, platform, Source::official())
+}
+
+fn router_with_source(home: PathBuf, platform: resource::Platform, skill_source: Source) -> Router {
     let controller = Arc::new(Controller {
         home,
         platform,
         agents: Mutex::new(()),
         editors: Mutex::new(()),
+        skills: Mutex::new(()),
+        skill_source,
     });
     Router::new()
         .route(
@@ -141,6 +151,24 @@ fn router_for(home: PathBuf, platform: resource::Platform) -> Router {
         .route("/api/service/resources/apply", post(apply_resources))
         .merge(
             Router::new()
+                .route("/api/service/agents/skills", get(skill_catalog))
+                .route(
+                    "/api/service/agents/skills/{name}/import",
+                    post(import_skill),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/skills",
+                    get(vm_skills).post(set_vm_skill),
+                )
+                .route("/api/service/agents/microvms/{vm}/rules", get(vm_rules))
+                .route(
+                    "/api/service/agents/microvms/{vm}/rules/refine",
+                    post(refine_vm_rule),
+                )
+                .route(
+                    "/api/service/agents/microvms/{vm}/rules/apply",
+                    post(apply_vm_rule),
+                )
                 .route("/api/service/agents/microvms/{vm}", get(vm_agent_status))
                 .route(
                     "/api/service/agents/microvms/{vm}/github",
@@ -208,6 +236,85 @@ fn router_for(home: PathBuf, platform: resource::Platform) -> Router {
         .layer(DefaultBodyLimit::max(4096))
         .layer(middleware::from_fn_with_state(controller.clone(), guard))
         .with_state(controller)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SkillToggle {
+    name: String,
+    enabled: bool,
+}
+
+/// Run blocking skill and rule work off the async runtime, mapping a join failure like other routes.
+async fn blocking<F>(work: F) -> Result<Json<serde_json::Value>, Error>
+where
+    F: FnOnce() -> Result<serde_json::Value, Error> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| Error::Invalid(e.to_string()))?
+        .map(Json)
+}
+async fn skill_catalog(
+    State(controller): State<Arc<Controller>>,
+) -> Result<Json<serde_json::Value>, Error> {
+    blocking(move || Store::new(&controller.home).view(&controller.skill_source)).await
+}
+async fn import_skill(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(name): RoutePath<String>,
+) -> Result<Json<serde_json::Value>, Error> {
+    blocking(move || {
+        let _lock = controller.skills.try_lock().map_err(|_| Error::Busy)?;
+        let store = Store::new(&controller.home);
+        store.import(&controller.skill_source, &name)?;
+        store.view(&controller.skill_source)
+    })
+    .await
+}
+async fn vm_skills(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, Error> {
+    blocking(move || super::agents::skills::vm_skills(&controller.home, vm)).await
+}
+async fn set_vm_skill(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+    Json(input): Json<SkillToggle>,
+) -> Result<Json<serde_json::Value>, Error> {
+    blocking(move || {
+        let _lock = controller.skills.try_lock().map_err(|_| Error::Busy)?;
+        super::agents::skills::set_vm_skill(&controller.home, vm, &input.name, input.enabled)
+    })
+    .await
+}
+async fn vm_rules(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+) -> Result<Json<serde_json::Value>, Error> {
+    blocking(move || super::agents::Runtime::for_vm(&controller.home, vm, false)?.rules()).await
+}
+async fn refine_vm_rule(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+    Json(input): Json<super::agents::rules::Refine>,
+) -> Result<Json<serde_json::Value>, Error> {
+    blocking(move || {
+        super::agents::Runtime::for_vm(&controller.home, vm, true)?.refine_rules(input)
+    })
+    .await
+}
+async fn apply_vm_rule(
+    State(controller): State<Arc<Controller>>,
+    RoutePath(vm): RoutePath<uuid::Uuid>,
+    Json(input): Json<super::agents::rules::Apply>,
+) -> Result<Json<serde_json::Value>, Error> {
+    blocking(move || {
+        let _lock = controller.skills.try_lock().map_err(|_| Error::Busy)?;
+        super::agents::Runtime::for_vm(&controller.home, vm, false)?.apply_rules(input)
+    })
+    .await
 }
 
 #[derive(serde::Deserialize)]

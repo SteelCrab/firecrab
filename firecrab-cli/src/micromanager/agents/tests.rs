@@ -230,6 +230,10 @@ if '-N' in sys.argv:
   conn,_=sock.accept();conn.close()
 script=shlex.split(sys.argv[-1])[-1]
 with (root/'remote-calls.jsonl').open('a') as f:f.write(json.dumps(script)+'\n')
+import os
+if not os.isatty(0):
+ data=sys.stdin.buffer.read()
+ if data:(root/('remote-stdin-%d.bin'%len(list(root.glob('remote-stdin-*.bin'))))).write_bytes(data)
 replies=root/'shell-replies.json'
 if replies.exists():
  for match,reply in json.loads(replies.read_text()).items():
@@ -290,6 +294,7 @@ print(json.dumps({'result':result}))
         session: "guest-test".into(),
         bin_dir: None,
         guest: Some(guest),
+        skills_home: root.path().join("controller"),
     };
     (root, runtime)
 }
