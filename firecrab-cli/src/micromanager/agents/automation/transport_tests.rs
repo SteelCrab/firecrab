@@ -10,7 +10,6 @@ fn request(action: &str) -> Request {
             build_command: "cargo build --locked".into(),
             start_command: String::new(),
             port: 3000,
-            security: false,
         },
     }
 }
@@ -21,11 +20,10 @@ fn status_restores_the_guest_run_and_saved_configuration_after_reconnect() {
     let run = Uuid::new_v4();
     let config = request("run").config;
     let output = format!(
-        "FILE:Cargo.toml:{}\nJOB:{run}\nSTATE:passed\nPHASE:ready\nexit:0\nAPPRUNNING:true\napp:ready\nBRANCH:feature/check\nHEAD:abcdef\nREMOTE:https://github.com/octocat/project.git\nWORKFLOW:present\nSCANNER:ready\nLOG:{}\nCONFIG:{}\nCOUNTS:{}\n",
+        "FILE:Cargo.toml:{}\nJOB:{run}\nSTATE:passed\nPHASE:ready\nexit:0\nAPPRUNNING:true\napp:ready\nBRANCH:feature/check\nHEAD:abcdef\nREMOTE:https://github.com/octocat/project.git\nWORKFLOW:present\nLOG:{}\nCONFIG:{}\n",
         STANDARD.encode("[workspace]"),
         STANDARD.encode("tests passed\n"),
         STANDARD.encode(serde_json::to_vec(&config).unwrap()),
-        STANDARD.encode("1 2 3\n")
     );
     shell_replies(root.path(), json!({"FILE:%s:": {"out": output}}));
     let value = runtime.automation_status(agent.id).unwrap();

@@ -478,13 +478,11 @@ async function setup(
             buildCommand: "npm run build",
             startCommand: "npm run dev -- --host 0.0.0.0 --port 3000",
             port: 3000,
-            security: true,
           },
           repository: "https://github.com/example/project",
           branch: "firecrab/task-test",
           head: "abcdef1",
           workflowConfigured: false,
-          scannerAvailable: false,
           run: null,
         };
         if (request.method() === "POST") {
@@ -499,7 +497,6 @@ async function setup(
               appReady: false,
               config: body.config,
               log: "Running tests",
-              findings: null,
             };
           if (body.action === "start_preview")
             state.automation.preview = {
@@ -1526,7 +1523,7 @@ test("verification stays scoped to its VM and does not publish until the app is 
   await expect(modal.getByRole("status")).toContainText("Running");
   const call = state.calls.find((c) => c.body?.action === "run");
   assert.equal(call.path, "/reviewer/automation");
-  assert.equal(call.body.config.security, true);
+  assert.equal(call.body.config.security, undefined);
   assert.equal(call.headers["x-firecrab-controller-id"], "native-controller");
   assert.equal(
     fixture.requests.some(
@@ -1562,7 +1559,6 @@ test("preview targets only the selected VM port and records an explicit HTTPS ch
     appReady: true,
     config: state.automation.config,
     log: "Verified",
-    findings: { vulnerabilities: 0, secrets: 0, misconfigurations: 0 },
   };
   await modal
     .getByRole("button", { name: "Refresh verification", exact: true })
@@ -3075,7 +3071,6 @@ test("app run explains a command that is missing in the VM", async (t) => {
     appRunning: false,
     config: state.automation.config,
     log: "Running project tests\nsh: 1: npm: not found",
-    findings: null,
   });
   state.automation.run = failed(1);
   await refresh.click();

@@ -46,7 +46,6 @@ export type AppConfig = {
   buildCommand: string;
   startCommand: string;
   port: number;
-  security: boolean;
 };
 export type AppVerification = {
   vmId: string;
@@ -61,11 +60,6 @@ export type AppVerification = {
     log: string;
     exitCode: number | null;
     config: AppConfig | null;
-    findings: null | {
-      vulnerabilities: number;
-      secrets: number;
-      misconfigurations: number;
-    };
   };
   preview: null | {
     running: boolean;

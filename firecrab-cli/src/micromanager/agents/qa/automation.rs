@@ -1,7 +1,7 @@
 //! Opt-in QA against explicitly owned resources. Not an automated coverage input.
 use super::*;
 #[test]
-#[ignore = "Explicit disposable qa-automation MicroVM; installs Trivy, never calls an AI model"]
+#[ignore = "Explicit disposable qa-automation MicroVM; never calls an AI model"]
 fn real_disposable_microvm_pipeline() {
     let home = std::env::var("FIRECRAB_AUTOMATION_QA_HOME").expect("Private QA managed home");
     let vm: Uuid = std::env::var("FIRECRAB_AUTOMATION_QA_VM")
@@ -79,7 +79,6 @@ fn real_disposable_microvm_pipeline() {
         build_command: "printf build-ok > build.flag".into(),
         start_command: format!("/usr/sbin/nginx -c {cwd}/nginx.conf -g 'daemon off;'"),
         port: 8765,
-        security: false,
     };
     let request = |action: &str, run: Uuid, config: &Config| Request {
         action: action.into(),
@@ -150,41 +149,21 @@ printf 'https://fixture-only-not-published.trycloudflare.com' > "$job/preview.lo
         .automate(id, request("run", Uuid::new_v4(), &bad))
         .unwrap();
     assert_eq!(wait()["run"]["state"], "failed");
-    let fake = format!("GITHUB_TOKEN=ghp_{}ABcd", Uuid::new_v4().simple());
-    guest
-        .shell(
-            &format!(
-                "printf %s {} > {cwd}/scanner-fixture.env",
-                guest::quote(&fake)
-            ),
-            Duration::from_secs(10),
-        )
-        .unwrap();
-    let scan = Config {
+    let ci = Config {
         test_command: "true".into(),
         start_command: String::new(),
-        security: true,
         ..config
     };
     runtime
-        .automate(id, request("run", Uuid::new_v4(), &scan))
-        .unwrap();
-    let state = wait();
-    assert_eq!(state["run"]["state"], "findings", "{state}");
-    assert!(
-        state["run"]["findings"]["secrets"].as_u64().unwrap_or(0) > 0,
-        "{state}"
-    );
-    runtime
-        .automate(id, request("configure_ci", Uuid::new_v4(), &scan))
+        .automate(id, request("configure_ci", Uuid::new_v4(), &ci))
         .unwrap();
     assert!(
         runtime
-            .automate(id, request("configure_ci", Uuid::new_v4(), &scan))
+            .automate(id, request("configure_ci", Uuid::new_v4(), &ci))
             .is_err(),
         "Never overwrite an existing workflow"
     );
     println!(
-        "Disposable VM verified: test/build/app, idempotent run, owned app stop, failed test gate, real scanner secret finding, non-overwriting CI generation. No AI model calls or public publication."
+        "Disposable VM verified: test/build/app, idempotent run, owned app stop, failed test gate, non-overwriting CI generation. No AI model calls or public publication."
     );
 }

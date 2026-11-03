@@ -98,18 +98,6 @@
   font-size: 13px;
   background: var(--surface, #fff);
 }
-.aa-fields > .aa-check {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  line-height: 1.5;
-}
-.aa-check input {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-  margin: 2px 0 0;
-}
 .aa-run {
   display: flex;
   gap: 12px;
@@ -125,19 +113,8 @@
   color: #128445;
 }
 .aa-run.failed,
-.aa-run.findings,
 .aa-run.interrupted {
   color: #ad3a31;
-}
-.aa-findings {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 18px;
-  margin: 14px 0;
-  font-size: 13px;
-}
-.aa-findings strong {
-  margin-left: 6px;
 }
 .aa-error {
   color: #b4232d;

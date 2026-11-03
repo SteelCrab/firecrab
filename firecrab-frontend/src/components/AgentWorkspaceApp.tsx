@@ -36,7 +36,6 @@ const initialConfig: AppConfig = {
   buildCommand: "",
   startCommand: "",
   port: 3000,
-  security: true,
 };
 const publicPreview = (url?: string | null) =>
   !!url && /^https:\/\/[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com$/.test(url);
@@ -460,12 +459,7 @@ export default function AgentWorkspaceApp({
         <form className="awa-card" onSubmit={submit}>
           <div className="awa-heading">
             <ShieldCheck />
-            <h3>
-              {t(
-                "Tests → security → build → app",
-                "테스트 → 보안 점검 → 빌드 → 앱 실행",
-              )}
-            </h3>
+            <h3>{t("Tests → build → app", "테스트 → 빌드 → 앱 실행")}</h3>
           </div>
           {run && (
             <div className={`awa-run ${run.state}`} role="status">
@@ -474,17 +468,14 @@ export default function AgentWorkspaceApp({
                   ? t("Checking", "검증 중")
                   : run.state === "passed"
                     ? t("Passed", "검증 통과")
-                    : run.state === "findings"
-                      ? t("Needs attention", "확인 필요")
-                      : run.state === "failed"
-                        ? t("Failed", "실패")
-                        : t("Check required", "상태 확인 필요")}
+                    : run.state === "failed"
+                      ? t("Failed", "실패")
+                      : t("Check required", "상태 확인 필요")}
               </strong>
               <span>
                 {(
                   {
                     tests: t("Tests", "테스트"),
-                    security: t("Security", "보안 점검"),
                     build: t("Build", "빌드"),
                     preview: t("Starting app", "앱 시작"),
                     complete: appReady
@@ -539,20 +530,6 @@ export default function AgentWorkspaceApp({
                 }
               />
             </label>
-            <label className="awa-check">
-              <input
-                type="checkbox"
-                checked={config.security}
-                disabled={!!busy || run?.state === "running"}
-                onChange={(e) =>
-                  setConfig({ ...config, security: e.target.checked })
-                }
-              />
-              {t(
-                "Scan dependencies, secrets and configuration",
-                "취약점·비밀키 노출·설정 오류 점검",
-              )}
-            </label>
             <small>
               {t(
                 "Run the app in the foreground. Keep development servers stopped until verification starts.",
@@ -604,12 +581,6 @@ export default function AgentWorkspaceApp({
               <RefreshCw />
             </button>
           </div>
-          {run?.findings && (
-            <p>
-              {t("Findings", "검사 결과")}: {run.findings.vulnerabilities} /{" "}
-              {run.findings.secrets} / {run.findings.misconfigurations}
-            </p>
-          )}
           {run?.exitCode === 127 && (
             <p>
               {t(

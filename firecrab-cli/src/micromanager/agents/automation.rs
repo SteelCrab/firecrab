@@ -5,14 +5,15 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 #[cfg(all(test, unix))]
 mod transport_tests;
 
+/// Unknown fields are ignored: settings saved by older builds still carry the removed
+/// `security` scan switch, and they must keep loading.
 #[derive(Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct Config {
     pub test_command: String,
     pub build_command: String,
     pub start_command: String,
     pub port: u16,
-    pub security: bool,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -102,7 +103,6 @@ printf 'BRANCH:'; git branch --show-current 2>/dev/null || true; printf '\n'
 printf 'HEAD:'; git rev-parse HEAD 2>/dev/null || true; printf '\n'
 printf 'REMOTE:'; git config --get remote.origin.url 2>/dev/null || true; printf '\n'
 if [ -f .github/workflows/firecrab-checks.yml ]; then printf 'WORKFLOW:present\n'; fi
-if command -v trivy >/dev/null 2>&1; then printf 'SCANNER:ready\n'; fi
 root={root}
 if [ -f "$root/latest" ]; then
   job=$(cat "$root/latest")
@@ -137,8 +137,6 @@ if [ -f "$root/latest" ]; then
   fi
   if [ -f "$root/$job/log" ]; then printf 'LOG:'; tail -c 24000 "$root/$job/log" | base64 -w0; printf '\n'; fi
   if [ -f "$root/$job/config" ]; then printf 'CONFIG:'; cat "$root/$job/config" | base64 -w0; printf '\n'; fi
-  if [ -f "$root/$job/counts" ]; then printf 'COUNTS:'; head -c 8192 "$root/$job/counts" | base64 -w0; printf '\n'; fi
-
 fi
 "#), Duration::from_secs(20))?;
         parse_status(&output, &self.automation_config_path(id)?, guest.id, &agent)
@@ -447,7 +445,6 @@ fn parse_status(text: &str, config_path: &Path, vm: Uuid, agent: &Agent) -> Resu
     }
     let mut config = Config {
         port: 3000,
-        security: true,
         ..Config::default()
     };
     if files.contains_key("Cargo.toml") {
@@ -491,60 +488,18 @@ fn parse_status(text: &str, config_path: &Path, vm: Uuid, agent: &Agent) -> Resu
         config = serde_json::from_slice(&saved)
             .map_err(|_| invalid("Saved automation settings could not be read."))?;
     }
-    let mut findings = json!({"vulnerabilities":0,"secrets":0,"misconfigurations":0});
-    let mut report_available = false;
-    if let Some(counts) = fields.get("COUNTS") {
-        report_available = true;
-        for line in decode(counts).lines() {
-            let counts = line
-                .split_whitespace()
-                .map(str::parse::<u64>)
-                .collect::<Result<Vec<_>, _>>();
-            if let Ok(counts) = counts
-                && counts.len() == 3
-            {
-                for (index, key) in ["vulnerabilities", "secrets", "misconfigurations"]
-                    .iter()
-                    .enumerate()
-                {
-                    findings[*key] = json!(
-                        findings[*key]
-                            .as_u64()
-                            .unwrap_or(0)
-                            .saturating_add(counts[index])
-                    );
-                }
-            } else {
-                report_available = false;
-                break;
-            }
-        }
-    }
-    let run=fields.get("JOB").map(|id|json!({"id":id,"state":fields.get("STATE").or(fields.get("state")).copied().unwrap_or("unknown"),"phase":fields.get("phase").copied().unwrap_or("starting"),"exitCode":fields.get("exit").and_then(|v|v.parse::<i32>().ok()),"appReady":fields.get("app")==Some(&"ready"),"appRunning":fields.get("APPRUNNING")==Some(&"true"),"config":fields.get("CONFIG").and_then(|c|serde_json::from_str::<Value>(&decode(c)).ok()),"log":decode(fields.get("LOG").copied().unwrap_or("")),"findings":if report_available {findings} else {Value::Null}}));
+    // Older builds ended a run with security findings in the `findings` state.
+    let state = match fields.get("STATE").or(fields.get("state")).copied() {
+        Some("findings") => "failed",
+        Some(state) => state,
+        None => "unknown",
+    };
+    let run=fields.get("JOB").map(|id|json!({"id":id,"state":state,"phase":fields.get("phase").copied().unwrap_or("starting"),"exitCode":fields.get("exit").and_then(|v|v.parse::<i32>().ok()),"appReady":fields.get("app")==Some(&"ready"),"appRunning":fields.get("APPRUNNING")==Some(&"true"),"config":fields.get("CONFIG").and_then(|c|serde_json::from_str::<Value>(&decode(c)).ok()),"log":decode(fields.get("LOG").copied().unwrap_or(""))}));
     Ok(
-        json!({"vmId":vm,"agentId":agent.id,"config":config,"branch":fields.get("BRANCH"),"head":fields.get("HEAD"),"repository":fields.get("REMOTE").and_then(|url|guest::repository_url(url).ok()),"workflowConfigured":fields.contains_key("WORKFLOW"),"scannerAvailable":fields.contains_key("SCANNER"),"run":run,"preview":if fields.contains_key("PREVIEW"){json!({"running":fields.get("PREVIEWRUNNING")==Some(&"true"),"publicUrl":fields.get("PUBLICURL").filter(|s|!s.is_empty()),"error":fields.get("PREVIEWERROR").map(|e|decode(e))})}else{Value::Null}}),
+        json!({"vmId":vm,"agentId":agent.id,"config":config,"branch":fields.get("BRANCH"),"head":fields.get("HEAD"),"repository":fields.get("REMOTE").and_then(|url|guest::repository_url(url).ok()),"workflowConfigured":fields.contains_key("WORKFLOW"),"run":run,"preview":if fields.contains_key("PREVIEW"){json!({"running":fields.get("PREVIEWRUNNING")==Some(&"true"),"publicUrl":fields.get("PUBLICURL").filter(|s|!s.is_empty()),"error":fields.get("PREVIEWERROR").map(|e|decode(e))})}else{Value::Null}}),
     )
 }
 
-// The release is intentional: use the same checked scanner in the VM and generated CI.
-const TRIVY_VERSION: &str = "0.76.1";
-fn scanner_setup() -> String {
-    format!(
-        r#"if ! command -v trivy >/dev/null 2>&1 || [ "$(trivy --version | head -n1)" != "Version: {TRIVY_VERSION}" ]; then
-  tools=$(mktemp -d)
-  case $(uname -m) in aarch64|arm64) arch=ARM64;; x86_64|amd64) arch=64bit;; *) echo 'Unsupported scanner architecture' >&2; exit 1;; esac
-  archive=trivy_{TRIVY_VERSION}_Linux-$arch.tar.gz
-  base=https://github.com/aquasecurity/trivy/releases/download/v{TRIVY_VERSION}
-  curl --connect-timeout 15 --max-time 120 --retry 2 -fsSL "$base/$archive" -o "$tools/$archive"
-  curl --connect-timeout 15 --max-time 30 -fsSL "$base/trivy_{TRIVY_VERSION}_checksums.txt" -o "$tools/checksums"
-  (cd "$tools"; grep "  $archive\$" checksums > selected; test -s selected; sha256sum -c selected; tar -xzf "$archive" trivy)
-  mkdir -p /root/.local/bin
-  install -m 755 "$tools/trivy" /root/.local/bin/trivy
-  rm -rf "$tools"
-fi
-"#
-    )
-}
 /// The program a command starts with, when it is a plain name that the shell finds in PATH.
 /// Paths, variables, quotes and assignments are left to the shell.
 fn program(command: &str) -> Option<&str> {
@@ -619,7 +574,7 @@ export CI=true
 umask 077
 root={root}
 job="$root/{id}"
-finish() {{ result=$?; trap - EXIT; printf '%s' "$result" > "$job/exit"; if [ "$result" -eq 0 ]; then printf passed > "$job/state"; elif [ "$result" -eq 10 ] && [ "$(cat "$job/phase")" = security ]; then printf findings > "$job/state"; else printf failed > "$job/state"; fi; rm -f "$root/lock/boot"; rmdir "$root/lock" 2>/dev/null || :; exit "$result"; }}
+finish() {{ result=$?; trap - EXIT; printf '%s' "$result" > "$job/exit"; if [ "$result" -eq 0 ]; then printf passed > "$job/state"; else printf failed > "$job/state"; fi; rm -f "$root/lock/boot"; rmdir "$root/lock" 2>/dev/null || :; exit "$result"; }}
 trap finish EXIT
 cd {cwd}
 {node}printf tests > "$job/phase"
@@ -632,18 +587,6 @@ echo 'Running project tests'
         require = require(&config.test_command),
         test = guest::quote(&config.test_command)
     );
-    if config.security {
-        s.push_str("printf security > \"$job/phase\"\necho 'Scanning vulnerabilities, exposed secrets and configuration'\n");
-        s.push_str(&scanner_setup());
-        s.push_str(r#"set +e
-timeout --kill-after=5 900 trivy fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --exit-code 10 --format json --output "$job/report.json" .
-result=$?
-set -e
-[ "$result" -eq 0 ] || [ "$result" -eq 10 ] || exit "$result"
-trivy convert --format template --template '{{range .}}{{len .Vulnerabilities}} {{len .Secrets}} {{len .Misconfigurations}}{{"\n"}}{{end}}' --output "$job/counts" "$job/report.json"
-[ "$result" -eq 0 ] || exit "$result"
-"#);
-    }
     if !config.build_command.trim().is_empty() {
         s.push_str(&format!("printf build > \"$job/phase\"\necho 'Building project'\n{}timeout --kill-after=5 900 sh -c {}\n",require(&config.build_command),guest::quote(&config.build_command)));
     }
@@ -657,7 +600,7 @@ pid=$!
 printf '%s' "$pid" > "$job/app.pid"
 sed 's/^.*) //' "/proc/$pid/stat" | awk '{{print $20}}' > "$job/app.start"
 for attempt in $(seq 1 45); do
-  if curl --connect-timeout 1 --max-time 2 -fsS -o /dev/null http://{app}/; then printf ready > "$job/app"; printf complete > "$job/phase"; exit 0; fi
+  if curl --connect-timeout 1 --max-time 2 -fs -o /dev/null http://{app}/; then printf ready > "$job/app"; printf complete > "$job/phase"; echo 'Test application is ready at http://{app}'; exit 0; fi
   sleep 1
 done
 echo 'The test app did not become ready. Listen on 127.0.0.1 or 0.0.0.0 at the selected port.' >&2
@@ -676,25 +619,6 @@ fn workflow(config: &Config) -> String {
         "      - name: Test\n        run: {}\n",
         quoted(&config.test_command)
     ));
-    if config.security {
-        s.push_str("      - name: Security scan\n        run: |\n");
-        // GitHub-hosted runners install into the current user's bin directory.
-        for line in scanner_setup()
-            .replace("/root/.local/bin", "$HOME/.local/bin")
-            .lines()
-        {
-            s.push_str(&format!("          {line}\n"));
-        }
-        s.push_str(r#"          export PATH="$HOME/.local/bin:$PATH"
-          set +e
-          trivy fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --format json --output "$RUNNER_TEMP/firecrab-trivy.json" --exit-code 10 .
-          result=$?
-          set -e
-          [ "$result" -eq 0 ] || [ "$result" -eq 10 ] || exit "$result"
-          trivy convert --format template --template '{{range .}}Vulnerabilities: {{len .Vulnerabilities}} | Secrets: {{len .Secrets}} | Configuration: {{len .Misconfigurations}}{{"\n"}}{{end}}' "$RUNNER_TEMP/firecrab-trivy.json" >> "$GITHUB_STEP_SUMMARY"
-          [ "$result" -eq 0 ]
-"#);
-    }
     if !config.build_command.trim().is_empty() {
         s.push_str(&format!(
             "      - name: Build\n        run: {}\n",
@@ -770,14 +694,10 @@ mod tests {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
     #[cfg(unix)]
-    fn run_pipeline(
-        test: &str,
-        security: bool,
-    ) -> (tempfile::TempDir, std::process::Output, PathBuf) {
+    fn run_pipeline(test: &str) -> (tempfile::TempDir, std::process::Output, PathBuf) {
         let config = Config {
             test_command: test.into(),
             build_command: "printf built > built".into(),
-            security,
             ..Config::default()
         };
         run_config(&config, |_| {})
@@ -802,12 +722,6 @@ mod tests {
             std::os::unix::fs::symlink(source, bin.join(tool)).unwrap();
         }
         fake(&bin.join("timeout"), "shift; shift; exec \"$@\"\n");
-        fake(
-            &bin.join("trivy"),
-            &format!(
-                "case \"$1\" in --version) printf 'Version: {TRIVY_VERSION}\\n';; fs) exit 10;; convert) while [ \"$1\" != --output ]; do shift; done; printf '1 2 3\\n' > \"$2\";; esac\n"
-            ),
-        );
         project(root);
         let id = Uuid::new_v4();
         let job = root.join(id.to_string());
@@ -828,7 +742,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn failed_tests_stop_before_build_and_release_the_vm_lock() {
-        let (temp, output, job) = run_pipeline("exit 7", false);
+        let (temp, output, job) = run_pipeline("exit 7");
         assert_eq!(output.status.code(), Some(7));
         assert_eq!(fs::read_to_string(job.join("state")).unwrap(), "failed");
         assert_eq!(fs::read_to_string(job.join("phase")).unwrap(), "tests");
@@ -837,17 +751,12 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn passing_tests_build_but_security_findings_block_build() {
-        let (temp, output, job) = run_pipeline("printf tested > tested", false);
+    fn passing_tests_build_and_exit_10_is_a_plain_failure() {
+        let (temp, output, job) = run_pipeline("printf tested > tested");
         assert!(output.status.success(), "{:?}", output);
         assert!(temp.path().join("built").exists());
         assert_eq!(fs::read_to_string(job.join("state")).unwrap(), "passed");
-        let (temp, output, job) = run_pipeline("true", true);
-        assert_eq!(output.status.code(), Some(10));
-        assert_eq!(fs::read_to_string(job.join("state")).unwrap(), "findings");
-        assert_eq!(fs::read_to_string(job.join("counts")).unwrap(), "1 2 3\n");
-        assert!(!temp.path().join("built").exists());
-        let (_temp, output, job) = run_pipeline("exit 10", false);
+        let (_temp, output, job) = run_pipeline("exit 10");
         assert_eq!(output.status.code(), Some(10));
         assert_eq!(fs::read_to_string(job.join("state")).unwrap(), "failed");
     }
@@ -1059,7 +968,6 @@ mod tests {
         let config = Config {
             test_command: command.into(),
             start_command: "private preview command".into(),
-            security: true,
             ..Config::default()
         };
         let yaml = workflow(&config);

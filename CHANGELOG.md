@@ -51,6 +51,16 @@ Entries land here as work merges, and move under the next version heading when t
   RAM its daemon boots with. Saved allocations and settings keep their values. New AI Sandbox workspaces default to 4 vCPU,
   8 GiB RAM and a 16 GiB disk.
   See [#576](https://github.com/SteelCrab/firecrab/issues/576).
+- AI Sandbox's App run no longer has a security scan. It runs tests, the build
+  and the app. The first scan downloaded Trivy's 132 MB vulnerability database
+  and wrote about 1 GB into the VM, which could overload a small VM until SSH
+  and terminals stopped responding. A new GitHub Actions workflow from
+  **Create workflow** runs only the tests and the build. Saved App run settings
+  still load, and a run that an older build stopped on scan findings shows as
+  failed. A VM that already ran a scan keeps Trivy and its cache (about 1 GB)
+  until you remove them in the VM:
+  `rm -rf /root/.cache/trivy /root/.local/bin/trivy`. An existing
+  `.github/workflows/firecrab-checks.yml` keeps its Trivy step until you edit it.
 
 ### Fixed
 
@@ -62,6 +72,9 @@ Entries land here as work merges, and move under the next version heading when t
 - AI Sandbox starts Codex with `--no-daemon`, so each session's own process holds
   its conversation. Codex board cards show their latest messages, and a chosen
   reasoning effort no longer prints the shared background server warning.
+- The App run log no longer shows a `curl: (7) Failed to connect` line while it
+  waits for the test app to start, which made a passed run look failed. When the
+  app answers, the log ends with `Test application is ready at http://127.0.0.1:<port>`.
 
 ## [0.4.3] - 2026-11-02
 

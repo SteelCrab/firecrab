@@ -20,7 +20,6 @@ type Config = {
   buildCommand: string;
   startCommand: string;
   port: number;
-  security: boolean;
 };
 type Verification = {
   vmId: string;
@@ -30,7 +29,6 @@ type Verification = {
   branch: string;
   head: string;
   workflowConfigured: boolean;
-  scannerAvailable: boolean;
   preview: null | {
     running: boolean;
     publicUrl: string | null;
@@ -45,11 +43,6 @@ type Verification = {
     appRunning?: boolean;
     config: Config;
     log: string;
-    findings: null | {
-      vulnerabilities: number;
-      secrets: number;
-      misconfigurations: number;
-    };
   };
 };
 type GithubRun = {
@@ -67,7 +60,6 @@ const empty: Config = {
   buildCommand: "",
   startCommand: "",
   port: 3000,
-  security: true,
 };
 
 export default function AgentAutomation({
@@ -204,7 +196,6 @@ export default function AgentAutomation({
     ({
       running: t("Running", "실행 중"),
       passed: t("Passed", "통과"),
-      findings: t("Findings detected", "보안 항목 발견"),
       failed: t("Failed", "실패"),
       interrupted: t("Interrupted", "중단됨"),
       unknown: t("Check required", "확인 필요"),
@@ -213,7 +204,6 @@ export default function AgentAutomation({
     ({
       starting: t("Preparing", "준비"),
       tests: t("Tests", "테스트"),
-      security: t("Security scan", "보안 점검"),
       build: t("Build", "빌드"),
       preview: t("Start test app", "테스트 앱 시작"),
       complete: t("Complete", "완료"),
@@ -221,7 +211,6 @@ export default function AgentAutomation({
   const stages = run
     ? [
         { id: "tests", enabled: true },
-        { id: "security", enabled: run.config.security },
         { id: "build", enabled: !!run.config.buildCommand.trim() },
         { id: "preview", enabled: !!run.config.startCommand.trim() },
       ]
@@ -231,10 +220,9 @@ export default function AgentAutomation({
       {
         starting: -1,
         tests: 0,
-        security: 1,
-        build: 2,
-        preview: 3,
-        complete: 4,
+        build: 1,
+        preview: 2,
+        complete: 3,
       } as Record<string, number>
     )[run?.phase || "starting"] ?? -1;
   const tunnel = status?.preview;
@@ -265,8 +253,8 @@ export default function AgentAutomation({
         </header>
         <p className="aa-intro">
           {t(
-            "Test → security scan → build → test app. Every command runs in this task’s MicroVM workspace.",
-            "테스트 → 보안 점검 → 빌드 → 테스트 앱 순서로 실행합니다. 모든 명령은 이 작업의 MicroVM 안에서 실행됩니다.",
+            "Test → build → test app. Every command runs in this task’s MicroVM workspace.",
+            "테스트 → 빌드 → 테스트 앱 순서로 실행합니다. 모든 명령은 이 작업의 MicroVM 안에서 실행됩니다.",
           )}
         </p>
         {(error || loadError) && (
@@ -339,22 +327,6 @@ export default function AgentAutomation({
                     )}
                   </p>
                 )}
-                {run?.findings && (
-                  <div className="aa-findings">
-                    <span>
-                      {t("Vulnerabilities", "의존성 취약점")}{" "}
-                      <strong>{run.findings.vulnerabilities}</strong>
-                    </span>
-                    <span>
-                      {t("Exposed secrets", "비밀키 노출")}{" "}
-                      <strong>{run.findings.secrets}</strong>
-                    </span>
-                    <span>
-                      {t("Configuration issues", "설정 오류")}{" "}
-                      <strong>{run.findings.misconfigurations}</strong>
-                    </span>
-                  </div>
-                )}
                 <details open={!config.testCommand} className="aa-settings">
                   <summary>{t("Execution settings", "실행 설정")}</summary>
                   <div className="aa-fields">
@@ -406,24 +378,10 @@ export default function AgentAutomation({
                         disabled={disabled}
                       />
                     </label>
-                    <label className="aa-check">
-                      <input
-                        type="checkbox"
-                        checked={config.security}
-                        onChange={(e) =>
-                          setConfig({ ...config, security: e.target.checked })
-                        }
-                        disabled={disabled}
-                      />
-                      {t(
-                        "Scan high and critical vulnerabilities, secrets and configuration with Trivy",
-                        "Trivy로 높음·심각 등급의 취약점, 비밀키 노출, 설정 오류를 점검합니다",
-                      )}
-                    </label>
                     <small>
                       {t(
-                        "Missing project tools must be installed in the VM. Trivy is downloaded and checksum-verified on the first security scan. Run the test app in the foreground on the selected port.",
-                        "프로젝트 실행에 필요한 도구를 VM에 미리 설치하세요. 첫 보안 점검 시 Trivy를 내려받고 체크섬을 확인합니다. 테스트 앱은 선택한 포트에서 포그라운드로 실행됩니다.",
+                        "Missing project tools must be installed in the VM. Run the test app in the foreground on the selected port.",
+                        "프로젝트 실행에 필요한 도구를 VM에 미리 설치하세요. 테스트 앱은 선택한 포트에서 포그라운드로 실행됩니다.",
                       )}
                     </small>
                   </div>
@@ -481,8 +439,8 @@ export default function AgentAutomation({
                         "워크플로우 파일이 있습니다. 변경 내용을 확인한 뒤 푸시하면 GitHub에서 실행됩니다.",
                       )
                     : t(
-                        "Create a workflow that tests, scans and builds on pushes and pull requests.",
-                        "커밋을 푸시하거나 PR을 만들 때 테스트·보안 점검·빌드를 실행할 워크플로우 파일을 만듭니다.",
+                        "Create a workflow that tests and builds on pushes and pull requests.",
+                        "커밋을 푸시하거나 PR을 만들 때 테스트·빌드를 실행할 워크플로우 파일을 만듭니다.",
                       )}
                 </p>
                 <div className="aa-actions">

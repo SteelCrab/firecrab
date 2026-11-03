@@ -19,7 +19,7 @@ for field in state phase exit; do
   if [ -f "$root/$job/$field" ]; then printf '%s:' "$field"; head -c 32 "$root/$job/$field" | tr -d '\n'; printf '\n'; fi
 done
 "#;
-const PHASES: &[&str] = &["starting", "tests", "security", "build", "preview"];
+const PHASES: &[&str] = &["starting", "tests", "build", "preview"];
 const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 #[derive(Deserialize, Default, Clone, Copy, PartialEq, Eq)]
@@ -79,9 +79,6 @@ pub(super) fn last_run_hint(text: &str) -> Option<String> {
             ),
             None => format!("The last App check of this project failed in its \"{phase}\" step."),
         }),
-        "findings" => Some(
-            "The last App check of this project found high or critical security issues.".into(),
-        ),
         _ => None,
     }
 }
