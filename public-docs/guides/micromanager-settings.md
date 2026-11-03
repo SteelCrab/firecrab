@@ -35,8 +35,8 @@ editor preserves other sections and creates a backup before changing an
 existing file. Limits take effect after the next WSL2 VM restart. Firecrab does
 not shut down the user's other distributions. On macOS, resources are passed
 to the native helper; build/install the matching updated helper.
-Before the first save, macOS settings use 2 CPUs and the microManager's
-new-install RAM default (16384 MiB on a 24 GiB Mac; see
+Before the first save, macOS settings use the microManager's new-install CPU
+and RAM defaults (8 CPUs and 16384 MiB on a 24 GiB Mac with 8 or more CPUs; see
 [microManager resources](micromanager-resources.md)). Windows uses 2 CPUs and
 4096 MiB.
 

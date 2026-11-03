@@ -23,10 +23,11 @@ Disks can only grow; virtual capacity does not reserve the same amount of physic
 
 ### macOS
 
-Without a saved allocation, the management VM uses 2 vCPU, 16384 MiB RAM, and a 64 GiB data disk.
+Without a saved allocation, the management VM uses 8 vCPU, 16384 MiB RAM, and a 64 GiB data disk.
+The CPU default never goes above the Mac's CPU count. For example, a Mac with 4 CPUs gets 4 vCPU.
 The RAM default shrinks so that macOS keeps 8 GiB, but it never goes below 4096 MiB or above the physical RAM.
 For example, a 24 GiB Mac gets 16384 MiB, a 16 GiB Mac gets 8192 MiB, and an 8 GiB Mac gets 4096 MiB.
-A saved allocation keeps its values. To give an existing install 16 GiB, run `firecrab service resorce --ram 16384 --apply`.
+A saved allocation keeps its values. To give an existing install 8 vCPU and 16 GiB, run `firecrab service resorce --cpu 8 --ram 16384 --apply`.
 CPU and RAM belong to this management VM. The replaceable OS disk is separate.
 Disk growth stops the VM, expands the sparse data image, and grows its ext4 filesystem after boot.
 The VM's existing disk data and network MAC address are preserved.

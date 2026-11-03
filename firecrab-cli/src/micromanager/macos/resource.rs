@@ -40,17 +40,16 @@ unsafe extern "C" {
     ) -> i32;
 }
 
-/// Physical RAM in MiB without starting the helper. `hw.memsize` is the value
-/// the helper reports as `ProcessInfo.physicalMemory`.
-pub fn physical_memory_mib() -> std::io::Result<u64> {
-    let mut bytes = 0_u64;
-    let mut size = std::mem::size_of::<u64>();
-    // SAFETY: the name is NUL-terminated, and `bytes`/`size` describe one
-    // writable u64. Nothing is written to the kernel.
+/// Reads one fixed-size integer sysctl value by name.
+fn sysctl_value<T: Default>(name: &std::ffi::CStr) -> std::io::Result<T> {
+    let mut value = T::default();
+    let mut size = std::mem::size_of::<T>();
+    // SAFETY: the name is NUL-terminated, and `value`/`size` describe one
+    // writable `T`. Nothing is written to the kernel.
     let result = unsafe {
         sysctlbyname(
-            c"hw.memsize".as_ptr(),
-            (&raw mut bytes).cast(),
+            name.as_ptr(),
+            (&raw mut value).cast(),
             &raw mut size,
             std::ptr::null_mut(),
             0,
@@ -59,7 +58,19 @@ pub fn physical_memory_mib() -> std::io::Result<u64> {
     if result != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok(bytes >> 20)
+    Ok(value)
+}
+
+/// Physical RAM in MiB without starting the helper. `hw.memsize` is the value
+/// the helper reports as `ProcessInfo.physicalMemory`.
+pub fn physical_memory_mib() -> std::io::Result<u64> {
+    Ok(sysctl_value::<u64>(c"hw.memsize")? >> 20)
+}
+
+/// Active CPUs without starting the helper. `hw.activecpu` is the value the
+/// helper reports as `ProcessInfo.activeProcessorCount`.
+pub fn active_cpu_count() -> std::io::Result<u32> {
+    Ok(u32::try_from(sysctl_value::<i32>(c"hw.activecpu")?).unwrap_or(1))
 }
 
 pub fn validate_configuration(home: &Path, settings: &ManagerResources) -> Result<(), Error> {

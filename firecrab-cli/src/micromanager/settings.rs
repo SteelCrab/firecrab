@@ -46,16 +46,20 @@ pub enum Error {
     Conflict,
 }
 impl Settings {
-    /// Settings before the first save. On macOS the RAM is the microManager's
-    /// new-install default, so turning on the controller with unchanged values
-    /// keeps that allocation. Windows keeps the WSL-wide 4096 MiB default.
+    /// Settings before the first save. On macOS the CPU and RAM are the
+    /// microManager's new-install defaults, so turning on the controller with
+    /// unchanged values keeps that allocation. Windows keeps the WSL-wide
+    /// 2 CPU / 4096 MiB default.
     fn unsaved() -> Result<Self, Error> {
         #[cfg(target_os = "macos")]
         {
-            let host = super::macos::resource::physical_memory_mib()?;
+            let host_cpu = super::macos::resource::active_cpu_count()?;
+            let host_memory = super::macos::resource::physical_memory_mib()?;
             Ok(Self {
+                // At most 8, so the cast cannot truncate.
+                cpu: super::resource::default_cpu(host_cpu) as u16,
                 // At most 16384 MiB, so the cast cannot truncate.
-                memory_mib: super::resource::default_memory_mib(host) as u32,
+                memory_mib: super::resource::default_memory_mib(host_memory) as u32,
                 ..Self::default()
             })
         }

@@ -168,6 +168,14 @@ pub(super) fn default_memory_mib(host_memory_mib: u64) -> u64 {
         .min(host_memory_mib)
 }
 
+/// vCPUs for an allocation that was never saved: 8, but never above the
+/// host's CPU count and at least 1. Unsaved controller settings use it too.
+/// The Swift helper boots with the same rule (`VMOptions.defaultCPUCount`).
+#[cfg(not(target_os = "windows"))]
+pub(super) fn default_cpu(host_cpu: u32) -> u32 {
+    host_cpu.clamp(1, 8)
+}
+
 pub fn defaults(home: &Path, host: &ManagerHostCapacity) -> Result<ManagerResources, Error> {
     #[cfg(target_os = "windows")]
     return super::windows::resource::defaults(home, host);
@@ -185,7 +193,7 @@ pub fn defaults(home: &Path, host: &ManagerHostCapacity) -> Result<ManagerResour
                 .settings;
             (u32::from(settings.cpu), u64::from(settings.memory_mib))
         } else {
-            (2, default_memory_mib(host.memory_mib))
+            (default_cpu(host.cpu), default_memory_mib(host.memory_mib))
         };
         Ok(ManagerResources {
             cpu,

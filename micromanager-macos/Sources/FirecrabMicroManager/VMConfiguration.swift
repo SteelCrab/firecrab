@@ -48,10 +48,18 @@ struct VMOptions: Equatable, Sendable {
         return min(max(min(spare, 16384), 4096), physicalMemoryMiB)
     }
 
+    /// vCPUs without a saved allocation: 8, but never above the host's CPU
+    /// count and at least 1. firecrab-cli reports the same rule
+    /// (`resource::default_cpu`).
+    static func defaultCPUCount(activeProcessorCount: Int) -> Int {
+        min(max(activeProcessorCount, 1), 8)
+    }
+
     static func managedDefaults(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        physicalMemory: UInt64 = ProcessInfo.processInfo.physicalMemory
+        physicalMemory: UInt64 = ProcessInfo.processInfo.physicalMemory,
+        activeProcessorCount: Int = ProcessInfo.processInfo.activeProcessorCount
     ) -> VMOptions {
         let managedHomeURL: URL
         if let override = environment["FIRECRAB_MICROMANAGER_HOME"], !override.isEmpty {
@@ -69,7 +77,8 @@ struct VMOptions: Equatable, Sendable {
             initialRamdiskURL: systemDirectory.appendingPathComponent("initrd.img"),
             osDiskURL: systemDirectory.appendingPathComponent("debian-system.raw"),
             dataDiskURL: dataDirectory.appendingPathComponent("firecrab-data.raw"),
-            cpuCount: environment["FIRECRAB_MICROMANAGER_CPU"].map { Int($0) ?? 0 } ?? 2,
+            cpuCount: environment["FIRECRAB_MICROMANAGER_CPU"].map { Int($0) ?? 0 }
+                ?? defaultCPUCount(activeProcessorCount: activeProcessorCount),
             memorySizeMiB: environment["FIRECRAB_MICROMANAGER_MEMORY_MIB"].map { UInt64($0) ?? 0 }
                 ?? defaultMemorySizeMiB(physicalMemoryMiB: physicalMemory / (1024 * 1024)),
             commandLine: commandLine(managedHomeURL: managedHomeURL)

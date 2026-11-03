@@ -44,11 +44,11 @@ Entries land here as work merges, and move under the next version heading when t
 - CODE workspaces, their runtime, editor, agent execution and verification
   routes under `/api/code/` are removed. Their MicroVMs stay as regular
   MicroVMs, and their saved records are no longer read.
-- A macOS microManager without a saved allocation gets 16 GiB RAM, reduced so
-  that macOS keeps 8 GiB, but at least 4 GiB. Unsaved controller (Sleepy)
-  settings use the same RAM default, and the resource status in controller
-  mode shows the CPU and RAM its daemon boots with. Saved allocations and
-  settings keep their values. New AI Sandbox workspaces default to 4 vCPU,
+- A macOS microManager without a saved allocation gets 8 vCPU, but never more
+  than the Mac's CPU count, and 16 GiB RAM, reduced so that macOS keeps 8 GiB,
+  but at least 4 GiB. Unsaved controller (Sleepy) settings use the same CPU and
+  RAM defaults, and the resource status in controller mode shows the CPU and
+  RAM its daemon boots with. Saved allocations and settings keep their values. New AI Sandbox workspaces default to 4 vCPU,
   8 GiB RAM and a 16 GiB disk.
   See [#576](https://github.com/SteelCrab/firecrab/issues/576).
 
