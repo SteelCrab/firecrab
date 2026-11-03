@@ -526,8 +526,9 @@ impl Store {
             return Err(PersistenceError::IacEndpointConflict);
         }
         let frozen = read(&tx, id)?.ok_or(PersistenceError::IacOperationIdentity)?;
+        let summary = frozen.summary()?;
         if frozen.request.expected_endpoint_id != request.expected_endpoint_id
-            || frozen.summary()?.plan_sha256 != request.plan_sha256
+            || summary.plan_sha256 != request.plan_sha256
         {
             return Err(PersistenceError::IacOperationIdentity);
         }
@@ -536,7 +537,7 @@ impl Store {
             [id.to_string()],
             |row| row.get(0),
         )?;
-        if completed {
+        if completed || summary.action == ResourcePlanAction::Noop {
             return Ok(None);
         }
         let Some(ResourceConfiguration::AiModel(config)) = &frozen.request.desired else {

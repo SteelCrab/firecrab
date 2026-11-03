@@ -173,6 +173,42 @@ fn iac_resource_model_rejects_source_rotation_and_same_uuid_disconnect_recreatio
 }
 
 #[test]
+fn iac_resource_model_noop_does_not_dispatch_expired_oauth_credentials_or_renew_tokens() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(&root.path().join("state.db")).unwrap();
+    let mut source = source();
+    source.connection.authentication = AiAuthentication::Chatgpt;
+    source.oauth=Some(serde_json::from_value(serde_json::json!({"client_id":"original-client","subject":"original-subject",
+        "refresh_token":"private-expired-refresh","expires_at":0,"earliest_refresh_at":0,"scope":"openid profile resource.invoke"})).unwrap());
+    store.save_ai_connection(&source).unwrap();
+    let mut request = input(&store, &source, Manager::Terraform);
+    let created = apply(
+        &store,
+        &store.plan_resource(request.clone(), 100).unwrap(),
+        101,
+    )
+    .unwrap();
+    request.operation_id = Uuid::new_v4();
+    request.resource = Some(created.ownership.resource.clone());
+    let noop = store.plan_resource(request, 102).unwrap();
+    assert_eq!(noop.action, ResourcePlanAction::Noop);
+    assert!(
+        store
+            .resource_plan_ai_source(noop.operation_id, &apply_input(&noop), 103)
+            .unwrap()
+            .is_none()
+    );
+    apply(&store, &noop, 104).unwrap();
+    let unchanged = store.ai_connection(source.connection.id).unwrap().unwrap();
+    assert_eq!(unchanged.api_key, source.api_key);
+    assert_eq!(unchanged.oauth.unwrap().expires_at, 0);
+    assert_eq!(
+        super::super::iac_ai_connections::generation(&store.lock(), source.connection.id).unwrap(),
+        1
+    );
+}
+
+#[test]
 fn iac_resource_model_original_oauth_identity_renews_without_advancing_configuration_version() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(&root.path().join("state.db")).unwrap();

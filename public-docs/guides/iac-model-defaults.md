@@ -60,6 +60,7 @@ An unchanged selection produces a no-op. Changing the connection or verified
 model updates the same project-scoped resource. The execution transaction
 rechecks the exact original selection and dependency generation before commit.
 Concurrent configuration changes require a new plan.
+No-op plans do not renew tokens or send provider requests.
 
 Set `desired` to null to remove only the exact owned default.
 Removal needs no live provider credential and does not delete the connection,

@@ -212,6 +212,9 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Fixed
 
+- Keep matching AI model plans from renewing OAuth tokens or sending provider
+  requests. Preserve configuration and original credential-source versions.
+
 - Retain original AWS signing credentials for ECR image recovery. Renew expired
   registry logins only for the original account and region; preserve legacy
   static-login retries and omit all credential values from public operations.
