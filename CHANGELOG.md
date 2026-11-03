@@ -34,6 +34,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Add shared security-group plans with ordered rules, borrowed network authority,
+  inactive-runtime checks and immutable completion receipts. Fence native writers
+  in SQLite and retain exact Sandbox parent-generation authority for child groups.
+
 - Add shared Secret plans with plan-bound encrypted private inputs, exact source
   versions, retained data by default and recovery of the original file effect
   after a lost SQLite acknowledgement. Keep uncertain target/address/Stack

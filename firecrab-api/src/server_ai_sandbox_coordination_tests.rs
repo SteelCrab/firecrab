@@ -377,15 +377,36 @@ async fn managed_environment_admission_pins_role_runtime_and_blocks_project_dele
             ipv6_egress: None,
         })
         .unwrap();
+    let group = SecurityGroupResponse {
+        id: vm.security_group_id.unwrap(),
+        name: vm.name.clone(),
+        micro_network_id: environment.network_id,
+        rules: vec![],
+    };
+    let mut stale_parent = environment.clone();
+    stale_parent.generation = Uuid::new_v4();
+    assert!(matches!(
+        f.state
+            .store
+            .insert_environment_security_group(&stale_parent, &group),
+        Err(crate::persistence::PersistenceError::IacParentManaged)
+    ));
     f.state
         .store
-        .insert_security_group(&SecurityGroupResponse {
-            id: role.security_group_id,
-            name: vm.name.clone(),
-            micro_network_id: environment.network_id,
-            rules: vec![],
-        })
+        .insert_environment_security_group(&environment, &group)
         .unwrap();
+    assert!(matches!(
+        f.state
+            .store
+            .replace_environment_security_group_rules(&stale_parent, group.id, &[]),
+        Err(crate::persistence::PersistenceError::IacParentManaged)
+    ));
+    assert!(matches!(
+        f.state
+            .store
+            .delete_environment_security_group(&stale_parent, group.id),
+        Err(crate::persistence::PersistenceError::IacParentManaged)
+    ));
     f.state.store.insert(&vm).unwrap();
     f.state.vms.lock().unwrap().insert(vm.id, vm.clone());
     let lease = f
@@ -397,7 +418,7 @@ async fn managed_environment_admission_pins_role_runtime_and_blocks_project_dele
                 .unwrap(),
         )
         .unwrap();
-    role.ipv4 = Some(lease.ipv4.to_string());
+    environment.roles[0].ipv4 = Some(lease.ipv4.to_string());
     f.state
         .store
         .save_sandbox_environment(&environment)
@@ -422,7 +443,8 @@ async fn managed_environment_admission_pins_role_runtime_and_blocks_project_dele
         environment.generation.to_string()
     );
     assert_eq!(admitted["runtime"]["vmId"], runtime.vm_id.to_string());
-    assert_eq!(finish(&f, key).await["state"], "result");
+    let completed = finish(&f, key).await;
+    assert_eq!(completed["state"], "result", "{completed}");
     let saved = f.state.store.sandbox_task(key).unwrap().unwrap();
     assert_eq!(
         saved.execution_mode,

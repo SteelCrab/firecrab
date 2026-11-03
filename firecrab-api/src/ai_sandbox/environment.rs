@@ -411,12 +411,15 @@ async fn provision(state: &AppState, environment: &mut SandboxEnvironment) -> Re
         } else {
             state
                 .store
-                .insert_security_group(&SecurityGroupResponse {
-                    id: reserved.security_group_id,
-                    name: name(environment, &reserved.role),
-                    micro_network_id: environment.network_id,
-                    rules: vec![],
-                })
+                .insert_environment_security_group(
+                    environment,
+                    &SecurityGroupResponse {
+                        id: reserved.security_group_id,
+                        name: name(environment, &reserved.role),
+                        micro_network_id: environment.network_id,
+                        rules: vec![],
+                    },
+                )
                 .map_err(|_| "Cannot reserve environment security group")?;
         }
         drop(network_mutation);
@@ -481,7 +484,11 @@ async fn provision(state: &AppState, environment: &mut SandboxEnvironment) -> Re
         }
         state
             .store
-            .replace_security_group_rules(reserved.security_group_id, &expected)
+            .replace_environment_security_group_rules(
+                environment,
+                reserved.security_group_id,
+                &expected,
+            )
             .map_err(|_| "Cannot persist environment policy")?;
     }
     Ok(())
@@ -1166,7 +1173,7 @@ pub async fn cleanup(
             }
             state
                 .store
-                .delete_security_group(group.id)
+                .delete_environment_security_group(&environment, group.id)
                 .map_err(|_| "Cannot delete owned security group")?;
         }
     }

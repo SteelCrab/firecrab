@@ -52,7 +52,26 @@ impl Store {
         &self,
         group: &SecurityGroupResponse,
     ) -> Result<(), PersistenceError> {
-        self.lock().execute(
+        self.insert_security_group_authority(group, None)
+    }
+
+    pub(crate) fn insert_environment_security_group(
+        &self,
+        environment: &firecrab_api_types::SandboxEnvironment,
+        group: &SecurityGroupResponse,
+    ) -> Result<(), PersistenceError> {
+        self.insert_security_group_authority(group, Some(environment))
+    }
+
+    fn insert_security_group_authority(
+        &self,
+        group: &SecurityGroupResponse,
+        parent: Option<&firecrab_api_types::SandboxEnvironment>,
+    ) -> Result<(), PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        ensure_writable(&tx, group.id, parent)?;
+        tx.execute(
             "INSERT INTO security_groups (id, micro_network_id, name) VALUES (?1, ?2, ?3)",
             params![
                 group.id.to_string(),
@@ -60,14 +79,20 @@ impl Store {
                 group.name
             ],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
     pub fn rename_security_group(&self, id: Uuid, name: &str) -> Result<bool, PersistenceError> {
-        Ok(self.lock().execute(
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        ensure_writable(&tx, id, None)?;
+        let changed = tx.execute(
             "UPDATE security_groups SET name = ?2 WHERE id = ?1",
             params![id.to_string(), name],
-        )? != 0)
+        )? != 0;
+        tx.commit()?;
+        Ok(changed)
     }
 
     pub fn replace_security_group_rules(
@@ -75,11 +100,31 @@ impl Store {
         id: Uuid,
         rules: &[SecurityGroupRule],
     ) -> Result<bool, PersistenceError> {
+        self.replace_security_group_rules_authority(id, rules, None)
+    }
+
+    pub(crate) fn replace_environment_security_group_rules(
+        &self,
+        parent: &firecrab_api_types::SandboxEnvironment,
+        id: Uuid,
+        rules: &[SecurityGroupRule],
+    ) -> Result<bool, PersistenceError> {
+        self.replace_security_group_rules_authority(id, rules, Some(parent))
+    }
+
+    fn replace_security_group_rules_authority(
+        &self,
+        id: Uuid,
+        rules: &[SecurityGroupRule],
+        parent: Option<&firecrab_api_types::SandboxEnvironment>,
+    ) -> Result<bool, PersistenceError> {
         let mut conn = self.lock();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        ensure_writable(&tx, id, parent)?;
         if read(&tx, id)?.is_none() {
             return Ok(false);
         }
+        ensure_rules_idle(&tx, &id.to_string())?;
         tx.execute(
             "DELETE FROM security_group_rules WHERE group_id = ?1",
             [id.to_string()],
@@ -97,8 +142,25 @@ impl Store {
     }
 
     pub fn delete_security_group(&self, id: Uuid) -> Result<bool, PersistenceError> {
+        self.delete_security_group_authority(id, None)
+    }
+
+    pub(crate) fn delete_environment_security_group(
+        &self,
+        parent: &firecrab_api_types::SandboxEnvironment,
+        id: Uuid,
+    ) -> Result<bool, PersistenceError> {
+        self.delete_security_group_authority(id, Some(parent))
+    }
+
+    fn delete_security_group_authority(
+        &self,
+        id: Uuid,
+        parent: Option<&firecrab_api_types::SandboxEnvironment>,
+    ) -> Result<bool, PersistenceError> {
         let mut conn = self.lock();
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        ensure_writable(&tx, id, parent)?;
         let referenced: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM vms WHERE security_group_id = ?1)
              OR EXISTS(SELECT 1 FROM micro_services WHERE json_extract(spec, '$.securityGroupId') = ?1)",
@@ -127,7 +189,10 @@ impl Store {
     }
 }
 
-fn read(conn: &Connection, id: Uuid) -> Result<Option<SecurityGroupResponse>, PersistenceError> {
+pub(super) fn read(
+    conn: &Connection,
+    id: Uuid,
+) -> Result<Option<SecurityGroupResponse>, PersistenceError> {
     let row: Option<(String, String)> = conn
         .query_row(
             "SELECT micro_network_id, name FROM security_groups WHERE id = ?1",
@@ -158,6 +223,50 @@ fn read(conn: &Connection, id: Uuid) -> Result<Option<SecurityGroupResponse>, Pe
         micro_network_id,
         rules,
     }))
+}
+
+fn ensure_writable(
+    conn: &Connection,
+    id: Uuid,
+    parent: Option<&firecrab_api_types::SandboxEnvironment>,
+) -> Result<(), PersistenceError> {
+    if let Some(parent) = parent {
+        let original:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM ai_sandbox_environment_resources r
+            JOIN ai_sandbox_environments e ON e.id=r.environment_id AND e.generation=r.generation
+            WHERE r.id=?1 AND r.kind='security_group' AND r.environment_id=?2 AND r.generation=?3 AND e.state<>'deleted')",
+            params![id.to_string(),parent.id.to_string(),parent.generation.to_string()],|row|row.get(0))?;
+        if !original {
+            return Err(PersistenceError::IacParentManaged);
+        }
+        let target = firecrab_stack::ManagedResource {
+            kind: "security_group".into(),
+            id: id.to_string(),
+        };
+        super::iac_native::ensure_idle(conn, &target)?;
+        super::iac_host::ensure_resource_idle(conn, &target)?;
+        return super::iac_owners::ensure_unowned(conn, &target);
+    }
+    if !super::iac_owners::public_write_allowed(
+        conn,
+        &firecrab_stack::ManagedResource {
+            kind: "security_group".into(),
+            id: id.to_string(),
+        },
+    )? {
+        return Err(PersistenceError::IacOwnershipConflict);
+    }
+    Ok(())
+}
+
+pub(super) fn ensure_rules_idle(conn: &Connection, id: &str) -> Result<(), PersistenceError> {
+    let busy:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM vms WHERE security_group_id=?1 AND state NOT IN ('created','stopped','error'))
+        OR EXISTS(SELECT 1 FROM micro_service_deployments WHERE json_extract(deployment,'$.spec.securityGroupId')=?1
+        AND (json_extract(deployment,'$.phase') NOT IN ('stopped','failed') OR json_array_length(deployment,'$.instances')>0))",
+        [id],|row|row.get(0))?;
+    if busy {
+        return Err(PersistenceError::IacResourceBusy);
+    }
+    Ok(())
 }
 
 fn corrupt(id: &str, reason: &str) -> PersistenceError {

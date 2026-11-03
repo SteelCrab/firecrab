@@ -36,7 +36,8 @@ pub use planning::{
 pub use resource_plan::{
     AiModelConfiguration, ApplyResourcePlan, CredentialInput, PlanResource, ResourceConfiguration,
     ResourcePlan, ResourcePlanAction, ResourcePlanDependency, ResourcePlanReceipt,
-    ResourceRemovalPolicy, SandboxAccessConfiguration, SecretConfiguration, UploadResourceValue,
+    ResourceRemovalPolicy, SandboxAccessConfiguration, SecretConfiguration,
+    SecurityGroupConfiguration, UploadResourceValue,
 };
 pub use source::{
     ConfigureGitSource, DeleteGitSource, GitCheck, GitCheckState, GitCredential, GitRevision,

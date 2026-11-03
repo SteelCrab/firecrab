@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 mod secret;
+mod security_group;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,6 +38,7 @@ enum Observation {
     AiModel(firecrab_api_types::AiModelSelection),
     SandboxAccess(firecrab_api_types::SandboxAccessPolicy),
     Secret(secret::SecretObservation),
+    SecurityGroup(firecrab_stack::SecurityGroupConfiguration),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -118,6 +120,9 @@ fn observe(
     vault: Option<&crate::secrets::Contents>,
 ) -> Result<Option<Observation>, PersistenceError> {
     match target.kind.as_str() {
+        "security_group" => {
+            security_group::observe(conn, target).map(|value| value.map(Observation::SecurityGroup))
+        }
         "shell" => shell(conn, target).map(|before| before.map(Observation::Shell)),
         "ai_model" => {
             let value: Option<(String, String)> = conn
@@ -198,6 +203,9 @@ fn dependencies(
     before: Option<&Observation>,
     vault: Option<&crate::secrets::Contents>,
 ) -> Result<Vec<ResourcePlanDependency>, PersistenceError> {
+    if let Some(ResourceConfiguration::SecurityGroup(config)) = desired {
+        return security_group::dependencies(conn, config);
+    }
     if let Some(ResourceConfiguration::Secret(config)) = desired {
         return secret::dependencies(
             conn,
@@ -226,6 +234,9 @@ fn dependencies(
 }
 
 fn deletable(conn: &Connection, resource: &ManagedResource) -> Result<(), PersistenceError> {
+    if resource.kind == "security_group" {
+        return security_group::deletable(conn, resource);
+    }
     if matches!(
         resource.kind.as_str(),
         "ai_model" | "sandbox_access" | "secret"
@@ -258,12 +269,22 @@ pub(crate) fn validate(request: &mut PlanResource) -> Result<(), PersistenceErro
             .map_err(|_| PersistenceError::InvalidIacOwner)?;
         if !matches!(
             resource.kind.as_str(),
-            "shell" | "ai_model" | "sandbox_access" | "secret"
+            "shell" | "ai_model" | "sandbox_access" | "secret" | "security_group"
         ) {
             return Err(PersistenceError::UnsupportedIacResource);
         }
     }
     match &mut request.desired {
+        Some(ResourceConfiguration::SecurityGroup(config)) => {
+            security_group::validate(config)?;
+            if request
+                .resource
+                .as_ref()
+                .is_some_and(|target| target.kind != "security_group")
+            {
+                return Err(PersistenceError::InvalidIacOwner);
+            }
+        }
         Some(ResourceConfiguration::Shell(configuration)) => {
             if request
                 .resource
@@ -428,6 +449,17 @@ impl Frozen {
         }
         let mut fields = Vec::new();
         let action = match (&self.before, &self.request.desired) {
+            (
+                Some(Observation::SecurityGroup(before)),
+                Some(ResourceConfiguration::SecurityGroup(desired)),
+            ) => {
+                fields = security_group::differences(before, desired)?;
+                if fields.is_empty() {
+                    ResourcePlanAction::Noop
+                } else {
+                    ResourcePlanAction::Update
+                }
+            }
             (None, Some(_)) => ResourcePlanAction::Create,
             (Some(_), None) => ResourcePlanAction::Delete,
             (Some(Observation::Shell(before)), Some(ResourceConfiguration::Shell(desired))) => {
@@ -513,7 +545,7 @@ fn read(conn: &Connection, id: Uuid) -> Result<Option<Frozen>, PersistenceError>
     if frozen.request.operation_id != id
         || !matches!(
             frozen.ownership.resource.kind.as_str(),
-            "shell" | "ai_model" | "sandbox_access" | "secret"
+            "shell" | "ai_model" | "sandbox_access" | "secret" | "security_group"
         )
         || frozen.ownership.endpoint_id != frozen.request.expected_endpoint_id
         || frozen.revision.is_nil()
@@ -791,6 +823,7 @@ impl Store {
             (None, ResourcePlanAction::Delete) => {
                 deletable(&tx, target)?;
                 match target.kind.as_str() {
+                    "security_group" => security_group::remove(&tx, target)?,
                     "shell" => {
                         tx.execute(
                             "DELETE FROM shell_revisions WHERE shell_id=?1",
@@ -817,6 +850,11 @@ impl Store {
                     _ => return Err(PersistenceError::UnsupportedIacResource),
                 }
                 revision = None;
+            }
+            (Some(ResourceConfiguration::SecurityGroup(desired)), action)
+                if action != ResourcePlanAction::Noop =>
+            {
+                security_group::write(&tx, target, frozen.before.as_ref(), desired)?;
             }
             (Some(ResourceConfiguration::Shell(desired)), action)
                 if action != ResourcePlanAction::Noop =>

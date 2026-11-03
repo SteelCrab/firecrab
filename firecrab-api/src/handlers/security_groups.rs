@@ -1,6 +1,6 @@
 //! Policy CRUD serialized with VM starts and service deployment claims.
 
-use super::{micro_services::database, vms::parse_id};
+use super::{stacks::database, vms::parse_id};
 
 #[cfg(test)]
 mod tests;
@@ -183,7 +183,7 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn ensure_idle(state: &AppState, id: Uuid, request: Uuid) -> Result<(), AppError> {
+pub(super) async fn ensure_idle(state: &AppState, id: Uuid, request: Uuid) -> Result<(), AppError> {
     let vms = state
         .vms
         .lock()

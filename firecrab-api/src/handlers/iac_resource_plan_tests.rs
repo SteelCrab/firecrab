@@ -15,6 +15,66 @@ use std::time::Duration;
 use tower::ServiceExt;
 
 #[tokio::test]
+async fn iac_resource_security_group_http_keeps_borrowed_network_and_original_completion() {
+    let root = tempfile::tempdir().unwrap();
+    let templates =
+        crate::templates::TemplateRegistry::from_specs(root.path(), std::iter::empty()).unwrap();
+    let state = AppState::with_db_file(templates, root.path().join("state.db"))
+        .await
+        .unwrap();
+    let app = router(&state).layer(Extension(LocalOperator));
+    let endpoint = state.store.iac_endpoint_id().unwrap();
+    let network = Uuid::new_v4();
+    state
+        .store
+        .insert_micro_network(
+            &serde_json::from_value(json!({"id":network,"name":"borrowed-policy-network",
+        "subnetCidr":"172.31.91.0/24","gateway":"172.31.91.1","internetEnabled":true}))
+            .unwrap(),
+        )
+        .unwrap();
+    let mut input = json!({"operationId":Uuid::new_v4(),"expectedEndpointId":endpoint,
+        "owner":{"manager":"terraform","id":Uuid::new_v4(),"key":"firecrab_security_group.http"},"resource":null,
+        "desired":{"kind":"security_group","configuration":{"name":"reviewed-policy","microNetworkId":network,"rules":[]}}});
+    let (code, plan) = send(&app, "POST", "/api/iac/resource-plans", input.clone()).await;
+    assert_eq!(code, StatusCode::OK, "{plan}");
+    let path = format!(
+        "/api/iac/resource-plans/{}/apply",
+        plan["operationId"].as_str().unwrap()
+    );
+    let command = json!({"expectedEndpointId":endpoint,"planSha256":plan["planSha256"]});
+    let (code, receipt) = send(&app, "POST", &path, command.clone()).await;
+    assert_eq!(code, StatusCode::OK, "{receipt}");
+    input["resource"] = receipt["ownership"]["resource"].clone();
+    input["operationId"] = json!(Uuid::new_v4());
+    let (code, noop) = send(&app, "POST", "/api/iac/resource-plans", input.clone()).await;
+    assert_eq!(code, StatusCode::OK, "{noop}");
+    assert_eq!(noop["action"], "noop");
+    input["operationId"] = json!(Uuid::new_v4());
+    input["desired"] = Value::Null;
+    let (code, deletion) = send(&app, "POST", "/api/iac/resource-plans", input).await;
+    assert_eq!(code, StatusCode::OK, "{deletion}");
+    let (code, deleted) = send(
+        &app,
+        "POST",
+        &format!(
+            "/api/iac/resource-plans/{}/apply",
+            deletion["operationId"].as_str().unwrap()
+        ),
+        json!({"expectedEndpointId":endpoint,"planSha256":deletion["planSha256"]}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{deleted}");
+    assert!(deleted["ownership"]["owner"].is_null());
+    assert_eq!(
+        send(&app, "POST", &path, command).await,
+        (StatusCode::OK, receipt)
+    );
+    assert!(state.store.micro_network(network).unwrap().is_some());
+    assert!(state.store.list_security_groups().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn iac_resource_secret_http_keeps_input_private_and_rejects_other_scope() {
     let root = tempfile::tempdir().unwrap();
     let templates =
@@ -425,7 +485,13 @@ async fn iac_resource_plan_http_uses_verified_operator_identity_and_returns_no_s
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         identity["resourcePlanKinds"],
-        json!(["shell", "ai_model", "sandbox_access", "secret"])
+        json!([
+            "shell",
+            "ai_model",
+            "sandbox_access",
+            "secret",
+            "security_group"
+        ])
     );
     let target = receipt["ownership"]["resource"]["id"].as_str().unwrap();
     let (status, _) = send(

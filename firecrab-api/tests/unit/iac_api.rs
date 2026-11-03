@@ -673,7 +673,8 @@ async fn iac_generated_children_keep_parent_authority_through_retirement() {
     let group = environment.roles[0].security_group_id;
     state
         .store
-        .insert_security_group(
+        .insert_environment_security_group(
+            &environment,
             &serde_json::from_value(json!({
                 "id":group,"name":"generated-group","microNetworkId":network,"rules":[]
             }))

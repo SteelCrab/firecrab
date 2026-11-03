@@ -104,15 +104,42 @@ async fn execute(
     let _admission = state.stack_apply_admission.lock().await;
     let _ai = state.pipe_ai_mutations.lock().await;
     let store = state.store.clone();
-    let kind = database(request.0, move || store.resource_plan(id))
-        .await?
-        .map(|plan| plan.ownership.resource.kind);
-    let _services = if kind.as_deref() == Some("secret") {
+    let plan = database(request.0, move || store.resource_plan(id)).await?;
+    let kind = plan
+        .as_ref()
+        .map(|plan| plan.ownership.resource.kind.as_str());
+    let _services = if matches!(kind, Some("secret" | "security_group")) {
         Some(state.service_mutations.clone().lock_owned().await)
     } else {
         None
     };
-    let _sandbox = if kind.as_deref() == Some("sandbox_access") {
+    let _network = if kind == Some("security_group") {
+        Some(state.network_mutations.clone().lock_owned().await)
+    } else {
+        None
+    };
+    if let Some(plan) = plan.as_ref()
+        && kind == Some("security_group")
+        && plan.changed_fields.iter().any(|field| field == "rules")
+    {
+        let store = state.store.clone();
+        let completed = database(request.0, move || store.resource_plan_receipt(id))
+            .await?
+            .is_some();
+        if !completed {
+            super::security_groups::ensure_idle(
+                &state,
+                plan.ownership
+                    .resource
+                    .id
+                    .parse()
+                    .map_err(|_| AppError::internal(request.0))?,
+                request.0,
+            )
+            .await?;
+        }
+    }
+    let _sandbox = if kind == Some("sandbox_access") {
         Some(state.sandbox.admission.clone().lock_owned().await)
     } else {
         None
@@ -138,8 +165,9 @@ async fn execute(
             .await?;
         }
     }
+    let private = kind == Some("secret");
     database(request.0, move || {
-        if kind.as_deref() == Some("secret") {
+        if private {
             state.store.apply_vault_resource_plan(
                 &state.secrets,
                 id,

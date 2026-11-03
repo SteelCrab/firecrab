@@ -23,6 +23,8 @@ pub enum ResourceConfiguration {
     SandboxAccess(SandboxAccessConfiguration),
     /// Encrypted host Secret metadata and a separate, versioned private value input.
     Secret(SecretConfiguration),
+    /// Complete ordered IPv4 allow policy on one immutable network identity.
+    SecurityGroup(SecurityGroupConfiguration),
 }
 
 impl ResourceConfiguration {
@@ -33,8 +35,21 @@ impl ResourceConfiguration {
             Self::AiModel(_) => "ai_model",
             Self::SandboxAccess(_) => "sandbox_access",
             Self::Secret(_) => "secret",
+            Self::SecurityGroup(_) => "security_group",
         }
     }
+}
+
+/// Saved policy configuration; rules activate when an affected VM next starts.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SecurityGroupConfiguration {
+    /// Display name, with the ordinary 1–64 byte policy-name limit.
+    pub name: String,
+    /// Existing IPv4-only network. Changing it requires a separate replacement.
+    pub micro_network_id: Uuid,
+    /// Complete ordered allow list. Empty means default deny.
+    pub rules: Vec<firecrab_api_types::SecurityGroupRule>,
 }
 
 /// Complete model-default scope and its exact verified connection reference.

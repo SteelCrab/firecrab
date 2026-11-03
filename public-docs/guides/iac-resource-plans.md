@@ -1,8 +1,8 @@
 # Shared resource plans
 
 The shared planning API is part of [#548 stage 2](../reference/iac.md).
-The executable configuration adapters are `shell`, `ai_model`, `sandbox_access`
-and `secret`.
+The executable configuration adapters are `shell`, `ai_model`, `sandbox_access`,
+`secret` and `security_group`.
 `GET /api/iac/identity` advertises it separately in `resourcePlanKinds`.
 The 43 ownership adapters do not imply 43 executable configuration adapters.
 Native Stack expansion and the typed Terraform provider remain pending.
@@ -109,6 +109,10 @@ identities before execution. Removal keeps an explicit deny row so the delegated
 certificate cannot bypass Sandbox scope. [Policy lifecycle](iac-sandbox-access.md).
 
 ## Verification evidence
+
+The [security-group adapter](iac-security-groups.md) manages complete ordered
+policies with borrowed network identity, inactive-runtime checks and atomic
+ownership/receipt commits. Sandbox children require their exact parent generation.
 
 The [clean Linux Release record](../assets/iac-548-access-linux-evidence.json)
 identifies the exact source, executable hashes, test totals and Clippy logs.
