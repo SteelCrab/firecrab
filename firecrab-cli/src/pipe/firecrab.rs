@@ -422,12 +422,24 @@ fn save(store: &mut Store, subdomain: String, target: Target, token: Option<Stri
             (*id, None)
         }
         Target::Nginx { host } => {
-            if !config.routes.iter().any(|r| r.host == *host) {
+            let mut routes = config.routes.iter().filter(|r| r.host == *host).peekable();
+            if routes.peek().is_none() {
                 return Err("Selected Nginx route no longer exists".into());
             }
+            // A MicroService's `<name>.internal` route is replaced on every Stop and
+            // Deploy. Bind the connector to the service identity, not to this deployment.
+            let service = routes.find_map(|r| {
+                r.network
+                    .as_ref()
+                    .and(r.owner.as_ref())
+                    .map(|owner| owner.service_id)
+            });
             (
                 managed_id(),
-                Some(QuickTunnelTarget::Routes { host: host.clone() }),
+                Some(match service {
+                    Some(service_id) => QuickTunnelTarget::Service { service_id },
+                    None => QuickTunnelTarget::Routes { host: host.clone() },
+                }),
             )
         }
     };

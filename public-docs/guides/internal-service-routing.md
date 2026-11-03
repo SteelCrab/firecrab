@@ -11,7 +11,11 @@ replica addresses or app ports. Guests receive their gateway DNS through DHCP.
 Internal listeners require an RFC1918 IPv4 gateway; discovery publishes A records.
 HTTP/1.1, HTTP/2 prior knowledge and WebSocket clients are supported; Nginx forwards
 to the application with HTTP/1.1. Another network's requests are denied. Private
-routes are absent from public tunnel selection and the public loopback listener.
+routes are absent from the public loopback listener and from the Cloudflare
+named tunnel. A [Firecrab address](firecrab-tunnel.md) can publish one service
+only when you select its `<name>.internal` route in **Nginx routes**. That address
+forwards to the healthy replica app ports; the gateway listener's peer checks do
+not apply to its public traffic.
 
 Omit `hostPort`, or send zero, to deploy without individual host ports. The CLI
 accepts `firecrab microservice deploy SERVICE_UUID` and REST accepts `{}`.

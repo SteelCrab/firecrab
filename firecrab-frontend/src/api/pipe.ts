@@ -115,7 +115,9 @@ export function connectQuickTunnel(config: PipeConfig): Promise<PipeSnapshot> {
 
 export type QuickTunnelTarget =
   | { type: "apps"; upstreams: string[] }
-  | { type: "routes"; host: string };
+  | { type: "routes"; host: string }
+  /** Set by a Firecrab address that publishes a MicroService's `.internal` route. */
+  | { type: "service"; service_id: string };
 export interface QuickTunnelEntry {
   id: string;
   name: string;

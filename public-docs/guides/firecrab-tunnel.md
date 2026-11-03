@@ -34,7 +34,9 @@ connection. The address remains owned by the dashboard account.
 2. Paste the dashboard token into **Connection token**.
 3. Select one of the two connection targets:
    - **VM apps**: select one or more running VM apps and registered TCP ports.
-   - **Nginx routes**: select a saved route domain.
+   - **Nginx routes**: select a saved route domain. A deployed MicroService
+     without a domain appears as `<name>.internal · MicroService internal
+     address`. Choosing it publishes that service to the internet.
 4. Select **Connect address**. The host verifies the token with the connection
    service before changing local routes or saving its ownership secret.
 5. Wait for **Connected**, then open the returned public address and app paths.
@@ -43,6 +45,16 @@ The **Cloudflare Quick Tunnel** panel independently creates and manages temporar
 URLs. Firecrab Tunnel's **Connection target** offers only VM apps and Nginx routes.
 It does not require an existing Quick Tunnel. A previously saved connector
 reference remains readable; editing it selects its existing apps or Nginx domain.
+
+A MicroService internal address follows the service, not one deployment. After
+Stop and Deploy the address reaches the new healthy replicas without an edit.
+While the service is stopped the address returns 404 and the table says the
+service is not deployed. Only the replica app port is published. The service's
+MicroNetwork listener, security-group allow-list and `/__firecrab/deploy` paths
+stay private. Deleting the service does not delete the address; a new service
+with the same name is not published until you select it again. If no route
+exists yet, the form asks you to deploy a MicroService or add a route in
+**Routing**.
 
 Nginx mode publishes every saved path and app pool for its hostname. It manages
 a dedicated private connector automatically. VM app mode manages its own

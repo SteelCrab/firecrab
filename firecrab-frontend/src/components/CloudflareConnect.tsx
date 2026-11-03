@@ -1,4 +1,4 @@
-import { publicPipeRoute } from "../lib/pipeRoutes";
+import { publicPipeRoute, serviceInternalRoute } from "../lib/pipeRoutes";
 import { useEffect, useRef, useState } from "react";
 import {
   controlQuickTunnel,
@@ -100,6 +100,8 @@ export default function CloudflareConnect({
   }
 
   function edit(tunnel: QuickTunnelSnapshot) {
+    // Service targets belong to a Firecrab address and are edited there.
+    if (tunnel.target.type === "service") return;
     setError(null);
     setEditor({
       id: tunnel.id,
@@ -353,7 +355,25 @@ export default function CloudflareConnect({
                   <tr key={tunnel.id}>
                     <td>{tunnel.name}</td>
                     <td>
-                      {tunnel.target.type === "routes" ? (
+                      {tunnel.target.type === "service" ? (
+                        <>
+                          <div>
+                            {t(
+                              "MicroService internal address",
+                              "MicroService 내부 주소",
+                            )}
+                          </div>
+                          <div className="quick-tunnel-target">
+                            {config.routes.find(
+                              (route) =>
+                                serviceInternalRoute(route) &&
+                                tunnel.target.type === "service" &&
+                                route.owner?.serviceId ===
+                                  tunnel.target.service_id,
+                            )?.host ?? t("Not deployed", "배포되지 않음")}
+                          </div>
+                        </>
+                      ) : tunnel.target.type === "routes" ? (
                         <>
                           <div>{t("Nginx routes", "Nginx 라우트")}</div>
                           <div className="quick-tunnel-target">
@@ -430,7 +450,8 @@ export default function CloudflareConnect({
                         items={[
                           {
                             label: t("Edit", "수정"),
-                            disabled: !!editor,
+                            disabled:
+                              !!editor || tunnel.target.type === "service",
                             onSelect: () => edit(tunnel),
                           },
                           {

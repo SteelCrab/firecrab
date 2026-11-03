@@ -1,4 +1,4 @@
-import { publicPipeRoute } from "../lib/pipeRoutes";
+import { firecrabRouteHosts, serviceInternalRoute } from "../lib/pipeRoutes";
 import { useEffect, useRef, useState } from "react";
 import {
   deleteFirecrabAddress,
@@ -46,13 +46,11 @@ export default function FirecrabTunnel({
   const [error, setError] = useState<string | null>(null);
   const active = useRef(false);
   const addresses = snapshot?.firecrabTunnels ?? [];
-  const hosts = [
-    ...new Set(
-      snapshot?.config?.routes
-        .filter(publicPipeRoute)
-        .map((route) => route.host) ?? [],
-    ),
-  ];
+  const routes = snapshot?.config?.routes ?? [];
+  const hosts = firecrabRouteHosts(routes);
+  const serviceHosts = new Set(
+    routes.filter(serviceInternalRoute).map((route) => route.host),
+  );
   const original = addresses.find(
     (address) => address.subdomain === editor?.original,
   );
@@ -119,7 +117,31 @@ export default function FirecrabTunnel({
       (tunnel) => tunnel.id === id,
     )?.target;
     if (!saved) return null;
-    return saved.type === "apps" ? saved : { type: "nginx", host: saved.host };
+    if (saved.type === "apps") return saved;
+    if (saved.type === "routes") return { type: "nginx", host: saved.host };
+    const route = routes.find(
+      (route) =>
+        serviceInternalRoute(route) &&
+        route.owner?.serviceId === saved.service_id,
+    );
+    return route ? { type: "nginx", host: route.host } : null;
+  }
+  /** A service-bound address whose service has no deployed internal route now. */
+  function serviceStopped(address: FirecrabAddress) {
+    const saved = snapshot?.quickTunnels?.find(
+      (tunnel) => tunnel.id === address.connectorId,
+    )?.target;
+    return (
+      saved?.type === "service" &&
+      !routes.some(
+        (route) =>
+          serviceInternalRoute(route) &&
+          route.owner?.serviceId === saved.service_id,
+      )
+    );
+  }
+  function serviceLabel() {
+    return t("MicroService internal address", "MicroService 내부 주소");
   }
   function appLabel(address: string) {
     const app = apps.find((value) => value.address === address);
@@ -243,13 +265,24 @@ export default function FirecrabTunnel({
               onChange={(addresses) => setEditor({ ...editor, addresses })}
             />
           )}
-          {editor.kind === "nginx" && (
+          {editor.kind === "nginx" && !hosts.length && (
+            <div className="field">
+              <span>{t("Nginx route domain", "Nginx 라우트 도메인")}</span>
+              <p className="poll-note" role="status">
+                {t(
+                  "No routes yet. Deploy a MicroService, or add a route in Routing.",
+                  "연결할 라우트가 없습니다. MicroService를 배포하거나 Routing에서 라우트를 추가하세요.",
+                )}
+              </p>
+            </div>
+          )}
+          {editor.kind === "nginx" && hosts.length > 0 && (
             <label className="field">
               <span>{t("Nginx route domain", "Nginx 라우트 도메인")}</span>
               <select
                 aria-label={t("Nginx route domain", "Nginx 라우트 도메인")}
                 value={editor.source}
-                disabled={busy || !hosts.length}
+                disabled={busy}
                 required
                 onChange={(event) =>
                   setEditor({ ...editor, source: event.target.value })
@@ -260,12 +293,19 @@ export default function FirecrabTunnel({
                 </option>
                 {hosts.map((host) => (
                   <option key={host} value={host}>
-                    {host}
+                    {serviceHosts.has(host)
+                      ? host + " · " + serviceLabel()
+                      : host}
                   </option>
                 ))}
               </select>
               <span className="poll-note">
-                {t("Publishes all paths.", "모든 경로 공개")}
+                {serviceHosts.has(editor.source)
+                  ? t(
+                      "Publishes this MicroService to the internet. It follows the current replicas after each deploy.",
+                      "이 MicroService를 인터넷에 공개합니다. 다시 배포해도 현재 복제본으로 연결됩니다.",
+                    )
+                  : t("Publishes all paths.", "모든 경로 공개")}
               </span>
             </label>
           )}
@@ -332,8 +372,19 @@ export default function FirecrabTunnel({
                         <>
                           {t("Nginx routes", "Nginx 라우트")}
                           <div className="quick-tunnel-target">
-                            {selected.host}
+                            {serviceHosts.has(selected.host) ||
+                            serviceStopped(address)
+                              ? selected.host + " · " + serviceLabel()
+                              : selected.host}
                           </div>
+                          {serviceStopped(address) && (
+                            <div className="poll-note">
+                              {t(
+                                "Service is not deployed. The address reconnects when it is deployed again.",
+                                "서비스가 배포되어 있지 않습니다. 다시 배포하면 이 주소로 연결됩니다.",
+                              )}
+                            </div>
+                          )}
                         </>
                       ) : selected?.type === "apps" ? (
                         <>

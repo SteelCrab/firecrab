@@ -161,9 +161,9 @@ allows deployment again. For AWS, the account and region must both match.
 
 ## Internal service addresses
 
-Every deployed service has `http://<name>.internal` access from its MicroNetwork.
-See [internal service routing](internal-service-routing.md) for DNS, security
-rules, restart recovery and host upgrade requirements.
+Every deployed service has `http://<name>.internal` access from its MicroNetwork ([details](internal-service-routing.md)).
+To publish a service without a domain, select that route in a [Firecrab address](firecrab-tunnel.md).
+The address keeps following the service after it is stopped and deployed again.
 
 ## Connect a domain
 

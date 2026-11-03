@@ -371,6 +371,31 @@ impl Config {
                             }),
                     );
                 }
+                // The service's private route is copied to this connector's loopback host.
+                // Its MicroNetwork listener, peer allow-list and CI deploy paths are not
+                // copied; only the replica upstreams of the current deployment are reused.
+                QuickTunnelTarget::Service { service_id } => {
+                    quick_routes.extend(
+                        self.routes
+                            .iter()
+                            .filter(|route| {
+                                route.network.is_some()
+                                    && route
+                                        .owner
+                                        .as_ref()
+                                        .is_some_and(|owner| owner.service_id == *service_id)
+                            })
+                            .map(|route| Route {
+                                service_port: route.service_port,
+                                security_group: None,
+                                network: None,
+                                owner: None,
+                                host: host.clone(),
+                                path_prefix: route.path_prefix.clone(),
+                                upstreams: route.upstreams.clone(),
+                            }),
+                    );
+                }
             }
         }
         let mut hosts: BTreeMap<(SocketAddr, &str), Vec<(usize, &Route)>> = BTreeMap::new();

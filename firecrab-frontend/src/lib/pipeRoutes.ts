@@ -3,6 +3,16 @@ export const managedPipeRoute = (route: PipeRoute) =>
   !!(route.owner || route.network);
 export const publicPipeRoute = (route: PipeRoute) =>
   !route.network && !route.host.toLowerCase().endsWith(".internal");
+/** A deployed MicroService's private `<name>.internal` route. */
+export const serviceInternalRoute = (route: PipeRoute) =>
+  !!route.network && !!route.owner;
+/** Hosts a Firecrab address may publish: operator and domain routes, then service names. */
+export const firecrabRouteHosts = (routes: PipeRoute[]) => [
+  ...new Set([
+    ...routes.filter(publicPipeRoute).map((route) => route.host),
+    ...routes.filter(serviceInternalRoute).map((route) => route.host),
+  ]),
+];
 export const editableRouteText = (routes: PipeRoute[]) =>
   routes
     .filter((route) => !managedPipeRoute(route))

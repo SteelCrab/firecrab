@@ -22,7 +22,7 @@ pub fn quick_tunnel_unit(id: Uuid) -> String {
     format!("firecrab-quick-tunnel-{}.service", id.simple())
 }
 
-/// App addresses or an existing Nginx host group to publish anonymously.
+/// App addresses, an existing Nginx host group or a MicroService to publish anonymously.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum QuickTunnelTarget {
@@ -36,6 +36,12 @@ pub enum QuickTunnelTarget {
         /// Existing literal hostname whose path rules remain locally managed.
         host: String,
     },
+    /// Follow one MicroService's managed `<name>.internal` route across deployments.
+    /// Nginx renders it only while that route exists, so a stopped service is not served.
+    Service {
+        /// Stable MicroService identity; a later service with the same name never matches.
+        service_id: Uuid,
+    },
 }
 
 impl QuickTunnelTarget {
@@ -46,6 +52,8 @@ impl QuickTunnelTarget {
             Self::Routes { .. } => {
                 Err("select a valid existing Nginx hostname for Quick Tunnel".into())
             }
+            Self::Service { service_id } if !service_id.is_nil() => Ok(()),
+            Self::Service { .. } => Err("select a deployed MicroService for Quick Tunnel".into()),
         }
     }
 }
@@ -58,7 +66,7 @@ pub struct QuickTunnelEntry {
     pub id: Uuid,
     /// User-facing connector name, at most 64 characters.
     pub name: String,
-    /// Selected app addresses or existing Nginx hostname.
+    /// Selected app addresses, existing Nginx hostname or MicroService.
     pub target: QuickTunnelTarget,
 }
 

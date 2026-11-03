@@ -46,6 +46,8 @@ VM apps and saved Nginx routes. The operator must deploy that service.
 
 The public-origin listener is HTTP on loopback, on port >= 1024. Public TLS terminates at Cloudflare. Deployment-owned `.internal` routes use separate
 MicroNetwork gateway listeners on port 80 with source-subnet and security-group checks. These private hosts are excluded from public tunnel configuration.
+A Firecrab address can publish one MicroService when you select its `.internal`
+route in **Nginx routes**; its connector reaches the replicas through the loopback listener.
 See [internal service addresses](internal-service-routing.md).
 Direct public HTTPS remains separate work.
 
