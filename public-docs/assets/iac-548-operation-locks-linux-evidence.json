@@ -1,0 +1,50 @@
+{
+  "sourceCommit": "2693c1c5891e308aa7782f1f4524bde751970c3d",
+  "sourceDirty": false,
+  "verifiedOn": "2026-11-03",
+  "platform": "linux/arm64",
+  "rustVersion": "1.97.1",
+  "containerImage": "rust@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f",
+  "profile": "release",
+  "buildCommand": "cargo test --release --locked -p firecrab-api --no-run --message-format=json",
+  "execution": "Compiler-reported binaries verified by SHA256, executed as nobody with --test-threads=4, writable temporary working directory and FIRECRAB_IMAGE_ROOT, read-only clean source worktree",
+  "results": {
+    "api": {
+      "passed": 1884,
+      "failed": 0,
+      "ignored": 27
+    },
+    "tlsStartup": {
+      "passed": 2,
+      "failed": 0
+    },
+    "vmShim": {
+      "passed": 6,
+      "failed": 0
+    }
+  },
+  "artifacts": [
+    {
+      "file": "vm_shim_subcommand-c5e39484238fa2fa",
+      "sha256": "e9ad13b45a02083b1264052acfaa7ceda7a18bf9c9dcbaf8fdc760fe39457a5a"
+    },
+    {
+      "file": "tls_startup-24d987e908c68060",
+      "sha256": "248beb4e1ce91faeed1d45e9451698a29f28ead58be24551d9afe5a507e9a009"
+    },
+    {
+      "file": "firecrab_api-8d3b9da14795d26e",
+      "sha256": "273a06119002789929e98c95a5fc95bcb40ebb22fda4345db9b7bc5378662e04"
+    }
+  ],
+  "logs": {
+    "buildSha256": "8307ecfc68834b39c70b15fb331aae469287fbe840fa9e3b01ff76b3573c18b7",
+    "testSha256": "9fe6c2f7caddbe307dfa788f5208f650569c1fdc06ca3e13442d86e081a9f64e",
+    "clippySha256": "a14685270646f33475d1641f165487755eaf61ea37a1e54a38c7309ef4290822"
+  },
+  "scope": "Full Linux Release API/TLS/VM shim suites after shared operation UUID migration and inherited publication-lock fixes. Includes actual forked-descriptor lease regression and concurrent Store startup. Strict Linux Clippy passed. Ignored live/browser fixtures excluded. Not every-resource Stack/Terraform or real KVM/controller acceptance.",
+  "buildEnvironment": {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_INCREMENTAL": "0"
+  }
+}
