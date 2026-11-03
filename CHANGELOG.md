@@ -69,6 +69,12 @@ Entries land here as work merges, and move under the next version heading when t
   in its folder. Claude Code and Codex continue their saved conversation; a
   session without a recorded conversation starts a new one and says so. Waiting
   tasks are never sent twice, and sign-in or closed sessions are not started again.
+- AI Sandbox keeps Claude Code conversations across a VM restart when Claude Code
+  moves to another conversation in the same process, for example when it starts
+  itself again in auto mode or after `/clear`. Status refreshes record the id
+  that the pane's own Claude Code process registers, at most every 10 seconds.
+  A resumed session keeps the permission mode its transcript last recorded
+  (`acceptEdits`, `auto`, `dontAsk` or `plan`).
 - AI Sandbox starts Codex with `--no-daemon`, so each session's own process holds
   its conversation. Codex board cards show their latest messages, and a chosen
   reasoning effort no longer prints the shared background server warning.

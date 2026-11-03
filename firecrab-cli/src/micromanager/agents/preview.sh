@@ -22,11 +22,16 @@ codex_rollout() {
   done
 }
 
+# Claude Code records the session of each running process under its PID, and changes it
+# when that process starts another conversation.
+claude_session() {
+  grep -o '"sessionId":"[0-9a-f-]*"' "$HOME/.claude/sessions/$1.json" 2>/dev/null |
+    head -n 1 | cut -d'"' -f4
+}
+
 claude_transcript() {
   for pid in $pids; do
-    # Claude Code records the session of each running process under its PID.
-    id=$(grep -o '"sessionId":"[0-9a-f-]*"' "$HOME/.claude/sessions/$pid.json" 2>/dev/null |
-      head -n 1 | cut -d'"' -f4)
+    id=$(claude_session "$pid")
     [ -n "$id" ] || continue
     for path in "$HOME"/.claude/projects/*/"$id".jsonl; do
       if [ -f "$path" ]; then file=$path; fi
@@ -41,6 +46,23 @@ thread() {
   file=
   codex_rollout
   [ -z "$file" ] || printf 'FIRECRAB_THREAD %s %s\n' "$1" "${file##*/}"
+}
+
+# Print the conversation id of the Claude Code process that runs in the pane:
+# session <agent-id> <pane-id>. A registry file left by a process of an earlier boot
+# can name a PID that is now another program, so only a Claude process counts. Two
+# different conversations in one pane print nothing.
+session() {
+  pids=$(processes "$2" 2>/dev/null | grep -o '"pid":[0-9]*' | cut -d: -f2)
+  found=
+  for pid in $pids; do
+    tr '\0' ' ' 2>/dev/null <"$proc/$pid/cmdline" | grep -q claude || continue
+    id=$(claude_session "$pid")
+    [ -n "$id" ] || continue
+    [ -z "$found" ] || [ "$found" = "$id" ] || return 0
+    found=$id
+  done
+  [ -z "$found" ] || printf 'FIRECRAB_SESSION %s %s\n' "$1" "$found"
 }
 
 preview() {

@@ -3,7 +3,8 @@
 //! stay, every terminal is new, and no CLI runs in it. Firecrab rebinds each open
 //! session once, then starts its CLI again. Claude Code and Codex continue their
 //! conversation; a CLI without a known conversation id starts a new one in the same
-//! folder. A Codex thread id is known only from the rollout its own pane process held.
+//! folder. A Codex thread id is known only from the rollout its own pane process held,
+//! and a Claude Code id only from the session registry of its own pane process.
 use super::*;
 use fs2::FileExt;
 use std::{collections::BTreeMap, sync::Mutex};
@@ -50,22 +51,46 @@ fn waiting(agent: &Agent) -> bool {
     restorable(agent) && agent.recovery == Some(Recovery::Pending)
 }
 
+/// A conversation that the CLI saved under the session's conversation id, so a
+/// restarted VM can continue it.
+#[derive(Debug, Default)]
+pub(super) struct Saved {
+    /// The Claude Code permission mode that the transcript last recorded.
+    permission_mode: Option<String>,
+}
+
+/// Claude Code permission modes that a resumed session gets again. The default mode
+/// needs no flag, and bypassing permissions stays a choice made in the terminal.
+const RESUMED_MODES: [&str; 4] = ["acceptEdits", "auto", "dontAsk", "plan"];
+
 /// Arguments after `--` in `herdr agent start`. With `resume`, the CLI continues the
 /// conversation saved under this session's conversation id.
-pub(super) fn cli_args(agent: &Agent, resume: bool) -> Vec<String> {
+pub(super) fn cli_args(agent: &Agent, resume: Option<&Saved>) -> Vec<String> {
     let mut args = Vec::new();
     match agent.conversation_id {
         // Codex names its thread itself; Firecrab only resumes one it recorded.
         Some(thread) if agent.kind == "codex" => {
-            if resume {
+            if resume.is_some() {
                 args.extend(["resume".to_owned(), thread.to_string()]);
             }
         }
         Some(conversation) => {
-            args.push(if resume { "--resume" } else { "--session-id" }.to_owned());
+            args.push(
+                if resume.is_some() {
+                    "--resume"
+                } else {
+                    "--session-id"
+                }
+                .to_owned(),
+            );
             args.push(conversation.to_string());
         }
         None => {}
+    }
+    if let Some(mode) = resume.and_then(|saved| saved.permission_mode.as_deref()) {
+        if agent.kind == "claude" {
+            args.extend(["--permission-mode".to_owned(), mode.to_owned()]);
+        }
     }
     let (model, effort) = match &agent.chosen {
         Some(chosen) => (chosen.model.as_str(), chosen.effort.as_str()),
@@ -97,10 +122,11 @@ pub(super) fn cli_args(agent: &Agent, resume: bool) -> Vec<String> {
 }
 
 /// Prints `found` when a Claude Code transcript for `id` holds a user message.
-/// A transcript with only metadata cannot be resumed.
+/// A transcript with only metadata cannot be resumed. Then it prints the permission
+/// mode of the last `permission-mode` record in the transcript's last MiB, if any.
 fn transcript_check(id: Uuid) -> String {
     format!(
-        r#"for f in "${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}"/projects/*/{id}.jsonl; do if [ -f "$f" ] && grep -Eq '"type": ?"user"' "$f"; then printf found; break; fi; done"#
+        r#"for f in "${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}"/projects/*/{id}.jsonl; do if [ -f "$f" ] && grep -Eq '"type": ?"user"' "$f"; then printf found; mode=$(tail -c 1048576 "$f" | grep '"type":"permission-mode"' | grep -o '"permissionMode":"[A-Za-z]*"' | tail -n 1 | cut -d'"' -f4); [ -z "$mode" ] || printf ' %s' "$mode"; break; fi; done"#
     )
 }
 
@@ -122,7 +148,7 @@ fn rollout_thread(name: &str) -> Option<Uuid> {
     Uuid::parse_str(ids.split_once('_').map_or(ids, |(thread, _)| thread)).ok()
 }
 
-/// Codex threads are read at most this often, off the request path.
+/// Codex threads and Claude Code ids are read at most this often, off the request path.
 const THREAD_CHECK: Duration = Duration::from_secs(10);
 static THREADS_CHECKED: Mutex<BTreeMap<PathBuf, Instant>> = Mutex::new(BTreeMap::new());
 
@@ -262,21 +288,23 @@ impl Runtime {
             if !waiting(&agent) || self.pane(&agent).is_err() {
                 continue;
             }
-            let resume = match agent.conversation_id {
-                Some(conversation) => match self.has_conversation(&agent.kind, conversation) {
-                    Ok(found) => found,
+            let saved = match agent.conversation_id {
+                Some(conversation) => match self.saved_conversation(&agent.kind, conversation) {
+                    Ok(saved) => saved,
                     Err(_) => continue,
                 },
-                None => false,
+                None => None,
             };
+            let resume = saved.is_some();
             // A fresh Claude Code gets an unused id, saved before the CLI can start
-            // with it. A fresh Codex thread is recorded once its pane holds it.
+            // with it. A fresh Codex thread, or the id Claude Code moves to, is recorded
+            // once its pane process holds it.
             let conversation = (agent.kind == "claude").then(Uuid::new_v4);
             if !resume && conversation != agent.conversation_id {
                 agent.conversation_id = conversation;
                 self.update(&agent, |a| a.conversation_id = conversation)?;
             }
-            let launched = self.start_cli(&agent, resume);
+            let launched = self.start_cli(&agent, saved.as_ref());
             self.update(&agent, |a| {
                 a.recovery = Some(if resume {
                     Recovery::Resumed
@@ -288,17 +316,22 @@ impl Runtime {
         }
         Ok(())
     }
-    /// Record the thread of each open Codex session from the rollout that its own pane
-    /// process holds, so a restarted VM can resume it. Off the request path, at most
-    /// once per `THREAD_CHECK`. Codex on the shared server holds no rollout in the pane,
-    /// so such a session stays without a thread.
-    pub(super) fn remember_threads_in_background(&self, records: &[Agent]) {
-        let codex = records
+    /// Record the conversation of each open Codex and Claude Code session from its own
+    /// pane process, so a restarted VM can resume it. Off the request path, at most
+    /// once per `THREAD_CHECK`.
+    /// - Codex: the rollout that the pane process holds. Codex on the shared server
+    ///   holds no rollout in the pane, so such a session stays without a thread.
+    /// - Claude Code: the registry file of the pane process. Claude Code can start
+    ///   another conversation in the same process, for example after `/clear` or when
+    ///   it starts itself again in another permission mode.
+    pub(super) fn remember_conversations_in_background(&self, records: &[Agent]) {
+        let tracked = records
             .iter()
-            .filter(|a| a.kind == "codex" && restorable(a) && !waiting(a))
+            .filter(|a| matches!(a.kind.as_str(), "codex" | "claude") && restorable(a))
+            .filter(|a| !waiting(a))
             .cloned()
             .collect::<Vec<_>>();
-        if self.guest.is_none() || codex.is_empty() {
+        if self.guest.is_none() || tracked.is_empty() {
             return;
         }
         {
@@ -316,10 +349,10 @@ impl Runtime {
         }
         let runtime = self.clone();
         std::thread::spawn(move || {
-            let _ = runtime.remember_threads(&codex);
+            let _ = runtime.remember_conversations(&tracked);
         });
     }
-    fn remember_threads(&self, agents: &[Agent]) -> Result<(), Error> {
+    fn remember_conversations(&self, agents: &[Agent]) -> Result<(), Error> {
         let guest = self
             .guest
             .as_ref()
@@ -331,29 +364,42 @@ impl Runtime {
         );
         for agent in agents {
             script.push_str(&format!(
-                "thread {} {}\n",
+                "{} {} {}\n",
+                if agent.kind == "codex" {
+                    "thread"
+                } else {
+                    "session"
+                },
                 guest::quote(&agent.id.to_string()),
                 guest::quote(&agent.pane_id)
             ));
         }
         let output = guest.shell(&script, Duration::from_secs(20))?;
         for line in output.lines() {
-            let Some((id, name)) = line
-                .strip_prefix("FIRECRAB_THREAD ")
-                .and_then(|rest| rest.split_once(' '))
-            else {
+            let found = if let Some(rest) = line.strip_prefix("FIRECRAB_THREAD ") {
+                rest.split_once(' ')
+                    .map(|(id, name)| (id, rollout_thread(name), "codex"))
+            } else if let Some(rest) = line.strip_prefix("FIRECRAB_SESSION ") {
+                rest.split_once(' ')
+                    .map(|(id, session)| (id, Uuid::parse_str(session).ok(), "claude"))
+            } else {
+                None
+            };
+            let Some((id, Some(conversation), kind)) = found else {
                 continue;
             };
-            let (Ok(id), Some(thread)) = (Uuid::parse_str(id), rollout_thread(name)) else {
+            let Ok(id) = Uuid::parse_str(id) else {
                 continue;
             };
-            let Some(agent) = agents.iter().find(|a| a.id == id) else {
+            // Each line counts only for the session it names, and only from that
+            // session's own CLI.
+            let Some(agent) = agents.iter().find(|a| a.id == id && a.kind == kind) else {
                 continue;
             };
-            if agent.conversation_id != Some(thread) {
+            if agent.conversation_id != Some(conversation) {
                 self.update(agent, |a| {
                     if a.recovery != Some(Recovery::Pending) {
-                        a.conversation_id = Some(thread);
+                        a.conversation_id = Some(conversation);
                     }
                 })?;
             }
@@ -372,12 +418,12 @@ impl Runtime {
             Ok(())
         })
     }
-    /// Whether the CLI saved messages under this conversation id.
-    fn has_conversation(&self, kind: &str, id: Uuid) -> Result<bool, Error> {
+    /// The conversation that the CLI saved under this id, when it holds messages.
+    fn saved_conversation(&self, kind: &str, id: Uuid) -> Result<Option<Saved>, Error> {
         let script = match kind {
             "claude" => transcript_check(id),
             "codex" => rollout_check(id),
-            _ => return Ok(false),
+            _ => return Ok(None),
         };
         let output = match &self.guest {
             Some(guest) => guest.shell(&script, Duration::from_secs(10))?,
@@ -387,11 +433,19 @@ impl Runtime {
                 .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
                 .unwrap_or_default(),
         };
-        Ok(output.trim() == "found")
+        let mut words = output.split_whitespace();
+        if words.next() != Some("found") {
+            return Ok(None);
+        }
+        let permission_mode = words
+            .next()
+            .filter(|mode| RESUMED_MODES.contains(mode))
+            .map(str::to_owned);
+        Ok(Some(Saved { permission_mode }))
     }
     /// Start the session's coding CLI. Herdr starts an agent only in an idle shell,
     /// so one pane never runs two.
-    pub(super) fn start_cli(&self, agent: &Agent, resume: bool) -> Result<Value, Error> {
+    pub(super) fn start_cli(&self, agent: &Agent, resume: Option<&Saved>) -> Result<Value, Error> {
         let alias = format!("fc-{}", &agent.id.simple().to_string()[..12]);
         let extra = cli_args(agent, resume);
         let mut args = vec![

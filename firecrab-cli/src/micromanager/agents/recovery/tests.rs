@@ -331,7 +331,10 @@ fn a_new_claude_session_keeps_its_conversation_id_for_a_later_resume() {
     assert!(agent_start(&remote(&root), &agent).ends_with(&format!(
         "'--' '--session-id' '{conversation}' '--model' 'opus'\""
     )));
-    assert!(cli_args(&agent, true).starts_with(&["--resume".into(), conversation.to_string()]));
+    assert!(
+        cli_args(&agent, Some(&Saved::default()))
+            .starts_with(&["--resume".into(), conversation.to_string()])
+    );
 }
 
 #[test]
