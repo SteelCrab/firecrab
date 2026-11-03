@@ -31,6 +31,7 @@ import {
   FileText,
 } from "lucide-react";
 import { useI18n } from "../i18n";
+import { AGENT_STATE_LABELS as labels, agentName } from "../lib/agentLabels";
 import { useHostStatus } from "../hostStatusContext";
 import {
   agentRequest,
@@ -83,27 +84,6 @@ const blank = (): AgentTask => ({
   cli: "",
   model: "",
 });
-const labels: Record<string, [string, string]> = {
-  working: ["Working", "실행 중"],
-  blocked: ["Needs input", "입력 필요"],
-  idle: ["Idle", "대기"],
-  done: ["Done", "완료"],
-  closed: ["Closed", "종료됨"],
-  disconnected: ["Disconnected", "연결 끊김"],
-  unknown: ["Unknown", "상태 미확인"],
-  failed: ["Launch failed", "시작 실패"],
-};
-
-const AGENT_NAMES: Record<string, string> = {
-  codex: "Codex",
-  claude: "Claude Code",
-  gemini: "Gemini CLI",
-  opencode: "OpenCode",
-  copilot: "GitHub Copilot",
-  cursor: "Cursor Agent",
-  github: "GitHub",
-};
-const agentName = (kind: string) => AGENT_NAMES[kind] || kind;
 
 export default function AgentManager(props: Props) {
   const host = useHostStatus();

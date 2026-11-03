@@ -44,19 +44,6 @@ pub(super) fn migrate(conn: &Connection) -> Result<(), PersistenceError> {
 }
 
 impl Store {
-    /// Read only GitHub's private credential document for discovery snapshot fencing.
-    /// This value must never be returned by a public handler.
-    pub(crate) fn code_github_snapshot(&self) -> Result<Option<String>, PersistenceError> {
-        use rusqlite::OptionalExtension;
-        Ok(self
-            .lock()
-            .query_row(
-                "SELECT credential FROM pipe_auth_credentials WHERE provider='github'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?)
-    }
     /// Decode saved provider credentials, rejecting malformed documents and provider mismatches.
     pub fn pipe_auths(&self) -> Result<Vec<SavedAuth>, PersistenceError> {
         let conn = self.lock();

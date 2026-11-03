@@ -11,7 +11,7 @@ export const VIEWS = [
   {
     id: "code",
     group: "code",
-    labels: { en: "Workspaces", ko: "워크스페이스" },
+    labels: { en: "VS Code", ko: "VS Code" },
   },
   { id: "vms", group: "compute", labels: { en: "MicroVM", ko: "MicroVM" } },
   { id: "pools", group: "compute", labels: { en: "Pools", ko: "풀" } },
@@ -205,7 +205,6 @@ export type AppRoute =
   | {
       kind: "shell";
       view: ViewId;
-      codePath?: string;
       vmId?: string;
       createService?: boolean;
       createSchedule?: boolean;
@@ -225,8 +224,8 @@ export function parseAppRoute(hash: string = window.location.hash): AppRoute {
       return { kind: "console", vmId: consoleMatch[1] };
     }
   }
-  if (/^code(?:\/(?:new|[0-9a-f-]{36})(?:\/editor)?)?$/.test(path))
-    return { kind: "shell", view: "code", codePath: path };
+  // Old CODE workspace links (`#/code/<id>`) land on the VS Code list.
+  if (/^code(?:\/.*)?$/.test(path)) return { kind: "shell", view: "code" };
   if (path === NEW_VM_PATH) return { kind: "vm-new" };
   if (path === "services/new")
     return { kind: "shell", view: "services", createService: true };
@@ -323,9 +322,13 @@ export function useAppRoute(confirmLeave?: () => boolean): {
   // (not only replaceState) so the URL bar and any hash-dependent code see
   // the same route immediately on first paint after `npm run dev`.
   useEffect(() => {
-    if (route.kind !== "shell" || (route.view === "code" && route.codePath))
-      return;
+    if (route.kind !== "shell") return;
     const path = stripHash(window.location.hash).split("?", 1)[0];
+    if (route.view === "code" && path !== "code") {
+      window.history.replaceState(window.history.state, "", viewHash("code"));
+      currentUrl.current = window.location.href;
+      return;
+    }
     // `#/vms/new` is not a ViewId; do not rewrite it to the list.
     if (path === NEW_VM_PATH || path === "services/new") return;
     if (

@@ -25,6 +25,17 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
 
+### Changed
+
+- The CODE menu now opens **VS Code**, a read-only list of projects linked in
+  AI Sandbox. Each open agent session has one link to its AI Sandbox editor.
+  macOS and Windows hosts show their own service commands when the main server
+  dashboard at `127.0.0.1:5523` cannot reach the host. Linux hosts show that
+  AI Sandbox editors are not supported there yet.
+- CODE workspaces, their runtime, editor, agent execution and verification
+  routes under `/api/code/` are removed. Their MicroVMs stay as regular
+  MicroVMs, and their saved records are no longer read.
+
 ## [0.4.3] - 2026-11-02
 
 AI Sandbox quick start and release validation updates for the React dashboard and guest workflows.
