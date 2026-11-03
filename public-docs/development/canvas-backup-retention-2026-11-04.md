@@ -74,3 +74,11 @@ Genuine different-host restoration, real ChatGPT/Claude workload use, production
 service-user/multi-user qualification, native editor lifecycle/replacement and live
 backup/cleanup interruption remain open. The test Pipe AI connection is unavailable.
 No production backup files were deleted. PR #562 stays Draft and unmerged.
+
+## Implementation priority update
+
+The user requested that further tests and CI be skipped. Current CI runs were
+cancelled. The retention range is now 1–63, reserving one of the 64 archive slots
+for rotation. This follow-up has not been revalidated. Earlier test counts above
+remain evidence for the preceding implementation, not a new acceptance claim.
+PR #562 remains Draft and must not be merged.

@@ -10,8 +10,9 @@ Normal project members do not acquire deletion rights through these controls.
 Automatic cleanup is **disabled by default**. The initial policy keeps the latest
 10 checkpoints, has no age requirement and excludes manual backups.
 
-- `keepLatest`: keep the latest 1–64 checkpoints in durable registry admission order.
-  Tied timestamps or a backward clock do not change that order.
+- `keepLatest`: keep the latest 1–63 checkpoints in durable registry admission order.
+  Tied timestamps or a backward clock do not change that order. One of the 64
+  archive slots is reserved so a count-only policy can rotate into a new backup.
 - `maxAgeDays`: null uses the count alone. A value from 1–3650 also retains younger
   backups. Only older backups outside the recent set can be selected.
 - `includeManual`: false excludes manual backups from automatic cleanup.

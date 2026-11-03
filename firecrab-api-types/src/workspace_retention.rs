@@ -10,7 +10,7 @@ pub struct SaveProjectBackupRetention {
     pub expected_generation: u64,
     /// Whether maintenance may admit automatic cleanup.
     pub enabled: bool,
-    /// Minimum recent checkpoints retained, from one through 64.
+    /// Minimum recent checkpoints retained, from one through 63; one catalog slot is reserved for rotation.
     pub keep_latest: u32,
     /// Only delete backups older than this many days; null applies the count alone.
     pub max_age_days: Option<u32>,

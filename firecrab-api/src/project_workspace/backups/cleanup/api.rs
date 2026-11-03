@@ -43,13 +43,13 @@ async fn save_policy(
     ValidatedJson(input): ValidatedJson<SaveProjectBackupRetention>,
 ) -> Result<Json<ProjectBackupRetention>, AppError> {
     permit(&state, caller, project, id.0, true)?;
-    if !(1..=64).contains(&input.keep_latest)
+    if !(1..=63).contains(&input.keep_latest)
         || input.max_age_days.is_some_and(|d| !(1..=3650).contains(&d))
         || input.expected_generation == 0
         || input.expected_generation > i64::MAX as u64
     {
         return Err(Error::Invalid(
-            "Keep one through 64 recent backups and use an age from one through 3650 days",
+            "Keep one through 63 recent backups to reserve a rotation slot, and use an age from one through 3650 days",
         )
         .response(id.0));
     }

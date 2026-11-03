@@ -185,7 +185,7 @@ export default function ProjectBackupRetention({
             <input
               type="number"
               min={1}
-              max={64}
+              max={63}
               value={policy.keepLatest}
               disabled={busy}
               onChange={(e) =>
@@ -238,7 +238,7 @@ export default function ProjectBackupRetention({
               !generation ||
               !Number.isInteger(policy.keepLatest) ||
               policy.keepLatest < 1 ||
-              policy.keepLatest > 64 ||
+              policy.keepLatest > 63 ||
               (policy.maxAgeDays !== null &&
                 (!Number.isInteger(policy.maxAgeDays) ||
                   policy.maxAgeDays < 1 ||
