@@ -29,6 +29,7 @@ pub mod terminal;
 const DRIVERS: &[(&str, &str, &str)] = &[
     ("codex", "Codex", "codex"),
     ("claude", "Claude Code", "claude"),
+    ("grok", "Grok Build", "grok"),
     ("gemini", "Gemini CLI", "gemini"),
     ("opencode", "OpenCode", "opencode"),
     ("copilot", "GitHub Copilot", "copilot"),
@@ -259,9 +260,9 @@ impl Runtime {
         }
     }
     pub fn prepare(&self, cli: &str) -> Result<Value, Error> {
-        if !["codex", "claude", "github"].contains(&cli) {
+        if !["codex", "claude", "grok", "github"].contains(&cli) {
             return Err(invalid(
-                "Select GitHub, Codex or Claude Code to prepare the environment.",
+                "Select GitHub, Codex, Claude Code or Grok Build to prepare the environment.",
             ));
         }
         if self.preparation()?["state"] == "installing" {
@@ -349,22 +350,16 @@ impl Runtime {
         if self.guest.is_none() {
             return Err(invalid("Select a MicroVM before connecting an account."));
         }
-        if !["codex", "claude", "github"].contains(&cli) {
+        let Some((_, name, _)) = DRIVERS
+            .iter()
+            .find(|d| d.0 == cli && ["codex", "claude", "grok", "github"].contains(&d.0))
+        else {
             return Err(invalid("Select a supported CLI account."));
-        }
+        };
         self.create_session(
             Create {
                 id,
-                name: format!(
-                    "{} sign in",
-                    if cli == "claude" {
-                        "Claude Code"
-                    } else if cli == "github" {
-                        "GitHub"
-                    } else {
-                        "Codex"
-                    }
-                ),
+                name: format!("{name} sign in"),
                 role: "authentication".into(),
                 kind: cli.into(),
                 cwd: "/root".into(),
@@ -632,7 +627,7 @@ impl Runtime {
                 self.projection(record, pane)
             })
             .collect::<Vec<_>>();
-        let mut status = json!({"available":self.program.is_some(),"running":panes.is_some(),"reason":reason,"drivers":DRIVERS.iter().filter(|(id,_,command)| *id != "github" && (self.guest.is_none() || ["codex","claude"].contains(id) || self.has_driver(command))).map(|(id,name,command)|json!({"id":id,"name":name,"available":self.has_driver(command),"authenticated":self.guest.as_ref().is_none_or(|g|g.authenticated.contains(*id))})).collect::<Vec<_>>(),"agents":agents});
+        let mut status = json!({"available":self.program.is_some(),"running":panes.is_some(),"reason":reason,"drivers":DRIVERS.iter().filter(|(id,_,command)| *id != "github" && (self.guest.is_none() || ["codex","claude","grok"].contains(id) || self.has_driver(command))).map(|(id,name,command)|json!({"id":id,"name":name,"available":self.has_driver(command),"authenticated":self.guest.as_ref().is_none_or(|g|g.authenticated.contains(*id))})).collect::<Vec<_>>(),"agents":agents});
         if let Some(guest) = &self.guest {
             status["vmId"] = json!(guest.id);
             status["githubConnected"] = json!(guest.authenticated.contains("github"));
@@ -736,7 +731,7 @@ impl Runtime {
                     "Prepare the CLI environment in the selected MicroVM first.",
                 ));
             }
-            if ["codex", "claude"].contains(&input.cli.as_str())
+            if ["codex", "claude", "grok"].contains(&input.cli.as_str())
                 && !guest.authenticated.contains(&input.cli)
             {
                 return Err(invalid(
@@ -826,9 +821,9 @@ impl Runtime {
                 driver.1
             )));
         }
-        if !input.model.is_empty() && !["codex", "claude"].contains(&input.kind.as_str()) {
+        if !input.model.is_empty() && !["codex", "claude", "grok"].contains(&input.kind.as_str()) {
             return Err(invalid(
-                "Model override is supported for Codex and Claude Code",
+                "Model override is supported for Codex, Claude Code and Grok Build",
             ));
         }
         if !input.effort.is_empty()
@@ -925,6 +920,7 @@ impl Runtime {
             let command = match agent.kind.as_str() {
                 "codex" => "codex login --device-auth",
                 "claude" => "claude auth login",
+                "grok" => "grok login --device-auth",
                 "github" => {
                     "gh auth login --hostname github.com --git-protocol https --web && gh auth setup-git --hostname github.com"
                 }

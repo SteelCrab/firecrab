@@ -29,6 +29,7 @@ const icons = {
 const providers: Record<string, string> = {
   codex: "Codex",
   claude: "Claude Code",
+  grok: "Grok Build",
   copilot: "GitHub Copilot",
 };
 

@@ -25,6 +25,15 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
 
+### Added
+
+- AI Sandbox can install and use xAI's official Grok Build CLI (`grok`). It
+  signs in inside the VM with `grok login --device-auth`; Firecrab does not
+  collect or store keys. A task can pick a Grok model by name. Grok Build keeps
+  its own reasoning effort, starts a new conversation after a VM restart, and
+  shows no board preview. It needs an xAI subscription that includes Grok Build.
+  See [#576](https://github.com/SteelCrab/firecrab/issues/576).
+
 ### Changed
 
 - The CODE menu now opens **VS Code**, a read-only list of projects linked in

@@ -52,17 +52,18 @@ function ModelEffortChoice({
   const { t } = useI18n();
   const note = useId();
   const [typing, setTyping] = useState(false);
-  const supported = ["codex", "claude"].includes(draft.cli);
+  // Grok Build takes a model name but documents no effort levels.
+  const modelOk = ["codex", "claude", "grok"].includes(draft.cli);
+  const effortOk = ["codex", "claude"].includes(draft.cli);
   const custom =
     typing || (!!draft.model && !models?.some((m) => m.id === draft.model));
-  const described = supported ? undefined : note;
   return (
     <div className="am-task-options">
       <label>
         {t("Model", "모델")}
         <select
-          disabled={!supported}
-          aria-describedby={described}
+          disabled={!modelOk}
+          aria-describedby={modelOk ? undefined : note}
           value={custom ? OTHER : draft.model}
           onChange={(e) => {
             const other = e.target.value === OTHER;
@@ -87,8 +88,8 @@ function ModelEffortChoice({
       <label>
         {t("Effort", "추론 강도")}
         <select
-          disabled={!supported}
-          aria-describedby={described}
+          disabled={!effortOk}
+          aria-describedby={effortOk ? undefined : note}
           value={draft.effort}
           onChange={(e) => onChange({ ...draft, effort: e.target.value })}
         >
@@ -114,13 +115,22 @@ function ModelEffortChoice({
           />
         </label>
       )}
-      {!supported && (
+      {!modelOk ? (
         <small id={note}>
           {t(
-            "Model and effort choices work only with Codex and Claude Code.",
-            "모델과 추론 강도는 Codex와 Claude Code에서만 고를 수 있어요.",
+            "Model choices work with Codex, Claude Code and Grok Build. Effort choices work only with Codex and Claude Code.",
+            "모델은 Codex, Claude Code, Grok Build에서 고를 수 있어요. 추론 강도는 Codex와 Claude Code에서만 고를 수 있어요.",
           )}
         </small>
+      ) : (
+        !effortOk && (
+          <small id={note}>
+            {t(
+              "Grok Build uses its own effort setting. Choose Other… to type a model name.",
+              "Grok Build는 자체 추론 강도 설정을 써요. 모델은 직접 입력에서 이름을 적어 주세요.",
+            )}
+          </small>
+        )
       )}
     </div>
   );
@@ -203,7 +213,7 @@ export default function AgentTaskForm({
             <div className="am-cli-choice-grid">
               {drivers
                 .filter((driver) =>
-                  ["codex", "claude", "copilot"].includes(driver.id),
+                  ["codex", "claude", "grok", "copilot"].includes(driver.id),
                 )
                 .map((driver) => (
                   <label key={driver.id} className="am-cli-choice">

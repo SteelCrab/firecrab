@@ -447,6 +447,11 @@
   border-radius: 0;
   background: transparent;
 }
+.am-agent-monogram {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
 .am-agent-brand.auto {
   background: var(--bg-subtle);
 }

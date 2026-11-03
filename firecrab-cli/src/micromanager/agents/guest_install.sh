@@ -34,8 +34,16 @@ case "$1" in
       curl --connect-timeout 15 --retry 2 -fsSL https://claude.ai/install.sh -o "$work/claude.sh"
       bash "$work/claude.sh" stable
     fi ;;
+  grok)
+    if ! command -v grok >/dev/null 2>&1; then
+      curl --connect-timeout 15 --retry 2 -fsSL https://x.ai/cli/install.sh -o "$work/grok.sh"
+      # The installer also links `agent`, Cursor Agent's command, into a PATH folder and
+      # edits the shell profile. Hide both from it and link only grok.
+      PATH=/usr/bin:/bin:/sbin SHELL= bash "$work/grok.sh"
+      ln -sf /root/.grok/bin/grok /usr/local/bin/grok
+    fi ;;
   github) : ;;
-  *) echo "Select GitHub, Codex or Claude Code." >&2; exit 1 ;;
+  *) echo "Select GitHub, Codex, Claude Code or Grok Build." >&2; exit 1 ;;
 esac
 printf 'FIRECRAB_STEP=4\n'
 if [ "$1" = github ]; then command -v gh >/dev/null; else

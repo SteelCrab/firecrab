@@ -17,6 +17,7 @@ export function agentStateLabel(state: string): [string, string] {
 const AGENT_NAMES: Record<string, string> = {
   codex: "Codex",
   claude: "Claude Code",
+  grok: "Grok Build",
   gemini: "Gemini CLI",
   opencode: "OpenCode",
   copilot: "GitHub Copilot",

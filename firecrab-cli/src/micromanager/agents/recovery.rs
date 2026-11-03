@@ -61,6 +61,7 @@ pub(super) fn cli_args(agent: &Agent, resume: bool) -> Vec<String> {
         None => (agent.model.as_str(), ""),
     };
     let claude = agent.kind == "claude";
+    // Codex and Grok Build both take `-m`.
     if !model.is_empty() {
         args.push(if claude { "--model" } else { "-m" }.to_owned());
         args.push(model.to_owned());
@@ -68,11 +69,12 @@ pub(super) fn cli_args(agent: &Agent, resume: bool) -> Vec<String> {
     if !effort.is_empty() {
         if claude {
             args.extend(["--effort".to_owned(), effort.to_owned()]);
-        } else {
+        } else if agent.kind == "codex" {
             // Codex has no effort flag. Any `-c` makes it skip its shared
             // background server, so only a chosen effort adds one.
             args.extend(["-c".to_owned(), format!("model_reasoning_effort={effort}")]);
         }
+        // Grok Build documents `--effort` but not its levels, so it takes no effort.
     }
     args
 }

@@ -1,6 +1,9 @@
 import { Sparkles, SquareTerminal } from "lucide-react";
 
-/** Original official app-bundle artwork. See /agent-brands/README.md for provenance. */
+/**
+ * Original official app-bundle artwork. See /agent-brands/README.md for provenance.
+ * Grok Build has no licensed mark in the repository, so it shows a neutral monogram.
+ */
 export default function AgentBrandIcon({ kind }: { kind: string }) {
   return (
     <span
@@ -16,6 +19,8 @@ export default function AgentBrandIcon({ kind }: { kind: string }) {
           alt=""
           draggable={false}
         />
+      ) : kind === "grok" ? (
+        <span className="am-agent-monogram">G</span>
       ) : kind === "auto" ? (
         <Sparkles />
       ) : (

@@ -323,6 +323,9 @@ impl Guest {
             "login claude claude auth status &\n",
             "login github gh auth status --hostname github.com &\n",
             "wait\nfi\n",
+            // Grok Build has no status command. `grok login` keeps its session in this
+            // file and `grok logout` removes it. Only its presence is checked.
+            "if command -v grok >/dev/null 2>&1 && [ -s /root/.grok/auth.json ]; then printf 'auth:grok\\n'; fi\n",
         ));
         let result = self.shell(&script, Duration::from_secs(20))?;
         (self.available, self.authenticated) = parse_probe(&result, &previous);

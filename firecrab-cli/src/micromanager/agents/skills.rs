@@ -7,13 +7,14 @@ use crate::micromanager::skills::registry::{valid_skill, valid_source};
 /// Pinned CLI release; `npx -y` fetches exactly this version.
 pub const CLI: &str = "skills@1.7.6";
 /// The CLI's agent names for every coding CLI in `DRIVERS`.
-const AGENTS: [&str; 6] = [
+const AGENTS: [&str; 7] = [
     "claude-code",
     "codex",
     "gemini-cli",
     "opencode",
     "github-copilot",
     "cursor",
+    "grok",
 ];
 const NODE_MISSING: &str = "FIRECRAB_NODE_MISSING";
 

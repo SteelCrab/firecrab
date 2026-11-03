@@ -38,8 +38,10 @@ export default function AgentEnvironment(p: Props) {
   const drivers = [
     { id: "codex", name: "Codex" },
     { id: "claude", name: "Claude Code" },
-    ...(p.status?.drivers.filter((d) => d.available && d.id === "copilot") ||
-      []),
+    // Offered once the VM's micromanager knows Grok Build.
+    ...(p.status?.drivers.filter(
+      (d) => d.id === "grok" || (d.available && d.id === "copilot"),
+    ) || []),
   ];
   const installingName =
     drivers.find((d) => d.id === installingCli)?.name || installingCli;
@@ -217,7 +219,7 @@ export default function AgentEnvironment(p: Props) {
                         )}
                       </label>
                       {state?.id === "signed-out" &&
-                        ["codex", "claude"].includes(d.id) && (
+                        ["codex", "claude", "grok"].includes(d.id) && (
                           <button
                             className="btn primary"
                             disabled={p.busy || !p.canControl}

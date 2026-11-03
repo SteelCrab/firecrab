@@ -181,7 +181,7 @@ function VmAgentWorkspace({
   // Written by the earlier one-CLI flow; new workspaces save no choice.
   const [savedCli] = useState(() => {
     const saved = localStorage.getItem(cliKey) || "";
-    return ["codex", "claude", "copilot"].includes(saved) ? saved : "";
+    return ["codex", "claude", "grok", "copilot"].includes(saved) ? saved : "";
   });
   const pageKey = `firecrab.workspacePage.${controllerId}.${vmId}`;
   const [page, setPage] = useState<WorkspacePage>(() => {
@@ -348,7 +348,7 @@ function VmAgentWorkspace({
   // the next step (sign in) when none is signed in.
   const codingDrivers =
     status?.drivers.filter((d) =>
-      ["codex", "claude", "copilot"].includes(d.id),
+      ["codex", "claude", "grok", "copilot"].includes(d.id),
     ) || [];
   const signedIn = codingDrivers.filter((d) => d.available && d.authenticated);
   const cli =
@@ -364,7 +364,7 @@ function VmAgentWorkspace({
     status?.vmId === vmId &&
     !!cli &&
     !!driver?.available &&
-    (!["codex", "claude"].includes(cli) || !!driver.authenticated) &&
+    (!["codex", "claude", "grok"].includes(cli) || !!driver.authenticated) &&
     status?.preparation?.state !== "installing";
   const canLaunch =
     canControl && cliReady && status?.project?.state === "ready";
@@ -400,7 +400,7 @@ function VmAgentWorkspace({
         `Prepare ${name} in Connect accounts to start coding.`,
         `계정 연결에서 ${name}를 준비하면 작업을 시작할 수 있어요.`,
       );
-    if (["codex", "claude"].includes(cli) && !driver.authenticated)
+    if (["codex", "claude", "grok"].includes(cli) && !driver.authenticated)
       return t(
         `Sign in to ${name} in Connect accounts to start coding.`,
         `계정 연결에서 ${name}에 로그인하면 작업을 시작할 수 있어요.`,
@@ -424,7 +424,8 @@ function VmAgentWorkspace({
       creating ||
       !canLaunch ||
       !chosenDriver?.available ||
-      (["codex", "claude"].includes(chosenCli) && !chosenDriver.authenticated)
+      (["codex", "claude", "grok"].includes(chosenCli) &&
+        !chosenDriver.authenticated)
     )
       return;
     setCreating(true);
