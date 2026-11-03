@@ -25,6 +25,7 @@ mod kernel_manager;
 mod m2image_manifest;
 mod microboot;
 mod model;
+mod native_lifecycle;
 mod network;
 mod network_policy;
 mod oci;
@@ -150,6 +151,9 @@ async fn run() -> Result<(), StartupError> {
         .await
         .map_err(StartupError::Persistence)?;
     state.cluster = std::sync::Arc::new(cluster);
+    state.native_host = native_lifecycle::configured_client(&state.store)
+        .map_err(StartupError::Tls)?
+        .map(std::sync::Arc::new);
     // Reject a second owner before recovering any host or scheduled work.
     let scheduler_ownership = state
         .store

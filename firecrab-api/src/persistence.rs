@@ -67,6 +67,7 @@ pub(crate) mod iac_images;
 pub(crate) mod iac_kernels;
 pub(crate) mod iac_managed_database_brokers;
 pub(crate) mod iac_native;
+pub(crate) mod iac_native_host;
 mod iac_native_schema;
 mod iac_operation_queries;
 mod iac_owners;
@@ -893,6 +894,7 @@ impl Store {
         conn.execute_batch(stack_sources::SCHEMA_SQL)?;
         iac_owners::initialize(&conn)?;
         conn.execute_batch(iac_host::SCHEMA)?;
+        conn.execute_batch(iac_native_host::SCHEMA)?;
         iac_native_schema::initialize(&conn)?;
         conn.execute_batch(iac_database_targets::SCHEMA)?;
         conn.execute_batch(iac_database_operations::SCHEMA)?;

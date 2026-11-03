@@ -68,22 +68,23 @@ pub(super) fn ensure_available(
     conn: &Connection,
     request: &ChangeResourceOwner,
 ) -> Result<(), Error> {
-    let original: Option<String> = conn
+    let original: Option<(String, bool)> = conn
         .query_row(
-            "SELECT request_hash FROM iac_host_owner_intents WHERE operation_id=?1",
+            "SELECT request_hash,rejected FROM iac_host_owner_intents WHERE operation_id=?1",
             [request.operation_id.to_string()],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    if let Some(original) = original {
+    if let Some((original, rejected)) = original {
         use sha2::{Digest, Sha256};
-        if original
-            != format!(
-                "{:x}",
-                Sha256::digest(
-                    serde_json::to_vec(request).map_err(|_| Error::IacOperationIdentity)?
+        if rejected
+            || original
+                != format!(
+                    "{:x}",
+                    Sha256::digest(
+                        serde_json::to_vec(request).map_err(|_| Error::IacOperationIdentity)?
+                    )
                 )
-            )
         {
             return Err(Error::IacOperationIdentity);
         }
@@ -109,6 +110,55 @@ pub(super) fn ensure_resource_idle(
     let busy:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM iac_host_owner_intents WHERE confirmed=0 AND kind=?1 AND resource_id=?2)", params![resource.kind,resource.id],|row|row.get(0))?;
     if busy {
         return Err(Error::IacResourceBusy);
+    }
+    Ok(())
+}
+
+/// Shared preflight reserves native and guest-host addresses in the same SQLite namespace.
+pub(super) fn prepare_owner(conn: &Connection, request: &ChangeResourceOwner) -> Result<(), Error> {
+    ensure_available(conn, request)?;
+    let before = iac_owners::read(conn, &request.resource)?;
+    if before.generation != request.expected_generation || before.owner != request.expected_owner {
+        return Err(Error::StaleIacOwner);
+    }
+    super::iac_native::ensure_idle(conn, &request.resource)?;
+    if request.owner.is_some() {
+        super::iac_resources::ensure_independent(conn, &request.resource)?;
+    }
+    for owner in [&request.owner, &request.expected_owner]
+        .into_iter()
+        .flatten()
+    {
+        if owner.manager == Manager::Stack {
+            super::stack_applies::ensure_idle(conn, owner.id)?;
+            super::stack_sources::ensure_idle(conn, owner.id)?;
+            let exists: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM stacks WHERE id=?1)",
+                [owner.id.to_string()],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Err(Error::MissingStack);
+            }
+        }
+    }
+    if let Some(owner) = &request.owner {
+        let manager = match owner.manager {
+            Manager::Stack => "stack",
+            Manager::Terraform => "terraform",
+        };
+        let occupied:bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM iac_resource_owners WHERE manager=?1 AND owner_id=?2 AND logical_key=?3
+            AND (manager='terraform' OR kind=?4) AND (kind<>?4 OR resource_id<>?5))",
+            params![manager,owner.id.to_string(),owner.key,request.resource.kind,request.resource.id],|row|row.get(0))?;
+        if occupied {
+            return Err(Error::IacOwnershipConflict);
+        }
+        if owner.manager == Manager::Stack
+            && super::stacks::binding_count(conn, owner.id, Some(&request.resource))?
+                >= firecrab_stack::MAX_RESOURCES
+        {
+            return Err(Error::StackBindingLimit);
+        }
     }
     Ok(())
 }
@@ -175,7 +225,7 @@ impl Store {
     pub(crate) fn host_owner_intent(&self, operation: Uuid) -> Result<Option<OwnerChange>, Error> {
         self.lock()
             .query_row(
-                "SELECT intent FROM iac_host_owner_intents WHERE operation_id=?1",
+                "SELECT intent FROM iac_host_owner_intents WHERE operation_id=?1 AND kind IN ('ingress','quick_tunnel','named_tunnel','firecrab_tunnel')",
                 [operation.to_string()],
                 |row| row.get::<_, String>(0),
             )
@@ -239,52 +289,7 @@ impl Store {
         )? {
             return Err(Error::IacOperationIdentity);
         }
-        ensure_available(&tx, request)?;
-        let before = iac_owners::read(&tx, &request.resource)?;
-        if before.generation != request.expected_generation
-            || before.owner != request.expected_owner
-        {
-            return Err(Error::StaleIacOwner);
-        }
-        super::iac_native::ensure_idle(&tx, &request.resource)?;
-        if request.owner.is_some() {
-            super::iac_resources::ensure_independent(&tx, &request.resource)?;
-        }
-        for owner in [&request.owner, &request.expected_owner]
-            .into_iter()
-            .flatten()
-        {
-            if owner.manager == Manager::Stack {
-                super::stack_applies::ensure_idle(&tx, owner.id)?;
-                super::stack_sources::ensure_idle(&tx, owner.id)?;
-                let exists: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM stacks WHERE id=?1)",
-                    [owner.id.to_string()],
-                    |row| row.get(0),
-                )?;
-                if !exists {
-                    return Err(Error::MissingStack);
-                }
-            }
-        }
-        if let Some(owner) = &request.owner {
-            let manager = match owner.manager {
-                Manager::Stack => "stack",
-                Manager::Terraform => "terraform",
-            };
-            let occupied:bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM iac_resource_owners WHERE manager=?1 AND owner_id=?2 AND logical_key=?3
-                AND (manager='terraform' OR kind=?4) AND (kind<>?4 OR resource_id<>?5))",
-                params![manager,owner.id.to_string(),owner.key,request.resource.kind,request.resource.id],|row|row.get(0))?;
-            if occupied {
-                return Err(Error::IacOwnershipConflict);
-            }
-            if owner.manager == Manager::Stack
-                && super::stacks::binding_count(&tx, owner.id, Some(&request.resource))?
-                    >= firecrab_stack::MAX_RESOURCES
-            {
-                return Err(Error::StackBindingLimit);
-            }
-        }
+        prepare_owner(&tx, request)?;
         let identity =
             serde_json::to_string(&intent.host).map_err(|_| Error::IacOperationIdentity)?;
         let original: Option<String> = tx

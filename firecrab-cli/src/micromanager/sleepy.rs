@@ -311,6 +311,17 @@ impl<B: Backend> Controller<B> {
                 return reply(&mut stream, 403, "Local CLI control only").await;
             }
             let _gate = self.gate.lock().await;
+            let _ownership = match super::native_unmanaged_guard(&self.home) {
+                Ok(guard) => guard,
+                Err(_) => {
+                    return reply(
+                        &mut stream,
+                        409,
+                        "Native installation is managed or has unfinished ownership work",
+                    )
+                    .await;
+                }
+            };
             if request.path.ends_with("/reconfigure") {
                 if self.active.load(Ordering::SeqCst) != 0 {
                     return reply(&mut stream, 503, "Close active API/console/shell connections before applying resource changes").await;

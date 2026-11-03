@@ -265,6 +265,8 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
         std::env::var_os("PATH"),
     )?;
     let layout = lifecycle::Layout::from_process_env()?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     let binaries_in_place = same_file(&cli_source, &layout.cli_path())
         && same_file(&helper_source, &layout.helper_path());
     let install_binaries = reinstall || !binaries_in_place;
@@ -355,6 +357,8 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
 
 fn run_start() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     if super::controller::configured(&layout.managed_home) {
         super::controller::start(&layout.managed_home)?;
         report!("[PASS] microManager: running (automatic wake enabled)");
@@ -376,6 +380,8 @@ fn run_start() -> Result<i32, Error> {
 
 fn run_repair() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     let status = repair::run(&layout)?;
     print_daemon_status(&status, &layout);
     report!("[PASS] guest boot report and local API: ready");
@@ -500,6 +506,8 @@ fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
 
 fn run_stop() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     if super::controller::active(&layout.managed_home) {
         super::controller::stop(&layout.managed_home)?;
         report!("[PASS] microManager: manually stopped (automatic wake blocked)");
@@ -1055,6 +1063,8 @@ fn wait_for_provisioning(
 
 fn run_uninstall(purge: bool) -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
+    let _installation = crate::native_host::installation_guard(&layout.managed_home)
+        .map_err(super::resource::Error::from)?;
     if purge {
         lifecycle::validate_purge(&layout)?;
     }

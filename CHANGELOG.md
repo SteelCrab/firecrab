@@ -35,6 +35,10 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 - Preserve independent Sandbox preview binding ownership with original task/runtime
   checks and transactional fences for native changes, handoffs and parent deletion.
+- Add native management-settings ownership with physical installation identity,
+  existing Firecrab certificate mTLS, durable native/API reservations and original
+  operation recovery. Full native configuration lifecycle and host configuration
+  remain pending under the #548 integration hold.
 - Preserve fixed-address ownership with the original registry, credential digest
   and exclusive connector pins, including after private address-record deletion.
 - Retain independent named Cloudflare connector ownership on the privileged host

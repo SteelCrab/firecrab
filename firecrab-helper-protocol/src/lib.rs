@@ -7,6 +7,8 @@
 pub mod framing;
 /// Physical host ownership proofs shared by API and privileged control brokers.
 pub mod host_iac;
+/// Native outer-host installation proofs, distinct from Linux guest Pipe ownership.
+pub mod native_iac;
 /// Network-helper-specific request/response payloads (bridge, TAP, firewall).
 pub mod network;
 /// Shared pipe manifest and restricted helper operations.

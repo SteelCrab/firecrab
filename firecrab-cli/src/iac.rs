@@ -12,6 +12,16 @@ use crate::api_client::{ApiClient, ApiError};
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Read the physical identity of this CLI's native installation without changing it.
+    #[command(hide = true)]
+    NativeIdentity,
+    /// Internal native metadata broker; caller must own the selected native installation.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[command(hide = true)]
+    NativeBroker,
+    /// Serve native ownership over authenticated Firecrab mTLS.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    NativeServe(crate::native_host::server::Options),
     /// Read persistent endpoint identity and implemented ownership capabilities.
     Identity,
     /// List active Stack and Terraform ownership records as JSON.
@@ -57,14 +67,53 @@ pub enum Command {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("could not observe the native installation: {0}")]
+    Native(#[from] std::io::Error),
     #[error(transparent)]
     Api(#[from] ApiError),
     #[error("{0}")]
     Input(&'static str),
 }
 
+impl Command {
+    pub fn is_local(&self) -> bool {
+        match self {
+            Self::NativeIdentity => true,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            Self::NativeBroker | Self::NativeServe(_) => true,
+            _ => false,
+        }
+    }
+}
+
+/// Local native administration does not depend on a selected remote API or TLS profile.
+pub fn run_local(command: Command) -> Result<(), Error> {
+    match command {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        Command::NativeBroker => {
+            crate::native_host::run_metadata()?;
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        Command::NativeServe(options) => crate::native_host::server::run(options)?,
+        Command::NativeIdentity => {
+            #[cfg(target_os = "linux")]
+            let root = crate::service::env::ServiceEnv::from_process_env().confdir;
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            let root = crate::micromanager::native_iac_home().map_err(std::io::Error::other)?;
+            print_json(&crate::native_host::inspect(&root)?)
+        }
+        _ => return Err(Error::Input("expected a local native command")),
+    }
+    Ok(())
+}
+
 pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
     match command {
+        Command::NativeIdentity => run_local(Command::NativeIdentity)?,
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        Command::NativeBroker => run_local(Command::NativeBroker)?,
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        Command::NativeServe(options) => run_local(Command::NativeServe(options))?,
         Command::NativeOperation { id } | Command::RecoverNativeOperation { id } if id.is_nil() => {
             return Err(Error::Input("operation UUID must be non-nil"));
         }

@@ -1158,6 +1158,7 @@ dependencies = [
  "toml",
  "tower",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1186,12 +1187,15 @@ name = "firecrab-helper-protocol"
 version = "0.5.0"
 dependencies = [
  "firecrab-api-types",
+ "firecrab-pki",
  "firecrab-stack",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-rustls",
  "uuid",
 ]
 

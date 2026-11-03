@@ -5,7 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+native-transport = ["dep:firecrab-pki", "dep:tokio-rustls", "tokio/net", "tokio/time"]
+
 [dependencies]
+firecrab-pki = { path = "../firecrab-pki", optional = true }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"], optional = true }
 firecrab-api-types = { path = "../firecrab-api-types" }
 firecrab-stack = { path = "../firecrab-stack" }
 serde = { workspace = true }
@@ -16,5 +21,6 @@ tokio = { version = "1", features = ["io-util"] }
 uuid = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3.27.0"
 tokio = { version = "1", features = ["io-util", "macros", "rt"] }
 

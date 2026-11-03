@@ -17,6 +17,7 @@ mod mcp;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 mod micromanager;
 mod microservice;
+mod native_host;
 mod network;
 mod pipe;
 mod pipe_ai;
@@ -203,6 +204,9 @@ fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
         Command::Iac { command } => {
+            if command.is_local() {
+                return finish_api_command(iac::run_local(command));
+            }
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 iac::run(client, command)
             })

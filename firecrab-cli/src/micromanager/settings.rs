@@ -49,6 +49,7 @@ impl Settings {
     #[cfg(any(target_os = "macos", test))]
     pub fn update_saved_resources(&self, home: &Path) -> Result<(), Error> {
         let _lock = super::resource::lock(home)?;
+        crate::native_host::require_unmanaged(home)?;
         let path = home.join("resources.json");
         let Some(mut resources) =
             super::resource::read::<firecrab_api_types::ManagerResources>(&path)?
@@ -141,6 +142,7 @@ impl Store {
             .write(true)
             .open(lock_path)?;
         fs2::FileExt::try_lock_exclusive(&lock).map_err(|_| Error::Conflict)?;
+        crate::native_host::require_unmanaged(&self.home)?;
         if self.bytes()? != previous.bytes {
             return Err(Error::Conflict);
         }

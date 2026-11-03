@@ -38,10 +38,29 @@ pub async fn identity(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let id = database(request.0, move || state.store.iac_endpoint_id()).await?;
+    let store = state.store.clone();
+    let id = database(request.0, move || store.iac_endpoint_id()).await?;
+    let mut kinds = crate::persistence::IAC_TRANSFER_KINDS
+        .iter()
+        .map(|kind| (*kind).to_owned())
+        .collect::<Vec<_>>();
+    let mut native_target = None;
+    if state.native_host.is_some() {
+        match crate::native_lifecycle::identity(&state, request.0).await {
+            Ok(firecrab_helper_protocol::native_iac::Reply::Identity {
+                target,
+                kinds: native_kinds,
+            }) => {
+                kinds.extend(native_kinds);
+                native_target = Some(target);
+            }
+            Ok(_) => return Err(AppError::internal(request.0)),
+            Err(error) => return Err(error),
+        }
+    }
     Ok(Json(
         serde_json::json!({"endpointId":id,"inventoryKinds":firecrab_stack::resource_kinds(),
-        "transferKinds":crate::persistence::IAC_TRANSFER_KINDS}),
+        "transferKinds":kinds,"nativeTarget":native_target}),
     ))
 }
 
@@ -55,6 +74,16 @@ pub async fn owners(
         .map(Json)
 }
 
+/// Native broker discovery uses authenticated transport and its independently observed installation.
+pub async fn native_identity(
+    State(state): State<AppState>,
+    Extension(request): Extension<RequestId>,
+) -> Result<Json<firecrab_helper_protocol::native_iac::Reply>, AppError> {
+    crate::native_lifecycle::identity(&state, request.0)
+        .await
+        .map(Json)
+}
+
 /// A free owner slot does not assert that the corresponding resource exists.
 pub async fn owner(
     State(state): State<AppState>,
@@ -62,6 +91,11 @@ pub async fn owner(
     Path((kind, id)): Path<(String, String)>,
 ) -> Result<Json<ResourceOwnership>, AppError> {
     let resource = ManagedResource { kind, id };
+    if firecrab_helper_protocol::native_iac::native_kind(&resource.kind) {
+        return crate::native_lifecycle::observe(&state, request.0, resource)
+            .await
+            .map(|observation| Json(observation.ownership));
+    }
     if firecrab_helper_protocol::host_iac::is_pipe_kind(&resource.kind) {
         return crate::host_lifecycle::observe(&state, request.0, resource)
             .await
@@ -79,6 +113,16 @@ pub async fn operation(
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<firecrab_stack::OwnershipOperation>, AppError> {
     let store = state.store.clone();
+    let native_store = state.store.clone();
+    if let Some(intent) =
+        database(request.0, move || native_store.native_host_owner_intent(id)).await?
+    {
+        let ownership = crate::native_lifecycle::change(state, request.0, intent.change).await?;
+        return Ok(Json(firecrab_stack::OwnershipOperation {
+            operation_id: id,
+            ownership,
+        }));
+    }
     if let Some(intent) = database(request.0, move || store.host_owner_intent(id)).await? {
         let ownership = crate::host_lifecycle::change(state, request.0, intent.change).await?;
         return Ok(Json(firecrab_stack::OwnershipOperation {
@@ -310,6 +354,11 @@ pub async fn change_owner(
     })?;
     let store = state.store.clone();
     let operation = change.operation_id;
+    if firecrab_helper_protocol::native_iac::native_kind(&change.resource.kind) {
+        return crate::native_lifecycle::change(state, request.0, change)
+            .await
+            .map(Json);
+    }
     if firecrab_helper_protocol::host_iac::is_pipe_kind(&change.resource.kind) {
         return crate::host_lifecycle::change(state, request.0, change)
             .await

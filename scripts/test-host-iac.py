@@ -304,6 +304,35 @@ def main():
         rpc(released)
         confirm(released)
         assert not observe()["exists"]
+        # A rejected original API must recover its own result after another API first binds this host.
+        fresh = root / "other-conf"
+        (fresh / "pipe").mkdir(parents=True)
+        (fresh / "pipe/manifest.json").write_bytes(original)
+        env["CONFDIR"] = str(fresh)
+        resource = {"kind": "ingress", "id": "listener"}
+        endpoint = str(uuid.uuid4())
+        old_request = change(dict(owner, key="firecrab_ingress.listener"), observe())
+        old_request["request"]["configurationSha256"] = "0" * 64
+        old_result = rpc(old_request)
+        assert old_result["kind"] == "owner_rejected"
+        endpoint = str(uuid.uuid4())
+        next_request = change(dict(owner, key="firecrab_ingress.listener"), observe())
+        rpc(next_request)
+        confirm(next_request)
+        assert rpc(old_request) == old_result
+        assert observe()["ownership"]["generation"] == 1
+        # The native identity reader reports the actual Linux process and directory, not a guest display descriptor.
+        (fresh / "host-platform.json").write_text(json.dumps({"os": "macos", "name": "fixture-display-only"}))
+        native_env = dict(env, FIRECRAB_API="https://unreachable.invalid:1",
+                          FIRECRAB_TLS_CERT=str(root / "missing-remote-cert"),
+                          FIRECRAB_TLS_KEY=str(root / "missing-remote-key"),
+                          FIRECRAB_TLS_CA=str(root / "missing-remote-ca"))
+        inspected = subprocess.run([str(binary), "iac", "native-identity"], env=native_env,
+                                   capture_output=True, timeout=20, check=True)
+        identity = json.loads(inspected.stdout)
+        assert identity["platform"] == "linux" and identity["configurationRoot"] == str(fresh.resolve())
+        assert identity["directoryId"] == f"{fresh.stat().st_dev:x}:{fresh.stat().st_ino:x}"
+        assert uuid.UUID(identity["installationId"]).version == 8
         print(json.dumps({"kind": "privileged-host-broker-fixture", "passed": True,
                           "manifestSha256": hashlib.sha256(original).hexdigest(),
                           "liveSystemd": False, "guestBoot": False,

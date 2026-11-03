@@ -9,6 +9,20 @@ use uuid::Uuid;
 
 use super::{PersistenceError, Store};
 
+/// Only a retained target receipt can admit an external host into the API mirror.
+enum ExternalProof<'a> {
+    Pipe(&'a super::iac_host::HostProof),
+    Native(&'a super::iac_native_host::NativeProof),
+}
+impl ExternalProof<'_> {
+    fn check(&self, request: &ChangeResourceOwner) -> Result<(), PersistenceError> {
+        match self {
+            Self::Pipe(proof) => proof.check(request),
+            Self::Native(proof) => proof.check(request),
+        }
+    }
+}
+
 pub(super) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS iac_endpoint (singleton INTEGER PRIMARY KEY CHECK(singleton=1), endpoint_id TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS iac_resource_owners (
@@ -270,7 +284,21 @@ impl Store {
         request: &ChangeResourceOwner,
         proof: &super::iac_host::HostProof,
     ) -> Result<ResourceOwnership, PersistenceError> {
-        self.change_iac_owner_checked(request, None, None, None, Some(proof))
+        self.change_iac_owner_checked(request, None, None, None, Some(ExternalProof::Pipe(proof)))
+    }
+
+    pub(super) fn change_iac_native_host_owner(
+        &self,
+        request: &ChangeResourceOwner,
+        proof: &super::iac_native_host::NativeProof,
+    ) -> Result<ResourceOwnership, PersistenceError> {
+        self.change_iac_owner_checked(
+            request,
+            None,
+            None,
+            None,
+            Some(ExternalProof::Native(proof)),
+        )
     }
 
     fn change_iac_owner_checked(
@@ -279,7 +307,7 @@ impl Store {
         vault_presence: Option<bool>,
         kernel_presence: Option<&crate::kernel_lifecycle::KernelPresence>,
         image_presence: Option<&crate::image_lifecycle::ImagePresence>,
-        host_proof: Option<&super::iac_host::HostProof>,
+        host_proof: Option<ExternalProof<'_>>,
     ) -> Result<ResourceOwnership, PersistenceError> {
         let mut request = request.clone();
         request
@@ -347,7 +375,9 @@ impl Store {
             if request.owner.is_some() && !exists {
                 return Err(PersistenceError::InvalidStackResource);
             }
-        } else if firecrab_helper_protocol::host_iac::is_pipe_kind(&request.resource.kind) {
+        } else if firecrab_helper_protocol::host_iac::is_pipe_kind(&request.resource.kind)
+            || firecrab_helper_protocol::native_iac::native_kind(&request.resource.kind)
+        {
             if request.owner.is_some() {
                 super::iac_resources::ensure_independent(&tx, &request.resource)?;
             }

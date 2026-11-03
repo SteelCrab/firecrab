@@ -16,6 +16,21 @@ mod host_platform;
 #[cfg(target_os = "macos")]
 mod macos;
 mod managed_home;
+
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+pub(crate) fn managed_home_for_iac(home: &std::path::Path) -> std::io::Result<()> {
+    managed_home::reject_symlink_components(home).map_err(std::io::Error::other)
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+pub(crate) fn native_iac_fixture_settings(home: &std::path::Path) -> Result<Vec<u8>, String> {
+    let store = settings::Store::new(home);
+    let previous = store.load().map_err(|error| error.to_string())?;
+    store
+        .save(&previous, previous.settings.clone())
+        .map_err(|error| error.to_string())?;
+    std::fs::read(home.join("settings.json")).map_err(|error| error.to_string())
+}
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod manifest;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
@@ -24,6 +39,79 @@ mod os_repair;
 mod release;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod resource;
+
+/// Native profile selected by the launcher; never obtained from a guest descriptor.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) fn native_iac_home() -> Result<std::path::PathBuf, String> {
+    let home = resource::home().map_err(|error| error.to_string())?;
+    #[cfg(target_os = "windows")]
+    if dev::instance::load(&home)
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        return Err("an isolated Docker installation has no native management VM settings".into());
+    }
+    Ok(home)
+}
+
+/// Destructive legacy actions exclude native ownership admission for their whole mutation.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+pub(crate) fn native_unmanaged_guard(
+    home: &std::path::Path,
+) -> Result<Option<resource::ResourceLock>, String> {
+    if !home.exists() {
+        return Ok(None);
+    }
+    let lock = resource::lock(home).map_err(|error| error.to_string())?;
+    crate::native_host::require_unmanaged(home).map_err(|error| error.to_string())?;
+    Ok(Some(lock))
+}
+
+/// Read the existing desired native configuration without starting the management VM.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+pub(crate) fn native_iac_snapshot(home: &std::path::Path) -> Result<(bool, bool, String), String> {
+    use sha2::{Digest, Sha256};
+    let settings = resource::read::<settings::Settings>(&home.join("settings.json"))
+        .map_err(|error| error.to_string())?;
+    if let Some(settings) = &settings {
+        settings.validate().map_err(|error| error.to_string())?;
+    }
+    let resources =
+        resource::read::<firecrab_api_types::ManagerResources>(&home.join("resources.json"))
+            .map_err(|error| error.to_string())?;
+    let operation = resource::read::<firecrab_api_types::ManagerResourceOperation>(
+        &home.join("runtime/resource-operation.json"),
+    )
+    .map_err(|error| error.to_string())?;
+    let applied = resource::read::<settings::Settings>(&home.join("runtime/applied-settings.json"))
+        .map_err(|error| error.to_string())?;
+    let active_resources = resource::read::<firecrab_api_types::ManagerResources>(
+        &home.join("runtime/resources-active.json"),
+    )
+    .map_err(|error| error.to_string())?;
+    let effective_settings = settings.clone().unwrap_or_default();
+    let uncertain_controller =
+        home.join("runtime/controlled").is_file() && applied.as_ref() != Some(&effective_settings);
+    let exists = manifest::Manifest::installed(home)
+        .map_err(|error| error.to_string())?
+        .is_some()
+        || settings.is_some()
+        || resources.is_some()
+        || applied.is_some()
+        || active_resources.is_some();
+    let busy =
+        uncertain_controller || operation.is_some_and(|operation| operation.state != "succeeded");
+    let effective_resources = resources.as_ref().or(active_resources.as_ref());
+    let bytes = serde_json::to_vec(&(
+        &settings,
+        &effective_settings,
+        &resources,
+        effective_resources,
+        home.join("runtime/manual-stop").is_file(),
+    ))
+    .map_err(|_| "invalid native settings projection".to_owned())?;
+    Ok((exists, busy, format!("{:x}", Sha256::digest(bytes))))
+}
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod resource_server;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]

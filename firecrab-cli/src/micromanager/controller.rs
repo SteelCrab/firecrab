@@ -74,6 +74,7 @@ pub fn start(home: &Path) -> Result<(), Error> {
         .open(home.join("runtime/controller-install.lock"))?;
     fs2::FileExt::try_lock_exclusive(&lock)
         .map_err(|_| Error::Native("Another controller operation is in progress".into()))?;
+    crate::native_host::require_unmanaged(home)?;
     let previous = fs::read(home.join("runtime/applied-settings.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Settings>(&bytes).ok());
@@ -167,16 +168,23 @@ pub fn require_idle(api_port: u16) -> Result<(), Error> {
     Ok(())
 }
 pub fn stop(home: &Path) -> Result<(), Error> {
-    fs::write(home.join("runtime/manual-stop"), b"manual\n")?;
+    {
+        let _guard = super::native_unmanaged_guard(home).map_err(Error::Native)?;
+        fs::write(home.join("runtime/manual-stop"), b"manual\n")?;
+    }
     match control(home, "stop") {
         Ok(()) => Ok(()),
-        Err(_) => platform::Backend::new(home)
-            .map_err(Error::Native)?
-            .stop_native()
-            .map_err(Error::Native),
+        Err(_) => {
+            let _guard = super::native_unmanaged_guard(home).map_err(Error::Native)?;
+            platform::Backend::new(home)
+                .map_err(Error::Native)?
+                .stop_native()
+                .map_err(Error::Native)
+        }
     }
 }
 pub fn uninstall(home: &Path) -> Result<(), Error> {
+    crate::native_host::require_unmanaged(home)?;
     if !active(home) {
         return Ok(());
     }
