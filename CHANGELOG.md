@@ -34,6 +34,11 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Recheck native schedule configuration ownership in the write transaction,
+  including unchanged enable/disable requests and expired or uncertain work.
+  Use a private canonical lock file on macOS to avoid SQLite lock conflicts;
+  retain the existing Linux scheduler lock for compatibility with older APIs.
+
 - Add shared local service OTLP plans with explicit consent, unchanged-session
   no-ops, immutable receipts and metadata-only observation. Recheck service
   environment conflicts in each setting/edit/admission transaction and preserve

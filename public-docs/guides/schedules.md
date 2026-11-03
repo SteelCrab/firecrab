@@ -87,6 +87,20 @@ The scheduler checks for due work once per second. It does not guarantee exact s
 
 ## REST API
 
+Public configuration writes recheck IaC ownership in their SQLite transaction,
+including idempotent enable/disable requests. An earlier HTTP check cannot
+authorize a late edit after another API process adopts the schedule. Uncertain
+native operations retain their write fence after restart.
+
+Shared schedule configuration and explicit delegation of a managed VM's state
+writer remain unfinished #548 requirements. Native schedule execution alone
+does not establish complete Stack or Terraform support.
+
+When running the API directly on macOS, scheduler ownership uses an owner-only
+`DATABASE_PATH.scheduler.lock` beside the canonical database path. Database
+aliases use the same lock; lock-file symlinks are rejected. Linux retains its
+existing database-file lock so older and newer APIs still exclude each other.
+
 | Method | Path | Effect |
 | --- | --- | --- |
 | GET, POST | `/api/schedules` | List / create |
