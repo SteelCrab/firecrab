@@ -2,9 +2,9 @@ set -eu
 export PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin:/sbin
 umask 077
 lock=/tmp/firecrab-agent-prepare.lock
-mkdir "$lock" 2>/dev/null || { echo "Another environment preparation is running in this MicroVM." >&2; exit 1; }
+prepare_lock "$lock" || exit 1
 work=""
-trap 'if [ -n "$work" ]; then rm -rf "$work"; fi; rmdir "$lock" 2>/dev/null || :' EXIT
+trap 'if [ -n "$work" ]; then rm -rf "$work"; fi; prepare_unlock "$lock"' EXIT
 work=$(mktemp -d /tmp/firecrab-agent-install.XXXXXX)
 printf 'FIRECRAB_STEP=1\n'
 if command -v apt-get >/dev/null 2>&1; then
