@@ -741,7 +741,7 @@ test("VM and CLI selection are explicit and opening a VM creation form starts no
   await expect(form).toContainText("Ubuntu 26.04 LTS");
   await expect(form).toContainText("2 vCPU");
   await expect(form).toContainText("4 GiB");
-  await expect(form).toContainText("32 GiB");
+  await expect(form).toContainText("8 GiB");
   await page.screenshot({
     path: join(tmpdir(), "firecrab-quick-start-1440.png"),
   });
@@ -852,7 +852,7 @@ test("quick start prepares the default VM and resumes the same job after reload"
       microNetworkId: job.microNetworkId,
       storageRoot: job.storageRoot,
     },
-    { cpu: 2, ram: 4096, diskGb: 32, microNetworkId: null, storageRoot: null },
+    { cpu: 2, ram: 4096, diskGb: 8, microNetworkId: null, storageRoot: null },
   );
   const row = vm(9, { id, name: job.name, state: "running" });
   fixture.state.vms.push(row);

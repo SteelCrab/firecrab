@@ -21,7 +21,7 @@ export const workspaceDefaults = () => ({
   name: "my-workspace",
   cpu: 2,
   ram: 4096,
-  diskGb: 32,
+  diskGb: 8,
   microNetworkId: null as string | null,
   storageRoot: null as string | null,
 });
