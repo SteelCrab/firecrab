@@ -627,3 +627,163 @@ fn iac_resource_secret_explicit_adoption_and_transfer_preserve_private_value() {
         })
         .unwrap();
 }
+
+#[test]
+fn iac_resource_secret_cleanup_expires_only_unadmitted_private_inputs_and_keeps_public_plans() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(&root.path().join("state.db")).unwrap();
+    let vault_path = root.path().join("vault");
+    let vault = Vault::new(vault_path.clone());
+    assert_eq!(
+        store.prune_resource_plan_inputs(&vault, u64::MAX).unwrap(),
+        0
+    );
+    assert!(!vault_path.exists());
+    let peer = add(&vault, "ORDINARY", "ordinary-retained-value");
+    let plan = store
+        .plan_vault_resource(&vault, input(&store, Manager::Terraform), 100)
+        .unwrap();
+    upload(&store, &vault, &plan, 1, "unadmitted-private-input").unwrap();
+    assert_eq!(store.prune_resource_plan_inputs(&vault, 600099).unwrap(), 0);
+    assert_eq!(store.prune_resource_plan_inputs(&vault, 600100).unwrap(), 1);
+    assert_eq!(
+        store.prune_resource_plan_inputs(&vault, u64::MAX).unwrap(),
+        0
+    );
+    assert_eq!(
+        store.resource_plan(plan.operation_id).unwrap().unwrap(),
+        plan
+    );
+    vault
+        .read(|contents| {
+            assert!(contents.iac_plan_inputs.is_empty());
+            assert!(contents.iac_plan_executions.is_empty());
+            assert_eq!(contents.secrets.len(), 1);
+            assert_eq!(contents.secrets[0].summary.id, peer);
+            assert_eq!(contents.secrets[0].value, "ordinary-retained-value");
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn iac_resource_secret_cleanup_preserves_admitted_effect_after_expiry_and_prunes_acknowledged_metadata()
+ {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(&root.path().join("state.db")).unwrap();
+    let vault = Vault::new(root.path().join("vault"));
+    let plan = store
+        .plan_vault_resource(&vault, input(&store, Manager::Terraform), 100)
+        .unwrap();
+    upload(&store, &vault, &plan, 1, "original-private-input").unwrap();
+    store.lock().execute_batch("CREATE TRIGGER reject_secret_ack BEFORE UPDATE OF receipt ON iac_resource_plans BEGIN SELECT RAISE(ABORT,'injected_lost_ack'); END").unwrap();
+    assert!(apply(&store, &vault, &plan, 102).is_err());
+    let applied = vault
+        .read(|contents| Ok(contents.iac_plan_executions[&plan.operation_id].clone()))
+        .unwrap();
+    assert_eq!(
+        store.prune_resource_plan_inputs(&vault, u64::MAX).unwrap(),
+        0
+    );
+    store
+        .lock()
+        .execute_batch("DROP TRIGGER reject_secret_ack")
+        .unwrap();
+    let receipt = apply(&store, &vault, &plan, u64::MAX).unwrap();
+    // Recreate metadata left by an unsuccessful post-acknowledgement prune, without replaying the effect.
+    vault
+        .write(|contents| {
+            contents
+                .iac_plan_executions
+                .insert(plan.operation_id, applied);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(store.prune_resource_plan_inputs(&vault, 103).unwrap(), 1);
+    assert_eq!(apply(&store, &vault, &plan, u64::MAX).unwrap(), receipt);
+    vault
+        .read(|contents| {
+            assert!(contents.iac_plan_executions.is_empty());
+            assert_eq!(contents.secrets.len(), 1);
+            assert_eq!(contents.secrets[0].summary.version, 1);
+            assert_eq!(contents.secrets[0].value, "original-private-input");
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn iac_resource_secret_cleanup_removes_expired_preparation_only_after_failed_sql_admission() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(&root.path().join("state.db")).unwrap();
+    let vault = Vault::new(root.path().join("vault"));
+    let plan = store
+        .plan_vault_resource(&vault, input(&store, Manager::Terraform), 100)
+        .unwrap();
+    upload(&store, &vault, &plan, 1, "never-admitted-input").unwrap();
+    store.lock().execute_batch("CREATE TRIGGER reject_secret_lease BEFORE INSERT ON iac_native_operations BEGIN SELECT RAISE(ABORT,'injected_admission_failure'); END").unwrap();
+    assert!(apply(&store, &vault, &plan, 102).is_err());
+    assert!(
+        store
+            .iac_native_operations(&plan.ownership.resource)
+            .unwrap()
+            .is_empty()
+    );
+    vault
+        .read(|contents| {
+            assert!(contents.secrets.is_empty());
+            assert!(
+                contents
+                    .iac_plan_executions
+                    .contains_key(&plan.operation_id)
+            );
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(store.prune_resource_plan_inputs(&vault, 600099).unwrap(), 0);
+    assert_eq!(store.prune_resource_plan_inputs(&vault, 600100).unwrap(), 1);
+    vault
+        .read(|contents| {
+            assert!(contents.secrets.is_empty());
+            assert!(contents.iac_plan_executions.is_empty());
+            assert!(contents.iac_plan_inputs.is_empty());
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn iac_resource_secret_cleanup_never_expires_material_from_another_or_unproven_database() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(&root.path().join("state.db")).unwrap();
+    let vault = Vault::new(root.path().join("vault"));
+    let plan = store
+        .plan_vault_resource(&vault, input(&store, Manager::Terraform), 100)
+        .unwrap();
+    upload(&store, &vault, &plan, 1, "preserved-unknown-input").unwrap();
+    let other = Store::open(&root.path().join("other.db")).unwrap();
+    assert_eq!(
+        other.prune_resource_plan_inputs(&vault, u64::MAX).unwrap(),
+        0
+    );
+    other
+        .lock()
+        .execute(
+            "UPDATE iac_endpoint SET endpoint_id=?1",
+            [plan.ownership.endpoint_id.to_string()],
+        )
+        .unwrap();
+    assert_eq!(
+        other.prune_resource_plan_inputs(&vault, u64::MAX).unwrap(),
+        0
+    );
+    vault
+        .read(|contents| {
+            assert_eq!(
+                contents.iac_plan_inputs[&plan.operation_id].value,
+                "preserved-unknown-input"
+            );
+            Ok(())
+        })
+        .unwrap();
+}

@@ -12,6 +12,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub(crate) mod plan_cleanup;
 pub(crate) mod providers;
 
 /// Vault format marker, also authenticated as additional AES-GCM data.

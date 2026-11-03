@@ -4,6 +4,7 @@ use super::*;
 use crate::secrets::{Contents, IacPlanInput, IacPlanScope, SecretError, Vault};
 use firecrab_stack::{CredentialInput, SecretConfiguration, UploadResourceValue};
 
+mod cleanup;
 mod execute;
 
 #[cfg(test)]
@@ -238,6 +239,7 @@ impl Store {
     ) -> Result<(), PersistenceError> {
         crate::secrets::validate_value(&input.value)
             .map_err(|_| PersistenceError::InvalidIacOwner)?;
+        self.prune_resource_plan_inputs(vault, now)?;
         vault
             .exclusive(|locked| {
                 let result = (|| {

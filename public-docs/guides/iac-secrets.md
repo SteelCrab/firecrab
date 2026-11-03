@@ -76,6 +76,14 @@ deletion, management transfer or an unavailable Vault cannot replay their effect
 Consumed private input is removed after the effect commits. Recovery metadata is
 pruned after its public receipt becomes durable.
 
+An API maintenance loop checks expired input once per minute. New private uploads
+also check for expired input. Only original scopes with no admitted operation are
+expired at their plan deadline. Accepted or uncertain effects keep their recovery
+material after expiry. Completed receipts permit removal of leftover private
+metadata. Missing plans, a different database identity or unknown effects retain
+their material for explicit recovery. Ordinary Secrets are never removed by this
+cleanup.
+
 ## Remove or retain
 
 Set `desired` to null for the exact owned target. The default policy releases
