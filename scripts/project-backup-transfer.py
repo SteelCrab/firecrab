@@ -317,6 +317,7 @@ def main():
     purge.add_argument("--destination-control", required=True)
     purge.add_argument("--operation", required=True, type=identifier)
     purge.add_argument("--confirm-delete", action="store_true", help="Permanently delete the listed quarantine files")
+    purge.add_argument("--confirm-plan", help="Exact previewDigest to authorize or resume quarantine deletion")
     deletion = commands.add_parser("delete-project", help="Preview or permanently delete retained project data while preserving its VM and volume")
     deletion.add_argument("--control", required=True, help="Stopped controller SQLite path")
     deletion.add_argument("--project", required=True, type=identifier)

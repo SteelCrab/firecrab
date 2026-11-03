@@ -16,7 +16,8 @@ The command removes project-owned files under the controller's project workspace
 project backup and Sandbox attempt directories. This includes private views, drafts,
 session history, task records, instructions, skills, local checkpoints and protected
 project backup archives. It removes the project's control registration, task catalog,
-backup policies and project grants. It retains a deletion tombstone and prevents that
+backup policies, the project's default AI model selection and project grants. Shared
+AI provider connections remain. It retains a deletion tombstone and prevents that
 project UUID from being reused.
 
 The borrowed VM is not stopped, deleted or reformatted by this command. Its other

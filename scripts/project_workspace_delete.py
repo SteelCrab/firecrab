@@ -367,6 +367,8 @@ def metadata_commit(db, record):
         if not disk or disk[0] != "ready" or (disk[1], disk[2]) not in ((None, None), (vm, "/workspace/shared")):
             raise ValueError("Borrowed volume binding changed during deletion")
         db.execute("UPDATE micro_block_storages SET attached_vm_id=NULL,mount_path=NULL WHERE id=?", (volume,))
+        # The selection belongs to this project; provider connections are shared.
+        db.execute("DELETE FROM pipe_ai_defaults WHERE project_id=?", (project,))
         db.execute("DELETE FROM sandbox_task_routes WHERE project_id=?", (project,))
         db.execute("DELETE FROM ai_sandbox_admissions WHERE task_id IN (SELECT id FROM ai_sandbox_tasks WHERE project_id=?)", (project,))
         db.execute("DELETE FROM ai_sandbox_attempts WHERE project_id=?", (project,))

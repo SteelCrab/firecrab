@@ -1,5 +1,6 @@
 """Explicit, journaled cleanup of abandoned import quarantine files."""
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -179,10 +180,18 @@ def purge_abandoned(args, io):
             validate_plan(record, roots, plan, io)
             count = len(plan["files"])
             size = sum(item["identity"][2] for item in plan["files"])
+            # Bind confirmation to the original identities and hashes, even when
+            # a retry has already removed some of the journaled entries.
+            preview = dict(operation=args.operation, control=str(control), project=record["project"],
+                           checkpoint=record["checkpoint"], poolIdentity=record["poolIdentity"],
+                           files=plan["files"], directories=plan["directories"])
+            preview_digest = hashlib.sha256(encode(preview).encode("utf-8")).hexdigest()
             if not args.confirm_delete:
                 entries = [dict(role=item["role"], path=item["relative"], bytes=item["identity"][2]) for item in plan["files"]]
-                print(encode(dict(status="preview", operationId=args.operation, fileCount=count, bytes=size, files=entries, pending=bool(record.get("quarantineCleanup")))))
+                print(encode(dict(status="preview", operationId=args.operation, fileCount=count, bytes=size, files=entries, previewDigest=preview_digest, pending=bool(record.get("quarantineCleanup")))))
                 return
+            if args.confirm_plan != preview_digest:
+                raise ValueError("Quarantine cleanup plan changed or its preview digest was not confirmed; preview again")
             if not record.get("quarantineCleanup"):
                 if len(encode(plan).encode()) > 1024 * 1024:
                     raise ValueError("Quarantine cleanup plan is too large")

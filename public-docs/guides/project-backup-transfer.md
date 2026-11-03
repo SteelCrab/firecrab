@@ -240,15 +240,21 @@ Without confirmation this prints each quarantine role and relative filename, plu
 number of files and logical bytes. A pending retry lists the original plan, including
 files already removed. The preview does not write a cleanup plan or delete data. It scans and hashes the private quarantine, so a
 large volume can make this step slow. The result is a preview, not a reservation.
-Review it, then repeat the command with `--confirm-delete` to permanently remove the
-listed quarantine files. The command never targets the source transfer, registered
-project DB, live volume, other projects, VM or retained backup catalog.
+Review the `previewDigest`, then repeat the command with
+`--confirm-delete --confirm-plan PREVIEW_DIGEST` to permanently remove the listed
+quarantine files. If the plan has changed, preview again before confirming. The
+digest binds the operation, controller, storage identity and exact file and directory
+proofs. The command never targets the source transfer, registered project DB, live
+volume, other projects, VM or retained backup catalog.
 
 Before the first deletion the controller records the exact file hashes and identities.
 It checks for unknown entries and changed identities, removes only recorded files,
 syncs each parent directory and removes only recorded empty directories. Interrupted
-cleanup can be resumed with the same operation and `--confirm-delete`. A completed
-receipt retains the exact file and directory proofs for audit. It returns the saved
+cleanup can be resumed with the same operation, `--confirm-delete` and the saved
+`--confirm-plan` digest. Preview an interrupted cleanup again to recover the digest;
+it still covers the original plan, including removed entries. This also applies to
+pending cleanups started by an earlier version. A completed receipt retains the
+exact file and directory proofs for audit. It returns the saved
 result without touching newer files. `import-status` reports
 whether quarantine cleanup is pending or complete. Missing storage, changed files,
 symlinks, hard links or unknown entries stop cleanup for operator inspection.
