@@ -27,6 +27,13 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- AI Sandbox asks for GitHub's `workflow` permission when it connects a VM's
+  GitHub account, so agents can push GitHub Actions workflow files such as the
+  one **Create workflow** makes. An account connected without it shows
+  **Add workflow permission** on **Connect accounts**. It adds the permission
+  with the same one-time code, through `gh auth refresh --scopes workflow` in
+  the VM, and keeps the account's other permissions. App run shows the same
+  hint next to **Create workflow**.
 - AI Sandbox can install and use xAI's official Grok Build CLI (`grok`). It
   signs in inside the VM with `grok login --device-auth`; Firecrab does not
   collect or store keys. A task can pick a Grok model by name. Grok Build keeps

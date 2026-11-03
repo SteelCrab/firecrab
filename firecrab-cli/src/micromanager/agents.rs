@@ -926,7 +926,7 @@ impl Runtime {
                 "claude" => "claude auth login",
                 "grok" => "grok login --device-auth",
                 "github" => {
-                    "gh auth login --hostname github.com --git-protocol https --web && gh auth setup-git --hostname github.com"
+                    "gh auth login --hostname github.com --git-protocol https --web --scopes workflow && gh auth setup-git --hostname github.com"
                 }
                 _ => return Err(invalid("This CLI login is not supported.")),
             };

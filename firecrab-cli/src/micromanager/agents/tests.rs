@@ -296,6 +296,7 @@ print(json.dumps({'result':result}))
         known: root.path().join("known hosts"),
         proxy: "unused-test-proxy".into(),
         program: Some(ssh),
+        github_missing_scopes: Vec::new(),
         available: ["herdr", "codex", "gh"]
             .into_iter()
             .map(str::to_owned)
@@ -734,7 +735,8 @@ fn login_checks_run_in_parallel_with_a_longer_limit() {
     let calls = fs::read_to_string(root.path().join("remote-calls.jsonl")).unwrap();
     let script: String = serde_json::from_str(calls.lines().last().unwrap()).unwrap();
     assert!(script.contains("timeout 12 \"$@\""), "{script}");
-    assert!(script.contains("login github gh auth status --hostname github.com &\n"));
+    assert!(script.contains("timeout 12 gh auth status --hostname github.com 2>&1"));
+    assert!(script.contains("github &\n"));
     assert!(script.contains("auth-unknown:"));
     assert!(script.contains("&\nwait\n"), "{script}");
 }

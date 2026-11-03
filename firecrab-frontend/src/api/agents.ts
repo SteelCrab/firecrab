@@ -32,6 +32,15 @@ export type GitHubAuth = {
   userCode?: string | null;
   verificationUri?: string;
   error?: string;
+  /** Scopes the connected account lacks, such as `workflow`. */
+  missingScopes?: string[];
+  /** The device flow that adds a missing scope to the connected account. */
+  refresh?: {
+    state: "pending" | "failed";
+    userCode?: string | null;
+    verificationUri?: string;
+    error?: string;
+  };
 };
 export type AgentStatus = {
   github?: GitHubAuth;

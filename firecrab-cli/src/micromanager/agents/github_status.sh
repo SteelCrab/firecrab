@@ -18,6 +18,7 @@ elif [ -f "$root/created" ] && [ "$(($(date +%s) - $(cat "$root/created")))" -lt
 else
   printf 'FAILED\n'
 fi
+if [ "$(cat "$root/kind" 2>/dev/null || true)" = refresh ]; then printf 'KIND:refresh\n'; fi
 if [ -f "$root/log" ]; then
   printf 'CODE:'
   head -c 8192 "$root/log" | grep -oE '[A-Z0-9]{4}-[A-Z0-9]{4}' | head -n1 || true

@@ -12,7 +12,28 @@ impl Runtime {
             .as_ref()
             .ok_or_else(|| invalid("Select a MicroVM first."))?;
         if guest.authenticated.contains("github") {
-            return Ok(json!({"state":"connected"}));
+            let missing = &guest.github_missing_scopes;
+            if missing.is_empty() {
+                return Ok(json!({"state":"connected"}));
+            }
+            // Read the permission request only while a scope is missing. A failed read
+            // must not hide the connected account, so it reports no request.
+            let output = guest
+                .shell(include_str!("github_status.sh"), Duration::from_secs(8))
+                .unwrap_or_default();
+            let mut status = json!({"state":"connected","missingScopes":missing});
+            if output.lines().any(|line| line == "KIND:refresh") {
+                let mut refresh = parse_status(&output);
+                if refresh["state"] == "failed" {
+                    refresh["error"] = json!(
+                        "The GitHub permission request ended or expired. Start again to get a new code."
+                    );
+                }
+                if refresh["state"] != "disconnected" {
+                    status["refresh"] = refresh;
+                }
+            }
+            return Ok(status);
         }
         if !guest.available.contains("gh") {
             return Ok(json!({"state":"unavailable"}));
@@ -21,17 +42,24 @@ impl Runtime {
         Ok(parse_status(&output))
     }
 
+    /// Starts the device flow: a new login, or for a connected account that lacks a
+    /// scope, `gh auth refresh` that adds it. A pending request is reused.
     pub fn connect_github(&self) -> Result<Value, Error> {
         let status = self.github_status()?;
-        if status["state"] == "connected" || status["state"] == "pending" {
+        let refresh = status["state"] == "connected" && status.get("missingScopes").is_some();
+        if status["state"] == "pending" || status["refresh"]["state"] == "pending" {
+            return Ok(status);
+        }
+        if status["state"] == "connected" && !refresh {
             return Ok(status);
         }
         if status["state"] == "unavailable" {
             return Err(invalid("Prepare GitHub tools in this MicroVM first."));
         }
         let guest = self.guest.as_ref().unwrap();
+        let kind = if refresh { "refresh" } else { "login" };
         let script = format!(
-            "set -eu\numask 077\nroot=/root/.local/share/firecrab/github-auth\nmkdir -p \"$root\"\nrun={}\nmkdir \"$root/$run\"\nprintf '%s' \"$run\" > \"$root/current.tmp\"\nmv -T \"$root/current.tmp\" \"$root/current\"\ndate +%s > \"$root/$run/created\"\nnohup /bin/sh -c {} -- \"$root/$run\" </dev/null >\"$root/$run/log\" 2>&1 &\n",
+            "set -eu\numask 077\nroot=/root/.local/share/firecrab/github-auth\nmkdir -p \"$root\"\nrun={}\nmkdir \"$root/$run\"\nprintf '%s' {kind} > \"$root/$run/kind\"\nprintf '%s' \"$run\" > \"$root/current.tmp\"\nmv -T \"$root/current.tmp\" \"$root/current\"\ndate +%s > \"$root/$run/created\"\nnohup /bin/sh -c {} -- \"$root/$run\" {kind} </dev/null >\"$root/$run/log\" 2>&1 &\n",
             Uuid::new_v4(),
             guest::quote(include_str!("github_login.sh")),
         );

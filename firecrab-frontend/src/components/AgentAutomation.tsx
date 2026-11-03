@@ -67,12 +67,15 @@ export default function AgentAutomation({
   vm,
   controllerId,
   canControl,
+  githubNeedsWorkflow,
   onClose,
 }: {
   agent: AgentSession;
   vm: VmResponse | undefined;
   controllerId: string;
   canControl: boolean;
+  /** The VM's GitHub account lacks the `workflow` scope a workflow push needs. */
+  githubNeedsWorkflow: boolean;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -443,6 +446,14 @@ export default function AgentAutomation({
                         "커밋을 푸시하거나 PR을 만들 때 테스트·빌드를 실행할 워크플로우 파일을 만듭니다.",
                       )}
                 </p>
+                {githubNeedsWorkflow && (
+                  <p role="note">
+                    {t(
+                      "Pushing a workflow file needs GitHub's workflow permission. Add it under Connect accounts.",
+                      "워크플로우 파일을 푸시하려면 GitHub workflow 권한이 필요합니다. 계정 연결 화면에서 추가하세요.",
+                    )}
+                  </p>
+                )}
                 <div className="aa-actions">
                   <button
                     className="btn"

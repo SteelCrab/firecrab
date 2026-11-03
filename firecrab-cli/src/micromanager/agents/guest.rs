@@ -18,6 +18,9 @@ pub(super) struct Guest {
     pub home: PathBuf,
     pub available: HashSet<String>,
     pub authenticated: HashSet<String>,
+    /// Scopes Firecrab needs that the VM's GitHub OAuth or classic token lacks.
+    /// Empty when GitHub is not connected, the token has no scopes, or the check timed out.
+    pub github_missing_scopes: Vec<String>,
     pub(super) address: IpAddr,
     pub(super) key: PathBuf,
     pub(super) known: PathBuf,
@@ -112,6 +115,7 @@ impl Guest {
             home: directory,
             available: HashSet::new(),
             authenticated: HashSet::new(),
+            github_missing_scopes: Vec::new(),
             address,
             key,
             known,
@@ -285,7 +289,7 @@ impl Guest {
         }
     }
     pub fn probe(&mut self) -> Result<(), Error> {
-        type Cached = (Instant, HashSet<String>, HashSet<String>);
+        type Cached = (Instant, HashSet<String>, HashSet<String>, Vec<String>);
         static CACHE: std::sync::OnceLock<
             std::sync::Mutex<std::collections::HashMap<PathBuf, Cached>>,
         > = std::sync::OnceLock::new();
@@ -296,12 +300,15 @@ impl Guest {
             .unwrap_or_else(|p| p.into_inner())
             .get(&self.home)
         {
-            Some((at, available, authenticated)) if at.elapsed() < Duration::from_secs(5) => {
+            Some((at, available, authenticated, missing))
+                if at.elapsed() < Duration::from_secs(5) =>
+            {
                 self.available = available.clone();
                 self.authenticated = authenticated.clone();
+                self.github_missing_scopes = missing.clone();
                 return Ok(());
             }
-            Some((_, _, authenticated)) => authenticated.clone(),
+            Some((_, _, authenticated, _)) => authenticated.clone(),
             None => HashSet::new(),
         };
         let mut script = String::from("set -eu\nexport DISABLE_AUTOUPDATER=1\n");
@@ -321,7 +328,15 @@ impl Guest {
             "if [ \"$rc\" -eq 0 ]; then printf 'auth:%s\\n' \"$name\"; elif [ \"$rc\" -eq 124 ]; then printf 'auth-unknown:%s\\n' \"$name\"; fi; }\n",
             "login codex codex login status &\n",
             "login claude claude auth status &\n",
-            "login github gh auth status --hostname github.com &\n",
+            // The GitHub check reads the active account's scopes from the same call. gh prints
+            // `Token scopes:` only for OAuth (gho_) and classic (ghp_) tokens; a blank line ends
+            // the active account. Only the missing scope name leaves the VM.
+            "github() { command -v gh >/dev/null 2>&1 || return 0; rc=0; out=$(timeout 12 gh auth status --hostname github.com 2>&1) || rc=$?; ",
+            "if [ \"$rc\" -eq 0 ]; then printf 'auth:github\\n'; ",
+            "scopes=$(printf '%s\\n' \"$out\" | awk 'NF==0{exit} /Token scopes:/{print; exit}'); ",
+            "case \"$scopes\" in ''|*workflow*) ;; *) printf 'github-missing-scope:workflow\\n';; esac; ",
+            "elif [ \"$rc\" -eq 124 ]; then printf 'auth-unknown:github\\n'; fi; }\n",
+            "github &\n",
             "wait\nfi\n",
             // Grok Build has no status command. `grok login` keeps its session in this
             // file and `grok logout` removes it. Only its presence is checked.
@@ -329,12 +344,19 @@ impl Guest {
         ));
         let result = self.shell(&script, Duration::from_secs(20))?;
         (self.available, self.authenticated) = parse_probe(&result, &previous);
+        self.github_missing_scopes = result
+            .lines()
+            .filter_map(|line| line.strip_prefix("github-missing-scope:"))
+            .filter(|_| self.authenticated.contains("github"))
+            .map(str::to_owned)
+            .collect();
         cache.lock().unwrap_or_else(|p| p.into_inner()).insert(
             self.home.clone(),
             (
                 Instant::now(),
                 self.available.clone(),
                 self.authenticated.clone(),
+                self.github_missing_scopes.clone(),
             ),
         );
         Ok(())

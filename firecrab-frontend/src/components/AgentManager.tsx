@@ -1061,6 +1061,11 @@ function VmAgentWorkspace({
                           controllerId={status?.controllerId || ""}
                           vmId={vmId}
                           canControl={canControl}
+                          githubNeedsWorkflow={
+                            !!status?.github?.missingScopes?.includes(
+                              "workflow",
+                            )
+                          }
                           onUpdate={updateAgent}
                         />
                       ))}
@@ -1241,6 +1246,7 @@ function AgentPane({
   vmId,
   controllerId,
   canControl,
+  githubNeedsWorkflow,
   onUpdate,
 }: {
   agent: AgentSession;
@@ -1248,6 +1254,7 @@ function AgentPane({
   vmId: string;
   controllerId: string;
   canControl: boolean;
+  githubNeedsWorkflow: boolean;
   onUpdate: (agent: AgentSession, mutation?: boolean) => void;
 }) {
   const { t } = useI18n();
@@ -1315,6 +1322,7 @@ function AgentPane({
           vm={vm}
           controllerId={controllerId}
           canControl={canControl}
+          githubNeedsWorkflow={githubNeedsWorkflow}
           onClose={() => setAutomation(false)}
         />
       )}

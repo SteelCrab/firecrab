@@ -72,8 +72,13 @@ export default function AgentRepository(p: Props) {
   const ready = p.project?.state === "ready";
   const preparing = busy || p.project?.state === "preparing";
   const connected = p.github?.state === "connected";
-  const pending = p.github?.state === "pending";
-  const code = p.github?.userCode;
+  // A connected account without `workflow` cannot push GitHub Actions workflow files.
+  const needsWorkflow =
+    connected && !!p.github?.missingScopes?.includes("workflow");
+  const refresh = needsWorkflow ? p.github?.refresh : undefined;
+  const pending = p.github?.state === "pending" || refresh?.state === "pending";
+  const code = refresh ? refresh.userCode : p.github?.userCode;
+  const githubError = refresh ? refresh.error : p.github?.error;
   const loadRepositories = useCallback(
     async (signal?: AbortSignal) => {
       try {
@@ -229,7 +234,7 @@ export default function AgentRepository(p: Props) {
           </span>
         )}
       </header>
-      {!connected && !p.compact && (
+      {(!connected || needsWorkflow) && !p.compact && (
         <div
           className="am-connection-step am-github-auth"
           aria-label="GitHub AUTH"
@@ -246,7 +251,12 @@ export default function AgentRepository(p: Props) {
                   aria-label={
                     p.github?.state === "unavailable"
                       ? t("Prepare GitHub AUTH", "GitHub 인증 준비")
-                      : t("Connect with GitHub AUTH", "GitHub AUTH로 연결")
+                      : needsWorkflow
+                        ? t(
+                            "Add GitHub workflow permission",
+                            "GitHub workflow 권한 추가",
+                          )
+                        : t("Connect with GitHub AUTH", "GitHub AUTH로 연결")
                   }
                   disabled={
                     !p.canControl || authBusy || p.preparingGitHub || !p.github
@@ -260,8 +270,12 @@ export default function AgentRepository(p: Props) {
                   {p.preparingGitHub
                     ? t("Preparing…", "준비 중…")
                     : authBusy
-                      ? t("Connecting…", "연결 중…")
-                      : t("Connect GitHub", "GitHub로 연결")}
+                      ? needsWorkflow
+                        ? t("Requesting…", "요청 중…")
+                        : t("Connecting…", "연결 중…")
+                      : needsWorkflow
+                        ? t("Add workflow permission", "workflow 권한 추가")
+                        : t("Connect GitHub", "GitHub로 연결")}
                   <ArrowRight aria-hidden="true" />
                 </button>
               )}
@@ -322,6 +336,13 @@ export default function AgentRepository(p: Props) {
                   </p>
                 )}
               </div>
+            ) : needsWorkflow ? (
+              <p>
+                {t(
+                  "Pushing GitHub Actions workflow files, such as the one Create workflow makes, needs GitHub's workflow permission.",
+                  "GitHub Actions 워크플로우 파일(워크플로우 생성으로 만든 파일 등)을 푸시하려면 GitHub workflow 권한이 필요해요.",
+                )}
+              </p>
             ) : (
               <p>
                 {t(
@@ -330,9 +351,9 @@ export default function AgentRepository(p: Props) {
                 )}
               </p>
             )}
-            {(authError || p.github?.error) && (
+            {(authError || githubError) && (
               <p className="am-error" role="alert">
-                {authError || p.github?.error}
+                {authError || githubError}
               </p>
             )}
           </div>
