@@ -424,7 +424,8 @@ fn unreadable_capacity_and_corrupt_settings_are_reported() {
 #[test]
 fn default_disk_capacity_tracks_the_existing_sparse_image() {
     let dir = tempfile::tempdir().unwrap();
-    assert_eq!(defaults(dir.path(), &host()).unwrap().disk_gib, 16);
+    // Before installation the default is what provisioning will create.
+    assert_eq!(defaults(dir.path(), &host()).unwrap().disk_gib, 64);
     fs::create_dir(dir.path().join("data")).unwrap();
     let file = File::create(dir.path().join("data/firecrab-data.raw")).unwrap();
     file.set_len((17 << 30) + 1).unwrap();

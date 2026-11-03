@@ -153,6 +153,9 @@ pub fn host_capacity(home: &Path) -> Result<ManagerHostCapacity, Error> {
     }
 }
 
+/// Sparse data disk a new macOS install creates; an existing image keeps its size.
+pub const DEFAULT_DATA_DISK_GIB: u64 = 64;
+
 pub fn defaults(home: &Path, host: &ManagerHostCapacity) -> Result<ManagerResources, Error> {
     #[cfg(target_os = "windows")]
     return super::windows::resource::defaults(home, host);
@@ -161,7 +164,7 @@ pub fn defaults(home: &Path, host: &ManagerHostCapacity) -> Result<ManagerResour
         let _ = host;
         let disk = fs::metadata(home.join("data/firecrab-data.raw"))
             .map(|metadata| metadata.len().div_ceil(1 << 30))
-            .unwrap_or(16);
+            .unwrap_or(DEFAULT_DATA_DISK_GIB);
         Ok(ManagerResources {
             cpu: 2,
             memory_mib: 4096,

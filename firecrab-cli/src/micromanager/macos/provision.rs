@@ -12,7 +12,7 @@ use super::super::report;
 pub const DEBIAN_ARCHIVE: &str = "debian-13-generic-arm64-20260914-2601.tar.xz";
 const DEBIAN_SHA512: &str = "7bacdeb825f81b7eb5fcd35330ce7160ed60413adfa61f37cff3c4028fdc61dbd444e046c58934cd0494192f53fa2cbcfcca1e8e1d337755b34c6c90dc72f62b";
 const DEBIAN_RAW_BYTES: u64 = 3 * 1024 * 1024 * 1024;
-const DATA_DISK_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+const DATA_DISK_BYTES: u64 = super::super::resource::DEFAULT_DATA_DISK_GIB << 30;
 pub(super) const PROVISION_SCHEMA: u32 = 7;
 const EXTRACT_ARM64_IMAGE: &str =
     include_str!("../../../../scripts/firecracker-menual/extract-arm64-image");
@@ -1071,6 +1071,11 @@ exit {status}
             assert!(log.lines().any(|line| line == "LAST_PROVISION_ERROR"));
             assert_eq!(share.join("runtime/provision.failed").exists(), status != 0);
         }
+    }
+
+    #[test]
+    fn new_installs_create_a_64_gib_data_disk() {
+        assert_eq!(DATA_DISK_BYTES, 64 * 1024 * 1024 * 1024);
     }
 
     #[test]

@@ -93,7 +93,7 @@ Override with `FIRECRAB_MICROMANAGER_HOME` for an isolated checkout or test.
 | `micromanager.toml` | Installed release inputs and editable runtime settings |
 | `downloads/` | Verified release artifacts |
 | `system/` | Kernel, initrd, and replaceable 3 GiB Debian OS disk |
-| `data/firecrab-data.raw` | Persistent 16 GiB sparse disk for databases, images, and VMs |
+| `data/firecrab-data.raw` | Persistent sparse disk for databases, images, and VMs (64 GiB on a new install) |
 | `provision/` | Provisioning scripts |
 | `runtime/` | SSH key, boot markers, registration, and logs |
 
