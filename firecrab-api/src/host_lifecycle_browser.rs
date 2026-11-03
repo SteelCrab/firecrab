@@ -20,7 +20,8 @@ async fn iac_ingress_browser_fixture() {
     assert!(
         (container.starts_with("firecrab-548-ingress-evidence-")
             || container.starts_with("firecrab-548-quick-evidence-")
-            || container.starts_with("firecrab-548-named-evidence-"))
+            || container.starts_with("firecrab-548-named-evidence-")
+            || container.starts_with("firecrab-548-address-evidence-"))
             && container
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
@@ -28,7 +29,7 @@ async fn iac_ingress_browser_fixture() {
     let resource_kind = std::env::var("FIRECRAB_IAC_QA_KIND").unwrap_or_else(|_| "ingress".into());
     assert!(matches!(
         resource_kind.as_str(),
-        "ingress" | "quick_tunnel" | "named_tunnel"
+        "ingress" | "quick_tunnel" | "named_tunnel" | "firecrab_tunnel"
     ));
     let info = std::path::PathBuf::from(std::env::var_os("FIRECRAB_IAC_QA_INFO").unwrap());
     let assets = std::path::PathBuf::from(std::env::var_os("FIRECRAB_IAC_QA_ASSETS").unwrap());
@@ -119,6 +120,8 @@ async fn iac_ingress_browser_fixture() {
                 kind: kind.into(),
                 id: if kind == "ingress" {
                     format!("route:{label}.example.com/")
+                } else if kind == "firecrab_tunnel" {
+                    format!("fixture-{label}")
                 } else {
                     Uuid::from_u128(0x548001 + index).to_string()
                 },
@@ -128,7 +131,11 @@ async fn iac_ingress_browser_fixture() {
             owner: Some(ResourceOwner {
                 manager: Manager::Terraform,
                 id: owner,
-                key: format!("firecrab_{kind}.{label}"),
+                key: if kind == "firecrab_tunnel" {
+                    format!("firecrab_fixed_address.{label}")
+                } else {
+                    format!("firecrab_{kind}.{label}")
+                },
             }),
         };
         ownerships.push(
@@ -146,7 +153,11 @@ async fn iac_ingress_browser_fixture() {
         owner: Some(ResourceOwner {
             manager: Manager::Terraform,
             id: second_owner,
-            key: format!("firecrab_{resource_kind}.app"),
+            key: if resource_kind == "firecrab_tunnel" {
+                "firecrab_fixed_address.app".into()
+            } else {
+                format!("firecrab_{resource_kind}.app")
+            },
         }),
     };
     let router = crate::server::build_router(

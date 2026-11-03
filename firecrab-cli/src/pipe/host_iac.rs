@@ -25,6 +25,8 @@ pub(super) fn run() -> Result<()> {
         return Err("host ownership request exceeds 16 KiB".into());
     }
     let request: Request = serde_json::from_slice(&bytes)?;
+    // Address mutations retain this lock through remote work and local commit.
+    let _address_lock = super::firecrab::address_lock()?;
     let _lock = super::host::lock()?;
     let root = fs::canonicalize(ServiceEnv::from_process_env().confdir)?;
     let metadata = fs::metadata(&root)?;
@@ -65,6 +67,9 @@ pub(super) fn run() -> Result<()> {
             endpoint_id,
             resource,
         } => {
+            if resource.kind == "firecrab_tunnel" {
+                ledger.set_addresses(super::firecrab::ownership_projections(&root)?);
+            }
             let config = config(&root)?;
             let present = ledger
                 .observe(&host, endpoint_id, &resource, config.as_ref())?
@@ -81,12 +86,16 @@ pub(super) fn run() -> Result<()> {
                 request.change.expected_endpoint_id,
                 request.change.operation_id,
             )?;
-            let config = if existing.is_some() || ledger.has_outcome(request.change.operation_id) {
+            let terminal = existing.is_some() || ledger.has_outcome(request.change.operation_id);
+            let config = if terminal {
                 None
             } else {
+                if request.change.resource.kind == "firecrab_tunnel" {
+                    ledger.set_addresses(super::firecrab::ownership_projections(&root)?);
+                }
                 config(&root)?
             };
-            if config.is_some() {
+            if !terminal {
                 let present = ledger
                     .observe(
                         &host,
@@ -145,6 +154,8 @@ fn prepare_activity(
         let id = uuid::Uuid::parse_str(&resource.id)?;
         ledger.set_controller_owned(super::firecrab::connector_is_owned(id)?);
         firecrab_helper_protocol::pipe::quick_tunnel_unit(id)
+    } else if resource.kind == "firecrab_tunnel" {
+        "firecrab-address-updater.service".into()
     } else if resource.kind == "named_tunnel" {
         use sha2::{Digest, Sha256};
         let credentials = config.map(Config::credentials).transpose()?.flatten();
@@ -227,7 +238,8 @@ fn protected_directory(path: &Path) -> Result<()> {
 
 /// Check the exact proposed configuration at the privileged commit boundary.
 pub(super) fn check_configuration(root: &Path, next: &Config) -> Result<()> {
-    let ledger = read(root)?;
+    let mut ledger = read(root)?;
+    ledger.set_addresses(super::firecrab::ownership_projections(root)?);
     let current = config(root)?;
     ledger.check_configuration(current.as_ref(), next)?;
     if ledger.check_named_control().is_err()
@@ -256,4 +268,11 @@ pub(super) fn check_quick_control(root: &Path, id: uuid::Uuid) -> Result<()> {
 /// Check the shared named slot before credentials, remote provisioning or unit mutations.
 pub(super) fn check_named_control(root: &Path) -> Result<()> {
     read(root)?.check_named_control()
+}
+
+/// The original label stays reserved even after an external private-binding deletion.
+pub(super) fn check_address_control(root: &Path, subdomain: &str) -> Result<()> {
+    read(root)?.check_resource_control(
+        &firecrab_helper_protocol::host_iac::firecrab_tunnel_resource(subdomain),
+    )
 }

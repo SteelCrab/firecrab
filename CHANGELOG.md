@@ -33,6 +33,8 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Preserve fixed-address ownership with the original registry, credential digest
+  and exclusive connector pins, including after private address-record deletion.
 - Retain independent named Cloudflare connector ownership on the privileged host
   and API. Pin credential content and fence shared-unit controls, credential
   replacement and new provisioning even after external configuration deletion.

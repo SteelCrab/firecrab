@@ -3,6 +3,98 @@ use firecrab_helper_protocol::host_iac::OwnerChange;
 use firecrab_stack::{ChangeResourceOwner, Manager, ResourceOwner};
 
 #[test]
+fn fixed_address_proof_retains_origin_credentials_target_and_exclusive_child() {
+    let mut current = config();
+    let id = Uuid::new_v4();
+    current
+        .quick_tunnels
+        .push(firecrab_helper_protocol::pipe::QuickTunnelEntry {
+            id,
+            name: "fixture".into(),
+            target: firecrab_helper_protocol::pipe::QuickTunnelTarget::Apps {
+                upstreams: vec!["127.0.0.1:8083".parse().unwrap()],
+            },
+        });
+    let origin = serde_json::json!({"endpoint":"https://registry.invalid","protocol":"addresses_v1",
+        "subdomain":"fixture-app","target":{"type":"apps","upstreams":["127.0.0.1:8083"]},
+        "connectorId":id,"ownedConnector":true,"credentialSha256":"a".repeat(64)});
+    let mut ledger = Ledger::default();
+    ledger.set_addresses(BTreeMap::from([("fixture-app".into(), origin.clone())]));
+    let resource = firecrab_helper_protocol::host_iac::firecrab_tunnel_resource("fixture-app");
+    let observed = ledger
+        .observe(&host(), Uuid::from_u128(548), &resource, Some(&current))
+        .unwrap();
+    let mut intent = request(&ledger, Some(&current), "listener");
+    intent.change.resource = resource.clone();
+    intent.change.owner.as_mut().unwrap().key = "firecrab_fixed_address.app".into();
+    intent.configuration_sha256 = observed.configuration_sha256;
+    let mut changed = origin.clone();
+    changed["credentialSha256"] = serde_json::json!("b".repeat(64));
+    ledger.set_addresses(BTreeMap::from([("fixture-app".into(), changed)]));
+    assert!(
+        ledger
+            .change(&host(), Some(&current), intent.clone())
+            .is_err()
+    );
+    ledger.set_addresses(BTreeMap::from([("fixture-app".into(), origin)]));
+    let receipt = ledger
+        .change(&host(), Some(&current), intent.clone())
+        .unwrap();
+    ledger
+        .confirm(&host(), receipt.ownership.endpoint_id, receipt.operation_id)
+        .unwrap();
+    assert!(ledger.check_resource_control(&resource).is_err());
+    assert!(ledger.check_configuration(Some(&current), &current).is_ok());
+    let mut candidate = current.clone();
+    candidate.quick_tunnels[0].name = "different".into();
+    assert!(
+        ledger
+            .check_configuration(Some(&current), &candidate)
+            .is_err()
+    );
+    candidate = current.clone();
+    candidate.routes[0].upstreams[0].set_port(9090);
+    assert!(
+        ledger
+            .check_configuration(Some(&current), &candidate)
+            .is_ok()
+    );
+    ledger.set_addresses(BTreeMap::new());
+    let mut ledger: Ledger = serde_json::from_slice(&serde_json::to_vec(&ledger).unwrap()).unwrap();
+    ledger.normalize_keys().unwrap();
+    let mut damaged = serde_json::to_value(&ledger).unwrap();
+    damaged["addressPins"] = serde_json::json!({});
+    let mut damaged: Ledger = serde_json::from_value(damaged).unwrap();
+    assert!(damaged.normalize_keys().is_err());
+    let child = firecrab_helper_protocol::host_iac::quick_tunnel_resource(id);
+    assert!(ledger.check_resource_control(&child).is_err());
+    assert!(
+        ledger
+            .observe(&host(), Uuid::from_u128(548), &child, Some(&current))
+            .unwrap()
+            .parent_controlled
+    );
+    let mut candidate = current.clone();
+    candidate.quick_tunnels.clear();
+    assert!(
+        ledger
+            .check_configuration(Some(&current), &candidate)
+            .is_err()
+    );
+    assert!(
+        !ledger
+            .observe(&host(), Uuid::from_u128(548), &resource, Some(&current))
+            .unwrap()
+            .exists
+    );
+    assert!(ledger.check_resource_control(&resource).is_err());
+    assert_eq!(
+        ledger.change(&host(), None, intent).unwrap().ownership,
+        receipt.ownership
+    );
+}
+
+#[test]
 fn named_connector_retains_identity_credentials_and_the_shared_slot_after_external_deletion() {
     let mut current = config();
     let id = Uuid::new_v4();

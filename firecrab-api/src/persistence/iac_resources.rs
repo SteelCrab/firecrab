@@ -28,6 +28,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "ingress",
     "quick_tunnel",
     "named_tunnel",
+    "firecrab_tunnel",
     "storage_connection",
     "secret",
     "secret_connection",
@@ -69,7 +70,13 @@ pub(super) fn ensure_independent(
         "SELECT EXISTS(SELECT 1 FROM database_managed_rabbitmq c,json_each(c.spec,'$.brokers') b WHERE json_extract(b.value,'$.id')=?1)",
         [&resource.id], |row| row.get::<_, bool>(0),
     )?;
-    if generated || queue_child || database_broker {
+    let sandbox_address = resource.kind == "firecrab_tunnel"
+        && conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM ai_sandbox_tunnels WHERE subdomain=?1)",
+            [&resource.id],
+            |row| row.get::<_, bool>(0),
+        )?;
+    if generated || queue_child || database_broker || sandbox_address {
         return Err(PersistenceError::IacParentManaged);
     }
     Ok(())

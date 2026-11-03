@@ -374,7 +374,21 @@ async fn firecrab_request(
     match &request {
         // The token's address is intentionally opaque to the API. It cannot be safely
         // resolved here without performing the very helper mutation being guarded.
-        Request::Connect { .. } => require_unclaimed(&state, request_id, None)?,
+        Request::Connect { .. } => {
+            require_unclaimed(&state, request_id, None)?;
+            let store = state.store.clone();
+            let allowed = super::stacks::database(request_id.0, move || {
+                store.iac_host_kind_public_write_allowed("firecrab_tunnel")
+            })
+            .await?;
+            if !allowed {
+                return Err(AppError::conflict(
+                    "iac_resource_managed",
+                    "a saved address is managed; use its workflow before resolving another connection token",
+                    request_id.0,
+                ));
+            }
+        }
         Request::Save { subdomain, .. } | Request::Delete { subdomain } => {
             if state
                 .store
@@ -383,6 +397,20 @@ async fn firecrab_request(
                 .is_some()
             {
                 return Err(preview_claimed(request_id));
+            }
+            let store = state.store.clone();
+            let resource = firecrab_helper_protocol::host_iac::firecrab_tunnel_resource(subdomain);
+            let allowed = super::stacks::database(request_id.0, move || {
+                Ok(store.iac_resource_owner(&resource)?.owner.is_none()
+                    && store.iac_public_write_allowed(&resource)?)
+            })
+            .await?;
+            if !allowed {
+                return Err(AppError::conflict(
+                    "iac_resource_managed",
+                    "address is managed; transfer or release its ownership before native changes",
+                    request_id.0,
+                ));
             }
         }
     }

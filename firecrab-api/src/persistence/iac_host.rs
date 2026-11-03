@@ -247,6 +247,9 @@ impl Store {
             return Err(Error::StaleIacOwner);
         }
         super::iac_native::ensure_idle(&tx, &request.resource)?;
+        if request.owner.is_some() {
+            super::iac_resources::ensure_independent(&tx, &request.resource)?;
+        }
         for owner in [&request.owner, &request.expected_owner]
             .into_iter()
             .flatten()

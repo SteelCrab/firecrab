@@ -124,7 +124,7 @@ fn write_at(path: &Path, store: &Store) -> Result<()> {
 }
 
 // Remote address operations use a separate lock so a service outage does not block route saves.
-fn address_lock() -> Result<fs::File> {
+pub(super) fn address_lock() -> Result<fs::File> {
     use fs2::FileExt;
     let file = fs::OpenOptions::new()
         .create(true)
@@ -135,6 +135,29 @@ fn address_lock() -> Result<fs::File> {
     file.try_lock_exclusive()
         .map_err(|_| "Another Firecrab address change is running; retry shortly")?;
     Ok(file)
+}
+
+/// Exact origin and secret-content pins; updater status is observation rather than desired input.
+pub(super) fn ownership_projections(
+    root: &Path,
+) -> Result<std::collections::BTreeMap<String, serde_json::Value>> {
+    use sha2::{Digest, Sha256};
+    let store = read_at(&root.join("pipe/firecrab-addresses.json"))?;
+    let mut projections = std::collections::BTreeMap::new();
+    for binding in store.bindings {
+        if !firecrab_helper_protocol::firecrab_tunnel::subdomain(&binding.subdomain)
+            || binding.connector_id.is_nil()
+        {
+            return Err("saved Firecrab address identity is invalid".into());
+        }
+        let value = serde_json::json!({"endpoint":store.endpoint,"protocol":store.protocol,
+            "subdomain":binding.subdomain,"target":binding.target,"connectorId":binding.connector_id,
+            "ownedConnector":binding.owned_connector,"credentialSha256":format!("{:x}",Sha256::digest(binding.token.as_bytes()))});
+        if projections.insert(binding.subdomain, value).is_some() {
+            return Err("saved Firecrab address identity is duplicated".into());
+        }
+    }
+    Ok(projections)
 }
 fn config() -> Result<Config> {
     Config::read(
@@ -330,6 +353,17 @@ pub(super) fn manage_request(request: Request) -> Result<()> {
     let mut store = read()?;
     match request {
         Request::Connect { token, target } => {
+            if let Some(binding) = store
+                .bindings
+                .iter()
+                .find(|binding| binding.token == token.0)
+            {
+                let _pipe_lock = super::host::lock()?;
+                super::host_iac::check_address_control(
+                    &ServiceEnv::from_process_env().confdir,
+                    &binding.subdomain,
+                )?;
+            }
             let previous_protocol = store.protocol;
             let (subdomain, protocol) = match store.original_connect(&token.0, &target)? {
                 Some(original) => original,
@@ -349,6 +383,13 @@ pub(super) fn manage_request(request: Request) -> Result<()> {
             save(&mut store, subdomain, target, None, previous)?;
         }
         Request::Delete { subdomain } => {
+            {
+                let _pipe_lock = super::host::lock()?;
+                super::host_iac::check_address_control(
+                    &ServiceEnv::from_process_env().confdir,
+                    &subdomain,
+                )?;
+            }
             store.check_pipe_scope(None)?;
             if store
                 .pending
@@ -407,6 +448,7 @@ fn save(
     previous_protocol: RegistryProtocol,
 ) -> Result<()> {
     let pipe_lock = super::host::lock()?;
+    super::host_iac::check_address_control(&ServiceEnv::from_process_env().confdir, &subdomain)?;
     store.check_pipe_scope(
         store
             .pending

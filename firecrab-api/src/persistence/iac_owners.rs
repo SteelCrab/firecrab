@@ -348,6 +348,9 @@ impl Store {
                 return Err(PersistenceError::InvalidStackResource);
             }
         } else if firecrab_helper_protocol::host_iac::is_pipe_kind(&request.resource.kind) {
+            if request.owner.is_some() {
+                super::iac_resources::ensure_independent(&tx, &request.resource)?;
+            }
             host_proof
                 .ok_or(PersistenceError::UnsupportedIacResource)?
                 .check(&request)?;

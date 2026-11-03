@@ -303,6 +303,11 @@ impl Store {
             }
         } else {
             super::iac_native::ensure_project_available(&tx, binding.project_id)?;
+            let address = firecrab_helper_protocol::host_iac::firecrab_tunnel_resource(
+                &binding.spec.subdomain,
+            );
+            super::iac_owners::ensure_unowned(&tx, &address)?;
+            super::iac_host::ensure_resource_idle(&tx, &address)?;
         }
         let claim = (!matches!(
             binding.state,

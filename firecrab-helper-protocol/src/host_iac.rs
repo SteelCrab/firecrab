@@ -160,7 +160,10 @@ pub enum Reply {
 
 /// Resource families whose ownership is committed by the privileged Pipe broker.
 pub fn is_pipe_kind(kind: &str) -> bool {
-    matches!(kind, "ingress" | "quick_tunnel" | "named_tunnel")
+    matches!(
+        kind,
+        "ingress" | "quick_tunnel" | "named_tunnel" | "firecrab_tunnel"
+    )
 }
 
 /// Only broker-backed identities are accepted; no arbitrary unit or file path crosses this boundary.
@@ -169,6 +172,13 @@ pub fn validate_resource(resource: &ManagedResource) -> Result<(), &'static str>
     canonical.normalize()?;
     if canonical != *resource {
         return Err("use the canonical host resource identity");
+    }
+    if resource.kind == "firecrab_tunnel" {
+        return if crate::firecrab_tunnel::subdomain(&resource.id) {
+            Ok(())
+        } else {
+            Err("provide the exact saved Firecrab address label")
+        };
     }
     if matches!(resource.kind.as_str(), "quick_tunnel" | "named_tunnel") {
         return Uuid::parse_str(&resource.id)
@@ -225,6 +235,14 @@ pub fn named_tunnel_resource(id: Uuid) -> ManagedResource {
     ManagedResource {
         kind: "named_tunnel".into(),
         id: id.to_string(),
+    }
+}
+
+/// A fixed address is scoped by the observed host's original registry endpoint and credential.
+pub fn firecrab_tunnel_resource(subdomain: &str) -> ManagedResource {
+    ManagedResource {
+        kind: "firecrab_tunnel".into(),
+        id: subdomain.into(),
     }
 }
 

@@ -270,6 +270,40 @@ def main():
         rpc(released)
         confirm(released)
         manifest.write_bytes(named_original)
+        private_store["bindings"][0]["token"] = "c" * 64
+        parent.write_text(json.dumps(private_store))
+        parent.chmod(0o600)
+        resource = {"kind": "firecrab_tunnel", "id": "fixture-peer"}
+        address = change(dict(owner, key="firecrab_fixed_address.peer"), observe())
+        address_receipt = rpc(address)["receipt"]
+        confirm(address)
+        for body in [
+            {"action": "save", "subdomain": "fixture-peer", "target": target},
+            {"action": "delete", "subdomain": "fixture-peer"},
+            {"action": "connect", "token": "c" * 64, "target": target},
+        ]:
+            denied = command(["firecrab-manage"], body, success=False)
+            assert b"connector is managed" in denied.stderr
+        parent.unlink()
+        assert not observe()["exists"] and observe()["ownership"]["generation"] == 1
+        assert rpc(address)["receipt"]["ownership"] == address_receipt["ownership"]
+        changed = json.loads(named_original)
+        changed["quickTunnels"][1]["target"]["upstreams"] = ["127.0.0.1:9091"]
+        candidate.write_text(json.dumps(changed))
+        denied = command(["apply", "--config", str(candidate), "--nginx", "/bin/true",
+                          "--cloudflared", "/bin/true"], success=False)
+        assert b"Pipe resource is managed" in denied.stderr
+        resource = {"kind": "quick_tunnel", "id": peer_id}
+        assert observe()["parentControlled"]
+        assert rpc(change(dict(owner, key="firecrab_quick_tunnel.peer"), observe()))["kind"] == "owner_rejected"
+        denied = command(["quick-manage"], {"action": "control", "id": peer_id,
+                                             "serviceAction": "stop"}, success=False)
+        assert b"connector is managed" in denied.stderr
+        resource = {"kind": "firecrab_tunnel", "id": "fixture-peer"}
+        released = change(None, observe())
+        rpc(released)
+        confirm(released)
+        assert not observe()["exists"]
         print(json.dumps({"kind": "privileged-host-broker-fixture", "passed": True,
                           "manifestSha256": hashlib.sha256(original).hexdigest(),
                           "liveSystemd": False, "guestBoot": False,

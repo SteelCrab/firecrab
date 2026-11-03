@@ -30,10 +30,16 @@ pub(super) struct Ledger {
     /// Fresh validated credential digest participates in named-connector adoption proofs only.
     #[serde(skip)]
     named_credentials_sha256: Option<String>,
+    /// Fresh private-registry projections exclude mutable connectivity and credential values.
+    #[serde(skip)]
+    addresses: BTreeMap<String, serde_json::Value>,
     /// First admitted transition binds the physical installation and API database.
     binding: Option<(HostIdentity, Uuid)>,
     /// Released records retain their monotonically increasing generations.
     owners: BTreeMap<String, ResourceOwnership>,
+    /// Original exclusively owned children remain fenced after private parent-record deletion.
+    #[serde(default)]
+    address_pins: BTreeMap<String, serde_json::Value>,
     /// Immutable results survive acknowledgement loss and later transfers.
     receipts: BTreeMap<Uuid, OwnerReceipt>,
     /// Known no-effect rejections cannot turn into a later successful replay.
@@ -53,8 +59,10 @@ impl Default for Ledger {
             runtime_busy: false,
             controller_owned: false,
             named_credentials_sha256: None,
+            addresses: BTreeMap::new(),
             binding: None,
             owners: BTreeMap::new(),
+            address_pins: BTreeMap::new(),
             receipts: BTreeMap::new(),
             rejections: BTreeMap::new(),
         }
@@ -113,6 +121,56 @@ fn projection(config: Option<&Config>, resource: &ManagedResource) -> serde_json
 }
 
 impl Ledger {
+    /// Keep address origin and owned-child configuration in the same host-side proof.
+    fn projection(&self, config: Option<&Config>, resource: &ManagedResource) -> serde_json::Value {
+        if resource.kind != "firecrab_tunnel" {
+            return projection(config, resource);
+        }
+        self.address_projection(config, self.addresses.get(&resource.id))
+    }
+
+    /// A configured parent owns only its exclusive connector; borrowed connectors remain independent.
+    fn address_projection(
+        &self,
+        config: Option<&Config>,
+        binding: Option<&serde_json::Value>,
+    ) -> serde_json::Value {
+        let Some(binding) = binding else {
+            return serde_json::Value::Null;
+        };
+        let connector = if binding["ownedConnector"] == true {
+            binding["connectorId"].as_str().map(|id| {
+                projection(
+                    config,
+                    &ManagedResource {
+                        kind: "quick_tunnel".into(),
+                        id: id.into(),
+                    },
+                )
+            })
+        } else {
+            None
+        };
+        serde_json::json!({"binding":binding,"ownedConnector":connector})
+    }
+
+    /// Native configuration checks follow the admitted child, even if a mutable parent file disappears.
+    fn protected_projection(
+        &self,
+        config: Option<&Config>,
+        resource: &ManagedResource,
+    ) -> serde_json::Value {
+        if resource.kind == "firecrab_tunnel" {
+            self.address_projection(config, self.address_pins.get(&resource.id))
+        } else {
+            projection(config, resource)
+        }
+    }
+
+    /// Populate under the host/address locks; no address secrets enter the durable owner file.
+    pub(super) fn set_addresses(&mut self, addresses: BTreeMap<String, serde_json::Value>) {
+        self.addresses = addresses;
+    }
     /// Preserve the original ingress-only ledger while separating future host resource namespaces.
     pub(super) fn normalize_keys(&mut self) -> Result<()> {
         if self.schema_version != current_schema_version() {
@@ -131,6 +189,27 @@ impl Ledger {
             }
         }
         self.owners = canonical;
+        for ownership in self.owners.values() {
+            if ownership.resource.kind == "firecrab_tunnel" && self.protected(&ownership.resource) {
+                let pin = self
+                    .address_pins
+                    .get(&ownership.resource.id)
+                    .ok_or("managed Firecrab address has no retained child identity")?;
+                if pin["subdomain"].as_str() != Some(ownership.resource.id.as_str())
+                    || pin["ownedConnector"].as_bool().is_none()
+                    || pin["connectorId"]
+                        .as_str()
+                        .and_then(|id| Uuid::parse_str(id).ok())
+                        .is_none_or(|id| id.is_nil())
+                    || serde_json::from_value::<firecrab_helper_protocol::firecrab_tunnel::Target>(
+                        pin["target"].clone(),
+                    )
+                    .is_err()
+                {
+                    return Err("managed Firecrab address child identity is invalid".into());
+                }
+            }
+        }
         Ok(())
     }
     /// Include asynchronous native unit work in the ownership admission check.
@@ -217,7 +296,7 @@ impl Ledger {
     ) -> Result<Observation> {
         firecrab_helper_protocol::host_iac::validate_resource(resource)?;
         self.check_binding(host, endpoint)?;
-        let mut value = projection(config, resource);
+        let mut value = self.projection(config, resource);
         if resource.kind == "named_tunnel" && !value.is_null() {
             value["credentialsSha256"] = serde_json::json!(self.named_credentials_sha256);
         }
@@ -233,6 +312,7 @@ impl Ledger {
             ),
             exists: !value.is_null(),
             parent_controlled: self.controller_owned
+                || self.address_owns_child(resource)
                 || value
                     .get("route")
                     .and_then(|route| route.get("owner"))
@@ -294,6 +374,22 @@ impl Ledger {
         {
             return Err("only an existing independent host resource can be adopted".into());
         }
+        let address_pin = if request.change.resource.kind == "firecrab_tunnel"
+            && request.change.owner.is_some()
+        {
+            let address = self
+                .addresses
+                .get(&request.change.resource.id)
+                .ok_or("saved Firecrab address is unavailable")?;
+            if observation.ownership.owner.is_some()
+                && self.address_pins.get(&request.change.resource.id) != Some(address)
+            {
+                return Err("restore the original Firecrab address identity or explicitly release its ownership".into());
+            }
+            Some(address.clone())
+        } else {
+            None
+        };
         let mut ownership = observation.ownership;
         if ownership.owner != request.change.owner {
             ownership.generation = ownership
@@ -311,6 +407,10 @@ impl Ledger {
             confirmed: false,
         };
         self.binding = Some((host.clone(), receipt.ownership.endpoint_id));
+        if let Some(pin) = address_pin {
+            self.address_pins
+                .insert(receipt.ownership.resource.id.clone(), pin);
+        }
         self.owners.insert(
             resource_key(&receipt.ownership.resource),
             receipt.ownership.clone(),
@@ -364,8 +464,8 @@ impl Ledger {
                 return Err("named tunnel slot is managed; release its original ownership before replacement".into());
             }
             if self.protected(&ownership.resource)
-                && projection(current, &ownership.resource)
-                    != projection(Some(next), &ownership.resource)
+                && self.protected_projection(current, &ownership.resource)
+                    != self.protected_projection(Some(next), &ownership.resource)
             {
                 return Err(
                     "Pipe resource is managed or has an unconfirmed ownership transition".into(),
@@ -391,10 +491,26 @@ impl Ledger {
 
     /// An exact connector control cannot use shared service endpoints to bypass its owner.
     pub(super) fn check_resource_control(&self, resource: &ManagedResource) -> Result<()> {
-        if self.protected(resource) {
+        if self.protected(resource) || self.address_owns_child(resource) {
             return Err("connector is managed or has an unconfirmed ownership transition".into());
         }
         Ok(())
+    }
+
+    /// A missing parent file cannot turn its admitted connector into an independent resource.
+    fn address_owns_child(&self, resource: &ManagedResource) -> bool {
+        resource.kind == "quick_tunnel"
+            && self.owners.values().any(|parent| {
+                parent.resource.kind == "firecrab_tunnel"
+                    && self.protected(&parent.resource)
+                    && self
+                        .address_pins
+                        .get(&parent.resource.id)
+                        .is_some_and(|pin| {
+                            pin["ownedConnector"] == true
+                                && pin["connectorId"].as_str() == Some(resource.id.as_str())
+                        })
+            })
     }
 
     /// Named connectors share one native unit, including after external configuration deletion.

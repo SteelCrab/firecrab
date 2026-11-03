@@ -55,6 +55,72 @@ fn binding() -> SandboxTunnelBinding {
 }
 
 #[test]
+fn iac_fixed_address_owner_and_sandbox_claim_cannot_cross_each_others_admission() {
+    use firecrab_helper_protocol::host_iac::{HostIdentity, OwnerChange, OwnerReceipt};
+    use firecrab_stack::{ChangeResourceOwner, Manager, ResourceOwner, ResourceOwnership};
+    for claim_first in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let store = crate::persistence::Store::open(&directory.path().join("state.db")).unwrap();
+        let row = binding();
+        let endpoint = store.iac_endpoint_id().unwrap();
+        let change = ChangeResourceOwner {
+            operation_id: Uuid::new_v4(),
+            expected_endpoint_id: endpoint,
+            resource: firecrab_helper_protocol::host_iac::firecrab_tunnel_resource(
+                &row.spec.subdomain,
+            ),
+            expected_generation: 0,
+            expected_owner: None,
+            owner: Some(ResourceOwner {
+                manager: Manager::Terraform,
+                id: Uuid::new_v4(),
+                key: "firecrab_fixed_address.preview".into(),
+            }),
+        };
+        let intent = OwnerChange {
+            change: change.clone(),
+            configuration_sha256: "b".repeat(64),
+            host: HostIdentity {
+                machine_id: "a".repeat(32),
+                configuration_root: "/etc/firecrab".into(),
+                device: 1,
+                inode: 42,
+            },
+        };
+        if claim_first {
+            store.save_sandbox_tunnel(&row).unwrap();
+            assert!(store.prepare_host_owner(intent).is_err());
+            assert!(
+                store
+                    .host_owner_intent(change.operation_id)
+                    .unwrap()
+                    .is_none()
+            );
+        } else {
+            store.prepare_host_owner(intent.clone()).unwrap();
+            assert!(store.save_sandbox_tunnel(&row).is_err());
+            assert!(store.sandbox_tunnel(row.id).unwrap().is_none());
+            let result = OwnerReceipt {
+                operation_id: change.operation_id,
+                request_sha256: intent.request_sha256().unwrap(),
+                host: intent.host,
+                confirmed: false,
+                ownership: ResourceOwnership {
+                    endpoint_id: endpoint,
+                    resource: change.resource.clone(),
+                    generation: 1,
+                    owner: change.owner.clone(),
+                },
+            };
+            store.commit_host_owner(&change, result).unwrap();
+            store.confirm_host_owner(change.operation_id).unwrap();
+            assert!(store.save_sandbox_tunnel(&row).is_err());
+            assert!(store.sandbox_tunnel(row.id).unwrap().is_none());
+        }
+    }
+}
+
+#[test]
 fn preview_mapping_reserves_only_its_vm_until_confirmed_stop() {
     use SandboxTunnelState::*;
     for (status, connector, target, blocked) in [

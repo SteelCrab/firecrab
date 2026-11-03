@@ -1,6 +1,44 @@
 use super::*;
 
 #[tokio::test]
+async fn iac_fixed_address_recovers_original_label_after_api_restart_and_rejects_native_deletion() {
+    let fixture = Fixture::new(1, false);
+    let state = fixture.state().await;
+    let mut request = fixture.request(&state);
+    request.resource = firecrab_helper_protocol::host_iac::firecrab_tunnel_resource("fixture-app");
+    request.owner.as_mut().unwrap().key = "firecrab_fixed_address.app".into();
+    assert!(
+        change(state.clone(), Uuid::new_v4(), request.clone())
+            .await
+            .is_err()
+    );
+    drop(state);
+    let state = fixture.state().await;
+    let receipt = change(state.clone(), Uuid::new_v4(), request.clone())
+        .await
+        .unwrap();
+    assert_eq!(receipt.resource, request.resource);
+    assert_eq!(receipt.generation, 1);
+    fixture.helper.abort();
+    let denied = crate::handlers::pipe::delete_firecrab_tunnel(
+        axum::extract::State(state.clone()),
+        axum::extract::Path(request.resource.id.clone()),
+        axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+    )
+    .await
+    .unwrap_err();
+    use axum::response::IntoResponse;
+    assert_eq!(
+        denied.into_response().status(),
+        axum::http::StatusCode::CONFLICT
+    );
+    assert_eq!(
+        change(state, Uuid::new_v4(), request).await.unwrap(),
+        receipt
+    );
+}
+
+#[tokio::test]
 async fn iac_named_tunnel_reuses_original_operation_after_lost_ack_and_api_restart() {
     let fixture = Fixture::new(1, false);
     let state = fixture.state().await;
