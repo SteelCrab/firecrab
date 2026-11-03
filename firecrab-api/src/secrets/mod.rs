@@ -302,6 +302,22 @@ pub(crate) struct Vault {
     root: PathBuf,
 }
 
+/// Keep encrypted file effects and their SQLite acknowledgement under one vault lock.
+/// Contents remain private; callers explicitly commit before acknowledging metadata.
+pub(crate) struct LockedVault<'a> {
+    vault: &'a Vault,
+    key: LessSafeKey,
+    /// Decrypted data belongs only to the current exclusive file-lock scope.
+    pub(crate) contents: Contents,
+}
+
+impl LockedVault<'_> {
+    /// Durably replace the encrypted file without releasing the current lock.
+    pub(crate) fn commit(&mut self) -> Result<(), SecretError> {
+        self.vault.save(&mut self.contents, &self.key)
+    }
+}
+
 impl Vault {
     /// Records the vault directory without creating files or reading its key.
     pub(crate) fn new(root: PathBuf) -> Self {
@@ -329,13 +345,33 @@ impl Vault {
         &self,
         operation: impl FnOnce(&mut Contents) -> Result<T, SecretError>,
     ) -> Result<T, SecretError> {
+        self.exclusive(|locked| {
+            let result = operation(&mut locked.contents)?;
+            locked.commit()?;
+            Ok(result)
+        })
+    }
+
+    /// Retain the file lock across multiple durable phases and their acknowledgement.
+    /// No data is written unless the callback explicitly calls `commit`.
+    pub(crate) fn exclusive<T>(
+        &self,
+        operation: impl FnOnce(&mut LockedVault<'_>) -> Result<T, SecretError>,
+    ) -> Result<T, SecretError> {
         let (_lock, key) = self.open()?;
-        let mut contents = self.load(&key)?;
-        let result = operation(&mut contents)?;
+        let contents = self.load(&key)?;
+        operation(&mut LockedVault {
+            vault: self,
+            key,
+            contents,
+        })
+    }
+
+    fn save(&self, contents: &mut Contents, key: &LessSafeKey) -> Result<(), SecretError> {
         contents
             .plans
             .retain(|plan| now_ms().saturating_sub(plan.created_at) < 600_000);
-        let bytes = serde_json::to_vec(&contents).map_err(|_| SecretError::Storage)?;
+        let bytes = serde_json::to_vec(contents).map_err(|_| SecretError::Storage)?;
         if bytes.len() as u64 > MAX_VAULT_BYTES - 64 {
             return Err(SecretError::Invalid("PipeSecrets storage limit reached"));
         }
@@ -354,7 +390,7 @@ impl Vault {
         output.extend_from_slice(&nonce);
         output.extend(encrypted);
         atomic_write(&self.root.join("vault.bin"), &output)?;
-        Ok(result)
+        Ok(())
     }
 
     /// Acquires the vault lock and loads its key, creating a key only for a new vault.

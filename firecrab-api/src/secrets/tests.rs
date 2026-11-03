@@ -150,6 +150,104 @@ fn secret(name: &str, value: &str) -> Secret {
 }
 
 #[test]
+fn iac_vault_explicit_commit_keeps_the_file_lock_until_acknowledgement_finishes() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("secrets");
+    let vault = Vault::new(path.clone());
+    vault
+        .write(|contents| {
+            contents
+                .secrets
+                .push(secret("original", "private-original"));
+            Ok(())
+        })
+        .unwrap();
+    let peer = private_file().open(path.join("vault.lock")).unwrap();
+    vault
+        .exclusive(|locked| {
+            locked.contents.secrets[0].value = "private-committed".into();
+            locked.commit()?;
+            // The filesystem effect is durable, but a competing actor must still wait for the acknowledgement.
+            assert!(peer.try_lock().is_err());
+            assert_eq!(locked.contents.secrets[0].value, "private-committed");
+            Ok(())
+        })
+        .unwrap();
+    peer.try_lock().unwrap();
+    File::unlock(&peer).unwrap();
+    Vault::new(path)
+        .read(|contents| {
+            assert_eq!(contents.secrets[0].value, "private-committed");
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn iac_vault_lost_metadata_acknowledgement_preserves_the_original_encrypted_effect() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("secrets");
+    let vault = Vault::new(path.clone());
+    vault
+        .write(|contents| {
+            contents
+                .secrets
+                .push(secret("original", "private-before-effect"));
+            Ok(())
+        })
+        .unwrap();
+    let result: Result<(), SecretError> = vault.exclusive(|locked| {
+        locked.contents.secrets[0].value = "private-original-durable-effect".into();
+        locked.contents.secrets[0].summary.version += 1;
+        locked.commit()?;
+        Err(SecretError::Storage)
+    });
+    assert!(matches!(result, Err(SecretError::Storage)));
+    Vault::new(path.clone())
+        .read(|contents| {
+            assert_eq!(contents.secrets[0].value, "private-original-durable-effect");
+            assert_eq!(contents.secrets[0].summary.version, 2);
+            Ok(())
+        })
+        .unwrap();
+    let bytes = fs::read(path.join("vault.bin")).unwrap();
+    assert!(
+        !bytes
+            .windows(b"private-original-durable-effect".len())
+            .any(|part| part == b"private-original-durable-effect")
+    );
+}
+
+#[test]
+fn iac_vault_uncommitted_private_observation_leaves_the_original_ciphertext_unchanged() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("secrets");
+    let vault = Vault::new(path.clone());
+    vault
+        .write(|contents| {
+            contents
+                .secrets
+                .push(secret("original", "private-before-plan"));
+            Ok(())
+        })
+        .unwrap();
+    let before = fs::read(path.join("vault.bin")).unwrap();
+    vault
+        .exclusive(|locked| {
+            locked.contents.secrets[0].value = "uncommitted-input".into();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(fs::read(path.join("vault.bin")).unwrap(), before);
+    vault
+        .read(|contents| {
+            assert_eq!(contents.secrets[0].value, "private-before-plan");
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn encrypted_values_and_credentials_survive_reopen_without_plaintext_files() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("secrets");
