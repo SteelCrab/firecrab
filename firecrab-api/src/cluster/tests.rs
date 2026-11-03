@@ -569,7 +569,8 @@ async fn state(root: &std::path::Path) -> AppState {
     let mut state = AppState::with_db_file(templates, root.join("state.db"))
         .await
         .unwrap();
-    state.storage = Arc::new(crate::storage::StorageRegistry::single(
+    std::fs::create_dir_all(root.join("storage")).unwrap();
+    state = state.with_test_storage(crate::storage::StorageRegistry::single(
         "default",
         root.join("storage"),
     ));

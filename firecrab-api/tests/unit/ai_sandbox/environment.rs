@@ -148,7 +148,11 @@ async fn lifecycle_fixture() -> (tempfile::TempDir, AppState, SandboxEnvironment
         crate::templates::TemplateRegistry::from_specs(dir.path(), std::iter::empty()).unwrap();
     let mut state = AppState::with_db_file(registry, dir.path().join("state.db"))
         .await
-        .unwrap();
+        .unwrap()
+        .with_test_storage(crate::storage::StorageRegistry::single(
+            "default",
+            dir.path().to_owned(),
+        ));
     state.network = crate::network::NetworkClient::with_socket_path(dir.path().join("helper.sock"));
     let mut environment = reserved();
     state
@@ -355,7 +359,11 @@ async fn partial_network_cleanup_keeps_checkpoint_then_restart_cleanup_finishes_
         crate::templates::TemplateRegistry::from_specs(dir.path(), std::iter::empty()).unwrap();
     let mut state = AppState::with_db_file(registry, dir.path().join("state.db"))
         .await
-        .unwrap();
+        .unwrap()
+        .with_test_storage(crate::storage::StorageRegistry::single(
+            "default",
+            dir.path().to_owned(),
+        ));
     state.network = crate::network::NetworkClient::with_socket_path(dir.path().join("helper.sock"));
     let (worker, requests) = helper(&state, false).await;
     reconcile_cleanup(state.clone()).await;
