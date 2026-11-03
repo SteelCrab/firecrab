@@ -90,6 +90,9 @@ borrowed input sources and external stores remain intact.
 
 ## Verification scope
 
+The [clean Linux Release record](../assets/iac-548-secret-linux-evidence.json)
+pins the source, compiler-reported executables, test totals and verification logs.
+
 Tests use actual encrypted files, independent SQLite connections and HTTP routes.
 They cover both manager identities, private-input scope, no-ops, metadata edits,
 rotation, default retention, exact data deletion, concurrent callers, source
