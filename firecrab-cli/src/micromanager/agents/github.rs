@@ -52,10 +52,10 @@ impl Runtime {
             "GH_PROMPT_DISABLED=1 timeout 25 gh api 'user/repos?sort=updated&per_page=100&affiliation=owner,collaborator,organization_member' --jq '[.[] | {name: .full_name, private: .private, archived: .archived}]'",
             Duration::from_secs(30),
         )?;
-        let rows: Vec<Repository> = serde_json::from_str(&output)?;
-        for row in &rows {
-            guest::repository_url(&row.name)?;
-        }
+        let mut rows: Vec<Repository> = serde_json::from_str(&output)?;
+        // Offer only repositories this VM can connect; one unsupported name
+        // (e.g. `.github`) must not hide the rest of the account.
+        rows.retain(|row| matches!(guest::repository_url(&row.name), Ok(Some(_))));
         Ok(json!({"repositories":rows}))
     }
 

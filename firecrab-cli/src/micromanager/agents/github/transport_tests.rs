@@ -26,13 +26,23 @@ fn repositories_use_only_the_vm_account_and_return_no_credentials() {
     assert_eq!(result["repositories"][0]["name"], "owner/private-repo");
     assert_eq!(result["repositories"][0]["private"], true);
     assert!(!result.to_string().contains("fixture-only-credential"));
-    for output in [
-        "not JSON",
-        r#"[{"name":"../host","private":false,"archived":false}]"#,
-    ] {
-        shell_replies(root.path(), json!({"user/repos?":{"out":output}}));
-        assert!(runtime.github_repositories().is_err());
-    }
+    shell_replies(root.path(), json!({"user/repos?":{"out":"not JSON"}}));
+    assert!(runtime.github_repositories().is_err());
+    // One repository this VM cannot connect must not hide the others.
+    shell_replies(
+        root.path(),
+        json!({"user/repos?": {"out": r#"[
+            {"name":"OpenStudyService/.github","private":false,"archived":false},
+            {"name":"../host","private":false,"archived":false},
+            {"name":"","private":false,"archived":false},
+            {"name":"owner/app","private":false,"archived":false}
+        ]"#}}),
+    );
+    let result = runtime.github_repositories().unwrap();
+    assert_eq!(
+        result["repositories"],
+        json!([{"name":"owner/app","private":false,"archived":false}])
+    );
 }
 
 #[test]
