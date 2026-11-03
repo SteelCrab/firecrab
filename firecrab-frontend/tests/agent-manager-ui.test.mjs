@@ -2194,17 +2194,14 @@ for (const [width, locale] of [
     await expect(
       page.getByText(locale === "ko" ? "검색 결과 2개" : "2 results"),
     ).toBeVisible();
-    await page
-      .getByRole("button", { name: /playwright-cli/ })
-      .first()
-      .click();
-    await expect(page.locator(".ask-detail")).toContainText(
-      "microsoft/playwright-cli",
-    );
-    await expect(page.locator(".ask-detail")).toContainText("206,087");
-    await page
+    // Each result row carries what is needed to compare and install it.
+    const row = page.locator(".ask-row", { hasText: "playwright-cli" });
+    await expect(row).toContainText("microsoft/playwright-cli");
+    await expect(row).toContainText("206,087");
+    await row
       .getByRole("button", {
-        name: locale === "ko" ? "이 MicroVM에 설치" : "Install in this MicroVM",
+        name:
+          locale === "ko" ? "playwright-cli 설치" : "Install playwright-cli",
       })
       .click();
     await expect(page.locator(".ask-installed")).toContainText(
@@ -2284,16 +2281,38 @@ test("skills cannot be installed before a MicroVM is selected", async (t) => {
     .getByRole("searchbox", { name: "Search skills.sh" })
     .fill("playwright");
   await page.getByRole("button", { name: "Search", exact: true }).click();
-  await page
-    .getByRole("button", { name: /webapp-testing/ })
-    .first()
-    .click();
   await expect(
-    page.getByRole("button", { name: "Install in this MicroVM" }),
+    page.getByRole("button", { name: "Install webapp-testing" }),
   ).toBeDisabled();
   await expect(
     page.getByText("Select a MicroVM to install skills"),
   ).toBeVisible();
+});
+
+test("the skill store keeps page margins and starts from example searches", async (t) => {
+  const { page, state } = await setup(t, { view: "board" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openSkills(page);
+  const store = page.getByRole("region", { name: "Skill store" });
+  const margins = await store.evaluate((node) => {
+    const box = node.parentElement.getBoundingClientRect();
+    const heading = node.querySelector("h2").getBoundingClientRect();
+    const search = node.querySelector(".ask-search").getBoundingClientRect();
+    return { left: heading.left - box.left, right: box.right - search.right };
+  });
+  assert.ok(margins.left >= 24 && margins.right >= 24, JSON.stringify(margins));
+  await expect(store.locator(".ask-search").locator("input")).toHaveCSS(
+    "border-top-width",
+    "0px",
+  );
+  await store.getByRole("button", { name: "playwright", exact: true }).click();
+  await expect(
+    page.getByRole("searchbox", { name: "Search skills.sh" }),
+  ).toHaveValue("playwright");
+  await expect(page.getByText("2 results")).toBeVisible();
+  assert.ok(
+    state.calls.some((c) => c.endpoint.endsWith("/agents/skills/search")),
+  );
 });
 
 async function openRules(page, locale = "en") {

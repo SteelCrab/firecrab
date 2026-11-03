@@ -1,34 +1,80 @@
+/* Same page margins as the Connect accounts page. */
 .ask {
   display: grid;
-  gap: 16px;
+  gap: 14px;
+  align-content: start;
   min-width: 0;
+  padding: 30px;
 }
 .ask-heading code {
   font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-subtle);
 }
+
+/* One field: the form draws the border, the input inside stays plain. */
 .ask-search {
   display: flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--border);
+  padding: 5px 5px 5px 12px;
+  border: 1px solid var(--border-strong);
   border-radius: 10px;
-  padding: 4px 4px 4px 10px;
+  background: var(--bg);
   color: var(--text-3);
   min-width: 0;
 }
+.ask-search:focus-within {
+  border-color: var(--text-2);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
 .ask-search > svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   flex: none;
 }
-.ask-search input {
+.ask .ask-search input {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  padding: 7px 0;
   border: 0;
+  outline: none;
   background: transparent;
-  padding: 6px 0;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text);
+}
+.ask-search .btn {
+  flex: none;
+  height: 34px;
+}
+/* Page-sized buttons would outweigh the 12–14px text around them. */
+.ask .btn {
+  min-height: 32px;
+  height: 32px;
+  padding: 0 12px;
+  gap: 6px;
+  border-radius: 7px;
+  font-size: 13px;
+}
+.ask .btn svg {
+  width: 14px;
+  height: 14px;
+}
+.ask-caution {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.ask-caution svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--amber-ink);
 }
 .ask-error {
   margin: 0;
@@ -38,153 +84,193 @@
   color: var(--red-ink);
   font-size: 13px;
 }
-.ask-layout {
-  display: grid;
-  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-.ask-list {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 8px;
-  min-width: 0;
-  max-height: 560px;
-  overflow: auto;
-}
-.ask-count {
-  margin: 2px 6px 8px;
-  color: var(--text-3);
-  font-size: 12px;
-}
-.ask-list ul,
-.ask-installed ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.ask-list button {
-  display: grid;
-  gap: 2px;
-  width: 100%;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-}
-.ask-list button:hover {
-  background: var(--bg-hover);
-}
-.ask-list button[aria-current="true"] {
-  background: var(--accent-soft);
-}
-.ask-list .ask-name,
-.ask-detail h3,
-.ask-installed strong {
-  font-family: var(--mono, ui-monospace, Menlo, monospace);
-  font-size: 12.5px;
-  overflow-wrap: anywhere;
-}
-.ask-list small,
-.ask-installed small {
-  color: var(--text-3);
-  font-size: 11.5px;
-  overflow-wrap: anywhere;
-}
-.ask-side {
-  display: grid;
-  gap: 16px;
-  min-width: 0;
-}
-.ask-detail,
-.ask-installed {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 16px 18px;
-  min-width: 0;
-}
-.ask-detail h3 {
-  margin: 0 0 8px;
-  font-size: 15px;
-}
-.ask-facts {
-  display: grid;
-  gap: 4px;
-  margin: 0 0 10px;
-  font-size: 12.5px;
-}
-.ask-facts div {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  gap: 8px;
-}
-.ask-facts dt {
-  color: var(--text-3);
-}
-.ask-facts dd {
-  margin: 0;
-  color: var(--text-2);
-  overflow-wrap: anywhere;
-}
-.ask-links {
-  display: flex;
-  gap: 14px;
-  margin: 0 0 12px;
-  font-size: 12.5px;
-}
-.ask-links a {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.ask-links svg {
-  width: 12px;
-  height: 12px;
-}
-.ask-done {
-  margin: 0;
-  color: var(--green-ink);
-  font-size: 13px;
-}
 .ask-note,
 .ask-audit {
-  margin: 10px 0 0;
+  margin: 0;
   color: var(--text-2);
   font-size: 12.5px;
   line-height: 1.7;
 }
-.ask-installed-head {
+
+/* This MicroVM's skills: a compact row of chips above the search results. */
+.ask-installed,
+.ask-results {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin-top: 8px;
+}
+.ask-section-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  margin-bottom: 8px;
 }
-.ask-installed-head h3 {
+.ask-section-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
   font-size: 13px;
+  font-weight: 600;
 }
-.ask-installed li {
+.ask-section-head h3 span {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--bg-subtle);
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  text-align: center;
+}
+.ask-chips,
+.ask-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ask-chips {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ask-chips li {
+  display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 0;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 4px 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.ask-chips li > span {
+  display: grid;
+  min-width: 0;
+}
+.ask-chips strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.ask-chips small {
+  color: var(--text-3);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.ask-chips .icon-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Results: everything needed to compare and install sits on one row. */
+.ask-count {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.ask-examples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.ask-example {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ask-example:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.ask-rows {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.ask-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px 18px;
+  padding: 12px 16px;
+}
+.ask-row + .ask-row {
   border-top: 1px solid var(--border);
 }
-.ask-installed li > div {
+.ask-row-main {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
+.ask-name {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.ask-row-main small {
+  color: var(--text-3);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.ask-installs {
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ask-links {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+}
+.ask-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-2);
+}
+.ask-links svg {
+  width: 11px;
+  height: 11px;
+}
+.ask-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--green-ink);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.ask-done svg {
+  width: 14px;
+  height: 14px;
+}
+.ask-row > .btn,
+.ask-row > .ask-done {
+  justify-self: end;
+}
+.ask-row .ask-audit {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 760px) {
-  .ask-layout {
-    grid-template-columns: minmax(0, 1fr);
+  .ask {
+    padding: 20px 16px;
   }
-  .ask-list {
-    max-height: 280px;
+  .ask-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .ask-installs,
+  .ask-links {
+    grid-row: 2;
   }
 }
