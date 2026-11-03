@@ -27,6 +27,9 @@ pub(super) struct Ledger {
     /// Root-owned address metadata proves controller ownership independently of the API database.
     #[serde(skip)]
     controller_owned: bool,
+    /// Fresh validated credential digest participates in named-connector adoption proofs only.
+    #[serde(skip)]
+    named_credentials_sha256: Option<String>,
     /// First admitted transition binds the physical installation and API database.
     binding: Option<(HostIdentity, Uuid)>,
     /// Released records retain their monotonically increasing generations.
@@ -49,6 +52,7 @@ impl Default for Ledger {
             schema_version: current_schema_version(),
             runtime_busy: false,
             controller_owned: false,
+            named_credentials_sha256: None,
             binding: None,
             owners: BTreeMap::new(),
             receipts: BTreeMap::new(),
@@ -72,6 +76,17 @@ fn projection(config: Option<&Config>, resource: &ManagedResource) -> serde_json
     let Some(config) = config else {
         return serde_json::Value::Null;
     };
+    if resource.kind == "named_tunnel" {
+        return config
+            .tunnel
+            .as_ref()
+            .filter(|tunnel| tunnel.id.to_string() == resource.id)
+            .map(|tunnel| {
+                serde_json::json!({"listen":config.listen,"id":tunnel.id,
+                "hostname":tunnel.hostname,"routes":config.routes})
+            })
+            .unwrap_or(serde_json::Value::Null);
+    }
     if resource.kind == "quick_tunnel" {
         if resource.id == firecrab_helper_protocol::pipe::LEGACY_QUICK_TUNNEL_ID.to_string()
             && let Some(legacy) = &config.quick_tunnel
@@ -125,6 +140,10 @@ impl Ledger {
     /// Parent provenance is read from privileged metadata while the same Pipe lock is held.
     pub(super) fn set_controller_owned(&mut self, owned: bool) {
         self.controller_owned = owned;
+    }
+    /// Pin credential content without retaining or returning the credential document.
+    pub(super) fn set_named_credentials_sha256(&mut self, digest: Option<String>) {
+        self.named_credentials_sha256 = digest;
     }
     /// Terminal replays bypass mutable manifest IO, including later corruption or removal.
     pub(super) fn has_outcome(&self, operation: Uuid) -> bool {
@@ -198,7 +217,10 @@ impl Ledger {
     ) -> Result<Observation> {
         firecrab_helper_protocol::host_iac::validate_resource(resource)?;
         self.check_binding(host, endpoint)?;
-        let value = projection(config, resource);
+        let mut value = projection(config, resource);
+        if resource.kind == "named_tunnel" && !value.is_null() {
+            value["credentialsSha256"] = serde_json::json!(self.named_credentials_sha256);
+        }
         Ok(Observation {
             host: host.clone(),
             ownership: self.owners.get(&resource_key(resource)).cloned().unwrap_or(
@@ -331,6 +353,16 @@ impl Ledger {
         next: &Config,
     ) -> Result<()> {
         for ownership in self.owners.values() {
+            if ownership.resource.kind == "named_tunnel"
+                && self.protected(&ownership.resource)
+                && (next.quick_tunnel.is_some()
+                    || next
+                        .tunnel
+                        .as_ref()
+                        .is_some_and(|tunnel| tunnel.id.to_string() != ownership.resource.id))
+            {
+                return Err("named tunnel slot is managed; release its original ownership before replacement".into());
+            }
             if self.protected(&ownership.resource)
                 && projection(current, &ownership.resource)
                     != projection(Some(next), &ownership.resource)
@@ -361,6 +393,20 @@ impl Ledger {
     pub(super) fn check_resource_control(&self, resource: &ManagedResource) -> Result<()> {
         if self.protected(resource) {
             return Err("connector is managed or has an unconfirmed ownership transition".into());
+        }
+        Ok(())
+    }
+
+    /// Named connectors share one native unit, including after external configuration deletion.
+    pub(super) fn check_named_control(&self) -> Result<()> {
+        if self
+            .owners
+            .values()
+            .any(|owner| owner.resource.kind == "named_tunnel" && self.protected(&owner.resource))
+        {
+            return Err(
+                "named tunnel slot is managed or has an unconfirmed ownership transition".into(),
+            );
         }
         Ok(())
     }

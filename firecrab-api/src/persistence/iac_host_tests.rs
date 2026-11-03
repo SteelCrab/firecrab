@@ -49,6 +49,12 @@ fn receipt(intent: &OwnerChange) -> OwnerReceipt {
 fn iac_host_reservation_survives_restart_and_only_the_exact_target_result_can_commit() {
     let (directory, store, intent) = fixture();
     store.prepare_host_owner(intent.clone()).unwrap();
+    assert!(!store.iac_host_kind_public_write_allowed("ingress").unwrap());
+    assert!(
+        store
+            .iac_host_kind_public_write_allowed("named_tunnel")
+            .unwrap()
+    );
     assert!(store.change_iac_resource_owner(&intent.change).is_err());
     assert!(ensure_resource_idle(&store.lock(), &intent.change.resource).is_err());
     let mut forged = receipt(&intent);

@@ -400,6 +400,9 @@ pub async fn control(
     Extension(request_id): Extension<RequestId>,
     Json(request): Json<ServiceRequest>,
 ) -> Result<Json<Snapshot>, AppError> {
+    if request.service == firecrab_helper_protocol::pipe::Service::Tunnel {
+        super::cloudflare::require_unmanaged(&state, request_id).await?;
+    }
     let _lock = super::sandbox_tunnels::MUTATIONS.lock().await;
     require_unclaimed(&state, request_id, None)?;
     call(&state.network, Operation::Control { request }, request_id).await

@@ -69,7 +69,7 @@ pub(super) fn run() -> Result<()> {
             let present = ledger
                 .observe(&host, endpoint_id, &resource, config.as_ref())?
                 .exists;
-            prepare_activity(&mut ledger, &resource, present)?;
+            prepare_activity(&mut ledger, &resource, present, config.as_ref())?;
             Reply::Observation {
                 observation: ledger.observe(&host, endpoint_id, &resource, config.as_ref())?,
             }
@@ -95,7 +95,12 @@ pub(super) fn run() -> Result<()> {
                         config.as_ref(),
                     )?
                     .exists;
-                prepare_activity(&mut ledger, &request.change.resource, present)?;
+                prepare_activity(
+                    &mut ledger,
+                    &request.change.resource,
+                    present,
+                    config.as_ref(),
+                )?;
             }
             let reply = ledger.transition(&host, config.as_ref(), *request)?;
             write(&root, &ledger)?;
@@ -133,12 +138,24 @@ fn prepare_activity(
     ledger: &mut Ledger,
     resource: &firecrab_stack::ManagedResource,
     present: bool,
+    config: Option<&Config>,
 ) -> Result<()> {
     firecrab_helper_protocol::host_iac::validate_resource(resource)?;
     let unit = if resource.kind == "quick_tunnel" {
         let id = uuid::Uuid::parse_str(&resource.id)?;
         ledger.set_controller_owned(super::firecrab::connector_is_owned(id)?);
         firecrab_helper_protocol::pipe::quick_tunnel_unit(id)
+    } else if resource.kind == "named_tunnel" {
+        use sha2::{Digest, Sha256};
+        let credentials = config.map(Config::credentials).transpose()?.flatten();
+        ledger.set_named_credentials_sha256(
+            credentials
+                .map(|value| {
+                    serde_json::to_vec(&value).map(|bytes| format!("{:x}", Sha256::digest(bytes)))
+                })
+                .transpose()?,
+        );
+        super::TUNNEL_UNIT.into()
     } else {
         super::INGRESS_UNIT.into()
     };
@@ -210,7 +227,18 @@ fn protected_directory(path: &Path) -> Result<()> {
 
 /// Check the exact proposed configuration at the privileged commit boundary.
 pub(super) fn check_configuration(root: &Path, next: &Config) -> Result<()> {
-    read(root)?.check_configuration(config(root)?.as_ref(), next)
+    let ledger = read(root)?;
+    let current = config(root)?;
+    ledger.check_configuration(current.as_ref(), next)?;
+    if ledger.check_named_control().is_err()
+        && let Some(current) = current.as_ref()
+        && current.credentials()? != next.credentials()?
+    {
+        return Err(
+            "named tunnel credentials are managed; release ownership before replacing them".into(),
+        );
+    }
+    Ok(())
 }
 
 /// Shared ingress unit control affects every owned route on that listener.
@@ -223,4 +251,9 @@ pub(super) fn check_quick_control(root: &Path, id: uuid::Uuid) -> Result<()> {
     read(root)?.check_resource_control(&firecrab_helper_protocol::host_iac::quick_tunnel_resource(
         id,
     ))
+}
+
+/// Check the shared named slot before credentials, remote provisioning or unit mutations.
+pub(super) fn check_named_control(root: &Path) -> Result<()> {
+    read(root)?.check_named_control()
 }

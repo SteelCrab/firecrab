@@ -19,13 +19,17 @@ async fn iac_ingress_browser_fixture() {
     let container = std::env::var("FIRECRAB_IAC_QA_CONTAINER").unwrap();
     assert!(
         (container.starts_with("firecrab-548-ingress-evidence-")
-            || container.starts_with("firecrab-548-quick-evidence-"))
+            || container.starts_with("firecrab-548-quick-evidence-")
+            || container.starts_with("firecrab-548-named-evidence-"))
             && container
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     );
     let resource_kind = std::env::var("FIRECRAB_IAC_QA_KIND").unwrap_or_else(|_| "ingress".into());
-    assert!(matches!(resource_kind.as_str(), "ingress" | "quick_tunnel"));
+    assert!(matches!(
+        resource_kind.as_str(),
+        "ingress" | "quick_tunnel" | "named_tunnel"
+    ));
     let info = std::path::PathBuf::from(std::env::var_os("FIRECRAB_IAC_QA_INFO").unwrap());
     let assets = std::path::PathBuf::from(std::env::var_os("FIRECRAB_IAC_QA_ASSETS").unwrap());
     assert!(assets.join("index.html").is_file());
@@ -103,12 +107,17 @@ async fn iac_ingress_browser_fixture() {
     let second_owner = Uuid::new_v4();
     let mut ownerships = Vec::new();
     for (index, owner, label) in [(0, first_owner, "app"), (1, second_owner, "peer")] {
+        let kind = if resource_kind == "named_tunnel" && index == 1 {
+            "quick_tunnel"
+        } else {
+            &resource_kind
+        };
         let request = ChangeResourceOwner {
             operation_id: Uuid::new_v4(),
             expected_endpoint_id: endpoint,
             resource: ManagedResource {
-                kind: resource_kind.clone(),
-                id: if resource_kind == "ingress" {
+                kind: kind.into(),
+                id: if kind == "ingress" {
                     format!("route:{label}.example.com/")
                 } else {
                     Uuid::from_u128(0x548001 + index).to_string()
@@ -119,7 +128,7 @@ async fn iac_ingress_browser_fixture() {
             owner: Some(ResourceOwner {
                 manager: Manager::Terraform,
                 id: owner,
-                key: format!("firecrab_{resource_kind}.{label}"),
+                key: format!("firecrab_{kind}.{label}"),
             }),
         };
         ownerships.push(

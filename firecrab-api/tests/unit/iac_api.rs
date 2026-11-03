@@ -98,6 +98,7 @@ async fn iac_owner_api_transfers_without_recreation_and_blocks_direct_writes() {
             "image",
             "ingress",
             "quick_tunnel",
+            "named_tunnel",
             "storage_connection",
             "secret",
             "secret_connection",

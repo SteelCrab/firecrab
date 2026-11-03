@@ -33,6 +33,9 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Retain independent named Cloudflare connector ownership on the privileged host
+  and API. Pin credential content and fence shared-unit controls, credential
+  replacement and new provisioning even after external configuration deletion.
 - Protect independent Quick Tunnel ownership, including legacy shared-unit
   controls. Retain generated address connector IDs and original private input
   before publication, fence uncertain local changes and preserve parent authority

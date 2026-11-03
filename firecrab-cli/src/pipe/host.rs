@@ -512,6 +512,9 @@ fn apply_with(
                 || (!tunnel.active && enable)
                 || (tunnel.active && tunnel.changed))
         {
+            if tunnel.unit == TUNNEL_UNIT {
+                super::host_iac::check_named_control(confdir)?;
+            }
             let id = if tunnel.unit == TUNNEL_UNIT {
                 Some(LEGACY_QUICK_TUNNEL_ID)
             } else {
@@ -994,6 +997,7 @@ fn control_with(
         super::host_iac::check_ingress_control(confdir)?;
     }
     if request.service == Service::Tunnel {
+        super::host_iac::check_named_control(confdir)?;
         super::host_iac::check_quick_control(confdir, LEGACY_QUICK_TUNNEL_ID)?;
     }
     let (unit, name) = match request.service {

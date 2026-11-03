@@ -160,7 +160,7 @@ pub enum Reply {
 
 /// Resource families whose ownership is committed by the privileged Pipe broker.
 pub fn is_pipe_kind(kind: &str) -> bool {
-    matches!(kind, "ingress" | "quick_tunnel")
+    matches!(kind, "ingress" | "quick_tunnel" | "named_tunnel")
 }
 
 /// Only broker-backed identities are accepted; no arbitrary unit or file path crosses this boundary.
@@ -170,7 +170,7 @@ pub fn validate_resource(resource: &ManagedResource) -> Result<(), &'static str>
     if canonical != *resource {
         return Err("use the canonical host resource identity");
     }
-    if resource.kind == "quick_tunnel" {
+    if matches!(resource.kind.as_str(), "quick_tunnel" | "named_tunnel") {
         return Uuid::parse_str(&resource.id)
             .ok()
             .filter(|id| !id.is_nil())
@@ -216,6 +216,14 @@ pub fn validate_resource(resource: &ManagedResource) -> Result<(), &'static str>
 pub fn quick_tunnel_resource(id: Uuid) -> ManagedResource {
     ManagedResource {
         kind: "quick_tunnel".into(),
+        id: id.to_string(),
+    }
+}
+
+/// One configured named connector; its credentials and hostname remain bound to this UUID.
+pub fn named_tunnel_resource(id: Uuid) -> ManagedResource {
+    ManagedResource {
+        kind: "named_tunnel".into(),
         id: id.to_string(),
     }
 }

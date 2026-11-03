@@ -114,6 +114,19 @@ pub(super) fn ensure_resource_idle(
 }
 
 impl Store {
+    /// Shared host units cannot be reused while any connector owner or transfer occupies the slot.
+    pub(crate) fn iac_host_kind_public_write_allowed(&self, kind: &str) -> Result<bool, Error> {
+        if !firecrab_helper_protocol::host_iac::is_pipe_kind(kind) {
+            return Err(Error::UnsupportedIacResource);
+        }
+        Ok(!self.lock().query_row(
+            "SELECT EXISTS(SELECT 1 FROM iac_resource_owners WHERE kind=?1 AND manager IS NOT NULL)
+             OR EXISTS(SELECT 1 FROM iac_host_owner_intents WHERE kind=?1 AND confirmed=0)",
+            [kind],
+            |row| row.get::<_, bool>(0),
+        )?)
+    }
+
     /// Local terminal state remains readable after a later helper outage.
     pub(crate) fn host_owner_status(&self, operation: Uuid) -> Result<(bool, bool), Error> {
         Ok(self.lock().query_row(

@@ -231,6 +231,13 @@ pub(super) fn connect() -> Result<()> {
     }
     let mut request: ConnectRequest = serde_json::from_slice(&bytes)?;
     request.validate()?;
+    let confdir = crate::service::env::ServiceEnv::from_process_env().confdir;
+    super::firecrab::ensure_pipe_idle_at(&confdir, None)?;
+    super::host_iac::check_named_control(&confdir)?;
+    super::host_iac::check_quick_control(
+        &confdir,
+        firecrab_helper_protocol::pipe::LEGACY_QUICK_TUNNEL_ID,
+    )?;
     let snapshot = host::snapshot(true)?;
     if snapshot
         .config
@@ -288,9 +295,10 @@ pub(super) fn disconnect() -> Result<()> {
     use super::host;
     host::require_root()?;
     let _lock = host::lock()?;
-    let manifest = crate::service::env::ServiceEnv::from_process_env()
-        .confdir
-        .join("pipe/manifest.json");
+    let confdir = crate::service::env::ServiceEnv::from_process_env().confdir;
+    super::firecrab::ensure_pipe_idle_at(&confdir, None)?;
+    super::host_iac::check_named_control(&confdir)?;
+    let manifest = confdir.join("pipe/manifest.json");
     let mut config = Config::read(&manifest)?;
     if config.tunnel.is_none() {
         return Ok(());

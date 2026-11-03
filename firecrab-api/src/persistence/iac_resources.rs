@@ -27,6 +27,7 @@ pub(crate) const TRANSFER_KINDS: &[&str] = &[
     "image",
     "ingress",
     "quick_tunnel",
+    "named_tunnel",
     "storage_connection",
     "secret",
     "secret_connection",

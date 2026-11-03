@@ -3,6 +3,101 @@ use firecrab_helper_protocol::host_iac::OwnerChange;
 use firecrab_stack::{ChangeResourceOwner, Manager, ResourceOwner};
 
 #[test]
+fn named_connector_retains_identity_credentials_and_the_shared_slot_after_external_deletion() {
+    let mut current = config();
+    let id = Uuid::new_v4();
+    current.tunnel = Some(firecrab_helper_protocol::pipe::Tunnel {
+        id,
+        hostname: Some("app.example.com".into()),
+        credentials_file: "first.json".into(),
+    });
+    let mut ledger = Ledger::default();
+    ledger.set_named_credentials_sha256(Some("a".repeat(64)));
+    let resource = firecrab_helper_protocol::host_iac::named_tunnel_resource(id);
+    let observed = ledger
+        .observe(&host(), Uuid::from_u128(548), &resource, Some(&current))
+        .unwrap();
+    let mut intent = request(&ledger, Some(&current), "listener");
+    intent.change.resource = resource.clone();
+    intent.change.owner.as_mut().unwrap().key = "firecrab_named_tunnel.app".into();
+    intent.configuration_sha256 = observed.configuration_sha256;
+    ledger.set_named_credentials_sha256(Some("b".repeat(64)));
+    assert!(
+        ledger
+            .change(&host(), Some(&current), intent.clone())
+            .is_err()
+    );
+    ledger.set_named_credentials_sha256(Some("a".repeat(64)));
+    let receipt = ledger
+        .change(&host(), Some(&current), intent.clone())
+        .unwrap();
+    ledger
+        .confirm(&host(), receipt.ownership.endpoint_id, receipt.operation_id)
+        .unwrap();
+    let mut candidate = current.clone();
+    candidate.tunnel.as_mut().unwrap().credentials_file = "second.json".into();
+    assert!(
+        ledger
+            .check_configuration(Some(&current), &candidate)
+            .is_ok()
+    );
+    candidate.tunnel.as_mut().unwrap().hostname = Some("peer.example.com".into());
+    assert!(
+        ledger
+            .check_configuration(Some(&current), &candidate)
+            .is_err()
+    );
+    candidate = current.clone();
+    candidate.routes[0].upstreams[0].set_port(9090);
+    assert!(
+        ledger
+            .check_configuration(Some(&current), &candidate)
+            .is_err()
+    );
+    candidate = current.clone();
+    candidate.tunnel.as_mut().unwrap().id = Uuid::new_v4();
+    assert!(ledger.check_configuration(None, &candidate).is_err());
+    assert!(ledger.check_named_control().is_err());
+    assert_eq!(
+        ledger.change(&host(), None, intent).unwrap().ownership,
+        receipt.ownership
+    );
+    let observed = ledger
+        .observe(&host(), Uuid::from_u128(548), &resource, None)
+        .unwrap();
+    assert!(!observed.exists);
+    assert_eq!(observed.ownership.generation, 1);
+    assert!(observed.ownership.owner.is_some());
+    let released = ledger
+        .change(
+            &host(),
+            None,
+            OwnerChange {
+                host: host(),
+                configuration_sha256: observed.configuration_sha256,
+                change: ChangeResourceOwner {
+                    operation_id: Uuid::new_v4(),
+                    expected_endpoint_id: observed.ownership.endpoint_id,
+                    resource,
+                    expected_generation: 1,
+                    expected_owner: observed.ownership.owner,
+                    owner: None,
+                },
+            },
+        )
+        .unwrap();
+    assert!(ledger.check_named_control().is_err());
+    ledger
+        .confirm(
+            &host(),
+            released.ownership.endpoint_id,
+            released.operation_id,
+        )
+        .unwrap();
+    assert!(ledger.check_named_control().is_ok());
+}
+
+#[test]
 fn stack_addresses_are_scoped_by_kind_while_terraform_addresses_are_unique_within_the_state() {
     let mut current = config();
     let id = Uuid::new_v4();

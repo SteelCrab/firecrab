@@ -211,6 +211,65 @@ def main():
         retained = json.loads((pipe / "ownership.json").read_text())
         assert retained["schemaVersion"] == 1
         assert "quick_tunnel:" + quick_id in retained["owners"]
+
+        parent.unlink()
+        resource = {"kind": "quick_tunnel", "id": str(uuid.UUID(int=1))}
+        released = change(None, observe())
+        rpc(released)
+        confirm(released)
+        # Named connectors share the legacy unit. Credentials never appear in observations.
+        named_id = str(uuid.uuid4())
+        credentials = pipe / "named-credentials.json"
+        secret = {"AccountTag": "a" * 32, "TunnelID": named_id,
+                  "TunnelSecret": "fixture-private-named-secret"}
+        credentials.write_text(json.dumps(secret))
+        credentials.chmod(0o600)
+        named_config = json.loads(original)
+        named_config["quickTunnel"] = None
+        named_config["tunnel"] = {"id": named_id, "hostname": "app.example.com",
+                                  "credentialsFile": str(credentials)}
+        named_original = json.dumps(named_config).encode()
+        manifest.write_bytes(named_original)
+        resource = {"kind": "named_tunnel", "id": named_id}
+        observed = observe()
+        assert observed["exists"] and not observed["busy"]
+        assert secret["TunnelSecret"] not in json.dumps(observed)
+        stale = change(dict(owner, key="firecrab_named_tunnel.app"), observed)
+        credentials.write_text(json.dumps(dict(secret, TunnelSecret="changed-private-secret")))
+        assert rpc(stale)["kind"] == "owner_rejected"
+        credentials.write_text(json.dumps(secret))
+        named = change(dict(owner, key="firecrab_named_tunnel.app"), observe())
+        result = rpc(named)["receipt"]
+        confirm(named)
+        for arguments, body in [
+            (["control"], {"service": "tunnel", "action": "stop"}),
+            (["cloudflare-disconnect"], None),
+        ]:
+            denied = command(arguments, body, success=False)
+            assert b"named tunnel slot is managed" in denied.stderr
+        replacement = root / "replacement-credentials.json"
+        replacement.write_text(json.dumps(dict(secret, TunnelSecret="changed-private-secret")))
+        changed = json.loads(named_original)
+        changed["tunnel"]["credentialsFile"] = str(replacement)
+        candidate.write_text(json.dumps(changed))
+        denied = command(["apply", "--config", str(candidate), "--nginx", "/bin/true",
+                          "--cloudflared", "/bin/true"], success=False)
+        assert b"named tunnel credentials are managed" in denied.stderr
+        assert manifest.read_bytes() == named_original
+        assert json.loads(credentials.read_text()) == secret
+        absent = dict(named_config, tunnel=None)
+        manifest.write_text(json.dumps(absent))
+        assert not observe()["exists"] and observe()["ownership"]["generation"] == 1
+        denied = command(["cloudflare-connect"], {
+            "apiToken": "fixture-scoped-token-01234567890123456789", "zoneId": "a" * 32,
+            "hostname": "app.example.com", "config": absent,
+        }, success=False)
+        assert b"named tunnel slot is managed" in denied.stderr
+        assert rpc(named)["receipt"]["ownership"] == result["ownership"]
+        released = change(None, observe())
+        rpc(released)
+        confirm(released)
+        manifest.write_bytes(named_original)
         print(json.dumps({"kind": "privileged-host-broker-fixture", "passed": True,
                           "manifestSha256": hashlib.sha256(original).hexdigest(),
                           "liveSystemd": False, "guestBoot": False,

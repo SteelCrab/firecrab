@@ -1,6 +1,44 @@
 use super::*;
 
 #[tokio::test]
+async fn iac_named_tunnel_reuses_original_operation_after_lost_ack_and_api_restart() {
+    let fixture = Fixture::new(1, false);
+    let state = fixture.state().await;
+    let mut request = fixture.request(&state);
+    request.resource = firecrab_helper_protocol::host_iac::named_tunnel_resource(Uuid::new_v4());
+    request.owner.as_mut().unwrap().key = "firecrab_named_tunnel.app".into();
+    assert!(
+        change(state.clone(), Uuid::new_v4(), request.clone())
+            .await
+            .is_err()
+    );
+    drop(state);
+    let state = fixture.state().await;
+    let receipt = change(state.clone(), Uuid::new_v4(), request.clone())
+        .await
+        .unwrap();
+    assert_eq!(receipt.resource, request.resource);
+    assert_eq!(receipt.generation, 1);
+    assert_eq!(fixture.target.lock().unwrap().receipts.len(), 1);
+    fixture.helper.abort();
+    use axum::response::IntoResponse;
+    let denied = crate::handlers::cloudflare::disconnect(
+        axum::extract::State(state.clone()),
+        axum::Extension(crate::server::RequestId(Uuid::new_v4())),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        denied.into_response().status(),
+        axum::http::StatusCode::CONFLICT
+    );
+    assert_eq!(
+        change(state, Uuid::new_v4(), request).await.unwrap(),
+        receipt
+    );
+}
+
+#[tokio::test]
 async fn iac_quick_tunnel_target_receipt_and_api_mirror_recover_the_original_connector() {
     let fixture = Fixture::new(1, false);
     let state = fixture.state().await;
