@@ -71,6 +71,18 @@ pub(super) struct SecretObservation {
     last_source: Option<CredentialInput>,
 }
 
+/// Only proven input descriptors and public versions may leave private persistence.
+pub(super) fn public_configuration(value: SecretObservation) -> (SecretConfiguration, u64) {
+    (
+        SecretConfiguration {
+            name: value.name,
+            description: value.description,
+            value: value.value_source,
+        },
+        value.version,
+    )
+}
+
 pub(super) fn validate(config: &SecretConfiguration) -> Result<(), PersistenceError> {
     crate::secrets::validate_name(&config.name).map_err(|_| PersistenceError::InvalidIacOwner)?;
     if config.description.len() > 1000 {

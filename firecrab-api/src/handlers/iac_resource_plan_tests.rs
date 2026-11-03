@@ -13,6 +13,9 @@ use axum::{
 use serde_json::{Value, json};
 use std::time::Duration;
 use tower::ServiceExt;
+#[path = "iac_resource_state_tests.rs"]
+mod observation_tests;
+use observation_tests::assert_resource_state;
 
 #[tokio::test]
 async fn iac_resource_security_group_http_keeps_borrowed_network_and_original_completion() {
@@ -45,6 +48,7 @@ async fn iac_resource_security_group_http_keeps_borrowed_network_and_original_co
     let command = json!({"expectedEndpointId":endpoint,"planSha256":plan["planSha256"]});
     let (code, receipt) = send(&app, "POST", &path, command.clone()).await;
     assert_eq!(code, StatusCode::OK, "{receipt}");
+    assert_resource_state(&app, &receipt, input["desired"].clone()).await;
     input["resource"] = receipt["ownership"]["resource"].clone();
     input["operationId"] = json!(Uuid::new_v4());
     let (code, noop) = send(&app, "POST", "/api/iac/resource-plans", input.clone()).await;
@@ -72,6 +76,7 @@ async fn iac_resource_security_group_http_keeps_borrowed_network_and_original_co
     );
     assert!(state.store.micro_network(network).unwrap().is_some());
     assert!(state.store.list_security_groups().unwrap().is_empty());
+    assert_resource_state(&app, &deleted, Value::Null).await;
 }
 
 #[tokio::test]
@@ -128,6 +133,13 @@ async fn iac_resource_secret_http_keeps_input_private_and_rejects_other_scope() 
             .to_string()
             .contains("private-http-credential-canary")
     );
+    let metadata = assert_resource_state(&app, &receipt, input["desired"].clone()).await;
+    assert_eq!(metadata["configurationGeneration"], 1);
+    assert!(
+        !metadata
+            .to_string()
+            .contains("private-http-credential-canary")
+    );
     assert_eq!(
         send(&app, "POST", &path, command).await,
         (StatusCode::OK, receipt)
@@ -168,6 +180,7 @@ async fn iac_resource_access_http_preserves_operator_authority_and_restricted_de
     let command = json!({"expectedEndpointId":endpoint,"planSha256":plan["planSha256"]});
     let (code, receipt) = send(&app, "POST", &path, command.clone()).await;
     assert_eq!(code, StatusCode::OK, "{receipt}");
+    assert_resource_state(&app, &receipt, input["desired"].clone()).await;
     let remote = app.clone().layer(Extension(ConnectInfo(AuthenticatedHost {
         host_id: principal,
     })));
@@ -349,6 +362,8 @@ async fn iac_resource_model_http_applies_verified_reference_and_removes_only_the
     .await;
     assert_eq!(status, StatusCode::OK, "{created}");
     assert!(!created.to_string().contains("private-http-model-canary"));
+    let metadata = assert_resource_state(&app, &created, input["desired"].clone()).await;
+    assert!(!metadata.to_string().contains("private-http-model-canary"));
     assert_eq!(
         state.store.ai_default(project).unwrap().unwrap().model,
         "fixture-verified"
@@ -375,6 +390,7 @@ async fn iac_resource_model_http_applies_verified_reference_and_removes_only_the
     .await;
     assert_eq!(status, StatusCode::OK, "{deleted}");
     assert!(state.store.ai_default(project).unwrap().is_none());
+    assert_resource_state(&app, &deleted, Value::Null).await;
     assert_eq!(
         state
             .store
@@ -466,6 +482,7 @@ async fn iac_resource_plan_http_uses_verified_operator_identity_and_returns_no_s
     let (status, receipt) = send(&operator, "POST", &path, apply.clone()).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(receipt["ownership"]["owner"]["id"], owner.to_string());
+    assert_resource_state(&operator, &receipt, input["desired"].clone()).await;
     assert_eq!(
         send(&operator, "POST", &path, apply).await,
         (StatusCode::OK, receipt.clone())

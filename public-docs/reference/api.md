@@ -142,6 +142,7 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | Resource | Paths |
 | --- | --- |
 | MicroService | `GET, POST /api/micro-services`, `GET, PUT, DELETE /api/micro-services/{id}` |
+| Shared IaC configuration | Operator: `GET /api/iac/identity`, `GET /api/iac/resources/{kind}/{id}`, `POST /api/iac/resource-plans`, `GET /api/iac/resource-plans/{id}`, `POST /api/iac/resource-plans/{id}/apply`, `GET /api/iac/resource-plans/{id}/receipt`; see [shared plans and current observation](../guides/iac-resource-plans.md) |
 | Stack ownership and planning | `GET, POST /api/stacks`, `GET, DELETE /api/stacks/{name}`, `POST /api/stacks/{name}/bindings`, `/unbind`, `/plan`; empty-registration deletion requires `?id=STACK_UUID`; see [Stack planning](../guides/stack-planning.md#rest) |
 | Native stack apply | `POST /api/stacks/{name}/apply`, `GET /api/stacks/{name}/applies/{id}`; durable, redacted execution with exact retry IDs; see [Stack apply](../guides/stack-apply.md#rest-and-limits) |
 | Git source synchronization | `GET, PUT /api/stacks/{name}/source`, `POST /api/stacks/{name}/source/check`, `POST /api/stacks/{name}/source/sync`, `GET /api/stacks/{name}/source/history`; detect-only by default, opt-in automatic apply and explicit recovery; see [Git source synchronization](../guides/stack-git-source.md#rest) |

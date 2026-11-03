@@ -127,6 +127,22 @@ pub(super) struct OtlpObservation {
     enabled_at_ms: Option<i64>,
 }
 
+pub(super) fn public_configuration(
+    value: OtlpObservation,
+) -> Result<(ServiceOtlpConfiguration, Option<u64>), PersistenceError> {
+    let epoch = value
+        .enabled_at_ms
+        .map(|value| u64::try_from(value).map_err(|_| PersistenceError::IacOperationIdentity))
+        .transpose()?;
+    Ok((
+        ServiceOtlpConfiguration {
+            service_id: value.service_id,
+            endpoint: value.endpoint,
+        },
+        epoch,
+    ))
+}
+
 pub(super) fn validate(config: &mut ServiceOtlpConfiguration) -> Result<(), PersistenceError> {
     if config.service_id.is_nil() {
         return Err(PersistenceError::InvalidIacOwner);

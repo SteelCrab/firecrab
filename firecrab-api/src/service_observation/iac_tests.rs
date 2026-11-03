@@ -404,6 +404,7 @@ async fn iac_resource_otlp_settings_read_excludes_application_data_and_does_not_
         "private-application-data",
     );
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri(format!("/api/micro-services/{service}/observability/otlp"))
@@ -420,6 +421,30 @@ async fn iac_resource_otlp_settings_read_excludes_application_data_and_does_not_
     assert_eq!(view["ownership"]["owner"]["manager"], "terraform");
     assert!(view["enabledAtMs"].as_i64().unwrap() > 0);
     assert_eq!(view.as_object().unwrap().len(), 4);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/iac/resources/service_otlp/{service}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 128 * 1024).await.unwrap();
+    let current: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(current["configuration"]["kind"], "service_otlp");
+    assert_eq!(
+        current["configuration"]["configuration"]["endpoint"],
+        view["endpoint"]
+    );
+    assert_eq!(current["configurationGeneration"], view["enabledAtMs"]);
+    assert_eq!(current["ownership"], view["ownership"]);
+    assert!(
+        !String::from_utf8(bytes.to_vec())
+            .unwrap()
+            .contains("private-application-data")
+    );
     assert!(
         !String::from_utf8(body.to_vec())
             .unwrap()

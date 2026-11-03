@@ -216,6 +216,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/iac/identity", get(handlers::iac::identity))
         .route(
+            "/api/iac/resources/{kind}/{id}",
+            get(handlers::iac_resource_plans::resource),
+        )
+        .route(
             "/api/iac/resource-plans",
             post(handlers::iac_resource_plans::plan),
         )

@@ -34,8 +34,13 @@ See [#572](https://github.com/SteelCrab/firecrab/pull/572) and
 
 ### Added
 
+- Add operator-only typed current-configuration observation for all six shared
+  adapters. Read configuration and authority in one snapshot, exclude credential
+  values and application observations, report active recovery fences, and return
+  storage failures separately from confirmed missing configuration.
+
 - Recheck native schedule configuration ownership in the write transaction,
-  including unchanged enable/disable requests and expired or uncertain work.
+  including unchanged enable/disable requests and uncertain native work.
   Use a private canonical lock file on macOS to avoid SQLite lock conflicts;
   retain the existing Linux scheduler lock for compatibility with older APIs.
 

@@ -5,6 +5,33 @@ use firecrab_api_types::{AiModelSelection, CreateShellRequest, SandboxAccessPoli
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Executable shared configuration adapters, distinct from ownership-only coverage.
+pub const RESOURCE_PLAN_KINDS: &[&str] = &[
+    "shell",
+    "ai_model",
+    "sandbox_access",
+    "secret",
+    "security_group",
+    "service_otlp",
+];
+
+/// Current configuration and exact authority from one server observation.
+/// Credential values and hashes, app data, and exporter delivery queues are excluded.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceState {
+    /// Endpoint, resource identity and current owner, including released tombstones.
+    pub ownership: ResourceOwnership,
+    /// Current public configuration, or null for a confirmed absent managed resource.
+    pub configuration: Option<ResourceConfiguration>,
+    /// Current immutable Shell revision; other resource kinds return null.
+    pub revision_id: Option<Uuid>,
+    /// Public Secret value version or OTLP consent epoch; no credential hash.
+    pub configuration_generation: Option<u64>,
+    /// Native effects still running or requiring recovery for this resource or dependency.
+    pub active_operation_ids: Vec<Uuid>,
+}
+
 /// Desired persistent configuration. Unknown resource variants fail before admission.
 /// This type intentionally has no Debug implementation.
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]

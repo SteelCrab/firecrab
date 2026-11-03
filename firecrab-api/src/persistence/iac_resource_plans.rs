@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+mod observation;
 mod secret;
 mod security_group;
 mod service_otlp;
@@ -279,10 +280,7 @@ pub(crate) fn validate(request: &mut PlanResource) -> Result<(), PersistenceErro
         resource
             .normalize()
             .map_err(|_| PersistenceError::InvalidIacOwner)?;
-        if !matches!(
-            resource.kind.as_str(),
-            "shell" | "ai_model" | "sandbox_access" | "secret" | "security_group" | "service_otlp"
-        ) {
+        if !firecrab_stack::RESOURCE_PLAN_KINDS.contains(&resource.kind.as_str()) {
             return Err(PersistenceError::UnsupportedIacResource);
         }
     }
@@ -574,10 +572,7 @@ fn read(conn: &Connection, id: Uuid) -> Result<Option<Frozen>, PersistenceError>
     let mut frozen: Frozen = decode(&raw)?;
     validate(&mut frozen.request)?;
     if frozen.request.operation_id != id
-        || !matches!(
-            frozen.ownership.resource.kind.as_str(),
-            "shell" | "ai_model" | "sandbox_access" | "secret" | "security_group" | "service_otlp"
-        )
+        || !firecrab_stack::RESOURCE_PLAN_KINDS.contains(&frozen.ownership.resource.kind.as_str())
         || frozen.ownership.endpoint_id != frozen.request.expected_endpoint_id
         || frozen.revision.is_nil()
         || frozen.expires == 0

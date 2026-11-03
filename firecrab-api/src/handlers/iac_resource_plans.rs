@@ -5,6 +5,7 @@ use crate::{
     ai_sandbox::access::Caller, error::AppError, extract::ValidatedJson, server::RequestId,
     state::AppState,
 };
+use axum::response::IntoResponse;
 use axum::{
     Extension, Json,
     extract::{Path, State},
@@ -23,6 +24,29 @@ fn operator(caller: &Caller, request: Uuid) -> Result<(), AppError> {
             request,
         )
     })
+}
+
+/// Metadata refresh never reads application observations or dispatches resource work.
+pub(crate) async fn resource(
+    State(state): State<AppState>,
+    Extension(request): Extension<RequestId>,
+    Path((kind, id)): Path<(String, String)>,
+    caller: Caller,
+) -> Result<axum::response::Response, AppError> {
+    operator(&caller, request.0)?;
+    let current = database(request.0, move || {
+        state.store.resource_state(
+            &state.secrets,
+            &firecrab_stack::ManagedResource { kind, id },
+        )
+    })
+    .await?;
+    let mut response = Json(current).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
 }
 
 pub(crate) async fn upload(

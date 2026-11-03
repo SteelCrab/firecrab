@@ -7,6 +7,35 @@ The executable configuration adapters are `shell`, `ai_model`, `sandbox_access`,
 The 43 ownership adapters do not imply 43 executable configuration adapters.
 Native Stack expansion and the typed Terraform provider remain pending.
 
+## Observe current configuration
+
+The operator-only `GET /api/iac/resources/KIND/RESOURCE_ID` returns typed public
+configuration, exact `ownership`, `revisionId`, `configurationGeneration` and
+`activeOperationIds`. It supports the same six executable adapters listed above.
+Configuration and ownership come from one SQLite snapshot. Secret observation
+also holds the existing Vault read lock before opening that snapshot.
+Responses use `Cache-Control: no-store`. Discovery lists this route's actual
+coverage in `resourceObservationKinds`.
+
+`configuration: null` confirms that the managed configuration is absent.
+Ownership metadata alone never proves existence. A retained Secret can still
+have configuration with a released owner. A disabled but owned OTLP slot has
+configuration with a null endpoint. A released Sandbox deny tombstone keeps
+its certificate restricted while reporting no live managed policy.
+
+Credential values, credential hashes, application logs/events, and delivery
+queues are excluded. Secret configuration contains only a proven non-secret
+input descriptor and its public value version. Failed or corrupt storage is
+an error; it is never converted into confirmed absence. SQL-only observations
+do not open unrelated Vault storage or contact a provider, collector or guest.
+
+Active native effects, including dependency reservations requiring recovery,
+are returned separately from saved configuration. Refresh does not declare
+runtime readiness, re-enable a controller, execute a script or replay an apply.
+Resolve active operations before treating a partial effect as a finished change.
+Read the original plan receipt to recover its immutable acknowledgement;
+use this route to inspect current drift after later mutations or transfers.
+
 ## Plan and review
 
 Use existing authenticated operator access and [remote mTLS](mtls.md).
