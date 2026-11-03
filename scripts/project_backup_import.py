@@ -449,18 +449,26 @@ def register(db, args, record, config, route, catalog, actual, io):
     transaction(db, write)
 
 
-def check_abandon_contents(role, path, checkpoint, operation, io):
-    """An unfinished staging import owns only empty live paths and private copies."""
+def check_abandon_contents(role, path, checkpoint, operation, io, prepared):
+    """Reject unexpected entries without deleting retained staging or installed files."""
     entries = list(path.iterdir())
-    if role in ("project", "volume") and entries:
-        raise ValueError("Live resource directory is not empty; inspect it before recovery")
+    if role in ("project", "volume"):
+        allowed = {"project.db"} if role == "project" and prepared else {"data.ext4"} if role == "volume" and prepared else set()
+        for entry in entries:
+            if entry.name not in allowed:
+                raise ValueError("Unknown live resource artifact prevents abandonment")
+            with io.private_file(entry):
+                pass
     if role == "backup":
         for entry in entries:
             if entry.name != checkpoint:
                 raise ValueError("Unknown backup artifact prevents abandonment")
             io.private_dir(entry)
-            if any(entry.iterdir()):
-                raise ValueError("Checkpoint archive is not empty")
+            for artifact in entry.iterdir():
+                if not prepared or artifact.name not in io.FILES:
+                    raise ValueError("Unknown checkpoint artifact prevents abandonment")
+                with io.private_file(artifact):
+                    pass
     if role.endswith("Stage"):
         for entry in entries:
             if not entry.name.startswith(".import-" + operation + "-"):
@@ -469,8 +477,49 @@ def check_abandon_contents(role, path, checkpoint, operation, io):
                 pass
 
 
+def verify_prepared_abandon(record, paths, targets, plan, io):
+    """Verify the complete prepared pair, including directories already quarantined."""
+    current = {}
+    for role, path in paths.items():
+        target, expected = targets[role], plan[role]
+        source_exists, target_exists = os.path.lexists(path), os.path.lexists(target)
+        if expected is None or source_exists == target_exists:
+            raise ValueError("Prepared abandonment directory is missing or ambiguous")
+        directory = path if source_exists else target
+        io.private_dir(directory)
+        info = os.lstat(directory)
+        if [info.st_dev, info.st_ino] != expected:
+            raise ValueError("Prepared abandonment directory identity changed")
+        check_abandon_contents(role, directory, record["checkpoint"], record["id"], io, True)
+        current[role] = directory
+    io.private_dir(current["backup"] / record["checkpoint"])
+    archive = Path(record["folders"]["archive"])
+    allowed = {archive / name: ("backup", Path(record["checkpoint"]) / name, "archiveStage") for name in io.FILES}
+    allowed[paths["project"] / "project.db"] = ("project", Path("project.db"), "projectStage")
+    allowed[paths["volume"] / "data.ext4"] = ("volume", Path("data.ext4"), "volumeStage")
+    items = record.get("files", [])
+    if len(items) != len(allowed) or {Path(item["path"]) for item in items} != set(allowed) or len({Path(item["stage"]) for item in items}) != len(items):
+        raise ValueError("Prepared abandonment file set differs from the retained plan")
+    c = record["manifest"]["checkpoint"]
+    source_hashes = {"project.db": c["databaseSha256"], "data.ext4": c["volumeSha256"], "control.db": record["manifest"]["controlDatabaseSha256"], "manifest.json": record["request"]["manifestSha256"]}
+    for item in items:
+        original_path, original_stage = Path(item["path"]), Path(item["stage"])
+        role, relative, stage_role = allowed[original_path]
+        if original_stage.parent != paths[stage_role] or not original_stage.name.startswith(".import-" + record["id"] + "-"):
+            raise ValueError("Prepared stage differs from its retained plan")
+        final_file = current[role] / relative
+        stage_file = current[stage_role] / original_stage.name
+        final_exists, stage_exists = os.path.lexists(final_file), os.path.lexists(stage_file)
+        if final_exists == stage_exists:
+            raise ValueError("Prepared file is missing or duplicated")
+        if role == "backup" and item["sha"] != source_hashes[relative.name]:
+            raise ValueError("Prepared checkpoint hash differs from its manifest")
+        if io.digest(final_file if final_exists else stage_file) != item["sha"]:
+            raise ValueError("Prepared file differs from its retained proof")
+
+
 def abandon_import(args, io):
-    """Quarantine a pre-installation import without deleting files or existing resources."""
+    """Quarantine an unregistered import without deleting files or existing resources."""
     if not sys.platform.startswith("linux") or not getattr(ctypes.CDLL(None), "renameat2", None):
         raise ValueError("Import abandonment requires Linux renameat2 support")
     if not args.confirm_abandon:
@@ -495,8 +544,11 @@ def abandon_import(args, io):
             if row[1] == "complete" and record.get("outcome") == "abandoned":
                 print(encode(dict(status="abandoned", operationId=args.operation, projectId=row[0])))
                 return
-            if row[1] != "staging" or record.get("files"):
-                raise ValueError("Only an import before prepared file installation can be abandoned")
+            if row[1] not in ("staging", "prepared"):
+                raise ValueError("Only an unregistered staging or prepared import can be abandoned")
+            prepared = row[1] == "prepared"
+            if not prepared and record.get("files"):
+                raise ValueError("Staging import unexpectedly contains a prepared file plan")
             c = record["manifest"]["checkpoint"]
             for name in ("id", "projectId", "databaseId", "volumeId"):
                 io.identifier(c[name])
@@ -530,7 +582,8 @@ def abandon_import(args, io):
             roles = ("project", "volume", "backup", "projectStage", "volumeStage", "archiveStage")
             paths = {role: Path(folders[role]) for role in roles}
             targets = {role: path.parent / (".abandoned-import-" + args.operation + "-" + role) for role, path in paths.items()}
-            if not record.get("abandonPlan"):
+            new_plan = not record.get("abandonPlan")
+            if new_plan:
                 plan = {}
                 for role in roles:
                     path, target = paths[role], targets[role]
@@ -540,14 +593,18 @@ def abandon_import(args, io):
                         plan[role] = None
                         continue
                     io.private_dir(path)
-                    check_abandon_contents(role, path, c["id"], args.operation, io)
+                    check_abandon_contents(role, path, c["id"], args.operation, io, prepared)
                     st = os.lstat(path)
                     plan[role] = [st.st_dev, st.st_ino]
+                if prepared:
+                    verify_prepared_abandon(record, paths, targets, plan, io)
                 record["abandonPlan"] = plan
                 transaction(db, lambda: save(db, record))
             plan = record["abandonPlan"]
             if set(plan) != set(roles):
                 raise ValueError("Abandonment journal is invalid")
+            if prepared and not new_plan:
+                verify_prepared_abandon(record, paths, targets, plan, io)
             for role in roles:
                 path, target, expected = paths[role], targets[role], plan[role]
                 source_exists, target_exists = os.path.lexists(path), os.path.lexists(target)
@@ -562,7 +619,7 @@ def abandon_import(args, io):
                 st = os.lstat(current)
                 if [st.st_dev, st.st_ino] != expected:
                     raise ValueError("Abandonment directory identity changed")
-                check_abandon_contents(role, current, c["id"], args.operation, io)
+                check_abandon_contents(role, current, c["id"], args.operation, io, prepared)
                 if source_exists:
                     rename_new(path, target)
                 io.sync_dir(target.parent)

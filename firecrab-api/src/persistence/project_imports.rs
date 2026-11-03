@@ -19,7 +19,7 @@ pub(super) fn require_complete(connection: &Connection) -> Result<(), Persistenc
     )?;
     if pending {
         return Err(PersistenceError::BlockStorageConflict {
-            message: "Offline project import is incomplete; inspect import-status and resume or abandon staging while the controller is stopped",
+            message: "Offline project import is incomplete; inspect import-status and resume or abandon the unregistered import while the controller is stopped",
         });
     }
     Ok(())

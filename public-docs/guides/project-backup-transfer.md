@@ -195,15 +195,13 @@ Changing the registered pool path, filesystem identity, immutable request or pre
 bytes fails closed. A different import cannot bypass an incomplete operation. Do not
 manually delete the journal row or change its phase to unblock controller startup.
 There is no automatic rollback or deletion of partial installation evidence.
-An unrecoverable `prepared` import requires operator recovery from retained
-controller/storage backups; retain all files before repair.
+Retain all files before attempting recovery or explicit abandonment.
 
-### Abandon a pre-installation import
+### Abandon an unregistered import
 
-If a `staging` import cannot resume, the operator can explicitly abandon it while the
-updated controller is stopped. This operation is unavailable once the import reached
-`prepared`, because files may already have been installed. It does not require the
-original transfer package.
+If a `staging` or `prepared` import cannot resume, the operator can explicitly abandon
+it while the updated controller is stopped. It does not require the original transfer
+package. It cannot abandon an import after project or volume registration is committed.
 
 ```sh
 python3 scripts/project-backup-transfer.py abandon-import \
@@ -212,11 +210,13 @@ python3 scripts/project-backup-transfer.py abandon-import \
 ```
 
 The command checks the controller lock, registered pool identity, resource bindings,
-private ownership and expected directory contents. It journals the directory identities
-before moving anything. Existing staging files and empty resource directories are
-renamed to private `.abandoned-import-IMPORT_OPERATION_UUID-*` entries beside their
-original namespaces. Nothing is deleted. Unknown files, changed identities or a
-registered project/volume stop the operation for operator inspection.
+private ownership and expected directory contents. For `prepared` imports it verifies
+the entire six-file plan and its hashes, including files already installed in their
+final locations. It journals directory identities before moving anything. Staging and
+resource directories are renamed to private `.abandoned-import-IMPORT_OPERATION_UUID-*`
+entries beside their original namespaces. Nothing is deleted. Unknown, duplicated,
+missing or changed files and registered project/volume resources stop the operation
+for operator inspection.
 
 If interrupted, rerun the same command with the same operation UUID. The controller
 remains blocked until every journaled move and the final receipt are complete. A
@@ -233,9 +233,10 @@ remove a file named by a prepared import plan.
 
 ## Resume service and qualify the workload
 
-Only after the CLI reports `complete`, start the updated controller using its normal
-service procedure. Refresh project state and generation. Start the selected VM
-explicitly, then run workspace reconciliation to verify the mounted ext4 UUID and
+After import reports `complete` or abandonment reports `abandoned`, start the updated
+controller using its normal service procedure. Only a completed import registers the
+project and volume. For a completed import, refresh project state and generation.
+Start the selected VM explicitly, then run workspace reconciliation to verify the mounted ext4 UUID and
 project/database/import marker. Configure destination model connections and grants
 before creating new agent tasks. Inspect restored files, version history, private
 drafts and session history under their original caller identities.

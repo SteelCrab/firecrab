@@ -125,7 +125,23 @@ directories and private staging directories into same-filesystem quarantine name
 It retains all partial files. A crash leaves the startup guard active; the same
 operation resumes the recorded moves. Only after those moves does it record the
 `abandoned` outcome and release the startup guard. Imported-checkpoint lookup
-excludes abandoned receipts. A prepared or already installed import is not eligible.
+excludes abandoned receipts. The initial implementation did not support prepared
+imports; the following extension adds that support before registration.
 
 This feature has not been tested or executed. Tests and CI remain deferred until
 final integration; live interruption and service-user validation remain open.
+
+## Abandon a prepared import
+
+An explicit offline abandonment can also quarantine an unregistered `prepared` import.
+The controller and pool identity, unregistered project/volume, all six journaled
+file paths and hashes, checkpoint hashes and private directory identities are checked
+before the move plan is committed. Staged and already installed files remain in their
+owner-only directories. Each directory is renamed to its operation-specific quarantine
+location without replacement or deletion. A retry verifies all files even if directories
+are split between original and quarantine locations. The controller startup guard stays
+in place until the final abandoned receipt is durable. Unknown, changed, duplicated or
+missing files stop the operation. A committed project registration cannot be abandoned.
+
+Tests and CI were skipped at the user's request. Real prepared-import interruption,
+abandonment, service restart and full #550 acceptance remain open.

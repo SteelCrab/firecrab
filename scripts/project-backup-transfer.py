@@ -308,7 +308,7 @@ def main():
     status = commands.add_parser("import-status", help="Read incomplete imports or one saved import receipt")
     status.add_argument("--destination-control", required=True, help="Existing destination controller SQLite path")
     status.add_argument("--operation", type=identifier, help="Exact import UUID; omit to list incomplete imports")
-    abandon = commands.add_parser("abandon-import", help="Quarantine and abandon a pre-installation import")
+    abandon = commands.add_parser("abandon-import", help="Quarantine and abandon an unregistered import")
     abandon.add_argument("--destination-control", required=True)
     abandon.add_argument("--operation", required=True, type=identifier)
     abandon.add_argument("--confirm-abandon", action="store_true")
