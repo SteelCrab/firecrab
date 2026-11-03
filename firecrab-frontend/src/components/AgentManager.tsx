@@ -26,6 +26,8 @@ import {
   Eye,
   Settings,
   ChevronRight,
+  Package,
+  FileText,
 } from "lucide-react";
 import { useI18n } from "../i18n";
 import { useHostStatus } from "../hostStatusContext";
@@ -47,6 +49,8 @@ import AgentEnvironment from "./AgentEnvironment";
 import AgentRepository from "./AgentRepository";
 import AgentAutomation from "./AgentAutomation";
 import AgentWorkspaceCreate from "./AgentWorkspaceCreate";
+import AgentSkillStore from "./AgentSkillStore";
+import AgentRules from "./AgentRules";
 import AgentWorkspaceApp, {
   type WorkspaceAppProgress,
 } from "./AgentWorkspaceApp";
@@ -64,6 +68,8 @@ type WorkspacePage =
   | "verify"
   | "address"
   | "preview"
+  | "rules"
+  | "skills"
   | "settings";
 
 type Props = {
@@ -201,6 +207,8 @@ function VmAgentWorkspace({
       "verify",
       "address",
       "preview",
+      "rules",
+      "skills",
       "settings",
     ].includes(saved)
       ? saved
@@ -558,6 +566,17 @@ function VmAgentWorkspace({
                 <ChevronRight />
               </button>
             </section>
+          )}
+          {vm && page === "rules" && (
+            <AgentRules
+              vmId={vm.id}
+              controllerId={controllerId}
+              drivers={status?.drivers || []}
+              onNavigate={navigate}
+            />
+          )}
+          {page === "skills" && (
+            <AgentSkillStore vmId={vm?.id || ""} controllerId={controllerId} />
           )}
           <div
             hidden={!vm || !["connections", "tasks"].includes(page)}
@@ -1063,13 +1082,22 @@ function VmAgentWorkspace({
                   t("Preview", "앱 미리보기"),
                   appProgress.previewVerified,
                 ],
+                [
+                  "rules",
+                  FileText,
+                  t("AGENTS.md rules", "AGENTS.md 규칙"),
+                  false,
+                ],
+                ["skills", Package, t("Skill store", "스킬 스토어"), false],
                 ["settings", Settings, t("Settings", "설정"), false],
               ] as const
             ).map(([id, Icon, label, done], index) => (
               <button
                 key={id}
                 aria-current={page === id ? "step" : undefined}
-                disabled={!vm && !["workspace", "settings"].includes(id)}
+                disabled={
+                  !vm && !["workspace", "skills", "settings"].includes(id)
+                }
                 onClick={() => navigate(id)}
               >
                 <Icon />

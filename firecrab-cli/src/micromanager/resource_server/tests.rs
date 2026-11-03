@@ -75,6 +75,8 @@ async fn vm_agent_operations_reject_damaged_private_identity_without_falling_bac
         platform: resource::tests::platform(),
         agents: Mutex::new(()),
         editors: Mutex::new(()),
+        skills: Mutex::new(()),
+        skill_source: closed_source(),
     });
     let state = || State(controller.clone());
     let vm = uuid::Uuid::new_v4();
@@ -205,6 +207,8 @@ async fn concurrent_vm_mutations_return_conflict_without_entering_the_guest() {
         platform: resource::tests::platform(),
         agents: Mutex::new(()),
         editors: Mutex::new(()),
+        skills: Mutex::new(()),
+        skill_source: closed_source(),
     });
     let (ready, locked) = tokio::sync::oneshot::channel();
     let (release, finish) = std::sync::mpsc::channel();
@@ -692,4 +696,103 @@ async fn native_agent_controls_are_scoped_to_the_selected_controller() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body["error"].as_str().unwrap().contains("Enter a task"));
     assert!(!dir.path().join("runtime/agents/sessions.json").exists());
+}
+
+fn closed_source() -> crate::micromanager::skills::source::Source {
+    crate::micromanager::skills::source::Source {
+        api: "http://127.0.0.1:9".into(),
+        raw: "http://127.0.0.1:9".into(),
+    }
+}
+
+#[tokio::test]
+async fn skill_routes_require_the_controller_id_for_mutations() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = router_with_source(
+        dir.path().into(),
+        resource::tests::platform(),
+        closed_source(),
+    );
+    let (status, _, _) = response(
+        app,
+        request(
+            "POST",
+            "/api/service/agents/skills/webapp-testing/import",
+            None,
+            "{}",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn vm_skill_toggle_is_saved_while_the_vm_is_unreachable() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("runtime/skills")).unwrap();
+    std::fs::write(
+        dir.path().join("runtime/skills/imported.json"),
+        serde_json::json!([{"name":"x","description":"","commit":"c","license":"apache2","digest":"d","files":[],"importedAt":0}]).to_string(),
+    )
+    .unwrap();
+    let id = resource::controller_id(dir.path()).unwrap();
+    let vm = uuid::Uuid::new_v4();
+    let app = router_with_source(
+        dir.path().into(),
+        resource::tests::platform(),
+        closed_source(),
+    );
+    let (status, _, body) = response(
+        app,
+        request(
+            "POST",
+            &format!("/api/service/agents/microvms/{vm}/skills"),
+            Some(&id),
+            r#"{"name":"x","enabled":true}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["state"], "pending");
+    assert_eq!(body["enabled"], serde_json::json!(["x"]));
+}
+
+#[tokio::test]
+async fn rule_routes_reject_unknown_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = resource::controller_id(dir.path()).unwrap();
+    let vm = uuid::Uuid::new_v4();
+    let app = router_with_source(
+        dir.path().into(),
+        resource::tests::platform(),
+        closed_source(),
+    );
+    let (status, _, _) = response(
+        app,
+        request(
+            "POST",
+            &format!("/api/service/agents/microvms/{vm}/rules/apply"),
+            Some(&id),
+            r#"{"mode":"add","text":"- x","digest":"d","extra":1}"#,
+        ),
+    )
+    .await;
+    assert!(status.is_client_error(), "{status}");
+    assert_ne!(status, StatusCode::NOT_FOUND);
+    assert_ne!(status, StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn static_skill_and_rule_paths_do_not_hit_agent_id_routes() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = router_with_source(
+        dir.path().into(),
+        resource::tests::platform(),
+        closed_source(),
+    );
+    let (status, _, body) =
+        response(app, request("GET", "/api/service/agents/skills", None, "")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["error"].is_string());
+    assert_eq!(body["repository"], "anthropics/skills");
 }

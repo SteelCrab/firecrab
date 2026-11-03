@@ -33,6 +33,8 @@ mod settings;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod settings_tui;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod skills;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod sleepy;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod snapshot;
